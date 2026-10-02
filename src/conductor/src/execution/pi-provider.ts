@@ -8,8 +8,6 @@ import { deriveProviderExitFacts, formatProviderExitFacts } from './provider-dia
 import { validateSpawnPermit } from './spawn-permit.js';
 import { providerDescriptor } from './provider-catalog.js';
 import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
-import { ensureGitGuardForDispatch } from '../engine/git-guard.js';
-import { withGitGuardPath } from './child-environment.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -272,11 +270,6 @@ export class PiProvider implements LLMProvider {
     if (!permit.permitted) {
       throw new Error(`${piDisplayName()} process spawn denied: ${permit.reason}`);
     }
-    let guardDir: string | null;
-    try { guardDir = options.reviewDispatch ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
-      return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
-    }
-    if (abortSignal?.aborted) return abortedInvocationResult();
 
     const harnessPath = join(this.environment.homeDir(), '.agents', 'skills', 'HARNESS.md');
     if (!await isFile(harnessPath, this.environment)) {
@@ -337,7 +330,6 @@ export class PiProvider implements LLMProvider {
       stdout: 'pipe',
       stderr: 'pipe',
       cwd: options.cwd,
-      env: withGitGuardPath({ PATH: process.env.PATH }, guardDir),
     });
     let aborted = false;
     const abort = () => {
@@ -404,7 +396,6 @@ export class PiProvider implements LLMProvider {
       ...(modelUnavailable ? { modelUnavailable: true } : {}),
       tokenUsage: exitCode === 0 ? parsed.tokenUsage : undefined,
       ...(genericUnclassifiedFailure ? { exitFacts } : {}),
-      gitGuardInstalled: guardDir !== null,
     };
   }
 }

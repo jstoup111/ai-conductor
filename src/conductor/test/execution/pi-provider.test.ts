@@ -3,21 +3,15 @@ import { readFile } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 import { classifyMetering } from '../../src/engine/metering.js';
-import type { PiEnvironment } from '../../src/execution/pi-provider.js';
-import { providerDescriptor } from '../../src/execution/provider-catalog.js';
-import type { InvokeOptions } from '../../src/execution/llm-provider.js';
-
-const { mockEnsureGitGuardForDispatch } = vi.hoisted(() => ({ mockEnsureGitGuardForDispatch: vi.fn() }));
-vi.mock('../../src/engine/git-guard.js', () => ({
-  ensureGitGuardForDispatch: (...args: Parameters<typeof mockEnsureGitGuardForDispatch>) => mockEnsureGitGuardForDispatch(...args),
-}));
-vi.resetModules();
-const {
+import {
   parsePiModelId,
   parsePiModelListing,
   PiProvider,
   resolvePiSkill,
-} = await import('../../src/execution/pi-provider.js');
+  type PiEnvironment,
+} from '../../src/execution/pi-provider.js';
+import { providerDescriptor } from '../../src/execution/provider-catalog.js';
+import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
 type PiSubprocessFactory = (
   file: string,
@@ -162,14 +156,13 @@ describe('resolvePiSkill', () => {
 
 describe('PiProvider', () => {
   const spawn = vi.fn<PiSubprocessFactory>();
-  let provider: InstanceType<typeof PiProvider>;
+  let provider: PiProvider;
   let environment: PiEnvironment;
   let stat: ReturnType<typeof vi.fn>;
   const harnessPath = '/home/agent/.agents/skills/HARNESS.md';
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockEnsureGitGuardForDispatch.mockResolvedValue(null);
     spawn.mockResolvedValue({
       stdout: JSON.stringify({
         type: 'message_end',
@@ -316,21 +309,6 @@ describe('PiProvider', () => {
     expect(spawn.mock.calls[0]?.[1]).toContain('-na');
     expect(spawn.mock.calls[0]?.[1]).not.toContain('--approve');
     expect(spawn.mock.calls[0]?.[1]).not.toContain('-a');
-  });
-
-  it('installs the prepared worktree guard in Pi child PATH without mutating process PATH', async () => {
-    const originalPath = process.env.PATH;
-    mockEnsureGitGuardForDispatch.mockResolvedValue('/prepared/.pipeline/bin');
-    await provider.invoke({ ...invokeOptions, cwd: '/prepared' });
-    expect(mockEnsureGitGuardForDispatch).toHaveBeenCalledWith('/prepared');
-    expect(spawn.mock.calls[0]?.[2]?.env?.PATH).toBe(`/prepared/.pipeline/bin:${originalPath}`);
-    expect(process.env.PATH).toBe(originalPath);
-  });
-
-  it('fails closed without spawning when guard repair throws', async () => {
-    mockEnsureGitGuardForDispatch.mockRejectedValue(new Error('git guard repair failed: /prepared/.pipeline/bin/git'));
-    await expect(provider.invoke({ ...invokeOptions, cwd: '/prepared' })).resolves.toMatchObject({ success: false, exitCode: 1, output: 'git guard repair failed: /prepared/.pipeline/bin/git' });
-    expect(spawn).not.toHaveBeenCalled();
   });
 
   it('keeps retries in fresh no-session invocations and exposes only invoke dispatch', async () => {
@@ -543,25 +521,6 @@ describe('PiProvider', () => {
     const result = await invocation;
 
     expect(process.kill).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({ success: false, output: 'Pi invocation aborted.', exitCode: 1 });
-    expect(result).not.toHaveProperty('providerUnavailable');
-    expect(result).not.toHaveProperty('modelUnavailable');
-    expect(result).not.toHaveProperty('authFailure');
-    expect(result).not.toHaveProperty('rateLimited');
-  });
-
-  it('stops before spawning when Pi is aborted while its guard is prepared', async () => {
-    const controller = new AbortController();
-
-    const invocation = provider.invoke({
-      ...invokeOptions,
-      abortSignal: controller.signal,
-    });
-    controller.abort();
-
-    const result = await invocation;
-
-    expect(spawn).not.toHaveBeenCalled();
     expect(result).toMatchObject({ success: false, output: 'Pi invocation aborted.', exitCode: 1 });
     expect(result).not.toHaveProperty('providerUnavailable');
     expect(result).not.toHaveProperty('modelUnavailable');

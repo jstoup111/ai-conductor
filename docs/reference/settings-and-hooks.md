@@ -242,7 +242,8 @@ Trailer semantics — which trailers are gates and which are telemetry — are d
 ## Engine git guard
 
 The engine writes a `git` argv guard into every worktree it prepares and puts it first on the child
-`PATH` of every Claude, Codex, and Pi dispatch into that worktree, in self-host and non-self-host runs. It is
+`PATH` of every Claude and Codex dispatch into that worktree, in self-host and non-self-host runs. Pi
+dispatches are not guarded yet; Pi enforcement is tracked by #2895. It is
 the enforcing control for destructive git; the operator hook above is Claude-only early feedback
 (adr-2026-09-23-engine-git-guard-on-agent-path).
 
