@@ -1,8 +1,32 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyShipmentAssociation } from '../../src/engine/shipment-association.js';
+import { classifyShipmentAssociation, recordedShipmentFindings } from '../../src/engine/shipment-association.js';
 
 describe('classifyShipmentAssociation', () => {
+  it('publishes recorded scope authority instead of inferring acceptance from reviewer intent', () => {
+    const prdAudit = {
+      attemptId: 'typed-authority', codeStamp: null, complete: true, diagnostics: [],
+      judgment: {
+        version: 'v1' as const,
+        criterionJudgments: [{
+          criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'OVER_SCOPE' as const,
+          evidence: 'src/unplanned.ts:1', rationale: 'The operator refused this visible widening.',
+          requirementAssociations: [], evidenceTaskIds: [], intentRelation: 'within' as const,
+        }],
+        noOwnerObservations: [],
+      },
+      recordedDispositions: [{
+        criterionId: 'S1.1', grade: 'OVER_SCOPE' as const, decision: 'refuse' as const,
+        rationale: 'Visible product behavior requires a plan decision.', authority: 'operator@example.test',
+      }],
+    };
+    expect(recordedShipmentFindings({ prdAudit })).toEqual([{
+      gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: 'S1.1',
+      summary: 'The operator refused this visible widening.', accepted: false,
+      decision: 'refuse', rationale: 'Visible product behavior requires a plan decision.',
+    }]);
+  });
+
   it('proves an implementation association only with exact metadata and an implementation change', () => {
     expect(classifyShipmentAssociation({
       planStems: ['durable-shipped-records'],

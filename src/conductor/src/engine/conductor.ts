@@ -4328,7 +4328,13 @@ export class Conductor {
       ...findings
         .filter((finding) => !stored.value.recordedDispositions.some((recorded) =>
           recorded.criterionId === finding.criterion && recorded.grade === finding.grade))
-        .map((finding) => ({ criterionId: finding.criterion, grade: finding.grade })),
+        .map((finding) => ({
+          criterionId: finding.criterion,
+          grade: finding.grade,
+          decision: 'record' as const,
+          rationale: 'Negative-path PLAN_GAP is recordable under the active PRD-audit policy.',
+          authority: 'engine',
+        })),
     ];
     try {
       await persistPrdAuditVerdict(this.projectRoot, {

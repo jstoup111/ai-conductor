@@ -13,11 +13,18 @@ export const PRD_AUDIT_REPORT_PATH = '.pipeline/prd-audit.md';
 
 /**
  * Routing supplies these engine-derived projections after it has applied the
- * current policy. They deliberately do not carry operator authority.
+ * current policy. They retain the durable decision separately from the
+ * reviewer's judgment so later consumers never infer acceptance from intent.
  */
 export interface PrdAuditRecordedDisposition {
   readonly criterionId: string;
   readonly grade: 'PLAN_GAP' | 'OVER_SCOPE';
+  /** `record` is the engine's non-operator publication decision. */
+  readonly decision: 'record' | 'accept' | 'refuse';
+  /** Policy or operator rationale for this disposition, never reviewer prose. */
+  readonly rationale: string;
+  /** The actor authorized an accept/refuse decision; engine for record. */
+  readonly authority: string;
 }
 
 export interface PersistedPrdAuditVerdict {
@@ -94,8 +101,10 @@ function validJudgment(value: unknown): value is PrdAuditJudgment {
 }
 
 function validRecordedDisposition(value: unknown): value is PrdAuditRecordedDisposition {
-  return isRecord(value) && exactKeys(value, ['criterionId', 'grade']) && nonEmptyText(value.criterionId) &&
-    (value.grade === 'PLAN_GAP' || value.grade === 'OVER_SCOPE');
+  return isRecord(value) && exactKeys(value, ['criterionId', 'grade', 'decision', 'rationale', 'authority']) &&
+    nonEmptyText(value.criterionId) && (value.grade === 'PLAN_GAP' || value.grade === 'OVER_SCOPE') &&
+    (value.decision === 'record' || value.decision === 'accept' || value.decision === 'refuse') &&
+    nonEmptyText(value.rationale) && nonEmptyText(value.authority);
 }
 
 /** Render a human-readable view. No machine reader may treat this text as authority. */
@@ -118,7 +127,7 @@ export function renderPrdAuditReport(value: PersistedPrdAuditVerdict): string {
   if (value.diagnostics.length > 0) lines.push('', '## Diagnostics', ...value.diagnostics.map((diagnostic) => `- ${diagnostic}`));
   if (value.recordedDispositions.length > 0) {
     lines.push('', '## Recorded dispositions', ...value.recordedDispositions.map((disposition) =>
-      `- ${disposition.criterionId}: ${disposition.grade}`));
+      `- ${disposition.criterionId}: ${disposition.grade} (${disposition.decision} by ${disposition.authority}) — ${disposition.rationale}`));
   }
   return `${lines.join('\n')}\n`;
 }
