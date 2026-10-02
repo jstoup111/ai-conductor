@@ -62,6 +62,7 @@ import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import {
   type RemediationGap,
 } from '../../src/engine/artifacts.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import * as artifactModule from '../../src/engine/artifacts.js';
 import {
   creditKickbackGateLaps,
@@ -6483,11 +6484,21 @@ describe('engine/conductor', () => {
               '# Results\n\n| Story | Result |\n|---|---|\n| story-a | PASS |\n',
             );
           } else if (step === 'prd_audit') {
-            await _mkdir(join(dir, '.pipeline'), { recursive: true });
-            await _wf(
-              join(dir, '.pipeline/prd-audit.md'),
-              '**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | PRD: | Evidence |\n|---|---|---|---|---|\n| S1.1 | PASS | — | FR-1 | foo.ts:1 |\n',
-            );
+            await persistPrdAuditVerdict(dir, {
+              complete: true,
+              judgment: {
+                version: 'v1',
+                criterionJudgments: [{
+                  criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
+                  evidence: 'The fixture supplies a complete typed audit judgment.',
+                  rationale: 'The artifact walk only needs a valid current verdict.',
+                  requirementAssociations: [], evidenceTaskIds: [],
+                }],
+                noOwnerObservations: [],
+              },
+              diagnostics: [],
+              recordedDispositions: [],
+            }, { attemptId: options?.runId ?? 'fixture-prd-audit', codeStamp: null });
           } else if (step === 'architecture_review_as_built') {
             await _mkdir(join(dir, '.docs/decisions'), { recursive: true });
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());

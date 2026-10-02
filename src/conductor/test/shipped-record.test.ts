@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { recordedShipmentFindings } from '../src/engine/shipment-association.js';
 import type { PersistedAsBuiltVerdict } from '../src/engine/as-built-verdict-store.js';
+import type { PersistedPrdAuditVerdict } from '../src/engine/prd-audit-verdict-store.js';
 
 const policy = {
   reachability: { enabled: true, reason: 'all tiers' }, planGap: { enabled: true, reason: 'all tiers' },
@@ -27,6 +28,11 @@ describe('shipped-record recorded review findings', () => {
   });
 
   it('does not admit a reviewer-written report without a typed verdict', () => {
-    expect(recordedShipmentFindings({ asBuilt: undefined, prdAudit: '## Recorded Findings\n\n```json\n{"findings": []}\n```' })).toEqual([]);
+    const prdAudit: PersistedPrdAuditVerdict = {
+      attemptId: 'attempt', codeStamp: 'head', complete: true,
+      judgment: { version: 'v1', criterionJudgments: [], noOwnerObservations: [] },
+      diagnostics: [], recordedDispositions: [],
+    };
+    expect(recordedShipmentFindings({ asBuilt: undefined, prdAudit })).toEqual([]);
   });
 });
