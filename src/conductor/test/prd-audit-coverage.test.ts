@@ -14,6 +14,8 @@ import {
   type ArtifactResolutionContext,
 } from '../src/engine/artifacts.js';
 import { appendRemediationTasks } from '../src/engine/remediation-append.js';
+import { persistPrdAuditVerdict } from '../src/engine/prd-audit-verdict-store.js';
+import type { PrdAuditJudgment } from '../src/engine/prd-audit-contract.js';
 
 const prdAuditSkillPath = fileURLToPath(
   new URL('../../../skills/prd-audit/SKILL.md', import.meta.url),
@@ -445,6 +447,41 @@ function criterionReport(
   ].join('\n');
 }
 
+async function persistCoverageVerdict(
+  root: string,
+  rows: Array<{ criterion: string; grade?: 'PASS' | 'FIXABLE' | 'PLAN_GAP' | 'OVER_SCOPE' }>,
+  options: {
+    complete?: boolean;
+    diagnostics?: readonly string[];
+    codeStamp?: string | null;
+  } = {},
+): Promise<void> {
+  const criterionJudgments: Array<PrdAuditJudgment['criterionJudgments'][number]> = rows.map(({
+    criterion: criterionId,
+    grade = 'PASS',
+  }) => {
+    const match = /^S(.+)\.(\d+)$/.exec(criterionId);
+    if (!match) throw new Error(`Fixture cannot derive criterion reference from ${criterionId}`);
+    const base = {
+      criterion: { storyId: match[1]!, ordinal: Number(match[2]) },
+      criterionId,
+      evidence: 'Fixture supplies typed audit evidence.',
+      rationale: 'Fixture supplies typed audit evidence.',
+      requirementAssociations: [],
+      evidenceTaskIds: [],
+    };
+    if (grade === 'FIXABLE') return { ...base, grade, ownerTaskId: '1' };
+    if (grade === 'OVER_SCOPE') return { ...base, grade, intentRelation: 'within' };
+    return { ...base, grade };
+  });
+  await persistPrdAuditVerdict(root, {
+    complete: options.complete ?? true,
+    judgment: { version: 'v1', criterionJudgments, noOwnerObservations: [] },
+    diagnostics: options.diagnostics ?? [],
+    recordedDispositions: [],
+  }, { attemptId: 'fixture-run', codeStamp: options.codeStamp ?? null });
+}
+
 describe('resolveFeaturePrdPaths', () => {
   let root: string;
 
@@ -614,11 +651,8 @@ describe('prd_audit completion predicate coverage', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('keeps a fresh fully-covered criterion report done', async () => {
-    const allAligned = criterionReport([1, 2, 3, 4, 5].map((n) => ({ criterion: `S1.${n}` })));
-
-    const reportPath = join(root, '.pipeline/prd-audit.md');
-    await writeFile(reportPath, allAligned);
+  it('keeps a fresh fully-covered typed verdict done', async () => {
+    await persistCoverageVerdict(root, [1, 2, 3, 4, 5].map((n) => ({ criterion: `S1.${n}` })));
     const covered = await checkStepCompletion(root, 'prd_audit', {
       artifactResolution: featureContext,
     });
@@ -626,56 +660,47 @@ describe('prd_audit completion predicate coverage', () => {
     expect(covered.done).toBe(true);
   });
 
-  it('blocks missing S1.3 and S1.5 without writing a code stamp', async () => {
-    await writeFile(
-      join(root, '.pipeline/prd-audit.md'),
-      criterionReport([1, 2, 4].map((n) => ({ criterion: `S1.${n}` }))),
-    );
+  it('blocks an incomplete typed verdict without writing a code stamp', async () => {
+    await persistCoverageVerdict(root, [1, 2, 4].map((n) => ({ criterion: `S1.${n}` })), {
+      complete: false,
+      diagnostics: ['criterion judgments missing S1.3, S1.5'],
+    });
 
     await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toEqual({
       done: false,
-      reason: 'PRD audit report is missing criterion-grade rows for S1.3, S1.5.',
+      routeClass: 'absent',
+      retrySignal: 'structured-result-rejected',
+      reason: '.pipeline/prd-audit.json is incomplete: criterion judgments missing S1.3, S1.5',
     });
     await expect(access(join(root, '.pipeline/prd-audit-code-stamp.json'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
   });
 
-  it('blocks an empty report as mechanically malformed without writing a code stamp', async () => {
+  it('does not interpret an empty rendered report without typed evidence', async () => {
     await writeFile(join(root, '.pipeline/prd-audit.md'), '');
 
     await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toEqual({
       done: false,
-      reason: 'PRD audit report must declare **PRD:** present or none.; PRD audit report must declare **PRD:** present or none.',
+      routeClass: 'absent',
+      reason: '.pipeline/prd-audit.json is missing',
     });
     await expect(access(join(root, '.pipeline/prd-audit-code-stamp.json'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
   });
 
-  it('continues story-criterion coverage when no approved PRD resolves', async () => {
+  it('preserves a complete typed verdict when its rendered report loses a source artifact', async () => {
     await rm(join(root, '.docs/specs/current-feature.md'));
     await mkdir(join(root, '.docs/stories'), { recursive: true });
     await writeFile(
       join(root, '.docs/stories/current-feature.md'),
       '## Story 1: Unreadable criteria\n\n**Requirement:** FR-1',
     );
-    await writeFile(
-      join(root, '.pipeline/prd-audit.md'),
-      [
-        '**PRD:** none',
-        '',
-        '## Verdict Table',
-        '',
-        '| Criterion | Grade | Plan task | Evidence |',
-        '| --- | --- | --- | --- |',
-        '| S1.1 | PASS | | Covered |',
-      ].join('\n'),
-    );
+    await persistCoverageVerdict(root, [{ criterion: 'S1.1' }]);
 
     await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toMatchObject({
-      done: false,
-      reason: expect.stringContaining('.docs/stories/current-feature.md'),
+      done: true,
     });
   });
 
@@ -692,10 +717,10 @@ describe('prd_audit completion predicate coverage', () => {
         '- Given a valid request, when it is handled, then the result is visible.',
       ].join('\n'),
     );
-    await writeFile(
-      join(root, '.pipeline/prd-audit.md'),
-      criterionReport([{ criterion: 'S1.1', prd: 'FR-1' }]),
-    );
+    await persistCoverageVerdict(root, [{ criterion: 'S1.1' }], {
+      complete: false,
+      diagnostics: ['FR-2 has no covering story criterion or PLAN_GAP judgment'],
+    });
 
     await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toMatchObject({
       done: false,
@@ -703,14 +728,14 @@ describe('prd_audit completion predicate coverage', () => {
     });
   });
 
-  it('keeps a report done when a prior-cycle history table carries a stale DIVERGED verdict', async () => {
+  it('keeps a typed verdict done when the rendered view carries stale DIVERGED history', async () => {
+    await persistCoverageVerdict(root, [1, 2, 3, 4, 5].map((n) => ({ criterion: `S1.${n}` })));
     await writeFile(
       join(root, '.pipeline/prd-audit.md'),
       [
         '# PRD Audit', '', '## What moved since cycle 4', '',
         '| FR | Cycle 4 | Cycle 5 | Why |', '| --- | --- | --- | --- |',
         '| FR-5 | DIVERGED (`intended-drift`), blocking | **ALIGNED** | PRD amended |', '',
-        criterionReport([1, 2, 3, 4, 5].map((n) => ({ criterion: `S1.${n}` }))),
       ].join('\n'),
     );
 
@@ -720,30 +745,28 @@ describe('prd_audit completion predicate coverage', () => {
   });
 
   it('still blocks on a Verdict Table row that a narrative table claims is closed', async () => {
-    await writeFile(
-      join(root, '.pipeline/prd-audit.md'),
-      criterionReport([
-        ...[1, 2, 3, 4].map((n) => ({ criterion: `S1.${n}` })),
-        { criterion: 'S1.5', grade: 'FIXABLE' },
-      ]),
-    );
+    await persistCoverageVerdict(root, [
+      ...[1, 2, 3, 4].map((n) => ({ criterion: `S1.${n}` })),
+      { criterion: 'S1.5', grade: 'FIXABLE' },
+    ]);
 
     await expect(
       checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext }),
     ).resolves.toEqual({
       done: false,
+      routeClass: 'named-route',
       reason: expect.stringContaining('S1.5 (FIXABLE)'),
     });
   });
 
-  it('reports both blocking verdict rows and omitted verdict rows without writing a code stamp', async () => {
-    await writeFile(
-      join(root, '.pipeline/prd-audit.md'),
-      criterionReport([{ criterion: 'S1.1' }, { criterion: 'S1.2', grade: 'FIXABLE' }, { criterion: 'S1.4' }]),
-    );
+  it('reports blocking typed verdict rows without writing a code stamp', async () => {
+    await persistCoverageVerdict(root, [
+      { criterion: 'S1.1' }, { criterion: 'S1.2', grade: 'FIXABLE' }, { criterion: 'S1.4' },
+    ]);
 
     await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toEqual({
       done: false,
+      routeClass: 'named-route',
       reason: expect.stringContaining('S1.2 (FIXABLE)'),
     });
     await expect(access(join(root, '.pipeline/prd-audit-code-stamp.json'))).rejects.toMatchObject({
@@ -755,8 +778,6 @@ describe('prd_audit completion predicate coverage', () => {
 describe('prd_audit code-validity coverage rechecks', () => {
   let root: string;
   const featureContext = context({ activePlanPath: '.docs/plans/current-feature.md' });
-  const partialReport = criterionReport([{ criterion: 'S1.1' }]);
-  const fullReport = criterionReport([{ criterion: 'S1.1' }, { criterion: 'S1.2' }]);
 
   const codeValidGit = async (args: string[]) => {
     if (args[0] === 'symbolic-ref') return { exitCode: 1, stdout: '', stderr: '' };
@@ -777,9 +798,8 @@ describe('prd_audit code-validity coverage rechecks', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('preserves a code-valid sidecar when no stories artifact makes the report complete', async () => {
-    await writeFile(join(root, '.pipeline/prd-audit.md'), partialReport);
-    await writeFile(join(root, '.pipeline/prd-audit-code-stamp.json'), '{"codeStamp":"baseline"}');
+  it('preserves a code-valid typed verdict when no stories artifact exists', async () => {
+    await persistCoverageVerdict(root, [{ criterion: 'S1.1' }], { codeStamp: 'baseline' });
 
     await expect(
       checkStepCompletion(root, 'prd_audit', {
@@ -790,9 +810,8 @@ describe('prd_audit code-validity coverage rechecks', () => {
     ).resolves.toMatchObject({ done: true });
   });
 
-  it('still preserves a fully-covered code-valid report', async () => {
-    await writeFile(join(root, '.pipeline/prd-audit.md'), fullReport);
-    await writeFile(join(root, '.pipeline/prd-audit-code-stamp.json'), '{"codeStamp":"baseline"}');
+  it('still preserves a fully-covered code-valid typed verdict', async () => {
+    await persistCoverageVerdict(root, [{ criterion: 'S1.1' }, { criterion: 'S1.2' }], { codeStamp: 'baseline' });
 
     await expect(
       checkStepCompletion(root, 'prd_audit', {
@@ -803,7 +822,7 @@ describe('prd_audit code-validity coverage rechecks', () => {
     ).resolves.toMatchObject({ done: true });
   });
 
-  it('preserves a stale report that is complete without a stories artifact', async () => {
+  it('preserves a stale rendered report backed by a code-valid typed verdict', async () => {
     await execa('git', ['init', '-q', '-b', 'main'], { cwd: root });
     await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
     await execa('git', ['config', 'user.name', 'Test'], { cwd: root });
@@ -811,8 +830,7 @@ describe('prd_audit code-validity coverage rechecks', () => {
     await execa('git', ['commit', '-qm', 'test fixture'], { cwd: root });
     const baseline = (await execa('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout;
     const reportPath = join(root, '.pipeline/prd-audit.md');
-    await writeFile(reportPath, partialReport);
-    await writeFile(join(root, '.pipeline/prd-audit-code-stamp.json'), JSON.stringify({ codeStamp: baseline }));
+    await persistCoverageVerdict(root, [{ criterion: 'S1.1' }], { codeStamp: baseline });
     await utimes(reportPath, 1, 1);
 
     await expect(
