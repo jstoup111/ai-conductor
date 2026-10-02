@@ -10,6 +10,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunOptions, StepRunResult } from '../../src/engine/conductor.js';
@@ -415,31 +416,22 @@ describe('integration/rebase-loop', () => {
       );
     } else if (step === 'prd_audit') {
       const codeStamp = await git('rev-parse', 'HEAD');
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(
-        join(dir, '.pipeline/prd-audit.md'),
-        [
-          '# PRD Audit',
-          '',
-          '**PRD:** present',
-          '',
-          '## Verdict Table',
-          '| Criterion | Grade | Plan task | Evidence |',
-          '|---|---|---|---|',
-          // The fixture story's heading id is `1-1`, so its sole criterion is
-          // `S1-1.1` — the criterion id carries the whole heading id, not just
-          // its first digit run.
-          '| S1-1.1 | PASS | 1 | foo.ts:1 |',
-          '',
-          '| FR | Verdict | Evidence |',
-          '|---|---|---|',
-          '| FR-1 | ALIGNED | foo.ts:1 |',
-        ].join('\n'),
-      );
-      await writeFile(
-        join(dir, '.pipeline/prd-audit-code-stamp.json'),
-        JSON.stringify({ codeStamp, runId: 'test-run' }),
-      );
+      await persistPrdAuditVerdict(dir, {
+        complete: true,
+        judgment: {
+          version: 'v1',
+          criterionJudgments: [{
+            // The fixture story's heading id is `1-1`, so its sole criterion
+            // is `S1-1.1` — the criterion id carries the whole heading id.
+            criterion: { storyId: '1-1', ordinal: 1 }, criterionId: 'S1-1.1', grade: 'PASS',
+            evidence: 'foo.ts:1', rationale: 'The fixture supplies a complete typed audit judgment.',
+            requirementAssociations: [], evidenceTaskIds: ['1'],
+          }],
+          noOwnerObservations: [],
+        },
+        diagnostics: [],
+        recordedDispositions: [],
+      }, { attemptId: options?.runId ?? 'test-run', codeStamp });
     } else if (step === 'architecture_review_as_built') {
       const codeStamp = await git('rev-parse', 'HEAD');
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });
