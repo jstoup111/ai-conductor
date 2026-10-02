@@ -1,5 +1,5 @@
 // Covers: task:11
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -18,6 +18,19 @@ afterEach(async () => {
 });
 
 describe('PRD audit typed verdict store', () => {
+  const validEvidence = {
+    complete: true,
+    judgment: {
+      version: 'v1' as const,
+      criterionJudgments: [{
+        criterion: { storyId: 'alpha', ordinal: 1 }, criterionId: 'Salpha.1', grade: 'PASS' as const,
+        evidence: 'Evidence.', rationale: 'Rationale.', requirementAssociations: [], evidenceTaskIds: [],
+      }],
+      noOwnerObservations: [],
+    },
+    diagnostics: [],
+    recordedDispositions: [],
+  };
   it('round trips complete and incomplete judgments with engine metadata and a derived report', async () => {
     for (const { complete, diagnostics, evidence, recordedDispositions } of [
       { complete: true, diagnostics: [], evidence: 'Complete judgment evidence.', recordedDispositions: [] },
@@ -77,5 +90,33 @@ describe('PRD audit typed verdict store', () => {
         expect(report).toContain('PLAN_GAP');
       }
     }
+  });
+
+  it('surfaces write and rendering failures without treating an old report as authority', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'prd-audit-store-failure-'));
+    dirs.push(dir);
+    await expect(persistPrdAuditVerdict(dir, validEvidence, { attemptId: 'write-fails', codeStamp: null }, {
+      write: async () => { throw new Error('authority write failed'); },
+    })).rejects.toThrow('authority write failed');
+    expect(await readPrdAuditVerdict(dir)).toEqual({ kind: 'absent' });
+
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'decisions.json'), 'durable operator decision\n');
+    await expect(persistPrdAuditVerdict(dir, validEvidence, { attemptId: 'render-fails', codeStamp: null }, {
+      render: () => { throw new Error('report rendering failed'); },
+    })).rejects.toThrow('report rendering failed');
+    expect(await readPrdAuditVerdict(dir)).toMatchObject({ kind: 'present', value: { attemptId: 'render-fails' } });
+    expect(await readFile(join(dir, '.pipeline', 'decisions.json'), 'utf8')).toBe('durable operator decision\n');
+  });
+
+  it('returns a named invalid-evidence fault rather than plausible report findings', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'prd-audit-store-invalid-'));
+    dirs.push(dir);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, PRD_AUDIT_REPORT_PATH), '# PRD audit\n\nStatus: complete\n- Salpha.1: PASS\n');
+    await writeFile(join(dir, PRD_AUDIT_VERDICT_PATH), JSON.stringify({ attemptId: 'old', codeStamp: null, judgment: { version: 'v99' } }));
+    await expect(readPrdAuditVerdict(dir)).resolves.toMatchObject({
+      kind: 'unreadable', reason: expect.stringContaining('invalid evidence'),
+    });
   });
 });
