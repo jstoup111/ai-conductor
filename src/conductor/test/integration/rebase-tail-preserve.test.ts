@@ -16,6 +16,7 @@ import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 
 const prospectiveMergeFixture = vi.hoisted(() => ({ forceIndeterminate: false }));
 
@@ -174,6 +175,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     runner: StepRunner,
     config: Record<string, unknown> = {},
     suiteVerifier?: NonNullable<ConstructorParameters<typeof Conductor>[0]['fullSuiteVerifier']>,
+    fromStep: 'build' | 'coverage_binding' = 'build',
   ): Conductor {
     const fakeGit: GitRunner = async (args) =>
       args.includes('--symbolic-full-name')
@@ -187,7 +189,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
       daemon: true,
       verifyArtifacts: true,
       mode: 'auto',
-      fromStep: 'build',
+      fromStep,
       maxRetries: 1,
       config: config as never,
       git: fakeGit,
@@ -230,22 +232,21 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
         '| Story | Result |\n|---|---|\n| foo | PASS |\n',
       );
     } else if (step === 'prd_audit') {
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(
-        join(dir, '.pipeline/prd-audit.md'),
-        [
-          '# PRD Audit',
-          '',
-          '**PRD:** present',
-          '',
-          '## Verdict Table',
-          '',
-          '| Criterion | Grade | Plan task | PRD | Evidence |',
-          '|---|---|---|---|---|',
-          '| S1.1 | PASS | 1 | FR-1 | foo.ts:1 |',
-          '',
-        ].join('\n'),
-      );
+      await persistPrdAuditVerdict(dir, {
+        complete: true,
+        judgment: {
+          version: 'v1',
+          criterionJudgments: [{
+            criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
+            evidence: 'The fixture supplies a complete typed audit judgment.',
+            rationale: 'The rebase-tail fixture requires a current typed verdict.',
+            requirementAssociations: [], evidenceTaskIds: [],
+          }],
+          noOwnerObservations: [],
+        },
+        diagnostics: [],
+        recordedDispositions: [],
+      }, { attemptId: options?.runId ?? 'test-run', codeStamp: null });
     } else if (step === 'architecture_review_as_built') {
       await persistAsBuiltVerdict(dir, {
         version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
@@ -281,6 +282,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
   ): StepRunner {
     const coverage = new DefaultStepRunner(provider, 'rebase-coverage-refresh', dir, {
       featureDesc: 'add-foo',
+      planPath: join(dir, '.docs/plans/add-foo.md'),
       config: config as never,
     });
     return {
@@ -427,7 +429,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     await prepareChangedCoveragePair();
 
     const counts: Record<string, number> = {};
-    await conductorWith(coverageRefreshRunner(counts, provider, config), config).run();
+    await conductorWith(coverageRefreshRunner(counts, provider, config), config, undefined, 'coverage_binding').run();
 
     expect(providerCalls).toBe(1);
     expect(counts.coverage_binding).toBe(1);
@@ -448,6 +450,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
       },
     };
     await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+    await advanceBaseForeignRuntimeOnly();
     const oldRunner = new DefaultStepRunner(provider, 'coverage-before-rebase', dir, {
       featureDesc: 'add-foo', planPath: join(dir, '.docs/plans/add-foo.md'), config: config as never,
     });
@@ -455,11 +458,10 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     // The seed proves the cache contains a judged entry; the assertion below
     // observes only the post-rebase refresh.
     providerCalls = 0;
-    await advanceBaseForeignRuntimeOnly();
     await writeState(statePath, { ...FRONT_DONE_M });
 
     const counts: Record<string, number> = {};
-    await conductorWith(coverageRefreshRunner(counts, provider, config), config).run();
+    await conductorWith(coverageRefreshRunner(counts, provider, config), config, undefined, 'coverage_binding').run();
 
     expect(counts.coverage_binding).toBe(1);
     expect(providerCalls).toBe(0);
@@ -479,7 +481,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
       },
     };
     const counts: Record<string, number> = {};
-    await conductorWith(coverageRefreshRunner(counts, provider, {})).run();
+    await conductorWith(coverageRefreshRunner(counts, provider, {}), {}, undefined, 'coverage_binding').run();
 
     expect(counts.coverage_binding).toBe(1);
     expect(providerCalls).toBe(0);
@@ -498,7 +500,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
       }),
     };
     const counts: Record<string, number> = {};
-    await conductorWith(coverageRefreshRunner(counts, provider, config), config).run();
+    await conductorWith(coverageRefreshRunner(counts, provider, config), config, undefined, 'coverage_binding').run();
 
     expect(counts.coverage_binding).toBe(1);
     expect(counts.acceptance_specs ?? 0).toBe(0);
@@ -515,7 +517,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     const config = { coverage_binding: { judge: { enabled: true } } };
     const provider: LLMProvider = { lifecycleCapability: { synchronousSpawnPermit: true }, invoke };
     const counts: Record<string, number> = {};
-    await conductorWith(coverageRefreshRunner(counts, provider, config), config).run();
+    await conductorWith(coverageRefreshRunner(counts, provider, config), config, undefined, 'coverage_binding').run();
 
     expect(counts.coverage_binding).toBe(1);
     expect(counts.acceptance_specs ?? 0).toBe(0);
