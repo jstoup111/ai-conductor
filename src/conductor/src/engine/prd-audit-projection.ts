@@ -20,6 +20,63 @@ export const PRD_AUDIT_PROJECTION_VERSION = 1;
 const PRD_AUDIT_DIFF_EXCERPT_PER_FILE_BYTES = 256 * 1024;
 const PRD_AUDIT_DIFF_EXCERPT_TOTAL_BYTES = 512 * 1024;
 
+/** Largest observed normal source inputs at the time these engineering bounds were set. */
+export const PRD_AUDIT_PROJECTION_CORPUS_MAXIMA_BYTES = {
+  planIntentBytes: 1_477,
+  planTasksBytes: 188_016,
+  criteriaBytes: 43_226,
+  prdIntentBytes: 17_991,
+  coherenceBytes: 82_354,
+  historyBytes: 0,
+} as const;
+
+/** A non-empty history allowance when the repository corpus has no current history artifact. */
+export const PRD_AUDIT_PROJECTION_MIN_HISTORY_BYTES = 256 * 1024;
+
+/** Allows the versioned projection wrapper and JSON structure around its bounded sections. */
+export const PRD_AUDIT_PROJECTION_ENVELOPE_OVERHEAD_BYTES = 64 * 1024;
+
+function roundUpPowerOfTwo(bytes: number): number {
+  let rounded = 1;
+  while (rounded < bytes) rounded *= 2;
+  return rounded;
+}
+
+const PRD_AUDIT_PROJECTION_COMPONENT_LIMITS = {
+  planIntentBytes: roundUpPowerOfTwo(Math.max(256 * 1024, PRD_AUDIT_PROJECTION_CORPUS_MAXIMA_BYTES.planIntentBytes)),
+  planTasksBytes: roundUpPowerOfTwo(Math.max(256 * 1024, PRD_AUDIT_PROJECTION_CORPUS_MAXIMA_BYTES.planTasksBytes)),
+  criteriaBytes: roundUpPowerOfTwo(Math.max(256 * 1024, PRD_AUDIT_PROJECTION_CORPUS_MAXIMA_BYTES.criteriaBytes)),
+  prdIntentBytes: roundUpPowerOfTwo(PRD_AUDIT_PROJECTION_CORPUS_MAXIMA_BYTES.prdIntentBytes),
+  coherenceBytes: roundUpPowerOfTwo(PRD_AUDIT_PROJECTION_CORPUS_MAXIMA_BYTES.coherenceBytes),
+  historyBytes: roundUpPowerOfTwo(Math.max(PRD_AUDIT_PROJECTION_MIN_HISTORY_BYTES, PRD_AUDIT_PROJECTION_CORPUS_MAXIMA_BYTES.historyBytes)),
+} as const;
+
+const PRD_AUDIT_PROJECTION_TOTAL_LIMIT_BYTES = roundUpPowerOfTwo(
+  PRD_AUDIT_PROJECTION_COMPONENT_LIMITS.planIntentBytes +
+  PRD_AUDIT_PROJECTION_COMPONENT_LIMITS.planTasksBytes +
+  PRD_AUDIT_PROJECTION_COMPONENT_LIMITS.criteriaBytes +
+  PRD_AUDIT_PROJECTION_COMPONENT_LIMITS.prdIntentBytes +
+  PRD_AUDIT_PROJECTION_COMPONENT_LIMITS.coherenceBytes +
+  PRD_AUDIT_PROJECTION_COMPONENT_LIMITS.historyBytes +
+  PRD_AUDIT_DIFF_EXCERPT_TOTAL_BYTES +
+  PRD_AUDIT_PROJECTION_ENVELOPE_OVERHEAD_BYTES,
+);
+
+export const PRD_AUDIT_PROJECTION_LIMITS = {
+  ...PRD_AUDIT_PROJECTION_COMPONENT_LIMITS,
+  totalBytes: PRD_AUDIT_PROJECTION_TOTAL_LIMIT_BYTES,
+} as const;
+
+export interface PrdAuditProjectionLimits {
+  readonly planIntentBytes: number;
+  readonly planTasksBytes: number;
+  readonly criteriaBytes: number;
+  readonly prdIntentBytes: number;
+  readonly coherenceBytes: number;
+  readonly historyBytes: number;
+  readonly totalBytes: number;
+}
+
 export interface PrdAuditProjection {
   readonly version: typeof PRD_AUDIT_PROJECTION_VERSION;
   readonly plan: { readonly intent: string };
@@ -66,7 +123,36 @@ export interface PrdAuditProjection {
 
 export type PrdAuditProjectionResult =
   | { readonly ok: true; readonly projection: PrdAuditProjection }
-  | { readonly ok: false; readonly fault: { readonly dimension: string; readonly detail?: string } };
+  | {
+      readonly ok: false;
+      readonly fault: {
+        readonly dimension: string;
+        readonly detail?: string;
+        readonly actual?: number;
+        readonly limit?: number;
+      };
+    };
+
+function serializedBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), 'utf-8');
+}
+
+function projectionLimitFault(
+  projection: PrdAuditProjection,
+  limits: PrdAuditProjectionLimits,
+): Extract<PrdAuditProjectionResult, { ok: false }> | undefined {
+  const sections: readonly { readonly dimension: string; readonly actual: number; readonly limit: number }[] = [
+    { dimension: 'plan-intent', actual: serializedBytes(projection.plan), limit: limits.planIntentBytes },
+    { dimension: 'plan-tasks', actual: serializedBytes(projection.tasks), limit: limits.planTasksBytes },
+    { dimension: 'criteria', actual: serializedBytes(projection.criteria), limit: limits.criteriaBytes },
+    { dimension: 'prd-intent', actual: serializedBytes(projection.prd), limit: limits.prdIntentBytes },
+    { dimension: 'coherence', actual: serializedBytes(projection.coherence), limit: limits.coherenceBytes },
+    { dimension: 'history', actual: serializedBytes(projection.history), limit: limits.historyBytes },
+    { dimension: 'total', actual: serializedBytes(projection), limit: limits.totalBytes },
+  ];
+  const overflow = sections.find(({ actual, limit }) => actual > limit);
+  return overflow === undefined ? undefined : { ok: false, fault: overflow };
+}
 
 function repoPath(projectRoot: string, path: string): string {
   return relative(projectRoot, path).replaceAll('\\', '/');
@@ -234,6 +320,7 @@ async function wideningHistory(projectRoot: string, activeFeature: string): Prom
 export async function buildPrdAuditProjection(
   projectRoot: string,
   featureDesc?: string,
+  limitOverrides: Partial<PrdAuditProjectionLimits> = {},
 ): Promise<PrdAuditProjectionResult> {
   const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
   if (!planPath) return { ok: false, fault: { dimension: 'plan', detail: 'active plan is unavailable' } };
@@ -294,5 +381,17 @@ export async function buildPrdAuditProjection(
   if (history.kind === 'foreign') return { ok: false, fault: { dimension: 'history', detail: 'widening history is foreign to the active feature' } };
   if (history.kind === 'invalid') return { ok: false, fault: { dimension: 'history', detail: 'widening history is invalid' } };
 
-  return { ok: true, projection: { version: PRD_AUDIT_PROJECTION_VERSION, plan: { intent }, criteria, tasks, prd, coherence, changes, history: history.history } };
+  const projection: PrdAuditProjection = {
+    version: PRD_AUDIT_PROJECTION_VERSION,
+    plan: { intent },
+    criteria,
+    tasks,
+    prd,
+    coherence,
+    changes,
+    history: history.history,
+  };
+  const fault = projectionLimitFault(projection, { ...PRD_AUDIT_PROJECTION_LIMITS, ...limitOverrides });
+  if (fault) return fault;
+  return { ok: true, projection };
 }
