@@ -21,7 +21,8 @@ args=("$@")
 i=0
 while [[ $i -lt \${#args[@]} ]]; do
   case "\${args[$i]}" in
-    -C|--git-dir|--work-tree|-c|--namespace) ((i+=2)); continue ;;
+    -C|--git-dir|--work-tree|-c|--namespace|--config-env|--attr-source|--super-prefix) ((i+=2)); continue ;;
+    --config-env=*|--attr-source=*|--super-prefix=*) ((i++)); continue ;;
     -C*|-c*|--git-dir=*|--work-tree=*|--namespace=*|--exec-path=*) ((i++)); continue ;;
     --exec-path|--no-pager|--paginate|-P|--no-optional-locks|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-replace-objects|--no-lazy-fetch|--no-advice|--bare) ((i++)); continue ;;
   esac

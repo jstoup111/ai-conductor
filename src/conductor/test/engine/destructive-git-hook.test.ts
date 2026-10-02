@@ -85,6 +85,21 @@ describe('block-destructive-git hook force-push protection', () => {
     expect(result.stderr).toContain('git reset --hard');
   });
 
+  it.each(["cat <<\\EOF", 'cat <<E"OF"'])('removes shell quoting from the %s heredoc delimiter', (opener) => {
+    const allowed = invoke(`${opener}\ngit reset --hard\nEOF`);
+    expect(allowed.status).toBe(0);
+
+    const refused = invoke(`${opener}\ngit reset --hard\nEOF\ngit reset --hard`);
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain('git reset --hard');
+  });
+
+  it('does not treat a heredoc-looking comment as an opener', () => {
+    const result = invoke('# <<EOF\ngit reset --hard');
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('git reset --hard');
+  });
+
   const separators: Array<[string, string]> = [
     ['&&', ' && '],
     ['||', ' || '],

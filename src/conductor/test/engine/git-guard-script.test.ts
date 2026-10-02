@@ -144,6 +144,7 @@ esac
     expect(result.status).toBe(0);
     expect(await recordedCommands()).toEqual(['config', 'log']);
   });
+
 });
 
 // These cases deliberately use local Git rather than the classification stub:
@@ -279,6 +280,45 @@ describe('GIT_GUARD_SCRIPT in a scratch repository', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('commits unreachable');
     expect(git(['rev-parse', 'doomed'])).toBe(tip);
+  });
+
+  it.each([
+    ['equals form', ['--config-env=core.pager=PAGER', 'reset', '--hard']],
+    ['separate form', ['--config-env', 'core.pager=PAGER', 'reset', '--hard']],
+  ])('refuses reset after the --config-env %s without reaching real Git', async (_name, args) => {
+    const calls = join(root, 'config-env-calls');
+    const recordingGit = join(root, 'recording-git');
+    const systemGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+    await writeFile(recordingGit, `#!/usr/bin/env bash
+printf '%s\\0' "$@" >> ${JSON.stringify(calls)}
+exec ${JSON.stringify(systemGit)} "$@"
+`, 'utf8');
+    await chmod(recordingGit, 0o755);
+    await writeFile(join(repository, '.pipeline', 'git-guard', 'real-git'), `${recordingGit}\n`);
+    await writeFile(join(repository, 'tracked'), 'edited\n');
+
+    const result = invoke(args, repository, { ...process.env, PAGER: 'cat' });
+
+    expect(result.status).toBe(1);
+    expect(await readFile(join(repository, 'tracked'), 'utf8')).toBe('edited\n');
+    expect((await readFile(calls, 'utf8')).split('\0').filter(Boolean)).not.toContain('reset');
+  });
+
+  it('passes a --config-env status command through with its argv unchanged', async () => {
+    const calls = join(root, 'config-env-status-calls');
+    const recordingGit = join(root, 'recording-git');
+    const systemGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+    await writeFile(recordingGit, `#!/usr/bin/env bash
+printf '%s\\0' "$@" >> ${JSON.stringify(calls)}
+exec ${JSON.stringify(systemGit)} "$@"
+`, 'utf8');
+    await chmod(recordingGit, 0o755);
+    await writeFile(join(repository, '.pipeline', 'git-guard', 'real-git'), `${recordingGit}\n`);
+    const args = ['--config-env=core.pager=PAGER', 'status'];
+
+    expect(invoke(args, repository, { ...process.env, PAGER: 'cat' }).status).toBe(0);
+    const recorded = (await readFile(calls, 'utf8')).split('\0').filter(Boolean);
+    expect(recorded.slice(-args.length)).toEqual(args);
   });
 
   it.each(['sibling worktree', 'root checkout'])('refuses clean -f in the feature repository\'s %s', async (where) => {

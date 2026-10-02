@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { Options as ExecaOptions } from 'execa';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { ensureGitGuardForDispatch, gitGuardPath, resolveRealGit } from '../../src/engine/git-guard.js';
+import { ensureGitGuardForDispatch, gitGuardPath, resolveRealGit, writeGitGuard } from '../../src/engine/git-guard.js';
 import { GIT_GUARD_SCRIPT } from '../../src/engine/git-hook-assets.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
@@ -42,6 +42,21 @@ describe('git guard provisioning primitives', () => {
     const realGit = (await readFile(join(root, '.pipeline', 'git-guard', 'real-git'), 'utf8')).trim();
     expect(realGit.startsWith('/')).toBe(true);
     expect(realGit).not.toContain('/.pipeline/bin/');
+  });
+
+  it('names the guard path when a read-only bin directory prevents writing it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'git-guard-read-only-'));
+    roots.push(root);
+    await initTestRepo(root);
+    const bin = join(root, '.pipeline', 'bin');
+    await mkdir(bin, { recursive: true });
+    await chmod(bin, 0o555);
+    const target = gitGuardPath(root);
+    try {
+      await expect(writeGitGuard(root)).rejects.toThrow(target);
+    } finally {
+      await chmod(bin, 0o755);
+    }
   });
 
   it('repairs a wholly deleted pipeline when worktree config still names its hooks', async () => {

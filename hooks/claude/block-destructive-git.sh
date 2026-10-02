@@ -22,8 +22,28 @@ import os
 import re
 
 heredoc_start = re.compile(
-    r"(?<!<)<<(?P<strip>-?)(?!<)[ \t]*(?:(?P<quote>['\"])(?P<quoted>[^'\"]+)(?P=quote)|(?P<bare>[^\s;|&]+))"
+    r"(?<!<)<<(?P<strip>-?)(?!<)[ \t]*(?P<word>(?:\\.|'[^']*'|\"[^\"]*\"|[^\s;|&])+)"
 )
+
+def comment_start(line):
+    quote = None
+    escaped = False
+    for i, char in enumerate(line):
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "#" and (i == 0 or line[i - 1].isspace() or line[i - 1] in ";|&"):
+            return i
+    return len(line)
+
+def shell_quote_removal(word):
+    return re.sub(r"\\(.)|['\"]", lambda match: match.group(1) or "", word)
 
 def arithmetic_expansion_spans(line, depth):
     spans = []
@@ -72,17 +92,19 @@ for line in os.environ["COMMAND"].splitlines(keepends=True):
     # its shape for later quote stripping but mask it before opener detection.
     # Preserve quoted delimiter tokens after << or <<- with arbitrary shell
     # whitespace; all other quoted literals stay masked before opener parsing.
-    opener_spans = [(m.start(), m.end()) for m in heredoc_start.finditer(line)]
+    comment = comment_start(line)
+    visible_line = line[:comment] + " " * (len(line) - comment)
+    opener_spans = [(m.start(), m.end()) for m in heredoc_start.finditer(visible_line)]
     def mask_quote(match):
         if any(start <= match.start() and match.end() <= end for start, end in opener_spans):
             return match.group()
         return " " * len(match.group())
-    opener_line = re.sub(r"'[^']*'|\"[^\"]*\"", mask_quote, line)
+    opener_line = re.sub(r"'[^']*'|\"[^\"]*\"", mask_quote, visible_line)
     print(line, end="")
     arithmetic_spans, arithmetic_depth = arithmetic_expansion_spans(line, arithmetic_depth)
     for match in heredoc_start.finditer(opener_line):
         if not any(start <= match.start() < end for start, end in arithmetic_spans):
-            delimiters.append((match.group("quoted") or match.group("bare"), match.group("strip") == "-"))
+            delimiters.append((shell_quote_removal(match.group("word").rstrip()), match.group("strip") == "-"))
 PY
 )
 SCAN=$(printf '%s' "$SCAN" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")

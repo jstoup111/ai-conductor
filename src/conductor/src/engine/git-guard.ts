@@ -39,9 +39,13 @@ export async function writeGitGuard(worktreePath: string): Promise<string> {
   }
   const realGit = await resolveRealGit();
   const commonDir = (await execa(realGit, ['-C', worktreePath, 'rev-parse', '--path-format=absolute', '--git-common-dir'])).stdout.trim();
-  await writeRegularFile(target, GIT_GUARD_SCRIPT, 0o755);
-  await writeRegularFile(join(dataDir, 'real-git'), realGit + '\n');
-  await writeRegularFile(join(dataDir, 'common-dir'), commonDir + '\n');
+  try {
+    await writeRegularFile(target, GIT_GUARD_SCRIPT, 0o755);
+    await writeRegularFile(join(dataDir, 'real-git'), realGit + '\n');
+    await writeRegularFile(join(dataDir, 'common-dir'), commonDir + '\n');
+  } catch (error) {
+    throw new Error(`unable to provision git guard ${target}: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return join(pipeline(worktreePath), 'bin');
 }
 
