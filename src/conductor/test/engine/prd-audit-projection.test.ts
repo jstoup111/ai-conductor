@@ -431,7 +431,7 @@ describe('PRD-audit feature projection', () => {
     });
   });
 
-  it('keeps case-only widening history and rejects a foreign case-store feature', async () => {
+  it('keeps case-only widening history and rejects a foreign case-store feature without rewriting it', async () => {
     const root = await fixture();
     await rm(join(root, '.pipeline', 'accepted-widenings.json'));
     const casePath = join(root, '.pipeline', 'remediation-cases.json');
@@ -452,11 +452,52 @@ describe('PRD-audit feature projection', () => {
       projection: { history: { decisions: [], cases: [expect.objectContaining({ id: 'prd-case-1' })] } },
     });
 
-    await writeFile(casePath, JSON.stringify({ ...caseHistory, feature: { ...caseHistory.feature, feature: 'foreign-fixture' } }));
-    await expect(buildPrdAuditProjection(root)).resolves.toMatchObject({
-      ok: false,
-      fault: { dimension: 'history', detail: 'widening case history at .pipeline/remediation-cases.json is foreign to the active feature' },
+    const foreignCaseHistory = JSON.stringify({
+      ...caseHistory,
+      feature: { ...caseHistory.feature, feature: 'foreign-fixture' },
     });
+    await writeFile(casePath, foreignCaseHistory);
+
+    expect({
+      result: await buildPrdAuditProjection(root),
+      bytes: await readFile(casePath, 'utf-8'),
+    }).toEqual({
+      result: {
+        ok: false,
+        fault: { dimension: 'history', detail: 'widening case history at .pipeline/remediation-cases.json is foreign to the active feature' },
+      },
+      bytes: foreignCaseHistory,
+    });
+  });
+
+  it('rejects corrupt and unsupported case-only history without rewriting its recovery source', async () => {
+    const root = await fixture();
+    await rm(join(root, '.pipeline', 'accepted-widenings.json'));
+    const casePath = join(root, '.pipeline', 'remediation-cases.json');
+    const histories = [
+      {
+        bytes: '{not json',
+        detail: 'widening case history at .pipeline/remediation-cases.json is corrupt',
+      },
+      {
+        bytes: JSON.stringify({ version: 'v3' }),
+        detail: 'widening case history at .pipeline/remediation-cases.json has an unsupported version',
+      },
+    ] as const;
+
+    for (const history of histories) {
+      await writeFile(casePath, history.bytes);
+      expect({
+        result: await buildPrdAuditProjection(root),
+        bytes: await readFile(casePath, 'utf-8'),
+      }).toEqual({
+        result: {
+          ok: false,
+          fault: { dimension: 'history', detail: history.detail },
+        },
+        bytes: history.bytes,
+      });
+    }
   });
 
   it('rejects corrupt, foreign, and unsupported present widening history without rewriting its recovery source', async () => {

@@ -8,7 +8,12 @@ import {
   resolveFeaturePrdPaths,
 } from './artifacts.js';
 import { AcceptedWideningDecisionStore, type AcceptedWideningDecision } from './accepted-widenings.js';
-import { readRemediationCaseStoreFeature, RemediationCaseStore, type RemediationCasePrdWideningRecord } from './remediation-case-store.js';
+import {
+  readRemediationCaseStoreFeature,
+  RemediationCaseStore,
+  type RemediationCasePrdWideningRecord,
+  type RemediationCaseStoreFailureReason,
+} from './remediation-case-store.js';
 import { parseCoherenceArtifact, type CoherenceRow } from './coherence-parse.js';
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskStoryIds } from './plan-task-parse.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
@@ -304,6 +309,18 @@ type WideningHistoryResult =
   | { readonly kind: 'available'; readonly history: PrdAuditProjection['history'] }
   | { readonly kind: 'fault'; readonly detail: string };
 
+const WIDENING_CASE_HISTORY_SOURCE = '.pipeline/remediation-cases.json';
+
+function wideningCaseHistoryFault(reason: RemediationCaseStoreFailureReason): WideningHistoryResult {
+  if (reason === 'foreign-feature') {
+    return { kind: 'fault', detail: `widening case history at ${WIDENING_CASE_HISTORY_SOURCE} is foreign to the active feature` };
+  }
+  if (reason === 'unknown-version') {
+    return { kind: 'fault', detail: `widening case history at ${WIDENING_CASE_HISTORY_SOURCE} has an unsupported version` };
+  }
+  return { kind: 'fault', detail: `widening case history at ${WIDENING_CASE_HISTORY_SOURCE} is corrupt` };
+}
+
 async function wideningHistory(projectRoot: string, activeFeature: string): Promise<WideningHistoryResult> {
   const path = join(projectRoot, '.pipeline', 'accepted-widenings.json');
   const source = '.pipeline/accepted-widenings.json';
@@ -314,15 +331,21 @@ async function wideningHistory(projectRoot: string, activeFeature: string): Prom
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { kind: 'fault', detail: `widening history at ${source} is corrupt` };
   }
   const featureRead = await readRemediationCaseStoreFeature(projectRoot);
-  if (!featureRead.ok) return { kind: 'fault', detail: 'widening case history is corrupt' };
+  if (!featureRead.ok) return wideningCaseHistoryFault(featureRead.reason);
   if (featureRead.feature !== undefined && featureRead.feature.feature !== activeFeature) {
-    return { kind: 'fault', detail: 'widening case history at .pipeline/remediation-cases.json is foreign to the active feature' };
+    return wideningCaseHistoryFault('foreign-feature');
   }
+  const cases = featureRead.feature === undefined
+    ? undefined
+    : new RemediationCaseStore(projectRoot, {
+      ...featureRead.feature,
+      feature: activeFeature,
+    });
   if (raw === undefined) {
-    if (featureRead.feature === undefined) return { kind: 'available', history: { kind: 'absent' } };
-    const cases = await new RemediationCaseStore(projectRoot, featureRead.feature).read();
-    if (!cases.ok) return { kind: 'fault', detail: 'widening case history is corrupt' };
-    return { kind: 'available', history: { decisions: [], cases: cases.state.version === 'v2' ? cases.state.prdWideningCases : [] } };
+    if (cases === undefined) return { kind: 'available', history: { kind: 'absent' } };
+    const readCases = await cases.read();
+    if (!readCases.ok) return wideningCaseHistoryFault(readCases.reason);
+    return { kind: 'available', history: { decisions: [], cases: readCases.state.version === 'v2' ? readCases.state.prdWideningCases : [] } };
   }
   if (typeof raw.feature?.repository !== 'string') return { kind: 'fault', detail: `widening history at ${source} is corrupt` };
   const read = await new AcceptedWideningDecisionStore(projectRoot, {
@@ -331,10 +354,10 @@ async function wideningHistory(projectRoot: string, activeFeature: string): Prom
     feature: activeFeature,
   }).read();
   if (read.kind === 'valid') {
-    if (featureRead.feature === undefined) return { kind: 'available', history: { decisions: read.state.decisions, cases: [] } };
-    const cases = await new RemediationCaseStore(projectRoot, featureRead.feature).read();
-    if (!cases.ok) return { kind: 'fault', detail: 'widening case history is corrupt' };
-    return { kind: 'available', history: { decisions: read.state.decisions, cases: cases.state.version === 'v2' ? cases.state.prdWideningCases : [] } };
+    if (cases === undefined) return { kind: 'available', history: { decisions: read.state.decisions, cases: [] } };
+    const readCases = await cases.read();
+    if (!readCases.ok) return wideningCaseHistoryFault(readCases.reason);
+    return { kind: 'available', history: { decisions: read.state.decisions, cases: readCases.state.version === 'v2' ? readCases.state.prdWideningCases : [] } };
   }
   if (read.kind === 'foreign-feature') return { kind: 'fault', detail: `widening history at ${source} is foreign to the active feature` };
   if (read.kind === 'unsupported') return { kind: 'fault', detail: `widening history at ${source} has an unsupported version` };
