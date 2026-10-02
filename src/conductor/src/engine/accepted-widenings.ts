@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
+import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
+
 import {
   createConductStateLease,
   type ConductStateLease,
@@ -574,7 +576,7 @@ export type OverScopeDecisionInput = Omit<OverScopeDecision, 'decidedAt'> & { de
 export interface RecordOverScopeDecisionsResult { recorded: OverScopeDecision[]; failure?: 'write-failed' | 'missing-operator' }
 
 function isNoOwnerCriterion(criterion: string): boolean {
-  return /^NC\.\d+$/i.test(criterion);
+  return isPrdAuditNoOwnerOrdinal(criterion);
 }
 
 /**

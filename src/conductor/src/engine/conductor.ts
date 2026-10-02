@@ -253,6 +253,7 @@ import {
   isVerdictRunIdentityStep,
 } from './artifacts.js';
 import { resolveHeadSha, resolvePrDisposition } from './run-provenance.js';
+import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
 import {
   AS_BUILT_VERDICT_PATH,
   asBuiltFindingDetail,
@@ -1084,7 +1085,7 @@ export function routePrdAuditOverScope(
       const durableDecision = decisions
         .filter((entry) => {
           if (entry.criterion !== finding.criterion) return false;
-          return !/^NC\.\d+$/i.test(finding.criterion) || entry.summary.trim() === summary.trim();
+          return !isPrdAuditNoOwnerOrdinal(finding.criterion) || entry.summary.trim() === summary.trim();
         })
         .at(-1);
       return {
@@ -1165,7 +1166,7 @@ function routePrdAuditOverScopeV2FromTypedReport(
     if (relation !== 'outside-visible') {
       return { gate: 'prd_audit' as const, grade: 'OVER_SCOPE' as const, criterion: finding.criterion, summary, relation, accepted: true, classification: 'not-blocking' as const };
     }
-    if (!/^NC\.\d+$/i.test(finding.criterion)) {
+    if (!isPrdAuditNoOwnerOrdinal(finding.criterion)) {
       const decision = decisions.filter((candidate) => candidate.criterion === finding.criterion).at(-1);
       return {
         gate: 'prd_audit' as const, grade: 'OVER_SCOPE' as const, criterion: finding.criterion, summary, relation,
@@ -1209,7 +1210,7 @@ function routePrdAuditOverScopeV2FromTypedReport(
   if (undecided.length || refused.length) {
     const defects: Array<{ kind: string; criterion: string }> = [];
     const editable = (items: typeof findings) => items.flatMap(({ classification: _classification, ...finding }) => {
-      if (!/^NC\.\d+$/i.test(finding.criterion)) return [finding];
+      if (!isPrdAuditNoOwnerOrdinal(finding.criterion)) return [finding];
       const record = 'offerEntryId' in finding
         ? cases.find((candidate) => candidate.id === finding.offerEntryId)
         : undefined;
@@ -4554,7 +4555,7 @@ export class Conductor {
     state: ConductState | undefined,
   ): Promise<string | undefined> {
     const visible = report.findings.filter((finding) =>
-      finding.grade === 'OVER_SCOPE' && /^NC\.\d+$/i.test(finding.criterion) && relations.get(finding.criterion) === 'outside-visible',
+      finding.grade === 'OVER_SCOPE' && isPrdAuditNoOwnerOrdinal(finding.criterion) && relations.get(finding.criterion) === 'outside-visible',
     );
     if (!visible.length) return undefined;
     const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
@@ -4636,7 +4637,7 @@ export class Conductor {
         const currentSources = currentTyped === undefined
           ? []
           : currentTyped.report.findings
-            .filter((finding) => finding.grade === 'OVER_SCOPE' && /^NC\.\d+$/i.test(finding.criterion) && currentTyped.relations.get(finding.criterion) === 'outside-visible')
+            .filter((finding) => finding.grade === 'OVER_SCOPE' && isPrdAuditNoOwnerOrdinal(finding.criterion) && currentTyped.relations.get(finding.criterion) === 'outside-visible')
             .map((finding) => ({ id: prdWideningSourceId(finding), evidence: finding.evidence, prdIds: finding.prdIds }))
           ;
         const currentDecision = await decisionStore.read();
@@ -4783,18 +4784,26 @@ export class Conductor {
     // the route went. A halted route carries the same findings — including the
     // refusal that caused the halt — and previously persisted none of them.
     if (route.kind === 'record' || route.kind === 'halt') {
+      const updated = new Map(stored.value.recordedDispositions.map((recorded) => [
+        `${recorded.criterionId}\u0000${recorded.grade}`,
+        recorded,
+      ]));
+      for (const finding of route.findings) {
+        const next: PersistedPrdAuditVerdict['recordedDispositions'][number] = {
+          criterionId: finding.criterion,
+          grade: finding.grade,
+          decision: finding.decision ?? 'record',
+          rationale: finding.rationale ?? 'The engine recorded this PRD-audit scope finding.',
+          authority: finding.decision === undefined ? 'engine' : finding.operator ?? 'operator',
+        };
+        const key = `${next.criterionId}\u0000${next.grade}`;
+        const prior = updated.get(key);
+        if (prior === undefined || prior.decision !== next.decision || prior.authority !== next.authority || prior.rationale !== next.rationale) {
+          updated.set(key, next);
+        }
+      }
       const recordedDispositions: PersistedPrdAuditVerdict['recordedDispositions'] = [
-        ...stored.value.recordedDispositions,
-        ...route.findings
-          .filter((finding) => !stored.value.recordedDispositions.some((recorded) =>
-            recorded.criterionId === finding.criterion && recorded.grade === finding.grade))
-          .map((finding): PersistedPrdAuditVerdict['recordedDispositions'][number] => ({
-            criterionId: finding.criterion,
-            grade: finding.grade,
-            decision: finding.decision ?? 'record',
-            rationale: finding.rationale ?? 'The engine recorded this PRD-audit scope finding.',
-            authority: finding.decision === undefined ? 'engine' : finding.operator ?? 'operator',
-          })),
+        ...updated.values(),
       ];
       try {
         await persistPrdAuditVerdict(this.projectRoot, {

@@ -13,7 +13,7 @@ import { parseCoherenceArtifact, type CoherenceRow } from './coherence-parse.js'
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskStoryIds } from './plan-task-parse.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { makeGitRunner, originDefaultBranch, resolveBase, type GitRunner } from './rebase.js';
-import { listItems, sectionBody, splitStoryBlocks } from './story-criteria.js';
+import { assessAcceptedStoryReadability, listItems, sectionBody, splitStoryBlocks } from './story-criteria.js';
 
 /** Incremented only when the engine-rendered PRD-audit input contract changes. */
 export const PRD_AUDIT_PROJECTION_VERSION = 2;
@@ -174,8 +174,20 @@ function criteriaFromStories(stories: string): {
 } {
   const criteria: PrdAuditProjection['criteria'][number][] = [];
   const malformed: string[] = [];
+  const unreadable = assessAcceptedStoryReadability(stories).stories.find((story) => !story.readable);
+  if (unreadable) {
+    return {
+      criteria,
+      malformed: [unreadable.id === undefined
+        ? 'story source has no readable Story id, Happy Path, and Negative Paths contract'
+        : `story ${unreadable.id} fails the sealed Happy Path/Negative Paths Given/When/Then contract`],
+    };
+  }
   for (const block of splitStoryBlocks(stories)) {
-    if (!block.id) continue;
+    if (!block.id) {
+      malformed.push('story source has no readable Story id');
+      continue;
+    }
     const requirementIds = [...block.text.matchAll(/^\s*\*\*Requirements?\s*:\*\*\s*(.+?)\s*$/gim)]
       .flatMap((match) => [...match[1].matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((id) => id[0].toUpperCase()));
     let ordinal = 0;
@@ -184,8 +196,8 @@ function criteriaFromStories(stories: string): {
       if (body === null) continue;
       for (const text of listItems(body)) {
         ordinal += 1;
-        if (!/\bgiven\b/i.test(text) || !/\bthen\b/i.test(text)) {
-          malformed.push(`story ${block.id} ${kind} criterion ${ordinal} lacks Given or Then`);
+        if (!/\bgiven\b/i.test(text) || !/\bwhen\b/i.test(text) || !/\bthen\b/i.test(text)) {
+          malformed.push(`story ${block.id} ${kind} criterion ${ordinal} lacks Given, When, or Then`);
           continue;
         }
         criteria.push({ id: `S${block.id}.${ordinal}`, storyId: block.id, kind, text, requirementIds });
@@ -310,12 +322,22 @@ type WideningHistoryResult =
 async function wideningHistory(projectRoot: string, activeFeature: string): Promise<WideningHistoryResult> {
   const path = join(projectRoot, '.pipeline', 'accepted-widenings.json');
   const source = '.pipeline/accepted-widenings.json';
-  let raw: { feature?: { repository?: unknown; feature?: unknown } };
+  let raw: { feature?: { repository?: unknown; feature?: unknown } } | undefined;
   try {
     raw = JSON.parse(await readFile(path, 'utf-8')) as typeof raw;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'available', history: { kind: 'absent' } };
-    return { kind: 'fault', detail: `widening history at ${source} is corrupt` };
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { kind: 'fault', detail: `widening history at ${source} is corrupt` };
+  }
+  const featureRead = await readRemediationCaseStoreFeature(projectRoot);
+  if (!featureRead.ok) return { kind: 'fault', detail: 'widening case history is corrupt' };
+  if (featureRead.feature !== undefined && featureRead.feature.feature !== activeFeature) {
+    return { kind: 'fault', detail: 'widening case history at .pipeline/remediation-cases.json is foreign to the active feature' };
+  }
+  if (raw === undefined) {
+    if (featureRead.feature === undefined) return { kind: 'available', history: { kind: 'absent' } };
+    const cases = await new RemediationCaseStore(projectRoot, featureRead.feature).read();
+    if (!cases.ok) return { kind: 'fault', detail: 'widening case history is corrupt' };
+    return { kind: 'available', history: { decisions: [], cases: cases.state.version === 'v2' ? cases.state.prdWideningCases : [] } };
   }
   if (typeof raw.feature?.repository !== 'string') return { kind: 'fault', detail: `widening history at ${source} is corrupt` };
   const read = await new AcceptedWideningDecisionStore(projectRoot, {
@@ -324,8 +346,6 @@ async function wideningHistory(projectRoot: string, activeFeature: string): Prom
     feature: activeFeature,
   }).read();
   if (read.kind === 'valid') {
-    const featureRead = await readRemediationCaseStoreFeature(projectRoot);
-    if (!featureRead.ok) return { kind: 'fault', detail: 'widening case history is corrupt' };
     if (featureRead.feature === undefined) return { kind: 'available', history: { decisions: read.state.decisions, cases: [] } };
     const cases = await new RemediationCaseStore(projectRoot, featureRead.feature).read();
     if (!cases.ok) return { kind: 'fault', detail: 'widening case history is corrupt' };
