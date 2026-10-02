@@ -221,7 +221,7 @@ As a build agent following the `tdd` skill, I want its pre-diff counterfactual c
 
 ### Negative Paths
 
-- **Given** the `tdd` skill, **When** its counterfactual step is read, **Then** it tells the agent neither to stash nor to check out, restore, or reset paths in any worktree, including the temporary one.
+- **Given** the `tdd` skill, **When** its counterfactual step is read, **Then** it names no stash, path checkout, restore, or reset command and tells the agent to change no worktree's files, the temporary one included, beyond adding the test copies.
 
 ### Done When
 
