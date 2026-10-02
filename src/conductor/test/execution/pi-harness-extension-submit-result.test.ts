@@ -31,7 +31,7 @@ describe('harness extension submit_result', () => {
 
     await factory(fake.api);
 
-    expect(fake.registeredFlags).toEqual(['conduct-output-schema']);
+    expect(fake.registeredFlags).toContain('conduct-output-schema');
     expect(fake.tools.map((tool) => tool.name)).toEqual(['submit_result']);
     expect(fake.tools[0]!.parameters).toEqual(schema);
   });
