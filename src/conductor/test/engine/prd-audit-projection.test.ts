@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -187,6 +187,85 @@ describe('PRD-audit feature projection', () => {
         prd: { kind: 'absent' },
         coherence: { kind: 'absent' },
         history: { kind: 'absent' },
+      },
+    });
+  });
+
+  it('bounds changed-file excerpts while retaining complete structured obligations', async () => {
+    const root = await fixture();
+    const git = async (...args: string[]) => execFileAsync('git', ['-C', root, ...args]);
+    const atLimitPath = join(root, 'b-at-limit.ts');
+    await writeFile(atLimitPath, 'x');
+    await git('add', 'b-at-limit.ts');
+    const provisional = (await git('diff', '--cached', '--', 'b-at-limit.ts')).stdout;
+    const diffOverhead = Buffer.byteLength(provisional, 'utf-8') - 1;
+    let atLimitContent = 'x'.repeat((256 * 1024) - diffOverhead);
+    await writeFile(atLimitPath, atLimitContent);
+    await git('add', 'b-at-limit.ts');
+    const actualBytes = Buffer.byteLength((await git('diff', '--cached', '--', 'b-at-limit.ts')).stdout, 'utf-8');
+    if (actualBytes !== 256 * 1024) {
+      atLimitContent = atLimitContent.slice(0, atLimitContent.length - (actualBytes - (256 * 1024)));
+      await writeFile(atLimitPath, atLimitContent);
+      await git('add', 'b-at-limit.ts');
+    }
+    await git('add', 'b-at-limit.ts');
+    await git('commit', '-m', 'at limit diff fixture');
+    const atLimit = await buildPrdAuditProjection(root);
+
+    await Promise.all([
+      writeFile(join(root, 'a-per-file.ts'), 'x'.repeat(256 * 1024)),
+      writeFile(join(root, 'c-total-one.ts'), 'x'.repeat(128 * 1024)),
+      writeFile(join(root, 'c-total-two.ts'), 'x'.repeat(128 * 1024)),
+      writeFile(join(root, 'c-total-three.ts'), 'x'.repeat(128 * 1024)),
+      writeFile(join(root, 'é-per-file.ts'), 'x'.repeat(256 * 1024)),
+    ]);
+    await git('add', '.');
+    await git('commit', '-m', 'bounded diff fixture');
+
+    const overflow = await buildPrdAuditProjection(root);
+
+    expect({ atLimit, overflow }).toMatchObject({
+      atLimit: {
+        ok: true,
+        projection: { changes: { excerpts: expect.arrayContaining([expect.stringContaining('b-at-limit.ts')]) } },
+      },
+      overflow: {
+        ok: true,
+        projection: {
+        criteria: [
+          { id: 'Salpha.1.1', text: 'Given the feature is audited, when its source meets the documented behavior, then the audit can pass.' },
+          { id: 'Salpha.1.2', text: 'Given the feature omits the documented behavior, when its source is audited, then the audit reports the gap.' },
+        ],
+        tasks: [{
+          id: 'task-a',
+          doneWhen: ['The published behavior preserves the documented outcome.'],
+        }],
+        prd: { sources: expect.arrayContaining([
+          expect.objectContaining({ requirements: expect.arrayContaining([
+            { id: 'FR-7', text: 'The audit preserves the documented outcome.' },
+            { id: 'FR-9', text: 'The audit retains bolded requirement syntax.' },
+          ]) }),
+        ]) },
+        changes: {
+          omittedFiles: expect.arrayContaining([
+            expect.objectContaining({
+              path: 'a-per-file.ts',
+              digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+              locator: expect.objectContaining({ kind: 'git-diff', path: 'a-per-file.ts' }),
+            }),
+            expect.objectContaining({
+              path: 'c-total-three.ts',
+              digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+              locator: expect.objectContaining({ kind: 'git-diff', path: 'c-total-three.ts' }),
+            }),
+            expect.objectContaining({
+              path: 'é-per-file.ts',
+              digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+              locator: expect.objectContaining({ kind: 'git-diff', path: 'é-per-file.ts' }),
+            }),
+          ]),
+        },
+      },
       },
     });
   });
