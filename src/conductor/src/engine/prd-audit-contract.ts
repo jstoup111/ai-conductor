@@ -1,4 +1,4 @@
-import { resolvePlanTaskReference } from './plan-task-parse.js';
+import { normalizePlanTaskId, resolvePlanTaskReference } from './plan-task-parse.js';
 
 /** The versioned, engine-owned output contract for PRD-audit judgments. */
 export const PRD_AUDIT_JUDGMENT_CONTRACT_VERSION = 'v1' as const;
@@ -185,9 +185,8 @@ function criterionId(reference: PrdAuditCriterionReference): string {
 }
 
 function activeTaskIds(context: PrdAuditJudgmentContext): ReadonlySet<string> {
-  if (context.activeTaskIds !== undefined) return new Set(context.activeTaskIds);
-  if (context.taskIds !== undefined) return new Set(context.taskIds);
-  return new Set(context.tasks?.map((task) => task.id) ?? []);
+  const ids = context.activeTaskIds ?? context.taskIds ?? context.tasks?.map((task) => task.id) ?? [];
+  return new Set(Array.from(ids, normalizePlanTaskId));
 }
 
 function requirementKeys(context: PrdAuditJudgmentContext): ReadonlySet<string> {

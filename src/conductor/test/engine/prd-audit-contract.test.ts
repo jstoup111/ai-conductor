@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:6, task:7
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -8,6 +8,78 @@ import {
 } from '../../src/engine/prd-audit-contract.js';
 
 describe('PRD audit judgment contract', () => {
+  it('resolves nested case-normalized criteria and annotated remediation citations', () => {
+    const input = {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: 'FEATURE.A.2', ordinal: 3 },
+        grade: 'FIXABLE',
+        evidence: 'The bounded repair is owned by the remediation task.',
+        rationale: 'The existing task resolves every cited repair reference.',
+        requirementAssociations: [],
+        evidenceTaskIds: ['rem-validate-1 (evidence)', 'task-a, task-b (verified)'],
+        ownerTaskId: 'rem-validate-1 (repair)',
+      }],
+      noOwnerObservations: [],
+    };
+
+    expect(validatePrdAuditJudgment(input, {
+      criteria: [{ id: 'Sfeature.a.2.3' }],
+      taskIds: new Set(['rem-validate-1 (follow-up)', 'task-a', 'task-b']),
+      requirements: [],
+    })).toEqual({
+      ok: true,
+      judgment: {
+        ...input,
+        criterionJudgments: [{
+          ...input.criterionJudgments[0],
+          criterionId: 'Sfeature.a.2.3',
+          evidenceTaskIds: ['rem-validate-1', 'task-a', 'task-b'],
+          ownerTaskId: 'rem-validate-1',
+        }],
+      },
+    });
+  });
+
+  it('names invalid criterion, task, requirement, and repair-owner citations', () => {
+    const judgment = (criterion: { storyId: string; ordinal: number }) => ({
+      criterion,
+      grade: 'FIXABLE',
+      evidence: 'The bounded repair must resolve only active references.',
+      rationale: 'Every repair citation is independently checked.',
+      requirementAssociations: [],
+      evidenceTaskIds: [],
+      ownerTaskId: 'task-a',
+    });
+    const inventedCriterion = judgment({ storyId: 'invented', ordinal: 1 });
+    const unresolvedTask = { ...judgment({ storyId: 'alpha', ordinal: 1 }), evidenceTaskIds: ['missing-task'] };
+    const unresolvedRequirement = {
+      ...judgment({ storyId: 'beta', ordinal: 1 }),
+      requirementAssociations: [{ path: '.docs/specs/a.md', requirementId: 'FR-404' }],
+    };
+    const missingOwner = { ...judgment({ storyId: 'gamma', ordinal: 1 }), ownerTaskId: ' ' };
+    const multipleOwners = { ...judgment({ storyId: 'delta', ordinal: 1 }), ownerTaskId: 'task-a, task-b' };
+
+    expect(validatePrdAuditJudgment({
+      version: 'v1',
+      criterionJudgments: [inventedCriterion, unresolvedTask, unresolvedRequirement, missingOwner, multipleOwners],
+      noOwnerObservations: [],
+    }, {
+      criteria: [{ id: 'Salpha.1' }, { id: 'Sbeta.1' }, { id: 'Sgamma.1' }, { id: 'Sdelta.1' }],
+      taskIds: new Set(['task-a', 'task-b']),
+      requirements: [{ path: '.docs/specs/a.md', id: 'FR-7' }],
+    })).toEqual({
+      ok: false,
+      diagnostics: [
+        'criterionJudgments[0].criterion does not resolve active criterion Sinvented.1',
+        'criterionJudgments[1].evidenceTaskIds[0] does not resolve active task missing-task',
+        'criterionJudgments[2].requirementAssociations[0] does not resolve requirement .docs/specs/a.md:FR-404',
+        'criterionJudgments[3].ownerTaskId must identify exactly one active task for FIXABLE',
+        'criterionJudgments[4].ownerTaskId must identify exactly one active task for FIXABLE',
+      ],
+    });
+  });
+
   it('accepts every legitimate grade with independently resolved criteria and engine-owned NC ordinals', () => {
     const input = {
       version: 'v1',
