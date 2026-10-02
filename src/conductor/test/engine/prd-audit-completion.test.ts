@@ -1,15 +1,17 @@
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { AcceptedWideningDecisionStore } from '../../src/engine/accepted-widenings.js';
 import {
   PRD_AUDIT_VERDICT_PATH,
   persistPrdAuditVerdict,
   readPrdAuditVerdict,
 } from '../../src/engine/prd-audit-verdict-store.js';
 import type { PrdAuditJudgment } from '../../src/engine/prd-audit-contract.js';
+import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
 
 const dirs: string[] = [];
 
@@ -31,6 +33,76 @@ async function fixtureDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'prd-audit-completion-'));
   dirs.push(dir);
   return dir;
+}
+
+const WIDENING_FEATURE = {
+  version: 'v1' as const,
+  repository: '/fixture/repository',
+  feature: 'prd-audit-completion',
+};
+
+const visibleScopeObservation = {
+  presentationOrdinal: 'NC-1',
+  grade: 'OVER_SCOPE' as const,
+  evidence: 'The completed feature now exposes a separately visible behavior.',
+  rationale: 'The behavior is outside the approved feature intent.',
+  intentRelation: 'outside-visible' as const,
+};
+
+async function persistCompleteJudgment(
+  dir: string,
+  judgment: PrdAuditJudgment,
+): Promise<void> {
+  await persistPrdAuditVerdict(dir, {
+    complete: true,
+    judgment,
+    diagnostics: [],
+    recordedDispositions: [],
+  }, { attemptId: 'current-audit', codeStamp: null });
+}
+
+async function persistVisibleWideningEvidence(
+  dir: string,
+  authority?: 'accept' | 'refuse',
+): Promise<void> {
+  const sourceId = prdWideningSourceId({
+    criterion: visibleScopeObservation.presentationOrdinal,
+    grade: visibleScopeObservation.grade,
+    evidence: visibleScopeObservation.evidence,
+    prdIds: [],
+  });
+  await mkdir(join(dir, '.pipeline'), { recursive: true });
+  await writeFile(join(dir, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+    version: 'v2',
+    feature: WIDENING_FEATURE,
+    cases: [],
+    prdWideningCases: [{
+      id: 'scope-case-1',
+      domain: 'prd_widening',
+      offeredCriterion: visibleScopeObservation.presentationOrdinal,
+      originalSources: [{ sourceId: 'original-scope-source', snapshot: 'The original visible scope offer.' }],
+      currentSources: [{ sourceId, snapshot: visibleScopeObservation.evidence, recordedAt: '2026-10-02T00:00:00.000Z' }],
+      relationships: [{ currentSourceId: sourceId, kind: 'same-case', caseId: 'scope-case-1', reason: 'The current observation is the accepted original behavior.' }],
+      reconciliationDigest: 'published-scope-relation',
+    }],
+    suppressions: [],
+  }), 'utf8');
+  if (authority === undefined) return;
+
+  const appended = await new AcceptedWideningDecisionStore(dir, {
+    version: 1,
+    repository: WIDENING_FEATURE.repository,
+    feature: WIDENING_FEATURE.feature,
+  }, { newDecisionId: () => `scope-${authority}` }).append({
+    criterion: visibleScopeObservation.presentationOrdinal,
+    authority,
+    rationale: `The operator ${authority === 'accept' ? 'accepted' : 'refused'} this visible scope change.`,
+    operator: 'operator@example.test',
+    originalSource: { id: 'original-scope-source', snapshot: 'The original visible scope offer.' },
+    originalCaseId: 'scope-case-1',
+    offerEntryId: 'scope-offer-1',
+  });
+  if (!appended.ok) throw new Error(`fixture decision did not persist: ${appended.reason}`);
 }
 
 describe('typed PRD-audit completion', () => {
@@ -55,6 +127,81 @@ describe('typed PRD-audit completion', () => {
 
     expect(completion.done).toBe(true);
     expect(completion.routeClass).toBeUndefined();
+  });
+
+  it('settles an accepted outside-visible finding from the same durable projection used by routing', async () => {
+    const dir = await fixtureDir();
+    await persistCompleteJudgment(dir, {
+      version: 'v1', criterionJudgments: [], noOwnerObservations: [visibleScopeObservation],
+    });
+    await persistVisibleWideningEvidence(dir, 'accept');
+
+    await expect(checkStepCompletion(dir, 'prd_audit', {
+      attemptRunId: 'current-audit', sessionStartedAt: 0,
+    })).resolves.toMatchObject({ done: true });
+  });
+
+  it.each([
+    ['pending', undefined],
+    ['refused', 'refuse'],
+  ] as const)('keeps a %s outside-visible finding blocking', async (_label, authority) => {
+    const dir = await fixtureDir();
+    await persistCompleteJudgment(dir, {
+      version: 'v1', criterionJudgments: [], noOwnerObservations: [visibleScopeObservation],
+    });
+    await persistVisibleWideningEvidence(dir, authority);
+
+    await expect(checkStepCompletion(dir, 'prd_audit', {
+      attemptRunId: 'current-audit', sessionStartedAt: 0,
+    })).resolves.toMatchObject({
+      done: false,
+      routeClass: 'named-route',
+      reason: expect.stringContaining('NC-1 (OVER_SCOPE)'),
+    });
+  });
+
+  it.each(['within', 'outside-harmless'] as const)(
+    'records a %s OVER_SCOPE finding without granting approval authority',
+    async (intentRelation) => {
+      const dir = await fixtureDir();
+      await persistCompleteJudgment(dir, {
+        version: 'v1', criterionJudgments: [], noOwnerObservations: [{
+          ...visibleScopeObservation,
+          intentRelation,
+        }],
+      });
+
+      await expect(checkStepCompletion(dir, 'prd_audit', {
+        attemptRunId: 'current-audit', sessionStartedAt: 0,
+      })).resolves.toMatchObject({ done: true });
+    },
+  );
+
+  it('does not let an accepted scope finding settle another blocking grade', async () => {
+    const dir = await fixtureDir();
+    await persistCompleteJudgment(dir, {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: '1', ordinal: 1 },
+        criterionId: 'S1.1',
+        grade: 'FIXABLE',
+        evidence: 'The implementation still misses the required error behavior.',
+        rationale: 'A task-owned repair remains necessary.',
+        requirementAssociations: [],
+        evidenceTaskIds: [],
+        ownerTaskId: '1',
+      }],
+      noOwnerObservations: [visibleScopeObservation],
+    });
+    await persistVisibleWideningEvidence(dir, 'accept');
+
+    await expect(checkStepCompletion(dir, 'prd_audit', {
+      attemptRunId: 'current-audit', sessionStartedAt: 0,
+    })).resolves.toMatchObject({
+      done: false,
+      routeClass: 'named-route',
+      reason: expect.stringContaining('S1.1 (FIXABLE)'),
+    });
   });
 
   it('keeps incomplete diagnostics and findings blocking despite scope and negative-gap dispositions', async () => {
