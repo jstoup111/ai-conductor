@@ -217,7 +217,6 @@ import {
   CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
   parsePrdAuditReport,
-  isNoOwnerKey,
   extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
   readRemediationPlanResult,
@@ -249,7 +248,6 @@ import {
   stampGateRunIdentity,
   isVerdictRunIdentityStep,
 } from './artifacts.js';
-import { extractStoryCriterionIds } from './story-criteria.js';
 import {
   AS_BUILT_VERDICT_PATH,
   asBuiltFindingDetail,
@@ -4894,7 +4892,27 @@ export class Conductor {
     // Re-evaluate the durable authority immediately before invoking
     // /remediate, so an accepted-only report neither consumes a repair lap nor
     // creates a synthetic repair obligation from stale routing state.
+    let prdAuditVerdict: PersistedPrdAuditVerdict | undefined;
     if (hintSource.evidence?.some((provenance) => provenance.gate === 'prd_audit')) {
+      // The rendered Markdown report is deliberately not a remediation input.
+      // A legacy or corrupt report cannot invent a repair route after the
+      // typed-verdict migration; normal lifecycle handling will request a
+      // current audit instead.
+      const stored = await readPrdAuditVerdict(this.projectRoot);
+      if (stored.kind === 'absent') {
+        return { kind: 'none', reason: `prd-audit has no current typed verdict at ${PRD_AUDIT_VERDICT_PATH}` };
+      }
+      if (stored.kind === 'unreadable') {
+        const detail = `PRD audit verdict mechanical fault: ${stored.reason}`;
+        await reportRefusal(detail);
+        return { kind: 'halt', haltClass: 'mechanical', detail };
+      }
+      if (!stored.value.complete) {
+        const detail = `PRD audit verdict is incomplete: ${stored.value.diagnostics.join('; ')}`;
+        await reportRefusal(detail);
+        return { kind: 'halt', haltClass: 'mechanical', detail };
+      }
+      prdAuditVerdict = stored.value;
       const overScopeRoute = await this.routeCurrentPrdAuditOverScope(state.feature_desc, state);
       // Accepted-only scope closes the round. The scope router inspects only
       // OVER_SCOPE rows, so a recorded acceptance may coexist with FIXABLE or
@@ -5084,69 +5102,23 @@ export class Conductor {
     let asBuiltValidated = false;
     let activePlanText = '';
     let asBuiltTypedFindings: readonly import('./as-built-contract.js').AsBuiltFinding[] | undefined;
-    if (planPath && prdAuditRemediation) {
-      try {
-        activePlanText = await readFile(
-          isAbsolute(planPath) ? planPath : join(this.projectRoot, planPath),
-          'utf8',
-        );
-        const report = await readFile(join(this.projectRoot, prdAuditEvidenceFile), 'utf8');
-        const parsed = parsePrdAuditReport(report, activePlanText);
-        if (!parsed.ok) {
-          const detail = `PRD audit report mechanical fault: ${parsed.error}`;
-          await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
-          return { kind: 'halt', haltClass: 'mechanical', detail };
-        }
-        if (parsed.value.rejectedRows.length > 0) {
-          const detail = `PRD audit report rejected rows: ${parsed.value.rejectedRows
-            .map((row) => `${row.key ?? row.rowText} (${row.reason})`)
-            .join('; ')}`;
-          await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
-          return { kind: 'halt', haltClass: 'mechanical', detail };
-        }
-        const storiesPath = await resolveFeatureStoriesPath(this.projectRoot, state.feature_desc);
-        const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
-        // Derive the authoritative id set with the SAME function the prd_audit
-        // completion predicate uses (#2219 / PR #2222). This site used to
-        // re-derive ids from `extractAuthoritativeStoryCriteria` prose with
-        // `^Story\s+(\d+)\s+`, which reduced the heading id to its first digit
-        // run — `## Story 5a:` never matched at all, so every one of its
-        // criteria vanished from the expected set and the report's legitimate
-        // `S5A.*` rows were rejected as "absent from the active stories".
-        // Reported keys are upper-cased at parse time, so the expected set is
-        // too, exactly as `prdAuditStoryCoverageGap` does.
-        const criteria = new Set(
-          extractStoryCriterionIds(storiesText).map((id) => id.toUpperCase()),
-        );
-        const unresolvedCriteria = parsed.value.findings
-          .map((finding) => finding.criterion)
-          .filter((criterion) => !isNoOwnerKey(criterion) && !criteria.has(criterion));
-        if (criteria.size === 0 || unresolvedCriteria.length > 0) {
-          const detail = criteria.size === 0
-            ? 'PRD audit remediation cannot resolve the active story criteria.'
-            : `PRD audit report names criteria absent from the active stories: ${[...new Set(unresolvedCriteria)].join(', ')}.`;
-          await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
-          return { kind: 'halt', haltClass: 'mechanical', detail };
-        }
-        for (const finding of parsed.value.findings) {
-          if (finding.grade === 'FIXABLE' && finding.planTask !== undefined) {
-            const boundFinding = {
-              criterion: finding.criterion,
-              parentTask: finding.planTask,
-            };
-            // Planner gap ids are FR-N by contract; reports are criterion
-            // keyed. Bind both identities so every report association remains
-            // available for the cap and append authorization.
-            prdAuditFindings.set(finding.criterion.toUpperCase(), boundFinding);
-            for (const frId of finding.prdIds) prdAuditFindings.set(frId, boundFinding);
-          }
-        }
-        prdAuditValidated = true;
-      } catch (error) {
-        const detail = `PRD audit report could not be read for remediation authorization: ${error instanceof Error ? error.message : String(error)}`;
-        await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
-        return { kind: 'halt', haltClass: 'mechanical', detail };
+    if (planPath && prdAuditRemediation && prdAuditVerdict) {
+      activePlanText = await readFile(
+        isAbsolute(planPath) ? planPath : join(this.projectRoot, planPath),
+        'utf8',
+      );
+      for (const judgment of prdAuditVerdict.judgment.criterionJudgments) {
+        if (judgment.grade !== 'FIXABLE' || !judgment.ownerTaskId) continue;
+        const boundFinding = {
+          criterion: judgment.criterionId,
+          parentTask: judgment.ownerTaskId,
+        };
+        // Only an active criterion owns repair admission. Requirement
+        // associations remain traceability evidence; they never authorize an
+        // independent remediation gap.
+        prdAuditFindings.set(judgment.criterionId.toUpperCase(), boundFinding);
       }
+      prdAuditValidated = true;
     }
 
     if (planPath && asBuiltEvidenceExists) {
@@ -5330,10 +5302,9 @@ export class Conductor {
       ) {
         const prdAuditFinding = prdAuditFindings.get(gap.id.toUpperCase());
         const asBuiltFinding = asBuiltFindings.get(gap.id);
-        // A prd_audit repair may append only work owned by a parsed FIXABLE
-        // finding and its existing parent plan task.  The planner's FR-N id
-        // is associated above through the report's PRD: column. In a mixed
-        // validation group either validated gate may admit its own gap.
+        // A prd_audit repair may append only work owned by a typed FIXABLE
+        // criterion and its existing parent plan task. In a mixed validation
+        // group either validated gate may admit its own gap.
         const { prdAuditAdmits, asBuiltAdmits } = gateAdmissions(gap.id);
         // Appending retains this conditional guard for older direct callers
         // that do not carry either validated gate. Existing-task above does

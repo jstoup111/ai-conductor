@@ -33,6 +33,7 @@ import {
 } from '../../src/engine/accepted-widenings.js';
 import { persistPrdWideningOffers } from '../../src/engine/prd-widening-offers.js';
 import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 
 const SUMMARY = 'unplanned npm test change';
 
@@ -146,6 +147,28 @@ describe('an accepted scope decision closes only its own blocker (S5.3)', () => 
       JSON.stringify({ activePlanPath: '.docs/plans/feature.md' }),
     );
     await writeFile(join(root, '.pipeline', 'prd-audit.md'), mixedReport(withFixable));
+    await persistPrdAuditVerdict(root, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '1', ordinal: 1 },
+          criterionId: 'S1.1',
+          grade: withFixable ? 'FIXABLE' : 'PASS',
+          evidence: withFixable ? 'Planned behavior is missing.' : 'Planned behavior is present.',
+          rationale: 'Fixture judgment.',
+          requirementAssociations: [],
+          evidenceTaskIds: ['1'],
+          ...(withFixable ? { ownerTaskId: '1' } : {}),
+        }],
+        noOwnerObservations: [{
+          presentationOrdinal: 'NC.1', grade: 'OVER_SCOPE', evidence: SUMMARY,
+          rationale: 'Fixture scope observation.', intentRelation: 'outside-visible',
+        }],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'fixture-run', codeStamp: null });
     const caseFeature = { version: 'v1' as const, repository: '/fixture/repository', feature: 'prd-audit-no-owner-over-scope' };
     const decisionFeature = { version: 1 as const, repository: '/fixture/repository', feature: 'prd-audit-no-owner-over-scope' };
     const currentSourceId = prdWideningSourceId({

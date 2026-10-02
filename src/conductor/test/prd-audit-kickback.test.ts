@@ -58,7 +58,7 @@ import {
 import * as machineIdentity from '../src/engine/owner-gate/machine-identity.js';
 import { persistAsBuiltVerdict, readAsBuiltVerdict } from '../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../src/engine/as-built-policy.js';
-import { persistPrdAuditVerdict } from '../src/engine/prd-audit-verdict-store.js';
+import { persistPrdAuditVerdict, readPrdAuditVerdict } from '../src/engine/prd-audit-verdict-store.js';
 import type { PrdAuditJudgment } from '../src/engine/prd-audit-contract.js';
 
 const dirs: string[] = [];
@@ -280,20 +280,28 @@ async function createPrdAuditRemediationFixture(input: {
     join(root, '.pipeline', 'engine-state.json'),
     JSON.stringify({ activePlanPath: planPath }),
   );
-  await writeFile(
-    join(root, '.pipeline', 'prd-audit.md'),
-    input.report ?? [
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      ...input.criteria.map(
-        (criterion, index) =>
-          `| ${criterion} | FIXABLE | ${index + 1} | Missing ${criterion} behavior |`,
-      ),
-    ].join('\n'),
-  );
+  const malformed = input.report?.includes('| S2.1 | MAYBE |') ?? false;
+  await persistPrdAuditVerdict(root, {
+    complete: !malformed,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: malformed
+        ? []
+        : input.criteria.map((criterion, index) => ({
+          criterion: { storyId: '2', ordinal: Number(criterion.slice('S2.'.length)) },
+          criterionId: criterion,
+          grade: 'FIXABLE' as const,
+          evidence: `Missing ${criterion} behavior`,
+          rationale: `Fixture repair for ${criterion}.`,
+          requirementAssociations: [],
+          evidenceTaskIds: [String(index + 1)],
+          ownerTaskId: String(index + 1),
+        })),
+      noOwnerObservations: [],
+    },
+    diagnostics: malformed ? ['S2.1: fixture invalid grade'] : [],
+    recordedDispositions: [],
+  }, { attemptId: 'fixture-remediation', codeStamp: null });
   if (input.priorLaps !== undefined || input.priorGrowthAdded !== undefined) {
     await writeKickbackLedger(root, {
       version: 1,
@@ -430,12 +438,21 @@ async function createAsBuiltRemediationCapFixture(input: {
       '#### Happy Path',
       '- Given a request, when handled, then the criterion holds.',
     ].join('\n'));
-    await writeFile(join(root, '.pipeline', 'prd-audit.md'), [
-      '# PRD Audit', '', '**PRD:** none', '', '## Verdict Table',
-      '| Criterion | Grade | Plan task | PRD: | Evidence |',
-      '| --- | --- | --- | --- | --- |',
-      '| S1.1 | FIXABLE | 1 | FR-1 | not implemented |',
-    ].join('\n'));
+    await persistPrdAuditVerdict(root, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'FIXABLE',
+          evidence: 'not implemented', rationale: 'Fixture repair.',
+          requirementAssociations: [{ path: '.docs/specs/feature.md', requirementId: 'FR-1' }],
+          evidenceTaskIds: ['1'], ownerTaskId: '1',
+        }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'fixture-prd', codeStamp: null });
   }
   if (
     input.priorLaps !== undefined
@@ -489,7 +506,7 @@ async function createAsBuiltRemediationCapFixture(input: {
         dispositions: [
           ...(input.withPrdEvidence
             ? [{
-                id: 'FR-1',
+                id: 'S1.1',
                 disposition: 'build',
                 category: null,
                 rationale: 'Satisfy the criterion.',
@@ -737,7 +754,7 @@ describe('prd_audit kickback', () => {
     const root = await mkdtemp(join(tmpdir(), 'over-scope-halt-route-'));
     dirs.push(root);
     await mkdir(join(root, '.pipeline'), { recursive: true });
-    await writeFile(join(root, '.pipeline', 'prd-audit.md'), [
+    const report = [
       '# PRD Audit',
       '',
       '**PRD:** none',
@@ -746,7 +763,8 @@ describe('prd_audit kickback', () => {
       '| --- | --- | --- | --- | --- | --- |',
       '| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:1 |',
       '',
-    ].join('\n'));
+    ].join('\n');
+    await persistGroupedPrdAuditVerdict(root, report, 'fixture-refusal');
     await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
       version: 1,
       decisions: [{
@@ -793,10 +811,14 @@ describe('prd_audit kickback', () => {
     expect(route.refused).toEqual([expect.objectContaining({ criterion: 'S3.1' })]);
     expect(route.defects).toBeUndefined();
 
-    const report = await readFile(join(root, '.pipeline', 'prd-audit.md'), 'utf8');
-    expect(report).toContain('## Recorded Findings');
-    expect(report).toContain('"decision": "refuse"');
-    expect(report).toContain('"rationale": "Rework it inside scope."');
+    await expect(readPrdAuditVerdict(root)).resolves.toMatchObject({
+      kind: 'present',
+      value: {
+        recordedDispositions: [expect.objectContaining({
+          criterionId: 'S3.1', decision: 'refuse', rationale: 'Rework it inside scope.', authority: 'operator',
+        })],
+      },
+    });
   });
 
   it('refuses to render a recorded decision that carries no rationale, naming the reason', () => {
@@ -855,7 +877,9 @@ describe('prd_audit kickback', () => {
       ((value: unknown, replacer?: Parameters<typeof JSON.stringify>[1], space?: Parameters<typeof JSON.stringify>[2]) => {
         if (
           typeof value === 'object' && value !== null &&
-          'findings' in value && Array.isArray((value as { findings?: unknown }).findings)
+          'recordedDispositions' in value &&
+          Array.isArray((value as { recordedDispositions?: unknown }).recordedDispositions) &&
+          (value as { recordedDispositions: unknown[] }).recordedDispositions.length > 0
         ) {
           throw new Error('recorded decision is unrenderable');
         }
@@ -882,11 +906,14 @@ describe('prd_audit kickback', () => {
       );
 
       await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
-        'Unreadable scope decisions: unrenderable-decision (recorded findings are not serializable: recorded decision is unrenderable).',
+        'recorded findings could not be persisted to .pipeline/prd-audit.json',
       );
       // Fail closed: the artifact is exactly the judge's original verdict;
       // it never settles without the recorded operator decision.
-      await expect(readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8')).resolves.toBe(report);
+      await expect(readPrdAuditVerdict(fixture.root)).resolves.toMatchObject({
+        kind: 'present',
+        value: { recordedDispositions: [] },
+      });
     } finally {
       stringify.mockRestore();
     }
@@ -1048,7 +1075,6 @@ describe('prd_audit kickback', () => {
           );
         } else if (step === 'prd_audit') {
           await persistGroupedPrdAuditVerdict(root, report, options?.runId);
-          await writeFile(join(root, '.pipeline', 'prd-audit.md'), report);
           if (report.includes('S13.4')) {
             await writeFile(join(root, '.pipeline', 's13.4-probe-file'), 'keep this review finding\n');
           }
@@ -1128,19 +1154,24 @@ describe('prd_audit kickback', () => {
       join(root, '.pipeline', 'engine-state.json'),
       JSON.stringify({ activePlanPath: planPath }),
     );
-    await writeFile(
-      join(root, '.pipeline', 'prd-audit.md'),
-      [
-        '**PRD:** present',
-        '',
-        '## Verdict Table',
-        '| Criterion | Grade | Plan task | Evidence |',
-        '| --- | --- | --- | --- |',
-        '| S2.1 | FIXABLE | 4 | Missing first behavior |',
-        '| S2.2 | FIXABLE | 5 | Missing second behavior |',
-        '| S2.3 | FIXABLE | 6 | Missing third behavior |',
-      ].join('\n'),
-    );
+    await persistPrdAuditVerdict(root, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [
+          ['S2.1', 4, 'Missing first behavior'],
+          ['S2.2', 5, 'Missing second behavior'],
+          ['S2.3', 6, 'Missing third behavior'],
+        ].map(([criterionId, ownerTaskId, evidence]) => ({
+          criterion: { storyId: '2', ordinal: Number(String(criterionId).slice('S2.'.length)) },
+          criterionId: String(criterionId), grade: 'FIXABLE' as const, evidence: String(evidence),
+          rationale: 'Fixture repair.', requirementAssociations: [], evidenceTaskIds: [String(ownerTaskId)], ownerTaskId: String(ownerTaskId),
+        })),
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'fixture-capped-lap', codeStamp: null });
 
     const runner: StepRunner = {
       run: async () => {
@@ -2017,11 +2048,11 @@ describe('prd_audit kickback', () => {
     expect(fixture.outcome).toMatchObject({
       kind: 'halt',
       haltClass: 'mechanical',
-      detail: 'PRD audit report rejected rows: S2.1 (PRD audit finding S2.1 has an invalid Grade.)',
+      detail: 'PRD audit verdict is incomplete: S2.1: fixture invalid grade',
     });
     expect(fixture.gateBlocks).toEqual([{
       step: 'prd_audit',
-      reason: 'PRD audit report rejected rows: S2.1 (PRD audit finding S2.1 has an invalid Grade.)',
+      reason: 'PRD audit verdict is incomplete: S2.1: fixture invalid grade',
     }]);
     expect(await readFile(fixture.planPath, 'utf8')).toBe(fixture.plan);
   });
@@ -2075,16 +2106,13 @@ describe('prd_audit kickback', () => {
       ].join('\n'),
     });
 
-    const report = await readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8');
-    // The fixture's own plan is the citation authority for the `1` cell.
-    expect(parsePrdAuditReport(report, await readFile(fixture.planPath, 'utf8'))).toMatchObject({
-      ok: true,
+    await expect(readPrdAuditVerdict(fixture.root)).resolves.toMatchObject({
+      kind: 'present',
       value: {
-        findings: [
-          { criterion: 'S2.1', grade: 'FIXABLE' },
-          { criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: 'Internal implementation detail' },
-        ],
-        rejectedRows: [],
+        complete: true,
+        judgment: {
+          criterionJudgments: [expect.objectContaining({ criterionId: 'S2.1', grade: 'FIXABLE' })],
+        },
       },
     });
     expect(fixture.outcome).toMatchObject({ kind: 'route', target: 'build' });
@@ -2439,9 +2467,14 @@ describe('prd_audit kickback', () => {
 
     expect(fixture.calls).not.toContain('remediate');
     expect(fixture.state.ok && fixture.state.value.prd_audit).toBe('done');
-    expect(await readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8')).toContain(
-      '"accepted": true',
-    );
+    await expect(readPrdAuditVerdict(fixture.root)).resolves.toMatchObject({
+      kind: 'present',
+      value: {
+        recordedDispositions: [expect.objectContaining({
+          criterionId: 'S9.1', grade: 'OVER_SCOPE', decision: 'record', authority: 'engine',
+        })],
+      },
+    });
   });
 
   it('records the S13.4 outside-harmless probe-file finding without deleting its evidence', async () => {
@@ -2459,9 +2492,14 @@ describe('prd_audit kickback', () => {
     await expect(readFile(join(fixture.root, '.pipeline', 's13.4-probe-file'), 'utf8')).resolves.toBe(
       'keep this review finding\n',
     );
-    expect(await readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8')).toContain(
-      '"criterion": "S13.4"',
-    );
+    await expect(readPrdAuditVerdict(fixture.root)).resolves.toMatchObject({
+      kind: 'present',
+      value: {
+        recordedDispositions: [expect.objectContaining({
+          criterionId: 'S13.4', grade: 'OVER_SCOPE', decision: 'record', authority: 'engine',
+        })],
+      },
+    });
   });
 
   it('halts a grouped outside-visible OVER_SCOPE finding with the serial over-scope class', async () => {
@@ -2496,12 +2534,13 @@ describe('prd_audit kickback', () => {
     );
 
     expect(fixture.state.ok && fixture.state.value.prd_audit).not.toBe('done');
-    // The serial tail never reaches its `record` promotion, so the PLAN_GAP is
-    // never projected back into the report as an accepted risk — the rejected
-    // OS.1 row is still the last word on disk.
-    const report = await readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8');
-    expect(report).toBe(rejectedRowWithNegativePathPlanGapReport());
-    expect(report).not.toContain('"grade": "PLAN_GAP"');
+    // The serial tail never reaches its `record` promotion. The typed verdict
+    // remains incomplete and has no recorded disposition, regardless of its
+    // rendered Markdown view.
+    await expect(readPrdAuditVerdict(fixture.root)).resolves.toMatchObject({
+      kind: 'present',
+      value: { complete: false, recordedDispositions: [] },
+    });
   });
 
   it('completes an NC.1 operator-acceptance lap through the rendered cleared-halt handoff', async () => {
@@ -2963,6 +3002,7 @@ describe('prd_audit kickback', () => {
         const fixture = await createAsBuiltRemediationCapFixture({
           withPrdEvidence,
           appendCap: 4,
+          ...(withPrdEvidence ? { plannerFindingIds: ['S1.1', 'AB-1', 'AB-2'] } : {}),
         });
 
         // The switch is the ONLY difference from the cell above: enabling it

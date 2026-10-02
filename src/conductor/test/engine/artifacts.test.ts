@@ -441,22 +441,11 @@ describe('engine/artifacts', () => {
       });
     });
 
-    it('parses the prd-audit skill no-owner report example without rejected rows', async () => {
+    it('keeps no-owner observations in the managed structured-result contract', async () => {
       const skill = await readFile(join(REPOSITORY_ROOT, 'skills/prd-audit/SKILL.md'), 'utf8');
-      const reportExample = skill.match(/```markdown\n(# PRD Audit:[\s\S]*?)```/)?.[1];
-      const noOwnerSection = reportExample?.match(/## Findings without an owning criterion[\s\S]*/)?.[0];
-
-      expect(noOwnerSection).toBeDefined();
-      expect(reportExample).toBeDefined();
-
-      const parsed = parsePrdAuditReport(reportExample ?? '', activePlan);
-      expect(parsed.ok).toBe(true);
-      if (parsed.ok) {
-        expect(parsed.value.findings).toContainEqual(
-          expect.objectContaining({ criterion: 'NC.1', grade: 'OVER_SCOPE' }),
-        );
-        expect(parsed.value.rejectedRows).toEqual([]);
-      }
+      expect(skill).toContain('Use a no-owner observation only for an actual unowned OVER_SCOPE finding.');
+      expect(skill).toContain('Do not recreate engine input collection');
+      expect(skill).not.toContain('## Findings without an owning criterion');
     });
 
     it('rejects an old no-owner row without an NC key per-row', () => {
