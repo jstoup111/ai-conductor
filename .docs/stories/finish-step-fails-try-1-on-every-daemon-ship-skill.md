@@ -104,48 +104,26 @@ gh/git verification, so that offline/no-remote finishes still converge on the ma
 - [ ] keep-path vitest asserts zero spawns via runner spies plus the marker content.
 - [ ] Contradictory-flag and missing-dir cases covered.
 
-## Story: absolute pipeline-dir guard
+## Story: Managed FINISH delegates recording to the engine
 
-**Requirement:** D1
+**Requirement:** adr-2026-08-01-engine-owned-resumable-finish-publication D3–D6; adr-2026-10-01-daemon-session-command-contracts D2.
 
-As the daemon, I want relative `--pipeline-dir` refused at the boundary, so that the
-cd-into-main-repo write-misdirection class (PR #134) cannot recur through this primitive.
-
-### Acceptance Criteria
-
-#### Happy Path
-- Given `--pipeline-dir /abs/path/.pipeline` where the directory exists, when the command runs, then the guard passes and processing continues.
-
-#### Negative Paths
-- Given `--pipeline-dir .pipeline`, when the command runs, then it exits non-zero with zero writes and stderr states the path must be absolute.
-- Given `--pipeline-dir ../other-repo/.pipeline`, when the command runs, then it exits non-zero with zero writes — relative traversal is refused identically.
-
-### Done When
-- [ ] Guard test covers bare-relative and traversal-relative shapes.
-- [ ] The guard runs before any gh/git spawn (spies assert no calls on refusal).
-
-## Story: finish skill and engine prompt end with the one command
-
-**Requirement:** D5
-
-As the daemon operator, I want the unattended finish flow to end with a single
-finish-record invocation, so that try-1 completion no longer depends on a small model
-executing six ordered manual steps.
+As a managed FINISH provider, I want a bounded PR prose assignment whose mechanical completion remains engine-owned.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `skills/finish/SKILL.md`, when the auto-mode section (§4 unattended + §5 recording) is read, then the instructed final act is invoking `conduct-ts finish-record` with the absolute pipeline dir (manual two-file write instructions replaced), while interactive-mode instructions are unchanged.
-- Given `buildStepPrompt('finish')` in auto mode with `pipelineDir` set, when the prompt is built, then it contains the exact `conduct-ts finish-record` command line with the absolute `--pipeline-dir` value and no longer instructs two manual file writes.
+- Given managed FINISH with coherent publication evidence, when the final outcome is recorded, then the engine invokes and verifies the recorder through the coordinator and provider instructions contain no recording command.
+- Given a provider completes a PR presentation repair, when FINISH resumes, then the engine owns subsequent recording and verification.
 
 #### Negative Paths
-- Given the finish skill refuses (GATE 0, failed suite, failed staleness proof, failed STOP gate), when the session ends, then SKILL.md still mandates NO finish-record invocation — the refusal contract (absent marker = finish refused) is stated explicitly in the rewritten section.
-- Given `buildStepPrompt('finish')` with no `pipelineDir` (legacy non-daemon auto), when the prompt is built, then the command is rendered with a relative `.pipeline` fallback exactly as the current marker paths are — behavior parity, no crash.
+- Given publication refuses or required evidence is missing, when FINISH settles, then no completion marker is fabricated and the existing typed refusal identifies the condition.
+- Given a managed path has no usable publication coordinator, when it requires recording, then it refuses explicitly instead of rendering a relative-path or absolute-path recording command for the provider.
+- Given a marked provider invokes finish-record directly, when the CLI guard evaluates the command, then it refuses before recorder execution.
 
 ### Done When
-- [ ] SKILL.md auto-mode rewrite merged; `test/test_harness_integrity.sh` passes (frontmatter, cross-references, section numbering).
-- [ ] step-runners.ts prompt test asserts the command line (absolute and fallback variants).
-- [ ] README.md + src/conductor/README.md document the new subcommand; CHANGELOG `[Unreleased]` carries the entry (MINOR).
+- [ ] FINISH coordinator fixtures prove engine recording and no provider recording instruction for normal, presentation-repair, and missing-coordinator paths.
+- [ ] CLI guard fixtures prove a marked recording call invokes no recorder; unmarked primitive parsing and evidence validation retain their existing contract.
 
 ## Story: real-binary smoke test
 

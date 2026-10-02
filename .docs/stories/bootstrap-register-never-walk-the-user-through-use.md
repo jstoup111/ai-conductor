@@ -6,7 +6,7 @@ Source: jstoup111/ai-conductor#2218
 
 Approved by James Stoup in composer chat, 2026-09-14.
 
-Scope boundary: Bootstrap-time guided setup of every decidable project-scoped setting, with the ability to record non-default answers; operator identity established as a machine-scoped setting; in-place explanations for settings the walkthrough does not ask about; non-destructive re-runs; unattended paths unchanged. Excludes cross-project reconfiguration during updates and any prompt during project registration or creation.
+Scope boundary: Bootstrap-time guided setup of every decidable project-scoped setting, with the ability to record non-default answers; operator identity established as a machine-scoped setting; in-place explanations for settings the walkthrough does not ask about; non-destructive re-runs; unmarked unattended setup retains its defaults; engine-managed refresh requires initialized configuration under adr-2026-10-01-daemon-session-command-contracts D2. Excludes cross-project reconfiguration during updates and any prompt during project registration or creation.
 
 ## Story 1: Ask every decidable project setting with enough guidance to choose
 
@@ -142,20 +142,23 @@ As an operator changing a setting later, I want the recorded configuration itsel
 ### Done When
 - [ ] A test proves every unasked top-level key has an authored, non-placeholder explanation, every nested key the harness accepts has its own explanation or a section reference line, and no explanation references a key the harness rejects.
 
-## Story 8: Unattended onboarding asks nothing
+## Story 8: Unattended setup and managed refresh ask nothing
 
-**Requirement:** FR-12
+**Requirement:** FR-12, as qualified by adr-2026-10-01-daemon-session-command-contracts D2.
 
-As the daemon or a continuous-integration job, I want onboarding to complete with defaults when no operator is present so no question ever blocks an automated run.
+As an operator, I want unattended setup and managed refresh to avoid interactive questions while respecting the managed session's configuration boundary.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given onboarding runs with no operator present, when it reaches configuration, then it asks no question, records today's defaults, and completes.
+- Given unmarked onboarding runs with no operator present, when it reaches configuration, then it asks no question, records the existing defaults, and completes.
+- Given engine-managed refresh runs on an initialized project, when readiness succeeds, then refresh proceeds without asking questions or directing the provider to read, initialize, or write configuration.
 
 #### Negative Paths
-- Given onboarding runs with no operator present and no identity is established, when it reaches the identity step, then it neither asks nor records an identity, and the existing fail-closed behavior on later identity-dependent actions is unchanged.
-- Given onboarding runs with no operator present, when its output is compared with the pre-change unattended output, then the recorded project configuration parses to the same effective settings and differs only by added comment or blank lines.
+- Given unmarked onboarding runs with no operator present and no identity is established, when it reaches the identity step, then it neither asks nor records an identity, and later identity-dependent actions retain their fail-closed behavior.
+- Given unmarked onboarding runs with no operator present, when its output is compared with the prior unattended output, then the recorded project configuration parses to the same effective settings and differs only by added comment or blank lines.
+- Given engine-managed refresh encounters missing or unreadable required configuration, when readiness is evaluated, then it reports the operator bootstrap requirement before provider launch and writes no replacement configuration.
 
 ### Done When
-- [ ] A test proves the unattended path records configuration with zero questions and effective settings identical to the pre-change output with only comment or blank lines added, and writes no identity.
+- [ ] Unmarked unattended setup records configuration with zero questions and unchanged effective defaults, and writes no identity.
+- [ ] Managed readiness fixtures distinguish initialized, missing, and unreadable configuration; refused paths launch no provider and write no configuration.

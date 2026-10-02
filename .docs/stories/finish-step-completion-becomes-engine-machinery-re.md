@@ -23,7 +23,7 @@ invocation; no pre-dispatch repair.)*
 
 #### Happy Path
 - Given a finish attempt on a reused halt PR (draft, `needs-remediation` label,
-  `needs-remediation:` title) where the agent recorded `finish-choice`/`pr_url` and push
+  `needs-remediation:` title) where the engine recorded `finish-choice`/`pr_url` and push
   evidence holds, when the completion predicate evaluates, then the engine repairs the PR
   (ready, label removed, `Closes <sourceRef>` present exactly once when a sourceRef
   exists) strictly BEFORE the presentation conditions are checked — and the gate passes
@@ -157,52 +157,28 @@ shipping (#439) and the branch is finally testable (#368).
 
 ---
 
-## Story: A recording-only completion miss triggers a surgical retry, not a full re-walk
+## Story: A recording-only completion miss resumes the engine coordinator
 
-**Requirement:** ADR D4
+**Requirement:** adr-2026-08-01-engine-owned-resumable-finish-publication D3–D6; adr-2026-10-01-daemon-session-command-contracts D2.
 
-As the conductor engine, I want a completion miss whose only gap is `finish-choice`/`pr_url`
-recording to re-dispatch a single-command prompt so that the residual recording-miss class
-costs one narrow dispatch instead of a ~10-minute finish re-walk.
+As the conductor engine, I want a recording-only completion miss repaired through the existing publication coordinator so that no managed provider receives a blocked recording instruction.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a finish attempt where push evidence, PR presentation, and all other gate
-  conditions verifiably held but `.pipeline/finish-choice` is absent, when the engine
-  retries, then the dispatched prompt is the narrow finish-record instruction carrying the
-  exact `conduct-ts finish-record` command line with the computed absolute
-  `--pipeline-dir` — not the full `/finish` skill walk.
-- Given the surgical retry's agent runs the named command and it exits 0, when the
-  completion predicate re-evaluates, then the step completes on that retry.
+- Given publication evidence is coherent and final recording is absent, when FINISH retries, then the coordinator records and verifies the authorized outcome without a provider recording dispatch.
+- Given an earlier publication effect is already verified, when the recording transition retries, then the verified effect is not repeated.
 
 #### Negative Paths
-- Given the completion miss includes ANY non-recording gap (push evidence false/null,
-  stale title, draft PR), when the engine retries, then the retry is the full finish
-  re-walk — the recording-only classification requires every other condition to have held
-  (misclassification guard).
-- Given the agent refused to record (no PR exists or head not pushed), when the surgical
-  retry runs the fail-closed `finish-record`, then the CLI refuses with zero writes and the
-  step still does not complete — the refusal signal of adr-2026-07-07 is preserved; the
-  engine never writes the marker itself.
-- Given surgical retries repeat, when the step's bounded retry budget is exhausted, then
-  the existing exhaustion path (recovery/HALT) triggers exactly as today — surgical retries
-  are not free and cannot loop unbounded.
-- Given an older completion-check result without a facet code, when the engine builds the
-  retry, then it defaults to the full re-walk (absent code never classifies as
-  recording-only).
+- Given publication evidence is missing, stale, or inconsistent, when recovery runs, then it leaves completion unwritten and returns the existing typed FINISH disposition.
+- Given no usable coordinator is available, when recording recovery is requested, then the path refuses explicitly without a fabricated marker or a provider recording instruction.
+- Given recording fails repeatedly, when the existing publication allowance is exhausted, then the existing typed FINISH exhaustion result applies; recording failure alone never dispatches BUILD.
+- Given a completion result lacks a recording facet, when FINISH evaluates recovery, then the coordinator observes authoritative state rather than guessing that recording alone is safe or requesting a full provider re-walk.
 
 ### Done When
-- [ ] The finish predicate result carries a machine-readable facet code; classification is
-      computed engine-side (no string-matching on human-readable reasons) and unit-tested
-      for: recording-only, mixed-gap, no-code-default cases.
-- [ ] A unit test asserts the surgical prompt contains the absolute `--pipeline-dir` and
-      the `finish-record` command, and that mixed-gap misses receive the standard retry
-      prompt instead.
-- [ ] A real-binary smoke test drives the surgical path end-to-end (injected-runner lesson,
-      PR #143): fake agent leaves recording absent with all evidence satisfiable → surgical
-      retry prompt issued → running the named command completes the step.
-- [ ] Retry accounting: surgical retries decrement the same per-step budget (asserted).
+- [ ] FINISH integration tests prove engine recorder ownership, verify-after-write, no provider recording dispatch, and no repeated verified effects.
+- [ ] Missing-coordinator and invalid-evidence fixtures leave completion unwritten and return the appropriate typed disposition.
+- [ ] Bounded failed-recording recovery does not route to BUILD solely for publication failure.
 
 ---
 
@@ -220,7 +196,7 @@ finish/pr contradiction over draft-flip ownership is resolved.
 - Given the updated `skills/finish/SKILL.md`, when its rehabilitation/completion sections
   are read, then undraft, unlabel, and `Closes`-injection are described as engine-performed
   (with the agent's remaining duties limited to the prose title/body rewrite via `/pr` and
-  the `finish-record` exit contract).
+  no final-recording action).
 - Given the updated `skills/pr/SKILL.md`, when its reused-halt-PR section is read, then its
   description of engine-owned mechanics matches `finish/SKILL.md` exactly (no ownership
   contradiction remains).
@@ -232,9 +208,7 @@ finish/pr contradiction over draft-flip ownership is resolved.
 - Given the harness validation suite (`test/test_harness_integrity.sh`), when run after the
   SKILL edits, then it passes (frontmatter, cross-references, model table untouched or
   regenerated).
-- Given the `finish-record` auto-mode exit contract (adr-2026-07-07 D5), when the finish
-  SKILL is read, then that contract is still an agent instruction — documentation-ization
-  applies only to presentation mechanics, not to decision recording.
+- Given a managed FINISH instruction, when recording ownership is described, then it assigns final recording to the engine coordinator under adr-2026-08-01 D3–D6 and never directs the marked provider to invoke finish-record.
 
 ### Done When
 - [ ] Both SKILL.md files updated; a grep test (or documented manual check in the PR)

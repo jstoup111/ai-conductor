@@ -81,6 +81,8 @@ self-service fix, at the end of a setup that appeared to succeed.
   documentation.
 - **FR-12:** When no operator is present — automation, or no interactive terminal — onboarding
   completes using defaults and is never blocked waiting for an answer.
+
+> **Amended 2026-10-02 by #2709:** Default-creating unattended onboarding here means an unmarked setup invocation. Engine-managed refresh requires already initialized configuration and performs no configuration initialization. Missing or unreadable required setup produces an operator-bootstrap diagnostic before provider launch, without writing configuration or waiting for interactive answers. This is the D2 boundary approved in adr-2026-10-01-daemon-session-command-contracts; the no-question requirement remains.
 - **FR-13:** An answer outside the permitted set for a question is rejected and re-asked; an
   invalid value is never recorded.
 - **FR-14:** A configuration produced by onboarding is accepted by the harness on the next run; the

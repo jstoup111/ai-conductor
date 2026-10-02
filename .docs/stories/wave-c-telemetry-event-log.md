@@ -44,10 +44,8 @@ As a harness operator, I want every conductor event persisted with a timestamp t
 
 #### Happy Path
 - Given the EventPersister is wired to the ConductorEventEmitter before a run,
-  when the conductor emits any ConductorEvent, then the event is appended as a
-  single JSON line with a `ts` (ISO 8601) field to `.pipeline/events.jsonl`
-- Given multiple events are emitted, when the run completes, then every line in
-  events.jsonl parses as valid JSON and the count equals the number of events emitted
+  when the conductor emits a persist-enabled ConductorEvent, then it is represented as a single JSON line with a `ts` (ISO 8601) field in `.pipeline/events.jsonl`; replay of a session-observation occurrence already persisted under the same stable event id does not append a duplicate
+- Given multiple persist-enabled events are emitted, when the run completes, then every line in events.jsonl parses as valid JSON; ordinary events retain their existing append behavior, while replayed session-observation occurrences with the same stable event id have one durable record and distinct occurrence ids remain distinct
 - Given the events.jsonl file does not exist, when the first event is emitted,
   then the file is created (including any missing parent directories)
 
