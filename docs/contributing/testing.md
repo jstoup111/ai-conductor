@@ -39,8 +39,10 @@ Run everything from `src/conductor` unless stated otherwise.
 node scripts/run-vitest-shards.mjs
 ```
 
-The aggregate launcher divides the ordinary suite into fresh, round-robin Vitest
-batches of at most five files. This keeps each fork below the 8 GiB worker ceiling
+The aggregate launcher divides the ordinary suite into fresh Vitest
+batches of at most five files and 128 KiB of test source. This keeps a large fixture
+from sharing a fork merely because it fits the file-count limit, keeping each fork below
+the 8 GiB worker ceiling
 as the suite grows while running every included test exactly once.
 
 `AGGREGATE_TEST_SUITE_PASS` is a human-readable shell success indicator. The pre-SHIP `test_suite`

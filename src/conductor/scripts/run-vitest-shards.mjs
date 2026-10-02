@@ -1,14 +1,16 @@
 import { spawn } from 'node:child_process';
-import { readdir } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const testRoot = join(packageRoot, 'test');
 // A worker can retain enough fixture state to exceed its 8 GiB cap while
-// processing a sixth file. Derive the shard count from the discovered suite so
-// later test growth cannot silently increase that per-worker bound.
+// processing a small number of large fixtures. Bound both file count and
+// source bytes so a growing heavyweight fixture cannot share a worker merely
+// because it fits below the count limit.
 const maxFilesPerBatch = 5;
+const maxBytesPerBatch = 128 * 1024;
 const vitestArgs = ['run', '--reporter=dot', '--silent', '--slowTestThreshold=1800000'];
 
 async function collectTestFiles(directory) {
@@ -22,10 +24,30 @@ async function collectTestFiles(directory) {
   return files.flat();
 }
 
-function partition(files) {
-  const count = Math.ceil(files.length / maxFilesPerBatch);
-  const batches = Array.from({ length: count }, () => []);
-  for (const [index, file] of files.entries()) batches[index % count].push(file);
+async function partition(files) {
+  const batches = [];
+  let batch = [];
+  let batchBytes = 0;
+
+  for (const file of files) {
+    const fileBytes = (await stat(join(packageRoot, file))).size;
+    if (batch.length > 0 && (
+      batch.length >= maxFilesPerBatch || batchBytes + fileBytes > maxBytesPerBatch
+    )) {
+      batches.push(batch);
+      batch = [];
+      batchBytes = 0;
+    }
+    batch.push(file);
+    batchBytes += fileBytes;
+    if (batchBytes >= maxBytesPerBatch) {
+      batches.push(batch);
+      batch = [];
+      batchBytes = 0;
+    }
+  }
+
+  if (batch.length > 0) batches.push(batch);
   return batches;
 }
 
@@ -42,7 +64,7 @@ function runVitest(selectors) {
 
 const selectors = process.argv.slice(2);
 const discovered = selectors.length === 0 ? await collectTestFiles(testRoot) : [];
-const batches = selectors.length > 0 ? [selectors] : partition(discovered);
+const batches = selectors.length > 0 ? [selectors] : await partition(discovered);
 
 for (const batch of batches.length === 0 ? [[]] : batches) {
   const { code, signal } = await runVitest(batch);
