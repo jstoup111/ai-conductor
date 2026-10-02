@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:14
+// Covers: task:1, task:2, task:14, task:rem-as-built-rem-as-built-adr-d8-quote-removal-1
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
