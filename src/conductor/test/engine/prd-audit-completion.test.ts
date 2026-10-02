@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -38,7 +38,7 @@ describe('typed PRD-audit completion', () => {
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
-  it('accepts complete clean criterion evidence from the persisted typed verdict', async () => {
+  it('accepts complete clean criterion evidence when a later source PRD is unreadable', async () => {
     const dir = await fixtureDir();
     await persistPrdAuditVerdict(dir, {
       complete: true,
@@ -46,6 +46,7 @@ describe('typed PRD-audit completion', () => {
       diagnostics: [],
       recordedDispositions: [],
     }, { attemptId: 'current-audit', codeStamp: null });
+    await mkdir(join(dir, '.docs', 'specs', 'current-feature.md'), { recursive: true });
 
     const completion = await checkStepCompletion(dir, 'prd_audit', {
       attemptRunId: 'current-audit',

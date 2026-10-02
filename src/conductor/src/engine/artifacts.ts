@@ -59,7 +59,6 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { createEngineStateStore } from './engine-state-store.js';
-import { extractPrdFrIds } from './prd-fr-ids.js';
 import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
 import {
   parsePlanTaskPaths,
@@ -836,18 +835,6 @@ export async function readActivePlanText(
   if (!resolved) return undefined;
   return readFile(isAbsolute(resolved) ? resolved : join(projectRoot, resolved), 'utf-8')
     .catch(() => undefined);
-}
-
-/** {@link readActivePlanText} for a caller that already resolved the feature. */
-async function activePlanTextFor(
-  projectRoot: string,
-  context: ArtifactResolutionContext,
-): Promise<string | undefined> {
-  return readActivePlanText(
-    projectRoot,
-    context.activePlanPath ?? context.planPath,
-    context.featureDesc,
-  );
 }
 
 /**
@@ -4518,127 +4505,6 @@ export function parsePrdAuditReport(
 
 function prdAuditMechanicalFault(error: string): PrdAuditReportParseResult {
   return { ok: false, class: 'mechanical-fault', error };
-}
-
-/** Return a diagnostic when a resolved PRD requirement lacks an audit verdict row. */
-export async function prdAuditCoverageGap(
-  projectRoot: string,
-  context: ArtifactResolutionContext,
-  reportContent: string,
-): Promise<string | null> {
-  // Direct predicate callers from before feature-scoped artifact resolution
-  // existed have no way to identify a PRD. Preserve their established
-  // presence/freshness-only contract; once any feature identity is available,
-  // resolution is authoritative and an absent PRD must fail closed.
-  const hasFeatureIdentity = Boolean(context.activePlanPath || context.featureDesc || context.featureIdentities.length > 0);
-  if (!hasFeatureIdentity) return null;
-
-  const parsed = parsePrdAuditReport(reportContent, await activePlanTextFor(projectRoot, context));
-  if (!parsed.ok) return parsed.error;
-  const prdPaths = await resolveFeaturePrdPaths(projectRoot, context);
-  if (prdPaths.length === 0) {
-    return parsed.value.prd === 'none'
-      ? null
-      : 'PRD audit report declares **PRD:** present but no approved PRD could be resolved for the feature.';
-  }
-
-  return parsed.value.prd === 'present'
-    ? null
-    : 'PRD audit report declares **PRD:** none but an approved PRD was resolved for the feature.';
-}
-
-/**
- * Refuse a PRD audit that cannot establish its story-criteria authority, or
- * that silently treats an uncovered PRD requirement as covered. Stories remain
- * the audit key; an FR that no story traces must instead be explicitly called
- * out with a PLAN_GAP row in the report.
- */
-export async function prdAuditStoryCoverageGap(
-  projectRoot: string,
-  context: ArtifactResolutionContext,
-  featureDesc: string | undefined,
-  reportContent: string,
-): Promise<string | null> {
-  const storyIdentity = featureDesc
-    ?? context.featureDesc
-    ?? (context.activePlanPath ? planStem(context.activePlanPath) : undefined)
-    ?? (context.planPath ? planStem(context.planPath) : undefined);
-  const storiesPath = await resolveFeatureStoriesPath(projectRoot, storyIdentity);
-  // Preserve the legacy PRD-only predicate contract for callers whose feature
-  // has no resolvable stories artifact. Once a stories file is resolved it is
-  // authoritative and must be readable.
-  if (!storiesPath) return null;
-
-  let storiesText: string;
-  try {
-    storiesText = await readFile(storiesPath, 'utf-8');
-  } catch {
-    return `PRD audit cannot read story criteria at ${relative(projectRoot, storiesPath)}.`;
-  }
-
-  // Reported keys are upper-cased at parse time, so the expected set must be
-  // too: a story id carrying letters (`5a`) otherwise derives `S5a.1` here and
-  // never matches the reported `S5A.1`.
-  const criterionIds = extractStoryCriterionIds(storiesText).map((id) => id.toUpperCase());
-  if (criterionIds.length === 0) {
-    return `PRD audit cannot parse story criteria in ${relative(projectRoot, storiesPath)}.`;
-  }
-  // Rows the parser rejects never reach `findings`, so an unauthorized parse
-  // here would drop every citing row and report its criterion as missing.
-  const parsed = parsePrdAuditReport(reportContent, await activePlanTextFor(projectRoot, context));
-  if (!parsed.ok) return parsed.error;
-  const expectedCriteria = new Set(criterionIds);
-  const reportedCriteria = new Set(
-    parsed.value.findings
-      .map((finding) => finding.criterion)
-      .filter((criterion) => !isNoOwnerKey(criterion)),
-  );
-  const unknownCriteria = [...reportedCriteria].filter((criterion) => !expectedCriteria.has(criterion));
-  if (unknownCriteria.length > 0) {
-    return `PRD audit report names criteria absent from the active stories: ${unknownCriteria.join(', ')}.`;
-  }
-  const missingCriteria = [...expectedCriteria].filter((criterion) => !reportedCriteria.has(criterion));
-  if (missingCriteria.length > 0) {
-    return `PRD audit report is missing criterion-grade rows for ${missingCriteria.join(', ')}.`;
-  }
-
-  const prdPaths = await resolveFeaturePrdPaths(projectRoot, context);
-  if (prdPaths.length === 0) return null;
-
-  let expectedIds: Set<string>;
-  try {
-    expectedIds = new Set(
-      (await Promise.all(prdPaths.map(async (path) => extractPrdFrIds(await readFile(path, 'utf8')))))
-        .flatMap((ids) => [...ids]),
-    );
-  } catch {
-    // prdAuditCoverageGap owns the primary unreadable-PRD diagnostic.
-    return null;
-  }
-
-  const covered = extractStoryCoveredFrIds(storiesText);
-  const uncovered = [...expectedIds].filter((id) => !covered.has(id));
-  const declaredPlanGaps = new Set(
-    parsed.value.findings
-      .filter((finding) => finding.grade === 'PLAN_GAP')
-      .flatMap((finding) => finding.prdIds),
-  );
-  const missingPlanGaps = uncovered.filter((id) => !declaredPlanGaps.has(id));
-  return missingPlanGaps.length === 0
-    ? null
-    : `PRD audit report is missing PLAN_GAP rows for PRD requirements without story coverage: ${missingPlanGaps.join(', ')}.`;
-}
-
-function extractStoryCoveredFrIds(storiesText: string): Set<string> {
-  const ids = new Set<string>();
-  for (const block of splitStoryBlocks(storiesText)) {
-    for (const match of block.text.matchAll(/^\s*\*\*Requirements?\s*:\*\*\s*(.+?)\s*$/gim)) {
-      for (const id of match[1].matchAll(/\bFR-\d+[A-Za-z]?\b/gi)) {
-        ids.add(id[0].toUpperCase());
-      }
-    }
-  }
-  return ids;
 }
 
 /**
