@@ -9,7 +9,7 @@ const testRoot = join(packageRoot, 'test');
 // processing a small number of large fixtures. Bound both file count and
 // source bytes so a growing heavyweight fixture cannot share a worker merely
 // because it fits below the count limit.
-const maxFilesPerBatch = 5;
+const maxFilesPerBatch = 3;
 const maxBytesPerBatch = 128 * 1024;
 const vitestArgs = ['run', '--reporter=dot', '--silent', '--slowTestThreshold=1800000'];
 
