@@ -90,6 +90,7 @@ import {
   AS_BUILT_REPORT_PATH,
   AS_BUILT_VERDICT_PATH,
 } from './as-built-verdict-store.js';
+import { PRD_AUDIT_REPORT_PATH, PRD_AUDIT_VERDICT_PATH } from './prd-audit-verdict-store.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
 import {
@@ -1073,6 +1074,8 @@ export async function sweepStaleReviewArtifacts(
     // either half of that authority/view pair behind after a stale sweep.
     const targets = step === 'architecture_review_as_built'
       ? [f, join(dir, AS_BUILT_REPORT_PATH)]
+      : step === 'prd_audit'
+        ? [f, join(dir, PRD_AUDIT_VERDICT_PATH), join(dir, PRD_AUDIT_REPORT_PATH)]
       : [f];
     for (const target of targets) {
       try {
