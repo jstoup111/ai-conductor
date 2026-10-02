@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -9,18 +9,28 @@ import { homedir } from 'node:os';
  */
 export const PI_HARNESS_EXTENSION_SOURCE = String.raw`
 export default function(pi: any) {
-  const schemaPath = pi.registerFlag('conduct-output-schema', { type: 'string' });
-  const path = pi.getFlag(schemaPath);
-  if (path) {
-    // The provider permits async extension factories; avoid a static dependency so this
-    // engine-owned asset remains one self-contained source string.
-    return import('node:fs/promises').then((fs: any) => fs.readFile(path, 'utf8').then((raw: string) =>
-      pi.registerTool({ name: 'submit_result', description: 'Submit the final structured result.', parameters: JSON.parse(raw), async execute(args: any) { return { details: args, terminate: true }; } })));
-  }
+  pi.registerFlag('conduct-output-schema', { type: 'string', description: 'Harness output schema file.' });
+  const path = pi.getFlag('conduct-output-schema');
+  if (typeof path !== 'string' || path === '') return;
+  // Import-free by contract (catalog D15): reach node:fs through the runtime, not an import.
+  const raw = process.getBuiltinModule('node:fs').readFileSync(path, 'utf8');
+  pi.registerTool({
+    name: 'submit_result',
+    label: 'Submit result',
+    description: 'Submit the final structured result.',
+    parameters: JSON.parse(raw),
+    async execute(_toolCallId: string, params: any) {
+      return { content: [{ type: 'text', text: 'Result submitted.' }], details: params, terminate: true };
+    },
+  });
 }
 `;
 
-export interface MaterializePiHarnessExtensionOptions { readonly homeDir?: string; }
+export interface MaterializePiHarnessExtensionOptions {
+  readonly homeDir?: string;
+  /** Filesystem write seam; defaults to node:fs/promises writeFile. */
+  readonly writeFile?: (path: string, data: string) => Promise<void>;
+}
 
 export async function materializePiHarnessExtension(
   options: MaterializePiHarnessExtensionOptions = {},
@@ -30,12 +40,19 @@ export async function materializePiHarnessExtension(
   await mkdir(dirname(target), { recursive: true });
   try {
     if ((await stat(target)).isFile()) {
-      const existing = await import('node:fs/promises').then(({ readFile }) => readFile(target, 'utf8'));
+      const existing = await readFile(target, 'utf8');
       if (existing === PI_HARNESS_EXTENSION_SOURCE) return target;
     }
   } catch (error: any) { if (error?.code !== 'ENOENT') throw new Error(`could not materialize provider harness extension at ${target}: ${error.message}`); }
   const temporary = join(dirname(target), `.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`);
-  try { await writeFile(temporary, PI_HARNESS_EXTENSION_SOURCE, 'utf8'); await rename(temporary, target); }
+  try { await (options.writeFile ?? ((path, data) => writeFile(path, data, 'utf8')))(temporary, PI_HARNESS_EXTENSION_SOURCE); await rename(temporary, target); }
   catch (error: any) { throw new Error(`could not materialize provider harness extension at ${target}: ${error.message}`); }
+  // Verify the bytes Pi will load, not the bytes we meant to write (catalog D15).
+  let written: string;
+  try { written = await readFile(target, 'utf8'); }
+  catch (error: any) { throw new Error(`could not materialize provider harness extension at ${target}: ${error.message}`); }
+  if (written !== PI_HARNESS_EXTENSION_SOURCE) {
+    throw new Error(`could not materialize provider harness extension at ${target}: written bytes do not match the harness source`);
+  }
   return target;
 }
