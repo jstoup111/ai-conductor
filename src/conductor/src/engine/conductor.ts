@@ -264,6 +264,7 @@ import {
   readAsBuiltVerdict,
   type RecordedAsBuiltFinding,
 } from './as-built-verdict-store.js';
+import { PRD_AUDIT_VERDICT_PATH, readPrdAuditVerdict } from './prd-audit-verdict-store.js';
 import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
 import type { AsBuiltGoverningReference } from './as-built-contract.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
@@ -3104,6 +3105,23 @@ export class Conductor {
     ) return undefined;
 
     try {
+      if (step === 'prd_audit') {
+        const absentReason = `prd_audit dispatch ${expectedRunId ?? 'current attempt'} produced no terminal typed verdict; expected ${PRD_AUDIT_VERDICT_PATH}`;
+        if (dispatchOutput === 'structured-result-missing' || dispatchOutput?.startsWith('structured-result-rejected:')) {
+          return { done: false, routeClass: 'absent', retrySignal: 'structured-result-missing', reason: absentReason };
+        }
+        const stored = await readPrdAuditVerdict(this.projectRoot);
+        if (stored.kind !== 'present') {
+          return { done: false, routeClass: 'absent', retrySignal: 'structured-result-missing', reason: `${absentReason}: ${stored.kind === 'absent' ? 'artifact is missing' : stored.reason}` };
+        }
+        if (expectedRunId !== undefined && stored.value.attemptId !== expectedRunId) {
+          return { done: false, routeClass: 'absent', retrySignal: 'stale-run-identity', reason: `${PRD_AUDIT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${expectedRunId}` };
+        }
+        if (!stored.value.complete) {
+          return { done: false, routeClass: 'absent', retrySignal: 'structured-result-rejected', reason: `${PRD_AUDIT_VERDICT_PATH} is incomplete: ${stored.value.diagnostics.join('; ')}` };
+        }
+        return undefined;
+      }
       if (step === 'architecture_review_as_built') {
         // A rejected structured result persisted nothing; record the
         // rejection (and its named field) as its own absent outcome rather
