@@ -32,7 +32,7 @@ export default function(pi: any) {
   }
   const path = pi.getFlag(schemaPath);
   if (path) {
-    // Pi permits async extension factories; avoid a static dependency so this
+    // The provider permits async extension factories; avoid a static dependency so this
     // engine-owned asset remains one self-contained source string.
     return import('node:fs/promises').then((fs: any) => fs.readFile(path, 'utf8').then((raw: string) =>
       pi.registerTool({ name: 'submit_result', description: 'Submit the final structured result.', parameters: JSON.parse(raw), async execute(args: any) { return { details: args, terminate: true }; } })));
@@ -53,9 +53,9 @@ export async function materializePiHarnessExtension(
       const existing = await import('node:fs/promises').then(({ readFile }) => readFile(target, 'utf8'));
       if (existing === PI_HARNESS_EXTENSION_SOURCE) return target;
     }
-  } catch (error: any) { if (error?.code !== 'ENOENT') throw new Error(`could not materialize Pi harness extension at ${target}: ${error.message}`); }
+  } catch (error: any) { if (error?.code !== 'ENOENT') throw new Error(`could not materialize provider harness extension at ${target}: ${error.message}`); }
   const temporary = join(dirname(target), `.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`);
   try { await writeFile(temporary, PI_HARNESS_EXTENSION_SOURCE, 'utf8'); await rename(temporary, target); }
-  catch (error: any) { throw new Error(`could not materialize Pi harness extension at ${target}: ${error.message}`); }
+  catch (error: any) { throw new Error(`could not materialize provider harness extension at ${target}: ${error.message}`); }
   return target;
 }
