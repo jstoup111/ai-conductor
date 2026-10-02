@@ -17,7 +17,7 @@ Outcome 1 (the overlap is surfaced before creation) is delivered by Stories 2, 3
 
 ## Functional requirements
 
-FR-1 to FR-16 are each cited by the `**Requirement:**` line of at least one story, and those stories' scenarios exercise the requirement. FR-3 is also cited by Story 17, which pins the plan-time scan's branch set while FR-3 extends the filing-time one; both hold at once because the enumerator default is unchanged. FR-17 (filing guidance for acting on a refusal) is documentation. Under the stories and plan documentation boundary it has no story or task, so it is recorded as a gap. It is waived to the lifecycle's documentation step in `.docs/coherence-waivers/surface-evidence-path-overlap-as-suggested-depende.md`. The refusal output itself carries the how-to-decide instructions (Story 10, Task 6, Task 18).
+FR-1 to FR-16 are each cited by the `**Requirement:**` line of at least one story, and those stories' scenarios exercise the requirement. FR-3 is also cited by Story 17, which pins the plan-time scan's branch set while FR-3 extends the filing-time one; both hold at once because the enumerator default is unchanged. FR-17 (filing guidance for acting on a refusal) is cited by Story 18, which Task 22 delivers in the intake skill and user guide.
 
 | Row class | Cited id(s) | Counterpart id(s) | Verdict | Quote |
 |---|---|---|---|---|
@@ -37,7 +37,7 @@ FR-1 to FR-16 are each cited by the `**Requirement:**` line of at least one stor
 | fr | fr-14 | story-14 | covered | FR-14 is cited by Story 14 and exercised by its criteria. |
 | fr | fr-15 | story-15 | covered | FR-15 is cited by Story 15 and exercised by its criteria. |
 | fr | fr-16 | story-16 | covered | FR-16 is cited by Story 16 and exercised by its criteria. |
-| fr | fr-17 | | gap | fr-17: documentation-only requirement with no story, waived to the documentation step. |
+| fr | fr-17 | story-18 | covered | FR-17 is cited by Story 18 and exercised by its criteria. |
 
 ## Stories
 
@@ -60,6 +60,7 @@ FR-1 to FR-16 are each cited by the `**Requirement:**` line of at least one stor
 | story | story-15 | task-14, task-21 | covered | Story 15 cites FR-15; every criterion maps to a cited task check in the criterion table below. |
 | story | story-16 | task-15 | covered | Story 16 cites FR-16; every criterion maps to a cited task check in the criterion table below. |
 | story | story-17 | task-16 | covered | Story 17 cites FR-3; every criterion maps to a cited task check in the criterion table below. |
+| story | story-18 | task-22 | covered | Story 18 cites FR-17; every criterion maps to a cited task check in the criterion table below. |
 
 ## Tasks
 
@@ -86,10 +87,11 @@ FR-1 to FR-16 are each cited by the `**Requirement:**` line of at least one stor
 | task | task-19 | story-6 | covered | Suggestions are ranked by shared paths and capped at five |
 | task | task-20 | story-1 | covered | Cited paths are filtered by the target checkout before any comparison |
 | task | task-21 | story-15 | covered | The in-flight comparison runs only against the resolved target checkout |
+| task | task-22 | story-18 | covered | Intake filing guidance documents how to act on an overlap refusal |
 
 ## Criteria
 
-Every criterion row below passed the independent coverage judgement (plan §7a), run over three rounds with fresh subagents; the final round returned 72 asserts and 0 does-not-assert. The cited task ids and Done-when blocks are identical to the plan's `## Coverage Check` rows. All dispositions are `diff-local`: each outcome is produced by code this feature adds or by fixtures it owns.
+Every criterion row below passed the independent coverage judgement (plan §7a), run over three rounds with fresh subagents; the final round returned 72 asserts and 0 does-not-assert. The two Story 18 rows were added with the 2026-10-02 FR-17 amendment. The cited task ids and Done-when blocks are identical to the plan's `## Coverage Check` rows. All dispositions are `diff-local`: each outcome is produced by code this feature adds or by fixtures it owns.
 
 | Row class | Exact criterion | Task id(s) | Verdict | Done when quote | Disposition |
 |---|---|---|---|---|---|
@@ -165,3 +167,5 @@ Every criterion row below passed the independent coverage judgement (plan §7a),
 | criterion | Story 16 negative: **Given** a no-overlap filing, **When** it completes, **Then** exactly one overlap-check entry is recorded with zero suggestions and the check itself writes no separate file or log | task-15 | covered | "The same test asserts that a no-overlap filing emits exactly one event with an empty `suggested` list, and that the check performs no filesystem write (asserted with a spied `node:fs` write surface)." | diff-local |
 | criterion | Story 17 happy: **Given** a repository with an unmerged spec branch overlapping candidate files, **When** the DECIDE-time overlap scan runs, **Then** it reports that spec branch exactly as before this feature | task-16 | covered | "The `overlap-scan-branch-set` Vitest test asserts `runOverlapScan` over the fixture reports a seam overlap for `spec/x` and no seam overlap for `feat/daemon-y`." | diff-local |
 | criterion | Story 17 negative: **Given** a repository with an unmerged daemon build branch overlapping candidate files, **When** the DECIDE-time overlap scan runs, **Then** the daemon branch is not reported because the scan's branch set stays exactly today's `spec/*` set | task-16 | covered | "The same test asserts `enumerateUnmergedBranches(git, base)` called without a pattern argument returns `spec/x` and not `feat/daemon-y`." | diff-local |
+| criterion | Story 18 happy: **Given** a filer whose filing was refused for undecided overlap suggestions, **When** the filer reads the intake filing guidance in `skills/intake/SKILL.md` and `docs/guides/intake.md`, **Then** the guidance explains the refusal line and says to re-run with `--depends-on <issue>` to accept or `--decline-overlap <issue>` to decline each listed suggestion | task-22 | covered | "`skills/intake/SKILL.md` contains an `Overlap refusal` entry naming the `[intake-file] overlap: undecided` line, `--depends-on <issue>` and `--decline-overlap <issue>`, and `docs/guides/intake.md` has an `### Overlap suggestions` section plus a `--decline-overlap <owner/repo#N>` flag row." |
+| criterion | Story 18 negative: **Given** a non-interactive agent whose filing was refused for undecided overlap suggestions, **When** the agent reads the intake filing guidance in `skills/intake/SKILL.md`, **Then** the guidance tells the agent to decide every listed suggestion itself and not to wait for an interactive prompt | task-22 | covered | "The same `Overlap refusal` entry in `skills/intake/SKILL.md` states that non-interactive agents must make the decision themselves for every listed suggestion." |

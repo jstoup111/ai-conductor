@@ -7,7 +7,7 @@
 
 ## Summary
 
-Before the intake filer creates an issue, it compares the paths the intake cites against open issues and in-flight spec and daemon branches in the target repository, then turns overlaps into suggested dependencies. Interactive filers decide each one. Non-interactive filers are refused until every suggestion is accepted or declined. Failures inside the check degrade to notes. Twenty-one tasks.
+Before the intake filer creates an issue, it compares the paths the intake cites against open issues and in-flight spec and daemon branches in the target repository, then turns overlaps into suggested dependencies. Interactive filers decide each one. Non-interactive filers are refused until every suggestion is accepted or declined. Failures inside the check degrade to notes. Twenty-two tasks.
 
 ## Technical Approach
 
@@ -525,6 +525,25 @@ Before the intake filer creates an issue, it compares the paths the intake cites
 
 **Dependencies:** 13, 14
 
+### Task 22: Intake filing guidance documents how to act on an overlap refusal
+**Story:** 18
+**Type:** happy-path
+
+**Steps:**
+1. Confirm `skills/intake/SKILL.md` carries an `Overlap refusal` entry that names the undecided line, both re-run flags, and the non-interactive obligation; add whatever is missing.
+2. Confirm `docs/guides/intake.md` carries an `### Overlap suggestions` section and the `--decline-overlap` flag row; add whatever is missing.
+3. Commit: "docs(intake): document acting on an overlap refusal".
+
+**Done when:**
+- `skills/intake/SKILL.md` contains an `Overlap refusal` entry naming the `[intake-file] overlap: undecided` line, `--depends-on <issue>` and `--decline-overlap <issue>`, and `docs/guides/intake.md` has an `### Overlap suggestions` section plus a `--decline-overlap <owner/repo#N>` flag row.
+- The same `Overlap refusal` entry in `skills/intake/SKILL.md` states that non-interactive agents must make the decision themselves for every listed suggestion.
+
+**Files likely touched:**
+- `skills/intake/SKILL.md`
+- `docs/guides/intake.md`
+
+**Dependencies:** 18
+
 ## Task Dependency Graph
 
 ```text
@@ -542,6 +561,7 @@ Task 2 ──┼─> Task 3 ─────────────────�
    Task 13 ─> Task 20 ──────────────────────────┤
    Tasks 13, 14 ─> Task 21 ─────────────────────┤
 Task 14 ─────────────────────────────────────────┴─> Task 18 ─> Task 17
+                                                          Task 18 ─> Task 22
 ```
 
 ## Integration Points
@@ -625,6 +645,8 @@ Task 14 ────────────────────────
 | Story 16 negative: **Given** a no-overlap filing, **When** it completes, **Then** exactly one overlap-check entry is recorded with zero suggestions and the check itself writes no separate file or log | 15 | "The same test asserts that a no-overlap filing emits exactly one event with an empty `suggested` list, and that the check performs no filesystem write (asserted with a spied `node:fs` write surface)." | diff-local |
 | Story 17 happy: **Given** a repository with an unmerged spec branch overlapping candidate files, **When** the DECIDE-time overlap scan runs, **Then** it reports that spec branch exactly as before this feature | 16 | "The `overlap-scan-branch-set` Vitest test asserts `runOverlapScan` over the fixture reports a seam overlap for `spec/x` and no seam overlap for `feat/daemon-y`." | diff-local |
 | Story 17 negative: **Given** a repository with an unmerged daemon build branch overlapping candidate files, **When** the DECIDE-time overlap scan runs, **Then** the daemon branch is not reported because the scan's branch set stays exactly today's `spec/*` set | 16 | "The same test asserts `enumerateUnmergedBranches(git, base)` called without a pattern argument returns `spec/x` and not `feat/daemon-y`." | diff-local |
+| Story 18 happy: **Given** a filer whose filing was refused for undecided overlap suggestions, **When** the filer reads the intake filing guidance in `skills/intake/SKILL.md` and `docs/guides/intake.md`, **Then** the guidance explains the refusal line and says to re-run with `--depends-on <issue>` to accept or `--decline-overlap <issue>` to decline each listed suggestion | 22 | "`skills/intake/SKILL.md` contains an `Overlap refusal` entry naming the `[intake-file] overlap: undecided` line, `--depends-on <issue>` and `--decline-overlap <issue>`, and `docs/guides/intake.md` has an `### Overlap suggestions` section plus a `--decline-overlap <owner/repo#N>` flag row." | diff-local |
+| Story 18 negative: **Given** a non-interactive agent whose filing was refused for undecided overlap suggestions, **When** the agent reads the intake filing guidance in `skills/intake/SKILL.md`, **Then** the guidance tells the agent to decide every listed suggestion itself and not to wait for an interactive prompt | 22 | "The same `Overlap refusal` entry in `skills/intake/SKILL.md` states that non-interactive agents must make the decision themselves for every listed suggestion." | diff-local |
 
 ## Verification
 
