@@ -28,6 +28,7 @@ import { writeState } from '../../src/engine/state.js';
 import { persistPrdWideningOffers } from '../../src/engine/prd-widening-offers.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import * as coordinatorModule from '../../src/engine/prd-widening-coordinator.js';
@@ -104,6 +105,36 @@ describe('v2 PRD widening routing', () => {
     });
   });
 
+  it('routes a complete typed OVER_SCOPE judgment when its derived report is altered', async () => {
+    await persistPrdAuditVerdict(projectRoot, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'OVER_SCOPE',
+          evidence: 'The change exposes an unapproved behavior.',
+          rationale: 'The behavior lies outside the approved intent.',
+          requirementAssociations: [], evidenceTaskIds: [], intentRelation: 'outside-visible',
+        }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'typed-over-scope', codeStamp: null });
+    await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), 'Presentation was independently edited.');
+
+    const conductor = new Conductor({
+      projectRoot, stateFilePath: statePath, stepRunner: { run: vi.fn(async () => ({ success: true })) }, events: new ConductorEventEmitter(),
+    });
+    const entry = conductor as unknown as {
+      routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<unknown>;
+    };
+
+    await expect(entry.routeCurrentPrdAuditOverScope('prd-widening-routing', {} as ConductState)).resolves.toMatchObject({
+      kind: 'halt', findings: [{ criterion: 'S1.1', grade: 'OVER_SCOPE' }],
+    });
+  });
+
   let projectRoot: string;
   let statePath: string;
 
@@ -141,6 +172,22 @@ describe('v2 PRD widening routing', () => {
     ])) as ConductState;
   }
 
+  async function writeTypedOverScope(evidence: string, criterion = 'NC.1'): Promise<void> {
+    await persistPrdAuditVerdict(projectRoot, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [],
+        noOwnerObservations: [{
+          presentationOrdinal: criterion, grade: 'OVER_SCOPE', evidence,
+          rationale: 'The fixture supplies typed outside-visible scope evidence.', intentRelation: 'outside-visible',
+        }],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: `typed-${criterion}`, codeStamp: null });
+  }
+
   it.each(['same-case', 'different'] as const)('captures the rendered %s offer after reconciliation', async (kind) => {
     const feature = { version: 'v1' as const, repository: '/fixture/repository', feature: 'prd-widening-routing' };
     const caseStore = new RemediationCaseStore(projectRoot, feature);
@@ -160,7 +207,7 @@ describe('v2 PRD widening routing', () => {
       routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<ReturnType<typeof routePrdAuditOverScopeV2>>;
     };
     await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
-    await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), report('Reworded current behavior.', 'NC.2'));
+    await writeTypedOverScope('Reworded current behavior.', 'NC.2');
     const route = await entry.routeCurrentPrdAuditOverScope(feature.feature, { feature_desc: feature.feature } as ConductState);
     if (route.kind !== 'halt') throw new Error('expected an operator offer');
     expect(route.findings).toEqual(expect.arrayContaining([expect.objectContaining({ criterion: 'NC.2' })]));
@@ -185,7 +232,7 @@ describe('v2 PRD widening routing', () => {
       routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<unknown>;
     };
     await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
-    await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), report('x'.repeat(8001)));
+    await writeTypedOverScope('x'.repeat(8001));
     await expect(entry.routeCurrentPrdAuditOverScope('prd-widening-routing', {} as ConductState)).resolves.toMatchObject({
       kind: 'halt', detail: expect.stringContaining('context-overflow:proseBytes actual=8001 limit=8000'),
     });
@@ -268,7 +315,7 @@ describe('v2 PRD widening routing', () => {
       routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<unknown>;
     };
     await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
-    await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), report('Replacement wording for the same behavior.'));
+    await writeTypedOverScope('Replacement wording for the same behavior.');
 
     await expect(entry.routeCurrentPrdAuditOverScope('prd-widening-routing', state)).resolves.toMatchObject({
       kind: 'record', findings: [{ criterion: 'NC.1', decision: 'accept' }],
@@ -309,7 +356,7 @@ describe('v2 PRD widening routing', () => {
       routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<unknown>;
     };
     await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
-    await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), report('The original user-visible widening.', 'NC.2'));
+    await writeTypedOverScope('The original user-visible widening.', 'NC.2');
 
     await expect(entry.routeCurrentPrdAuditOverScope('prd-widening-routing', state)).resolves.toMatchObject({
       kind: 'record', findings: [{ criterion: 'NC.2', decision: 'accept' }],
@@ -328,7 +375,7 @@ describe('v2 PRD widening routing', () => {
     const runner: StepRunner = {
       run: vi.fn(async (step) => {
         if (step !== 'remediate') return { success: true };
-        await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), report('A changed source arrived while reconciliation ran.'));
+        await writeTypedOverScope('A changed source arrived while reconciliation ran.');
         return {
           success: true,
           finalStructuredResult: {
@@ -344,7 +391,7 @@ describe('v2 PRD widening routing', () => {
       routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<unknown>;
     };
     await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
-    await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), report('Replacement wording needs reconciliation.'));
+    await writeTypedOverScope('Replacement wording needs reconciliation.');
 
     await expect(entry.routeCurrentPrdAuditOverScope('prd-widening-routing', state)).resolves.toMatchObject({
       kind: 'halt', detail: expect.stringContaining('stale-relation'),
@@ -367,7 +414,7 @@ describe('v2 PRD widening routing', () => {
       routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<unknown>;
     };
     await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
-    await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), report('Replacement wording needs reconciliation.'));
+    await writeTypedOverScope('Replacement wording needs reconciliation.');
 
     await expect(entry.routeCurrentPrdAuditOverScope('prd-widening-routing', state)).resolves.toMatchObject({
       kind: 'halt', detail: expect.stringContaining('attempts-exhausted'),
@@ -401,7 +448,7 @@ describe('v2 PRD widening routing', () => {
       routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<unknown>;
     };
     await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
-    await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), report('Replacement wording needs reconciliation.'));
+    await writeTypedOverScope('Replacement wording needs reconciliation.');
 
     await expect(entry.routeCurrentPrdAuditOverScope('prd-widening-routing', state)).resolves.toMatchObject({
       kind: 'halt', detail: expect.stringContaining('attempts-exhausted'),

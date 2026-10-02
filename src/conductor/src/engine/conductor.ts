@@ -217,7 +217,6 @@ import {
   CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
   parsePrdAuditReport,
-  readActivePlanText,
   isNoOwnerKey,
   extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
@@ -263,6 +262,7 @@ import {
   PRD_AUDIT_VERDICT_PATH,
   persistPrdAuditVerdict,
   readPrdAuditVerdict,
+  type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
 import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
 import type { AsBuiltGoverningReference } from './as-built-contract.js';
@@ -1128,14 +1128,56 @@ export function routePrdAuditOverScopeV2(
   const parsed = parsePrdAuditReport(reportText, activePlanText);
   if (!parsed.ok || parsed.value.rejectedRows.length > 0) return { kind: 'none' };
   const relations = overScopeRelations(reportText);
-  const overScope = parsed.value.findings.filter((finding) => finding.grade === 'OVER_SCOPE');
+  return routePrdAuditOverScopeV2FromTypedReport(parsed.value, relations, decisions, cases);
+}
+
+/**
+ * Adapt the validated verdict to the existing widening domain without
+ * re-reading its derived Markdown report.  Presentation ordinals remain only
+ * locators for no-owner observations; their evidence and relation come from
+ * the typed authority.
+ */
+function prdAuditTypedRouteReport(value: PersistedPrdAuditVerdict): {
+  readonly report: PrdAuditReport;
+  readonly relations: ReadonlyMap<string, IntentRelation>;
+} {
+  const relations = new Map<string, IntentRelation>();
+  const findings: PrdAuditReport['findings'] = value.judgment.criterionJudgments.map((judgment) => {
+    if (judgment.grade === 'OVER_SCOPE') relations.set(judgment.criterionId, judgment.intentRelation!);
+    return {
+      criterion: judgment.criterionId,
+      grade: judgment.grade,
+      ...(judgment.ownerTaskId === undefined ? {} : { planTask: judgment.ownerTaskId }),
+      prdIds: judgment.requirementAssociations.map((association) => association.requirementId),
+      evidence: judgment.evidence,
+    };
+  });
+  for (const observation of value.judgment.noOwnerObservations) {
+    relations.set(observation.presentationOrdinal, observation.intentRelation);
+    findings.push({
+      criterion: observation.presentationOrdinal,
+      grade: observation.grade,
+      prdIds: [],
+      evidence: observation.evidence,
+    });
+  }
+  return { report: { prd: 'none', findings, rejectedRows: [] }, relations };
+}
+
+function routePrdAuditOverScopeV2FromTypedReport(
+  report: PrdAuditReport,
+  relations: ReadonlyMap<string, IntentRelation>,
+  decisions: readonly AcceptedWideningDecision[],
+  cases: readonly RemediationCasePrdWideningRecord[],
+): PrdAuditOverScopeRoute {
+  const overScope = report.findings.filter((finding) => finding.grade === 'OVER_SCOPE');
   if (overScope.some((finding) => !relations.has(finding.criterion))) return { kind: 'none' };
   // Keep routing on the exact same freshness-aware projection as artifact
   // completion and rendered records.  This must not reconstruct freshness
   // from a source link here: that would let a stale relation pass one reader
   // while the other readers correctly reject it.
   const classifications = classifyPrdWideningProjection({
-    findings: parsed.value.findings,
+    findings: report.findings,
     decisions,
     cases,
   });
@@ -1217,7 +1259,7 @@ export function routePrdAuditOverScopeV2(
       ...(defects.length ? { defects } : {}),
     };
   }
-  const hasOtherBlockingGrade = parsed.value.findings.some((finding) => finding.grade !== 'PASS' && finding.grade !== 'OVER_SCOPE');
+  const hasOtherBlockingGrade = report.findings.some((finding) => finding.grade !== 'PASS' && finding.grade !== 'OVER_SCOPE');
   return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings: recorded };
 }
 
@@ -1307,29 +1349,6 @@ export function recordedPrdAuditFindingsBlock(
   findings: readonly RecordedPrdAuditFinding[],
 ): RecordedFindingsProjection {
   return recordedFindingsBlock(findings);
-}
-
-async function persistRecordedFindings(
-  reportPath: string,
-  reportText: string,
-  findings: readonly RecordedReviewFinding[],
-): Promise<{ ok: true } | { ok: false; message: string }> {
-  const rendered = recordedFindingsBlock(findings);
-  // Fail closed: write nothing rather than a verdict artifact that omits a
-  // decision the operator authored.
-  if (!rendered.ok) return rendered;
-  const next = reportText.match(/^## Recorded Findings\s*$/im)
-    ? reportText.replace(/^## Recorded Findings\s*$[\s\S]*$/im, rendered.block)
-    : `${reportText.trimEnd()}\n\n${rendered.block}\n`;
-  try {
-    await writeFile(reportPath, next, 'utf8');
-  } catch (error) {
-    return {
-      ok: false,
-      message: `recorded findings could not be written to ${reportPath}: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-  return { ok: true };
 }
 
 /**
@@ -4284,11 +4303,6 @@ export class Conductor {
     return recordGateRepair(this.projectRoot, gate, { ...failure, observedAt: Date.now() });
   }
 
-  /** The active plan's text: the authority a prd_audit citation resolves against. */
-  private async activePlanText(featureDesc?: string): Promise<string | undefined> {
-    return readActivePlanText(this.projectRoot, undefined, featureDesc);
-  }
-
   /** Read the current verdict and its authoritative story sections as one route decision. */
   private async routeCurrentPrdAuditPlanGaps(state: ConductState): Promise<PrdAuditPlanGapRoute> {
     const stored = await readPrdAuditVerdict(this.projectRoot);
@@ -4602,26 +4616,24 @@ export class Conductor {
     };
     const freshness = {
       sample: async () => {
-        const [currentReportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
-        let currentReport = reportText;
-        if (currentReportPath) {
-          try { currentReport = await readFile(currentReportPath, 'utf8'); } catch { /* compare supplied snapshot */ }
-        }
-        const parsedCurrent = parsePrdAuditReport(currentReport, await this.activePlanText(state.feature_desc));
-        const currentRelations = overScopeRelations(currentReport);
-        const currentSources = parsedCurrent.ok
-          ? parsedCurrent.value.findings
-            .filter((finding) => finding.grade === 'OVER_SCOPE' && /^NC\.\d+$/i.test(finding.criterion) && currentRelations.get(finding.criterion) === 'outside-visible')
+        const currentVerdict = await readPrdAuditVerdict(this.projectRoot);
+        const currentTyped = currentVerdict.kind === 'present' && currentVerdict.value.complete
+          ? prdAuditTypedRouteReport(currentVerdict.value)
+          : undefined;
+        const currentSources = currentTyped === undefined
+          ? []
+          : currentTyped.report.findings
+            .filter((finding) => finding.grade === 'OVER_SCOPE' && /^NC\.\d+$/i.test(finding.criterion) && currentTyped.relations.get(finding.criterion) === 'outside-visible')
             .map((finding) => ({ id: prdWideningSourceId(finding), evidence: finding.evidence, prdIds: finding.prdIds }))
-          : [];
+          ;
         const currentDecision = await decisionStore.read();
         return {
           // Persisted decision projection is engine-owned output, not reviewer
-          // input. Hash the parser's source-bearing result so recording a
-          // relation cannot invalidate its own exact replay.
-          reportDigest: createHash('sha256').update(JSON.stringify(parsedCurrent.ok
-            ? { findings: parsedCurrent.value.findings, rejectedRows: parsedCurrent.value.rejectedRows }
-            : { malformed: true })).digest('hex'),
+          // input. Hash the typed source-bearing result so rendering a report
+          // cannot invalidate its own exact replay.
+          reportDigest: createHash('sha256').update(JSON.stringify(currentTyped === undefined
+            ? { unavailable: currentVerdict.kind }
+            : { findings: currentTyped.report.findings, relations: [...currentTyped.relations] })).digest('hex'),
           sourceDigest: createHash('sha256').update(JSON.stringify(currentSources)).digest('hex'),
           codeDigest: await readCodeDigest(),
           feature: `${caseFeature.repository}\u0000${caseFeature.feature}`,
@@ -4711,35 +4723,31 @@ export class Conductor {
     return undefined;
   }
 
-  private async routeCurrentPrdAuditOverScope(featureDesc?: string, state?: ConductState): Promise<PrdAuditOverScopeRoute> {
-    const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
-    if (!reportPath) return { kind: 'none' };
-    let reportText: string;
-    try {
-      reportText = await readFile(reportPath, 'utf8');
-    } catch {
+  private async routeCurrentPrdAuditOverScope(_featureDesc?: string, state?: ConductState): Promise<PrdAuditOverScopeRoute> {
+    const stored = await readPrdAuditVerdict(this.projectRoot);
+    if (stored.kind === 'unreadable') {
+      this.prdAuditProjectionRefusal = `Cannot route PRD-audit findings: ${stored.reason}`;
       return { kind: 'none' };
     }
-    const relations = overScopeRelations(reportText);
-    const activePlanText = await this.activePlanText(featureDesc);
-    const parsedReport = parsePrdAuditReport(reportText, activePlanText);
-    if (parsedReport.ok) {
-      const recovery = await this.reconcileCurrentPrdWidening(parsedReport.value, relations, reportText, state);
-      if (recovery) {
-        return { kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS, detail: recovery, findings: [], undecided: [], refused: [] };
-      }
+    if (stored.kind !== 'present' || !stored.value.complete) return { kind: 'none' };
+    const typed = prdAuditTypedRouteReport(stored.value);
+    const typedSnapshot = JSON.stringify({
+      judgment: stored.value.judgment,
+      diagnostics: stored.value.diagnostics,
+    });
+    const recovery = await this.reconcileCurrentPrdWidening(typed.report, typed.relations, typedSnapshot, state);
+    if (recovery) {
+      return { kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS, detail: recovery, findings: [], undecided: [], refused: [] };
     }
     const blockingFindings = new Map(
-      parsedReport.ok
-        ? parsedReport.value.findings
-          .filter((finding) => finding.grade === 'OVER_SCOPE' && relations.get(finding.criterion) === 'outside-visible')
-          .map((finding) => [
-            finding.criterion,
-            finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`,
-          ])
-        : [],
+      typed.report.findings
+        .filter((finding) => finding.grade === 'OVER_SCOPE' && typed.relations.get(finding.criterion) === 'outside-visible')
+        .map((finding) => [
+          finding.criterion,
+          finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`,
+        ]),
     );
-    if (!parsedReport.ok || !parsedReport.value.findings.some((finding) => finding.grade === 'OVER_SCOPE')) {
+    if (!typed.report.findings.some((finding) => finding.grade === 'OVER_SCOPE')) {
       return { kind: 'none' };
     }
     const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
@@ -4752,23 +4760,42 @@ export class Conductor {
     if (!cases.ok || (decisions.kind !== 'absent' && decisions.kind !== 'valid')) {
       return { kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS, detail: renderPrdWideningRecovery('persistence-failed', [...blockingFindings.keys()]), findings: [], undecided: [], refused: [] };
     }
-    const route = routePrdAuditOverScopeV2(
-      reportText,
+    const route = routePrdAuditOverScopeV2FromTypedReport(
+      typed.report,
+      typed.relations,
       decisions.kind === 'valid' ? decisions.state.decisions : [],
       cases.state.version === 'v2' ? cases.state.prdWideningCases : [],
-      activePlanText,
     );
     // D8: recorded decisions project into the verdict artifact whichever way
     // the route went. A halted route carries the same findings — including the
     // refusal that caused the halt — and previously persisted none of them.
     if (route.kind === 'record' || route.kind === 'halt') {
-      const projected = await persistRecordedFindings(reportPath, reportText, route.findings);
-      if (!projected.ok) {
+      const recordedDispositions: PersistedPrdAuditVerdict['recordedDispositions'] = [
+        ...stored.value.recordedDispositions,
+        ...route.findings
+          .filter((finding) => !stored.value.recordedDispositions.some((recorded) =>
+            recorded.criterionId === finding.criterion && recorded.grade === finding.grade))
+          .map((finding): PersistedPrdAuditVerdict['recordedDispositions'][number] => ({
+            criterionId: finding.criterion,
+            grade: finding.grade,
+            decision: finding.decision ?? 'record',
+            rationale: finding.rationale ?? 'The engine recorded this PRD-audit scope finding.',
+            authority: finding.decision === undefined ? 'engine' : 'operator',
+          })),
+      ];
+      try {
+        await persistPrdAuditVerdict(this.projectRoot, {
+          complete: stored.value.complete,
+          judgment: stored.value.judgment,
+          diagnostics: stored.value.diagnostics,
+          recordedDispositions,
+        }, { attemptId: stored.value.attemptId, codeStamp: stored.value.codeStamp });
+      } catch {
         // D8's projection refusal is an evidentiary defect on the same
         // operator-facing over-scope route, never a generic side channel.
         // A record route must become a halt so completion cannot pass while
         // the decision is absent from the verdict artifact.
-        const defects = [{ kind: 'unrenderable-decision', message: projected.message }];
+        const defects = [{ kind: 'unrenderable-decision', message: `recorded findings could not be persisted to ${PRD_AUDIT_VERDICT_PATH}` }];
         if (route.kind === 'record') {
           return {
             kind: 'halt',
