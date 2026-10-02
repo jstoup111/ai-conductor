@@ -183,6 +183,12 @@ dispatched this skill (the conductor's dispatch context names it):
 - `.pipeline/build-review.json` — present when the `build_review` trigger dispatches remediation
   after a FAIL verdict. Read its rubric findings and reasons as the per-gap evidence.
 
+The listed SHIP verdict artifacts are read-only evidence: `.pipeline/prd-audit.md` and
+`.pipeline/architecture-review-as-built.md` must be read but never changed. In gap-plan mode,
+`.pipeline/remediation.json` is the only write. If a planner concludes a finding is resolved,
+record that conclusion in `.pipeline/remediation.json`; do not edit, delete, or recreate a verdict
+artifact to change its verdict.
+
 **Stall-question input (daemon mode only, build_stall trigger):**
 - `.pipeline/build-stall-question.md` — present when the build step stalled with
   `halt-user-input-required` marker (ADR-2026-07-10). Contains a question posed by the build
