@@ -308,6 +308,8 @@ export interface InvokeOptions {
   readOnlyReview?: boolean;
   /** Engine-owned marker for build-review dispatches, which run outside the git guard. */
   reviewDispatch?: boolean;
+  /** Pi-only opt-in to project-owned .pi files for unattended build work. */
+  trustProjectFiles?: boolean;
   stepCooldown?: number;
   sessionName?: string;
   /**

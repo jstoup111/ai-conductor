@@ -10,6 +10,8 @@ import { providerDescriptor } from './provider-catalog.js';
 import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { scrubTmuxEnvironment } from './child-environment.js';
+import { materializePiHarnessExtension } from './pi-harness-extension.js';
+import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -152,6 +154,9 @@ export function parsePiModelListing(stdout: string): ProviderModelCatalogParseRe
 
 type PiJsonEvent = {
   type?: unknown;
+  toolName?: unknown;
+  isError?: unknown;
+  result?: { details?: unknown };
   message?: {
     role?: unknown;
     content?: unknown;
@@ -179,6 +184,16 @@ function abortedInvocationResult(): InvokeResult {
   };
 }
 
+async function writePiNativeSchema(options: InvokeOptions): Promise<string> {
+  const homeDir = options.nativeSchemaScratchHome ?? options.selfHost?.env.PI_HOME;
+  if (!homeDir) throw new Error('requested native schema requires an owned Pi scratch home');
+  return writeScratchSchema({
+    worktreeRoot: (options.nativeSchemaScratchHome === undefined ? undefined : options.nativeSchemaScratchRoot) ?? options.cwd ?? process.cwd(),
+    homeDir,
+    schema: options.nativeSchema!,
+  });
+}
+
 function terminalAssistantText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -199,6 +214,7 @@ export function parsePiJsonl(stdout: string): {
   hasTerminalAssistantMessage: boolean;
   terminalAssistantStopReason?: string;
   terminalAssistantErrorMessage?: string;
+  finalStructuredResult?: unknown;
 } {
   let output = '';
   let tokenUsage: TokenUsage | undefined;
@@ -206,11 +222,15 @@ export function parsePiJsonl(stdout: string): {
   let terminalAssistantStopReason: string | undefined;
   let terminalAssistantErrorMessage: string | undefined;
   let assistantTurns = 0;
+  let finalStructuredResult: unknown;
 
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) continue;
     try {
       const event = JSON.parse(line) as PiJsonEvent;
+      if (event.type === 'tool_execution_end' && event.toolName === 'submit_result' && event.isError === false) {
+        finalStructuredResult = event.result?.details;
+      }
       if (event.type === 'message_end' && event.message?.role === 'assistant') {
         hasTerminalAssistantMessage = true;
         assistantTurns += 1;
@@ -250,6 +270,7 @@ export function parsePiJsonl(stdout: string): {
     hasTerminalAssistantMessage,
     ...(terminalAssistantStopReason ? { terminalAssistantStopReason } : {}),
     ...(terminalAssistantErrorMessage ? { terminalAssistantErrorMessage } : {}),
+    ...(finalStructuredResult === undefined ? {} : { finalStructuredResult }),
   };
 }
 
@@ -257,11 +278,13 @@ export function parsePiJsonl(stdout: string): {
 export class PiProvider implements LLMProvider {
   readonly supportsSessionResume = false;
   readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
+  readonly nativeSchemaCapability = { nativeOutputSchema: true } as const;
 
   constructor(
     private readonly executable = 'pi',
     private readonly subprocessFactory: PiSubprocessFactory = execa,
     private readonly environment: PiEnvironment = defaultPiEnvironment,
+    private readonly materializeExtension: typeof materializePiHarnessExtension = materializePiHarnessExtension,
   ) {}
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
@@ -309,11 +332,29 @@ export class PiProvider implements LLMProvider {
       }
     }
 
-    const args = ['-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath];
+    // ADR D18: -na keeps project-local Pi files untrusted unless the operator
+    // opts in for an ordinary step; a read-only review always keeps it (D17).
+    const trustProjectFiles = !options.readOnlyReview && options.trustProjectFiles === true;
+    const args = ['-p', ...(trustProjectFiles ? [] : ['-na']), '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath];
     const projectSkillsPath = join(cwd, '.agents', 'skills');
     if (await isDirectory(projectSkillsPath, this.environment)) {
       args.push('--skill', projectSkillsPath);
     }
+    let schemaFile: string | undefined;
+    let extensionPath: string | undefined;
+    try {
+      if (options.nativeSchema !== undefined) schemaFile = await writePiNativeSchema(options);
+      if (options.readOnlyReview || options.nativeSchema !== undefined) {
+        extensionPath = await this.materializeExtension({ homeDir: options.selfHost?.env.PI_HOME });
+        args.push('-e', extensionPath);
+      }
+    } catch (error) {
+      return { success: false, output: `Pi native schema setup failed: ${error instanceof Error ? error.message : String(error)}`, exitCode: 1 };
+    }
+    if (options.readOnlyReview) {
+      args.push('--no-extensions', '--tools', `read,grep,find,ls,git_read${schemaFile ? ',submit_result' : ''}`, '--conduct-git-read');
+    }
+    if (schemaFile) args.push('--conduct-output-schema', schemaFile);
     if (options.model) {
       const parsedModel = parsePiModelId(options.model);
       if ('provider' in parsedModel) {
@@ -379,6 +420,9 @@ export class PiProvider implements LLMProvider {
         exitCode,
       };
     }
+    if (exitCode === 0 && options.nativeSchema !== undefined && parsed.finalStructuredResult === undefined) {
+      return { success: false, output: 'Pi provider parse failure: missing structured result.', exitCode: 1 };
+    }
 
     if (exitCode === 0 && parsed.terminalAssistantStopReason === 'error') {
       return {
@@ -403,7 +447,9 @@ export class PiProvider implements LLMProvider {
       exitCode,
       ...(modelUnavailable ? { modelUnavailable: true } : {}),
       tokenUsage: exitCode === 0 ? parsed.tokenUsage : undefined,
+      ...(exitCode === 0 && parsed.finalStructuredResult !== undefined ? { finalStructuredResult: parsed.finalStructuredResult } : {}),
       ...(genericUnclassifiedFailure ? { exitFacts } : {}),
     };
   }
+
 }
