@@ -3120,6 +3120,7 @@ export class Conductor {
         return undefined;
       }
       if (step === 'architecture_review_as_built') {
+        const absentReason = `architecture_review_as_built dispatch ${expectedRunId ?? 'current attempt'} produced no terminal typed verdict; expected ${AS_BUILT_VERDICT_PATH}`;
         // A rejected structured result persisted nothing; record the
         // rejection (and its named field) as its own absent outcome rather
         // than a generic missing file or a prior lap's verdict.
@@ -3128,7 +3129,12 @@ export class Conductor {
         }
         const stored = await readAsBuiltVerdict(this.projectRoot);
         if (stored.kind !== 'present') {
-          return { done: false, routeClass: 'absent', reason: stored.kind === 'absent' ? `${AS_BUILT_VERDICT_PATH} is missing` : stored.reason };
+          return {
+            done: false,
+            routeClass: 'absent',
+            retrySignal: 'structured-result-missing',
+            reason: `${absentReason}: ${stored.kind === 'absent' ? 'artifact is missing' : stored.reason}`,
+          };
         }
         if (expectedRunId !== undefined && stored.value.attemptId !== expectedRunId) {
           return {
