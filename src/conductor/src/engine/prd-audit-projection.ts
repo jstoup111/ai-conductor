@@ -13,7 +13,7 @@ import { parseCoherenceArtifact, type CoherenceRow } from './coherence-parse.js'
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskStoryIds } from './plan-task-parse.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { makeGitRunner, originDefaultBranch, resolveBase, type GitRunner } from './rebase.js';
-import { assessAcceptedStoryReadability, listItems, sectionBody, splitStoryBlocks } from './story-criteria.js';
+import { readSealedStoryCriteria, splitStoryBlocks } from './story-criteria.js';
 
 /** Incremented only when the engine-rendered PRD-audit input contract changes. */
 export const PRD_AUDIT_PROJECTION_VERSION = 2;
@@ -130,6 +130,7 @@ export type PrdAuditProjectionResult =
       readonly ok: false;
       readonly fault: {
         readonly dimension: string;
+        readonly source?: string;
         readonly detail?: string;
         readonly actual?: number;
         readonly limit?: number;
@@ -172,39 +173,23 @@ function criteriaFromStories(stories: string): {
   readonly criteria: PrdAuditProjection['criteria'];
   readonly malformed: readonly string[];
 } {
-  const criteria: PrdAuditProjection['criteria'][number][] = [];
-  const malformed: string[] = [];
-  const unreadable = assessAcceptedStoryReadability(stories).stories.find((story) => !story.readable);
-  if (unreadable) {
-    return {
-      criteria,
-      malformed: [unreadable.id === undefined
-        ? 'story source has no readable Story id, Happy Path, and Negative Paths contract'
-        : `story ${unreadable.id} fails the sealed Happy Path/Negative Paths Given/When/Then contract`],
-    };
-  }
-  for (const block of splitStoryBlocks(stories)) {
-    if (!block.id) {
-      malformed.push('story source has no readable Story id');
-      continue;
-    }
-    const requirementIds = [...block.text.matchAll(/^\s*\*\*Requirements?\s*:\*\*\s*(.+?)\s*$/gim)]
-      .flatMap((match) => [...match[1].matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((id) => id[0].toUpperCase()));
-    let ordinal = 0;
-    for (const kind of ['happy', 'negative'] as const) {
-      const body = sectionBody(block.text, kind === 'happy' ? /happy\s*path/i : /negative\s*paths?/i);
-      if (body === null) continue;
-      for (const text of listItems(body)) {
-        ordinal += 1;
-        if (!/\bgiven\b/i.test(text) || !/\bwhen\b/i.test(text) || !/\bthen\b/i.test(text)) {
-          malformed.push(`story ${block.id} ${kind} criterion ${ordinal} lacks Given, When, or Then`);
-          continue;
-        }
-        criteria.push({ id: `S${block.id}.${ordinal}`, storyId: block.id, kind, text, requirementIds });
-      }
-    }
-  }
-  return { criteria, malformed };
+  const sealedCriteria = readSealedStoryCriteria(stories);
+  if (!sealedCriteria.ok) return { criteria: [], malformed: sealedCriteria.diagnostics.map((diagnostic) => diagnostic.detail) };
+
+  const requirementIdsByStory = new Map(splitStoryBlocks(stories)
+    .filter((block): block is typeof block & { readonly id: string } => block.id !== undefined)
+    .map((block) => [
+      block.id,
+      [...block.text.matchAll(/^\s*\*\*Requirements?\s*:\*\*\s*(.+?)\s*$/gim)]
+        .flatMap((match) => [...match[1].matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((id) => id[0].toUpperCase())),
+    ]));
+  return {
+    criteria: sealedCriteria.criteria.map((criterion) => ({
+      ...criterion,
+      requirementIds: requirementIdsByStory.get(criterion.storyId) ?? [],
+    })),
+    malformed: [],
+  };
 }
 
 function prdRequirements(prd: string): { readonly id: string; readonly text: string }[] {
@@ -379,11 +364,14 @@ export async function buildPrdAuditProjection(
   try {
     stories = await readFile(join(projectRoot, storiesRepoPath), 'utf-8');
   } catch {
-    return { ok: false, fault: { dimension: 'stories', detail: 'sealed stories are unreadable' } };
+    return { ok: false, fault: { source: storiesRepoPath, dimension: 'stories', detail: 'sealed stories are unreadable' } };
   }
   const parsedCriteria = criteriaFromStories(stories);
   if (parsedCriteria.malformed.length > 0) {
-    return { ok: false, fault: { dimension: 'stories criteria', detail: parsedCriteria.malformed.join('; ') } };
+    return {
+      ok: false,
+      fault: { source: storiesRepoPath, dimension: 'malformed-criteria', detail: parsedCriteria.malformed.join('; ') },
+    };
   }
   const criteria = parsedCriteria.criteria;
   const taskBodies = parsePlanTaskBodies(plan);
