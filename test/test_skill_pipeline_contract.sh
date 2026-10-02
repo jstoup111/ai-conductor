@@ -5,6 +5,7 @@ set -euo pipefail
 # Pipeline documents session-hook task stamping, requires the ordinary Done when
 # close flow to reach the engine-owned writer, and finish delegates aggregate
 # verification to the configured verifier.
+# Covers: task:1
 #
 # Usage: ./test/test_skill_pipeline_contract.sh
 
@@ -119,6 +120,35 @@ ordinary_done_when_close_contract_holds() {
     && grep -qF "if (completion.kind === 'refused')" <<<"$run_task_done"
 }
 
+ship_verdict_artifacts_read_only_contract_holds() {
+  local pipeline_skill="$1"
+  local tdd_skill="$2"
+  local artifact pipeline_text tdd_text
+  local artifacts=(
+    '.pipeline/prd-audit.md'
+    '.pipeline/architecture-review-as-built.md'
+    '.pipeline/architecture-review-as-built.json'
+    '.pipeline/prd-audit-code-stamp.json'
+    '.pipeline/architecture-review-as-built-code-stamp.json'
+  )
+
+  pipeline_text="$(tr '\n' ' ' < "$pipeline_skill" | tr -s ' ' | tr '[:upper:]' '[:lower:]')"
+  tdd_text="$(tr '\n' ' ' < "$tdd_skill" | tr -s ' ' | tr '[:upper:]' '[:lower:]')"
+
+  for artifact in "${artifacts[@]}"; do
+    grep -qF "$artifact" <<<"$pipeline_text" || return 1
+    grep -qF "$artifact" <<<"$tdd_text" || return 1
+  done
+
+  grep -qF 'never write, delete, rename, or recreate' <<<"$pipeline_text" \
+    && grep -qF 'never write, delete, rename, or recreate' <<<"$tdd_text" \
+    && grep -qF "only the validator's own next dispatch produces a new verdict." <<<"$pipeline_text" \
+    && grep -qF 'conduct task done <id> --done-when <n>=<evidence>' <<<"$pipeline_text" \
+    && grep -qF 'reading `.pipeline/remediation.json` and the cited verdict artifact remains allowed.' <<<"$pipeline_text" \
+    && grep -qF 'reading `.pipeline/remediation.json` and the cited verdict artifact remains allowed.' <<<"$tdd_text" \
+    && grep -qF 'every implementer dispatch prompt must carry this ship verdict read-only rule.' <<<"$pipeline_text"
+}
+
 adr_structural_policy_contract_holds() {
   local skill_file="$1"
   local skill_text
@@ -160,6 +190,12 @@ if [ ! -f "$FINISH_SKILL_FILE" ]; then
   exit 1
 fi
 pass "skills/finish/SKILL.md exists"
+
+if ship_verdict_artifacts_read_only_contract_holds "$SKILL_FILE" "${HARNESS_DIR}/skills/tdd/SKILL.md"; then
+  pass "BUILD skills fence all SHIP validator verdict artifacts as read-only evidence"
+else
+  fail "pipeline and tdd must name all SHIP verdict artifacts, preserve read-only access, and leave new verdicts to validators"
+fi
 
 if tr '\n' ' ' < "$COMPOSER_SKILL_FILE" | tr -s ' ' | grep -qF "Never change the originating GitHub issue's assignees during claim, land, handoff, verification, or cleanup."; then
   pass "composer preserves originating GitHub issue assignees throughout its lifecycle"

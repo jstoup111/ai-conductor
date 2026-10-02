@@ -35,6 +35,14 @@ in RED/GREEN dispatches. Repair and verify the affected tests through
 `ai-conductor scoped-run <selectors...>`, then commit. Leave aggregate re-verification to
 `test_suite`; a scoped PASS does not establish an aggregate PASS.
 
+### SHIP verdict artifacts are read-only
+
+During BUILD, `.pipeline/prd-audit.md`, `.pipeline/architecture-review-as-built.md`,
+`.pipeline/architecture-review-as-built.json`, `.pipeline/prd-audit-code-stamp.json`, and
+`.pipeline/architecture-review-as-built-code-stamp.json` are read-only SHIP validator evidence.
+Never write, delete, rename, or recreate them. Reading `.pipeline/remediation.json` and the cited
+verdict artifact remains allowed. Use that read-only evidence when the task needs finding detail.
+
 ## Practices
 
 ### The Cycle
