@@ -35,7 +35,12 @@ async function fixture(): Promise<string> {
 function runner(root: string, result: InvokeResult, native = true) {
   const invoke = vi.fn(async (_: InvokeOptions) => result);
   const provider = { name: 'claude', invoke } as unknown as LLMProvider;
-  const runtimes = new ProviderRuntimeSet([{ key: 'claude', provider, lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: native }, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]);
+  const runtimes = new ProviderRuntimeSet([{
+    key: 'claude', provider, lifecycleCapability: { synchronousSpawnPermit: true },
+    ...(native ? { nativeSchemaCapability: { nativeOutputSchema: true as const } } : {}),
+    policy: CLAUDE_MODEL_POLICY, builtIn: true,
+    availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+  }]);
   return { invoke, runner: new DefaultStepRunner({ invoke: vi.fn() }, 'prd-attempt', root, { mode: 'auto', featureDesc: 'feature', config: { llm_provider: 'claude', steps: { prd_audit: { llm_provider: 'claude' } } }, configuredProviders: ['claude'], providerRuntimes: runtimes, sessionStore: new ProviderSessionStore() }) };
 }
 

@@ -42,6 +42,47 @@ import type { BuildReviewScopedLauncher } from '../../src/engine/build-review-sc
 import { renderBuildReviewUnresolvedSkillRemedy } from '../../src/engine/build-review-domain.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 
+const { buildPrdAuditProjection } = vi.hoisted(() => ({
+  buildPrdAuditProjection: vi.fn(),
+}));
+
+vi.mock('../../src/engine/prd-audit-projection.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/prd-audit-projection.js')>(),
+  buildPrdAuditProjection,
+}));
+
+function prdAuditProjectionFixture() {
+  return {
+    ok: true as const,
+    projection: {
+      version: 1 as const,
+      plan: { intent: 'Audit the typed verdict.' },
+      criteria: [{ id: 'S1.1', storyId: '1', kind: 'happy' as const, text: 'The audit returns a typed verdict.' }],
+      tasks: [], prd: { kind: 'absent' as const }, coherence: { kind: 'absent' as const },
+      changes: { base: 'base', head: 'head', changedFiles: [], excerpts: [], omittedFiles: [] },
+      history: { kind: 'absent' as const },
+    },
+  };
+}
+
+function prdAuditPassResult(): InvokeResult {
+  return {
+    success: true,
+    output: 'typed PRD-audit judgment',
+    exitCode: 0,
+    finalStructuredResult: {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: '1', ordinal: 1 }, grade: 'PASS',
+        evidence: 'The fixture returns a valid terminal judgment.',
+        rationale: 'The only active criterion is satisfied.',
+        requirementAssociations: [], evidenceTaskIds: [],
+      }],
+      noOwnerObservations: [],
+    },
+  };
+}
+
 function createMockProvider(): LLMProvider {
   return {
     lifecycleCapability: { synchronousSpawnPermit: true },
@@ -1813,6 +1854,7 @@ describe('DefaultStepRunner', () => {
     const permits: Array<ReturnType<NonNullable<InvokeOptions['spawnPermit']>> | undefined> = [];
     const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
       permits.push(options.spawnPermit?.());
+      if (options.nativeSchema !== undefined) return prdAuditPassResult();
       return {
         success: true,
         output: 'MODELS: 1\nINTEGRATIONS: 0\nAUTH: 0\nSTATE_MACHINES: 0\nSTORIES: 1\nTIER: S',
@@ -1821,6 +1863,7 @@ describe('DefaultStepRunner', () => {
     });
     const provider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
       invoke,
     };
     const sessions = new ProviderSessionStore();
@@ -1831,6 +1874,7 @@ describe('DefaultStepRunner', () => {
           key: 'claude',
           provider,
           lifecycleCapability: provider.lifecycleCapability,
+          nativeSchemaCapability: { nativeOutputSchema: true },
           policy: CLAUDE_POLICY,
           builtIn: true,
           availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
@@ -1840,6 +1884,7 @@ describe('DefaultStepRunner', () => {
     });
 
     try {
+      buildPrdAuditProjection.mockResolvedValue(prdAuditProjectionFixture());
       await runner.assessComplexity();
       await sessions.beginStep('build');
       await runner.run('build', emptyState);
@@ -1853,6 +1898,7 @@ describe('DefaultStepRunner', () => {
         { permitted: true },
       ]);
     } finally {
+      buildPrdAuditProjection.mockReset();
       await rm(projectDir, { recursive: true, force: true });
     }
   });
@@ -3174,11 +3220,10 @@ describe('DefaultStepRunner', () => {
       { step: 'finish', prompt: '$finish' },
     ] satisfies ReadonlyArray<{ step: StepName; prompt: string }>;
     const codexBoundary = vi.fn(
-      async (_options: InvokeOptions): Promise<InvokeResult> => ({
-        success: true,
-        output: 'done',
-        exitCode: 0,
-      }),
+      async (options: InvokeOptions): Promise<InvokeResult> =>
+        options.nativeSchema === undefined
+          ? { success: true, output: 'done', exitCode: 0 }
+          : prdAuditPassResult(),
     );
     const codexProvider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
@@ -3225,14 +3270,21 @@ describe('DefaultStepRunner', () => {
     );
     const observed: Array<{ step: StepName; prompt: string }> = [];
 
+    buildPrdAuditProjection.mockResolvedValue(prdAuditProjectionFixture());
     for (const { step } of cases) {
       await runner.resetSession(step);
       await runner.run(step, emptyState);
       const options = codexBoundary.mock.calls.at(-1)?.[0] as InvokeOptions;
-      observed.push({ step, prompt: options.prompt });
+      observed.push({
+        step,
+        prompt: options.prompt.startsWith('$prd-audit\n\nPRD-AUDIT EVIDENCE')
+          ? '$prd-audit'
+          : options.prompt,
+      });
     }
 
     expect(observed).toEqual(cases);
+    buildPrdAuditProjection.mockReset();
   });
 
   // Worktree isolation: the spawned claude must run in the runner's projectDir,

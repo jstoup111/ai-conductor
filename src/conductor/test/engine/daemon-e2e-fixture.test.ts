@@ -111,21 +111,21 @@ function createFixtureAgentFake(
       };
     }
 
-    if (options.prompt.includes('You are running step: PRD Audit.')) {
-      mkdirSync(join(worktreeDir, '.pipeline'), { recursive: true });
-      writeFileSync(
-        join(worktreeDir, '.pipeline/prd-audit.md'),
-        '**PRD:** none\n\n'
-          + '## Verdict Table\n\n'
-          + '| Criterion | Grade | Plan task | Evidence |\n'
-          + '| --- | --- | --- | --- |\n'
-          + '| S1.1 | PASS | 1 | test/fixtures/daemon-e2e/touched.txt |\n',
-        'utf-8',
-      );
+    if (options.prompt.startsWith('$prd-audit\n\nPRD-AUDIT EVIDENCE')) {
       return {
         success: true,
         output: 'fixture prd audit recorded aligned evidence',
         exitCode: 0,
+        finalStructuredResult: {
+          version: 'v1',
+          criterionJudgments: [{
+            criterion: { storyId: '1', ordinal: 1 }, grade: 'PASS',
+            evidence: 'test/fixtures/daemon-e2e/touched.txt was touched.',
+            rationale: 'The fixture task delivers its sole declared criterion.',
+            requirementAssociations: [], evidenceTaskIds: ['1'],
+          }],
+          noOwnerObservations: [],
+        },
       };
     }
 
@@ -431,7 +431,7 @@ describe('daemon E2E fixture', () => {
         buildReview: state.build_review,
         prdAudit: state.prd_audit,
         finish: state.finish,
-        prdAuditPrompt: fake.calls.some((call) => call.prompt.includes('You are running step: PRD Audit.')),
+        prdAuditPrompt: fake.calls.some((call) => call.prompt.startsWith('$prd-audit\n\nPRD-AUDIT EVIDENCE')),
         prdAuditReport,
         commitBody: commitBody.trim(),
         done: existsSync(join(pipelineDir, 'DONE')),
@@ -447,7 +447,7 @@ describe('daemon E2E fixture', () => {
         prdAudit: 'done',
         finish: 'done',
         prdAuditPrompt: true,
-        prdAuditReport: expect.stringMatching(/\*\*PRD:\*\* none[\s\S]*\| S1\.1 \| PASS \| 1 \|/),
+        prdAuditReport: expect.stringMatching(/Status: complete[\s\S]*S1\.1: PASS/),
         commitBody: 'test: complete fixture task\n\nTask: 1',
         done: true,
         halt: false,
