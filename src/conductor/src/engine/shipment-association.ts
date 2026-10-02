@@ -1,4 +1,5 @@
 import type { PersistedAsBuiltVerdict } from './as-built-verdict-store.js';
+import type { PersistedPrdAuditVerdict } from './prd-audit-verdict-store.js';
 
 export interface ShipmentAssociationInput {
   planStems: readonly string[];
@@ -66,7 +67,8 @@ export type RecordedShipmentFinding =
  * absent or malformed finding stays absent rather than being inferred.
  */
 export function recordedShipmentFindings(input: {
-  prdAudit?: string;
+  /** The engine-owned typed PRD audit verdict; Markdown is not authority. */
+  prdAudit?: PersistedPrdAuditVerdict;
   /** The engine-owned verdict envelope; rendered Markdown is deliberately not accepted. */
   asBuilt?: PersistedAsBuiltVerdict;
 }): RecordedShipmentFinding[] {
@@ -130,43 +132,22 @@ function uniqueNonEmpty(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
-function recordedPrdAuditFindings(report: string | undefined): RecordedShipmentFinding[] {
-  const block = report?.match(/^## Recorded Findings\s*\n+```json\s*\n([\s\S]*?)\n```\s*$/im)?.[1];
-  if (!block) return [];
-  try {
-    const parsed: unknown = JSON.parse(block);
-    const findings = parsed !== null && typeof parsed === 'object' && Array.isArray((parsed as { findings?: unknown }).findings)
-      ? (parsed as { findings: unknown[] }).findings
-      : [];
-    return findings.flatMap<RecordedShipmentFinding>((finding) => {
-      if (!isObject(finding) || finding.gate !== 'prd_audit') return [];
-      const criterion = nonEmptyString(finding.criterion);
-      const summary = nonEmptyString(finding.summary);
-      if (!criterion || !summary) return [];
-      if (finding.grade === 'PLAN_GAP') {
-        return [{ gate: 'prd_audit', grade: 'PLAN_GAP', criterion, summary }];
-      }
-      if (finding.grade !== 'OVER_SCOPE' || typeof finding.accepted !== 'boolean') return [];
-      // D8: a recorded decision and its rationale ride into the shipped record
-      // with the finding. Dropping them left the record saying a criterion was
-      // accepted with no trace of who decided what, or that it was refused at all.
-      const decision = finding.decision === 'accept' || finding.decision === 'refuse'
-        ? finding.decision
-        : undefined;
-      const rationale = nonEmptyString(finding.rationale);
-      return [{
-        gate: 'prd_audit',
-        grade: 'OVER_SCOPE',
-        criterion,
-        summary,
-        accepted: finding.accepted,
-        ...(decision ? { decision } : {}),
-        ...(decision && rationale ? { rationale } : {}),
-      }];
-    });
-  } catch {
-    return [];
-  }
+function recordedPrdAuditFindings(value: PersistedPrdAuditVerdict | undefined): RecordedShipmentFinding[] {
+  if (!value || !value.complete) return [];
+  const recorded = new Set(value.recordedDispositions.map((entry) => `${entry.criterionId.toUpperCase()}\u0000${entry.grade}`));
+  return value.judgment.criterionJudgments.flatMap<RecordedShipmentFinding>((finding) => {
+    const key = `${finding.criterionId.toUpperCase()}\u0000${finding.grade}`;
+    if (!recorded.has(key)) return [];
+    if (finding.grade === 'PLAN_GAP') {
+      return [{ gate: 'prd_audit', grade: 'PLAN_GAP', criterion: finding.criterionId, summary: finding.rationale }];
+    }
+    if (finding.grade !== 'OVER_SCOPE') return [];
+    return [{
+      gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: finding.criterionId,
+      summary: finding.rationale,
+      accepted: finding.intentRelation === 'within' || finding.intentRelation === 'outside-harmless',
+    }];
+  });
 }
 
 function recordedAsBuiltFindings(value: PersistedAsBuiltVerdict | undefined): RecordedShipmentFinding[] {
@@ -194,14 +175,6 @@ function recordedAsBuiltFindings(value: PersistedAsBuiltVerdict | undefined): Re
       }]
     : [];
   return [...remediation, ...planGap];
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object';
-}
-
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function yamlScalar(value: string): string {

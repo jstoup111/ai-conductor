@@ -54,6 +54,7 @@ import {
   recordedShipmentFindings,
 } from './shipment-association.js';
 import { readAsBuiltVerdict } from './as-built-verdict-store.js';
+import { readPrdAuditVerdict } from './prd-audit-verdict-store.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 import {
   extractShipmentPlanDeclarations,
@@ -333,13 +334,12 @@ export function createProductionFinishPublicationCoordinator(
   const finishRecordRunners = deps.finishRecordRunners ?? makeProductionFinishRecordRunners();
 
   const copyRecordedReviewFindingsToShippedRecord = async (slug: string): Promise<void> => {
-    const pipeline = join(deps.projectRoot, '.pipeline');
     const [prdAudit, asBuiltResult] = await Promise.all([
-      readFile(join(pipeline, 'prd-audit.md'), 'utf8').catch(() => undefined),
+      readPrdAuditVerdict(deps.projectRoot),
       readAsBuiltVerdict(deps.projectRoot),
     ]);
     const findings = recordedShipmentFindings({
-      prdAudit,
+      prdAudit: prdAudit.kind === 'present' ? prdAudit.value : undefined,
       asBuilt: asBuiltResult.kind === 'present' ? asBuiltResult.value : undefined,
     });
     if (findings.length === 0) return;
