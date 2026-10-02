@@ -1,4 +1,4 @@
-// Covers: task:10
+// Covers: task:1, task:10
 
 import { describe, expect, it, vi } from 'vitest';
 import { readFile, readdir } from 'node:fs/promises';
@@ -8,6 +8,7 @@ import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
 import {
   DAEMON_SESSION_MARKER,
+  evaluateDaemonSessionCommandPolicy,
   guardDaemonSessionInvocation,
   withDaemonSessionMarker,
 } from '../../src/execution/daemon-session.js';
@@ -28,6 +29,30 @@ const markedEnv = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
 });
 
 describe('guardDaemonSessionInvocation', () => {
+  it.each([
+    ['task', true],
+    ['scoped-run', true],
+    ['overlap-scan', true],
+    ['plan-protected-targets', true],
+    ['manual-test-record', true],
+    ['closeout-event', true],
+    ['derive-feedback', true],
+    ['scope-check', true],
+    ['github-operation', true],
+    ['daemon', false],
+    ['config', false],
+    ['test-suite', false],
+    ['build-review', false],
+    ['finish-record', false],
+  ] as const)(
+    'shares the production command policy with audit callers for %s',
+    (subcommand, allowed) => {
+      const argv = argvFor(subcommand);
+      expect(evaluateDaemonSessionCommandPolicy(argv).allowed).toBe(allowed);
+      expect(guardDaemonSessionInvocation(argv, markedEnv()).allowed).toBe(allowed);
+    },
+  );
+
   it('refuses any conductor invocation when the daemon-session marker is set', () => {
     for (const argv of [
       argvFor('daemon', 'park', 'some-slug'),
@@ -58,6 +83,7 @@ describe('guardDaemonSessionInvocation', () => {
     );
     expect(verdict).toEqual({
       allowed: false,
+      subcommand: 'daemon',
       message: expect.stringContaining('blocked subcommand: daemon'),
     });
   });
