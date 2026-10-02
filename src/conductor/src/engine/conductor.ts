@@ -4403,18 +4403,13 @@ export class Conductor {
    * Fails closed: an unreadable or unparseable report never lets an accepted
    * scope decision swallow the rest of the round.
    */
-  private async prdAuditHasNonScopeBlockingFindings(featureDesc?: string): Promise<boolean> {
-    const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
-    if (!reportPath) return false;
-    let reportText: string;
-    try {
-      reportText = await readFile(reportPath, 'utf8');
-    } catch {
-      return true;
-    }
-    const parsed = parsePrdAuditReport(reportText, await this.activePlanText(featureDesc));
-    if (!parsed.ok) return true;
-    return parsed.value.findings.some(
+  private async prdAuditHasNonScopeBlockingFindings(): Promise<boolean> {
+    // The rendered report is deliberately not a routing input. An unavailable
+    // typed verdict is fail-closed so an accepted scope decision cannot hide a
+    // concurrent repair or plan blocker.
+    const stored = await readPrdAuditVerdict(this.projectRoot);
+    if (stored.kind !== 'present' || !stored.value.complete) return true;
+    return stored.value.judgment.criterionJudgments.some(
       (finding) => finding.grade === 'FIXABLE' || finding.grade === 'PLAN_GAP',
     );
   }
@@ -4921,7 +4916,7 @@ export class Conductor {
       if (
         overScopeRoute.kind === 'record' &&
         hintSource.evidence.every((provenance) => provenance.gate === 'prd_audit') &&
-        !(await this.prdAuditHasNonScopeBlockingFindings(state.feature_desc))
+        !(await this.prdAuditHasNonScopeBlockingFindings())
       ) {
         return { kind: 'none', reason: 'the recorded prd-audit scope acceptance closes the only blocking finding' };
       }
