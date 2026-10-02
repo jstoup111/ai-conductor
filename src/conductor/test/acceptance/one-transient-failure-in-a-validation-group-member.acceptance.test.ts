@@ -20,19 +20,6 @@ import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.j
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
-const PRD_PASS = [
-  '# PRD Audit',
-  '',
-  '**PRD:** none',
-  '',
-  '## Verdict Table',
-  '',
-  '| Criterion | Grade | Plan task | Evidence |',
-  '|---|---|---|---|',
-  '| S1.1 | PASS | — | evidence.ts:1 |',
-  '',
-].join('\n');
-
 const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
 const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'test fixture' },
@@ -445,7 +432,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       await new Conductor({
         stateFilePath: statePath, events, projectRoot: dir, mode: 'auto', daemon: true,
         verifyArtifacts: true, maxRetries: 2, fromStep: 'manual_test',
-        stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
+        stepRunner: { run: vi.fn(async (step: StepName) => {
           calls.push(step);
           if (step === 'manual_test' && ++attempts === 1) throw new Error('transient runner failure');
           if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
@@ -609,7 +596,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const conductor = new Conductor({
         stateFilePath: statePath, events, projectRoot: dir, mode: 'auto', daemon: true,
         verifyArtifacts: true, maxRetries: 1, fromStep: entry,
-        stepRunner: { run: vi.fn(async (step: StepName) => {
+        stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           if (route === 'permission denial' && step === 'manual_test') {
             return {
               success: false, permissionDenied: true, actualProvider: 'codex',

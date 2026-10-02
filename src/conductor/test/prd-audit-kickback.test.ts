@@ -58,6 +58,8 @@ import {
 import * as machineIdentity from '../src/engine/owner-gate/machine-identity.js';
 import { persistAsBuiltVerdict, readAsBuiltVerdict } from '../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../src/engine/as-built-policy.js';
+import { persistPrdAuditVerdict } from '../src/engine/prd-audit-verdict-store.js';
+import type { PrdAuditJudgment } from '../src/engine/prd-audit-contract.js';
 
 const dirs: string[] = [];
 
@@ -161,6 +163,74 @@ function rejectedRowWithNegativePathPlanGapReport() {
     '| --- | --- | --- | --- |',
     '| OS.1 | OVER_SCOPE | outside-visible | A visible behavior exists outside the approved plan. |',
   ].join('\n');
+}
+
+/**
+ * This legacy report matrix still names its fixtures as Markdown, but managed
+ * dispatches must now settle the engine-owned typed verdict. Keep the fixture
+ * data as-is while translating it at the mocked provider boundary.
+ */
+async function persistGroupedPrdAuditVerdict(
+  root: string,
+  report: string,
+  attemptId: string | undefined,
+): Promise<void> {
+  const parsed = parsePrdAuditReport(report);
+  const diagnostics = parsed.ok
+    ? parsed.value.rejectedRows.map((row) => `${row.key ?? row.rowText}: ${row.reason}`)
+    : [parsed.error];
+  const relations = overScopeRelations(report);
+  const criterionJudgments: Array<PrdAuditJudgment['criterionJudgments'][number]> = [];
+  const noOwnerObservations: Array<PrdAuditJudgment['noOwnerObservations'][number]> = [];
+
+  if (parsed.ok) {
+    for (const finding of parsed.value.findings) {
+      if (/^NC\.\d+$/i.test(finding.criterion)) {
+        noOwnerObservations.push({
+          presentationOrdinal: finding.criterion,
+          grade: 'OVER_SCOPE',
+          evidence: finding.evidence || 'Fixture supplies typed audit evidence.',
+          rationale: 'Fixture supplies typed audit evidence.',
+          intentRelation: relations.get(finding.criterion) ?? 'outside-visible',
+        });
+        continue;
+      }
+      const match = /^S(.+)\.(\d+)$/i.exec(finding.criterion);
+      if (!match) {
+        diagnostics.push(`${finding.criterion}: fixture could not derive a criterion reference`);
+        continue;
+      }
+      const criterion = { storyId: match[1]!, ordinal: Number(match[2]) };
+      const base = {
+        criterion,
+        criterionId: finding.criterion,
+        evidence: finding.evidence || 'Fixture supplies typed audit evidence.',
+        rationale: 'Fixture supplies typed audit evidence.',
+        requirementAssociations: finding.prdIds.map((requirementId) => ({
+          path: '.docs/specs/feature.md', requirementId,
+        })),
+        evidenceTaskIds: finding.planTask ? [finding.planTask] : [],
+      };
+      if (finding.grade === 'FIXABLE') {
+        criterionJudgments.push({ ...base, grade: 'FIXABLE', ownerTaskId: finding.planTask ?? '1' });
+      } else if (finding.grade === 'OVER_SCOPE') {
+        criterionJudgments.push({
+          ...base,
+          grade: 'OVER_SCOPE',
+          intentRelation: relations.get(finding.criterion) ?? 'outside-visible',
+        });
+      } else {
+        criterionJudgments.push({ ...base, grade: finding.grade });
+      }
+    }
+  }
+
+  await persistPrdAuditVerdict(root, {
+    complete: diagnostics.length === 0,
+    judgment: { version: 'v1', criterionJudgments, noOwnerObservations },
+    diagnostics,
+    recordedDispositions: [],
+  }, { attemptId: attemptId ?? 'fixture-run', codeStamp: null });
 }
 
 function storiesForRejectedRowReport() {
@@ -997,6 +1067,7 @@ describe('prd_audit kickback', () => {
             '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
           );
         } else if (step === 'prd_audit') {
+          await persistGroupedPrdAuditVerdict(root, report, options?.runId);
           await writeFile(join(root, '.pipeline', 'prd-audit.md'), report);
           if (report.includes('S13.4')) {
             await writeFile(join(root, '.pipeline', 's13.4-probe-file'), 'keep this review finding\n');
@@ -2376,7 +2447,7 @@ describe('prd_audit kickback', () => {
     expect(fixture.calls).not.toContain('remediate');
     expect(fixture.state.ok && fixture.state.value.prd_audit).toBe('done');
     expect(await readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8')).toContain(
-      '"grade": "PLAN_GAP"',
+      '- S11.1: PLAN_GAP',
     );
   });
 
