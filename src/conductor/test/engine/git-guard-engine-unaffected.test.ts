@@ -55,7 +55,13 @@ describe('engine git guard boundary', () => {
     await prepareWorktree(worktree);
     const calls = join(worktree, 'real-git-calls');
     const realGit = join(worktree, 'recording-real-git');
-    await writeFile(realGit, `#!/usr/bin/env bash\nprintf '%s\\0' "$@" >> ${JSON.stringify(calls)}\n`, 'utf8');
+    const featureCommon = (await readFile(join(worktree, '.pipeline', 'git-guard', 'common-dir'), 'utf8')).trim();
+    // Answer the guard's scope query with the feature common dir, so any argv
+    // the classifier marks destructive is genuinely refused rather than exec'd.
+    await writeFile(realGit, `#!/usr/bin/env bash
+case " $* " in *" --git-common-dir "*) printf '%s\\n' ${JSON.stringify(featureCommon)}; exit 0 ;; esac
+printf '%s\\0' "$@" >> ${JSON.stringify(calls)}
+`, 'utf8');
     await chmod(realGit, 0o755);
     await writeFile(join(worktree, '.pipeline', 'git-guard', 'real-git'), `${realGit}\n`, 'utf8');
 
@@ -69,8 +75,25 @@ describe('engine git guard boundary', () => {
   });
 
   it('does not attribute the guard assets themselves as GitHub invocation bypasses', () => {
-    const findings = auditShippedGithubInvocationBoundary(resolve(__dirname, '../../..'));
-    expect(findings.filter((finding) => finding.file === 'engine/git-hook-assets.ts' || finding.file === 'engine/git-guard.ts')).toEqual([]);
+    const findings = auditShippedGithubInvocationBoundary(resolve(__dirname, '../..'));
+    expect(findings.filter((finding) => finding.file.endsWith('engine/git-hook-assets.ts') || finding.file.endsWith('engine/git-guard.ts'))).toEqual([]);
+  });
+
+  it('the inventory stub makes a destructive argv observable as a refusal', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'git-guard-inventory-control-'));
+    roots.push(worktree);
+    await initTestRepo(worktree);
+    await prepareWorktree(worktree);
+    const realGit = join(worktree, 'recording-real-git');
+    const featureCommon = (await readFile(join(worktree, '.pipeline', 'git-guard', 'common-dir'), 'utf8')).trim();
+    await writeFile(realGit, `#!/usr/bin/env bash
+case " $* " in *" --git-common-dir "*) printf '%s\\n' ${JSON.stringify(featureCommon)} ;; esac
+`, 'utf8');
+    await chmod(realGit, 0o755);
+    await writeFile(join(worktree, '.pipeline', 'git-guard', 'real-git'), `${realGit}\n`, 'utf8');
+    const result = spawnSync(join(worktree, '.pipeline', 'bin', 'git'), ['push', '--force', 'origin', 'HEAD'], { cwd: worktree, encoding: 'utf8' });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('ai-conductor git guard: refused push');
   });
 
   it('keeps the materialized script’s safe lease pass-through contract', () => {
