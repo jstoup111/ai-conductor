@@ -787,6 +787,7 @@ describe('ClaudeProvider', () => {
         waitSeconds: undefined,
         deadline: undefined,
         observedIntervals: [{ startedAtMs: 2_000, durationMs: 40 }],
+        gitGuardInstalled: false,
       });
     });
 
@@ -936,6 +937,7 @@ describe('ClaudeProvider', () => {
           providerUnavailableScope: 'run',
           providerUnavailableReason: "LLM provider 'claude' not found. Install it or check your PATH.",
           observedIntervals: [{ startedAtMs: 1_000, durationMs: 50 }],
+          gitGuardInstalled: false,
         },
       },
       {
@@ -956,6 +958,7 @@ describe('ClaudeProvider', () => {
           waitSeconds: undefined,
           deadline: undefined,
           observedIntervals: [{ startedAtMs: 1_000, durationMs: 50 }],
+          gitGuardInstalled: false,
         },
       },
       {
@@ -976,6 +979,7 @@ describe('ClaudeProvider', () => {
           waitSeconds: 300,
           deadline: undefined,
           observedIntervals: [{ startedAtMs: 1_000, durationMs: 50 }],
+          gitGuardInstalled: false,
         },
       },
       {
@@ -996,6 +1000,7 @@ describe('ClaudeProvider', () => {
           waitSeconds: undefined,
           deadline: undefined,
           observedIntervals: [{ startedAtMs: 1_000, durationMs: 50 }],
+          gitGuardInstalled: false,
         },
       },
     ])('does not add exit facts or an exit diagnostic to a classified $name', async (fixture) => {
