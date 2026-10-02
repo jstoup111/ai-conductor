@@ -28,7 +28,6 @@ import {
   BUILD_REVIEW_VERDICT,
   FINISH_CHOICE_MARKER,
   MANUAL_TEST_CODE_STAMP,
-  PRD_AUDIT_CODE_STAMP,
 } from '../../src/engine/artifacts.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
@@ -39,6 +38,10 @@ import {
   writeVerdict,
   type ReplayPreservationRecord,
 } from '../../src/engine/gate-verdicts.js';
+import {
+  PRD_AUDIT_VERDICT_PATH,
+  persistPrdAuditVerdict,
+} from '../../src/engine/prd-audit-verdict-store.js';
 
 interface Scratch {
   repo: string;
@@ -114,10 +117,30 @@ afterEach(async () => {
   }
 });
 
+async function writePrdAuditIdentity(dir: string, attemptId: string): Promise<void> {
+  await persistPrdAuditVerdict(dir, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: '1', ordinal: 1 },
+        criterionId: 'S1.1',
+        grade: 'PASS',
+        evidence: 'Fixture evidence.',
+        rationale: 'Fixture rationale.',
+        requirementAssociations: [],
+        evidenceTaskIds: [],
+      }],
+      noOwnerObservations: [],
+    },
+    diagnostics: [],
+    recordedDispositions: [],
+  }, { attemptId, codeStamp: null });
+}
+
 // Covers: task:5
 describe('verdictProducedByRun', () => {
   const verdictGates = [
-    ['prd_audit', PRD_AUDIT_CODE_STAMP],
     ['architecture_review_as_built', ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP],
     ['manual_test', MANUAL_TEST_CODE_STAMP],
   ] as const;
@@ -170,11 +193,47 @@ describe('verdictProducedByRun', () => {
     });
   }
 
-  it('falls back to mtime when no expected run id is available for a legacy context', async () => {
+  it('returns match for prd_audit when its typed verdict carries the expected attempt id', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'verdict-run-identity-'));
+    scratches.push(dir);
+    await writePrdAuditIdentity(dir, 'run-current');
+
+    await expect(verdictProducedByRun(dir, 'prd_audit', 'run-current')).resolves.toEqual({
+      state: 'match', runId: 'run-current',
+    });
+  });
+
+  it('returns typed stale-run-identity for prd_audit when its typed verdict carries another attempt id', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'verdict-run-identity-'));
+    scratches.push(dir);
+    await writePrdAuditIdentity(dir, 'run-prior');
+
+    await expect(verdictProducedByRun(dir, 'prd_audit', 'run-current')).resolves.toEqual({
+      state: 'stale-run-identity',
+      expectedRunId: 'run-current',
+      foundRunId: 'run-prior',
+    });
+  });
+
+  it('falls back to unstamped for prd_audit when its typed verdict is missing or corrupt', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'verdict-run-identity-'));
     scratches.push(dir);
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeFile(join(dir, PRD_AUDIT_CODE_STAMP), JSON.stringify({ runId: 'run-prior' }));
+
+    await expect(verdictProducedByRun(dir, 'prd_audit', 'run-current')).resolves.toEqual({
+      state: 'unstamped',
+    });
+
+    await writeFile(join(dir, PRD_AUDIT_VERDICT_PATH), '{not-json');
+    await expect(verdictProducedByRun(dir, 'prd_audit', 'run-current')).resolves.toEqual({
+      state: 'unstamped',
+    });
+  });
+
+  it('falls back to mtime when no expected run id is available for a legacy context', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'verdict-run-identity-'));
+    scratches.push(dir);
+    await writePrdAuditIdentity(dir, 'run-prior');
 
     await expect(verdictProducedByRun(dir, 'prd_audit', undefined)).resolves.toEqual({
       state: 'unstamped',
@@ -184,8 +243,7 @@ describe('verdictProducedByRun', () => {
   it('returns unstamped when gate-code-validity is disabled, even for a matching sidecar', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'verdict-run-identity-'));
     scratches.push(dir);
-    await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeFile(join(dir, PRD_AUDIT_CODE_STAMP), JSON.stringify({ runId: 'run-current' }));
+    await writePrdAuditIdentity(dir, 'run-current');
 
     await expect(
       verdictProducedByRun(dir, 'prd_audit', 'run-current', {
