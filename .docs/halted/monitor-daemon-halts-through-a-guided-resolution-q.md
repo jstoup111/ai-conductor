@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-10-01T23:19:32.782Z
+Status: halted
 Slug: monitor-daemon-halts-through-a-guided-resolution-q
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-monitor-daemon-halts-through-a-guided-resolution-q
-Head SHA: 63747ae61b0815c4b83244d2cdb518a06e3bd268
-Halted at: 2026-10-01T15:28:06.093Z
+Head SHA: 511bee3b16f2e538255e9357dd4e9347f9bfe7fd
+Halted at: 2026-10-02T05:06:02.269Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-gate 'test_suite' selected 7 times without satisfying: test_suite not yet satisfied
+gate 'test_suite' selected 7 times without satisfying: kickback from rebase: rebase changed paths: ARCHITECTURE.md, src/conductor/src/daemon-cli.ts, src/conductor/src/engine/attribution-lane.ts, src/conductor/src/engine/conductor.ts, src/conductor/src/engine/config.ts (+49 more)
 ```
