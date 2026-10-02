@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.6.0] - 2026-10-01
+## [1.6.0] - 2026-10-02
 
 ### Added
 
@@ -27,6 +27,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Interactive composer launches honor the configured Codex provider. ([implementation PR #2844](https://github.com/jstoup111/ai-conductor/pull/2844)).
 - Plan authors can declare bounded work slices, and the conductor rejects ordered slice dependencies. ([implementation PR #2864](https://github.com/jstoup111/ai-conductor/pull/2864)).
 - Unclassified provider dispatch failures now include recorded exit codes, signals, and output sizes. ([implementation PR #2853](https://github.com/jstoup111/ai-conductor/pull/2853)).
+- You can configure provider-specific models, fallback ladders, and escalation orders for Pi-backed steps. ([implementation PR #2880](https://github.com/jstoup111/ai-conductor/pull/2880)).
 
 ### Changed
 
