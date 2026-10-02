@@ -1,7 +1,7 @@
 // Covers: task:5
 import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -486,6 +486,10 @@ describe('structural: smoke test entry point', () => {
   );
 
   it('discovers every known smoke file through the resolved smoke config', async () => {
+    const fixtureDirectory = join(conductorRoot, '.vitest-tmp', `smoke-discovery-${Date.now()}-${Math.random()}`);
+    const ignoredSmokeFile = join(fixtureDirectory, 'ignored.smoke.test.ts');
+    await mkdir(fixtureDirectory, { recursive: true });
+    await writeFile(ignoredSmokeFile, "const smokeCapability = 'hermetic';\n");
     const vitest = await createVitest('test', {
       config: join(conductorRoot, 'vitest.smoke.config.ts'),
       root: conductorRoot,
@@ -516,6 +520,7 @@ describe('structural: smoke test entry point', () => {
       ]);
     } finally {
       await vitest.close();
+      await rm(fixtureDirectory, { recursive: true, force: true });
     }
   });
 

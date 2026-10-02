@@ -2,14 +2,14 @@ import { defineConfig } from 'vitest/config';
 import { ensureRunTmpRootSync } from './test/tmpdir-leak-guard.js';
 
 // Smoke tests are opt-in, but retain the ordinary suite's runtime guards.
-// Vitest merges `exclude` arrays additively, so this must override the default
-// smoke exclusions rather than inherit them.
+// Vitest merges `exclude` arrays additively, so replace the default smoke
+// exclusions while keeping checkout-local Vitest fixtures out of discovery.
 ensureRunTmpRootSync();
 
 export default defineConfig({
   test: {
     include: ['test/smoke/**', '**/*.smoke.test.ts'],
-    exclude: [],
+    exclude: ['**/.vitest-tmp/**'],
     environment: 'node',
     setupFiles: ['./test/setup.ts'],
     globalSetup: ['./test/global-setup.ts'],
