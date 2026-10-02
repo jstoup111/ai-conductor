@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-10-02T10:22:20.328Z
+Status: halted
 Slug: monitor-daemon-halts-through-a-guided-resolution-q
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-monitor-daemon-halts-through-a-guided-resolution-q
-Head SHA: 511bee3b16f2e538255e9357dd4e9347f9bfe7fd
-Halted at: 2026-10-02T05:06:02.269Z
+Head SHA: c3325211a2536a8fb818d07b89f1ce5a87f6c574
+Halted at: 2026-10-02T22:46:44.514Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
