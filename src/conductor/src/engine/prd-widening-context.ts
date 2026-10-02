@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type { PrdAuditRejectedRow, PrdAuditReport } from './artifacts.js';
 import type { AcceptedWideningDecision, IntentRelation } from './accepted-widenings.js';
 import type { RemediationCasePrdWideningRecord } from './remediation-case-store.js';
+import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
 
 export const PRD_WIDENING_CONTEXT_LIMITS = {
   currentSources: 512, cases: 128, sourceLinksPerCase: 512,
@@ -19,8 +20,10 @@ export interface PrdWideningContextSource {
   readonly prdIds: readonly string[];
 }
 
+export const PRD_WIDENING_CONTEXT_VERSION = 'v2' as const;
+
 export interface PrdWideningContext {
-  readonly version: 'v1';
+  readonly version: typeof PRD_WIDENING_CONTEXT_VERSION;
   readonly digest: string;
   readonly currentSources: readonly PrdWideningContextSource[];
   readonly cases: readonly RemediationCasePrdWideningRecord[];
@@ -68,13 +71,13 @@ export function projectPrdWideningSemanticSnapshot(input: {
 }): PrdWideningSemanticSnapshot {
   const criterionOnlyCaseIds = input.scope?.criterionOnlyCaseIds ?? [
     ...new Set(input.decisions
-      .filter((decision) => decision.originalCaseId !== undefined && !/^NC\.\d+$/i.test(decision.criterion))
+      .filter((decision) => decision.originalCaseId !== undefined && !isPrdAuditNoOwnerOrdinal(decision.criterion))
       .map((decision) => decision.originalCaseId!)),
   ];
   const excludedCaseIds = new Set(criterionOnlyCaseIds);
   const cases = input.cases.filter((record) => !excludedCaseIds.has(record.id));
   const decisions = input.decisions.filter((decision) =>
-    decision.originalSource !== undefined && /^NC\.\d+$/i.test(decision.criterion));
+    decision.originalSource !== undefined && isPrdAuditNoOwnerOrdinal(decision.criterion));
   return {
     cases,
     decisions,
@@ -191,7 +194,7 @@ export function buildPrdWideningContext(
   relations: ReadonlyMap<string, IntentRelation> = new Map(),
 ): PrdWideningContextResult {
   const currentSources = report.findings
-    .filter((finding) => finding.grade === 'OVER_SCOPE' && /^NC\.\d+$/i.test(finding.criterion))
+    .filter((finding) => finding.grade === 'OVER_SCOPE' && isPrdAuditNoOwnerOrdinal(finding.criterion))
     .map((finding) => ({
       id: prdWideningSourceId(finding),
       criterion: finding.criterion,
@@ -217,14 +220,14 @@ export function buildPrdWideningContext(
     if (check) return check;
   }
   const semanticSnapshot = projectPrdWideningSemanticSnapshot({
-    version: 'v1', currentSources, cases, decisions,
+    version: PRD_WIDENING_CONTEXT_VERSION, currentSources, cases, decisions,
   });
   for (const decision of semanticSnapshot.decisions) {
     const check = checkDecisionBounds(decision);
     if (check) return check;
   }
   const value: Omit<PrdWideningContext, 'digest'> = {
-    version: 'v1',
+    version: PRD_WIDENING_CONTEXT_VERSION,
     currentSources,
     cases: semanticSnapshot.cases,
     rejectedRows: report.rejectedRows,

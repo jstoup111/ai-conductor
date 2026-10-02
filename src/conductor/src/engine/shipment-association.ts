@@ -33,6 +33,8 @@ export type RecordedShipmentFinding =
     grade: 'PLAN_GAP';
     criterion: string;
     summary: string;
+    rationale?: string;
+    authority?: string;
   }
   | {
     gate: 'prd_audit';
@@ -45,6 +47,8 @@ export type RecordedShipmentFinding =
     decision?: 'accept' | 'refuse';
     /** The rationale the operator wrote beside that decision. */
     rationale?: string;
+    /** Attribution is preserved from the engine-recorded disposition. */
+    authority?: string;
   }
   | {
     gate: 'architecture_review_as_built';
@@ -104,6 +108,9 @@ export function appendRecordedShipmentFindings(
     ...('rationale' in finding && finding.rationale
       ? [`    rationale: ${yamlScalar(finding.rationale)}`]
       : []),
+    ...('authority' in finding && finding.authority
+      ? [`    authority: ${yamlScalar(finding.authority)}`]
+      : []),
   ].join('\n')).join('\n');
   return `${record.slice(0, frontmatterEnd)}\nfindings:\n${rendered}${record.slice(frontmatterEnd)}`;
 }
@@ -138,23 +145,28 @@ function recordedPrdAuditFindings(value: PersistedPrdAuditVerdict | undefined): 
     value.recordedDispositions.map((entry) =>
       [`${entry.criterionId.toUpperCase()}\u0000${entry.grade}`, entry] as const),
   );
-  return value.judgment.criterionJudgments.flatMap<RecordedShipmentFinding>((finding) => {
-    const key = `${finding.criterionId.toUpperCase()}\u0000${finding.grade}`;
-    const disposition = recorded.get(key);
+  const project = (criterion: string, grade: 'PLAN_GAP' | 'OVER_SCOPE', summary: string): RecordedShipmentFinding[] => {
+    const disposition = recorded.get(`${criterion.toUpperCase()}\u0000${grade}`);
     if (!disposition) return [];
-    if (finding.grade === 'PLAN_GAP') {
-      return [{ gate: 'prd_audit', grade: 'PLAN_GAP', criterion: finding.criterionId, summary: finding.rationale }];
+    if (grade === 'PLAN_GAP') {
+      return [{ gate: 'prd_audit', grade, criterion, summary, rationale: disposition.rationale, authority: disposition.authority }];
     }
-    if (finding.grade !== 'OVER_SCOPE') return [];
     return [{
-      gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: finding.criterionId,
-      summary: finding.rationale,
-      accepted: disposition.decision === 'accept',
+      gate: 'prd_audit', grade, criterion, summary, accepted: disposition.decision === 'accept',
       ...(disposition.decision === 'accept' || disposition.decision === 'refuse'
         ? { decision: disposition.decision, rationale: disposition.rationale }
         : {}),
+      authority: disposition.authority,
     }];
-  });
+  };
+  return [
+    ...value.judgment.criterionJudgments.flatMap((finding) =>
+      finding.grade === 'PLAN_GAP' || finding.grade === 'OVER_SCOPE'
+        ? project(finding.criterionId, finding.grade, finding.rationale)
+        : []),
+    ...value.judgment.noOwnerObservations.flatMap((finding) =>
+      project(finding.presentationOrdinal, finding.grade, finding.rationale)),
+  ];
 }
 
 function recordedAsBuiltFindings(value: PersistedAsBuiltVerdict | undefined): RecordedShipmentFinding[] {

@@ -3,6 +3,16 @@ import { normalizePlanTaskId, resolvePlanTaskReference } from './plan-task-parse
 /** The versioned, engine-owned output contract for PRD-audit judgments. */
 export const PRD_AUDIT_JUDGMENT_CONTRACT_VERSION = 'v1' as const;
 
+/** One grammar for the reviewer-facing, non-story observation locator. */
+export function formatPrdAuditNoOwnerOrdinal(ordinal: number): string {
+  return `NC-${ordinal}`;
+}
+
+/** Accept the retired dotted presentation form while emitting only NC-<n>. */
+export function isPrdAuditNoOwnerOrdinal(value: string): boolean {
+  return /^NC[-.]\d+$/i.test(value);
+}
+
 export const PRD_AUDIT_JUDGMENT_GRADES = ['PASS', 'FIXABLE', 'PLAN_GAP', 'OVER_SCOPE'] as const;
 export type PrdAuditJudgmentGrade = typeof PRD_AUDIT_JUDGMENT_GRADES[number];
 export type PrdAuditIntentRelation = 'within' | 'outside-harmless' | 'outside-visible';
@@ -46,7 +56,7 @@ export interface PrdAuditJudgment {
 
 /** The independently resolved, feature-scoped references a reviewer may cite. */
 export interface PrdAuditJudgmentContext {
-  readonly criteria: readonly { readonly id: string }[];
+  readonly criteria: readonly { readonly id: string; readonly requirementIds?: readonly string[] }[];
   readonly requirements: readonly (
     | { readonly path: string; readonly requirementId: string }
     | { readonly path: string; readonly id: string }
@@ -400,7 +410,7 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
       diagnostics.push(`${field}.intentRelation must be one of ${INTENT_RELATIONS.join(', ')}`);
       continue;
     }
-    noOwnerObservations.push({ presentationOrdinal: `NC-${noOwnerObservations.length + 1}`, grade: 'OVER_SCOPE', evidence: raw.evidence,
+    noOwnerObservations.push({ presentationOrdinal: formatPrdAuditNoOwnerOrdinal(noOwnerObservations.length + 1), grade: 'OVER_SCOPE', evidence: raw.evidence,
       rationale: raw.rationale, intentRelation: raw.intentRelation });
   }
 
@@ -413,11 +423,26 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
   for (const [normalizedCriterionId, criterionId] of criteria) {
     if (!judgedCriteria.has(normalizedCriterionId)) diagnostics.push(`criterion ${criterionId} is missing a judgment`);
   }
+  // An association says a reviewer considered a requirement; it is not story
+  // coverage. A requirement is discharged only by the engine-projected story
+  // mapping or by an explicit PLAN_GAP judgment for that requirement.
+  const planGapRequirements = new Set(judgment.criterionJudgments
+    .filter((entry) => entry.grade === 'PLAN_GAP')
+    .flatMap((entry) => entry.requirementAssociations.map((association) => `${association.path}\u0000${association.requirementId}`)));
+  const storyCoveredRequirements = new Set(context.criteria.flatMap((criterion) =>
+    (criterion.requirementIds ?? []).map((requirementId) => requirementId.toUpperCase())));
+  const hasProjectedCoverage = context.criteria.some((criterion) => criterion.requirementIds !== undefined);
   const associatedRequirements = new Set(judgment.criterionJudgments.flatMap((entry) =>
     entry.requirementAssociations.map((association) => `${association.path}\u0000${association.requirementId}`),
   ));
   for (const requirement of requirements) {
-    if (!associatedRequirements.has(requirement)) {
+    const [, requirementId] = requirement.split('\u0000');
+    // Compatibility callers that predate the projection have no story map;
+    // the managed runner always supplies one and never takes this fallback.
+    const coveredByStory = hasProjectedCoverage
+      ? storyCoveredRequirements.has(requirementId.toUpperCase())
+      : associatedRequirements.has(requirement);
+    if (!coveredByStory && !planGapRequirements.has(requirement)) {
       const [path, requirementId] = requirement.split('\u0000');
       diagnostics.push(`requirement ${path}:${requirementId} lacks a criterion association or valid PLAN_GAP evidence`);
     }

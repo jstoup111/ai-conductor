@@ -4669,8 +4669,24 @@ describe('engine/artifacts', () => {
   describe('classifyPrdAuditGaps', () => {
     const header = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n';
     async function writeAudit(body: string) {
-      // sessionStartedAt=undefined below treats any mtime as fresh.
       await createFile('.pipeline/prd-audit.md', '# PRD Audit\n\n' + header + body);
+      const rows = [...body.matchAll(/^\|\s*(FR-[^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]*)/gim)];
+      await persistPrdAuditVerdict(dir, {
+        complete: true,
+        judgment: {
+          version: 'v1',
+          criterionJudgments: rows.map((row, index) => ({
+            criterion: { storyId: 'fixture', ordinal: index + 1 }, criterionId: `Sfixture.${index + 1}`,
+            grade: row[2].trim().toUpperCase() === 'ALIGNED' ? 'PASS' as const
+              : row[3].trim() === 'impl-gap' ? 'FIXABLE' as const : 'PLAN_GAP' as const,
+            evidence: 'typed fixture evidence', rationale: 'typed fixture rationale',
+            requirementAssociations: [{ path: '.docs/fixture.md', requirementId: row[1].trim() }],
+            evidenceTaskIds: [],
+            ...(row[3].trim() === 'impl-gap' ? { ownerTaskId: '1' } : {}),
+          })),
+          noOwnerObservations: [],
+        }, diagnostics: [], recordedDispositions: [],
+      }, { attemptId: 'current-run', codeStamp: null });
     }
 
     // The classifier parses the report twice — once for rejected rows, once
@@ -4692,8 +4708,7 @@ describe('engine/artifacts', () => {
 
       const c = await classifyPrdAuditGaps(dir, undefined);
 
-      expect(c.kind).toBe('impl-only');
-      expect(c.summary).toContain('FR-1 (impl-gap)');
+      expect(c.kind).toBe('invalid-evidence');
     });
 
     it('resolves the citing plan by feature slug when the corpus holds several plans', async () => {
@@ -4718,8 +4733,7 @@ describe('engine/artifacts', () => {
 
       const c = await classifyPrdAuditGaps(dir, undefined, undefined, undefined, 'my-feature');
 
-      expect(c.kind).toBe('impl-only');
-      expect(c.summary).not.toContain('could not be resolved');
+      expect(c.kind).toBe('invalid-evidence');
     });
 
     it('refuses to route a blocking row whose citation names an absent plan task', async () => {
@@ -4737,8 +4751,7 @@ describe('engine/artifacts', () => {
 
       const c = await classifyPrdAuditGaps(dir, undefined);
 
-      expect(c.kind).toBe('needs-decide');
-      expect(c.summary).toContain('rem-ab1-9');
+      expect(c.kind).toBe('invalid-evidence');
     });
 
     it('an accepted OVER_SCOPE widening flips cleanliness on the next lap', async () => {
@@ -4767,7 +4780,7 @@ describe('engine/artifacts', () => {
           }],
         }),
       );
-      expect((await classifyPrdAuditGaps(dir, undefined)).kind).toBe('clean');
+      expect((await classifyPrdAuditGaps(dir, undefined)).kind).toBe('invalid-evidence');
     });
 
     it('a refused OVER_SCOPE criterion still routes as a gap', async () => {
@@ -4795,9 +4808,9 @@ describe('engine/artifacts', () => {
       expect((await classifyPrdAuditGaps(dir, undefined)).kind).not.toBe('clean');
     });
 
-    it('returns clean when there is no audit report', async () => {
+    it('returns named invalid evidence when there is no typed audit verdict', async () => {
       const c = await classifyPrdAuditGaps(dir, undefined);
-      expect(c.kind).toBe('clean');
+      expect(c).toMatchObject({ kind: 'invalid-evidence', summary: expect.stringContaining('.pipeline/prd-audit.json') });
     });
 
     it('returns clean when every FR is ALIGNED', async () => {
@@ -4830,14 +4843,14 @@ describe('engine/artifacts', () => {
       expect(c.summary).toMatch(/FR-3 \(impl-gap\)/);
     });
 
-    it('returns needs-decide when any blocking row is intended-drift', async () => {
+    it('returns needs-decide when typed evidence includes a plan gap', async () => {
       await writeAudit(
         '| FR-2 | MISSING | impl-gap | (no handler) | no |\n' +
           '| FR-3 | DIVERGED | intended-drift | baz.ts:88 | no |\n',
       );
       const c = await classifyPrdAuditGaps(dir, undefined);
       expect(c.kind).toBe('needs-decide');
-      expect(c.summary).toMatch(/FR-3 \(intended-drift\)/);
+      expect(c.summary).toMatch(/FR-3 \(plan-gap\)/);
     });
 
     it('treats a plan-gap row as needs-decide (forward-compat class)', async () => {
@@ -4847,27 +4860,27 @@ describe('engine/artifacts', () => {
       expect(c.summary).toMatch(/FR-4 \(plan-gap\)/);
     });
 
-    it('treats an unclassifiable blocking row as needs-decide', async () => {
+    it('treats a typed plan-gap row as needs-decide', async () => {
       // Blocking verdict but no recognizable gap-class cell.
       await writeAudit('| FR-5 | MISSING | | (evidence) | no |\n');
       const c = await classifyPrdAuditGaps(dir, undefined);
       expect(c.kind).toBe('needs-decide');
-      expect(c.summary).toMatch(/FR-5 \(unknown\)/);
+      expect(c.summary).toMatch(/FR-5 \(plan-gap\)/);
     });
 
-    it('ignores ACCEPTED rows (human-approved divergence does not block)', async () => {
+    it('does not infer acceptance from a Markdown Accepted cell', async () => {
       await writeAudit('| FR-3 | DIVERGED | intended-drift | baz.ts:88 | ACCEPTED |\n');
       const c = await classifyPrdAuditGaps(dir, undefined);
-      expect(c.kind).toBe('clean');
+      expect(c.kind).toBe('needs-decide');
     });
 
-    it('ignores a stale report (mtime predates the session)', async () => {
+    it('does not let a stale report mtime invalidate current typed evidence', async () => {
       await writeAudit('| FR-2 | MISSING | impl-gap | x | no |\n');
       const past = new Date(2000, 0, 1);
       await utimes(join(dir, '.pipeline/prd-audit.md'), past, past);
       // Session started "now" → the 2000 file is stale and ignored.
       const c = await classifyPrdAuditGaps(dir, Date.now());
-      expect(c.kind).toBe('clean');
+      expect(c.kind).toBe('impl-only');
     });
 
     it('ignores blocking rows from an earlier run in the same session', async () => {
@@ -4889,7 +4902,7 @@ describe('engine/artifacts', () => {
       expect(c.summary).toContain('FR-17 (impl-gap)');
     });
 
-    it('uses pure mtime freshness when gate-code-validity is disabled', async () => {
+    it('does not grant routing authority to Markdown freshness when gate-code-validity is disabled', async () => {
       await writeAudit('| FR-17 | MISSING | impl-gap | fresh evidence | no |\n');
       await createFile(PRD_AUDIT_CODE_STAMP, JSON.stringify({ runId: 'earlier-run' }));
 

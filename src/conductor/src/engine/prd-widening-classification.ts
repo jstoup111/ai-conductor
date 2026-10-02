@@ -1,6 +1,7 @@
 import type { AcceptedWideningDecision } from './accepted-widenings.js';
 import type { RemediationCasePrdWideningRecord } from './remediation-case-store.js';
 import { prdWideningSourceId } from './prd-widening-context.js';
+import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
 
 /** The single authority projection consumed by PRD routing and renderers. */
 export type PrdWideningClassification =
@@ -47,7 +48,7 @@ function effectiveDecision(
  */
 export function classifyPrdWidening(input: PrdWideningClassificationInput): PrdWideningClassification {
   if (input.grade !== 'OVER_SCOPE') return { kind: 'not-blocking', reason: 'non-over-scope' };
-  if (!/^NC\.\d+$/i.test(input.criterion)) return { kind: 'not-blocking', reason: 'non-nc' };
+  if (!isPrdAuditNoOwnerOrdinal(input.criterion)) return { kind: 'not-blocking', reason: 'non-nc' };
   if (!input.relation) return { kind: 'unresolved', reason: 'missing-relation' };
   if (!input.relation.fresh) return { kind: 'unresolved', reason: 'stale-relation' };
   if (input.relation.kind === 'uncertain' || input.relation.kind === 'different') {
@@ -82,7 +83,7 @@ export function classifyPrdWideningProjection(input: {
   readonly evidenceFault?: Extract<PrdWideningClassification, { readonly kind: 'unresolved' }>['reason'];
 }): ReadonlyMap<string, PrdWideningClassification> {
   const publishedDigests = input.findings
-    .filter((finding) => finding.grade === 'OVER_SCOPE' && /^NC\.\d+$/i.test(finding.criterion))
+    .filter((finding) => finding.grade === 'OVER_SCOPE' && isPrdAuditNoOwnerOrdinal(finding.criterion))
     .map((finding) => {
       const sourceId = prdWideningSourceId(finding);
       return input.cases.find((candidate) => candidate.currentSources.some((source) => source.sourceId === sourceId))?.reconciliationDigest;
@@ -105,7 +106,7 @@ export function classifyPrdWideningProjection(input: {
     // Story-criterion decisions retain their criterion-keyed authority. They
     // have no lap-local NC source identity to reconcile, so they never fall
     // back to a reviewer-summary comparison.
-    if (!/^NC\.\d+$/i.test(finding.criterion)) {
+    if (!isPrdAuditNoOwnerOrdinal(finding.criterion)) {
       const decision = input.decisions.filter((candidate) => candidate.criterion === finding.criterion)
         .sort((left, right) => right.revision - left.revision)[0];
       return [finding.criterion, decision === undefined

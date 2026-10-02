@@ -272,7 +272,7 @@ import {
   validatePrdAuditJudgment,
 } from './prd-audit-contract.js';
 import { buildPrdAuditProjection } from './prd-audit-projection.js';
-import { persistPrdAuditVerdict } from './prd-audit-verdict-store.js';
+import { persistPrdAuditVerdict, PrdAuditVerdictPersistenceError } from './prd-audit-verdict-store.js';
 
 /** A closed coverage-binding payload that cannot be treated as a verdict. */
 export class CoverageBindingPayloadError extends Error {
@@ -1265,7 +1265,11 @@ export class DefaultStepRunner implements StepRunner {
                   complete: false, judgment: validated.judgment, diagnostics: validated.diagnostics, recordedDispositions: [],
                 }, { attemptId: opts?.runId ?? this.runId, codeStamp });
               } catch (error) {
-                return { ...this.toStepRunResult(step, result), success: false, output: `prd-audit authority persistence failed: ${error instanceof Error ? error.message : String(error)}` };
+                const reason = error instanceof Error ? error.message : String(error);
+                const stage = error instanceof PrdAuditVerdictPersistenceError && error.stage === 'report'
+                  ? `report output ${'.pipeline/prd-audit.md'}`
+                  : 'authority persistence';
+                return { ...this.toStepRunResult(step, result), success: false, output: `prd-audit ${stage} failed: ${reason}` };
               }
             }
             return { ...this.toStepRunResult(step, result), success: false, output: `structured-result-rejected: ${validated.diagnostics.join('; ')}` };
@@ -1276,7 +1280,9 @@ export class DefaultStepRunner implements StepRunner {
             }, { attemptId: opts?.runId ?? this.runId, codeStamp });
           } catch (error) {
             const reason = error instanceof Error ? error.message : String(error);
-            const stage = /render|report/i.test(reason) ? 'report rendering' : 'authority persistence';
+            const stage = error instanceof PrdAuditVerdictPersistenceError && error.stage === 'report'
+              ? `report output ${'.pipeline/prd-audit.md'}`
+              : 'authority persistence';
             return { ...this.toStepRunResult(step, result), success: false, output: `prd-audit ${stage} failed: ${reason}` };
           }
           return this.toStepRunResult(step, result);

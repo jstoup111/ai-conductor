@@ -27,8 +27,8 @@ import {
 } from './gate-code-validity.js';
 import type { VerdictRunIdentity } from './gate-code-validity.js';
 import {
-  overScopeRelations,
   readOverScopeDecisions,
+  type IntentRelation,
 } from './accepted-widenings.js';
 import { AcceptedWideningDecisionStore } from './accepted-widenings.js';
 import {
@@ -60,6 +60,7 @@ import {
 import { currentCommitSha } from './project-prelude.js';
 import { createEngineStateStore } from './engine-state-store.js';
 import { extractPrdFrIds } from './prd-fr-ids.js';
+import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
 import {
   parsePlanTaskPaths,
   parsePlanTaskStoryIds,
@@ -95,6 +96,7 @@ import {
   PRD_AUDIT_VERDICT_PATH,
   persistPrdAuditVerdict,
   readPrdAuditVerdict,
+  type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
@@ -3212,11 +3214,18 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: `${PRD_AUDIT_VERDICT_PATH} is incomplete: ${stored.value.diagnostics.join('; ')}`,
       };
     }
-    const blocking = stored.value.judgment.criterionJudgments.filter((finding) => finding.grade !== 'PASS');
-    if (blocking.length > 0 || stored.value.judgment.noOwnerObservations.length > 0) {
+    const recorded = new Set(stored.value.recordedDispositions.map((finding) => `${finding.criterionId.toUpperCase()}\u0000${finding.grade}`));
+    const settledOverScope = (criterionId: string, grade: string, relation: IntentRelation | undefined) =>
+      grade === 'OVER_SCOPE' && (relation === 'within' || relation === 'outside-harmless') &&
+      recorded.has(`${criterionId.toUpperCase()}\u0000OVER_SCOPE`);
+    const blocking = stored.value.judgment.criterionJudgments.filter((finding) =>
+      finding.grade !== 'PASS' && !settledOverScope(finding.criterionId, finding.grade, finding.intentRelation));
+    const blockingNoOwner = stored.value.judgment.noOwnerObservations.filter((finding) =>
+      !settledOverScope(finding.presentationOrdinal, finding.grade, finding.intentRelation));
+    if (blocking.length > 0 || blockingNoOwner.length > 0) {
       const labels = [
         ...blocking.map((finding) => `${finding.criterionId} (${finding.grade})`),
-        ...stored.value.judgment.noOwnerObservations.map((finding) => `${finding.presentationOrdinal} (${finding.grade})`),
+        ...blockingNoOwner.map((finding) => `${finding.presentationOrdinal} (${finding.grade})`),
       ];
       return {
         done: false,
@@ -4245,10 +4254,8 @@ const PRD_AUDIT_GRADES: ReadonlySet<PrdAuditGrade> = new Set([
  * form.
  */
 const CRITERION_ID_RE = /^S[A-Za-z0-9.-]+\.\d+$/i;
-const NO_OWNER_KEY_RE = /^NC\.\d+$/i;
-
 export function isNoOwnerKey(key: string): boolean {
-  return NO_OWNER_KEY_RE.test(key);
+  return isPrdAuditNoOwnerOrdinal(key);
 }
 
 function tableCells(line: string): string[] {
@@ -4512,10 +4519,6 @@ function prdAuditMechanicalFault(error: string): PrdAuditReportParseResult {
   return { ok: false, class: 'mechanical-fault', error };
 }
 
-function formatPrdAuditRejectedRows(rows: readonly PrdAuditRejectedRow[]): string {
-  return rows.map((row) => `${row.key ?? row.rowText} (${row.reason})`).join('; ');
-}
-
 /** Return a diagnostic when a resolved PRD requirement lacks an audit verdict row. */
 export async function prdAuditCoverageGap(
   projectRoot: string,
@@ -4642,59 +4645,11 @@ function extractStoryCoveredFrIds(storiesText: string): Set<string> {
  * ALIGNED and not human-ACCEPTED. Returns the FR identifier of every still-
  * blocking row. Verdict is read per-cell (see {@link parseFrVerdictRow}).
  */
-function findUnalignedFrRows(content: string, activePlan?: string): string[] {
-  const parsed = parsePrdAuditReport(content, activePlan);
-  if (parsed.ok) {
-    return parsed.value.findings
-      .filter((finding) => finding.grade !== 'PASS')
-      .flatMap((finding) => finding.prdIds);
-  }
-  const blocking: string[] = [];
-  for (const line of verdictTableLines(content)) {
-    const row = parseFrVerdictRow(line);
-    if (row?.blocking) blocking.push(row.fr);
-  }
-  return blocking;
-}
-
-/**
- * Like {@link findUnalignedFrRows}, but also reads each blocking row's
- * gap-class cell (`impl-gap | intended-drift | plan-gap`; `unknown` when the
- * class cell can't be read). Used by the daemon to decide self-heal vs HALT.
- */
-function findUnalignedFrRowsWithClass(
-  content: string,
-  settledOverScopeCriteria: ReadonlySet<string> = new Set(),
-  activePlan?: string,
-): UnalignedFrRow[] {
-  const parsed = parsePrdAuditReport(content, activePlan);
-  if (parsed.ok) {
-    return parsed.value.findings
-      .filter((finding) => finding.grade !== 'PASS')
-      .filter((finding) =>
-        finding.grade !== 'OVER_SCOPE' || !settledOverScopeCriteria.has(finding.criterion))
-      .flatMap((finding) => finding.prdIds.map((fr) => ({
-        fr,
-        gapClass: finding.grade === 'FIXABLE'
-          ? 'impl-gap' as const
-          : finding.grade === 'PLAN_GAP'
-            ? 'plan-gap' as const
-            : 'intended-drift' as const,
-      })));
-  }
-  const rows: UnalignedFrRow[] = [];
-  for (const line of verdictTableLines(content)) {
-    const row = parseFrVerdictRow(line);
-    if (row?.blocking) rows.push({ fr: row.fr, gapClass: row.gapClass });
-  }
-  return rows;
-}
-
 export interface PrdGapClassification {
   /** `clean` = no blocking rows; `impl-only` = every blocking row is impl-gap
    * (daemon can self-heal via BUILD); `needs-decide` = at least one row is a
    * product/plan gap or unclassifiable (needs a human DECIDE amendment). */
-  kind: 'clean' | 'impl-only' | 'needs-decide';
+  kind: 'clean' | 'impl-only' | 'needs-decide' | 'invalid-evidence';
   /** Human-readable FR/class list for the kickback or HALT reason. */
   summary: string;
 }
@@ -4707,10 +4662,9 @@ export interface PrdGapClassification {
  */
 export async function classifyPrdAuditWideningProjection(
   dir: string,
-  reportText: string,
+  relations: ReadonlyMap<string, IntentRelation>,
   findings: readonly PrdAuditFinding[],
 ): Promise<ReadonlyMap<string, PrdWideningClassification>> {
-  const relations = overScopeRelations(reportText);
   const visible = findings.filter((finding) =>
     finding.grade === 'OVER_SCOPE' && relations.get(finding.criterion) === 'outside-visible',
   );
@@ -4777,8 +4731,31 @@ export async function classifyPrdAuditWideningProjection(
   return projected;
 }
 
+/** Adapts validated JSON to the existing widening domain without parsing Markdown. */
+export function prdAuditTypedRouteReport(value: PersistedPrdAuditVerdict): {
+  readonly report: PrdAuditReport;
+  readonly relations: ReadonlyMap<string, IntentRelation>;
+} {
+  const relations = new Map<string, IntentRelation>();
+  const findings: PrdAuditFinding[] = value.judgment.criterionJudgments.map((judgment) => {
+    if (judgment.grade === 'OVER_SCOPE') relations.set(judgment.criterionId, judgment.intentRelation!);
+    return {
+      criterion: judgment.criterionId,
+      grade: judgment.grade,
+      ...(judgment.ownerTaskId === undefined ? {} : { planTask: judgment.ownerTaskId }),
+      prdIds: judgment.requirementAssociations.map((association) => association.requirementId),
+      evidence: judgment.evidence,
+    };
+  });
+  for (const observation of value.judgment.noOwnerObservations) {
+    relations.set(observation.presentationOrdinal, observation.intentRelation);
+    findings.push({ criterion: observation.presentationOrdinal, grade: observation.grade, prdIds: [], evidence: observation.evidence });
+  }
+  return { report: { prd: 'none', findings, rejectedRows: [] }, relations };
+}
+
 /**
- * Classify the blocking rows of the fresh PRD-audit report(s) for this session
+ * Classify the blocking rows of the current typed PRD-audit verdict for this session
  * so the daemon can decide whether to self-heal (impl-only → BUILD) or halt
  * (any product/plan gap → human DECIDE). Only reports written this session are
  * considered; a stale audit from a prior feature is ignored.
@@ -4790,59 +4767,50 @@ export async function classifyPrdAuditGaps(
   config?: Pick<HarnessConfig, 'gate_code_validity'>,
   featureDesc?: string,
 ): Promise<PrdGapClassification> {
-  const files = await findArtifactFiles(dir, 'prd_audit');
-  const identity = await verdictProducedByRun(dir, 'prd_audit', expectedRunId, config);
-  // Routing decides self-heal vs HALT off these rows, so it reads them under
-  // the same citation authority the gate scored them with (adr-2026-08-30 D1).
-  // The feature slug is what resolves the plan in a multi-plan corpus with no
-  // recorded activePlanPath; without it every citing row is rejected as
-  // unresolvable and a valid audit routes to a needs-decide halt.
-  const activePlan = await readActivePlanText(dir, undefined, featureDesc);
-  const blocking: UnalignedFrRow[] = [];
-  for (const f of files) {
-    if (identity.state === 'stale-run-identity') continue;
-    if (
-      identity.state === 'unstamped' &&
-      !(await fileIsFreshSinceSession(f, sessionStartedAt))
-    ) continue;
-    const content = await readFile(f, 'utf-8');
-    const parsed = parsePrdAuditReport(content, activePlan);
-    if (parsed.ok && parsed.value.rejectedRows.length > 0) {
-      return {
-        kind: 'needs-decide',
-        summary: `rejected rows: ${formatPrdAuditRejectedRows(parsed.value.rejectedRows)}`,
-      };
-    }
+  void sessionStartedAt;
+  void config;
+  void featureDesc;
+  const stored = await readPrdAuditVerdict(dir);
+  if (stored.kind === 'absent') {
+    return { kind: 'invalid-evidence', summary: `missing current typed PRD-audit verdict at ${PRD_AUDIT_VERDICT_PATH}` };
+  }
+  if (stored.kind === 'unreadable') {
+    return { kind: 'invalid-evidence', summary: `invalid typed PRD-audit evidence: ${stored.reason}` };
+  }
+  if (expectedRunId !== undefined && stored.value.attemptId !== expectedRunId) {
+    return { kind: 'invalid-evidence', summary: `${PRD_AUDIT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not current run ${expectedRunId}` };
+  }
+  if (!stored.value.complete) {
+    return { kind: 'invalid-evidence', summary: `${PRD_AUDIT_VERDICT_PATH} is incomplete: ${stored.value.diagnostics.join('; ')}` };
+  }
+  const typed = prdAuditTypedRouteReport(stored.value);
+  const findings = typed.report.findings;
     // An OVER_SCOPE criterion the operator already accepted, or one whose
     // intent relation never made it blocking, is not a gap this routing should
     // act on. Reading only the fresh rows made an accepted widening re-route
     // the next lap exactly as it did before the operator decided (ADR D8).
-    const classifications = parsed.ok
-      ? await classifyPrdAuditWideningProjection(dir, content, parsed.value.findings)
-      : new Map<string, PrdWideningClassification>();
-    if (parsed.ok) {
-      const unresolvedWidenings = parsed.value.findings.filter((finding) => {
+  const classifications = await classifyPrdAuditWideningProjection(dir, typed.relations, findings);
+  const unresolvedWidenings = findings.filter((finding) => {
         if (finding.grade !== 'OVER_SCOPE') return false;
         const classification = classifications.get(finding.criterion);
         return classification?.kind === 'refused' || classification?.kind === 'unresolved';
       });
-      if (unresolvedWidenings.length > 0) {
+  if (unresolvedWidenings.length > 0) {
         const summary = unresolvedWidenings.slice(0, 5).map((finding) => {
           const classification = classifications.get(finding.criterion)!;
           return `${finding.criterion} (${classification.kind === 'unresolved' ? classification.reason : 'refused'})`;
         }).join('; ');
         return { kind: 'needs-decide', summary: `PRD widening evidence blocks routing: ${summary}` };
-      }
-    }
-    const settled = new Set(
-      parsed.ok
-        ? parsed.value.findings
-          .filter((finding) => ['accepted', 'not-blocking'].includes(classifications.get(finding.criterion)?.kind ?? 'unresolved'))
-          .map((finding) => finding.criterion)
-        : [],
-    );
-    blocking.push(...findUnalignedFrRowsWithClass(content, settled, activePlan));
   }
+  const settled = new Set(findings
+    .filter((finding) => finding.grade === 'OVER_SCOPE' && ['accepted', 'not-blocking'].includes(classifications.get(finding.criterion)?.kind ?? 'unresolved'))
+    .map((finding) => finding.criterion));
+  const blocking = findings
+    .filter((finding) => finding.grade !== 'PASS' && !settled.has(finding.criterion))
+    .flatMap((finding) => (finding.prdIds.length > 0 ? finding.prdIds : [finding.criterion]).map((fr) => ({
+      fr,
+      gapClass: finding.grade === 'FIXABLE' ? 'impl-gap' as const : finding.grade === 'PLAN_GAP' ? 'plan-gap' as const : 'intended-drift' as const,
+    })));
   if (blocking.length === 0) return { kind: 'clean', summary: 'no blocking FRs' };
 
   const summary = blocking
