@@ -123,6 +123,11 @@ function createFixtureAgentFake(
             evidence: 'test/fixtures/daemon-e2e/touched.txt was touched.',
             rationale: 'The fixture task delivers its sole declared criterion.',
             requirementAssociations: [], evidenceTaskIds: ['1'],
+          }, {
+            criterion: { storyId: '1', ordinal: 2 }, grade: 'PASS',
+            evidence: 'Task 1 records the fixture change in its trailered commit.',
+            rationale: 'The fixture retains an auditable negative-path criterion.',
+            requirementAssociations: [], evidenceTaskIds: ['1'],
           }],
           noOwnerObservations: [],
         },
@@ -284,7 +289,10 @@ describe('daemon E2E fixture', () => {
           + '**Requirements:** FR-1\n\n'
           + '### Happy Path\n\n'
           + '- Given the fixture feature is dispatched, when Task 1 runs, then the agent touches '
-          + '`test/fixtures/daemon-e2e/touched.txt`.\n',
+          + '`test/fixtures/daemon-e2e/touched.txt`.\n\n'
+          + '### Negative Paths\n\n'
+          + '- Given task evidence is inspected, when Task 1 omits its trailer, then the fixture '
+          + 'rejects the commit.\n',
       );
       await copyFile(
         fixtureTouchedPath,
