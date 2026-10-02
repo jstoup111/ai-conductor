@@ -117,8 +117,15 @@ async function probeClaude(options: ProbeReadOnlyReviewCapabilityOptions): Promi
 const PI_READ_ONLY_FLAGS = ['--tools', '--no-extensions', '--extension', '--no-approve'] as const;
 async function probePi(options: ProbeReadOnlyReviewCapabilityOptions): Promise<ReadOnlyReviewCapability> {
   let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
-  try { result = await options.runProcess(resolveProviderExecutable(PI_PROVIDER), ['--help']); }
-  catch (error) { return unavailable(options, processFailureReason(error, PI_PROVIDER)); }
+  const executable = resolveProviderExecutable(PI_PROVIDER);
+  try { result = await options.runProcess(executable, ['--help']); }
+  catch (error) {
+    // Pi has no sandbox helper: a missing binary is the provider executable itself.
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+      return unavailable(options, `${providerDescriptor(PI_PROVIDER).displayName} executable ${executable} is unavailable`);
+    }
+    return unavailable(options, processFailureReason(error, PI_PROVIDER));
+  }
   if (result.exitCode !== 0) return unavailable(options, exitedReason(PI_PROVIDER, result.exitCode, result.stderr));
   const missing = PI_READ_ONLY_FLAGS.find((flag) => !result.stdout.includes(flag));
   if (missing) return unavailable(options, `${providerDescriptor(PI_PROVIDER).displayName} help does not list ${missing}`);
