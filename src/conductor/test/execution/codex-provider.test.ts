@@ -284,6 +284,7 @@ describe('CodexProvider', () => {
 
   it('fails before launch when a missing guard cannot be rewritten in its read-only directory', async () => {
     const guardPath = '/prepared/.pipeline/bin/git';
+    const priorPath = process.env.PATH;
     mockEnsureGitGuardForDispatch.mockRejectedValue(new Error(`git guard repair failed: ${guardPath}`));
 
     const result = await provider.invoke({ ...baseOptions, cwd: '/prepared' });
@@ -291,6 +292,7 @@ describe('CodexProvider', () => {
     expect(mockEnsureGitGuardForDispatch).toHaveBeenCalledWith('/prepared');
     expect(result).toEqual({ success: false, output: `git guard repair failed: ${guardPath}`, exitCode: 1 });
     expect(mockExeca).not.toHaveBeenCalled();
+    expect(process.env.PATH).toBe(priorPath);
   });
 
   it.each([
