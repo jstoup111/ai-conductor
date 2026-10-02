@@ -8,6 +8,8 @@ import { deriveProviderExitFacts, formatProviderExitFacts } from './provider-dia
 import { validateSpawnPermit } from './spawn-permit.js';
 import { providerDescriptor } from './provider-catalog.js';
 import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
+import { withDaemonSessionMarker } from './daemon-session.js';
+import { scrubTmuxEnvironment } from './child-environment.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -330,6 +332,12 @@ export class PiProvider implements LLMProvider {
       stdout: 'pipe',
       stderr: 'pipe',
       cwd: options.cwd,
+      // Apply the marker after the self-host overlay, then explicitly mask
+      // tmux's implicit target variables so execa cannot inherit the daemon
+      // pane from its parent environment.
+      env: scrubTmuxEnvironment(withDaemonSessionMarker({
+        ...(options.selfHost?.env ?? {}),
+      })),
     });
     let aborted = false;
     const abort = () => {
