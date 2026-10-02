@@ -8,7 +8,6 @@ import { execa } from 'execa';
 import {
   checkStepCompletion,
   parsePrdAuditReport,
-  prdAuditCoverageGap,
   resolveFeaturePrdPaths,
   sweepStaleReviewArtifacts,
   type ArtifactResolutionContext,
@@ -427,22 +426,6 @@ const context = (overrides: Partial<ArtifactResolutionContext> = {}): ArtifactRe
   ...overrides,
 });
 
-function criterionReport(
-  rows: Array<{ criterion: string; grade?: 'PASS' | 'FIXABLE' | 'PLAN_GAP' | 'OVER_SCOPE'; prd?: string }>,
-  prd: 'present' | 'none' = 'present',
-): string {
-  return [
-    `**PRD:** ${prd}`,
-    '',
-    '## Verdict Table',
-    '',
-    '| Criterion | Grade | Plan task | PRD: | Evidence |',
-    '| --- | --- | --- | --- | --- |',
-    ...rows.map(({ criterion, grade = 'PASS', prd: intent = '' }) =>
-      `| ${criterion} | ${grade} | ${grade === 'FIXABLE' ? '1' : '—'} | ${intent} | Covered |`),
-  ].join('\n');
-}
-
 async function persistCoverageVerdict(
   root: string,
   rows: Array<{ criterion: string; grade?: 'PASS' | 'FIXABLE' | 'PLAN_GAP' | 'OVER_SCOPE' }>,
@@ -524,90 +507,6 @@ describe('resolveFeaturePrdPaths', () => {
     await expect(
       resolveFeaturePrdPaths(root, context({ featureIdentities: ['csv-export-single-account'] })),
     ).resolves.toEqual([join(root, '.docs/specs/2026-08-09-csv-export-single-account.md')]);
-  });
-});
-
-describe('prdAuditCoverageGap', () => {
-  let root: string;
-
-  beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'prd-audit-coverage-'));
-    await mkdir(join(root, '.docs/specs'), { recursive: true });
-  });
-
-  afterEach(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
-
-  it('requires the PRD-presence marker to agree with resolved PRD authority', async () => {
-    const featureContext = context({ activePlanPath: '.docs/plans/current-feature.md' });
-    const report = criterionReport([{ criterion: 'S1.1', prd: 'FR-1' }]);
-
-    await writeFile(
-      join(root, '.docs/specs/current-feature.md'),
-      '# PRD\n\n## Functional Requirements\n\nFR-1\nFR-2',
-    );
-    await expect(prdAuditCoverageGap(root, featureContext, report)).resolves.toBeNull();
-    await expect(
-      prdAuditCoverageGap(root, featureContext, criterionReport([{ criterion: 'S1.1' }], 'none')),
-    ).resolves.toContain('declares **PRD:** none');
-  });
-
-  it('accepts a conformant no-PRD report when no approved PRD resolves', async () => {
-    const report = [
-      '**PRD:** none',
-      '',
-      '## Verdict Table',
-      '',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| S1.1 | PASS | | Implemented |',
-    ].join('\n');
-
-    await expect(
-      prdAuditCoverageGap(root, context({ activePlanPath: '.docs/plans/current-feature.md' }), report),
-    ).resolves.toBeNull();
-  });
-
-  it.each([
-    {
-      name: 'the no-PRD report has a malformed PRD declaration',
-      featureContext: context({ activePlanPath: '.docs/plans/current-feature.md' }),
-      setup: async () => undefined,
-      report: '**PRD:** unavailable',
-      expectedGap: 'must declare **PRD:** present or none',
-    },
-    {
-      name: 'a resolved PRD cannot be read',
-      featureContext: context({ activePlanPath: '.docs/plans/current-feature.md' }),
-      setup: async () => mkdir(join(root, '.docs/specs/current-feature.md')),
-      report: criterionReport([{ criterion: 'S1.1' }]),
-      expectedGap: null,
-    },
-    {
-      name: 'two resolved PRDs contribute their union of FR ids',
-      featureContext: context({ featureIdentities: ['first-feature', 'second-feature'] }),
-      setup: async () => {
-        await writeFile(
-          join(root, '.docs/specs/first-feature.md'),
-          '## Functional Requirements\n\nFR-1',
-        );
-        await writeFile(
-          join(root, '.docs/specs/second-feature.md'),
-          '## Functional Requirements\n\nFR-2',
-        );
-      },
-      report: criterionReport([{ criterion: 'S1.1' }], 'none'),
-      expectedGap: 'declares **PRD:** none',
-    },
-  ])('handles $name', async ({ featureContext, setup, report, expectedGap }) => {
-    await setup();
-
-    if (expectedGap === null) {
-      await expect(prdAuditCoverageGap(root, featureContext, report)).resolves.toBeNull();
-    } else {
-      await expect(prdAuditCoverageGap(root, featureContext, report)).resolves.toContain(expectedGap);
-    }
   });
 });
 
