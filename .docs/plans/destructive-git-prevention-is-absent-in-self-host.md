@@ -672,3 +672,27 @@ Twenty-three tasks deliver an engine-generated `git` argv guard, provisioned fai
 **Done when:**
 - adr-2026-09-23-engine-git-guard-on-agent-path decision 10 is satisfied by this task.
 - Re-run as-built and confirm task rem-as-built-rem-as-built-rem-adr-d10-2 is complete.
+
+### Task rem-as-built-rem-as-built-adr-d3-1: src/conductor/src/engine/git-guard.ts:68-79 — replace the `access(pipeline(cwd))` early return in ensureGitGuardForDispatch with an existence check for `join(cwd, '.git')` only, so the worktree-scoped core.hooksPath read always runs for a git cwd; when core.hooksPath names this worktree's .pipeline/git-hooks, recreate .pipeline/bin/git (mode 0755) and the .pipeline/git-guard sidecars and return .pipeline/bin even if .pipeline was wholly deleted; keep returning null for a cwd with no .git and for exit-code-1 (unset) config. Add failing-first cases to src/conductor/test/engine/git-guard.test.ts (prepared scratch worktree, `rm -rf .pipeline`, guard path returned and script restored) and to src/conductor/test/execution/claude-provider.test.ts, codex-provider.test.ts and pi-provider.test.ts (recorded spawn PATH begins with the worktree .pipeline/bin after .pipeline deletion); keep Task 19's missing-hooks-directory tests unchanged (Task 19)
+**Gate:** as-built
+**Rationale:** git-guard.ts:73 returns null when .pipeline is absent before reading the worktree-scoped core.hooksPath, so a configured prepared worktree with .pipeline deleted launches unguarded, contrary to ADR D3 and Task 19 Step 3 ('the only early return that skips the git config read is a cwd with no .git entry'); Task 19's Done-when covers only a missing .pipeline/git-hooks, so a file-scoped build task is emitted. The existing adapter-only no-engine-state behaviour (cwd with no .git, or a .git cwd whose core.hooksPath is unset) must still return null, preserving Task 7/19 coverage.
+**Governing clause:** adr-2026-09-23-engine-git-guard-on-agent-path decision 3
+**Done when:**
+- adr-2026-09-23-engine-git-guard-on-agent-path decision 3 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-as-built-adr-d3-1 is complete.
+
+### Task rem-as-built-rem-as-built-adr-d6-punct-1: src/conductor/src/engine/self-host/environment-claim-audit.ts:167-171 — in isGuardRefusedForcePushClaim strip leading/trailing sentence punctuation and wrapping quotes/backticks ([.,;:!?)\]('"`]) from each push-tail token before matching --force, -f or a +refspec, without letting --force-with-lease or --force-if-includes match; add failing-first cases to src/conductor/test/engine/environment-claim-audit.test.ts for `git push --force.`, `git push -f,`, `` `git push --force` `` and `git push origin +HEAD:main.` (not refuted when gitGuardInstalled is true) and `git push --force-with-lease.` (still refuted); keep Task 13's existing plain-push, lease and gh pr cases unchanged (Task 13)
+**Gate:** as-built
+**Rationale:** isGuardRefusedForcePushClaim (environment-claim-audit.ts:167-171) splits the push tail on whitespace only, so `git push --force.` yields token `--force.` and the truthful guard-refused claim is refuted, contrary to ADR D6 and Task 13; sibling forms with the same shape (`-f,`, `--force)`, backtick- or quote-wrapped `--force`, and `+refspec.`) are swept into the same task. The task must keep Task 13's plain-push and --force-with-lease refutation tests, and the new exemption remains conditional on Task 22's gitGuardInstalled fact.
+**Governing clause:** adr-2026-09-23-engine-git-guard-on-agent-path decision 6
+**Done when:**
+- adr-2026-09-23-engine-git-guard-on-agent-path decision 6 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-as-built-adr-d6-punct-1 is complete.
+
+### Task rem-as-built-rem-as-built-adr-d8-1: hooks/claude/block-destructive-git.sh:71-73 — replace the fixed-width `(?<!<<)(?<!<< )` lookbehinds in the opener-line quote mask with a check that skips masking a quoted token preceded by `<<` or `<<-` plus any run of spaces/tabs (e.g. find heredoc-opener spans first with the :25 regex and exclude them from the mask), so the delimiter is detected regardless of spacing; add failing-first cases to src/conductor/test/engine/destructive-git-hook.test.ts for `cat << 'EOF'`, `cat <<\t"EOF"` and `cat <<- 'EOF'` bodies containing `git reset --hard` (exit 0) and the same opener followed by an unquoted `git reset --hard` after the delimiter (exit 2); keep Task 14's existing heredoc, quoted-literal and regression cases unchanged (Task 14)
+**Gate:** as-built
+**Rationale:** hooks/claude/block-destructive-git.sh:73 masks quoted literals except immediately after `<<` or `<< ` (single space), so a valid opener `cat <<  'EOF'` (two spaces, a tab, or `<<- 'EOF'` spaced) is masked before the delimiter regex at :25 runs and its body is scanned and falsely refused, contrary to ADR D8 and Task 14; the fix makes the mask exemption spacing-independent and must keep Task 14's post-heredoc refusal and regression tests (git clean -f, branch -D unmerged, checkout -- ., echo '<<EOF' literal) unchanged.
+**Governing clause:** adr-2026-09-23-engine-git-guard-on-agent-path decision 8
+**Done when:**
+- adr-2026-09-23-engine-git-guard-on-agent-path decision 8 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-as-built-adr-d8-1 is complete.
