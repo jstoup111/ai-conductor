@@ -293,27 +293,28 @@ async function scopedChanges(projectRoot: string): Promise<Extract<PrdAuditProje
 
 type WideningHistoryResult =
   | { readonly kind: 'available'; readonly history: PrdAuditProjection['history'] }
-  | { readonly kind: 'invalid' }
-  | { readonly kind: 'foreign' };
+  | { readonly kind: 'fault'; readonly detail: string };
 
 async function wideningHistory(projectRoot: string, activeFeature: string): Promise<WideningHistoryResult> {
   const path = join(projectRoot, '.pipeline', 'accepted-widenings.json');
+  const source = '.pipeline/accepted-widenings.json';
   let raw: { feature?: { repository?: unknown; feature?: unknown } };
   try {
     raw = JSON.parse(await readFile(path, 'utf-8')) as typeof raw;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'available', history: { kind: 'absent' } };
-    return { kind: 'invalid' };
+    return { kind: 'fault', detail: `widening history at ${source} is corrupt` };
   }
-  if (typeof raw.feature?.repository !== 'string') return { kind: 'invalid' };
+  if (typeof raw.feature?.repository !== 'string') return { kind: 'fault', detail: `widening history at ${source} is corrupt` };
   const read = await new AcceptedWideningDecisionStore(projectRoot, {
     version: 1,
     repository: raw.feature.repository,
     feature: activeFeature,
   }).read();
   if (read.kind === 'valid') return { kind: 'available', history: { decisions: read.state.decisions } };
-  if (read.kind === 'absent') return { kind: 'available', history: { kind: 'absent' } };
-  return read.kind === 'foreign-feature' ? { kind: 'foreign' } : { kind: 'invalid' };
+  if (read.kind === 'foreign-feature') return { kind: 'fault', detail: `widening history at ${source} is foreign to the active feature` };
+  if (read.kind === 'unsupported') return { kind: 'fault', detail: `widening history at ${source} has an unsupported version` };
+  return { kind: 'fault', detail: `widening history at ${source} is corrupt` };
 }
 
 /** Build the engine-owned source projection used by the managed PRD audit. */
@@ -378,8 +379,7 @@ export async function buildPrdAuditProjection(
 
   const [changes, history] = await Promise.all([scopedChanges(projectRoot), wideningHistory(projectRoot, basename(planPath, '.md'))]);
   if (!changes) return { ok: false, fault: { dimension: 'changes', detail: 'scoped git changes are unavailable' } };
-  if (history.kind === 'foreign') return { ok: false, fault: { dimension: 'history', detail: 'widening history is foreign to the active feature' } };
-  if (history.kind === 'invalid') return { ok: false, fault: { dimension: 'history', detail: 'widening history is invalid' } };
+  if (history.kind === 'fault') return { ok: false, fault: { dimension: 'history', detail: history.detail } };
 
   const projection: PrdAuditProjection = {
     version: PRD_AUDIT_PROJECTION_VERSION,
