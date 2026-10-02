@@ -32,6 +32,18 @@ describe('tmpdir redirect propagation into forked workers', () => {
     expect(resolve(tmpdir())).toBe(resolve(runRoot as string));
   });
 
+  it('keeps every conventional temporary-directory alias at the run root', () => {
+    expect({
+      TMPDIR: resolve(process.env.TMPDIR as string),
+      TMP: resolve(process.env.TMP as string),
+      TEMP: resolve(process.env.TEMP as string),
+    }).toEqual({
+      TMPDIR: resolve(runRoot as string),
+      TMP: resolve(runRoot as string),
+      TEMP: resolve(runRoot as string),
+    });
+  });
+
   it('places a real mkdtemp call inside the run root', async () => {
     // Same shape as the canonical leaking call site (governor.test.ts) —
     // proving containment against the actual pattern, not just the env var.
