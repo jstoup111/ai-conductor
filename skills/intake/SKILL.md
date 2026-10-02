@@ -300,9 +300,10 @@ For Codex, it is the directory of the listed `SKILL.md` path.
   suggestion. Review each one — does the new issue really depend on it? — then
   re-run the same command with `--depends-on <issue>` to accept it or
   `--decline-overlap <issue>` to decline it, deciding every listed suggestion.
-  Non-interactive agents must make this decision themselves from the shared
-  paths; never loop the same command, and never drop the overlap check to get a
-  filing through. `advisory` and `skipped` lines are informational only.
+  Non-interactive agents must make the decision themselves for every listed
+  suggestion, based on the shared paths; never loop the same command, and never
+  drop the overlap check to get a filing through. `advisory` and `skipped` lines
+  are informational only.
 - **`--repo owner/repo`** (optional): target a repo other than the current one.
 - The script assigns the filer via the normal `gh issue create` invocation it
   wraps; a label-apply or `--depends-on` link failure after successful issue
