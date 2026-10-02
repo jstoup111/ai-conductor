@@ -78,7 +78,6 @@ import {
 } from './build-review-effective.js';
 import {
   assessAcceptedStoryReadability,
-  extractStoryCriterionIds,
   listItems,
   sectionBody,
   splitStoryBlocks,
