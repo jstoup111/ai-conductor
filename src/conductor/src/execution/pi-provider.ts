@@ -186,7 +186,7 @@ function abortedInvocationResult(): InvokeResult {
 
 async function writePiNativeSchema(options: InvokeOptions): Promise<string> {
   const homeDir = options.nativeSchemaScratchHome ?? options.selfHost?.env.PI_HOME;
-  if (!homeDir) throw new Error('requested native schema requires an owned Pi scratch home');
+  if (!homeDir) throw new Error(`requested native schema requires an owned ${piDisplayName()} scratch home`);
   return writeScratchSchema({
     worktreeRoot: (options.nativeSchemaScratchHome === undefined ? undefined : options.nativeSchemaScratchRoot) ?? options.cwd ?? process.cwd(),
     homeDir,
@@ -349,7 +349,7 @@ export class PiProvider implements LLMProvider {
         args.push('-e', extensionPath);
       }
     } catch (error) {
-      return { success: false, output: `Pi native schema setup failed: ${error instanceof Error ? error.message : String(error)}`, exitCode: 1 };
+      return { success: false, output: `${piDisplayName()} native schema setup failed: ${error instanceof Error ? error.message : String(error)}`, exitCode: 1 };
     }
     if (options.readOnlyReview) {
       args.push('--no-extensions', '--tools', `read,grep,find,ls,git_read${schemaFile ? ',submit_result' : ''}`, '--conduct-git-read');
@@ -421,7 +421,7 @@ export class PiProvider implements LLMProvider {
       };
     }
     if (exitCode === 0 && options.nativeSchema !== undefined && parsed.finalStructuredResult === undefined) {
-      return { success: false, output: 'Pi provider parse failure: missing structured result.', exitCode: 1 };
+      return { success: false, output: `${piDisplayName()} provider parse failure: missing structured result.`, exitCode: 1 };
     }
 
     if (exitCode === 0 && parsed.terminalAssistantStopReason === 'error') {
