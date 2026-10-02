@@ -638,6 +638,7 @@ describe('prd_audit kickback', () => {
       '| NC.1 | OVER_SCOPE | within | Unplanned internal detail |',
       '| NC.2 | OVER_SCOPE | outside-harmless | Harmless unplanned detail |',
       '| NC.3 | OVER_SCOPE | outside-visible | Visible unplanned behavior |',
+      '| NC-4 | OVER_SCOPE | outside-visible | Validator-emitted visible behavior |',
     ].join('\n'));
 
     expect([...relations]).toEqual([
@@ -645,10 +646,12 @@ describe('prd_audit kickback', () => {
       ['NC.1', 'within'],
       ['NC.2', 'outside-harmless'],
       ['NC.3', 'outside-visible'],
+      ['NC-4', 'outside-visible'],
     ]);
     expect(classifyOverScopeCriterion('NC.1', 'Unplanned internal detail', relations, [])).toBe('not-blocking');
     expect(classifyOverScopeCriterion('NC.2', 'Harmless unplanned detail', relations, [])).toBe('not-blocking');
     expect(classifyOverScopeCriterion('NC.3', 'Visible unplanned behavior', relations, [])).toBe('blocking-undecided');
+    expect(classifyOverScopeCriterion('NC-4', 'Validator-emitted visible behavior', relations, [])).toBe('blocking-undecided');
   });
 
   it('binds NC decisions to their normalized finding summary while criterion decisions remain criterion-only', () => {

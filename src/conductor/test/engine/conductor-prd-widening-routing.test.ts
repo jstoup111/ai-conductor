@@ -1,4 +1,4 @@
-// Covers: task:21
+// Covers: task:21, task:25
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -194,6 +194,69 @@ describe('v2 PRD widening routing', () => {
       noOwnerObservations: [{ grade: 'OVER_SCOPE', evidence: 'A distinct visible widening.', rationale: 'The finding has no owning criterion.', intentRelation: 'outside-visible' }],
     }, { criteria: [], requirements: [] });
     expect(result).toMatchObject({ ok: true, judgment: { noOwnerObservations: [{ presentationOrdinal: 'NC-1' }] } });
+  });
+
+  it('keeps a validator-emitted later NC-1 distinct from a decided legacy NC.1 case without BUILD work', async () => {
+    const feature = { version: 'v1' as const, repository: '/fixture/repository', feature: 'prd-widening-routing' };
+    const caseStore = new RemediationCaseStore(projectRoot, feature);
+    const before = await caseStore.read();
+    if (!before.ok || before.state.version !== 'v2') throw new Error('expected original widening case');
+    const originalCaseId = before.state.prdWideningCases[0]!.id;
+    const state = { session_started_at: Date.now(), feature_desc: feature.feature } as ConductState;
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => step === 'remediate' ? {
+        success: true,
+        finalStructuredResult: {
+          version: 'v1',
+          results: [{
+            sourceId: sourceId('A semantically different visible behavior.', 'NC-1'),
+            kind: 'different',
+            reason: 'The later observation describes an independent behavior.',
+          }],
+        },
+      } : { success: true }),
+    };
+    const conductor = new Conductor({ projectRoot, stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter() });
+    const entry = conductor as unknown as {
+      preparePrdWideningBeforeAudit(): Promise<string | undefined>;
+      routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<ReturnType<typeof routePrdAuditOverScopeV2>>;
+    };
+
+    await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
+    const validation = validatePrdAuditJudgment({
+      version: 'v1', criterionJudgments: [],
+      noOwnerObservations: [{
+        grade: 'OVER_SCOPE', evidence: 'A semantically different visible behavior.',
+        rationale: 'The later observation has no owning criterion.', intentRelation: 'outside-visible',
+      }],
+    }, { criteria: [], requirements: [] });
+    if (!validation.ok) throw new Error(validation.diagnostics.join('; '));
+    expect(validation.judgment.noOwnerObservations[0]!.presentationOrdinal).toBe('NC-1');
+    await persistPrdAuditVerdict(projectRoot, {
+      complete: true, judgment: validation.judgment, diagnostics: [], recordedDispositions: [],
+    }, { attemptId: 'validator-emitted-nc-1', codeStamp: null });
+
+    const route = await entry.routeCurrentPrdAuditOverScope(feature.feature, state);
+    expect(route).toMatchObject({
+      kind: 'halt',
+      findings: [expect.objectContaining({ criterion: 'NC-1', accepted: false })],
+    });
+    expect(runner.run).toHaveBeenCalledTimes(1);
+    expect(runner.run).toHaveBeenCalledWith('remediate', state, expect.any(Object));
+    await expect(new AcceptedWideningDecisionStore(projectRoot, { ...feature, version: 1 }).read()).resolves.toMatchObject({
+      kind: 'valid', state: { decisions: [expect.objectContaining({ originalCaseId, authority: 'accept' })] },
+    });
+    await expect(caseStore.read()).resolves.toMatchObject({
+      state: {
+        prdWideningCases: expect.arrayContaining([
+          expect.objectContaining({ id: originalCaseId }),
+          expect.objectContaining({
+            currentSources: [expect.objectContaining({ sourceId: sourceId('A semantically different visible behavior.', 'NC-1') })],
+            relationships: [expect.objectContaining({ kind: 'different' })],
+          }),
+        ]),
+      },
+    });
   });
 
   it.each(['same-case', 'different'] as const)('captures the rendered %s offer after reconciliation', async (kind) => {
