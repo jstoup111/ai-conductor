@@ -1,18 +1,50 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:4
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import * as prdAuditProjection from '../../src/engine/prd-audit-projection.js';
 import {
   buildPrdAuditProjection,
   PRD_AUDIT_PROJECTION_VERSION,
+  type PrdAuditProjectionLimits,
 } from '../../src/engine/prd-audit-projection.js';
 
 const execFileAsync = promisify(execFile);
 const directories: string[] = [];
+
+async function largestCorpusBytes(directory: string): Promise<number> {
+  const names = await readdir(directory, { recursive: true });
+  const sizes = await Promise.all(names
+    .filter((name) => name.endsWith('.md'))
+    .map(async (name) => Buffer.byteLength(await readFile(join(directory, name), 'utf-8'))));
+  return Math.max(...sizes);
+}
+
+async function largestPlanIntentBytes(directory: string): Promise<number> {
+  const names = await readdir(directory, { recursive: true });
+  const intents = await Promise.all(names
+    .filter((name) => name.endsWith('.md'))
+    .map(async (name) => {
+      const plan = await readFile(join(directory, name), 'utf-8');
+      const heading = /^##\s+Technical Approach\s*$/im.exec(plan);
+      if (heading?.index === undefined) return 0;
+      const section = plan.slice(heading.index + heading[0].length).split(/^##\s+/m, 1)[0] ?? '';
+      const intent = section.split('\n').map((line) => line.trim()).find(Boolean) ?? '';
+      return Buffer.byteLength(intent, 'utf-8');
+    }));
+  return Math.max(...intents);
+}
+
+function roundUpPowerOfTwo(bytes: number): number {
+  let rounded = 1;
+  while (rounded < bytes) rounded *= 2;
+  return rounded;
+}
 
 async function fixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'prd-audit-projection-'));
@@ -268,6 +300,76 @@ describe('PRD-audit feature projection', () => {
       },
       },
     });
+  });
+
+  it('refuses every over-limit structured corpus dimension and the total envelope without a shortened projection', async () => {
+    const root = await fixture();
+    const cases: readonly { readonly limits: Partial<PrdAuditProjectionLimits>; readonly dimension: string }[] = [
+      { limits: { planIntentBytes: 1 }, dimension: 'plan-intent' },
+      { limits: { planTasksBytes: 1 }, dimension: 'plan-tasks' },
+      { limits: { criteriaBytes: 1 }, dimension: 'criteria' },
+      { limits: { prdIntentBytes: 1 }, dimension: 'prd-intent' },
+      { limits: { coherenceBytes: 1 }, dimension: 'coherence' },
+      { limits: { historyBytes: 1 }, dimension: 'history' },
+      { limits: { totalBytes: 1 }, dimension: 'total' },
+    ];
+
+    for (const { limits, dimension } of cases) {
+      const result = await buildPrdAuditProjection(root, undefined, limits);
+
+      expect(result).toMatchObject({
+        ok: false,
+        fault: { dimension, actual: expect.any(Number), limit: 1 },
+      });
+      if (result.ok) throw new Error('expected an over-limit projection fault');
+      const fault = result.fault as { readonly actual: number; readonly limit: number };
+      expect(fault.actual).toBeGreaterThan(fault.limit);
+      expect(result).not.toHaveProperty('projection');
+    }
+  });
+
+  it('ships finite corpus-based limits that admit every normal input and its total envelope', async () => {
+    const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+    const limits = prdAuditProjection.PRD_AUDIT_PROJECTION_LIMITS;
+    const maxima = prdAuditProjection.PRD_AUDIT_PROJECTION_CORPUS_MAXIMA_BYTES;
+    const historyFloor = prdAuditProjection.PRD_AUDIT_PROJECTION_MIN_HISTORY_BYTES;
+    const overhead = prdAuditProjection.PRD_AUDIT_PROJECTION_ENVELOPE_OVERHEAD_BYTES;
+    const [largestPlanIntent, largestPlan, largestStories, largestPrd, largestCoherence] = await Promise.all([
+      largestPlanIntentBytes(join(repositoryRoot, '.docs', 'plans')),
+      largestCorpusBytes(join(repositoryRoot, '.docs', 'plans')),
+      largestCorpusBytes(join(repositoryRoot, '.docs', 'stories')),
+      largestCorpusBytes(join(repositoryRoot, '.docs', 'specs')),
+      largestCorpusBytes(join(repositoryRoot, '.docs', 'coherence')),
+    ]);
+
+    expect(limits).toEqual({
+      planIntentBytes: expect.any(Number),
+      planTasksBytes: expect.any(Number),
+      criteriaBytes: expect.any(Number),
+      prdIntentBytes: expect.any(Number),
+      coherenceBytes: expect.any(Number),
+      historyBytes: expect.any(Number),
+      totalBytes: expect.any(Number),
+    });
+    expect(maxima).toEqual({
+      planIntentBytes: largestPlanIntent,
+      planTasksBytes: largestPlan,
+      criteriaBytes: largestStories,
+      prdIntentBytes: largestPrd,
+      coherenceBytes: largestCoherence,
+      historyBytes: 0,
+    });
+    expect(Object.values({ ...limits, overhead, historyFloor }).every((limit) => Number.isFinite(limit) && limit > 0)).toBe(true);
+    expect(limits.planIntentBytes).toBe(roundUpPowerOfTwo(Math.max(256 * 1024, maxima.planIntentBytes)));
+    expect(limits.planTasksBytes).toBe(roundUpPowerOfTwo(Math.max(256 * 1024, maxima.planTasksBytes)));
+    expect(limits.criteriaBytes).toBe(roundUpPowerOfTwo(Math.max(256 * 1024, maxima.criteriaBytes)));
+    expect(limits.prdIntentBytes).toBe(roundUpPowerOfTwo(maxima.prdIntentBytes));
+    expect(limits.coherenceBytes).toBe(roundUpPowerOfTwo(maxima.coherenceBytes));
+    expect(limits.historyBytes).toBe(roundUpPowerOfTwo(Math.max(historyFloor, maxima.historyBytes)));
+    expect(limits.totalBytes).toBe(roundUpPowerOfTwo(
+      limits.planIntentBytes + limits.planTasksBytes + limits.criteriaBytes + limits.prdIntentBytes +
+      limits.coherenceBytes + limits.historyBytes + (512 * 1024) + overhead,
+    ));
   });
 
   it('rejects a valid foreign widening history without rewriting its recovery source', async () => {
