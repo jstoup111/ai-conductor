@@ -815,7 +815,7 @@ describe('prd_audit kickback', () => {
       kind: 'present',
       value: {
         recordedDispositions: [expect.objectContaining({
-          criterionId: 'S3.1', decision: 'refuse', rationale: 'Rework it inside scope.', authority: 'operator',
+          criterionId: 'S3.1', decision: 'refuse', rationale: 'Rework it inside scope.', authority: 'operator@example.test',
         })],
       },
     });
