@@ -21,6 +21,7 @@ import {
   type StepRunResult,
 } from '../../src/engine/conductor.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -39,19 +40,6 @@ const MANUAL_TEST_PASS = [
   '',
 ].join('\n');
 
-const PRD_AUDIT_PASS = [
-  '# PRD Audit',
-  '',
-  '**PRD:** none',
-  '',
-  '## Verdict Table',
-  '',
-  '| Criterion | Grade | Plan task | Evidence |',
-  '|---|---|---|---|',
-  '| S3.1 | PASS | 1 | src/feature.ts:1 |',
-  '',
-].join('\n');
-
 const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'test fixture' },
   planGap: { enabled: true, reason: 'test fixture' },
@@ -59,18 +47,34 @@ const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   diagramDrift: { enabled: false, reason: 'test fixture' },
 };
 
-const PRD_AUDIT_FIXABLE = [
-  '# PRD Audit',
-  '',
-  '**PRD:** none',
-  '',
-  '## Verdict Table',
-  '',
-  '| Criterion | Grade | Plan task | Evidence |',
-  '|---|---|---|---|',
-  '| S3.1 | FIXABLE | 1 | src/feature.ts:1 — the criterion is not satisfied |',
-  '',
-].join('\n');
+async function writePrdAuditVerdict(
+  root: string,
+  runId: string | undefined,
+  grade: 'PASS' | 'FIXABLE',
+): Promise<void> {
+  await persistPrdAuditVerdict(root, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: '3', ordinal: 1 },
+        criterionId: 'S3.1',
+        grade,
+        evidence: 'src/feature.ts:1',
+        rationale: 'Fixture supplies typed audit evidence.',
+        requirementAssociations: [],
+        evidenceTaskIds: ['1'],
+        ...(grade === 'FIXABLE' ? { ownerTaskId: '1' } : {}),
+      }],
+      noOwnerObservations: [],
+    },
+    diagnostics: [],
+    recordedDispositions: [],
+  }, {
+    attemptId: runId ?? 'test-run',
+    codeStamp: null,
+  });
+}
 
 async function writeRemediableAsBuiltVerdict(root: string, runId: string | undefined): Promise<void> {
   await persistAsBuiltVerdict(root, {
@@ -208,7 +212,7 @@ describe('acceptance: an all-REMEDIABLE as-built verdict returns the daemon to B
         if (step === 'manual_test') {
           await writeFile(join(root, '.pipeline', 'manual-test-results.md'), MANUAL_TEST_PASS);
         } else if (step === 'prd_audit') {
-          await writeFile(join(root, '.pipeline', 'prd-audit.md'), PRD_AUDIT_PASS);
+          await writePrdAuditVerdict(root, options?.runId, 'PASS');
         } else if (step === 'architecture_review_as_built') {
           await writeRemediableAsBuiltVerdict(root, options?.runId);
         } else if (step === 'remediate') {
@@ -300,7 +304,7 @@ describe('acceptance: a serial as-built kickback-to-build no-op is a capped term
     state.prd_audit = 'done';
     state.architecture_review_as_built = 'pending';
     await writeState(statePath, state as ConductState);
-    await writeFile(join(root, '.pipeline', 'prd-audit.md'), PRD_AUDIT_PASS);
+    await writePrdAuditVerdict(root, 'fixture-run', 'PASS');
 
     // The single-use no-op baseline this gate consumes: a prior lap already
     // routed BUILD, and neither the tree nor the resolved tasks have moved.
@@ -369,7 +373,7 @@ describe('acceptance: a mixed DESIGN as-built report appends no as-built work', 
         if (step === 'manual_test') {
           await writeFile(join(root, '.pipeline', 'manual-test-results.md'), MANUAL_TEST_PASS);
         } else if (step === 'prd_audit') {
-          await writeFile(join(root, '.pipeline', 'prd-audit.md'), PRD_AUDIT_FIXABLE);
+          await writePrdAuditVerdict(root, options?.runId, 'FIXABLE');
         } else if (step === 'architecture_review_as_built') {
           await writeMixedDesignAsBuiltVerdict(root, options?.runId);
         } else if (step === 'remediate') {
