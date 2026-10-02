@@ -7,7 +7,6 @@ import { BasicTracerProvider, type ReadableSpan, type SpanExporter } from '@open
 import { ExportResultCode } from '@opentelemetry/core';
 import { AggregationTemporality, DataPointType, InstrumentType, type PushMetricExporter, type ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import { ValueType } from '@opentelemetry/api';
-import { ProtobufMetricsSerializer } from '@opentelemetry/otlp-transformer';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { SpoolStore } from '../../../src/engine/otel/spool-store.js';
 import { buildExporters } from '../../../src/engine/otel/transport.js';
@@ -88,6 +87,89 @@ function embedded(fields: Map<number, ProtoField[]>, number: number): Uint8Array
   });
 }
 
+function requiredEmbedded(fields: Map<number, ProtoField[]>, number: number): Uint8Array {
+  const [value] = embedded(fields, number);
+  if (value === undefined) throw new Error(`OTLP field ${number} is missing`);
+  return value;
+}
+
+function strings(fields: Map<number, ProtoField[]>, number: number): string[] {
+  return embedded(fields, number).map((value) => new TextDecoder().decode(value));
+}
+
+function fixed64(value: number | Uint8Array): bigint {
+  if (!(value instanceof Uint8Array) || value.byteLength !== 8) throw new Error('expected fixed64 OTLP field');
+  return new DataView(value.buffer, value.byteOffset, value.byteLength).getBigUint64(0, true);
+}
+
+function signedFixed64(value: number | Uint8Array): number {
+  if (!(value instanceof Uint8Array) || value.byteLength !== 8) throw new Error('expected sfixed64 OTLP field');
+  return Number(new DataView(value.buffer, value.byteOffset, value.byteLength).getBigInt64(0, true));
+}
+
+function double(value: number | Uint8Array): number {
+  if (!(value instanceof Uint8Array) || value.byteLength !== 8) throw new Error('expected double OTLP field');
+  return new DataView(value.buffer, value.byteOffset, value.byteLength).getFloat64(0, true);
+}
+
+function attributeValues(fields: Map<number, ProtoField[]>, field = 1): Record<string, string> {
+  return Object.fromEntries(embedded(fields, field).map((keyValue) => {
+    const decoded = decodeFields(keyValue);
+    const value = decodeFields(requiredEmbedded(decoded, 2));
+    return [new TextDecoder().decode(requiredEmbedded(decoded, 1)), new TextDecoder().decode(requiredEmbedded(value, 1))];
+  }));
+}
+
+/** An independent decoder for the OTLP ExportMetricsServiceRequest spool body. */
+function decodeExportMetricsServiceRequest(body: Uint8Array): {
+  resourceAttributes: Record<string, string>;
+  scopeName: string;
+  metrics: Array<Record<string, unknown>>;
+} {
+  const request = decodeFields(body);
+  const resourceMetrics = decodeFields(requiredEmbedded(request, 1));
+  const resource = decodeFields(requiredEmbedded(resourceMetrics, 1));
+  const scopeMetrics = decodeFields(requiredEmbedded(resourceMetrics, 2));
+  const scope = decodeFields(requiredEmbedded(scopeMetrics, 1));
+  const metrics = embedded(scopeMetrics, 2).map((metricBody) => {
+    const metric = decodeFields(metricBody);
+    const name = new TextDecoder().decode(requiredEmbedded(metric, 1));
+    const sum = embedded(metric, 7)[0];
+    if (sum !== undefined) {
+      const points = embedded(decodeFields(sum), 1).map((point) => {
+        const fields = decodeFields(point);
+        return { value: signedFixed64(fields.get(6)?.[0].value ?? 0), attributes: attributeValues(fields, 7) };
+      });
+      return { name, sum: points };
+    }
+    const histogram = requiredEmbedded(metric, 9);
+    const [point] = embedded(decodeFields(histogram), 1).map(decodeFields);
+    if (point === undefined) throw new Error('histogram point is missing');
+    const packedCounts = requiredEmbedded(point, 6);
+    const packedBounds = requiredEmbedded(point, 7);
+    const counts = Array.from({ length: packedCounts.byteLength / 8 }, (_, index) =>
+      Number(fixed64(packedCounts.slice(index * 8, index * 8 + 8))),
+    );
+    const boundaries = Array.from({ length: packedBounds.byteLength / 8 }, (_, index) =>
+      double(packedBounds.slice(index * 8, index * 8 + 8)),
+    );
+    return {
+      name,
+      histogram: {
+        count: Number(fixed64(point.get(4)?.[0].value ?? 0)),
+        sum: double(point.get(5)?.[0].value ?? 0),
+        counts,
+        boundaries,
+      },
+    };
+  });
+  return {
+    resourceAttributes: attributeValues(resource),
+    scopeName: new TextDecoder().decode(requiredEmbedded(scope, 1)),
+    metrics,
+  };
+}
+
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
   if (originalHeaderValue === undefined) delete process.env[headerEnvironment];
@@ -115,7 +197,7 @@ describe('spooling exporters', () => {
   it('publishes a decodable OTLP protobuf metrics request with counter and histogram points before SDK success', async () => {
     const store = new SpoolStore(await temporaryDirectory());
     const metrics = {
-      resource: { attributes: {}, schemaUrl: undefined } as ResourceMetrics['resource'],
+      resource: { attributes: { 'service.name': 'spool-test' }, schemaUrl: undefined } as ResourceMetrics['resource'],
       scopeMetrics: [{
         scope: { name: 'spooling-exporter-test' },
         metrics: [
@@ -143,31 +225,36 @@ describe('spooling exporters', () => {
     } satisfies ResourceMetrics;
     const exporter = new SpoolingMetricExporter(store, directMetricExporter());
 
+    let decoded: ReturnType<typeof decodeExportMetricsServiceRequest> | undefined;
     const result = await new Promise<{ code: number }>((resolve) => {
       exporter.export(metrics, async (exportResult) => {
         const [batch] = await store.list('metrics');
         expect(batch).toBeDefined();
         expect(batch.items).toBe(3);
         const spooledBody = await readFile(batch.path);
-        // This compares every encoded resource, scope, metric, and data point
-        // against the OTLP request for the ResourceMetrics passed to export().
-        expect(spooledBody).toEqual(Buffer.from(ProtobufMetricsSerializer.serializeRequest(metrics)!));
-        const request = decodeFields(spooledBody);
-        const resourceMetrics = decodeFields(embedded(request, 1)[0]);
-        const scopeMetrics = decodeFields(embedded(resourceMetrics, 2)[0]);
-        const decodedMetrics = embedded(scopeMetrics, 2).map((metric) => decodeFields(metric));
-        expect(decodedMetrics.map((metric) => new TextDecoder().decode(embedded(metric, 1)[0]))).toEqual([
-          'spooled.counter', 'spooled.histogram',
-        ]);
-        expect(embedded(decodedMetrics[0], 7)).toHaveLength(1);
-        expect(embedded(decodedMetrics[1], 9)).toHaveLength(1);
-        expect(embedded(decodeFields(embedded(decodedMetrics[0], 7)[0]), 1)).toHaveLength(2);
-        expect(embedded(decodeFields(embedded(decodedMetrics[1], 9)[0]), 1)).toHaveLength(1);
+        decoded = decodeExportMetricsServiceRequest(spooledBody);
         resolve(exportResult);
       });
     });
 
     expect(result.code).toBe(ExportResultCode.SUCCESS);
+    expect(decoded).toEqual({
+      resourceAttributes: { 'service.name': 'spool-test' },
+      scopeName: 'spooling-exporter-test',
+      metrics: [
+        {
+          name: 'spooled.counter',
+          sum: [
+            { value: 7, attributes: {} },
+            { value: 8, attributes: { replica: 'two' } },
+          ],
+        },
+        {
+          name: 'spooled.histogram',
+          histogram: { count: 2, sum: 10, counts: [1, 1], boundaries: [5] },
+        },
+      ],
+    });
   });
 
   it('delegates LOWMEMORY aggregation selectors unchanged to the direct HTTP exporter', async () => {
