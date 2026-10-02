@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-02T20:02:20.447Z
 Slug: surface-evidence-path-overlap-as-suggested-depende
 Class: plan-gap
 Halting step: prd_audit
