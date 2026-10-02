@@ -5,10 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const testRoot = join(packageRoot, 'test');
-// A 73-file batch grew a worker past its 8 GiB cap. Thirty-two fresh,
-// round-robin batches keep each worker below that ceiling while separating
+// A 36-file batch still grew a fork past its 8 GiB cap. Sixty-four fresh,
+// round-robin batches keep a fork to at most nine files while separating
 // adjacent heavy fixtures.
-const shardCount = 32;
+const shardCount = 64;
 const vitestArgs = ['run', '--reporter=dot', '--silent', '--slowTestThreshold=1800000'];
 
 async function collectTestFiles(directory) {

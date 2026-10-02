@@ -284,7 +284,7 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     // Every invocation goes through the Node 26 temp-dir wrapper
     // (`scripts/run-vitest.mjs`), so no bare `vitest run` survives.
     // The aggregate run has a dedicated launcher that partitions the concrete
-    // include set into thirty-two round-robin batches. Each starts a fresh Vitest parent,
+    // include set into sixty-four round-robin batches. Each starts a fresh Vitest parent,
     // bounding the module graph retained by its fork workers while still
     // covering the configured include set exactly once.
     // The selector branch remains a single unsharded run below.
@@ -326,7 +326,7 @@ describe('Story 7 — package-script selector forwarding (Task 17)', () => {
     const runnerArgumentsPath = join(scratchParent, 'sharded-vitest-arguments');
     const scriptRoot = join(fixturePackageRoot, 'scripts');
     const fakeVitestPath = join(fixturePackageRoot, 'node_modules', '.bin', 'vitest');
-    const testFiles = Array.from({ length: 33 }, (_, index) => `test/group-${index + 1}.test.ts`);
+    const testFiles = Array.from({ length: 65 }, (_, index) => `test/group-${index + 1}.test.ts`);
     mkdirSync(scriptRoot, { recursive: true });
     mkdirSync(dirname(fakeVitestPath), { recursive: true });
     for (const file of [...testFiles, 'test/ignored.smoke.test.ts']) {
@@ -366,7 +366,7 @@ describe('Story 7 — package-script selector forwarding (Task 17)', () => {
     }).toEqual({
       exitCode: 0,
       stdout: 'AGGREGATE_TEST_SUITE_PASS\n',
-      invocationCount: 32,
+      invocationCount: 64,
       forwarded: [...testFiles].sort(),
     });
     expect(invocations[0].filter((argument) => argument.endsWith('.test.ts'))).toEqual([

@@ -39,9 +39,9 @@ Run everything from `src/conductor` unless stated otherwise.
 node scripts/run-vitest-shards.mjs
 ```
 
-The aggregate launcher divides the ordinary suite into thirty-two fresh, round-robin
-Vitest batches. This keeps the retained module graph below the 8 GiB worker ceiling
-while running every included test exactly once.
+The aggregate launcher divides the ordinary suite into sixty-four fresh, round-robin
+Vitest batches. This keeps each fork below the 8 GiB worker ceiling while running
+every included test exactly once.
 
 `AGGREGATE_TEST_SUITE_PASS` is a human-readable shell success indicator. The pre-SHIP `test_suite`
 gate classifies the aggregate command's exit code and records its evidence; it does not inspect this
