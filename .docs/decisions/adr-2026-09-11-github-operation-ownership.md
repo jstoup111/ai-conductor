@@ -74,6 +74,8 @@ Maintain a bounded operation inventory and an executable production-boundary aud
 
 Migrate supported skill-directed writes to guarded CLI operations in both Claude and Codex workflows. A provider-specific hook alone is insufficient. Keep raw transport access private and fail closed when required operation context is absent. This is not a new general-purpose process sandbox.
 
+> **Amended 2026-10-01 by #2709:** adr-2026-10-01-daemon-session-command-contracts D7–D8 adds an operator-approved observational wrapper for ordinary PATH-resolved gh commands already issued by a managed provider session. Its single private passthrough call is explicitly identified by the invocation audit; it is not a whole-file exemption or a new authorized harness operation. Observation neither grants ownership nor retries, rewrites, or newly blocks the raw command. Harness-authored GitHub operations and skill-directed writes still use this ADR's guarded boundary, and a refused guarded operation never falls back through the observer. Absolute binaries, replaced PATH, custom HTTP/SDK clients, and separate MCP transports remain outside this bounded monitoring guarantee.
+
 
 ### D8 — Gated visibility never requires a foreign-resource write
 
