@@ -24,6 +24,7 @@ import {
   type AsBuiltVerdict,
 } from '../../src/engine/as-built-contract.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -62,6 +63,10 @@ const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   adrCompliance: { enabled: false, reason: 'test fixture' },
   diagramDrift: { enabled: false, reason: 'test fixture' },
 };
+
+async function writePrdAuditPass(root: string, attemptId = 'fixture-run'): Promise<void> {
+  await persistPrdAuditVerdict(root, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'fixture.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId, codeStamp: null });
+}
 
 async function persist(root: string, verdict: AsBuiltVerdict, runId: string | undefined): Promise<void> {
   await persistAsBuiltVerdict(root, verdict, {
@@ -175,7 +180,7 @@ async function seedSerial(root: string, statePath: string): Promise<void> {
   state.prd_audit = 'done';
   state.architecture_review_as_built = 'pending';
   await writeState(statePath, state as ConductState);
-  await writeFile(join(root, '.pipeline', 'prd-audit.md'), PRD_AUDIT_PASS);
+  await writePrdAuditPass(root);
 }
 
 function conductorFor(
@@ -242,7 +247,7 @@ describe('S4.5: a D5.2 sub-decision is cited as whole-number decision 5 and ente
         if (step === 'manual_test') {
           await writeFile(join(root, '.pipeline', 'manual-test-results.md'), MANUAL_TEST_PASS);
         } else if (step === 'prd_audit') {
-          await writeFile(join(root, '.pipeline', 'prd-audit.md'), PRD_AUDIT_PASS);
+          await writePrdAuditPass(root, options?.runId);
         } else if (step === 'architecture_review_as_built') {
           await persist(root, resolved.verdict, options?.runId);
         } else if (step === 'remediate') {
@@ -280,7 +285,7 @@ describe('S4.17: rejected-result exhaustion names the last rejected field', () =
     const { root, statePath } = await seedFixture();
     await seedSerial(root, statePath);
     const runner: StepRunner = {
-      run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+      run: vi.fn(async (step: StepName, _state, options): Promise<StepRunResult> => {
         if (step === 'architecture_review_as_built') {
           return {
             success: false,
@@ -381,7 +386,7 @@ describe('S6.11: a mechanical as-built fault in the validation group is a no-ver
         if (step === 'manual_test') {
           await writeFile(join(root, '.pipeline', 'manual-test-results.md'), MANUAL_TEST_PASS);
         } else if (step === 'prd_audit') {
-          await writeFile(join(root, '.pipeline', 'prd-audit.md'), PRD_AUDIT_PASS);
+          await writePrdAuditPass(root, options?.runId);
         } else if (step === 'architecture_review_as_built') {
           return {
             success: false,

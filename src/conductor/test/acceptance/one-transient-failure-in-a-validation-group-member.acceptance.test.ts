@@ -17,6 +17,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 const PRD_PASS = [
@@ -39,6 +40,10 @@ const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   adrCompliance: { enabled: false, reason: 'test fixture' },
   diagramDrift: { enabled: false, reason: 'test fixture' },
 };
+
+async function writePrdAuditPass(dir: string, options?: StepRunOptions): Promise<void> {
+  await persistPrdAuditVerdict(dir, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'fixture.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: null });
+}
 
 async function writeAsBuiltApproval(dir: string, options?: StepRunOptions): Promise<void> {
   await persistAsBuiltVerdict(dir, {
@@ -102,7 +107,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
             throw new Error('validator process exited before writing its verdict');
           }
           if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+            await writePrdAuditPass(dir, options);
           }
           if (step === 'architecture_review_as_built') {
             await writeAsBuiltApproval(dir, options);
@@ -208,7 +213,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
         mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1, fromStep: 'manual_test', log,
         stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') throw new Error('runner died');
-          if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+          if (step === 'prd_audit') await writePrdAuditPass(dir, options);
           if (step === 'architecture_review_as_built') await writeAsBuiltApproval(dir, options);
           return { success: true } as StepRunResult;
         }) },
@@ -327,7 +332,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
         mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1, fromStep: 'prd_audit',
         stepRunner: { run: vi.fn(async (step: StepName, _state, _options) => {
           recoveryCalls.push(step);
-          if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+          if (step === 'prd_audit') await writePrdAuditPass(dir, _options);
           return { success: true } as StepRunResult;
         }) },
       }).run();
@@ -411,7 +416,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
         verifyArtifacts: true, fromStep: 'manual_test',
         stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
-          if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+          if (step === 'prd_audit') await writePrdAuditPass(dir, options);
           if (step === 'architecture_review_as_built') await writeAsBuiltApproval(dir, options);
           return { success: true } as StepRunResult;
         }) },
@@ -440,7 +445,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       await new Conductor({
         stateFilePath: statePath, events, projectRoot: dir, mode: 'auto', daemon: true,
         verifyArtifacts: true, maxRetries: 2, fromStep: 'manual_test',
-        stepRunner: { run: vi.fn(async (step: StepName) => {
+        stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           calls.push(step);
           if (step === 'manual_test' && ++attempts === 1) throw new Error('transient runner failure');
           if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
@@ -468,7 +473,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const runner: StepRunner = { run: vi.fn(async (step: StepName, _state, options) => {
         calls.push(step);
         if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
-        if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+        if (step === 'prd_audit') await writePrdAuditPass(dir, options);
         if (step === 'architecture_review_as_built') await writeAsBuiltApproval(dir, options);
         return { success: true } as StepRunResult;
       }) };
@@ -507,7 +512,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
         calls.push(step);
         if (step === 'coverage_binding') await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'one-transient-failure-in-a-validation-group-member', runId: 'test-run', status: 'disabled', entries: [] }));
         if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
-        if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+        if (step === 'prd_audit') await writePrdAuditPass(dir, options);
         if (step === 'architecture_review_as_built') await writeAsBuiltApproval(dir, options);
         return { success: true } as StepRunResult;
       }) };
@@ -616,7 +621,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n');
           }
           if (route === 'PLAN_GAP halt' && step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+            await writePrdAuditPass(dir, options);
           }
           return { success: true } as StepRunResult;
         }) },
