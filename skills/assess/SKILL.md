@@ -178,7 +178,8 @@ Save assessment metadata to `.pipeline/conduct-state.json`:
 - [ ] `.pipeline/assessment/` directory created
 - [ ] All 9 specialist reports written (or single report for `--area` mode)
 - [ ] CTO orchestrator report written to `.docs/decisions/technical-assessment-YYYY-MM-DD.md`
-- [ ] Report follows template structure from `templates/technical-assessment.md.template`
+- [ ] Report follows template structure from `templates/technical-assessment.md.template` (harness root,
+  not this skill's directory)
 - [ ] Verdict is one of: HEALTHY, NEEDS_WORK, CRITICAL
 - [ ] Assessment metadata saved to `.pipeline/conduct-state.json`
 - [ ] Report presented to user for review
