@@ -6,9 +6,9 @@ import { fileURLToPath } from 'node:url';
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const testRoot = join(packageRoot, 'test');
 // A worker can retain enough fixture state to exceed its 8 GiB cap while
-// processing a ninth file. Derive the shard count from the discovered suite so
+// processing an eighth file. Derive the shard count from the discovered suite so
 // later test growth cannot silently increase that per-worker bound.
-const maxFilesPerBatch = 8;
+const maxFilesPerBatch = 7;
 const vitestArgs = ['run', '--reporter=dot', '--silent', '--slowTestThreshold=1800000'];
 
 async function collectTestFiles(directory) {
