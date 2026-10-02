@@ -1,6 +1,8 @@
-// Covers: task:2, task:3, task:4, task:13, task:15, task:16, task:17, task:18
-import { readFile } from 'node:fs/promises';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+// Covers: task:2, task:3, task:4, task:6, task:7, task:13, task:15, task:16, task:17, task:18
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 import { classifyMetering } from '../../src/engine/metering.js';
 import {
@@ -666,5 +668,161 @@ describe('parsePiModelId', () => {
     ['anthropic/claude opus-4-5', 'whitespace'],
   ] as const)('rejects invalid Pi id %j with reason %s', (modelId, reason) => {
     expect(parsePiModelId(modelId)).toEqual({ reason });
+  });
+});
+
+/**
+ * Captured-style Pi `--mode json` records. `tool_execution_end` mirrors
+ * pi-agent-core agent-loop emitToolExecutionEnd: `{ toolCallId, toolName, result, isError }`,
+ * where a tool's thrown error becomes `isError: true` with empty details.
+ */
+const piLine = (event: Record<string, unknown>) => JSON.stringify(event);
+const assistantEnd = piLine({
+  type: 'message_end',
+  message: { role: 'assistant', content: [{ type: 'text', text: 'Submitted.' }], stopReason: 'stop' },
+});
+const submitEnd = (details: unknown, isError = false) => piLine({
+  type: 'tool_execution_end',
+  toolCallId: `call-${Math.random().toString(36).slice(2)}`,
+  toolName: 'submit_result',
+  result: { content: [{ type: 'text', text: isError ? 'validation failed' : 'Result submitted.' }], details },
+  isError,
+});
+
+describe('PiProvider native output schema', () => {
+  const spawn = vi.fn<PiSubprocessFactory>();
+  const materializeExtension = vi.fn(async () => '/engine-home/.ai-conductor/pi/harness-extension-0123456789abcdef.ts');
+  const schema = { type: 'object', properties: { verdict: { type: 'string' } }, required: ['verdict'] };
+  let worktree: string;
+  let scratchHome: string;
+  let provider: PiProvider;
+
+  const respond = (lines: string[]) => spawn.mockResolvedValue({ stdout: lines.join('\n'), stderr: '', exitCode: 0 } as ExecaResult);
+  const schemaInvoke = (overrides: Partial<InvokeOptions> = {}) => provider.invoke({
+    ...invokeOptions,
+    cwd: worktree,
+    nativeSchema: schema,
+    nativeSchemaScratchHome: scratchHome,
+    nativeSchemaScratchRoot: worktree,
+    ...overrides,
+  });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    worktree = await mkdtemp(join(tmpdir(), 'pi-native-schema-'));
+    scratchHome = join(worktree, '.daemon', 'scratch', 'run-1', 'pi');
+    await mkdir(scratchHome, { recursive: true });
+    provider = new PiProvider('/resolved/pi', spawn, materializeExtension);
+    respond([submitEnd({ verdict: 'pass' }), assistantEnd]);
+  });
+  afterEach(async () => { await rm(worktree, { recursive: true, force: true }); });
+
+  it('writes the schema into the scratch home and passes -e «asset» plus the schema flag', async () => {
+    await schemaInvoke();
+
+    const schemaPath = join(scratchHome, 'output-schema.json');
+    expect(JSON.parse(await readFile(schemaPath, 'utf8'))).toEqual(schema);
+    const args = spawn.mock.calls[0]![1];
+    expect(args[args.indexOf('-e') + 1]).toBe('/engine-home/.ai-conductor/pi/harness-extension-0123456789abcdef.ts');
+    expect(args[args.indexOf('--conduct-output-schema') + 1]).toBe(schemaPath);
+    expect(args.filter((arg) => arg === '-e')).toHaveLength(1);
+    expect(provider.nativeSchemaCapability.nativeOutputSchema).toBe(true);
+  });
+
+  it('passes no schema flag, no harness asset and no submit_result tool without a native schema', async () => {
+    respond([assistantEnd]);
+
+    await provider.invoke(invokeOptions);
+
+    const args = spawn.mock.calls[0]![1];
+    expect(args).not.toContain('--conduct-output-schema');
+    expect(args).not.toContain('-e');
+    expect(args.join(' ')).not.toContain('submit_result');
+    expect(materializeExtension).not.toHaveBeenCalled();
+  });
+
+  it('fails before spawning pi, naming the schema path, when the schema cannot be written', async () => {
+    const missingHome = join(worktree, '.daemon', 'scratch', 'run-1', 'absent');
+
+    const result = await schemaInvoke({ nativeSchemaScratchHome: missingHome });
+
+    expect(result.success).toBe(false);
+    expect(result.output).toContain(join(missingHome, 'output-schema.json'));
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('returns the details of the last successful submit_result as finalStructuredResult', async () => {
+    const result = await schemaInvoke();
+
+    expect(result).toMatchObject({ success: true, finalStructuredResult: { verdict: 'pass' } });
+  });
+
+  it('takes the last of two successful submit_result calls', async () => {
+    respond([submitEnd({ verdict: 'fail' }), submitEnd({ verdict: 'pass' }), assistantEnd]);
+
+    const result = await schemaInvoke();
+
+    expect(result.finalStructuredResult).toEqual({ verdict: 'pass' });
+  });
+
+  it('ignores a later failed submit_result after a successful one', async () => {
+    respond([submitEnd({ verdict: 'pass' }), submitEnd({}, true), assistantEnd]);
+
+    const result = await schemaInvoke();
+
+    expect(result.finalStructuredResult).toEqual({ verdict: 'pass' });
+  });
+
+  it('fails naming the missing structured result when no submit_result ends', async () => {
+    respond([assistantEnd]);
+
+    const result = await schemaInvoke();
+
+    expect(result.success).toBe(false);
+    expect(result.output).toMatch(/missing structured result/);
+    expect(result).not.toHaveProperty('finalStructuredResult');
+  });
+
+  it('fails naming the missing structured result when the only submit_result is an error', async () => {
+    respond([submitEnd({}, true), assistantEnd]);
+
+    const result = await schemaInvoke();
+
+    expect(result.success).toBe(false);
+    expect(result.output).toMatch(/missing structured result/);
+    expect(result).not.toHaveProperty('finalStructuredResult');
+  });
+});
+
+describe('PiProvider trust_project_files', () => {
+  const spawn = vi.fn<PiSubprocessFactory>();
+  beforeEach(() => {
+    vi.clearAllMocks();
+    spawn.mockResolvedValue({
+      stdout: assistantEnd,
+      stderr: '',
+      exitCode: 0,
+    } as ExecaResult);
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['false', false],
+  ] as const)('passes -na and never -a/--approve/--no-extensions when trust is %s', async (_label, trustProjectFiles) => {
+    await new PiProvider('/resolved/pi', spawn).invoke({ ...invokeOptions, trustProjectFiles });
+
+    const args = spawn.mock.calls[0]![1];
+    expect(args).toContain('-na');
+    expect(args).not.toContain('-a');
+    expect(args).not.toContain('--approve');
+    expect(args).not.toContain('--no-extensions');
+  });
+
+  it('omits -na and --no-extensions when trust_project_files opts in', async () => {
+    await new PiProvider('/resolved/pi', spawn).invoke({ ...invokeOptions, trustProjectFiles: true });
+
+    const args = spawn.mock.calls[0]![1];
+    expect(args).not.toContain('-na');
+    expect(args).not.toContain('--no-extensions');
   });
 });
