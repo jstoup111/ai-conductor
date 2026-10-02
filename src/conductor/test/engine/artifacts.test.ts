@@ -5188,6 +5188,7 @@ describe('engine/artifacts', () => {
         },
         attempt: 1,
         inputsUnchanged: false,
+        prdAuditNonClean: true,
       });
 
       expect(r).toEqual({ decision: 'rerun', signal: 'stale-run-identity' });

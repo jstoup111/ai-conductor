@@ -4880,17 +4880,18 @@ export function classifyRetryDecision(input: {
 
   if (unretryableInputs) return { decision: 'route', signal: 'unretryable-inputs' };
 
-  const namedRoute = step === 'prd_audit' ? prdAuditNonClean === true : completion.routeClass === 'named-route';
-  if (namedRoute) return { decision: 'route', signal: 'named-route' };
-
   // D5: no verdict for this dispatch is a retryable absence, even when its
-  // diagnostic happens to repeat byte-for-byte. This is a typed facet rather
-  // than a reason-string exception, so stale findings cannot become a route.
+  // diagnostic happens to repeat byte-for-byte. This must outrank a PRD
+  // finding observed from a prior verdict, so stale findings cannot become a
+  // route.
   if (completion.routeClass === 'absent') {
     return completion.retrySignal === 'stale-run-identity'
       ? { decision: 'rerun', signal: 'stale-run-identity' }
       : { decision: 'rerun' };
   }
+
+  const namedRoute = step === 'prd_audit' ? prdAuditNonClean === true : completion.routeClass === 'named-route';
+  if (namedRoute) return { decision: 'route', signal: 'named-route' };
 
   if (
     attempt >= 2 &&

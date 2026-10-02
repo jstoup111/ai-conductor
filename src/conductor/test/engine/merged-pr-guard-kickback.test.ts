@@ -26,6 +26,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 
 const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
 const APPROVED_AS_BUILT_POLICY: AsBuiltPolicy = {
@@ -34,19 +35,6 @@ const APPROVED_AS_BUILT_POLICY: AsBuiltPolicy = {
   adrCompliance: { enabled: false, reason: 'fixture' },
   diagramDrift: { enabled: false, reason: 'fixture' },
 };
-const PRD_AUDIT_FIXABLE = [
-  '# PRD Audit',
-  '',
-  '**PRD:** present',
-  '',
-  '## Verdict Table',
-  '',
-  '| Criterion | Grade | Plan task | PRD | Evidence |',
-  '|---|---|---|---|---|',
-  '| S1.1 | FIXABLE | 1 | FR-2 | x.ts:10 |',
-  '',
-].join('\n');
-
 // ── Fake GhRunner (adapted from test/engine/daemon-runner-mergeable.test.ts's
 // makeGhFake — this variant returns the `state` field prMergeState.ts:277
 // actually parses, not PR labels). ──────────────────────────────────────────
@@ -83,6 +71,28 @@ async function writeAsBuiltApproval(dir: string, attemptId: string): Promise<voi
     reachability: [],
     driftNotes: [],
   }, { attemptId, codeStamp: null, policy: APPROVED_AS_BUILT_POLICY });
+}
+
+async function writePrdAuditFixable(dir: string, attemptId: string): Promise<void> {
+  await persistPrdAuditVerdict(dir, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: '1', ordinal: 1 },
+        criterionId: 'S1.1',
+        grade: 'FIXABLE',
+        evidence: 'x.ts:10',
+        rationale: 'The fixture supplies a typed repairable finding.',
+        requirementAssociations: [{ path: '.docs/specs/feat.md', requirementId: 'FR-2' }],
+        evidenceTaskIds: ['1'],
+        ownerTaskId: '1',
+      }],
+      noOwnerObservations: [],
+    },
+    diagnostics: [],
+    recordedDispositions: [],
+  }, { attemptId, codeStamp: null });
 }
 
 describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
@@ -485,7 +495,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
     function perpetualImplGapRunner(): { runner: StepRunner; calls: StepName[] } {
       const calls: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           calls.push(step);
           if (step === 'build') {
             await writeFile(
@@ -498,10 +508,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
               '# Results\n\n| Story | Result |\n|--|--|\n| s | PASS |\n',
             );
           } else if (step === 'prd_audit') {
-            await writeFile(
-              join(dir, '.pipeline/prd-audit.md'),
-              PRD_AUDIT_FIXABLE,
-            );
+            await writePrdAuditFixable(dir, options?.runId ?? 'fixture-prd-audit-run');
           }
           return { success: true };
         }),
@@ -562,7 +569,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
     function remediateGenericRunner(): { runner: StepRunner; calls: StepName[] } {
       const calls: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           calls.push(step);
           if (step === 'remediate') {
             await writeFile(
@@ -570,7 +577,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
               JSON.stringify({
                 dispositions: [
                   {
-                    id: 'FR-2',
+                    id: 'S1.1',
                     disposition: 'build',
                     category: null,
                     rationale: 'read path wrong at x.ts:10',
@@ -585,10 +592,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
               JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
             );
           } else if (step === 'prd_audit') {
-            await writeFile(
-              join(dir, '.pipeline/prd-audit.md'),
-              PRD_AUDIT_FIXABLE,
-            );
+            await writePrdAuditFixable(dir, options?.runId ?? 'fixture-prd-audit-run');
           } else if (step === 'manual_test') {
             await writeFile(
               join(dir, '.pipeline/manual-test-results.md'),

@@ -5573,7 +5573,7 @@ describe('engine/conductor', () => {
       return { runner, calls };
     }
 
-    it('halts needs-human when a typed FIXABLE judgment has no remediation plan', async () => {
+    it('uses the bounded BUILD fallback when a typed FIXABLE judgment has no remediation plan', async () => {
       await seedToPrdAudit();
       // The fixture emits the current typed FIXABLE authority but no
       // remediation.json. Markdown is derived-only, so it cannot manufacture
@@ -5616,10 +5616,10 @@ describe('engine/conductor', () => {
         halt,
         haltClass,
       }).toEqual({
-        prdAuditKickbacks: 0,
-        buildCalls: 0,
+        prdAuditKickbacks: 1,
+        buildCalls: 1,
         halted: true,
-        halt: expect.stringMatching(/product\/plan gap needs human DECIDE/),
+        halt: expect.stringMatching(/prd-audit impl-gap unresolved after 1 build attempt\(s\) \(cap 1\): S1\.1 \(impl-gap\)/),
         haltClass: 'needs-human',
       });
     });
