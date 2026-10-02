@@ -175,6 +175,25 @@ describe('CodexProvider', () => {
     );
   });
 
+  it('carries the guarded child PATH in the shell-environment policy only for a guarded dispatch', async () => {
+    // Covers: task:9
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('done'), stderr: '', exitCode: 0, failed: false } as any);
+    const setPath = (args: readonly string[]) => args.filter((arg) => arg.startsWith('shell_environment_policy.set.PATH='));
+
+    mockEnsureGitGuardForDispatch.mockResolvedValue('/prepared/.pipeline/bin');
+    await provider.invoke({ ...baseOptions, cwd: '/prepared' });
+    const [, guardedArgs, guardedOptions] = mockExeca.mock.calls.at(-1) as [string, string[], ExecaOptions];
+    const guardedPath = (guardedOptions.env as NodeJS.ProcessEnv).PATH!;
+    expect(guardedPath.split(':')[0]).toBe('/prepared/.pipeline/bin');
+    expect(setPath(guardedArgs)).toEqual([`shell_environment_policy.set.PATH=${JSON.stringify(guardedPath)}`]);
+    expect(guardedArgs[guardedArgs.indexOf(setPath(guardedArgs)[0]) - 1]).toBe('--config');
+
+    mockEnsureGitGuardForDispatch.mockResolvedValue(null);
+    await provider.invoke({ ...baseOptions, cwd: '/unprepared' });
+    const [, unguardedArgs] = mockExeca.mock.calls.at(-1) as [string, string[], ExecaOptions];
+    expect(setPath(unguardedArgs)).toEqual([]);
+  });
+
   it('fails before launch when a missing guard cannot be rewritten in its read-only directory', async () => {
     const guardPath = '/prepared/.pipeline/bin/git';
     mockEnsureGitGuardForDispatch.mockRejectedValue(new Error(`git guard repair failed: ${guardPath}`));
