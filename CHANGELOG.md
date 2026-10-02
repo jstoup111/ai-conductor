@@ -69,6 +69,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Task completion now succeeds when no current task is recorded. ([implementation PR #2885](https://github.com/jstoup111/ai-conductor/pull/2885)).
 - Intake authors retain complete wrapped desired-outcome bullets. ([implementation PR #2882](https://github.com/jstoup111/ai-conductor/pull/2882)).
 - Build reviews now ignore Covers marker text embedded in test string literals. ([implementation PR #2881](https://github.com/jstoup111/ai-conductor/pull/2881)).
+- `/prd`, `/architecture-review`, and `/assess` now state that their templates resolve against the harness root, so authors find `design-doc`, `api-response-contract`, `adr`, and `technical-assessment` templates instead of hitting a missing path. ([implementation PR #2905](https://github.com/jstoup111/ai-conductor/pull/2905)).
 
 ## [1.5.0] - 2026-09-27
 
