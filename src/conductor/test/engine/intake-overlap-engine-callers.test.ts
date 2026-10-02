@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 async function files(path: string): Promise<string[]> {
   const entries = await readdir(path, { withFileTypes: true });
-  return (await Promise.all(entries.map((entry) => entry.isDirectory() ? files(join(path, entry.name)) : [join(path, entry.name)]))).flat();
+  return (await Promise.all(entries.map(async (entry) => entry.isDirectory() ? files(join(path, entry.name)) : [join(path, entry.name)]))).flat();
 }
 
 describe('engine-internal intake filings', () => {
