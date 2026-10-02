@@ -333,9 +333,8 @@ export class PiProvider implements LLMProvider {
     }
 
     // ADR D18: -na keeps project-local Pi files untrusted unless the operator
-    // opts in. Pi read-only review (a restricted tool set) is deferred to #1888;
-    // custom-policy read-only paths refuse Pi before dispatch.
-    const args = ['-p', ...(options.trustProjectFiles === true ? [] : ['-na']), '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath];
+    // opts in; a read-only review (D17) always keeps -na.
+    const args = ['-p', ...(options.trustProjectFiles === true && !options.readOnlyReview ? [] : ['-na']), '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath];
     const projectSkillsPath = join(cwd, '.agents', 'skills');
     if (await isDirectory(projectSkillsPath, this.environment)) {
       args.push('--skill', projectSkillsPath);
@@ -344,12 +343,17 @@ export class PiProvider implements LLMProvider {
     let extensionPath: string | undefined;
     try {
       if (options.nativeSchema !== undefined) schemaFile = await writePiNativeSchema(options);
-      if (options.nativeSchema !== undefined) {
+      if (options.readOnlyReview || options.nativeSchema !== undefined) {
         extensionPath = await this.materializeExtension({ homeDir: options.selfHost?.env.PI_HOME });
         args.push('-e', extensionPath);
       }
     } catch (error) {
       return { success: false, output: `${piDisplayName()} native schema setup failed: ${error instanceof Error ? error.message : String(error)}`, exitCode: 1 };
+    }
+    if (options.readOnlyReview) {
+      // Read-only review: no discovered extensions, no project resources (whatever
+      // trust_project_files says), and a closed tool set whose only git access is git_read.
+      args.push('--no-extensions', '--tools', `read,grep,find,ls,git_read${schemaFile ? ',submit_result' : ''}`, '--conduct-git-read');
     }
     if (schemaFile) args.push('--conduct-output-schema', schemaFile);
     if (options.model) {

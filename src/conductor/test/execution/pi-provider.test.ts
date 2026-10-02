@@ -1,5 +1,5 @@
-// Covers: task:2, task:3, task:4, task:6, task:7, task:13, task:15, task:16, task:17, task:18
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+// Covers: task:2, task:3, task:4, task:6, task:7, task:9, task:13, task:15, task:16, task:17, task:18
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -93,6 +93,11 @@ function fakePiEnvironment(options: {
     },
     stat,
   };
+}
+
+/** A fake environment that satisfies Pi's HARNESS.md dispatch precondition. */
+function harnessedPiEnvironment(): PiEnvironment {
+  return fakePiEnvironment({ files: ['/home/agent/.agents/skills/HARNESS.md'] }).environment;
 }
 
 describe('resolvePiSkill', () => {
@@ -712,7 +717,7 @@ describe('PiProvider native output schema', () => {
     worktree = await mkdtemp(join(tmpdir(), 'pi-native-schema-'));
     scratchHome = join(worktree, '.daemon', 'scratch', 'run-1', 'pi');
     await mkdir(scratchHome, { recursive: true });
-    provider = new PiProvider('/resolved/pi', spawn, materializeExtension);
+    provider = new PiProvider('/resolved/pi', spawn, harnessedPiEnvironment(), materializeExtension);
     respond([submitEnd({ verdict: 'pass' }), assistantEnd]);
   });
   afterEach(async () => { await rm(worktree, { recursive: true, force: true }); });
@@ -809,7 +814,7 @@ describe('PiProvider trust_project_files', () => {
     ['absent', undefined],
     ['false', false],
   ] as const)('passes -na and never -a/--approve/--no-extensions when trust is %s', async (_label, trustProjectFiles) => {
-    await new PiProvider('/resolved/pi', spawn).invoke({ ...invokeOptions, trustProjectFiles });
+    await new PiProvider('/resolved/pi', spawn, harnessedPiEnvironment()).invoke({ ...invokeOptions, trustProjectFiles });
 
     const args = spawn.mock.calls[0]![1];
     expect(args).toContain('-na');
@@ -819,10 +824,78 @@ describe('PiProvider trust_project_files', () => {
   });
 
   it('omits -na and --no-extensions when trust_project_files opts in', async () => {
-    await new PiProvider('/resolved/pi', spawn).invoke({ ...invokeOptions, trustProjectFiles: true });
+    await new PiProvider('/resolved/pi', spawn, harnessedPiEnvironment()).invoke({ ...invokeOptions, trustProjectFiles: true });
 
     const args = spawn.mock.calls[0]![1];
     expect(args).not.toContain('-na');
     expect(args).not.toContain('--no-extensions');
+  });
+});
+
+describe('PiProvider read-only review argv', () => {
+  const spawn = vi.fn<PiSubprocessFactory>();
+  const asset = '/engine-home/.ai-conductor/pi/harness-extension-0123456789abcdef.ts';
+  const materializeExtension = vi.fn(async () => asset);
+  let worktree: string;
+  let scratchHome: string;
+
+  const toolsValue = (args: readonly string[]) => args[args.indexOf('--tools') + 1];
+  const invokeReadOnly = (overrides: Partial<InvokeOptions> = {}) =>
+    new PiProvider('/resolved/pi', spawn, harnessedPiEnvironment(), materializeExtension).invoke({ ...invokeOptions, cwd: worktree, readOnlyReview: true, ...overrides });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    worktree = await mkdtemp(join(tmpdir(), 'pi-read-only-'));
+    scratchHome = join(worktree, '.daemon', 'scratch', 'run-1', 'pi');
+    await mkdir(scratchHome, { recursive: true });
+    spawn.mockResolvedValue({ stdout: [submitEnd({ verdict: 'pass' }), assistantEnd].join('\n'), stderr: '', exitCode: 0 } as ExecaResult);
+  });
+  afterEach(async () => { await rm(worktree, { recursive: true, force: true }); });
+
+  it('restricts tools to read,grep,find,ls,git_read and loads only the harness asset', async () => {
+    await invokeReadOnly();
+
+    const args = spawn.mock.calls[0]![1];
+    expect(args).toContain('--no-extensions');
+    expect(args).toContain('-na');
+    expect(args).toContain('--conduct-git-read');
+    expect(toolsValue(args)).toBe('read,grep,find,ls,git_read');
+    expect(args[args.indexOf('-e') + 1]).toBe(asset);
+    expect(asset.startsWith('/')).toBe(true);
+  });
+
+  it('adds submit_result to the tools when a native schema is requested', async () => {
+    await invokeReadOnly({ nativeSchema: { type: 'object' }, nativeSchemaScratchHome: scratchHome, nativeSchemaScratchRoot: worktree });
+
+    expect(toolsValue(spawn.mock.calls[0]![1])).toBe('read,grep,find,ls,git_read,submit_result');
+  });
+
+  it('never names a write or shell tool', async () => {
+    await invokeReadOnly();
+    await invokeReadOnly({ nativeSchema: { type: 'object' }, nativeSchemaScratchHome: scratchHome, nativeSchemaScratchRoot: worktree });
+
+    for (const [, args] of spawn.mock.calls) {
+      const tools = toolsValue(args)!.split(',');
+      for (const forbidden of ['bash', 'edit', 'write', 'powershell']) expect(tools).not.toContain(forbidden);
+    }
+  });
+
+  it('loads exactly one extension, the harness asset, even when the cwd has .pi/extensions', async () => {
+    await mkdir(join(worktree, '.pi', 'extensions'), { recursive: true });
+    await writeFile(join(worktree, '.pi', 'extensions', 'evil.ts'), 'export default () => {}');
+
+    await invokeReadOnly();
+
+    const args = spawn.mock.calls[0]![1];
+    expect(args).toContain('-na');
+    expect(args).toContain('--no-extensions');
+    expect(args.filter((arg) => arg === '-e' || arg === '--extension')).toHaveLength(1);
+    expect(args[args.indexOf('-e') + 1]).toBe(asset);
+  });
+
+  it('keeps -na when trust_project_files opts in', async () => {
+    await invokeReadOnly({ trustProjectFiles: true });
+
+    expect(spawn.mock.calls[0]![1]).toContain('-na');
   });
 });
