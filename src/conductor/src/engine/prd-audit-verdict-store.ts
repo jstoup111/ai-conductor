@@ -37,6 +37,12 @@ export type ReadPrdAuditVerdictResult =
   | { readonly kind: 'unreadable'; readonly reason: string }
   | { readonly kind: 'present'; readonly value: PersistedPrdAuditVerdict };
 
+/** Narrow test seam; failure remains a failure and never falls back to Markdown. */
+export interface PrdAuditVerdictStoreDependencies {
+  readonly write?: (path: string, contents: string) => Promise<void>;
+  readonly render?: (value: PersistedPrdAuditVerdict) => string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -137,10 +143,13 @@ export async function persistPrdAuditVerdict(
   worktree: string,
   evidence: Omit<PersistedPrdAuditVerdict, 'attemptId' | 'codeStamp'>,
   identity: Pick<PersistedPrdAuditVerdict, 'attemptId' | 'codeStamp'>,
+  dependencies: PrdAuditVerdictStoreDependencies = {},
 ): Promise<PersistedPrdAuditVerdict> {
   const value: PersistedPrdAuditVerdict = { ...evidence, ...identity };
-  await atomicWrite(join(worktree, PRD_AUDIT_VERDICT_PATH), `${JSON.stringify(value, null, 2)}\n`);
-  await atomicWrite(join(worktree, PRD_AUDIT_REPORT_PATH), renderPrdAuditReport(value));
+  const write = dependencies.write ?? atomicWrite;
+  const render = dependencies.render ?? renderPrdAuditReport;
+  await write(join(worktree, PRD_AUDIT_VERDICT_PATH), `${JSON.stringify(value, null, 2)}\n`);
+  await write(join(worktree, PRD_AUDIT_REPORT_PATH), render(value));
   return value;
 }
 
@@ -160,7 +169,7 @@ export async function readPrdAuditVerdict(worktree: string): Promise<ReadPrdAudi
     !nonEmptyText(raw.attemptId) || (raw.codeStamp !== null && !nonEmptyText(raw.codeStamp)) || typeof raw.complete !== 'boolean' ||
     !validJudgment(raw.judgment) || !Array.isArray(raw.diagnostics) || !raw.diagnostics.every(nonEmptyText) ||
     !Array.isArray(raw.recordedDispositions) || !raw.recordedDispositions.every(validRecordedDisposition)) {
-    return { kind: 'unreadable', reason: `${PRD_AUDIT_VERDICT_PATH} has an invalid persisted envelope` };
+    return { kind: 'unreadable', reason: `${PRD_AUDIT_VERDICT_PATH} has invalid evidence: invalid persisted envelope` };
   }
   return {
     kind: 'present',
