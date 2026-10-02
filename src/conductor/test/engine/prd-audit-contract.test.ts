@@ -1,4 +1,4 @@
-// Covers: task:6, task:7, task:8
+// Covers: task:6, task:7, task:8, task:10
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -282,6 +282,69 @@ describe('PRD audit judgment contract', () => {
     })).toMatchObject({
       ok: false,
       diagnostics: [expect.stringMatching(/presentationOrdinal/)],
+    });
+  });
+
+  it('keeps missing, malformed, and unsupported terminal roots unusable rather than incomplete', () => {
+    const context = { criteria: [], taskIds: new Set<string>(), requirements: [] };
+
+    for (const input of [
+      undefined,
+      { version: 'v1', criterionJudgments: [] },
+      { version: 'v2', criterionJudgments: [], noOwnerObservations: [] },
+    ]) {
+      const result = validatePrdAuditJudgment(input, context);
+
+      expect(result.ok).toBe(false);
+      expect(result).not.toHaveProperty('judgment');
+    }
+  });
+
+  it('never recovers a judgment from plausible chat or intermediate tool fields', () => {
+    const plausibleJudgment = {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: 'alpha', ordinal: 1 },
+        grade: 'PASS',
+        evidence: 'Plausible prose says that the criterion was met.',
+        rationale: 'The chat transcript looks complete but is not terminal output.',
+        requirementAssociations: [],
+        evidenceTaskIds: [],
+      }],
+      noOwnerObservations: [],
+    };
+
+    const result = validatePrdAuditJudgment({
+      chatResponse: JSON.stringify(plausibleJudgment),
+      intermediateToolResult: plausibleJudgment,
+    }, {
+      criteria: [{ id: 'Salpha.1' }],
+      taskIds: new Set(),
+      requirements: [],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result).not.toHaveProperty('judgment');
+  });
+
+  it.each([
+    ['accept', 'accept'],
+    ['refuse', 'refuse'],
+    ['engine identity', 'engineIdentity'],
+    ['code stamp', 'codeStamp'],
+    ['recorded disposition', 'recordedDisposition'],
+  ])('names reviewer-supplied %s as an engine/operator authority violation', (_label, field) => {
+    const result = validatePrdAuditJudgment({
+      version: 'v1',
+      criterionJudgments: [],
+      noOwnerObservations: [],
+      [field]: 'reviewer-claim',
+    }, { criteria: [], taskIds: new Set(), requirements: [] });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result).not.toHaveProperty('judgment');
+    expect(result).toMatchObject({
+      diagnostics: [expect.stringMatching(new RegExp(`^root\\.${field}\\b.*(engine|operator|authority)`, 'i'))],
     });
   });
 });
