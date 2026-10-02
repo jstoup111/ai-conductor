@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-10-01T01:29:29.471Z
+Status: halted
 Slug: destructive-git-prevention-is-absent-in-self-host
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-destructive-git-prevention-is-absent-in-self-host
-Head SHA: 7b7f539449073b0effb088025e0e079f15503158
-Halted at: 2026-10-01T01:27:20.829Z
+Head SHA: ac8d162e8340cf450d80827c8c5785dca5ba1dbe
+Halted at: 2026-10-02T22:30:17.840Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
@@ -18,8 +16,8 @@ Push status: this record may be ahead of the remote; push is not guaranteed.
 ```text
 coverage_binding refused: cited Done when checks do not assert the required claim.
 
-Criterion: Story 11 negative: **Given** the default (non-smoke) test suite, **When** it runs, **Then** no live provider session is started.
-Task ids: 16
-Done when checks: `git-guard-claude.smoke.test.ts` declares `credentialed:claude` and, with Claude credentials and binary present, asserts a real Claude session's `command -v git` output equals the prepared worktree's `.pipeline/bin/git` and its `git clean -f` output contains the guard's refusal text. | `git-guard-codex.smoke.test.ts` declares `credentialed:codex` and makes the same two assertions against a real Codex session. | In advisory mode a guard smoke file lacking its credential or binary reports skipped naming the missing prerequisite, and in gate mode it reports a non-gating skip naming the missing credential, as asserted by the smoke-runner tests. | The smoke-entry-point test lists both files with their capabilities and confirms the default `vitest` configuration excludes them.
-Missing assertion: The check only requires excluding the two guard smoke files from default Vitest; it does not explicitly require that no other live provider session can start.
+Criterion: Story 10 negative: **Given** the `tdd` skill, **When** its counterfactual step is read, **Then** it names no stash, path checkout, restore, or reset command and tells the agent to change no worktree's files, the temporary one included, beyond adding the test copies.
+Task ids: 15
+Done when checks: The skill-content test asserts the `skills/tdd/SKILL.md` pre-diff sensitivity item names a temporary detached worktree at the base commit and copying the new or changed test files into it, then removing that worktree. | The same test asserts the item contains none of `stash`, `checkout --`, `git restore`, or `reset`, so following it never discards paths in any worktree.
+Missing assertion: The checks do not explicitly require that the item tells the agent not to change any worktree files other than copying test files.
 ```
