@@ -3,6 +3,7 @@ import { chmod, lstat, mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Options as ExecaOptions } from 'execa';
+import { execa } from 'execa';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ensureGitGuardForDispatch, gitGuardPath, resolveRealGit, writeGitGuard } from '../../src/engine/git-guard.js';
@@ -42,6 +43,8 @@ describe('git guard provisioning primitives', () => {
     const realGit = (await readFile(join(root, '.pipeline', 'git-guard', 'real-git'), 'utf8')).trim();
     expect(realGit.startsWith('/')).toBe(true);
     expect(realGit).not.toContain('/.pipeline/bin/');
+    const commonDir = (await readFile(join(root, '.pipeline', 'git-guard', 'common-dir'), 'utf8')).trim();
+    expect(commonDir).toBe((await execa(realGit, ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'])).stdout);
   });
 
   it('names the guard path when a read-only bin directory prevents writing it', async () => {
