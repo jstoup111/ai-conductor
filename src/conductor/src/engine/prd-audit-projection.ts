@@ -129,22 +129,29 @@ async function scopedChanges(projectRoot: string): Promise<Extract<PrdAuditProje
   return { base: mergeBase.stdout.trim(), head: headSha.stdout.trim(), changedFiles: parseNumstat(changes.stdout) };
 }
 
-async function wideningHistory(projectRoot: string): Promise<PrdAuditProjection['history'] | undefined> {
+type WideningHistoryResult =
+  | { readonly kind: 'available'; readonly history: PrdAuditProjection['history'] }
+  | { readonly kind: 'invalid' }
+  | { readonly kind: 'foreign' };
+
+async function wideningHistory(projectRoot: string, activeFeature: string): Promise<WideningHistoryResult> {
   const path = join(projectRoot, '.pipeline', 'accepted-widenings.json');
   let raw: { feature?: { repository?: unknown; feature?: unknown } };
   try {
     raw = JSON.parse(await readFile(path, 'utf-8')) as typeof raw;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
-    return undefined;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'available', history: { kind: 'absent' } };
+    return { kind: 'invalid' };
   }
-  if (typeof raw.feature?.repository !== 'string' || typeof raw.feature.feature !== 'string') return undefined;
+  if (typeof raw.feature?.repository !== 'string') return { kind: 'invalid' };
   const read = await new AcceptedWideningDecisionStore(projectRoot, {
     version: 1,
     repository: raw.feature.repository,
-    feature: raw.feature.feature,
+    feature: activeFeature,
   }).read();
-  return read.kind === 'valid' ? { decisions: read.state.decisions } : read.kind === 'absent' ? { kind: 'absent' } : undefined;
+  if (read.kind === 'valid') return { kind: 'available', history: { decisions: read.state.decisions } };
+  if (read.kind === 'absent') return { kind: 'available', history: { kind: 'absent' } };
+  return read.kind === 'foreign-feature' ? { kind: 'foreign' } : { kind: 'invalid' };
 }
 
 /** Build the engine-owned source projection used by the managed PRD audit. */
@@ -177,8 +184,21 @@ export async function buildPrdAuditProjection(
   const tasks = [...taskBodies].map(([id, body]) => ({ id, storyIds: parsePlanTaskStoryIds(body), doneWhen: doneWhen.get(id) ?? [] }));
   if (criteria.length === 0 || tasks.length === 0) return { ok: false, fault: { dimension: 'obligations', detail: 'active stories or plan contain no audit obligations' } };
 
+  const coherencePath = join(projectRoot, '.docs', 'coherence', `${basename(planPath, '.md')}.md`);
+  let coherence: PrdAuditProjection['coherence'] = { kind: 'absent' };
+  try {
+    const parsed = parseCoherenceArtifact(await readFile(coherencePath, 'utf-8'));
+    if (!parsed.ok) return { ok: false, fault: { dimension: 'coherence', detail: parsed.reason } };
+    coherence = parsed.rows;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, fault: { dimension: 'coherence', detail: 'active coherence is unreadable' } };
+  }
+
   const context = await buildArtifactResolutionContext(projectRoot, { planPath, featureDesc });
   const prdPaths = await resolveFeaturePrdPaths(projectRoot, context);
+  if (prdPaths.length === 0 && Array.isArray(coherence) && coherence.some((row) => row.rowClass === 'fr')) {
+    return { ok: false, fault: { dimension: 'prd', detail: 'active PRD required by coherence is unavailable' } };
+  }
   let prd: PrdAuditProjection['prd'] = { kind: 'absent' };
   if (prdPaths.length > 0) {
     try {
@@ -193,19 +213,10 @@ export async function buildPrdAuditProjection(
     }
   }
 
-  const coherencePath = join(projectRoot, '.docs', 'coherence', `${basename(planPath, '.md')}.md`);
-  let coherence: PrdAuditProjection['coherence'] = { kind: 'absent' };
-  try {
-    const parsed = parseCoherenceArtifact(await readFile(coherencePath, 'utf-8'));
-    if (!parsed.ok) return { ok: false, fault: { dimension: 'coherence', detail: parsed.reason } };
-    coherence = parsed.rows;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, fault: { dimension: 'coherence', detail: 'active coherence is unreadable' } };
-  }
-
-  const [changes, history] = await Promise.all([scopedChanges(projectRoot), wideningHistory(projectRoot)]);
+  const [changes, history] = await Promise.all([scopedChanges(projectRoot), wideningHistory(projectRoot, basename(planPath, '.md'))]);
   if (!changes) return { ok: false, fault: { dimension: 'changes', detail: 'scoped git changes are unavailable' } };
-  if (!history) return { ok: false, fault: { dimension: 'history', detail: 'widening history is invalid' } };
+  if (history.kind === 'foreign') return { ok: false, fault: { dimension: 'history', detail: 'widening history is foreign to the active feature' } };
+  if (history.kind === 'invalid') return { ok: false, fault: { dimension: 'history', detail: 'widening history is invalid' } };
 
-  return { ok: true, projection: { version: PRD_AUDIT_PROJECTION_VERSION, plan: { intent }, criteria, tasks, prd, coherence, changes, history } };
+  return { ok: true, projection: { version: PRD_AUDIT_PROJECTION_VERSION, plan: { intent }, criteria, tasks, prd, coherence, changes, history: history.history } };
 }
