@@ -4757,10 +4757,11 @@ export class Conductor {
           authority: finding.decision === undefined ? 'engine' : finding.operator ?? 'operator',
         };
         const key = `${next.criterionId}\u0000${next.grade}`;
-        const prior = updated.get(key);
-        if (prior === undefined || prior.decision !== next.decision || prior.authority !== next.authority || prior.rationale !== next.rationale) {
-          updated.set(key, next);
-        }
+        // A later durable decision is the effective disposition for this
+        // criterion/grade pair. Keep the reviewer judgment above intact, but
+        // always replace this derived handoff rather than preserving a stale
+        // accept/refuse decision or attribution from an earlier route.
+        updated.set(key, next);
       }
       const recordedDispositions: PersistedPrdAuditVerdict['recordedDispositions'] = [
         ...updated.values(),
