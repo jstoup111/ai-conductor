@@ -25,6 +25,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { readKickbackLedger, settlePendingRepair } from '../../src/engine/kickback-ledger.js';
 import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 
 const execFile = promisify(execFileCb);
 
@@ -111,12 +112,25 @@ describe('planRemediation D1: route-into-no-op guard (plan Task 2)', () => {
       '# Stories', '', '## Story 1: repair', '', '#### Happy Path',
       '- Given S1.1, when repaired, then it holds.',
     ].join('\n'));
-    await writeFile(join(dir, '.pipeline/prd-audit.md'), [
-      '**PRD:** present', '', '## Verdict Table',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      `| S1.1 | FIXABLE | ${remId} | Missing repair behavior |`,
-    ].join('\n'));
+    await persistPrdAuditVerdict(dir, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '1', ordinal: 1 },
+          criterionId: 'S1.1',
+          grade: 'FIXABLE',
+          evidence: 'Missing repair behavior',
+          rationale: 'Fixture repair requires the active owning task.',
+          requirementAssociations: [],
+          evidenceTaskIds: [remId],
+          ownerTaskId: remId,
+        }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'fixture-prd-audit', codeStamp: null });
     await mkdir(join(dir, 'src'), { recursive: true });
     await writeFile(join(dir, 'src/remediated.ts'), 'fix\n');
     await git('add', '.');
