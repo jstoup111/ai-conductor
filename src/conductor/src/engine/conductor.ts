@@ -6189,8 +6189,8 @@ export class Conductor {
     });
   }
 
-  /** Halt a deterministic as-built precondition fault identically in both dispatch paths. */
-  private async haltForAsBuiltFault(state: ConductState, reason: string): Promise<void> {
+  /** Halt a deterministic SHIP-validator precondition fault in either dispatch path. */
+  private async haltForValidatorFault(state: ConductState, reason: string): Promise<void> {
     await this.closeOpenExecutions();
     await this.writeHaltMarker(reason + '\n', 'mechanical');
     await this.persistPendingStateChanges(state, 'persist conductor transition');
@@ -8841,7 +8841,7 @@ export class Conductor {
                     `${err instanceof Error ? err.message : String(err)}`,
                 );
               }
-              await this.haltForAsBuiltFault(state, mechanicalFault.reason);
+              await this.haltForValidatorFault(state, mechanicalFault.reason);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -10761,9 +10761,13 @@ export class Conductor {
           // The as-built projection and native-schema capability are engine
           // preconditions. A retry cannot make an unreadable input parse or add
           // a provider capability, so halt before ordinary retry accounting.
-          if (step.name === 'architecture_review_as_built' && result.asBuiltFault) {
-            const reason = result.asBuiltFault.reason;
-            await this.haltForAsBuiltFault(state, reason);
+          const validatorFault = step.name === 'architecture_review_as_built'
+            ? result.asBuiltFault
+            : step.name === 'prd_audit'
+              ? result.prdAuditFault
+              : undefined;
+          if (validatorFault) {
+            await this.haltForValidatorFault(state, validatorFault.reason);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
