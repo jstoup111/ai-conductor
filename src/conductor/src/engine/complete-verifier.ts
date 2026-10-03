@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import type { ConductState, StepName } from '../types/index.js';
 import { checkStepCompletion } from './artifacts.js';
-import type { FullSuiteInspectionResult } from './full-suite-verifier.js';
+import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { getStepStatus, readState } from './state.js';
 
 /** Steps re-checked when a feature is marked complete on resume. */
@@ -52,7 +52,9 @@ export async function verifyCompleteState(
   const ctx = {
     sessionStartedAt: state.session_started_at,
     featureDesc: state.feature_desc,
-    fullSuiteInspect: options.fullSuiteInspect,
+    // SHIP-phase re-check: a changed-only lap PASS does not satisfy SHIP.
+    fullSuiteInspect: options.fullSuiteInspect ??
+      (() => new FullSuiteVerifier({ projectRoot: worktreePath }).inspect({ requireAggregate: true })),
   };
 
   const failedSteps: StepName[] = [];

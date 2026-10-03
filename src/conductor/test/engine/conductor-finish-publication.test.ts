@@ -706,6 +706,65 @@ describe('Conductor FINISH publication routing', () => {
     ]).toEqual(['done', 'done', 'done', 'done']);
   });
 
+  it('routes a changed-only lap PASS back through one aggregate test_suite run before publishing', async () => {
+    await writeGreenShipValidatorEvidence(dir);
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M', architecture_review: 'skipped',
+      session_started_at: Date.now() - 60_000,
+      coverage_binding: 'done',
+      manual_test: 'skipped',
+      validation__prd_audit: 'done',
+      validation__architecture_review_as_built: 'done',
+    } as ConductState);
+
+    const order: string[] = [];
+    let aggregateRan = false;
+    const fullSuiteVerifier = {
+      inspect: vi.fn(async (options?: { requireAggregate?: boolean }) =>
+        options?.requireAggregate === true && !aggregateRan
+          ? { status: 'STALE' as const, reason: 'aggregate_required' as const }
+          : { status: 'CURRENT' as const, evidence: PASS_EVIDENCE }),
+      ensure: vi.fn(async (_inspection?: unknown, options?: { requireAggregate?: boolean }) => {
+        order.push(`ensure:${options?.requireAggregate === true ? 'aggregate' : 'lap'}`);
+        if (options?.requireAggregate === true) aggregateRan = true;
+        return {
+          status: 'EXECUTED' as const,
+          freshness: { status: 'STALE' as const, reason: 'aggregate_required' as const },
+          evidence: PASS_EVIDENCE,
+        };
+      }),
+    };
+    const advance = vi.fn(async () => {
+      order.push('publish');
+      return { kind: 'complete' } as const;
+    });
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events: new ConductorEventEmitter(), projectRoot: dir, fromStep: 'finish',
+      mode: 'auto', daemon: true, verifyArtifacts: true,
+      config: {
+        steps: { manual_test: { disable: true } },
+        test_suite: {
+          command: 'npm test',
+          changed_command: 'npm test -- --changed {base}',
+          verification: { mode: 'changed', drift_budget: {} as never },
+        },
+      },
+      fullSuiteVerifier: fullSuiteVerifier as never,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    }).run();
+
+    // One aggregate run, strictly before the first publication attempt.
+    expect(order.filter((entry) => entry.startsWith('ensure:'))).toEqual(['ensure:aggregate']);
+    expect(order.slice(0, 2)).toEqual(['ensure:aggregate', 'publish']);
+  });
+
   it('halts after the configured FINISH-fence recheck budget and never publishes', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeGreenShipValidatorEvidence(dir);

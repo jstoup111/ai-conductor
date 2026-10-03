@@ -255,10 +255,12 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
         { command: 'test/test_harness_integrity.sh', working_directory: '.' },
       ],
       scoped_command: './node_modules/.bin/vitest run {selectors}',
+      // Changed-only BUILD laps; the FINISH fence requires one aggregate PASS.
+      changed_command: expect.stringContaining('--changed {base}'),
       working_directory: 'src/conductor',
       timeout_seconds: 1800,
       verification: {
-        mode: 'aggregate',
+        mode: 'changed',
         drift_budget: {
           additional_inputs: 'none',
           dependencies: 'none',

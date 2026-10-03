@@ -33,13 +33,14 @@ type FullSuiteNonSignalFailureReason = Exclude<FullSuiteFailureReason, 'signal'>
  */
 type FullSuiteEvidenceWriteVersion = typeof FULL_SUITE_EVIDENCE_VERSION | typeof FULL_SUITE_LIST_EVIDENCE_VERSION | 3;
 
-export type FullSuiteEvidenceMode = 'aggregate' | 'scoped';
+export type FullSuiteEvidenceMode = 'aggregate' | 'scoped' | 'changed';
 
 /** The closed execution route that produced a PASS. */
 export type FullSuiteExecutionBasis =
   | 'aggregate'
   | 'scoped'
-  | 'scoped-empty-selection-aggregate';
+  | 'scoped-empty-selection-aggregate'
+  | 'changed';
 
 export type FullSuiteDriftCategoryCounts = Record<
   FullSuiteFingerprintCategory,
@@ -276,14 +277,15 @@ function isDriftLedgerEntry(value: unknown): value is FullSuiteDriftLedgerEntry 
 }
 
 function isPassMode(value: unknown): value is FullSuiteEvidenceMode {
-  return value === 'aggregate' || value === 'scoped';
+  return value === 'aggregate' || value === 'scoped' || value === 'changed';
 }
 
 function isOptionalExecutionBasis(value: unknown): value is FullSuiteExecutionBasis | undefined {
   return value === undefined ||
     value === 'aggregate' ||
     value === 'scoped' ||
-    value === 'scoped-empty-selection-aggregate';
+    value === 'scoped-empty-selection-aggregate' ||
+    value === 'changed';
 }
 
 function isSelectors(value: unknown): value is string[] {

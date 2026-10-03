@@ -1994,6 +1994,27 @@ steps:
       });
     });
 
+    it('requires changed_command with a {base} placeholder for changed mode', async () => {
+      const config = join(tmpDir, '.ai-conductor', 'config.yml');
+      await writeFile(config, 'test_suite:\n  command: npm test\n  verification:\n    mode: changed\n');
+      expect(await loadConfig(tmpDir)).toMatchObject({
+        ok: false,
+        error: { message: expect.stringMatching(/changed_command must be configured/) },
+      });
+
+      await writeFile(config, 'test_suite:\n  command: npm test\n  changed_command: npm test\n  verification:\n    mode: changed\n');
+      expect(await loadConfig(tmpDir)).toMatchObject({
+        ok: false,
+        error: { message: expect.stringMatching(/\{base\}/) },
+      });
+
+      await writeFile(config, 'test_suite:\n  command: npm test\n  changed_command: npm test -- --changed {base}\n  verification:\n    mode: changed\n');
+      expect(await loadConfig(tmpDir)).toMatchObject({
+        ok: true,
+        config: { test_suite: { verification: { mode: 'changed' } } },
+      });
+    });
+
     it('rejects an unknown verification key by name', async () => {
       await writeFile(
         join(tmpDir, '.ai-conductor', 'config.yml'),

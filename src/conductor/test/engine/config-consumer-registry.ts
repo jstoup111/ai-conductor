@@ -296,6 +296,8 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   // scoped_command.
   'test_suite.command': consumer(FULL_SUITE_EXECUTOR),
   'test_suite.scoped_command': consumer(STEP_RUNNERS),
+  // changed-mode laps substitute the merge-base into changed_command.
+  'test_suite.changed_command': consumer(FULL_SUITE_VERIFIER),
   'test_suite.working_directory': consumer(FULL_SUITE_EXECUTOR),
   'test_suite.timeout_seconds': consumer(FULL_SUITE_EXECUTOR),
   'test_suite.inputs': consumer(FULL_SUITE_FINGERPRINT),

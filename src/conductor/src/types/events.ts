@@ -1287,7 +1287,7 @@ export type ConductorEvent =
         reason?: string;
       };
       /** Optional to preserve parsing of events emitted before verification modes existed. */
-      mode?: 'aggregate' | 'scoped';
+      mode?: 'aggregate' | 'scoped' | 'changed';
       /** Present only for a newly executed ordered aggregate collection. */
       executionSummary?: {
         plannedEntryCount: number;
@@ -1321,7 +1321,7 @@ export type ConductorEvent =
       decision: 'reuse';
       basis: 'fingerprint-match';
       /** Optional to preserve parsing of events emitted before verification modes existed. */
-      mode?: 'aggregate' | 'scoped';
+      mode?: 'aggregate' | 'scoped' | 'changed';
     }
   | {
       /**

@@ -123,16 +123,23 @@ test_suite:
   # The detached counterfactual checkout materializes this ignored dependency
   # installation at its root before the scoped command runs.
   scoped_command: './node_modules/.bin/vitest run {selectors}'
+  # `changed` mode: each BUILD-lap test_suite run executes only the tests
+  # Vitest relates to files changed since the merge-base with origin/<default>
+  # ({base}), plus the integrity suite. The FINISH validation fence requires an
+  # aggregate-basis PASS, so `commands` above runs in full exactly once before
+  # SHIP. Changes to dependencies, config, test infrastructure (setup, helpers,
+  # vitest configs) or scripts/ fail closed to the full `commands` sequence.
+  changed_command: 'node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 --passWithNoTests --changed {base} && cd ../.. && test/test_harness_integrity.sh'
   # Ordered aggregate entries each choose their own directory; scoped runs use
   # this shared fallback to reach the conductor package's Vitest binary.
   working_directory: src/conductor
   timeout_seconds: 1800
   # One full-suite run per feature, then hold that PASS across small laps.
   #
-  # `aggregate` stays the mode deliberately. `scoped` derives its selectors
-  # from the feature's changed *test* paths only, so a source change that
-  # breaks an untouched test would not be executed by the build loop's only
-  # regression gate.
+  # `changed`, not `scoped`: `scoped` derives its selectors from the feature's
+  # changed *test* paths only, so a source change that breaks an untouched
+  # test would not be executed. `changed` lets Vitest follow the module graph
+  # from changed source, and SHIP still requires one aggregate PASS.
   #
   # The budget is a count of changed files since the attested PASS, per
   # category. Within budget the PASS is preserved and nothing re-runs; over
@@ -149,7 +156,7 @@ test_suite:
   # `project_config` remain `none` — those are unbudgetable and always
   # re-run.
   verification:
-    mode: aggregate
+    mode: changed
     drift_budget:
       source: 6
       tests: 3

@@ -542,6 +542,12 @@ function normalizeSuiteConfig(
       timeout_seconds: entry.timeout_seconds ?? null,
     })),
   };
+  if (testSuite.verification?.mode === 'changed') {
+    return JSON.stringify({
+      ...normalizedWithCommands,
+      changed_command: testSuite.changed_command,
+    });
+  }
   if (testSuite.verification?.mode !== 'scoped') return JSON.stringify(normalizedWithCommands);
   return JSON.stringify({
     ...normalizedWithCommands,
