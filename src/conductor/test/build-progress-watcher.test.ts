@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4
+// Covers: task:1, task:2, task:3, task:4, task:5
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1621,5 +1621,185 @@ describe('BuildProgressWatcher active-stall warn episodes', () => {
     watcher.stop();
 
     expect(activeStallEvents()).toEqual([]);
+  });
+});
+
+describe('BuildProgressWatcher active-stall bounds and clearing', () => {
+  let dir: string;
+  let emitter: ConductorEventEmitter;
+  let emitSpy: MockInstance<typeof emitter.emit>;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-active-stall-bound-test-'));
+    emitter = new ConductorEventEmitter();
+    emitSpy = vi.spyOn(emitter, 'emit');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function writeTasks(resolved: number, total: number): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const tasks = Array.from({ length: total }, (_, i) => ({
+      id: String(i + 1),
+      status: i < resolved ? 'completed' : 'pending',
+    }));
+    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  }
+
+  async function writeHeartbeat(timestamp: number): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/step-heartbeat'),
+      JSON.stringify({ step: 'build', ts: new Date(timestamp).toISOString() }),
+    );
+  }
+
+  function activeStallEvents(): Extract<ConductorEvent, { type: 'build_active_stall' }>[] {
+    return emitSpy.mock.calls
+      .map((call) => call[0] as ConductorEvent)
+      .filter((event): event is Extract<ConductorEvent, { type: 'build_active_stall' }> =>
+        event.type === 'build_active_stall');
+  }
+
+  function buildProgressEvents(): Extract<ConductorEvent, { type: 'build_progress' }>[] {
+    return emitSpy.mock.calls
+      .map((call) => call[0] as ConductorEvent)
+      .filter((event): event is Extract<ConductorEvent, { type: 'build_progress' }> =>
+        event.type === 'build_progress');
+  }
+
+  function tick(watcher: BuildProgressWatcher): Promise<void> {
+    return (watcher as unknown as { tick(): Promise<void> }).tick();
+  }
+
+  it('uses the resolved 120-minute bound instead of an earlier default', async () => {
+    await writeTasks(5, 21);
+    let clock = Date.UTC(2026, 8, 28, 12, 0, 0);
+    const endAttempt = vi.fn();
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      config: { build_progress: { active_stall_minutes: 120, active_stall_action: 'end_attempt' } },
+      now: () => clock,
+      endAttempt,
+    });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    clock += 59 * 60 * 1000 + 59 * 1000;
+    await writeHeartbeat(clock);
+    clock += 1_000;
+    await tick(watcher);
+    watcher.stop();
+
+    expect(activeStallEvents()).toEqual([]);
+    expect(endAttempt).not.toHaveBeenCalled();
+  });
+
+  it('resets the active-stall bound after an observed commit', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeTasks(5, 21);
+    await writeFile(join(dir, 'README.md'), 'first');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial'], { cwd: dir });
+
+    let clock = Date.UTC(2026, 8, 28, 12, 0, 0);
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      config: { build_progress: { active_stall_minutes: 45 } },
+      now: () => clock,
+    });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    clock += 40 * 60 * 1000;
+    await writeFile(join(dir, 'README.md'), 'second');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'second'], { cwd: dir });
+    await tick(watcher);
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({ activity: 'active-committing', tickReason: 'head-moved' }),
+    ]);
+    emitSpy.mockClear();
+
+    clock += 5 * 60 * 1000 - 1_000;
+    await writeHeartbeat(clock);
+    clock += 1_000;
+    await tick(watcher);
+    expect(activeStallEvents()).toEqual([]);
+
+    clock += 39 * 60 * 1000 + 59 * 1000;
+    await writeHeartbeat(clock);
+    clock += 1_000;
+    await tick(watcher);
+    watcher.stop();
+
+    expect(activeStallEvents()).toHaveLength(1);
+    expect(activeStallEvents()[0].minutes).toBe(45);
+  });
+
+  it('does not end an attempt when only a stale heartbeat remains', async () => {
+    await writeTasks(5, 21);
+    let clock = Date.UTC(2026, 8, 28, 12, 0, 0);
+    const endAttempt = vi.fn();
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      config: { build_progress: { active_stall_minutes: 45, active_stall_action: 'end_attempt' } },
+      now: () => clock,
+      endAttempt,
+    });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    await writeHeartbeat(clock + 1_000);
+    clock += 45 * 60 * 1000;
+    await tick(watcher);
+    watcher.stop();
+
+    expect(activeStallEvents()).toEqual([]);
+    expect(endAttempt).not.toHaveBeenCalled();
+  });
+
+  it('clears the original deadline on a task-progress change without a new commit', async () => {
+    await writeTasks(5, 21);
+    let clock = Date.UTC(2026, 8, 28, 12, 0, 0);
+    const endAttempt = vi.fn();
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      config: { build_progress: { active_stall_minutes: 45, active_stall_action: 'end_attempt' } },
+      now: () => clock,
+      endAttempt,
+    });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    clock += 40 * 60 * 1000;
+    await writeTasks(6, 21);
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    clock += 4 * 60 * 1000 + 59 * 1000;
+    await writeHeartbeat(clock);
+    clock += 1_000;
+    await tick(watcher);
+    watcher.stop();
+
+    expect(activeStallEvents()).toEqual([]);
+    expect(endAttempt).not.toHaveBeenCalled();
   });
 });
