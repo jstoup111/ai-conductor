@@ -210,7 +210,7 @@ describe('makeProductionGh bot write credential', () => {
     productionGh.stdout = '{"login":"bot"}';
     botCredential.credential = { kind: 'unconfigured' };
     botCredential.token = { kind: 'unavailable' };
-    for (const key of ['AI_CONDUCTOR_NO_REAL_EXEC', 'GH_TOKEN', 'GITHUB_TOKEN']) {
+    for (const key of ['AI_CONDUCTOR_NO_REAL_EXEC', 'GH_TOKEN', 'GITHUB_TOKEN', 'CONDUCT_GH_REAL_EXECUTABLE']) {
       savedEnvironment.set(key, process.env[key]);
     }
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
@@ -243,6 +243,16 @@ describe('makeProductionGh bot write credential', () => {
     }]);
     expect(process.env.GH_TOKEN).toBe('operator-token');
     expect(process.env.GITHUB_TOKEN).toBe('operator-github-token');
+  });
+
+  it('uses the provisioned real executable for a guarded operation without invoking the managed PATH observer', async () => {
+    process.env.CONDUCT_GH_REAL_EXECUTABLE = '/private/real-gh';
+
+    await makeProductionGh()(['issue', 'edit', '7'], { cwd: '/worktree', credential: 'write' });
+
+    expect(execFileCb).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(execFileCb).mock.calls[0]?.[0]).toBe('/private/real-gh');
+    expect(vi.mocked(execFileCb).mock.calls[0]?.[1]).toEqual(['issue', 'edit', '7']);
   });
 
   it.each([

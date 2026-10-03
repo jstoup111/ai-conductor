@@ -5,6 +5,22 @@ import type { Stream } from 'node:stream';
 import { classifyGhObservation } from './gh-observation-classifier.js';
 import { SessionEventProducer, type SessionEventProducerContext } from './session-event-producer.js';
 
+/**
+ * Managed-session preparation sets this only after resolving the real binary
+ * before the observer directory is prepended to PATH.
+ */
+export const GH_OBSERVER_REAL_EXECUTABLE_ENV = 'CONDUCT_GH_REAL_EXECUTABLE';
+
+/**
+ * The guarded GitHub-operation adapter must bypass the managed PATH observer:
+ * its own authorization is already established per operation. Invalid or
+ * absent context deliberately falls back to ordinary PATH resolution.
+ */
+export function resolvePrivateGhObserverPassthrough(environment: NodeJS.ProcessEnv = process.env): string {
+  const executable = environment[GH_OBSERVER_REAL_EXECUTABLE_ENV];
+  return executable !== undefined && isAbsolute(executable) ? executable : 'gh';
+}
+
 /** The already-resolved process result. It is intentionally not a remote-state claim. */
 export interface GhObserverTerminalResult {
   readonly exitCode: number | null;
@@ -109,7 +125,7 @@ export const runRealGhTransport: GhObserverTransport = (executable, argv, stream
  * only by managed-session preparation; absence is an explicit setup failure.
  */
 export async function runGhObserverFromEnvironment(environment: NodeJS.ProcessEnv = process.env): Promise<GhObserverTerminalResult> {
-  const realExecutable = environment.CONDUCT_GH_REAL_EXECUTABLE;
+  const realExecutable = environment[GH_OBSERVER_REAL_EXECUTABLE_ENV];
   const producerRoot = environment.CONDUCT_SESSION_EVENT_ROOT;
   const dispatchId = environment.CONDUCT_SESSION_DISPATCH_ID;
   const provider = environment.CONDUCT_SESSION_PROVIDER;
