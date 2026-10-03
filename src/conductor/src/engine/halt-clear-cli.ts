@@ -71,7 +71,9 @@ export async function dispatchHaltClearCommand(
     return 1;
   }
   const haltClass = (await readFile(join(worktree, HALT_CLASS_MARKER), 'utf8').catch(() => 'unclassified')).trim() || 'unclassified';
-  const operator = await (deps.resolveOperator?.() ?? resolveMachineOperatorIdentity(root));
+  const operator = deps.resolveOperator
+    ? await deps.resolveOperator()
+    : await resolveMachineOperatorIdentity(root);
   if (!operator?.trim()) {
     print('halt clear: no approved operator identity is available.');
     return 1;
