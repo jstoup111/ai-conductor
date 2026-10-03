@@ -182,7 +182,7 @@ async function writePrdAuditFixableFixture(
     },
     diagnostics: [],
     recordedDispositions: [],
-  }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: null });
+  }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: 'fixture-head' });
 }
 
 function asBuiltBlockedFixture(findings: readonly AsBuiltFinding[]) {

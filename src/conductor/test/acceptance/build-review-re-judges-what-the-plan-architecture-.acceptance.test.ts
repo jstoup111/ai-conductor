@@ -191,7 +191,7 @@ function fakeRunner(fixture: Fixture, calls: StepName[], options: RunnerOptions 
       } else if (step === 'manual_test') {
         await writeFile(join(fixture.pipelineDir, 'manual-test-results.md'), MANUAL_TEST_PASS);
       } else if (step === 'prd_audit' && options.prdAudit !== 'missing') {
-        await persistPrdAuditVerdict(fixture.root, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'src/feature.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: ['1'] }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId: runOptions?.runId ?? 'fixture-run', codeStamp: null });
+        await persistPrdAuditVerdict(fixture.root, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'src/feature.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: ['1'] }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId: runOptions?.runId ?? 'fixture-run', codeStamp: 'fixture-head' });
       } else if (step === 'architecture_review_as_built') {
         await persistAsBuiltVerdict(fixture.root, options.asBuilt === 'plan-gap'
           ? {

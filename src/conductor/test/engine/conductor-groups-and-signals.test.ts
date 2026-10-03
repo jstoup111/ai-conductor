@@ -160,7 +160,7 @@ async function writePrdAuditFixture(
     },
     diagnostics: [],
     recordedDispositions: [],
-  }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: null });
+  }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: 'fixture-head' });
 }
 
 /**
@@ -194,7 +194,7 @@ async function writePrdAuditFixableFixture(
     },
     diagnostics: [],
     recordedDispositions: [],
-  }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: null });
+  }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: 'fixture-head' });
 }
 
 function asBuiltApprovedFixture() {
@@ -6538,7 +6538,7 @@ describe('engine/conductor', () => {
               },
               diagnostics: [],
               recordedDispositions: [],
-            }, { attemptId: options?.runId ?? 'fixture-prd-audit', codeStamp: null });
+            }, { attemptId: options?.runId ?? 'fixture-prd-audit', codeStamp: 'fixture-head' });
           } else if (step === 'architecture_review_as_built') {
             await _mkdir(join(dir, '.docs/decisions'), { recursive: true });
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());

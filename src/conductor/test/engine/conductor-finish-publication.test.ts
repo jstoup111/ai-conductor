@@ -79,7 +79,7 @@ async function writePrdAuditFixture(
   dir: string,
   attemptId = 'fixture-run',
   grade: 'PASS' | 'PLAN_GAP' = 'PASS',
-  codeStamp: string | null = null,
+  codeStamp: string | null = 'fixture-head',
 ): Promise<void> {
   await persistPrdAuditVerdict(dir, {
     complete: true,

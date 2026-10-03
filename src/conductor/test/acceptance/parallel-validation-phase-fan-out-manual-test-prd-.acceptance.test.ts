@@ -129,7 +129,7 @@ const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
 };
 
 async function writePrdAuditPass(dir: string, attemptId?: string, grade: 'PASS' | 'FIXABLE' = 'PASS'): Promise<void> {
-  await persistPrdAuditVerdict(dir, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade, evidence: 'evidence.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: [], ...(grade === 'FIXABLE' ? { ownerTaskId: '1' } : {}) }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId: attemptId ?? 'fixture-run', codeStamp: null });
+  await persistPrdAuditVerdict(dir, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade, evidence: 'evidence.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: [], ...(grade === 'FIXABLE' ? { ownerTaskId: '1' } : {}) }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId: attemptId ?? 'fixture-run', codeStamp: 'fixture-head' });
 }
 
 describe('parallel validation phase — cross-module acceptance flows (#469)', () => {

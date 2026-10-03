@@ -246,7 +246,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
         },
         diagnostics: [],
         recordedDispositions: [],
-      }, { attemptId: options?.runId ?? 'test-run', codeStamp: null });
+      }, { attemptId: options?.runId ?? 'test-run', codeStamp: 'fixture-head' });
     } else if (step === 'architecture_review_as_built') {
       await persistAsBuiltVerdict(dir, {
         version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],

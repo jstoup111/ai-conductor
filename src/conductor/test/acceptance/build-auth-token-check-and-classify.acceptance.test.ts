@@ -97,7 +97,7 @@ const FEATURE_PRD = '# PRD: Build auth token check and classify\n\n## Functional
 const OBSERVED_401 = 'Failed to authenticate. API Error: 401 Invalid bearer token';
 
 async function writePrdAuditPass(dir: string, runId?: string): Promise<void> {
-  await persistPrdAuditVerdict(dir, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'evidence.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId: runId ?? 'fixture-run', codeStamp: null });
+  await persistPrdAuditVerdict(dir, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'evidence.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId: runId ?? 'fixture-run', codeStamp: 'fixture-head' });
 }
 
 describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join path parks on authFailure (#484)', () => {

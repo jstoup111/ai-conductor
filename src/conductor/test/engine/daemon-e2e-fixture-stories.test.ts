@@ -42,7 +42,7 @@ describe('daemon E2E fixture stories', () => {
       },
       diagnostics: [],
       recordedDispositions: [],
-    }, { attemptId: 'fixture-run', codeStamp: null });
+    }, { attemptId: 'fixture-run', codeStamp: 'fixture-head' });
 
     const result = await checkStepCompletion(dir, 'prd_audit', {
       planPath: join(dir, `.docs/plans/${slug}.md`),

@@ -29,7 +29,7 @@ const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
 };
 
 async function writePrdAuditPass(dir: string, options?: StepRunOptions): Promise<void> {
-  await persistPrdAuditVerdict(dir, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'fixture.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: null });
+  await persistPrdAuditVerdict(dir, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'fixture.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: 'fixture-head' });
 }
 
 async function writeAsBuiltApproval(dir: string, options?: StepRunOptions): Promise<void> {
