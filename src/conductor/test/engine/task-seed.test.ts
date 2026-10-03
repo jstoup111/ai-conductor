@@ -2,8 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-// Covers: task:5
+import { execa } from 'execa';
+import * as autoheal from '../../src/engine/autoheal.js';
+// Covers: task:1, task:5
 import { seedTaskStatus } from '../../src/engine/task-seed.js';
+
+vi.mock('../../src/engine/autoheal.js', { spy: true });
 
 describe('task-seed', () => {
   let dir: string;
@@ -86,6 +90,98 @@ Content with \`src/file3.ts\`
       expect(status.tasks.find((task: any) => task.id === '1').files).toEqual(['src/one.ts', 'src/two.ts']);
       expect(status.tasks.find((task: any) => task.id === '2').files).toEqual(['src/one.ts', 'src/two.ts']);
       expect(status.tasks.find((task: any) => task.id === '3').files).toBeUndefined();
+    });
+  });
+
+  describe('Task 1: partial task-status recovery from Task trailers', () => {
+    async function git(args: string[]): Promise<string> {
+      const result = await execa('git', args, { cwd: dir });
+      return result.stdout.trim();
+    }
+
+    async function initializeRepository(): Promise<void> {
+      await git(['init', '-q', '-b', 'main']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test User']);
+      await fsPromises.writeFile(join(dir, 'README.md'), '# fixture\n');
+      await git(['add', 'README.md']);
+      await git(['commit', '-q', '-m', 'initial fixture']);
+      await git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    }
+
+    async function commitForTask(id: string): Promise<string> {
+      const path = `task-${id}.txt`;
+      await fsPromises.writeFile(join(dir, path), `task ${id}\n`);
+      await git(['add', path]);
+      await git(['commit', '-q', '-m', `feat: task ${id}`, '-m', `Task: ${id}`]);
+      return git(['rev-parse', 'HEAD']);
+    }
+
+    async function writePlan(): Promise<string> {
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.writeFile(
+        planPath,
+        '# Plan\n\n## Task 1: Already recorded\n\n## Task 18: Restored work\n',
+      );
+      return planPath;
+    }
+
+    it('restores only a missing row from its branch-scoped Task trailer', async () => {
+      await initializeRepository();
+      const trailerCommit = await commitForTask('18');
+      const planPath = await writePlan();
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' }] }),
+      );
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks).toEqual([
+        { id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' },
+        {
+          id: '18', name: 'Restored work', status: 'completed', commit: trailerCommit,
+          restored_from: 'task-trailer',
+        },
+      ]);
+    });
+
+    it('writes a missing row as pending when no branch-scoped Task trailer proves it', async () => {
+      await initializeRepository();
+      const planPath = await writePlan();
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' }] }),
+      );
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks.find((task: any) => task.id === '18')).toEqual({
+        id: '18', name: 'Restored work', status: 'pending',
+      });
+    });
+
+    it('avoids scanning trailers when every plan task already has a row', async () => {
+      const planPath = await writePlan();
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [
+          { id: '1', name: 'Already recorded', status: 'pending' },
+          { id: '18', name: 'Restored work', status: 'pending' },
+        ] }),
+      );
+      const trailers = vi.spyOn(autoheal, 'listCommitsWithTrailers');
+      trailers.mockClear();
+
+      await seedTaskStatus(dir, planPath);
+
+      expect(trailers).not.toHaveBeenCalled();
     });
   });
 
