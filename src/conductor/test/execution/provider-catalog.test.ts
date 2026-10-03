@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   BUILT_IN_PROVIDERS,
   DEFAULT_PROVIDER,
+  PROVIDER_CAPABILITY_OWNERS,
   ProviderCapabilityUnsupportedError,
   requireProviderCapability,
   resolveProviderExecutable,
@@ -186,5 +187,29 @@ describe('built-in provider catalog', () => {
 
     const provider: ProviderWith<'selfHost'> = requireProviderCapability('claude', 'selfHost');
     expect(provider).toBe(claude);
+  });
+
+  it('declares Pi\'s agent home and keeps its review-policy capability with its follow-up intake', () => {
+    const pi = BUILT_IN_PROVIDERS.find((provider) => provider.id === 'pi')!;
+
+    expect(pi).toMatchObject({
+      homeVariable: 'PI_CODING_AGENT_DIR',
+      defaultHome: '.pi/agent',
+    });
+    expect(pi.capabilities).not.toHaveProperty('reviewPolicyCatalog');
+    expect(pi.capabilities).not.toHaveProperty('readiness');
+    expect(PROVIDER_CAPABILITY_OWNERS.reviewPolicyCatalog).toBe('#2852');
+
+    const requireReviewPolicyCatalog = () => requireProviderCapability('pi', 'reviewPolicyCatalog');
+    expect(requireReviewPolicyCatalog).toThrow(ProviderCapabilityUnsupportedError);
+    expect(requireReviewPolicyCatalog).toThrow(/#2852/);
+    expect(requireReviewPolicyCatalog).not.toThrow(/#1888/);
+    try {
+      requireReviewPolicyCatalog();
+    } catch (error) {
+      expect(error).toMatchObject({
+        owningIntake: '#2852',
+      });
+    }
   });
 });

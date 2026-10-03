@@ -23,6 +23,11 @@ import {
   type ProviderExecutionContext,
 } from './provider-execution.js';
 import { dispatchMemorySetup } from './memory-cli.js';
+import {
+  renderSkillInvocation,
+  STEP_SKILL_INVOCATIONS,
+  type SkillInvocationDescriptor,
+} from './skill-invocation.js';
 
 const exec = promisify(execCb);
 
@@ -123,7 +128,7 @@ export async function runProjectPrelude(
     result.bootstrapExecuted = true;
     result.bootstrapReason = bootstrapReason;
     const skillResult = await invokePreludeSkill('bootstrap', projectRoot,
-      provider, sessionId, config, options, '/bootstrap',
+      provider, sessionId, config, options, STEP_SKILL_INVOCATIONS.bootstrap!,
       'Run the bootstrap skill for this project. It is safe to re-run: detect ' +
       'current state, refresh artifacts, apply any harness migrations.');
     result.bootstrapSuccess = skillResult.success;
@@ -140,7 +145,7 @@ export async function runProjectPrelude(
     result.assessExecuted = true;
     result.assessReason = assessResult.reason;
     const skillResult = await invokePreludeSkill('assess', projectRoot,
-      provider, sessionId, config, options, '/assess',
+      provider, sessionId, config, options, STEP_SKILL_INVOCATIONS.assess!,
       'Run the assess skill. Produce or refresh technical-assessment docs and ' +
       'architecture decision records based on current project state.');
     result.assessSuccess = skillResult.success;
@@ -160,12 +165,12 @@ async function invokePreludeSkill(
   sessionId: string,
   config: HarnessConfig,
   options: PreludeOptions,
-  prompt: string,
+  invocation: SkillInvocationDescriptor,
   systemPrompt: string,
 ): Promise<InvokeSkillResult> {
   const execution = options.providerExecution;
   if (!execution) {
-    return invokeSkill(provider, sessionId, prompt, systemPrompt);
+    return invokeSkill(provider, sessionId, renderSkillInvocation(invocation, '/'), systemPrompt);
   }
 
   const result = await (
@@ -181,11 +186,14 @@ async function invokePreludeSkill(
     onAttempt: execution.onAttempt,
     warn: execution.warn,
     options: {
-      prompt,
+      prompt: renderSkillInvocation(invocation, '/'),
       cwd: projectRoot,
       dangerouslySkipPermissions: true,
       systemPrompt,
     },
+    optionsForCandidate: (candidateKey) => ({
+      prompt: renderSkillInvocation(invocation, candidateKey),
+    }),
   });
   return {
     success: result.success,

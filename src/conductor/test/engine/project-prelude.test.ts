@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
@@ -386,7 +387,7 @@ describe('runProjectPrelude (happy paths)', () => {
       ],
       codexCalls: [
         {
-          prompt: '/bootstrap',
+          prompt: '$bootstrap',
           sessionId: bootstrapSessionId,
           resume: false,
           cwd: dir,
@@ -426,6 +427,41 @@ describe('runProjectPrelude (happy paths)', () => {
         assessed_at: expect.any(String),
       }),
     });
+  });
+
+  it('renders bootstrap and assess skills for Pi through provider execution', async () => {
+    await writeFile(join(dir, 'app.rb'), 'puts 1\n');
+    const piInvoke = vi.fn<LLMProvider['invoke']>(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'completed',
+      exitCode: 0,
+    }));
+    const piProvider: LLMProvider = { invoke: piInvoke };
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'pi',
+        provider: piProvider,
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+
+    await runProjectPrelude(dir, createMockProvider(), 'session-1', {
+      llm_provider: 'pi',
+    }, {
+      harnessVersion: '1.0.0',
+      providerExecution: {
+        configuredProviders: ['pi'],
+        runtimes,
+        sessions: new ProviderSessionStore(),
+      },
+    });
+
+    expect(piInvoke.mock.calls.map(([options]) => options.prompt)).toEqual([
+      '/skill:bootstrap',
+      '/skill:assess',
+    ]);
   });
 
   it('runs bootstrap on a fresh project (never_run)', async () => {

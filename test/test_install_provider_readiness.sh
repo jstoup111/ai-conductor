@@ -17,11 +17,13 @@ cp -r "$HARNESS_DIR/bin" "$CHECKOUT/bin"
 cp -r "$HARNESS_DIR/skills" "$CHECKOUT/skills"
 cp -r "$HARNESS_DIR/hooks" "$CHECKOUT/hooks"
 cp "$HARNESS_DIR/HARNESS.md" "$HARNESS_DIR/ARCHITECTURE.md" "$HARNESS_DIR/VERSION" "$CHECKOUT/"
+mkdir -p "$CHECKOUT/src/conductor/dist"
+cp "$HARNESS_DIR/src/conductor/dist/index.js" "$CHECKOUT/src/conductor/dist/"
 
 FAKE_HOME="$TMP_ROOT/home"
 STUBS="$TMP_ROOT/stubs"
 mkdir -p "$FAKE_HOME" "$STUBS"
-for tool in rtk npm node claude codex uv; do
+for tool in rtk npm node claude codex pi uv; do
   printf '#!/usr/bin/env bash\nexit 0\n' > "$STUBS/$tool"
   chmod +x "$STUBS/$tool"
 done
@@ -35,10 +37,10 @@ HELP_SHORT=$(HOME="$FAKE_HOME" "$CHECKOUT/bin/install" -h)
 
 if [ "$HELP_LONG" = "$HELP_SHORT" ] \
   && printf '%s' "$HELP_LONG" | grep -Fq -- '--providers' \
-  && printf '%s' "$HELP_LONG" | grep -Fqi 'comma-separated selection of Claude and/or Codex'; then
-  echo 'PASS install help documents the Claude/Codex provider selection'
+  && printf '%s' "$HELP_LONG" | grep -Fqi 'comma-separated selection of Claude, Codex, and/or Pi'; then
+  echo 'PASS install help documents the Claude/Codex/Pi provider selection'
 else
-  echo 'FAIL install help documents the Claude/Codex provider selection'
+  echo 'FAIL install help documents the Claude/Codex/Pi provider selection'
   printf '%s\n' "$HELP_LONG"
   exit 1
 fi
@@ -51,7 +53,7 @@ set -e
 
 if [ "$MISSING_PROVIDERS_CODE" -ne 0 ] \
   && [ "$MISSING_PROVIDERS_CODE" -ne 124 ] \
-  && printf '%s' "$MISSING_PROVIDERS_OUT" | grep -Fq -- '--providers requires a comma-separated selection of Claude and/or Codex'; then
+  && printf '%s' "$MISSING_PROVIDERS_OUT" | grep -Fq -- '--providers requires a comma-separated selection of Claude, Codex, and/or Pi'; then
   echo 'PASS missing --providers value retains its specific validation error'
 else
   echo 'FAIL missing --providers value retains its specific validation error'
@@ -60,21 +62,24 @@ else
   exit 1
 fi
 
-# `script` supplies a true TTY; the answer is intentionally harmless until
-# provider selection is implemented, at which point it chooses Claude.
+# `script` supplies a true TTY. Select Claude and Codex together to prove the
+# chooser keeps the legacy two-host selection while offering Pi.
 set +e
 # The test needs only the first interactive question. Bound the real installer
 # so unrelated setup work cannot make this RED assertion hang.
-OUT=$(cd "$CHECKOUT" && printf '1\n' | HOME="$FAKE_HOME" PATH="$STUBS:$PATH" timeout 8s script -qec "$CHECKOUT/bin/install --allow-worktree-root" "$TMP_ROOT/install.log" 2>&1)
+OUT=$(cd "$CHECKOUT" && printf '1,2\n' | HOME="$FAKE_HOME" PATH="$STUBS:$PATH" timeout 8s script -qec "$CHECKOUT/bin/install --allow-worktree-root" "$TMP_ROOT/install.log" 2>&1)
 CODE=$?
 set -e
 
 # One behavior, one assertion: the interactive prompt makes all built-in
 # readiness choices visible before setup continues.
-if printf '%s' "$OUT" | tr '\n' ' ' | grep -qiE 'claude.*codex.*both'; then
-  echo 'PASS interactive install offers Claude, Codex, and both choices'
+if printf '%s' "$OUT" | tr '\n' ' ' | grep -qiE 'claude.*codex.*pi' \
+  && printf '%s' "$OUT" | grep -Fqi 'Claude Code CLI found' \
+  && printf '%s' "$OUT" | grep -Fqi 'Codex CLI found' \
+  && ! printf '%s' "$OUT" | grep -Fqi 'Pi CLI found'; then
+  echo 'PASS interactive install multiselect keeps the Claude and Codex pair while offering Pi'
 else
-  echo 'FAIL interactive install offers Claude, Codex, and both choices'
+  echo 'FAIL interactive install multiselect keeps the Claude and Codex pair while offering Pi'
   printf '%s\n' "$OUT"
   exit 1
 fi
@@ -82,19 +87,146 @@ fi
 # One behavior, one assertion: unsupported explicit selection is rejected
 # synchronously, before installation can continue into setup or readiness.
 set +e
-UNSUPPORTED_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$STUBS:$PATH" timeout 8s script -qec "$CHECKOUT/bin/install --providers unsupported --allow-worktree-root" "$TMP_ROOT/unsupported.log" 2>&1)
+UNSUPPORTED_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$STUBS:$PATH" timeout 8s script -qec "$CHECKOUT/bin/install --providers foo --allow-worktree-root" "$TMP_ROOT/unsupported.log" 2>&1)
 UNSUPPORTED_CODE=$?
 set -e
 
 if [ "$UNSUPPORTED_CODE" -ne 0 ] \
   && [ "$UNSUPPORTED_CODE" -ne 124 ] \
   && printf '%s' "$UNSUPPORTED_OUT" | grep -qi 'claude' \
-  && printf '%s' "$UNSUPPORTED_OUT" | grep -qi 'codex'; then
-  echo 'PASS unsupported provider selection names Claude and Codex before setup'
+  && printf '%s' "$UNSUPPORTED_OUT" | grep -qi 'codex' \
+  && printf '%s' "$UNSUPPORTED_OUT" | grep -qi 'pi' \
+  && ! printf '%s' "$UNSUPPORTED_OUT" | grep -qi 'Built-in provider readiness'; then
+  echo 'PASS unsupported provider selection names Claude, Codex, and Pi before setup'
 else
-  echo 'FAIL unsupported provider selection names Claude and Codex before setup'
+  echo 'FAIL unsupported provider selection names Claude, Codex, and Pi before setup'
   printf 'exit code: %s\n' "$UNSUPPORTED_CODE"
   printf '%s\n' "$UNSUPPORTED_OUT"
+  exit 1
+fi
+
+# A Pi-only installation completes and reports the Pi executable as ready from
+# the installer's own PATH, independent of any engine capability descriptor.
+PI_ONLY_HOME="$TMP_ROOT/pi-only-home"
+mkdir -p "$PI_ONLY_HOME"
+set +e
+PI_ONLY_OUT=$(cd "$CHECKOUT" && HOME="$PI_ONLY_HOME" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" --providers pi --allow-worktree-root </dev/null 2>&1)
+PI_ONLY_CODE=$?
+set -e
+
+if [ "$PI_ONLY_CODE" -eq 0 ] \
+  && printf '%s' "$PI_ONLY_OUT" | grep -Fqi 'Pi CLI found'; then
+  echo 'PASS Pi-only install reports Pi ready'
+else
+  echo 'FAIL Pi-only install reports Pi ready'
+  printf 'exit code: %s\n' "$PI_ONLY_CODE"
+  printf '%s\n' "$PI_ONLY_OUT"
+  exit 1
+fi
+
+# A combined selection reports every selected built-in provider.
+ALL_PROVIDERS_HOME="$TMP_ROOT/all-providers-home"
+mkdir -p "$ALL_PROVIDERS_HOME"
+set +e
+ALL_PROVIDERS_OUT=$(cd "$CHECKOUT" && HOME="$ALL_PROVIDERS_HOME" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" --providers claude,codex,pi --allow-worktree-root </dev/null 2>&1)
+ALL_PROVIDERS_CODE=$?
+set -e
+
+if [ "$ALL_PROVIDERS_CODE" -eq 0 ] \
+  && printf '%s' "$ALL_PROVIDERS_OUT" | grep -Fqi 'Claude Code CLI found' \
+  && printf '%s' "$ALL_PROVIDERS_OUT" | grep -Fqi 'Codex CLI found' \
+  && printf '%s' "$ALL_PROVIDERS_OUT" | grep -Fqi 'Pi CLI found'; then
+  echo 'PASS combined install reports Claude, Codex, and Pi ready'
+else
+  echo 'FAIL combined install reports Claude, Codex, and Pi ready'
+  printf 'exit code: %s\n' "$ALL_PROVIDERS_CODE"
+  printf '%s\n' "$ALL_PROVIDERS_OUT"
+  exit 1
+fi
+
+# Provider readiness is deliberately separate from catalog reconciliation.
+# Establish the existing two-provider catalog, then prove that selecting Pi
+# cannot create, remove, or repoint either discovery catalog on either run.
+CATALOG_LINKS_HOME="$TMP_ROOT/catalog-links-home"
+mkdir -p "$CATALOG_LINKS_HOME"
+set +e
+CATALOG_BASELINE_OUT=$(cd "$CHECKOUT" && HOME="$CATALOG_LINKS_HOME" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" --providers claude,codex --allow-worktree-root </dev/null 2>&1)
+CATALOG_BASELINE_CODE=$?
+set -e
+CATALOG_LINKS_BEFORE=$(find "$CATALOG_LINKS_HOME/.claude/skills" "$CATALOG_LINKS_HOME/.agents/skills" -maxdepth 1 -printf '%p -> %l\n' | sort)
+
+set +e
+CATALOG_PI_FIRST_OUT=$(cd "$CHECKOUT" && HOME="$CATALOG_LINKS_HOME" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" --providers pi --allow-worktree-root </dev/null 2>&1)
+CATALOG_PI_FIRST_CODE=$?
+set -e
+CATALOG_LINKS_AFTER_FIRST_PI=$(find "$CATALOG_LINKS_HOME/.claude/skills" "$CATALOG_LINKS_HOME/.agents/skills" -maxdepth 1 -printf '%p -> %l\n' | sort)
+
+set +e
+CATALOG_PI_SECOND_OUT=$(cd "$CHECKOUT" && HOME="$CATALOG_LINKS_HOME" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" --providers pi --allow-worktree-root </dev/null 2>&1)
+CATALOG_PI_SECOND_CODE=$?
+set -e
+CATALOG_LINKS_AFTER_SECOND_PI=$(find "$CATALOG_LINKS_HOME/.claude/skills" "$CATALOG_LINKS_HOME/.agents/skills" -maxdepth 1 -printf '%p -> %l\n' | sort)
+
+if [ "$CATALOG_BASELINE_CODE" -eq 0 ] \
+  && [ "$CATALOG_PI_FIRST_CODE" -eq 0 ] \
+  && [ "$CATALOG_PI_SECOND_CODE" -eq 0 ] \
+  && [ "$CATALOG_LINKS_BEFORE" = "$CATALOG_LINKS_AFTER_FIRST_PI" ] \
+  && [ "$CATALOG_LINKS_BEFORE" = "$CATALOG_LINKS_AFTER_SECOND_PI" ]; then
+  echo 'PASS Pi installs preserve existing Claude and Codex catalog links on both runs'
+else
+  echo 'FAIL Pi installs preserve existing Claude and Codex catalog links on both runs'
+  printf 'baseline exit code: %s; first Pi exit code: %s; second Pi exit code: %s\n' "$CATALOG_BASELINE_CODE" "$CATALOG_PI_FIRST_CODE" "$CATALOG_PI_SECOND_CODE"
+  printf 'before:\n%s\nafter first Pi:\n%s\nafter second Pi:\n%s\n' "$CATALOG_LINKS_BEFORE" "$CATALOG_LINKS_AFTER_FIRST_PI" "$CATALOG_LINKS_AFTER_SECOND_PI"
+  exit 1
+fi
+
+# A missing Pi remains advisory during installation, but strict readiness
+# reports it as a selected unavailable provider.
+MISSING_PI_STUBS="$TMP_ROOT/stubs-without-pi"
+mkdir -p "$MISSING_PI_STUBS"
+for tool in rtk npm node claude codex uv python3; do
+  ln -s "$STUBS/$tool" "$MISSING_PI_STUBS/$tool"
+done
+
+MISSING_PI_HOME="$TMP_ROOT/missing-pi-home"
+mkdir -p "$MISSING_PI_HOME"
+set +e
+MISSING_PI_OUT=$(cd "$CHECKOUT" && HOME="$MISSING_PI_HOME" PATH="$MISSING_PI_STUBS:/usr/bin:/bin" timeout 8s "$CHECKOUT/bin/install" --providers pi --allow-worktree-root </dev/null 2>&1)
+MISSING_PI_CODE=$?
+set -e
+
+if [ "$MISSING_PI_CODE" -eq 0 ] \
+  && printf '%s' "$MISSING_PI_OUT" | grep -qiE 'Pi.*(not found|missing|not installed)' \
+  && printf '%s' "$MISSING_PI_OUT" | grep -qi 'install'; then
+  echo 'PASS missing selected Pi CLI warns without blocking install'
+else
+  echo 'FAIL missing selected Pi CLI warns without blocking install'
+  printf 'exit code: %s\n' "$MISSING_PI_CODE"
+  printf '%s\n' "$MISSING_PI_OUT"
+  exit 1
+fi
+
+mkdir -p "$MISSING_PI_HOME/.local/bin"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$MISSING_PI_HOME/.local/bin/conduct-ts"
+chmod +x "$MISSING_PI_HOME/.local/bin/conduct-ts"
+
+set +e
+PI_CHECK_READY_OUT=$(cd "$CHECKOUT" && HOME="$PI_ONLY_HOME" PATH="$STUBS:$PI_ONLY_HOME/.local/bin:/usr/bin:/bin" timeout 8s "$CHECKOUT/bin/install" --check --providers pi --allow-worktree-root 2>&1)
+PI_CHECK_READY_CODE=$?
+MISSING_PI_CHECK_OUT=$(cd "$CHECKOUT" && HOME="$MISSING_PI_HOME" PATH="$MISSING_PI_STUBS:$MISSING_PI_HOME/.local/bin:/usr/bin:/bin" timeout 8s "$CHECKOUT/bin/install" --check --providers pi --allow-worktree-root 2>&1)
+MISSING_PI_CHECK_CODE=$?
+set -e
+
+if [ "$PI_CHECK_READY_CODE" -eq 0 ] \
+  && [ "$MISSING_PI_CHECK_CODE" -ne 0 ] \
+  && printf '%s' "$MISSING_PI_CHECK_OUT" | grep -qiE 'Pi.*(not found|missing|not installed)'; then
+  echo 'PASS strict Pi readiness succeeds when installed and fails when missing'
+else
+  echo 'FAIL strict Pi readiness succeeds when installed and fails when missing'
+  printf 'ready exit code: %s\n' "$PI_CHECK_READY_CODE"
+  printf '%s\n' "$PI_CHECK_READY_OUT"
+  printf 'missing exit code: %s\n' "$MISSING_PI_CHECK_CODE"
+  printf '%s\n' "$MISSING_PI_CHECK_OUT"
   exit 1
 fi
 
@@ -163,6 +295,25 @@ else
   echo 'FAIL strict readiness succeeds for Claude, Codex, and both required-provider selections when ready'
   printf 'providers: %s; exit code: %s\n' "$REQUIRED_PROVIDERS" "$STRICT_READY_MATRIX_CODE"
   printf '%s\n' "$STRICT_READY_MATRIX_OUT"
+  exit 1
+fi
+
+# Omitting --providers keeps the original strict-check default: Claude alone
+# is required. Codex and Pi remain unselected even when their CLIs are present.
+set +e
+DEFAULT_STRICT_CHECK_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$STUBS:$FAKE_HOME/.local/bin:/usr/bin:/bin" timeout 8s "$CHECKOUT/bin/install" --check --allow-worktree-root 2>&1)
+DEFAULT_STRICT_CHECK_CODE=$?
+set -e
+
+if [ "$DEFAULT_STRICT_CHECK_CODE" -eq 0 ] \
+  && printf '%s' "$DEFAULT_STRICT_CHECK_OUT" | grep -Fqi 'Claude Code installed' \
+  && ! printf '%s' "$DEFAULT_STRICT_CHECK_OUT" | grep -Fqi 'Codex CLI installed' \
+  && ! printf '%s' "$DEFAULT_STRICT_CHECK_OUT" | grep -Fqi 'Pi CLI installed'; then
+  echo 'PASS no-provider strict check retains the Claude-only default selection'
+else
+  echo 'FAIL no-provider strict check retains the Claude-only default selection'
+  printf 'exit code: %s\n' "$DEFAULT_STRICT_CHECK_CODE"
+  printf '%s\n' "$DEFAULT_STRICT_CHECK_OUT"
   exit 1
 fi
 

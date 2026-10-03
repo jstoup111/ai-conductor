@@ -200,7 +200,9 @@ the provider skill catalog.` and its class is `mechanical`.
 the run's home is missing the skill that step renders to. This is a deterministic environment
 failure: retrying, escalating model or effort, or walking providers cannot make a command
 appear in a catalog that does not have it, so the conductor halts immediately instead of
-spending further attempts.
+spending further attempts. Under Pi, the engine raises the same HALT before spawning `pi` when
+`<name>/SKILL.md` exists in none of `~/.agents/skills`, `$PI_CODING_AGENT_DIR/skills` (default
+`~/.pi/agent/skills`), or the project's `.agents/skills`.
 
 **Recovery:** re-provision the provider home (or self-host sandbox) with the missing skill, then
 clear the HALT using [the resume procedure](#clear-a-halt-and-let-the-feature-resume). Because

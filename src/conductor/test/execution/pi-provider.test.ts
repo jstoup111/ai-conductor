@@ -3,7 +3,13 @@ import { readFile } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 import { classifyMetering } from '../../src/engine/metering.js';
-import { parsePiModelId, parsePiModelListing, PiProvider } from '../../src/execution/pi-provider.js';
+import {
+  parsePiModelId,
+  parsePiModelListing,
+  PiProvider,
+  resolvePiSkill,
+  type PiEnvironment,
+} from '../../src/execution/pi-provider.js';
 import { providerDescriptor } from '../../src/execution/provider-catalog.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
@@ -59,9 +65,101 @@ describe('parsePiModelListing', () => {
   });
 });
 
+function fakePiEnvironment(options: {
+  files?: readonly string[];
+  directories?: readonly string[];
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  cwd?: string;
+} = {}): { environment: PiEnvironment; stat: ReturnType<typeof vi.fn> } {
+  const files = new Set(options.files ?? []);
+  const directories = new Set(options.directories ?? []);
+  const stat = vi.fn(async (path: string) => {
+    if (files.has(path)) return { isFile: () => true, isDirectory: () => false };
+    if (directories.has(path)) return { isFile: () => false, isDirectory: () => true };
+    const error = new Error(`ENOENT: ${path}`) as NodeJS.ErrnoException;
+    error.code = 'ENOENT';
+    throw error;
+  });
+  return {
+    environment: {
+      stat,
+      env: options.env ?? {},
+      homeDir: () => options.homeDir ?? '/home/agent',
+      cwd: () => options.cwd ?? '/workspace/project',
+    },
+    stat,
+  };
+}
+
+describe('resolvePiSkill', () => {
+  const skillName = 'pipeline';
+  const homeSkillsRoot = '/home/agent/.agents/skills';
+  const configuredPiRoot = '/configured/pi-agent/skills';
+  const defaultPiRoot = '/home/agent/.pi/agent/skills';
+  const projectSkillsRoot = '/workspace/project/.agents/skills';
+
+  it.each([
+    ['the agent catalog', `${homeSkillsRoot}/${skillName}/SKILL.md`, {}, [homeSkillsRoot, defaultPiRoot, projectSkillsRoot]],
+    ['the configured Pi agent catalog', `${configuredPiRoot}/${skillName}/SKILL.md`, { PI_CODING_AGENT_DIR: '/configured/pi-agent' }, [homeSkillsRoot, configuredPiRoot, projectSkillsRoot]],
+    ['the default Pi agent catalog', `${defaultPiRoot}/${skillName}/SKILL.md`, {}, [homeSkillsRoot, defaultPiRoot, projectSkillsRoot]],
+    ['the project catalog', `${projectSkillsRoot}/${skillName}/SKILL.md`, {}, [homeSkillsRoot, defaultPiRoot, projectSkillsRoot]],
+  ])('finds SKILL.md in %s', async (_source, skillPath, env, searchedRoots) => {
+    const { environment, stat } = fakePiEnvironment({ files: [skillPath], env });
+
+    await expect(resolvePiSkill(skillName, environment)).resolves.toEqual({
+      found: true,
+      skillPath,
+      searchedRoots,
+    });
+    expect(stat.mock.calls.flat().every((path) => path.endsWith('/SKILL.md'))).toBe(true);
+    expect(stat.mock.calls.flat().at(-1)).toBe(skillPath);
+  });
+
+  it.each([
+    ['the retired PI_HOME catalog', '/legacy/pi-home/skills/pipeline/SKILL.md', { PI_HOME: '/legacy/pi-home' }],
+    ['the retired project .pi catalog', '/workspace/project/.pi/skills/pipeline/SKILL.md', {}],
+    ['a skill directory without SKILL.md', '/home/agent/.agents/skills/pipeline', {}],
+  ])('rejects a skill found only in %s', async (_source, legacyPath, env) => {
+    const { environment, stat } = fakePiEnvironment({
+      env,
+      files: legacyPath.endsWith('/SKILL.md') ? [legacyPath] : [],
+      directories: legacyPath.endsWith('/SKILL.md') ? [] : [legacyPath],
+    });
+
+    await expect(resolvePiSkill(skillName, environment)).resolves.toEqual({
+      found: false,
+      searchedRoots: [homeSkillsRoot, defaultPiRoot, projectSkillsRoot],
+    });
+    expect(stat.mock.calls.flat()).toEqual([
+      `${homeSkillsRoot}/${skillName}/SKILL.md`,
+      `${defaultPiRoot}/${skillName}/SKILL.md`,
+      `${projectSkillsRoot}/${skillName}/SKILL.md`,
+    ]);
+  });
+
+  it('reads the configured variable and default home from the Pi catalog and only stats SKILL.md', async () => {
+    const { environment, stat } = fakePiEnvironment({
+      env: { PI_CODING_AGENT_DIR: '/configured/pi-agent' },
+    });
+
+    await resolvePiSkill(skillName, environment);
+
+    expect(stat.mock.calls.flat()).toEqual([
+      `${homeSkillsRoot}/${skillName}/SKILL.md`,
+      `${configuredPiRoot}/${skillName}/SKILL.md`,
+      `${projectSkillsRoot}/${skillName}/SKILL.md`,
+    ]);
+    expect(stat.mock.calls.flat().every((path) => path.endsWith('/SKILL.md'))).toBe(true);
+  });
+});
+
 describe('PiProvider', () => {
   const spawn = vi.fn<PiSubprocessFactory>();
   let provider: PiProvider;
+  let environment: PiEnvironment;
+  let stat: ReturnType<typeof vi.fn>;
+  const harnessPath = '/home/agent/.agents/skills/HARNESS.md';
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -73,7 +171,8 @@ describe('PiProvider', () => {
       stderr: '',
       exitCode: 0,
     } as ExecaResult);
-    provider = new PiProvider('/resolved/pi', spawn);
+    ({ environment, stat } = fakePiEnvironment({ files: [harnessPath] }));
+    provider = new PiProvider('/resolved/pi', spawn, environment);
   });
 
   it('spawns a resolved Pi executable headlessly with its configured provider, model, and thinking effort', async () => {
@@ -82,7 +181,7 @@ describe('PiProvider', () => {
     expect(spawn).toHaveBeenCalledWith(
       '/resolved/pi',
       [
-        '-p', '--no-session', '--mode', 'json',
+        '-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath,
         '--provider', 'anthropic',
         '--model', 'claude-opus-4-5',
         '--thinking', 'xhigh',
@@ -99,19 +198,132 @@ describe('PiProvider', () => {
     expect(spawn.mock.calls[0]?.[1]).not.toContain('claude-opus-4-5:xhigh');
   });
 
+  it.each([
+    ['the installed agent catalog', '/home/agent/.agents/skills/pipeline/SKILL.md', {}],
+    ['the configured Pi catalog', '/configured/pi-agent/skills/pipeline/SKILL.md', { PI_CODING_AGENT_DIR: '/configured/pi-agent' }],
+    ['the default Pi catalog', '/home/agent/.pi/agent/skills/pipeline/SKILL.md', {}],
+    ['the project catalog', '/workspace/project/.agents/skills/pipeline/SKILL.md', {}],
+  ])('invokes a /skill: command found in %s', async (_source, skillPath, env) => {
+    ({ environment } = fakePiEnvironment({ files: [harnessPath, skillPath], env }));
+    provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:pipeline\nBuild it.' })).resolves.toMatchObject({ success: true });
+
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(spawn.mock.calls[0]?.[1]).toContain('-na');
+  });
+
+  it('does not resolve a skill when the prompt does not begin with a Pi skill command', async () => {
+    await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({ success: true });
+
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(spawn.mock.calls[0]?.[1]).toContain('-na');
+    expect(stat.mock.calls.flat().filter((path) => String(path).endsWith('/pipeline/SKILL.md'))).toEqual([]);
+  });
+
+  it.each([
+    ['a blank first line', '\n/skill:pipeline\nBuild it.'],
+    ['whitespace before the first-line command', ' /skill:pipeline\nBuild it.'],
+  ])('does not resolve a skill when the prompt has %s', async (_source, prompt) => {
+    await expect(provider.invoke({ ...invokeOptions, prompt })).resolves.toMatchObject({ success: true });
+
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(stat.mock.calls.flat().filter((path) => String(path).endsWith('/pipeline/SKILL.md'))).toEqual([]);
+  });
+
+  it.each([
+    ['no skill catalog entry', [], []],
+    ['only the retired PI_HOME catalog', ['/legacy/pi-home/skills/pipeline/SKILL.md'], []],
+    ['only the retired project .pi catalog', ['/workspace/project/.pi/skills/pipeline/SKILL.md'], []],
+    ['a directory without SKILL.md', [], ['/home/agent/.agents/skills/pipeline']],
+  ])('refuses an unresolvable Pi command found in %s without spawning', async (_source, extraFiles, directories) => {
+    ({ environment } = fakePiEnvironment({
+      files: [harnessPath, ...extraFiles],
+      directories,
+      env: { PI_HOME: '/legacy/pi-home' },
+    }));
+    provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:pipeline\nBuild it.' })).resolves.toMatchObject({
+      success: false,
+      commandUnresolved: true,
+      commandUnresolvedName: 'pipeline',
+      output: expect.stringContaining('pipeline'),
+    });
+
+    const result = await provider.invoke({ ...invokeOptions, prompt: '/skill:pipeline' });
+    expect(result.output).toContain('/home/agent/.agents/skills');
+    expect(result.output).toContain('/home/agent/.pi/agent/skills');
+    expect(result.output).toContain('/workspace/project/.agents/skills');
+    expect(result).not.toHaveProperty('providerUnavailable');
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('does not reject an explicit-only skill whose SKILL.md exists', async () => {
+    ({ environment } = fakePiEnvironment({
+      files: [harnessPath, '/home/agent/.agents/skills/fixture/SKILL.md'],
+    }));
+    provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:fixture\nBuild it.' })).resolves.toMatchObject({ success: true });
+
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['missing', [], []],
+    ['a dangling symlink', [], []],
+  ])('refuses Pi dispatch when HARNESS.md is %s', async (_source, files, directories) => {
+    ({ environment } = fakePiEnvironment({ files, directories }));
+    provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({
+      success: false,
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+      providerUnavailableReason: expect.stringMatching(/HARNESS\.md.*bin\/install/),
+    });
+
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a project skills directory', ['/workspace/project/.agents/skills'], ['-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath, '--skill', '/workspace/project/.agents/skills']],
+    ['no project skills path', [], ['-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath]],
+    ['a project skills file', [], ['-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath]],
+  ])('loads %s only when it is a directory and never trusts it', async (_source, directories, expectedArgs) => {
+    const files = _source === 'a project skills file'
+      ? [harnessPath, '/workspace/project/.agents/skills']
+      : [harnessPath];
+    ({ environment } = fakePiEnvironment({ files, directories }));
+    provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({ success: true });
+
+    expect(spawn).toHaveBeenCalledWith('/resolved/pi', [
+      ...expectedArgs,
+      '--provider', 'anthropic',
+      '--model', 'claude-opus-4-5',
+      '--thinking', 'xhigh',
+    ], expect.anything());
+    expect(spawn.mock.calls[0]?.[1]).toContain('-na');
+    expect(spawn.mock.calls[0]?.[1]).not.toContain('--approve');
+    expect(spawn.mock.calls[0]?.[1]).not.toContain('-a');
+  });
+
   it('keeps retries in fresh no-session invocations and exposes only invoke dispatch', async () => {
     await provider.invoke(invokeOptions);
     await provider.invoke({ ...invokeOptions, resume: true, sessionId: 'retry-session' });
 
     expect(spawn.mock.calls.map(([, args]) => args)).toEqual([
       [
-        '-p', '--no-session', '--mode', 'json',
+        '-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath,
         '--provider', 'anthropic',
         '--model', 'claude-opus-4-5',
         '--thinking', 'xhigh',
       ],
       [
-        '-p', '--no-session', '--mode', 'json',
+        '-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath,
         '--provider', 'anthropic',
         '--model', 'claude-opus-4-5',
         '--thinking', 'xhigh',
@@ -303,6 +515,7 @@ describe('PiProvider', () => {
       ...invokeOptions,
       abortSignal: controller.signal,
     });
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
     controller.abort();
 
     const result = await invocation;
@@ -332,6 +545,19 @@ describe('PiProvider', () => {
     )).toEqual([[
       'pi subprocess exited without a classifiable result: signal=SIGTERM stdoutBytes=0 stderrBytes=0',
     ]]);
+  });
+
+  it('does not spawn after an abort arrives during asynchronous preflight', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(provider.invoke({ ...invokeOptions, abortSignal: controller.signal })).resolves.toMatchObject({
+      success: false,
+      output: 'Pi invocation aborted.',
+      exitCode: 1,
+    });
+
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it.each([

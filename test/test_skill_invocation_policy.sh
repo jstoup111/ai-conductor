@@ -69,6 +69,11 @@ sed -i '/^disable-model-invocation: true$/a disable-model-invocation: FALSE' \
 expect_rejection "duplicate noncanonical Claude control" "$case_root" \
   "requires exactly one canonical Claude 'disable-model-invocation: true' declaration"
 
+case_root=$(reset_case missing-pipeline-claude-control)
+sed -i '/^disable-model-invocation: true$/d' \
+  "$case_root/skills/pipeline/SKILL.md"
+expect_rejection "missing pipeline Claude control" "$case_root" "pipeline"
+
 case_root=$(reset_case contradictory-codex)
 sed -i 's/^  allow_implicit_invocation: false$/  allow_implicit_invocation: true/' \
   "$case_root/skills/memory/agents/openai.yaml"

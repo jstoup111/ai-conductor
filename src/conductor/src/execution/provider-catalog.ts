@@ -37,7 +37,7 @@ export const PROVIDER_CAPABILITY_OWNERS = {
   selfHost: '#1887',
   interactiveLaunch: '#1007',
   readOnlyReview: '#1886',
-  reviewPolicyCatalog: '#1888',
+  reviewPolicyCatalog: '#2852',
   costSelfReporting: '#1889',
 } as const satisfies Partial<Record<ProviderCapability, string>>;
 
@@ -195,10 +195,10 @@ export const BUILT_IN_PROVIDERS = [
     defaultExecutable: 'pi',
     executableOverrideEnv: 'PI_EXECUTABLE',
     versionArgv: ['--version'],
-    invocationPrefix: '',
+    invocationPrefix: '/skill:',
     environmentPrefix: 'PI_',
-    homeVariable: 'PI_HOME',
-    defaultHome: '.pi',
+    homeVariable: 'PI_CODING_AGENT_DIR',
+    defaultHome: '.pi/agent',
     modelPolicy: PI_MODEL_POLICY,
     parseModelId: parsePiModelId,
     modelCatalog: { argv: ['--list-models'], parse: parsePiModelListing },

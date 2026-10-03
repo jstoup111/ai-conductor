@@ -135,6 +135,7 @@ As an operator, I want to select Pi at install time so that the installer tells 
 - Given an unsupported value such as `--providers foo`, when `bin/install` runs, then it is rejected before any readiness check with an error listing Claude, Codex, and Pi as the supported built-in providers.
 - Given existing `~/.claude/skills` and `~/.agents/skills` link sets from a claude and codex install, when `bin/install --providers pi` runs, then the listing of both directories with link targets is identical before and after.
 - Given the daemon freshness check, when it runs `bin/install --check` without `--providers`, then its result is unchanged by this feature.
+- Given the interactive provider chooser, when the operator selects Claude and Codex together, then both are installed and no previously offered selection is removed.
 
 ### Done When
 - [ ] `test/test_install_provider_readiness.sh` covers `pi` in the accepted-provider, missing-CLI advisory, and strict `--check` cases.

@@ -239,6 +239,115 @@ describe('DefaultStepRunner', () => {
     }
   });
 
+  it('refuses Pi by the review-policy catalog owner in an unmutated custom-policy lap before dispatching Claude', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-policy-catalog-'));
+    const baselinePath = join(projectDir, 'baseline');
+    const headPath = join(projectDir, 'head');
+    await Promise.all([mkdir(baselinePath), mkdir(headPath)]);
+    const attempts: ProviderAttemptEvent[] = [];
+    const piInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }),
+      exitCode: 0,
+      finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] },
+    }));
+    const lifecycleCapability = { synchronousSpawnPermit: true } as const;
+    const nativeSchemaCapability = { nativeOutputSchema: true } as const;
+    const runtime = (key: 'pi' | 'claude', invoke: LLMProvider['invoke']) => ({
+      key,
+      provider: { lifecycleCapability, nativeSchemaCapability, invoke },
+      lifecycleCapability,
+      nativeSchemaCapability,
+      policy: CLAUDE_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+    });
+    const source = {
+      identity: {
+        snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
+        mergeBase: 'a'.repeat(40), headSha: 'b'.repeat(40),
+      },
+      baselinePath,
+      headPath,
+    };
+    const config = resolveBuildReviewConfig({
+      llm_provider: 'claude',
+      build_review: {
+        enabled: true,
+        rubrics: { testQuality: { enabled: false } },
+        custom_rubrics: {
+          portable: {
+            enabled: true, skill: 'portable-policy', question: 'Check the frozen input.',
+            llm_provider: ['pi', 'claude'], max_retries: 1,
+          },
+        },
+      },
+    } as HarnessConfig, CLAUDE_POLICY);
+    const runner = new DefaultStepRunner(createMockProvider(), 'custom-policy-catalog', projectDir, {
+      providerRuntimes: new ProviderRuntimeSet([
+        runtime('pi', piInvoke),
+        runtime('claude', claudeInvoke),
+      ]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['pi', 'claude'],
+      providerAttempt: (step, attempt) => { attempts.push({ type: 'provider_attempt', step, ...attempt }); },
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project',
+        canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
+        declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+      buildReviewEffectiveResolver: async () => ({
+        ok: true,
+        feature: { version: 'v1', repository: projectDir, feature: 'custom-policy-catalog' },
+        effective: {
+          rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+          skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+          uncoveredScopeIncompleteRubrics: [],
+        },
+      }) as never,
+    });
+    const inputs = {
+      sourceSnapshot: {
+        digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main',
+        mergeBase: 'a'.repeat(40), headSha: 'b'.repeat(40), diff: '', planBody: '', repairContext: [],
+        removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [],
+      },
+      sourceMaterialization: {
+        source,
+        contextFor: (memberId: string) => ({ memberId, source }),
+        settle: async () => {},
+        finish: async () => {},
+      },
+    } as never;
+
+    try {
+      await (runner as unknown as {
+        runRubricBuildReview(value: unknown, resolved: typeof config, tier: ConductState['complexity_tier'], context: undefined, capabilities: unknown): Promise<unknown>;
+      }).runRubricBuildReview(inputs, config, 'S', undefined, {
+        claude: { provider: 'claude', platform: process.platform, status: 'available' },
+      });
+
+      expect(piInvoke).not.toHaveBeenCalled();
+      expect(claudeInvoke).toHaveBeenCalledOnce();
+      expect(attempts).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          provider: 'pi', outcome: 'unavailable', invoked: false,
+          skipReason: 'setup-unavailable', reason: expect.stringContaining('#2852'),
+        }),
+        expect.objectContaining({ provider: 'claude', invoked: true }),
+      ]));
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('withholds the custom-only aggregate, resolution, and verdict until the mechanical allowance is exhausted', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-only-allowance-'));
     const resolver = vi.fn(async () => ({
@@ -6242,6 +6351,75 @@ describe('build_review rubric dispatch', () => {
       detail: 'build_review grader invocation ended without a result.',
     });
     expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips Pi for its unavailable native schema and dispatches the Claude fallback', async () => {
+    const piInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: '{"findings":[]}',
+      exitCode: 0,
+      finalStructuredResult: { findings: [] },
+    }));
+    const lifecycleCapability = { synchronousSpawnPermit: true } as const;
+    const nativeSchemaCapability = { nativeOutputSchema: true } as const;
+    const runtime = (key: 'pi' | 'claude', invoke: LLMProvider['invoke']) => ({
+      key,
+      provider: { lifecycleCapability, nativeSchemaCapability, invoke },
+      lifecycleCapability,
+      nativeSchemaCapability,
+      policy: CLAUDE_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+    });
+    const attempts: ProviderAttemptEvent[] = [];
+    const runner = new DefaultStepRunner(createMockProvider(), 'session-1', '/tmp/project', {
+      providerRuntimes: new ProviderRuntimeSet([
+        runtime('pi', piInvoke),
+        runtime('claude', claudeInvoke),
+      ]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['pi', 'claude'],
+      providerAttempt: (step, attempt) => { attempts.push({ type: 'provider_attempt', step, ...attempt }); },
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'build-review-test-quality', source: 'project', installationOrigin: '/fixture/project',
+        canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
+        declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Build review test quality\n') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+    });
+    const piThenClaudeBranch = {
+      ...branch,
+      policy: { ...policy, llm_provider: ['pi', 'claude'] as const },
+    };
+    const inputs = {
+      sourceMaterialization: {
+        contextFor: () => ({ source: undefined }),
+        settle: async () => {},
+      },
+      sourceSnapshot: { contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', sourceChanges: [] },
+    };
+    const engineIdentity = {
+      engineStamp: 'engine-stamp',
+      skillDigests: { testQuality: { kind: 'resolved' as const, digest: `sha256-v1:${'b'.repeat(64)}` } },
+    };
+    await (runner as unknown as {
+      dispatchBuildReviewRubric: (
+        branch: unknown, projection: unknown, tier: undefined, context: undefined,
+        inputs: unknown, engineIdentity: unknown,
+      ) => Promise<unknown>;
+    }).dispatchBuildReviewRubric(piThenClaudeBranch, projection, undefined, undefined, inputs, engineIdentity);
+
+    expect(piInvoke).not.toHaveBeenCalled();
+    expect(claudeInvoke).toHaveBeenCalledOnce();
+    expect(attempts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: 'claude', invoked: true }),
+    ]));
   });
 
 });

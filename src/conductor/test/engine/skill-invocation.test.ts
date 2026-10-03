@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   STEP_SKILL_INVOCATIONS,
+  renderAuxiliarySkillInvocation,
   renderSkillInvocation,
   type SkillInvocationDescriptor,
 } from '../../src/engine/skill-invocation.js';
@@ -82,6 +83,20 @@ describe('provider-native skill invocation', () => {
       expected: '$pipeline',
     },
     {
+      providerKey: 'pi',
+      descriptor: { kind: 'skill', skillName: 'pipeline', arguments: [] },
+      expected: '/skill:pipeline',
+    },
+    {
+      providerKey: 'pi',
+      descriptor: {
+        kind: 'skill',
+        skillName: 'architecture-review',
+        arguments: ['--as-built'],
+      },
+      expected: '/skill:architecture-review --as-built',
+    },
+    {
       providerKey: 'custom-provider',
       descriptor: {
         kind: 'skill',
@@ -103,6 +118,26 @@ describe('provider-native skill invocation', () => {
   });
 
   it.each([
+    ['build-review-security', '/skill:build-review-security'],
+    ['coverage-binding', '/skill:coverage-binding'],
+  ])('renders Pi auxiliary skill %s', (skillName, expected) => {
+    expect(renderAuxiliarySkillInvocation(skillName, 'pi')).toBe(expected);
+  });
+
+  it('preserves Claude and Codex prefixes for every skill step', () => {
+    for (const descriptor of Object.values(STEP_SKILL_INVOCATIONS)) {
+      if (descriptor?.kind !== 'skill') continue;
+
+      expect(renderSkillInvocation(descriptor, 'claude').startsWith(
+        `/${descriptor.skillName}`,
+      )).toBe(true);
+      expect(renderSkillInvocation(descriptor, 'codex').startsWith(
+        `$${descriptor.skillName}`,
+      )).toBe(true);
+    }
+  });
+
+  it.each([
     'build_review',
     'test_suite',
     'attribution_verify',
@@ -114,4 +149,16 @@ describe('provider-native skill invocation', () => {
       ).toThrow(/engine-native/i);
     },
   );
+
+  it('rejects Pi rendering of an engine-native step', () => {
+    expect(() =>
+      renderSkillInvocation(STEP_SKILL_INVOCATIONS.attribution_verify!, 'pi'),
+    ).toThrow('Cannot render an engine-native step as a skill invocation');
+  });
+
+  it('uses the slash prefix for an unknown provider', () => {
+    expect(renderSkillInvocation(STEP_SKILL_INVOCATIONS.build!, 'my-plugin')).toBe(
+      '/pipeline',
+    );
+  });
 });

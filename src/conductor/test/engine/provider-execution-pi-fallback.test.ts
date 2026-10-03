@@ -113,7 +113,16 @@ describe('Pi lifecycle abort', () => {
       signalStarted();
       return subprocess;
     });
-    const pi = new PiProvider('pi', spawnPi as never);
+    // Provision HARNESS.md so Pi's invocation preflight reaches the spawn.
+    const pi = new PiProvider('pi', spawnPi as never, {
+      stat: async (path) => ({
+        isFile: () => path === '/home/agent/.agents/skills/HARNESS.md',
+        isDirectory: () => false,
+      }),
+      env: {},
+      homeDir: () => '/home/agent',
+      cwd: () => '/workspace',
+    });
     const piInvoke = vi.spyOn(pi, 'invoke');
     const claude = fakeProvider({ success: true, output: 'Claude must not run', exitCode: 0 });
 

@@ -1,3 +1,6 @@
+import { stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { execa, type Options as ExecaOptions } from 'execa';
 import type { InvokeOptions, InvokeResult, LLMProvider, TokenUsage } from './llm-provider.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
@@ -17,6 +20,73 @@ export type PiSubprocessFactory = (
   exitCode?: number | null;
   signal?: unknown;
 }>;
+
+/** Filesystem and process environment Pi uses to locate installed skills. */
+export interface PiEnvironment {
+  readonly stat: (path: string) => Promise<{ isFile: () => boolean; isDirectory: () => boolean }>;
+  readonly env: NodeJS.ProcessEnv;
+  readonly homeDir: () => string;
+  readonly cwd: () => string;
+}
+
+export type PiSkillResolution = {
+  readonly found: true;
+  readonly skillPath: string;
+  readonly searchedRoots: readonly string[];
+} | {
+  readonly found: false;
+  readonly searchedRoots: readonly string[];
+};
+
+const defaultPiEnvironment: PiEnvironment = {
+  stat,
+  env: process.env,
+  homeDir: homedir,
+  cwd: process.cwd,
+};
+
+async function isFile(path: string, environment: PiEnvironment): Promise<boolean> {
+  try {
+    return (await environment.stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function isDirectory(path: string, environment: PiEnvironment): Promise<boolean> {
+  try {
+    return (await environment.stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve a Pi skill only in the roots loaded by non-interactive Pi sessions.
+ * The resolver deliberately stats the conventionally named instruction file;
+ * eligibility is Pi's responsibility, so no frontmatter is parsed here.
+ */
+export async function resolvePiSkill(
+  name: string,
+  environment: PiEnvironment = defaultPiEnvironment,
+): Promise<PiSkillResolution> {
+  const descriptor = providerDescriptor('pi');
+  const piAgentDirectory = environment.env[descriptor.homeVariable]
+    ?? join(environment.homeDir(), descriptor.defaultHome);
+  const searchedRoots = [
+    join(environment.homeDir(), '.agents', 'skills'),
+    join(piAgentDirectory, 'skills'),
+    join(environment.cwd(), '.agents', 'skills'),
+  ];
+
+  for (const root of searchedRoots) {
+    const skillPath = join(root, name, 'SKILL.md');
+    if (await isFile(skillPath, environment)) {
+      return { found: true, skillPath, searchedRoots };
+    }
+  }
+  return { found: false, searchedRoots };
+}
 
 /**
  * This is the one Pi diagnostic verified against the CLI. Keep it anchored:
@@ -189,6 +259,7 @@ export class PiProvider implements LLMProvider {
   constructor(
     private readonly executable = 'pi',
     private readonly subprocessFactory: PiSubprocessFactory = execa,
+    private readonly environment: PiEnvironment = defaultPiEnvironment,
   ) {}
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
@@ -200,7 +271,47 @@ export class PiProvider implements LLMProvider {
       throw new Error(`${piDisplayName()} process spawn denied: ${permit.reason}`);
     }
 
-    const args = ['-p', '--no-session', '--mode', 'json'];
+    const harnessPath = join(this.environment.homeDir(), '.agents', 'skills', 'HARNESS.md');
+    if (!await isFile(harnessPath, this.environment)) {
+      const reason = `${piDisplayName()} provider requires HARNESS.md at ${harnessPath}. Run bin/install to provision it.`;
+      return {
+        success: false,
+        output: reason,
+        exitCode: 1,
+        providerUnavailable: true,
+        providerUnavailableScope: 'run',
+        providerUnavailableReason: reason,
+      };
+    }
+
+    // Pi commands are recognized only at the exact start of the first line.
+    // Trimming here would turn ordinary prompt text on a later or indented line
+    // into an executable skill command.
+    const promptCommand = options.prompt.split('\n', 1)[0]?.split(/\s+/, 1)[0];
+    const prefix = providerDescriptor('pi').invocationPrefix;
+    const cwd = options.cwd ?? this.environment.cwd();
+    if (promptCommand?.startsWith(prefix)) {
+      const name = promptCommand.slice(prefix.length);
+      const resolution = await resolvePiSkill(name, {
+        ...this.environment,
+        cwd: () => cwd,
+      });
+      if (!resolution.found) {
+        return {
+          success: false,
+          output: `${piDisplayName()} skill '${name}' was not found. Searched: ${resolution.searchedRoots.join(', ')}`,
+          exitCode: 1,
+          commandUnresolved: true,
+          commandUnresolvedName: name,
+        };
+      }
+    }
+
+    const args = ['-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath];
+    const projectSkillsPath = join(cwd, '.agents', 'skills');
+    if (await isDirectory(projectSkillsPath, this.environment)) {
+      args.push('--skill', projectSkillsPath);
+    }
     if (options.model) {
       const parsedModel = parsePiModelId(options.model);
       if ('provider' in parsedModel) {
@@ -208,6 +319,9 @@ export class PiProvider implements LLMProvider {
       }
     }
     if (options.effort) args.push('--thinking', options.effort);
+    // Filesystem preflight is asynchronous. An abort that arrives during it
+    // must not create an unobservable subprocess after the signal fired.
+    if (abortSignal?.aborted) return abortedInvocationResult();
 
     const subprocess = this.subprocessFactory(this.executable, args, {
       reject: false,

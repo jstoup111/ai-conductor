@@ -32,9 +32,9 @@ There is **no `--provider` CLI flag**. Selection lives entirely in the `llm_prov
 
 The default when the key is absent is `['claude']`.
 
-`bin/install --providers=claude,codex` does **not** set this. It gates only the install-time
+`bin/install --providers=claude,codex,pi` does **not** set this. It gates only the install-time
 readiness report — a line per selected host saying whether its CLI was found. Both skill catalogs
-(`~/.claude/skills` for Claude, `~/.agents/skills` for Codex) are symlinked on every install
+(`~/.claude/skills` for Claude, `~/.agents/skills` for Codex and Pi) are symlinked on every install
 regardless of the value, and the flag never writes into any config file.
 
 Both catalogs also contain `HARNESS.md` and `ARCHITECTURE.md` symlinks to the installed
@@ -193,9 +193,9 @@ records the exhausted provider and deadline; see [artifacts](../reference/artifa
 | Aspect | `claude` | `codex` | `pi` |
 | --- | --- | --- | --- |
 | Executable | `$CLAUDE_EXECUTABLE`, default `claude` | `$CODEX_EXECUTABLE`, default `codex` | `$PI_EXECUTABLE`, default `pi` |
-| Skill catalog | `~/.claude/skills` | `~/.agents/skills` | none |
-| Project instruction file | `CLAUDE.md` | `AGENTS.md` | n/a |
-| Skill invocation syntax | `/skill-name` | `$skill-name` | prompt is passed on standard input |
+| Skill catalog | `~/.claude/skills` | `~/.agents/skills` | `~/.agents/skills`, `$PI_CODING_AGENT_DIR/skills` (default `~/.pi/agent/skills`), and the project's `.agents/skills` |
+| Project instruction file | `CLAUDE.md` | `AGENTS.md` | n/a; `~/.agents/skills/HARNESS.md` is passed with `--append-system-prompt` |
+| Skill invocation syntax | `/skill-name` | `$skill-name` | `/skill:skill-name`, passed on standard input |
 | Explicit-only metadata | `disable-model-invocation: true` in `SKILL.md` | `policy.allow_implicit_invocation: false` in `agents/openai.yaml` | n/a |
 | Interactive steps | a real REPL | none — `codex exec` is one-shot, streamed as JSONL | none — one-shot JSONL output |
 | Readiness check | none; failures are classified from process signals and output | explicit `codex doctor --json --summary` before every dispatch, failing closed | none; boot probes `pi --version` |
@@ -203,7 +203,15 @@ records the exhausted provider and deadline; see [artifacts](../reference/artifa
 | Model selection | harness model table | harness model table | required `llm_providers.pi` block; boot validates ids with `pi --list-models` |
 | Provider-specific features | self-host and custom build-review policies | self-host and custom build-review policies | unsupported; the engine refuses before spawning |
 
-Claude and Codex share one skill corpus; Pi is a headless build provider and does not load skills.
+Codex and Pi share the `~/.agents/skills` catalog; Claude reads the same skills from
+`~/.claude/skills`. Before spawning `pi`, the engine checks two things:
+
+- `~/.agents/skills/HARNESS.md` must be a file. If it is missing or a broken link, Pi is unavailable
+  for the rest of the run; run `./bin/install` to restore it.
+- A `/skill:<name>` prompt must resolve to `<name>/SKILL.md` in one of the three Pi catalog roots
+  above. A miss is refused without spawning and halts the step naming the command; see
+  [unresolved step command](../runbooks/stalled-or-stuck-feature.md#unresolved-step-command).
+
 Model and effort resolution per host is owned by [../reference/models.md](../reference/models.md);
 the environment variables above are enumerated in
 [../reference/environment.md](../reference/environment.md).
@@ -242,11 +250,9 @@ cd <harness-checkout>
 ./bin/install --check
 ```
 
-It reports a found/not-found line for each Claude or Codex host named by `--providers` (defaulting to `claude`),
-plus the state of both skill catalogs. Exit codes are in [../quickstart.md](../quickstart.md).
-
-`--providers` remains the installer’s Claude/Codex catalog-readiness option; it does not probe Pi.
-Verify Pi directly with `pi --version` before selecting `llm_provider: pi`.
+It reports a found/not-found line for each host named by `--providers` (defaulting to `claude`),
+plus the state of both skill catalogs. A selected Pi is found when `command -v pi` and
+`pi --version` succeed. Exit codes are in [../quickstart.md](../quickstart.md).
 
 A missing binary surfaces at dispatch time with a symmetric message from either host:
 

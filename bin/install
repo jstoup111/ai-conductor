@@ -73,14 +73,14 @@ warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
 info() { echo -e "  ${CYAN}→${NC} $*"; }
 
 usage() {
-  echo "Usage: ./bin/install [--check | --update | --uninstall | -h] [--purge] [--providers claude[,codex]] [--channel stable|tagged|main] [--allow-worktree-root]"
+  echo "Usage: ./bin/install [--check | --update | --uninstall | -h] [--purge] [--providers claude[,codex[,pi]]] [--channel stable|tagged|main] [--allow-worktree-root]"
   echo ""
   echo "  (no args)     Install/update harness skills and conduct script"
   echo "  --check       Check installation status"
   echo "  --update      Refresh symlinks + settings (skip deps + channel prompt)"
   echo "  --uninstall   Remove all symlinks"
   echo "  --purge       Remove ~/.ai-conductor during uninstall"
-  echo "  --providers   Comma-separated selection of Claude and/or Codex"
+  echo "  --providers   Comma-separated selection of Claude, Codex, and/or Pi"
   echo "  --channel     First-run update channel: stable, tagged, or main"
   echo "                AI_CONDUCTOR_CHANNEL provides the same first-run choice"
   echo "  --allow-worktree-root"
@@ -177,6 +177,14 @@ check_installation() {
           ok "Codex CLI installed ($(codex --version 2>/dev/null || echo 'unknown version'))"
         else
           fail "Codex CLI not found on PATH — install it with: npm install -g @openai/codex"
+          all_ok=false
+        fi
+        ;;
+      pi)
+        if command -v pi &>/dev/null && pi --version &>/dev/null; then
+          ok "Pi CLI installed ($(pi --version 2>/dev/null))"
+        else
+          fail "Pi CLI not found on PATH — install it with: npm install -g @mariozechner/pi-coding-agent"
           all_ok=false
         fi
         ;;
@@ -1158,10 +1166,12 @@ choose_builtin_provider() {
   [ -n "$PROVIDER_SELECTION" ] || [ "$UPDATE_MODE" = true ] || [ ! -t 0 ] && return 0
 
   echo ""
-  info "Built-in provider — choose the CLI you plan to use:"
+  info "Built-in provider — choose one or more CLIs (comma-separated):"
   echo "    1) Claude"
   echo "    2) Codex"
   echo "    3) Both Claude and Codex"
+  echo "    4) Pi"
+  echo "    5) All: Claude, Codex, and Pi"
   local choice
   read -r -p "  Choice [1]: " choice || choice=1
 
@@ -1169,6 +1179,31 @@ choose_builtin_provider() {
     ""|1) PROVIDER_SELECTION="claude" ;;
     2)    PROVIDER_SELECTION="codex" ;;
     3)    PROVIDER_SELECTION="claude,codex" ;;
+    4)    PROVIDER_SELECTION="pi" ;;
+    5)    PROVIDER_SELECTION="claude,codex,pi" ;;
+    *,*)
+      local selection=""
+      local token
+      local -a choices
+      IFS=',' read -r -a choices <<< "$choice"
+      for token in "${choices[@]}"; do
+        case "$token" in
+          1) [[ ",$selection," == *,claude,* ]] || selection="${selection:+$selection,}claude" ;;
+          2) [[ ",$selection," == *,codex,* ]] || selection="${selection:+$selection,}codex" ;;
+          3) [[ ",$selection," == *,claude,* ]] || selection="${selection:+$selection,}claude"
+             [[ ",$selection," == *,codex,* ]] || selection="${selection:+$selection,}codex" ;;
+          4) [[ ",$selection," == *,pi,* ]] || selection="${selection:+$selection,}pi" ;;
+          5) selection="claude,codex,pi" ;;
+          *) selection=""; break ;;
+        esac
+      done
+      if [ -n "$selection" ]; then
+        PROVIDER_SELECTION="$selection"
+      else
+        warn "Unrecognized provider choice '${choice}' — using Claude"
+        PROVIDER_SELECTION="claude"
+      fi
+      ;;
     *)
       warn "Unrecognized provider choice '${choice}' — using Claude"
       PROVIDER_SELECTION="claude"
@@ -1201,6 +1236,13 @@ report_selected_provider_readiness() {
           ok "Codex CLI found"
         else
           warn "Codex CLI not found — install it with: npm install -g @openai/codex"
+        fi
+        ;;
+      pi)
+        if command -v pi &>/dev/null && pi --version &>/dev/null; then
+          ok "Pi CLI found ($(pi --version 2>/dev/null))"
+        else
+          warn "Pi CLI not found — install it with: npm install -g @mariozechner/pi-coding-agent"
         fi
         ;;
     esac
@@ -1826,7 +1868,7 @@ while [ "$#" -gt 0 ]; do
     --providers)
       shift
       if [ "$#" -eq 0 ] || [ -z "$1" ]; then
-        fail "--providers requires a comma-separated selection of Claude and/or Codex"
+        fail "--providers requires a comma-separated selection of Claude, Codex, and/or Pi"
         exit 1
       fi
       PROVIDER_SELECTION="$1"
@@ -1834,7 +1876,7 @@ while [ "$#" -gt 0 ]; do
     --providers=*)
       PROVIDER_SELECTION="${1#--providers=}"
       if [ -z "$PROVIDER_SELECTION" ]; then
-        fail "--providers requires a comma-separated selection of Claude and/or Codex"
+        fail "--providers requires a comma-separated selection of Claude, Codex, and/or Pi"
         exit 1
       fi
       ;;
@@ -1881,7 +1923,7 @@ fi
 if [ -n "$PROVIDER_SELECTION" ]; then
   case ",${PROVIDER_SELECTION}," in
     *,,*)
-      fail "Provider selection cannot contain an empty value. Supported built-in providers: Claude, Codex"
+      fail "Provider selection cannot contain an empty value. Supported built-in providers: Claude, Codex, Pi"
       exit 1
       ;;
   esac
@@ -1889,9 +1931,9 @@ if [ -n "$PROVIDER_SELECTION" ]; then
   IFS=',' read -r -a _selected_providers <<< "$PROVIDER_SELECTION"
   for _provider in "${_selected_providers[@]}"; do
     case "$_provider" in
-      claude|codex) ;;
+      claude|codex|pi) ;;
       *)
-        fail "Unsupported provider '${_provider}'. Supported built-in providers: Claude, Codex"
+        fail "Unsupported provider '${_provider}'. Supported built-in providers: Claude, Codex, Pi"
         exit 1
         ;;
     esac

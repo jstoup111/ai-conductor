@@ -3218,17 +3218,17 @@ export class DefaultStepRunner implements StepRunner {
         await lapGate?.registerPolicy(bundle.materialPath, policy.packageRoot);
       } } : {}),
       preparedCandidateOperation: async (context) => {
-        const missingReadOnlyReview = unavailableReviewCapabilityResult(context.candidate.providerKey, 'readOnlyReview');
-        if (missingReadOnlyReview !== undefined) return { kind: 'failure' as const, result: missingReadOnlyReview };
-        const readOnlyReviewProvider = requireProviderCapability(
-          context.candidate.providerKey as BuiltInProviderId,
-          'readOnlyReview',
-        );
         const missingPolicyCatalog = unavailableReviewCapabilityResult(context.candidate.providerKey, 'reviewPolicyCatalog');
         if (missingPolicyCatalog !== undefined) return { kind: 'failure' as const, result: missingPolicyCatalog };
         const catalogProvider = requireProviderCapability(
           context.candidate.providerKey as BuiltInProviderId,
           'reviewPolicyCatalog',
+        );
+        const missingReadOnlyReview = unavailableReviewCapabilityResult(context.candidate.providerKey, 'readOnlyReview');
+        if (missingReadOnlyReview !== undefined) return { kind: 'failure' as const, result: missingReadOnlyReview };
+        const readOnlyReviewProvider = requireProviderCapability(
+          context.candidate.providerKey as BuiltInProviderId,
+          'readOnlyReview',
         );
         const readOnlyReviewCapability = await readOnlyReviewCapabilityFor?.(context.candidate.providerKey);
         if (readOnlyReviewCapability?.status !== 'available') {
