@@ -120,6 +120,11 @@ Option A.
    > way git quotes it, delivered by this feature's remediation tasks ahead of #2904. Those spellings
    > are therefore not a recorded limit under D10, and the D10 control inventory says so. Every other
    > non-canonical spelling, such as `branch -d -f` or `-df`, stays a recorded limit until #2904.
+
+   > **Amended 2026-10-03 by #2904 (operator decision):** non-canonical spellings are no longer a
+   > recorded limit. Both guards normalize argv against one git option spec, following git's global
+   > and parse-options grammars, and refuse any option on a guarded subcommand they cannot resolve
+   > (adr-2026-10-03-fail-closed-git-option-normalization). The matrix above is unchanged.
 6. **Every refusal explains itself.** It exits non-zero without running `git`. Its stderr names the
    refused operation, why it is refused, and the safe alternative: `--force-with-lease`,
    `reset --keep`, `branch -d`, `clean -n`, or committing a WIP first or using a temporary worktree.
@@ -151,6 +156,11 @@ Option A.
    > forms #1354's tests name. Bash quote removal on heredoc delimiters (`<<\EOF`, `<<E"OF"`) and
    > ignoring openers inside comments are delivered by #2904. The hook is early feedback, not the
    > enforcement point (D2), so these gaps cost a false refusal or a missed early warning only.
+
+   > **Amended 2026-10-03 by #2904 (operator decision):** heredoc delimiter quote removal and
+   > comment-opener masking shipped with #1354 itself (#2773), verified on main @ `833b75868`. #2904
+   > replaces the hook's regex matching with argv normalization against the shared option spec
+   > (adr-2026-10-03-fail-closed-git-option-normalization D6). Shell indirection stays out of scope.
 9. **Skill text agrees with the guard.** The `tdd` skill's pre-diff counterfactual runs in a
    temporary detached worktree, never by discarding changes in the build worktree.
 10. **Coverage is proven by executable tests and documented limits.**
