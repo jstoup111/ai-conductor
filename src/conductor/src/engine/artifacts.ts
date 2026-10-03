@@ -1041,9 +1041,11 @@ export async function sweepStaleReviewArtifacts(
   // outlive it. Include that derived path in the sweep without registering it
   // as completion authority, so a stale legacy-only report cannot survive to
   // influence the next dispatch.
-  const artifacts = step === 'prd_audit'
-    ? [join(dir, PRD_AUDIT_REPORT_PATH), ...await findArtifactFiles(dir, step)]
-    : await findArtifactFiles(dir, step);
+  const artifacts = await findArtifactFiles(dir, step);
+  if (step === 'prd_audit') {
+    const reportPath = join(dir, PRD_AUDIT_REPORT_PATH);
+    if (await access(reportPath).then(() => true, () => false)) artifacts.push(reportPath);
+  }
   for (const f of new Set(artifacts)) {
     if (await fileIsFreshSinceSession(f, sessionStartedAt)) continue; // fresh → keep
     if (await sweptArtifactStillValid(dir, step, config, expectedRunId)) continue; // still code-valid → spare
@@ -1052,7 +1054,7 @@ export async function sweepStaleReviewArtifacts(
     const targets = step === 'architecture_review_as_built'
       ? [f, join(dir, AS_BUILT_REPORT_PATH)]
       : step === 'prd_audit'
-        ? [join(dir, PRD_AUDIT_REPORT_PATH), join(dir, PRD_AUDIT_VERDICT_PATH)]
+        ? [f, join(dir, PRD_AUDIT_VERDICT_PATH), join(dir, PRD_AUDIT_REPORT_PATH)]
         : [f];
     for (const target of targets) {
       try {

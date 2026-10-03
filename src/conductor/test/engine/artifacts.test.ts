@@ -4794,6 +4794,17 @@ describe('engine/artifacts', () => {
       expect(await findArtifactFiles(dir, 'prd_audit')).toHaveLength(1);
     });
 
+    it('removes a stale legacy PRD-audit report without a typed verdict', async () => {
+      const reportPath = join(dir, '.pipeline/prd-audit.md');
+      await createFile('.pipeline/prd-audit.md', 'legacy report');
+      await utimes(reportPath, stale, stale);
+
+      const removed = await sweepStaleReviewArtifacts(dir, 'prd_audit', SESSION);
+
+      expect(removed).toEqual([reportPath]);
+      await expect(readFile(reportPath, 'utf-8')).rejects.toThrow();
+    });
+
     it('never sweeps build state (.pipeline/task-status.json is cumulative run state)', async () => {
       await createFile('.pipeline/task-status.json', '{"tasks":[]}');
       await utimes(join(dir, '.pipeline/task-status.json'), stale, stale);
