@@ -259,6 +259,13 @@ negative says "the only assertion changes are the added credential option"; Task
 requires new endpoint assertions — both cannot ship, so amend one before landing or surface it to
 the operator.
 
+Run this sweep through a fresh subagent exactly as plan §7b directs: the same inputs, including
+every approved ADR decision the plan is subject to, and the same conflict rule and round limit. Never
+run it in the authoring context. Record each confirmed conflict as `fail` on the affected criterion
+or `adr` row, with `CONTRADICTS:` prose naming the task and quoting both passages. A sweep that finds
+nothing still needs the subagent's clean result; do not mark rows `covered` on the author's own
+re-read.
+
 When a contradiction is confirmed, amend the artifact during this DECIDE pass — do not
 defer it to BUILD. Follow the accepted-artifact amendment convention the sibling DECIDE
 skills use: add a dated note beside the original assertion, additively, leaving the
