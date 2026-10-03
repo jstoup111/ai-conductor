@@ -149,6 +149,14 @@ would both miss halts and keep offering resolved ones. D2 records what would cha
    never by rename — and the monitor continues with no deferrals recorded, which re-offers work
    rather than suppressing it.
 
+   > **Amended 2026-10-03 by operator decision (James Stoup, as-built AR-010 for
+   > `monitor-daemon-halts-through-a-guided-resolution-q`):** D3 no longer requires a clear helper.
+   >
+   > D3.1: A deferral is keyed to the exact halt instance (marker mtime and size), so a resolved or
+   > re-raised halt never matches a stored deferral; a stale entry is inert and expires with its
+   > halt. The deferral module owns read and write helpers only; no production clear lifecycle is
+   > required, and none ships until a caller needs one.
+
 4. **A deferral is keyed by project, feature, and halt identity, and fails toward re-offering.**
    Keying on project and feature alone is insufficient: a feature that halts again after being
    resolved is a new halt and must be offered again, not silently suppressed by a stale deferral.
