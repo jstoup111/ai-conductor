@@ -344,6 +344,48 @@ describe('task-progress', () => {
   });
 
   describe('current repair freshness', () => {
+    it('resolves a plan_amendment obligation only from a Task trailer committed after its boundary', async () => {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'feature.md'), '### Task 7: Repair the close path\n');
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '7', status: 'completed' }],
+      }));
+      await writeFile(join(dir, 'original.txt'), 'original\n');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'original implementation\n\nTask: 7'], { cwd: dir });
+      const boundary = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+
+      const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+      const admitted = await repairs.admitOrReplay('plan-amendment-close-path', {
+        id: 'plan-amendment-close-path',
+        planPath: '.docs/plans/feature.md',
+        taskIds: ['7'],
+        source: {
+          findingId: 'changed-task-digest',
+          authority: 'plan_amendment',
+          instruction: 'Re-implement the changed task.',
+        },
+        baseline: { head: boundary, tree: 'tree', resolvedTaskIds: ['7'] },
+      });
+      if (!admitted.ok) throw new Error(admitted.message);
+
+      // The completed row and original trailer are both before the amendment boundary.
+      expect(await resolveTaskIds(dir, ['7'])).toEqual(new Set());
+
+      await writeFile(join(dir, 'repair.txt'), 'repair\n');
+      await execa('git', ['add', 'repair.txt'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'repair close path\n\nTask: 7'], { cwd: dir });
+
+      expect(await resolveTaskIds(dir, ['7'])).toEqual(new Set(['7']));
+    });
+
     type TranslatedBoundary = 'direct' | 'successor';
 
     /**
