@@ -25,6 +25,10 @@ export interface TaskStatusFile {
   [key: string]: unknown;
 }
 
+export interface SeedTaskStatusOptions {
+  dispatchBoundary?: boolean;
+}
+
 interface EngineState {
   activePlanPath?: string;
   [key: string]: unknown;
@@ -159,8 +163,14 @@ async function trailerProvenCompletions(projectRoot: string): Promise<Map<string
  * @param projectRoot - Project root directory
  * @param planPath - Path to the plan file (relative to projectRoot or absolute)
  * @param enginePlanPath - Optional: plan path recorded in engine state (overrides planPath)
+ * @param options - Dispatch-only reseed behavior
  */
-export async function seedTaskStatus(projectRoot: string, planPath: string, enginePlanPath?: string): Promise<void> {
+export async function seedTaskStatus(
+  projectRoot: string,
+  planPath: string,
+  enginePlanPath?: string,
+  options: SeedTaskStatusOptions = {},
+): Promise<void> {
   try {
     // Ensure .pipeline directory exists
     const pipelineDir = join(projectRoot, '.pipeline');
@@ -278,7 +288,10 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     const hasMissingPlanTask = Array.from(planTasks.keys()).some(
       (taskId) => !existingTaskIds.has(canonicalTaskId(taskId)),
     );
-    const provenCompletions = hasMissingPlanTask
+    const hasInProgressTask = (existingStatus.tasks ?? []).some(
+      (task) => task.status === 'in_progress',
+    );
+    const provenCompletions = hasMissingPlanTask || (options.dispatchBoundary && hasInProgressTask)
       ? await trailerProvenCompletions(projectRoot)
       : new Map<string, string>();
 
@@ -323,9 +336,14 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
         existing.id = taskId;
         if (declaredFiles) existing.files = mergeDeclaredFiles(existing.files, declaredFiles);
 
-        // Preserve in_progress
+        // Only a pre-BUILD dispatch can reclaim a stale in-progress row. A
+        // branch-scoped trailer proves the work committed before daemon death;
+        // otherwise, hand it back to BUILD as pending.
         if (existing.status === 'in_progress') {
-          // Keep as-is
+          if (options.dispatchBoundary && !provenCompletions.has(canonicalId)) {
+            existing.name = planTask.name;
+            existing.status = 'pending';
+          }
           continue;
         }
 

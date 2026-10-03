@@ -2116,7 +2116,7 @@ export async function seedBuildTaskTelemetry(
     return;
   }
   try {
-    await seedTaskStatus(projectRoot, planPath);
+    await seedTaskStatus(projectRoot, planPath, undefined, { dispatchBoundary: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[task-telemetry] unable to seed task-status.json: ${message}`);

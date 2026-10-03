@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import * as autoheal from '../../src/engine/autoheal.js';
-// Covers: task:1, task:2, task:5
+// Covers: task:1, task:2, task:3, task:5
 import { seedTaskStatus } from '../../src/engine/task-seed.js';
 
 vi.mock('../../src/engine/autoheal.js', { spy: true });
@@ -286,6 +286,27 @@ Content with \`src/file3.ts\`
       expect({ originResolutions: originResolution.mock.calls.length, task18: status.tasks.find((task: any) => task.id === '18') }).toEqual({
         originResolutions: 1,
         task18: { id: '18', name: 'Restored work', status: 'pending' },
+      });
+    });
+
+    it('resets a trailerless in_progress row to pending at a dispatch boundary', async () => {
+      await initializeRepository();
+      const planPath = await writePlan(true);
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [
+          { id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' },
+          { id: '18', name: 'Restored work', status: 'pending' },
+          { id: '19', name: 'Missing sibling', status: 'in_progress' },
+        ] }),
+      );
+
+      await seedTaskStatus(dir, planPath, undefined, { dispatchBoundary: true });
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks.find((task: any) => task.id === '19')).toEqual({
+        id: '19', name: 'Missing sibling', status: 'pending',
       });
     });
   });
