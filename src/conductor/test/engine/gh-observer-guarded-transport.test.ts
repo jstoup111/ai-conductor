@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolvePrivateGhObserverPassthrough } from '../../src/execution/gh-observer.js';
+import { resolvePrivateGhObserverPassthrough } from '../../src/execution/gh-observer-passthrough.js';
 
 describe('resolvePrivateGhObserverPassthrough', () => {
   it('accepts only a provisioned absolute executable and otherwise retains ordinary gh resolution', () => {

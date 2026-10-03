@@ -1371,5 +1371,6 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
     exitCode: 1,
     preferredProvider: configuredProviders[0] ?? 'unknown',
     attempts: [],
+    managedGhObservationCoverage: UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE,
   };
 }

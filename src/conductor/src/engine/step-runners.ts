@@ -235,6 +235,7 @@ import {
   ProviderRuntimeSet,
 } from './provider-runtime.js';
 import { normalizeProviderSelection } from './provider-selection.js';
+import { UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE } from '../execution/managed-session-preparation.js';
 import type { VerifierDispatchResult } from './attribution-lane.js';
 import {
   renderSkillInvocation,
@@ -447,6 +448,7 @@ function mapProviderLifecycleHalt(
     preferredProvider,
     attempts: [],
     haltMarkerWrite: result.haltMarkerWrite,
+    managedGhObservationCoverage: UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE,
   };
 }
 

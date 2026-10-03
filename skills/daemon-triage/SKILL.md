@@ -10,6 +10,8 @@ phase_active_policy: advisory
 requires: [verify-claims]
 ---
 
+<!-- ai-conductor:session-command-context=operator-only -->
+
 ## Purpose
 
 An operator's entry point when the daemon has a feature wedged. It answers three
@@ -311,3 +313,4 @@ wrong midway, the record must already show what had actually run.
 - [ ] *Actions taken* records each approved action and its result, appended as it
       completed — empty if the run was diagnosis-only
 - [ ] Feature-side vs harness-side called explicitly
+<!-- /ai-conductor:session-command-context -->

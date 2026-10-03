@@ -7,7 +7,7 @@ import {
   composePreparedManagedSessionEnvironment,
   prepareManagedGhObservation,
 } from '../../src/execution/managed-session-preparation.js';
-import { GH_OBSERVER_REAL_EXECUTABLE_ENV } from '../../src/execution/gh-observer.js';
+import { GH_OBSERVER_REAL_EXECUTABLE_ENV } from '../../src/execution/gh-observer-passthrough.js';
 import type { ManagedSessionContext } from '../../src/execution/managed-session-context.js';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
