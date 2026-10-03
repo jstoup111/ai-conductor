@@ -45,7 +45,9 @@ type DeferralCase = RemediationCaseRecord & {
 
 export type PersistBuildReviewDecisionStopResult =
   | { readonly ok: true; readonly status: 'persisted' | 'already-persisted'; readonly caseId: string }
-  | { readonly ok: false; readonly reason: 'invalid-decision-stop' | 'conflicting-case-id' | `case store ${string}` };
+  | { readonly ok: false; readonly reason: 'invalid-decision-stop' | 'conflicting-case-id' | `case store ${string}` }
+  | { readonly ok: false; readonly reason: 'rejected-transition'; readonly caseIds: readonly string[]; readonly sourceIds: readonly string[] }
+  | { readonly ok: false; readonly reason: 'malformed-state' };
 
 /** The shared lifecycle vocabulary for reducers and effect execution. */
 export function isOpenRemediationCase(record: RemediationCaseRecord): boolean {
@@ -96,7 +98,12 @@ export async function persistBuildReviewDecisionStop(input: {
       nextState: { ...state, cases: [...state.cases, input.record] },
     };
   });
-  return mutation.ok ? mutation.value : { ok: false, reason: `case store ${mutation.reason}` };
+  if (mutation.ok) return mutation.value;
+  if (mutation.reason === 'rejected-transition' && 'caseIds' in mutation) {
+    return { ok: false, reason: mutation.reason, caseIds: mutation.caseIds, sourceIds: mutation.sourceIds };
+  }
+  if (mutation.reason === 'malformed-state') return { ok: false, reason: mutation.reason };
+  return { ok: false, reason: `case store ${mutation.reason}` };
 }
 
 function isActionCase(record: RemediationCaseRecord): record is ActionCase {

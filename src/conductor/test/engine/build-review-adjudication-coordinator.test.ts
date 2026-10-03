@@ -992,6 +992,78 @@ describe('coordinateBuildReviewAdjudication', () => {
     }
   });
 
+  it('records both unresolved owners when an unbound escalation stop is rejected by the store', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-current-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The current owner remains unresolved.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-current-owner', kind: 'action', status: 'reserved' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'unbound-stop' }],
+      cases: [{
+        caseRef: 'unbound-stop', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'An owner decision is required.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: {
+        verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['unbound-stop'],
+        rationale: 'The single proposed stop is consistent.',
+      },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), generateId: () => 'case-escalation-stop',
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      detail: expect.stringMatching(/persisted case history is valid; failure kind: rejected-transition/),
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'rejected-transition',
+      caseIds: ['case-current-owner', 'case-escalation-stop'], sourceIds: [sourceId],
+    }));
+  });
+
+  it('records both unresolved owners when the synthetic consistency stop is rejected by the store', async () => {
+    const root = await projectRoot();
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'rejected', caseRef: 'rejected-case' }],
+      cases: [{
+        caseRef: 'rejected-case', disposition: 'reject', priority: 'low', confidence: 'high',
+        rationale: 'The proposed repair should not proceed.', effect: { kind: 'none' },
+      }],
+      consistency: {
+        verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['rejected-case'],
+        rationale: 'The rejected proposal leaves an unresolved consistency conflict.',
+      },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), generateId: () => 'case-reject-owner',
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      detail: expect.stringMatching(/persisted case history is valid; failure kind: rejected-transition/),
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'rejected-transition',
+      caseIds: ['case-reject-owner', 'consistency-stop-lap-1'], sourceIds: [sourceId],
+    }));
+  });
+
   it('classifies persisted duplicate unresolved owners as malformed history', async () => {
     const root = await projectRoot();
     await mkdir(join(root, '.pipeline'), { recursive: true });
