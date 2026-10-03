@@ -54,7 +54,10 @@ import {
   supportsProviderCapability,
 } from '../execution/provider-catalog.js';
 import type { ManagedSessionContext } from '../execution/managed-session-context.js';
-import { prepareManagedGhObservation } from '../execution/managed-session-preparation.js';
+import {
+  prepareManagedGhObservation,
+  UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE,
+} from '../execution/managed-session-preparation.js';
 import type { ManagedGhObservationCoverage } from '../execution/managed-session-preparation.js';
 
 export interface ProviderUnavailableClassification {
@@ -114,7 +117,7 @@ export interface ProviderExecutionResult extends InvokeResult, ProviderAttributi
   /** Lifecycle-supervisor marker outcome, when preparation recovery was exhausted. */
   haltMarkerWrite?: HaltMarkerWriteResult;
   /** PATH, custom-client, and MCP gaps remain explicitly unknown. */
-  managedGhObservationCoverage?: ManagedGhObservationCoverage;
+  managedGhObservationCoverage: ManagedGhObservationCoverage;
 }
 
 export type ProviderTransitionWarning =
@@ -927,7 +930,7 @@ export async function executeProviderCandidates({
     // so the step keys the schema home whenever no auxiliary member does.
     const schemaScratchMember = auxiliaryMember ?? step;
     let invocationResult: Promise<InvokeResult> | undefined;
-    let managedGhObservationCoverage: ManagedGhObservationCoverage | undefined;
+    let managedGhObservationCoverage: ManagedGhObservationCoverage = UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE;
     const teardownCallbacks: Array<() => Promise<void>> = [];
     const supportsNativeSchemaCapability =
       runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
@@ -1108,7 +1111,7 @@ export async function executeProviderCandidates({
           rateLimited: true,
           preferredProvider,
           attempts,
-          ...(managedGhObservationCoverage ? { managedGhObservationCoverage } : {}),
+          managedGhObservationCoverage,
         };
       }
       const diagnostic = attempts
@@ -1127,7 +1130,7 @@ export async function executeProviderCandidates({
         exitCode: lastResult.exitCode ?? 1,
         preferredProvider,
         attempts,
-        ...(managedGhObservationCoverage ? { managedGhObservationCoverage } : {}),
+        managedGhObservationCoverage,
       };
     }
     let result: InvokeResult;
@@ -1233,7 +1236,7 @@ export async function executeProviderCandidates({
         resolvedEffort: resolved.effort,
         attempts,
         ...(observedIntervals.length ? { observedIntervals } : {}),
-        ...(managedGhObservationCoverage ? { managedGhObservationCoverage } : {}),
+        managedGhObservationCoverage,
       };
     }
 
@@ -1266,7 +1269,7 @@ export async function executeProviderCandidates({
           preferredProvider,
           attempts,
           ...(observedIntervals.length ? { observedIntervals } : {}),
-          ...(managedGhObservationCoverage ? { managedGhObservationCoverage } : {}),
+          managedGhObservationCoverage,
         };
       }
     }
@@ -1302,7 +1305,7 @@ export async function executeProviderCandidates({
             }
           : {}),
         ...(observedIntervals.length ? { observedIntervals } : {}),
-        ...(managedGhObservationCoverage ? { managedGhObservationCoverage } : {}),
+        managedGhObservationCoverage,
       };
     }
 

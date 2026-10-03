@@ -28,7 +28,11 @@ export interface PrepareManagedGhObservationInput {
 }
 
 const preparedGhObservations = new WeakMap<ManagedSessionContext, PreparedManagedGhObservation>();
-const UNKNOWN_COMPLETENESS: ManagedGhObservationCoverage = {
+/**
+ * The wrapper observes only PATH-resolved `gh`; all executor results retain
+ * this verdict so an absent event is never interpreted as absence of a write.
+ */
+export const UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE: ManagedGhObservationCoverage = {
   boundary: 'managed-path-resolved-gh', completeness: 'unknown',
 };
 
@@ -66,7 +70,7 @@ export async function prepareManagedGhObservation(
   } catch {
     throw ghUnavailable(input.context.provider, 'the managed gh observer wrapper could not be provisioned');
   }
-  const prepared = { wrapperDirectory, realExecutable, coverage: UNKNOWN_COMPLETENESS };
+  const prepared = { wrapperDirectory, realExecutable, coverage: UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE };
   preparedGhObservations.set(input.context, prepared);
   return prepared;
 }

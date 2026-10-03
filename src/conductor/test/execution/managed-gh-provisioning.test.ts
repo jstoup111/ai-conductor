@@ -74,6 +74,28 @@ describe('managed gh observation provisioning', () => {
   });
 
   it.each([
+    'an absolute gh binary',
+    'a child that replaces PATH',
+    'a custom GitHub HTTP or SDK client',
+    'a separate MCP transport',
+  ])('reports unknown completeness when observations cannot cover %s', async (_outsideBoundary) => {
+    const managed = await context();
+    const prepared = await prepareManagedGhObservation({
+      context: managed,
+      environment: { PATH: '/operator/bin' },
+      resolveExecutable: async () => '/operator/bin/gh',
+      observerModuleUrl: 'file:///observer.mjs',
+    });
+
+    // These routes do not execute through the PATH wrapper. Their absent
+    // observations are deliberately not evidence that no GitHub write ran.
+    expect(prepared.coverage).toEqual({
+      boundary: 'managed-path-resolved-gh',
+      completeness: 'unknown',
+    });
+  });
+
+  it.each([
     ['claude', (calls: NodeJS.ProcessEnv[]) => new ClaudeProvider(undefined, ((_file: string, _args: string[], launch: { env?: NodeJS.ProcessEnv }) => {
       calls.push(launch.env ?? {}); return Promise.resolve({ stdout: JSON.stringify({ type: 'result', result: 'done' }), stderr: '', exitCode: 0, failed: false } as any);
     }) as never)],
