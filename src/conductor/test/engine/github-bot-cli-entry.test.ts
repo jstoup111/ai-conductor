@@ -47,7 +47,7 @@ describe('GitHub bot CLI entry points', () => {
   it('dispatchGithubOperationCommand writes issue comments through the bot child and shares the user config with owner resolution', async () => {
     await expect(readMachineOwnerConfig()).resolves.toEqual({ spec_owner: 'pr-labels' });
     await expect(readGithubBotCredential()).resolves.toEqual({ kind: 'configured', tokenFile: join(root, 'token') });
-    const gh = makeProductionGh();
+    const gh = makeProductionGh({ execFile: execFileCb });
     const guarded = createGuardedGithubOperationRunner(gh, { cwd: root, mutation: {
       provenance: { repository: 'acme/repo', defaultBranch: 'main', specBranch: 'feature/topic', featureMarker: '.docs/intake/topic.md', publication: 'initial' },
       dependencies: { resolveMachineOwner: async () => ({ resolved: true as const, id: 'pr-labels' }), provenanceDiscovery: { readCommittedRecords: async () => [{ path: '.docs/intake/topic.md', content: 'Owner: pr-labels\n' }] } },
@@ -61,7 +61,7 @@ describe('GitHub bot CLI entry points', () => {
   });
 
   it('runs the engineer handoff PR create and HTTPS push through bot-authenticated children', async () => {
-    const gh = makeProductionGh();
+    const gh = makeProductionGh({ execFile: execFileCb });
     const operations = createGuardedGithubOperationRunner(gh, { cwd: root, mutation: {
       provenance: { repository: 'acme/repo', defaultBranch: 'main', specBranch: 'spec/topic', featureMarker: '.docs/intake/topic.md', publication: 'initial' },
       dependencies: { resolveMachineOwner: async () => ({ resolved: true as const, id: 'pr-labels' }), provenanceDiscovery: { readCommittedRecords: async () => [{ path: '.docs/intake/topic.md', content: 'Owner: pr-labels\n' }] } },
@@ -104,7 +104,7 @@ describe('GitHub bot CLI entry points', () => {
   });
 
   it('runs intake-file issue creation through a bot-authenticated gh child', async () => {
-    const gh = makeProductionGh();
+    const gh = makeProductionGh({ execFile: execFileCb });
     const operations = createIntakeFilingOperations(gh, root, {
       resolveActor: async () => ({ resolved: true as const, id: 'pr-labels' }),
       intent: { kind: 'explicit-intake', repository: 'acme/repo' },

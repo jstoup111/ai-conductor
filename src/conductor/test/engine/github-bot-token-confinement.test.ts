@@ -81,7 +81,7 @@ describe('GitHub bot token confinement', () => {
   });
 
   it('confines a bot write to gh/git children and redacts a failed child stderr before later children are built', async () => {
-    const gh = makeProductionGh();
+    const gh = makeProductionGh({ execFile: execFileCb });
 
     await gh(['issue', 'comment', '1'], { cwd: root, credential: 'write' });
     expect(boundary.calls[0]).toMatchObject({

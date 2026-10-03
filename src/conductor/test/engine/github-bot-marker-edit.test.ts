@@ -39,7 +39,7 @@ describe('configured bot marker edit fallback', () => {
 
   it('retries a refused marker edit once as operator and never creates a second comment', async () => {
     const logs: string[] = [];
-    const gh = makeProductionGh();
+    const gh = makeProductionGh({ execFile: execFileCb });
     const guarded = createGuardedGithubOperationRunner(gh, {
       cwd: root,
       mutation: {

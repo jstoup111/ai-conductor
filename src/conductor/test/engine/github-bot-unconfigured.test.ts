@@ -84,7 +84,7 @@ describe('unconfigured GitHub bot credential', () => {
 
   it('keeps guarded writes and authorized pushes ambient without fallback telemetry', async () => {
     const events: unknown[] = [];
-    const guarded = createGuardedGithubOperationRunner(makeProductionGh(), {
+    const guarded = createGuardedGithubOperationRunner(makeProductionGh({ execFile: execFileCb }), {
       cwd: root,
       creation: { authorize: async () => ({}) },
       events: { emit: async (event) => { events.push(event); } },
@@ -128,7 +128,7 @@ describe('unconfigured GitHub bot credential', () => {
     });
     boundary.failure = failure;
     const events: unknown[] = [];
-    const guarded = createGuardedGithubOperationRunner(makeProductionGh(), {
+    const guarded = createGuardedGithubOperationRunner(makeProductionGh({ execFile: execFileCb }), {
       cwd: root,
       creation: { authorize: async () => ({}) },
       events: { emit: async (event) => { events.push(event); } },
