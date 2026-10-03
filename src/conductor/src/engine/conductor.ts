@@ -231,6 +231,7 @@ import {
   parseTrack,
   parseIntakeSourceRef,
   planStem,
+  FINISH_CHOICE_MARKER,
   readManualTestFailRows,
   BUILD_REVIEW_VERDICT,
   buildReviewFailureDetails,
@@ -243,6 +244,7 @@ import {
   type RemediationDispositionRejection,
   type CompletionContext,
   type CompletionResult,
+  type FinishChoice,
   type PrdAuditReport,
   discardStaleLapBuildReviewFail,
   removeBuildReviewVerdict,
@@ -250,6 +252,7 @@ import {
   stampGateRunIdentity,
   isVerdictRunIdentityStep,
 } from './artifacts.js';
+import { resolveHeadSha, resolvePrDisposition } from './run-provenance.js';
 import { extractStoryCriterionIds } from './story-criteria.js';
 import {
   AS_BUILT_VERDICT_PATH,
@@ -6121,12 +6124,19 @@ export class Conductor {
     await this.commitStateChanges(state, 'complete verified feature run', {
       feature_status: 'complete',
     });
+    const headSha = await resolveHeadSha(this.git);
+    const finishChoice = await readFile(join(this.projectRoot, FINISH_CHOICE_MARKER), 'utf-8')
+      .then((choice) => choice.trim() as FinishChoice)
+      .catch(() => undefined);
     await this.events.emit({
       type: 'feature_complete',
-      prUrl: state.pr_url,
       featureDesc: state.feature_desc,
       sessionStartedAt: state.session_started_at,
       ...(state.complexity_tier === undefined ? {} : { tier: state.complexity_tier }),
+      ...(state.pr_url === undefined ? {} : { prUrl: state.pr_url }),
+      ...(headSha === undefined ? {} : { headSha }),
+      ...(state.rebase_base_sha === undefined ? {} : { baseSha: state.rebase_base_sha }),
+      prDisposition: resolvePrDisposition({ prUrl: state.pr_url, finishChoice }),
     });
     // The daemon classifies a run solely by .pipeline/DONE vs .pipeline/HALT.
     // Interactive runs intentionally leave no daemon marker.
