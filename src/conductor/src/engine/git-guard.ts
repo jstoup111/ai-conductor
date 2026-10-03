@@ -2,7 +2,7 @@ import { access, chmod, lstat, mkdir, readFile, realpath, stat, unlink, writeFil
 import { constants } from 'node:fs';
 import { delimiter, isAbsolute, join, normalize, resolve } from 'node:path';
 import { execa } from 'execa';
-import { GIT_GUARD_SCRIPT } from './git-hook-assets.js';
+import { GIT_GUARD_SCRIPT, PRE_PUSH_HOOK, REFERENCE_TRANSACTION_HOOK } from './git-hook-assets.js';
 
 const pipeline = (cwd: string) => join(cwd, '.pipeline');
 export const gitGuardPath = (cwd: string) => join(pipeline(cwd), 'bin', 'git');
@@ -100,6 +100,32 @@ export async function ensureGitGuardForDispatch(cwd: string | undefined): Promis
     if (!regular || (info.mode & 0o777) !== 0o755) throw new Error('guard is not a regular executable file');
   } catch (error) {
     throw new Error(`git guard repair failed: ${target}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const hookDirectory = join(pipeline(cwd), 'git-hooks');
+  for (const [name, content] of [
+    ['reference-transaction', REFERENCE_TRANSACTION_HOOK],
+    ['pre-push', PRE_PUSH_HOOK],
+  ] as const) {
+    const hook = join(hookDirectory, name);
+    let hookValid = false;
+    try {
+      const [actual, info, regular] = await Promise.all([readFile(hook, 'utf8'), stat(hook), isRegularFile(hook)]);
+      hookValid = regular && actual === content && (info.mode & 0o777) === 0o755;
+    } catch { /* repair */ }
+    if (!hookValid) {
+      try {
+        await mkdir(hookDirectory, { recursive: true });
+        await writeRegularFile(hook, content, 0o755);
+      } catch (error) {
+        throw new Error(`git hook repair failed: ${hook}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    try {
+      const [actual, info, regular] = await Promise.all([readFile(hook, 'utf8'), stat(hook), isRegularFile(hook)]);
+      if (!regular || actual !== content || (info.mode & 0o777) !== 0o755) throw new Error('hook is not the expected regular executable file');
+    } catch (error) {
+      throw new Error(`git hook repair failed: ${hook}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   return join(pipeline(cwd), 'bin');
 }
