@@ -90,6 +90,57 @@ describe('CloseoutEventTail', () => {
 
     expect(received).toEqual([completed, partial]);
   });
+
+  it('projects complete dispatch-local producer records through the existing tail without consuming a partial record', async () => {
+    const projectRoot = await createProjectRoot();
+    const producer = join(projectRoot, '.pipeline', 'session-events', 'dispatch-1', 'producer-a.jsonl');
+    const observed = {
+      type: 'session_command_refused', eventId: 'event-1', sourceTime: '2026-10-02T12:00:00.000Z',
+      dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'feature', featureSlug: 'feature-a' }, subcommand: 'finish-record',
+    } as const;
+    await mkdir(join(projectRoot, '.pipeline', 'session-events', 'dispatch-1'), { recursive: true });
+    await writeFile(producer, JSON.stringify(observed));
+    const events = new ConductorEventEmitter();
+    const received: unknown[] = [];
+    events.on('session_command_refused', (event) => { received.push(event); });
+    const tail = new CloseoutEventTail({ projectRoot, events });
+
+    await tail.poll();
+    expect(received).toEqual([]);
+    await appendFile(producer, '\n');
+    await tail.poll();
+    await tail.poll();
+
+    expect(received).toEqual([observed]);
+  });
+
+  it('retains a producer record when projection fails and delivers it after recovery', async () => {
+    const projectRoot = await createProjectRoot();
+    const producer = join(projectRoot, '.pipeline', 'session-events', 'dispatch-1', 'producer-a.jsonl');
+    const observed = {
+      type: 'session_command_refused', eventId: 'event-1', sourceTime: '2026-10-02T12:00:00.000Z',
+      dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'project' }, subcommand: 'finish-record',
+    } as const;
+    await mkdir(join(projectRoot, '.pipeline', 'session-events', 'dispatch-1'), { recursive: true });
+    await writeFile(producer, `${JSON.stringify(observed)}\n`);
+    const events = new ConductorEventEmitter();
+    const projected: unknown[] = [];
+    let available = false;
+    const tail = new CloseoutEventTail({
+      projectRoot,
+      events,
+      emitEvent: async (event) => {
+        if (!available) throw new Error('sink unavailable');
+        projected.push(event);
+      },
+    });
+
+    await expect(tail.poll()).rejects.toThrow('sink unavailable');
+    available = true;
+    await tail.poll();
+
+    expect(projected).toEqual([observed]);
+  });
 });
 
 describe('CloseoutEventTail lifecycle', () => {

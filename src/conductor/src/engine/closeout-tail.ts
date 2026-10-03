@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import type { ExternalPipelineEvent } from './closeout-events.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
+import { SessionEventReader } from './session-event-reader.js';
 
 const PIPELINE_CLOSEOUT_LEDGER = '.pipeline/pipeline-events.jsonl';
 const CANONICAL_EVENTS_LEDGER = '.pipeline/events.jsonl';
@@ -75,7 +76,9 @@ class CloseoutTailReader {
 /** Polls the pipeline-owned closeout ledger and re-emits complete records. */
 export class CloseoutEventTail {
   private readonly reader: CloseoutTailReader;
+  private readonly sessionReader: SessionEventReader;
   private readonly events: ConductorEventEmitter;
+  private readonly emitEvent: (event: Parameters<ConductorEventEmitter['emit']>[0]) => Promise<void>;
   private readonly projectRoot: string;
   private interval: ReturnType<typeof setInterval> | null = null;
   private inFlight: Promise<void> | null = null;
@@ -84,14 +87,22 @@ export class CloseoutEventTail {
     projectRoot,
     events,
     readLedger,
+    sessionReader,
+    emitEvent,
   }: {
     projectRoot: string;
     events: ConductorEventEmitter;
     readLedger?: (path: string) => Promise<Buffer>;
+    /** Test seam; production reads the validated dispatch-local producer files. */
+    sessionReader?: SessionEventReader;
+    /** Test seam for a failing projection; production preserves best-effort bus emission. */
+    emitEvent?: (event: Parameters<ConductorEventEmitter['emit']>[0]) => Promise<void>;
   }) {
     this.projectRoot = projectRoot;
     this.reader = new CloseoutTailReader(projectRoot, readLedger);
+    this.sessionReader = sessionReader ?? new SessionEventReader({ projectRoot });
     this.events = events;
+    this.emitEvent = emitEvent ?? ((event) => this.events.emit(event));
   }
 
   poll(): Promise<void> {
@@ -118,6 +129,20 @@ export class CloseoutEventTail {
           byteOffset: record.byteOffset,
         });
       }
+    }
+    for (const record of await this.sessionReader.read()) {
+      if (record.kind === 'event') {
+        await this.emitEvent(record.event);
+      } else {
+        await this.events.emit({
+          type: 'pipeline_tail_diagnostic',
+          reason: record.code === 'malformed-json' ? 'malformed-line' : 'poll-failed',
+          path: record.path.slice(this.projectRoot.length + 1),
+          byteOffset: record.byteOffset,
+        });
+      }
+      // Task 12 replaces this best-effort acknowledgement with persistence acknowledgement.
+      this.sessionReader.acknowledge(record);
     }
   }
 

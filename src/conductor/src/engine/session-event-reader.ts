@@ -1,0 +1,172 @@
+import { readdir, readFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import { join } from 'node:path';
+
+import type { ConductorEvent, SessionObservationScope } from '../types/events.js';
+
+export const SESSION_EVENTS_DIRECTORY = '.pipeline/session-events';
+export const MAX_SESSION_EVENT_RECORD_BYTES = 4_096;
+const MAX_INCREMENTAL_READ_BYTES = 64 * 1_024;
+const IDENTITY = /^[a-z][a-z0-9-]{0,63}$/;
+
+export type SessionEventReadRecord =
+  | { kind: 'event'; path: string; byteOffset: number; event: SessionProducerEvent }
+  | { kind: 'diagnostic'; path: string; byteOffset: number; code: 'malformed-json' | 'record-too-large' | 'invalid-attribution' | 'incomplete-record' };
+
+type SessionProducerEvent = Extract<ConductorEvent, {
+  type: 'session_command_refused' | 'github_bypass_attempt' | 'github_bypass_result' | 'github_possible_bypass' | 'session_event_delivery_diagnostic';
+}>;
+
+type PendingRecord = SessionEventReadRecord & { endOffset?: number };
+
+export interface SessionEventReaderDependencies {
+  readonly list?: (path: string) => Promise<Dirent[]>;
+  readonly read?: (path: string) => Promise<Buffer>;
+}
+
+/**
+ * Bounded, acknowledged reader for dispatch-local producer ledgers. It never
+ * advances an offset until its caller acknowledges the delivered record.
+ */
+export class SessionEventReader {
+  private readonly offsets = new Map<string, number>();
+  private pending: PendingRecord[] = [];
+  private readonly list: (path: string) => Promise<Dirent[]>;
+  private readonly readFile: (path: string) => Promise<Buffer>;
+
+  constructor({ projectRoot, ...dependencies }: { projectRoot: string } & SessionEventReaderDependencies) {
+    this.projectRoot = projectRoot;
+    this.list = dependencies.list ?? ((path) => readdir(path, { withFileTypes: true }));
+    this.readFile = dependencies.read ?? readFile;
+  }
+
+  private readonly projectRoot: string;
+
+  async read(): Promise<readonly SessionEventReadRecord[]> {
+    if (this.pending.length > 0) return this.pending;
+    return this.collect(false);
+  }
+
+  /** Diagnose an unterminated record only after its producer has settled. */
+  async drain(): Promise<readonly SessionEventReadRecord[]> {
+    if (this.pending.length > 0) return this.pending;
+    return this.collect(true);
+  }
+
+  acknowledge(record: SessionEventReadRecord): void {
+    const pending = this.pending[0];
+    if (!pending || pending !== record) return;
+    this.pending.shift();
+    if (pending.endOffset !== undefined) this.offsets.set(pending.path, pending.endOffset);
+  }
+
+  private async collect(settled: boolean): Promise<readonly SessionEventReadRecord[]> {
+    const paths = await this.producerPaths();
+    for (const path of paths) {
+      const records = await this.readPath(path, settled);
+      if (records.length > 0) this.pending.push(...records);
+    }
+    return this.pending;
+  }
+
+  private async producerPaths(): Promise<string[]> {
+    const root = join(this.projectRoot, SESSION_EVENTS_DIRECTORY);
+    let dispatches: Dirent[];
+    try { dispatches = await this.list(root); } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    const paths: string[] = [];
+    for (const dispatch of dispatches) {
+      if (!dispatch.isDirectory() || !IDENTITY.test(dispatch.name)) continue;
+      const dispatchPath = join(root, dispatch.name);
+      let producers: Dirent[];
+      try { producers = await this.list(dispatchPath); } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      for (const producer of producers) {
+        if (producer.isFile() && /^[a-z][a-z0-9-]{0,63}\.jsonl$/.test(producer.name)) {
+          paths.push(join(dispatchPath, producer.name));
+        }
+      }
+    }
+    return paths.sort();
+  }
+
+  private async readPath(path: string, settled: boolean): Promise<PendingRecord[]> {
+    let content: Buffer;
+    try { content = await this.readFile(path); } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    let offset = this.offsets.get(path) ?? 0;
+    if (content.byteLength < offset) offset = 0;
+    const unread = content.subarray(offset, offset + MAX_INCREMENTAL_READ_BYTES);
+    const records: PendingRecord[] = [];
+    let lineStart = 0;
+    while (lineStart < unread.byteLength) {
+      const lineEnd = unread.indexOf(0x0a, lineStart);
+      if (lineEnd === -1) {
+        const bytes = unread.byteLength - lineStart;
+        if (bytes > MAX_SESSION_EVENT_RECORD_BYTES) {
+          records.push(this.diagnostic(path, offset + lineStart, 'record-too-large', undefined));
+        } else if (settled) {
+          records.push(this.diagnostic(path, offset + lineStart, 'incomplete-record'));
+        }
+        break;
+      }
+      const line = unread.subarray(lineStart, lineEnd);
+      const endOffset = offset + lineEnd + 1;
+      if (line.byteLength > MAX_SESSION_EVENT_RECORD_BYTES) {
+        records.push(this.diagnostic(path, offset + lineStart, 'record-too-large', endOffset));
+      } else if (line.byteLength > 0) {
+        records.push(this.parse(path, offset + lineStart, endOffset, line));
+      } else {
+        records.push({ kind: 'diagnostic', path, byteOffset: offset + lineStart, code: 'malformed-json', endOffset });
+      }
+      lineStart = lineEnd + 1;
+    }
+    return records;
+  }
+
+  private parse(path: string, byteOffset: number, endOffset: number, line: Buffer): PendingRecord {
+    try {
+      const value: unknown = JSON.parse(line.toString('utf8'));
+      if (!isSessionProducerEvent(value)) return this.diagnostic(path, byteOffset, 'invalid-attribution', endOffset);
+      return { kind: 'event', path, byteOffset, event: value, endOffset };
+    } catch {
+      return this.diagnostic(path, byteOffset, 'malformed-json', endOffset);
+    }
+  }
+
+  private diagnostic(path: string, byteOffset: number, code: Extract<SessionEventReadRecord, { kind: 'diagnostic' }>['code'], endOffset?: number): PendingRecord {
+    return { kind: 'diagnostic', path, byteOffset, code, endOffset };
+  }
+}
+
+function isSessionProducerEvent(value: unknown): value is SessionProducerEvent {
+  if (!isRecord(value) || !isIdentity(value.eventId) || !isIdentity(value.dispatchId) || !isIdentity(value.provider)
+    || typeof value.sourceTime !== 'string' || !Number.isFinite(Date.parse(value.sourceTime)) || !isScope(value.scope)) return false;
+  if (value.type === 'session_command_refused') return isSafeValue(value.subcommand);
+  if (value.type === 'github_bypass_attempt' || value.type === 'github_possible_bypass') return isSafeValue(value.operation);
+  if (value.type === 'github_bypass_result') return isIdentity(value.attemptId) && ['cli-succeeded', 'cli-failed', 'unknown'].includes(String(value.outcome));
+  return value.type === 'session_event_delivery_diagnostic'
+    && ['producer-path-invalid', 'record-too-large', 'write-failed'].includes(String(value.code));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isScope(value: unknown): value is SessionObservationScope {
+  return isRecord(value) && (value.kind === 'project' || (value.kind === 'feature' && isIdentity(value.featureSlug)));
+}
+
+function isSafeValue(value: unknown): boolean {
+  return value === 'unknown' || isIdentity(value);
+}
+
+function isIdentity(value: unknown): value is string {
+  return typeof value === 'string' && IDENTITY.test(value);
+}
