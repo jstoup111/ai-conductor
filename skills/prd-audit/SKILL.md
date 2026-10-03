@@ -127,6 +127,11 @@ For every story criterion, record one row.
   identity; a reviewer must never claim that wording alone proves the same behavior. If the relation
   is uncertain, describe the uncertainty and leave it unresolved.
 
+**Sweep every unplanned change in one pass.** Enumerate every OVER_SCOPE site in the reviewed diff
+in this audit — never one per lap. On a re-audit, judge prior findings plus the code changed since
+the judged lap; do not raise a first-time finding against unchanged code unless the prior audit could
+not have seen it, and say why.
+
 Do not conflate grades: an unmet criterion with an existing owner is FIXABLE even if another
 criterion is a PLAN_GAP. One row carries one grade.
 
