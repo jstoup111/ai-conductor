@@ -10395,6 +10395,8 @@ export class Conductor {
           const buildAttemptController = step.name === 'build'
             ? new AbortController()
             : undefined;
+          let buildAttemptSettled = false;
+          let activeStallEndedAttempt = false;
           const buildWatcher: BuildProgressWatcher | null =
             step.name === 'build' && resolveBuildProgressConfig(this.config).enabled
               ? new BuildProgressWatcher({
@@ -10403,7 +10405,17 @@ export class Conductor {
                   step: step.name,
                   featureSlug: state.feature_desc,
                   config: this.config,
-                  endAttempt: () => buildAttemptController?.abort(),
+                  endAttempt: () => {
+                    if (
+                      buildAttemptSettled ||
+                      buildAttemptController === undefined ||
+                      buildAttemptController.signal.aborted
+                    ) {
+                      return;
+                    }
+                    activeStallEndedAttempt = true;
+                    buildAttemptController.abort();
+                  },
                 })
               : null;
           buildWatcher?.start();
@@ -10475,6 +10487,7 @@ export class Conductor {
             !(step.name === 'finish' && this.finishPublication);
           let result: StepRunResult;
           if (protectedArtifactIssue) {
+            buildAttemptSettled = true;
             buildWatcher?.stop();
             closeoutTail?.stop();
             const dispatchIssue = protectedArtifactIssue;
@@ -10679,6 +10692,7 @@ export class Conductor {
                             }
                           })());
           } finally {
+            buildAttemptSettled = true;
             buildWatcher?.stop();
             closeoutTail?.stop();
             // Task 4 (#788): the phase-active marker is written for any
@@ -10709,19 +10723,39 @@ export class Conductor {
           // spends the existing retry budget, but records its distinct cause
           // before generic failure handling. The controller is attempt-local,
           // so a retry always receives a fresh, non-aborted signal/watcher.
+          // A settled attempt (or a second watcher callback) cannot retroactively
+          // turn a completed result into an active-stall outcome.
           if (
             step.name === 'build' &&
-            buildAttemptController?.signal.aborted === true &&
+            activeStallEndedAttempt &&
             !result.success
           ) {
-            const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
-            lastBuildStallReason =
-              `build stalled: active without movement for ` +
-              `${resolveBuildProgressConfig(this.config).active_stall_minutes} minutes`;
+            const [resolvedTasksAfter, headShaAttemptEnd] = await Promise.all([
+              countResolvedTasks(this.projectRoot),
+              currentCommitSha(this.projectRoot),
+            ]);
+            const headMovedThisAttempt =
+              headShaAttemptEnd !== null &&
+              headShaAttemptStart !== null &&
+              headShaAttemptEnd !== headShaAttemptStart;
+            // Preserve the established pinned-attempt breaker before adding
+            // the intra-attempt signal: on retry two or later, no resolved
+            // work and no HEAD movement is no_task_progress regardless of
+            // how the attempt ended.
+            const reason =
+              attempt >= 2 &&
+              resolvedTasksAfter <= resolvedTasksBefore &&
+              !headMovedThisAttempt
+                ? 'no_task_progress'
+                : 'active_stall';
+            lastBuildStallReason = reason === 'no_task_progress'
+              ? `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))`
+              : `build stalled: active without movement for ` +
+                `${resolveBuildProgressConfig(this.config).active_stall_minutes} minutes`;
             await emitTracked({
               type: 'build_stall',
               step: step.name,
-              reason: 'active_stall',
+              reason,
               resolvedBefore: resolvedTasksBefore,
               resolvedAfter: resolvedTasksAfter,
             });
