@@ -200,6 +200,7 @@ export class SpoolDrainer {
         new Uint8Array(await response.arrayBuffer()),
         Object.fromEntries(response.headers.entries()),
         signal,
+        this.now,
       );
     } catch {
       return classifyNetworkError();

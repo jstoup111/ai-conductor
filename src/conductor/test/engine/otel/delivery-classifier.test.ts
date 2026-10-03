@@ -35,6 +35,34 @@ describe('OTLP delivery response classification', () => {
     });
   });
 
+  it('parses future and past HTTP-date Retry-After values against the injected clock', () => {
+    const now = Date.parse('2024-10-01T00:00:00Z');
+
+    expect(classifyResponse(429, undefined, { 'retry-after': 'Tue, 01 Oct 2024 00:00:30 GMT' }, 'traces', () => now)).toEqual({
+      action: 'keep', failureClass: 'throttled', retryAfterMs: 30_000,
+    });
+    expect(classifyResponse(429, undefined, { 'retry-after': 'Mon, 30 Sep 2024 23:59:30 GMT' }, 'traces', () => now)).toEqual({
+      action: 'keep', failureClass: 'throttled', retryAfterMs: 0,
+    });
+  });
+
+  it('omits an unparseable Retry-After value', () => {
+    expect(classifyResponse(429, undefined, { 'retry-after': 'after-a-while' })).toEqual({
+      action: 'keep', failureClass: 'throttled',
+    });
+  });
+
+  it('honours delay-seconds and HTTP-date Retry-After values for 503 responses', () => {
+    const now = Date.parse('2024-10-01T00:00:00Z');
+
+    expect(classifyResponse(503, undefined, { 'retry-after': '30' }, 'traces', () => now)).toEqual({
+      action: 'keep', failureClass: 'server', retryAfterMs: 30_000,
+    });
+    expect(classifyResponse(503, undefined, { 'retry-after': 'Tue, 01 Oct 2024 00:00:30 GMT' }, 'traces', () => now)).toEqual({
+      action: 'keep', failureClass: 'server', retryAfterMs: 30_000,
+    });
+  });
+
   it('keeps a connection failure for retry', () => {
     expect(classifyNetworkError()).toEqual({ action: 'keep', failureClass: 'network' });
   });

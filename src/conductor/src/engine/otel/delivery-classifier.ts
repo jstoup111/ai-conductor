@@ -7,11 +7,17 @@ export type DeliveryClassification =
 
 type Headers = Record<string, string | undefined> | undefined;
 
-function retryAfterMs(headers: Headers): number | undefined {
+function retryAfterMs(headers: Headers, now: () => number): number | undefined {
   const value = Object.entries(headers ?? {}).find(([name]) => name.toLowerCase() === 'retry-after')?.[1];
   if (value === undefined) return undefined;
-  const seconds = Number(value);
-  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1_000 : undefined;
+  if (/^\d+$/.test(value)) {
+    const seconds = Number(value);
+    return Number.isSafeInteger(seconds) && seconds <= Number.MAX_SAFE_INTEGER / 1_000
+      ? seconds * 1_000
+      : undefined;
+  }
+  const retryAt = Date.parse(value);
+  return Number.isNaN(retryAt) ? undefined : Math.max(0, retryAt - now());
 }
 
 function rejectedItems(body: Uint8Array, signal: 'traces' | 'metrics'): number {
@@ -27,6 +33,7 @@ export function classifyResponse(
   body?: Uint8Array,
   headers?: Headers,
   signal: 'traces' | 'metrics' = 'traces',
+  now: () => number = Date.now,
 ): DeliveryClassification {
   if (status >= 200 && status < 300) {
     const rejected = body === undefined || body.length === 0 ? 0 : rejectedItems(body, signal);
@@ -38,8 +45,12 @@ export function classifyResponse(
   if (status === 401 || status === 403) return { action: 'keep', failureClass: 'auth' };
   if (status === 404) return { action: 'keep', failureClass: 'endpoint' };
   if (status === 408 || status === 429) {
-    const retryAfter = retryAfterMs(headers);
+    const retryAfter = retryAfterMs(headers, now);
     return { action: 'keep', failureClass: 'throttled', ...(retryAfter === undefined ? {} : { retryAfterMs: retryAfter }) };
+  }
+  if (status >= 500 && status < 600) {
+    const retryAfter = retryAfterMs(headers, now);
+    return { action: 'keep', failureClass: 'server', ...(retryAfter === undefined ? {} : { retryAfterMs: retryAfter }) };
   }
   return { action: 'keep', failureClass: 'server' };
 }

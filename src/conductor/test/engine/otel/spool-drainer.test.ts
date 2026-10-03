@@ -454,6 +454,63 @@ describe('SpoolDrainer', () => {
     }
   });
 
+  it.each([
+    { status: 503, retryAfter: '30', description: 'delay-seconds from a server error' },
+    { status: 429, retryAfter: 'Mon, 02 Sep 2024 04:27:10 GMT', description: 'an HTTP-date from a throttled response' },
+  ])('honours Retry-After $description before retrying traces and keeps the batch', async ({ status, retryAfter }) => {
+    const received: string[] = [];
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      received.push(Buffer.concat(chunks).toString());
+      response.writeHead(status, { 'retry-after': retryAfter }).end();
+    });
+    const endpoint = await listen(server);
+    let now = Date.parse('2024-09-02T04:26:40Z');
+    const delays: number[] = [];
+    let releaseSleep: (() => void) | undefined;
+    let signalSleepStarted!: () => void;
+    const sleepStarted = new Promise<void>((resolve) => { signalSleepStarted = resolve; });
+    const store = new SpoolStore(await temporaryDirectory(), { now: () => now });
+    await store.write('traces', Buffer.from('respect-retry-after'));
+
+    const drainer = new SpoolDrainer(store, {
+      endpoint,
+      headers: () => ({}),
+      now: () => now,
+      sleep: async (delay: number) => new Promise<void>((resolve) => {
+        if (delay === 30_000) {
+          delays.push(delay);
+          releaseSleep = resolve;
+          signalSleepStarted();
+        }
+      }),
+      random: () => 0,
+    });
+    const draining = drainer.drainUntilStopped();
+
+    try {
+      await sleepStarted;
+      expect(delays).toEqual([30_000]);
+      expect(received).toEqual(['respect-retry-after']);
+      now += 29_999;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(received).toEqual(['respect-retry-after']);
+
+      now += 1;
+      releaseSleep?.();
+      for (let turns = 0; turns < 50 && received.length < 2; turns += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(received).toEqual(['respect-retry-after', 'respect-retry-after']);
+      await expect(drainer.stop()).resolves.toBeUndefined();
+      expect(await store.list('traces')).toHaveLength(1);
+    } finally {
+      releaseSleep?.();
+      await draining.catch(() => undefined);
+    }
+  });
+
   it('keeps and retries a dropped oldest traces batch before newer traces while metrics drain independently', async () => {
     const received: string[] = [];
     let traceAttempts = 0;
