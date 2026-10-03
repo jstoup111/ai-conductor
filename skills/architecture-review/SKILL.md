@@ -460,6 +460,16 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
     was stated. `.docs/intake/` is an idea capture that is **superseded** once stories are approved;
     never grade the shipped code against it. Where intake and the stories disagree, the stories win:
     a deliberate narrowing recorded in an amended, resealed story is the decision, not a plan gap.
+- **Exhaustive sweep per judged decision (one pass, every site).** For each ADR decision, diagram
+  element, or reachability primitive you judge, enumerate EVERY violating site in the reviewed diff
+  in this verdict — one BLOCKED finding per site, or one finding whose summary lists every site as
+  `file:line`. Never stop at the first violation of a decision: a decision with nine violating
+  sites reported one per lap costs nine laps. Brief each delegated subagent to return all sites,
+  not an example.
+  - **Re-review laps.** When the supplied context shows prior as-built findings, judge (a) whether
+    each prior finding is resolved, and (b) the code changed since the judged lap. Do not raise a
+    first-time finding against code unchanged since a prior lap unless that lap could not have seen
+    it (for example, the check was off or the evidence did not exist then); say why in the finding.
 - **Delegated evidence gathering.** The window that matters is the reviewer's own: it holds the
   verdict. Keep it for judgement and push the reading into subagents through the host's facility
   (Claude Code: the Agent tool; Codex: `collaboration.spawn_agent` / `collaboration.wait_agent`),
