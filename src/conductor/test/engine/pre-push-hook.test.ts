@@ -55,6 +55,16 @@ describe('pre-push hook', () => {
     expect((await f.git(f.bare, 'rev-parse', 'main')).stdout).toBe((await f.git(f.clone, 'rev-parse', 'main')).stdout);
   });
 
+  it('refuses a stale worktree even when an explicit lease names the current remote tip', async () => {
+    const f = await fixture(); await staleRewrite(f);
+    const remoteTip = (await f.git(f.clone, 'rev-parse', 'main')).stdout;
+    const result = await f.git(f.worktree, 'push', `--force-with-lease=main:${remoteTip}`, 'origin', 'HEAD:main');
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('refused push to refs/heads/main');
+    expect((await f.git(f.bare, 'rev-parse', 'main')).stdout).toBe(remoteTip);
+  });
+
   it('allows a force update when the tracking ref proves the remote value and permits new and delete refs', async () => {
     const f = await fixture(); await commit(f, f.worktree, 'rewrite.txt');
     expect((await f.git(f.worktree, 'push', '--force-with-lease', 'origin', 'HEAD:main')).exitCode).toBe(0);
