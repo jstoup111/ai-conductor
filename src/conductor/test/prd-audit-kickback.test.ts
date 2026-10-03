@@ -26,14 +26,11 @@ import {
   Conductor,
   remediationLapCapForGate,
   validationJoinRemediationRoundCap,
-  recordedFindingsBlock,
-  recordedPrdAuditFindingsBlock,
   type StepRunner,
 } from '../src/engine/conductor.js';
 import {
   AcceptedWideningDecisionStore,
   classifyOverScopeCriterion,
-  overScopeRelations,
   parseClearedOverScopeDecisions,
   readOverScopeDecisions,
   recordOverScopeDecisions,
@@ -631,38 +628,6 @@ describe('prd_audit kickback', () => {
     expect(classifyOverScopeCriterion('S3.1', 'Visible behavior.', new Map([['S3.1', 'outside-visible']]), decisions)).toBe('accepted');
   });
 
-  it('extracts no-owner intent relations and classifies NC findings uniformly without decisions', () => {
-    const relations = overScopeRelations([
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '| Criterion | Grade | Plan task | Evidence | Intent relation |',
-      '| --- | --- | --- | --- | --- |',
-      '| S3.1 | OVER_SCOPE | | Existing criterion behavior | within |',
-      '',
-      '## Findings without an owning criterion',
-      '| Finding | Grade | Intent relation | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| NC.1 | OVER_SCOPE | within | Unplanned internal detail |',
-      '| NC.2 | OVER_SCOPE | outside-harmless | Harmless unplanned detail |',
-      '| NC.3 | OVER_SCOPE | outside-visible | Visible unplanned behavior |',
-      '| NC-4 | OVER_SCOPE | outside-visible | Validator-emitted visible behavior |',
-    ].join('\n'));
-
-    expect([...relations]).toEqual([
-      ['S3.1', 'within'],
-      ['NC.1', 'within'],
-      ['NC.2', 'outside-harmless'],
-      ['NC.3', 'outside-visible'],
-      ['NC-4', 'outside-visible'],
-    ]);
-    expect(classifyOverScopeCriterion('NC.1', 'Unplanned internal detail', relations, [])).toBe('not-blocking');
-    expect(classifyOverScopeCriterion('NC.2', 'Harmless unplanned detail', relations, [])).toBe('not-blocking');
-    expect(classifyOverScopeCriterion('NC.3', 'Visible unplanned behavior', relations, [])).toBe('blocking-undecided');
-    expect(classifyOverScopeCriterion('NC-4', 'Validator-emitted visible behavior', relations, [])).toBe('blocking-undecided');
-  });
-
-
   it('preserves migrated sibling decisions while routing a current refusal', async () => {
     // Legacy decisions are migrated at the pre-audit entry boundary. A clear
     // that names a different historical finding remains durable but inert;
@@ -734,53 +699,6 @@ describe('prd_audit kickback', () => {
           criterionId: 'S3.1', decision: 'refuse', rationale: 'Rework it inside scope.', authority: 'operator@example.test',
         })],
       },
-    });
-  });
-
-  it('refuses to render a recorded decision that carries no rationale, naming the reason', () => {
-    // ADR adr-2026-08-24 D8 / adr-2026-08-13 §6: a recorded decision that
-    // cannot be rendered blocks with a named reason rather than silently
-    // disappearing from the verdict artifact.
-    const renderable = recordedPrdAuditFindingsBlock([
-      { gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: 'S3.1', summary: 'Visible.', decision: 'refuse', rationale: 'Rework.' },
-    ]);
-    expect(renderable.ok).toBe(true);
-    expect(renderable.ok && renderable.block).toContain('"decision": "refuse"');
-
-    const missingRationale = recordedPrdAuditFindingsBlock([
-      { gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: 'S3.1', summary: 'Visible.', decision: 'accept', rationale: '   ' },
-    ]);
-    expect(missingRationale).toEqual({
-      ok: false,
-      message: 'recorded decision accept on S3.1 carries no rationale',
-    });
-
-    const missingSummary = recordedPrdAuditFindingsBlock([
-      { gate: 'prd_audit', grade: 'PLAN_GAP', criterion: 'S4.2', summary: '' },
-    ]);
-    expect(missingSummary).toEqual({ ok: false, message: 'recorded finding S4.2 carries no summary' });
-
-    const unrenderableDecision = {
-      gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: 'S3.2', summary: 'Visible.',
-      decision: 'accept', rationale: 'Accepted.', unrenderableDetail: 1n,
-    };
-    expect(recordedPrdAuditFindingsBlock([unrenderableDecision] as never)).toMatchObject({
-      ok: false,
-      message: expect.stringContaining('recorded findings are not serializable'),
-    });
-  });
-
-  it('refuses a partial remediated as-built finding by naming its missing render field', () => {
-    expect(recordedFindingsBlock([{
-      gate: 'architecture_review_as_built',
-      finding: 'AB-1',
-      class: 'REMEDIABLE',
-      governingClause: '   ',
-      summary: 'Add the approved guard.',
-      outcome: 'remediated',
-    }] as never)).toEqual({
-      ok: false,
-      message: 'recorded as-built finding AB-1 carries no governingClause',
     });
   });
 

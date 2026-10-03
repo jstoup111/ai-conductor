@@ -1131,75 +1131,6 @@ export function prdAuditScopeProjection(input: {
 }
 
 /**
- * ADR adr-2026-08-24 D8 (with adr-2026-08-13 §6): a recorded decision that
- * cannot be rendered BLOCKS with a named reason — it never silently
- * disappears from the verdict artifact. Rendering is therefore a fail-closed
- * result, not a string: every finding must carry the fields the projection
- * promises, and the block must survive a JSON round-trip.
- */
-export type RecordedFindingsProjection =
-  | { ok: true; block: string }
-  | { ok: false; message: string };
-
-export function recordedFindingsBlock(
-  findings: readonly RecordedReviewFinding[],
-): RecordedFindingsProjection {
-  for (const finding of findings) {
-    if (finding.gate === 'architecture_review_as_built') {
-      const where = finding.finding?.trim() || '<finding missing>';
-      if (!finding.finding?.trim()) {
-        return { ok: false, message: 'a recorded as-built finding carries no finding id' };
-      }
-      if (finding.class !== 'REMEDIABLE') {
-        return { ok: false, message: `recorded as-built finding ${where} carries no REMEDIABLE class` };
-      }
-      if (!finding.governingClause?.trim()) {
-        return { ok: false, message: `recorded as-built finding ${where} carries no governingClause` };
-      }
-      if (!finding.summary?.trim()) {
-        return { ok: false, message: `recorded as-built finding ${where} carries no summary` };
-      }
-      if (finding.outcome !== 'remediated') {
-        return { ok: false, message: `recorded as-built finding ${where} carries no remediated outcome` };
-      }
-      continue;
-    }
-    const where = finding.criterion?.trim() || '<criterion missing>';
-    if (!finding.criterion?.trim()) {
-      return { ok: false, message: 'a recorded finding carries no criterion id' };
-    }
-    if (!finding.summary?.trim()) {
-      return { ok: false, message: `recorded finding ${where} carries no summary` };
-    }
-    if (finding.decision && !finding.rationale?.trim()) {
-      return {
-        ok: false,
-        message: `recorded decision ${finding.decision} on ${where} carries no rationale`,
-      };
-    }
-  }
-  let json: string;
-  try {
-    json = JSON.stringify({ findings }, null, 2);
-  } catch (error) {
-    return {
-      ok: false,
-      message: `recorded findings are not serializable: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-  if (typeof json !== 'string') {
-    return { ok: false, message: 'recorded findings rendered to no JSON body' };
-  }
-  return { ok: true, block: `## Recorded Findings\n\n\`\`\`json\n${json}\n\`\`\`` };
-}
-
-export function recordedPrdAuditFindingsBlock(
-  findings: readonly RecordedPrdAuditFinding[],
-): RecordedFindingsProjection {
-  return recordedFindingsBlock(findings);
-}
-
-/**
  * How many times one run may re-dispatch `finish` for a PUBLICATION defect —
  * a completion-gate refusal where every evidence check passed and only the
  * recorded PR's own body/title/draft state is wrong.
@@ -11713,6 +11644,7 @@ export class Conductor {
                     lastPrdAuditRunId,
                     this.config,
                     state.feature_desc,
+                    makeGitRunner(this.projectRoot),
                   );
                   prdAuditNonClean = cls.kind !== 'clean';
                 }
@@ -11782,6 +11714,7 @@ export class Conductor {
                   lastPrdAuditRunId,
                   this.config,
                   state.feature_desc,
+                  makeGitRunner(this.projectRoot),
                 );
                 if (cls.kind !== 'clean') break;
               }
@@ -13355,6 +13288,7 @@ export class Conductor {
                 lastPrdAuditRunId,
                 this.config,
                 state.feature_desc,
+                makeGitRunner(this.projectRoot),
               );
               if (cls.kind === 'impl-only' && prdAuditSelfHeals < prdAuditRemediationLapCap) {
                 prdAuditSelfHeals++;

@@ -101,6 +101,12 @@ Audit the feature requirements against the delivered source.
 ## Non-Goals
 - Do not broaden unrelated behavior.
 
+## In Scope
+- Bounded evidence for the active audit.
+
+## Out of Scope
+- Replacing the reviewer contract.
+
 ## Functional Requirements
 - FR-7: The audit preserves the documented outcome.
 - **FR-9:** The audit retains bolded requirement syntax.
@@ -311,10 +317,26 @@ describe('PRD-audit feature projection', () => {
           doneWhen: ['The published behavior preserves the documented outcome.'],
         }],
         prd: { sources: expect.arrayContaining([
-          expect.objectContaining({ requirements: expect.arrayContaining([
-            { id: 'FR-7', text: 'The audit preserves the documented outcome.' },
-            { id: 'FR-9', text: 'The audit retains bolded requirement syntax.' },
-          ]) }),
+          expect.objectContaining({
+            path: '.docs/specs/audit-fixture.md',
+            requirements: expect.arrayContaining([
+              { id: 'FR-7', text: 'The audit preserves the documented outcome.' },
+              { id: 'FR-9', text: 'The audit retains bolded requirement syntax.' },
+            ]),
+            intent: {
+              goals: { kind: 'present', text: '- Preserve the documented outcome.' },
+              nonGoals: { kind: 'present', text: '- Do not broaden unrelated behavior.' },
+              inScope: { kind: 'present', text: '- Bounded evidence for the active audit.' },
+              outOfScope: { kind: 'present', text: '- Replacing the reviewer contract.' },
+            },
+          }),
+          expect.objectContaining({
+            path: '.docs/specs/2026-09-30-audit-fixture.md',
+            intent: {
+              goals: { kind: 'absent' }, nonGoals: { kind: 'absent' },
+              inScope: { kind: 'absent' }, outOfScope: { kind: 'absent' },
+            },
+          }),
         ]) },
         changes: {
           omittedFiles: expect.arrayContaining([

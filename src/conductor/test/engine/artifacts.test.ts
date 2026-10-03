@@ -288,7 +288,7 @@ describe('engine/artifacts', () => {
         build_review: ['.pipeline/build-review.json'],
          test_suite: ['.pipeline/test-suite-evidence.json'],
         manual_test: ['.pipeline/manual-test-results.md'],
-        prd_audit: ['.pipeline/prd-audit.md'],
+        prd_audit: ['.pipeline/prd-audit.json'],
         architecture_review_as_built: [
           '.pipeline/architecture-review-as-built.json',
         ],
@@ -4785,8 +4785,8 @@ describe('engine/artifacts', () => {
     });
 
     it('keeps an artifact already fresh this session (within-session retry is safe)', async () => {
-      await createFile('.pipeline/prd-audit.md', 'written this session');
-      await utimes(join(dir, '.pipeline/prd-audit.md'), freshTs, freshTs);
+      await createFile('.pipeline/prd-audit.json', 'written this session');
+      await utimes(join(dir, '.pipeline/prd-audit.json'), freshTs, freshTs);
 
       const removed = await sweepStaleReviewArtifacts(dir, 'prd_audit', SESSION);
 
@@ -6153,16 +6153,10 @@ Task 1 → Task 2
         await utimes(join(d, '.pipeline/prd-audit.json'), OLD_MTIME, OLD_MTIME);
       }
 
-      async function writeStaleReport(d: string): Promise<void> {
-        const p = join(d, PATH);
-        await writeFile(p, ALIGNED);
-        await utimes(p, OLD_MTIME, OLD_MTIME);
-      }
-
       it('spares a stale typed verdict whose codeStamp surface is unchanged', async () => {
         gdir = await makeGitDir();
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
-        await writeStaleTypedVerdict(gdir, baseline);
+        await writeStaleTypedVerdict(gdir, baseline, 'run-prior');
 
         const removed = await sweepStaleReviewArtifacts(gdir, 'prd_audit', Date.now());
 
@@ -6213,44 +6207,53 @@ Task 1 → Task 2
         );
 
         expect(removed).toEqual([]);
+        await expect(classifyPrdAuditGaps(gdir, undefined, 'run-current')).resolves.toEqual({
+          kind: 'clean', summary: 'no blocking FRs',
+        });
       });
 
-      it('gate_code_validity.enabled: false restores pure mtime-freshness — deletes a stale report even when the codeStamp sidecar surface is unchanged (Task 8, #817)', async () => {
+      it('gate_code_validity.enabled: false removes the typed verdict and derived report together', async () => {
         gdir = await makeGitDir();
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
-        await writeStaleReport(gdir);
-        await writeFile(join(gdir, SIDECAR), JSON.stringify({ codeStamp: baseline }, null, 2));
+        await writeStaleTypedVerdict(gdir, baseline);
 
         const removed = await sweepStaleReviewArtifacts(gdir, 'prd_audit', Date.now(), {
           gate_code_validity: { enabled: false },
         });
 
-        expect(removed).toEqual([join(gdir, PATH)]);
+        expect(removed).toEqual([join(gdir, '.pipeline/prd-audit.json'), join(gdir, PATH)]);
+        await expect(readFile(join(gdir, '.pipeline/prd-audit.json'), 'utf-8')).rejects.toThrow();
         await expect(readFile(join(gdir, PATH), 'utf-8')).rejects.toThrow();
       });
 
-      it('deletes a stale report whose codeStamp sidecar surface HAS changed', async () => {
+      it('removes the typed verdict and derived report when its code stamp is invalid', async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
-        await writeStaleReport(gdir);
-        await writeFile(join(gdir, SIDECAR), JSON.stringify({ codeStamp: baseline }, null, 2));
+        await writeStaleTypedVerdict(gdir, baseline, 'run-prior');
         await commitFile(gdir, 'featureA.ts', 'f2\n', 'feat: change featureA');
+
+        await expect(classifyPrdAuditGaps(gdir, undefined, 'run-current')).resolves.toMatchObject({
+          kind: 'invalid-evidence',
+          summary: expect.stringContaining('run-prior'),
+        });
 
         const removed = await sweepStaleReviewArtifacts(gdir, 'prd_audit', Date.now());
 
-        expect(removed).toEqual([join(gdir, PATH)]);
+        expect(removed).toEqual([join(gdir, '.pipeline/prd-audit.json'), join(gdir, PATH)]);
+        await expect(readFile(join(gdir, '.pipeline/prd-audit.json'), 'utf-8')).rejects.toThrow();
         await expect(readFile(join(gdir, PATH), 'utf-8')).rejects.toThrow();
       });
 
-      it('deletes a stale report with no codeStamp sidecar at all (legacy, unchanged regression)', async () => {
+      it('removes the typed verdict and derived report with no code stamp', async () => {
         gdir = await makeGitDir();
         await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
-        await writeStaleReport(gdir);
+        await writeStaleTypedVerdict(gdir);
 
         const removed = await sweepStaleReviewArtifacts(gdir, 'prd_audit', Date.now());
 
-        expect(removed).toEqual([join(gdir, PATH)]);
+        expect(removed).toEqual([join(gdir, '.pipeline/prd-audit.json'), join(gdir, PATH)]);
+        await expect(readFile(join(gdir, '.pipeline/prd-audit.json'), 'utf-8')).rejects.toThrow();
         await expect(readFile(join(gdir, PATH), 'utf-8')).rejects.toThrow();
       });
 

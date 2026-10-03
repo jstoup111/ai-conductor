@@ -349,7 +349,8 @@ export const STEP_ARTIFACT_CONTRACTS = {
   build_review: [{ pattern: '.pipeline/build-review.json', scope: 'run' }],
   test_suite: [{ pattern: FULL_SUITE_EVIDENCE_PATH, scope: 'run' }],
   manual_test: [{ pattern: '.pipeline/manual-test-results.md', scope: 'run' }],
-  prd_audit: [{ pattern: '.pipeline/prd-audit.md', scope: 'run' }],
+  // The typed verdict is authority; the adjacent report is its derived view.
+  prd_audit: [{ pattern: PRD_AUDIT_VERDICT_PATH, scope: 'run' }],
   architecture_review_as_built: [
     { pattern: AS_BUILT_VERDICT_PATH, scope: 'run' },
   ],
@@ -981,11 +982,10 @@ async function sweptArtifactStillValid(
     }
     if (step === 'prd_audit') {
       const stored = await readPrdAuditVerdict(dir);
-      if (stored.kind !== 'present' || !stored.value.complete || stored.value.codeStamp === null) return false;
-      const validity = await gateVerdictStillValid(ctx, 'prd_audit', stored.value.codeStamp);
-      if (validity !== 'preserve') return false;
-      return stored.value.judgment.criterionJudgments.every((judgment) => judgment.grade === 'PASS') &&
-        stored.value.judgment.noOwnerObservations.length === 0;
+      if (stored.kind !== 'present' || !stored.value.complete) return false;
+      const identity = await prdAuditVerdictIdentity(dir, stored.value, { config, git, attemptRunId: expectedRunId });
+      if (!identity.codeStampStillValid) return false;
+      return (await prdAuditBlockingFindings(dir, stored.value)).labels.length === 0;
     }
     if (step === 'architecture_review_as_built') {
       const stored = await readAsBuiltVerdict(dir);
@@ -2563,6 +2563,44 @@ async function writePrdAuditCodeStamp(dir: string, ctx: CompletionContext): Prom
   }, { attemptId: stored.value.attemptId, codeStamp }).catch(() => {});
 }
 
+/** Shared code-stamp-first then dispatch-identity decision for every PRD reader. */
+export async function prdAuditVerdictIdentity(
+  dir: string,
+  verdict: PersistedPrdAuditVerdict,
+  input: Pick<CompletionContext, 'attemptRunId' | 'config' | 'git'>,
+): Promise<{ codeStampStillValid: boolean; staleRunIdentity: boolean }> {
+  let codeStampStillValid = false;
+  if (verdict.codeStamp !== null && resolveGateCodeValidityConfig(input.config).enabled) {
+    const git = input.git ?? makeGitRunner(dir);
+    codeStampStillValid = await gateVerdictStillValid({ projectRoot: dir, git }, 'prd_audit', verdict.codeStamp) === 'preserve';
+  }
+  return {
+    codeStampStillValid,
+    staleRunIdentity: !codeStampStillValid && input.attemptRunId !== undefined && verdict.attemptId !== input.attemptRunId,
+  };
+}
+
+/** One semantic settlement rule for completion and stale-evidence preservation. */
+export async function prdAuditBlockingFindings(
+  dir: string,
+  verdict: PersistedPrdAuditVerdict,
+): Promise<{ labels: readonly string[] }> {
+  const typed = prdAuditTypedRouteReport(verdict);
+  const classifications = await classifyPrdAuditWideningProjection(dir, typed.relations, typed.report.findings);
+  const settled = (id: string, grade: string, relation: IntentRelation | undefined) =>
+    grade === 'OVER_SCOPE' && (relation === 'within' || relation === 'outside-harmless' || classifications.get(id)?.kind === 'accepted');
+  return {
+    labels: [
+      ...verdict.judgment.criterionJudgments
+        .filter((finding) => finding.grade !== 'PASS' && !settled(finding.criterionId, finding.grade, finding.intentRelation))
+        .map((finding) => `${finding.criterionId} (${finding.grade})`),
+      ...verdict.judgment.noOwnerObservations
+        .filter((finding) => !settled(finding.presentationOrdinal, finding.grade, finding.intentRelation))
+        .map((finding) => `${finding.presentationOrdinal} (${finding.grade})`),
+    ],
+  };
+}
+
 async function writeArchitectureReviewAsBuiltCodeStamp(
   dir: string,
   ctx: CompletionContext,
@@ -3166,14 +3204,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return { done: false, routeClass: 'absent', reason: stored.reason };
     }
     const artifact = join(dir, PRD_AUDIT_VERDICT_PATH);
-    let codeStampStillValid = false;
-    if (stored.value.codeStamp !== null && resolveGateCodeValidityConfig(ctx.config).enabled) {
-      const git = ctx.git ?? makeGitRunner(dir);
-      codeStampStillValid = await gateVerdictStillValid(
-        { projectRoot: dir, git }, 'prd_audit', stored.value.codeStamp,
-      ) === 'preserve';
-    }
-    if (!codeStampStillValid && ctx.attemptRunId !== undefined && stored.value.attemptId !== ctx.attemptRunId) {
+    const identity = await prdAuditVerdictIdentity(dir, stored.value, ctx);
+    if (identity.staleRunIdentity) {
       return {
         done: false,
         routeClass: 'absent',
@@ -3195,27 +3227,15 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: `${PRD_AUDIT_VERDICT_PATH} is incomplete: ${stored.value.diagnostics.join('; ')}`,
       };
     }
-    const typed = prdAuditTypedRouteReport(stored.value);
-    const classifications = await classifyPrdAuditWideningProjection(dir, typed.relations, typed.report.findings);
-    const settledOverScope = (criterionId: string, grade: string, relation: IntentRelation | undefined) =>
-      grade === 'OVER_SCOPE' && (relation === 'within' || relation === 'outside-harmless' ||
-        classifications.get(criterionId)?.kind === 'accepted');
-    const blocking = stored.value.judgment.criterionJudgments.filter((finding) =>
-      finding.grade !== 'PASS' && !settledOverScope(finding.criterionId, finding.grade, finding.intentRelation));
-    const blockingNoOwner = stored.value.judgment.noOwnerObservations.filter((finding) =>
-      !settledOverScope(finding.presentationOrdinal, finding.grade, finding.intentRelation));
-    if (blocking.length > 0 || blockingNoOwner.length > 0) {
-      const labels = [
-        ...blocking.map((finding) => `${finding.criterionId} (${finding.grade})`),
-        ...blockingNoOwner.map((finding) => `${finding.presentationOrdinal} (${finding.grade})`),
-      ];
+    const blocking = await prdAuditBlockingFindings(dir, stored.value);
+    if (blocking.labels.length > 0) {
       return {
         done: false,
         routeClass: 'named-route',
-        reason: `prd-audit found blocking criterion grades: ${labels.join('; ')} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`,
+        reason: `prd-audit found blocking criterion grades: ${blocking.labels.join('; ')} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`,
       };
     }
-    if (!codeStampStillValid && ctx.attemptRunId === undefined) {
+    if (!identity.codeStampStillValid && ctx.attemptRunId === undefined) {
       const comparand = verdictFreshnessComparand(ctx);
       if (!(await fileIsFreshSinceSession(artifact, comparand))) {
         return {
@@ -3232,7 +3252,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       verdictFreshness: await verdictFreshnessFor(
         artifact,
         ctx,
-        codeStampStillValid ? 'preserved_surface_miss' : 'rewritten',
+        identity.codeStampStillValid ? 'preserved_surface_miss' : 'rewritten',
       ),
     };
 
@@ -4218,9 +4238,9 @@ export async function classifyPrdAuditGaps(
   expectedRunId?: string,
   config?: Pick<HarnessConfig, 'gate_code_validity'>,
   featureDesc?: string,
+  git?: GitRunner,
 ): Promise<PrdGapClassification> {
   void sessionStartedAt;
-  void config;
   void featureDesc;
   const stored = await readPrdAuditVerdict(dir);
   if (stored.kind === 'absent') {
@@ -4229,7 +4249,8 @@ export async function classifyPrdAuditGaps(
   if (stored.kind === 'unreadable') {
     return { kind: 'invalid-evidence', summary: `invalid typed PRD-audit evidence: ${stored.reason}` };
   }
-  if (expectedRunId !== undefined && stored.value.attemptId !== expectedRunId) {
+  const identity = await prdAuditVerdictIdentity(dir, stored.value, { attemptRunId: expectedRunId, config, git });
+  if (identity.staleRunIdentity) {
     return { kind: 'invalid-evidence', summary: `${PRD_AUDIT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not current run ${expectedRunId}` };
   }
   if (!stored.value.complete) {

@@ -802,33 +802,3 @@ export function parseClearedOverScopeDecisions(
   }
   return { kind: 'parsed', decisions, defects };
 }
-
-export function prdAuditTableCells(line: string): string[] { return line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim()); }
-/** Criterion → declared intent relation, for OVER_SCOPE rows of a prd-audit Verdict Table. */
-export function overScopeRelations(reportText: string): Map<string, IntentRelation> {
-  const lines = reportText.split('\n');
-  const headerIndex = lines.findIndex((line) => /^\s*\|/.test(line) && (() => { const header = prdAuditTableCells(line).map((cell) => cell.toLowerCase()); return header.includes('criterion') && header.includes('grade'); })());
-  if (headerIndex === -1) return new Map();
-  const header = prdAuditTableCells(lines[headerIndex]!).map((cell) => cell.toLowerCase()); const criterionIndex = header.indexOf('criterion'); const gradeIndex = header.indexOf('grade'); const relationIndex = header.findIndex((cell) => cell === 'intent relation' || cell === 'intentrelation');
-  if (relationIndex === -1) return new Map();
-  const relations = new Map<string, IntentRelation>();
-  for (const line of lines.slice(headerIndex + 1)) {
-    if (!/^\s*\|/.test(line)) continue;
-    const cells = prdAuditTableCells(line); if (cells.every((cell) => /^:?-{3,}:?$/.test(cell)) || cells[gradeIndex]?.toUpperCase() !== 'OVER_SCOPE') continue;
-    const criterion = cells[criterionIndex]?.trim().toUpperCase(); const relation = cells[relationIndex]?.trim().toLowerCase();
-    if (criterion && (relation === 'within' || relation === 'outside-harmless' || relation === 'outside-visible')) relations.set(criterion, relation);
-  }
-  const noOwnerSectionIndex = lines.findIndex((line) => /^\s*##\s+Findings without an owning criterion\s*$/i.test(line));
-  const noOwnerHeaderIndex = noOwnerSectionIndex === -1 ? -1 : lines.findIndex((line, index) => index > noOwnerSectionIndex && /^\s*\|/.test(line) && (() => { const header = prdAuditTableCells(line).map((cell) => cell.toLowerCase()); return header.includes('finding') && header.includes('grade'); })());
-  if (noOwnerHeaderIndex === -1) return relations;
-  const noOwnerHeader = prdAuditTableCells(lines[noOwnerHeaderIndex]!).map((cell) => cell.toLowerCase()); const findingIndex = noOwnerHeader.indexOf('finding'); const noOwnerGradeIndex = noOwnerHeader.indexOf('grade'); const noOwnerRelationIndex = noOwnerHeader.findIndex((cell) => cell === 'intent relation' || cell === 'intentrelation');
-  if (noOwnerRelationIndex === -1) return relations;
-  for (const line of lines.slice(noOwnerHeaderIndex + 1)) {
-    if (/^\s*##\s/.test(line)) break;
-    if (!/^\s*\|/.test(line)) continue;
-    const cells = prdAuditTableCells(line); if (cells.every((cell) => /^:?-{3,}:?$/.test(cell)) || cells[noOwnerGradeIndex]?.toUpperCase() !== 'OVER_SCOPE') continue;
-    const finding = cells[findingIndex]?.trim().toUpperCase(); const relation = cells[noOwnerRelationIndex]?.trim().toLowerCase();
-    if (finding && isPrdAuditNoOwnerOrdinal(finding) && (relation === 'within' || relation === 'outside-harmless' || relation === 'outside-visible')) relations.set(finding, relation);
-  }
-  return relations;
-}

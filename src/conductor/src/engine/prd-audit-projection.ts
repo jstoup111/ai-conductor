@@ -21,7 +21,7 @@ import { makeGitRunner, originDefaultBranch, resolveBase, type GitRunner } from 
 import { readSealedStoryCriteria, splitStoryBlocks } from './story-criteria.js';
 
 /** Incremented only when the engine-rendered PRD-audit input contract changes. */
-export const PRD_AUDIT_PROJECTION_VERSION = 2;
+export const PRD_AUDIT_PROJECTION_VERSION = 3;
 
 const PRD_AUDIT_DIFF_EXCERPT_PER_FILE_BYTES = 256 * 1024;
 const PRD_AUDIT_DIFF_EXCERPT_TOTAL_BYTES = 512 * 1024;
@@ -103,7 +103,12 @@ export interface PrdAuditProjection {
     | { readonly kind: 'absent' }
     | {
         /** Every feature-matching PRD stays available to the reviewer. */
-        readonly sources: readonly { readonly path: string; readonly requirements: readonly { readonly id: string; readonly text: string }[] }[];
+        readonly sources: readonly {
+          readonly path: string;
+          readonly requirements: readonly { readonly id: string; readonly text: string }[];
+          /** PRD intent is source-qualified so scope judgments cannot invent it. */
+          readonly intent: PrdIntentEvidence;
+        }[];
         /** Compatibility view of the first deterministic source. */
         readonly path: string;
         readonly requirements: readonly { readonly id: string; readonly text: string }[];
@@ -127,6 +132,17 @@ export interface PrdAuditProjection {
   readonly history:
     | { readonly kind: 'absent' }
   | { readonly decisions: readonly AcceptedWideningDecision[]; readonly cases: readonly RemediationCasePrdWideningRecord[] };
+}
+
+export type PrdIntentSection =
+  | { readonly kind: 'present'; readonly text: string }
+  | { readonly kind: 'absent' };
+
+export interface PrdIntentEvidence {
+  readonly goals: PrdIntentSection;
+  readonly nonGoals: PrdIntentSection;
+  readonly inScope: PrdIntentSection;
+  readonly outOfScope: PrdIntentSection;
 }
 
 export type PrdAuditProjectionResult =
@@ -210,6 +226,22 @@ function prdRequirements(prd: string): { readonly id: string; readonly text: str
     if (text && !requirements.some((requirement) => requirement.id === id)) requirements.push({ id, text });
   }
   return requirements;
+}
+
+function prdIntentSection(prd: string, heading: string): PrdIntentSection {
+  const match = new RegExp(`^##\\s+${heading}\\s*$`, 'im').exec(prd);
+  if (!match || match.index === undefined) return { kind: 'absent' };
+  const text = (prd.slice(match.index + match[0].length).split(/^##\s+/m, 1)[0] ?? '').trim();
+  return { kind: 'present', text };
+}
+
+function prdIntent(prd: string): PrdIntentEvidence {
+  return {
+    goals: prdIntentSection(prd, 'Goals'),
+    nonGoals: prdIntentSection(prd, 'Non-Goals'),
+    inScope: prdIntentSection(prd, 'In Scope'),
+    outOfScope: prdIntentSection(prd, 'Out of Scope'),
+  };
 }
 
 function parseNumstat(text: string): PrdAuditProjection['changes']['changedFiles'] {
@@ -427,10 +459,14 @@ export async function buildPrdAuditProjection(
   let prd: PrdAuditProjection['prd'] = { kind: 'absent' };
   if (prdPaths.length > 0) {
     try {
-      const sources = await Promise.all(prdPaths.sort().map(async (prdPath) => ({
-        path: repoPath(projectRoot, prdPath),
-        requirements: prdRequirements(await readFile(prdPath, 'utf-8')),
-      })));
+      const sources = await Promise.all(prdPaths.sort().map(async (prdPath) => {
+        const source = await readFile(prdPath, 'utf-8');
+        return {
+          path: repoPath(projectRoot, prdPath),
+          requirements: prdRequirements(source),
+          intent: prdIntent(source),
+        };
+      }));
       const first = sources[0]!;
       prd = { sources, path: first.path, requirements: first.requirements };
     } catch {

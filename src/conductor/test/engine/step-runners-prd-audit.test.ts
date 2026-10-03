@@ -27,9 +27,10 @@ async function fixture(): Promise<string> {
   const git = (...args: string[]) => execFileAsync('git', ['-C', root, ...args]);
   await execFileAsync('git', ['init', '-b', 'main', root]);
   await git('config', 'user.email', 'test@example.com'); await git('config', 'user.name', 'Test');
-  await mkdir(join(root, '.docs', 'plans'), { recursive: true }); await mkdir(join(root, '.docs', 'stories'), { recursive: true });
+  await mkdir(join(root, '.docs', 'plans'), { recursive: true }); await mkdir(join(root, '.docs', 'stories'), { recursive: true }); await mkdir(join(root, '.docs', 'specs'), { recursive: true });
   await writeFile(join(root, '.docs', 'plans', 'feature.md'), `# Plan\n\n**Stories:** .docs/stories/feature.md\n\n## Technical Approach\nBound the PRD audit.\n\n### Task 1: Project criteria\n\n**Story:** Story 1\n\n**Done when:**\n- the audit dispatches typed evidence\n\n### Task 2: Persist verdict\n\n**Story:** Story 1\n\n**Done when:**\n- the rendered report reflects the persisted judgment\n`);
-  await writeFile(join(root, '.docs', 'stories', 'feature.md'), `# Stories\n\n## Story 1: Audit\n\n### Happy Path\n- Given an active feature, when audited, then the evidence is bounded.\n\n### Negative Paths\n- Given a malformed judgment, when audited, then the engine rejects it.\n`);
+  await writeFile(join(root, '.docs', 'stories', 'feature.md'), `# Stories\n\n## Story 1: Audit\n\n**Requirements:** FR-1\n\n### Happy Path\n- Given an active feature, when audited, then the evidence is bounded.\n\n### Negative Paths\n- Given a malformed judgment, when audited, then the engine rejects it.\n`);
+  await writeFile(join(root, '.docs', 'specs', 'feature.md'), `# PRD\n\n## Goals\n- Keep the audit bounded.\n\n## Non-Goals\n- Do not broaden review authority.\n\n## In Scope\n- Typed PRD evidence.\n\n## Out of Scope\n- Legacy Markdown parsing.\n\n## Functional Requirements\n- FR-1: The audit uses typed evidence.\n`);
   await writeFile(join(root, 'tracked.ts'), 'export const value = 1;\n'); await git('add', '.'); await git('commit', '-m', 'base');
   await git('checkout', '-b', 'feature/audit'); await writeFile(join(root, 'tracked.ts'), 'export const value = 2;\n'); await git('add', '.'); await git('commit', '-m', 'change');
   return root;
@@ -98,6 +99,7 @@ function dispatchedProjection(invoke: ReturnType<typeof vi.fn>) {
   return JSON.parse(prompt.slice(start + prefix.length, end)) as {
     criteria: { id: string; kind: string }[];
     tasks: { id: string; doneWhen: string[] }[];
+    prd: { sources: Array<{ path: string; intent: unknown }> };
   };
 }
 
@@ -127,6 +129,15 @@ describe('PRD audit typed provider dispatch', () => {
         { id: '1', doneWhen: ['the audit dispatches typed evidence'] },
         { id: '2', doneWhen: ['the rendered report reflects the persisted judgment'] },
       ],
+      prd: { sources: [expect.objectContaining({
+        path: '.docs/specs/feature.md',
+        intent: {
+          goals: { kind: 'present', text: '- Keep the audit bounded.' },
+          nonGoals: { kind: 'present', text: '- Do not broaden review authority.' },
+          inScope: { kind: 'present', text: '- Typed PRD evidence.' },
+          outOfScope: { kind: 'present', text: '- Legacy Markdown parsing.' },
+        },
+      })] },
     });
     const persisted = JSON.parse(await readFile(join(root, PRD_AUDIT_VERDICT_PATH), 'utf8'));
     expect(persisted).toMatchObject({ attemptId: 'prd-attempt', complete: true, judgment: passingJudgment });
@@ -243,6 +254,14 @@ describe('PRD audit typed provider dispatch', () => {
       output: expect.stringContaining('timed out'),
     });
     expect(invoke).toHaveBeenCalledOnce();
+    expect(dispatchedProjection(invoke).prd.sources[0]).toMatchObject({
+      intent: {
+        goals: { kind: 'present', text: '- Keep the audit bounded.' },
+        nonGoals: { kind: 'present', text: '- Do not broaden review authority.' },
+        inScope: { kind: 'present', text: '- Typed PRD evidence.' },
+        outOfScope: { kind: 'present', text: '- Legacy Markdown parsing.' },
+      },
+    });
     expect(schemaPath).toBeDefined();
     await expect(access(schemaPath!)).rejects.toMatchObject({ code: 'ENOENT' });
     await expectNoVerdict(root);
