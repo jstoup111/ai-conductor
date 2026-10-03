@@ -61,6 +61,7 @@ Adds an audited `ai-conductor halt clear --feature <slug> --rationale <text>` op
 - The same test asserts `.pipeline/events.jsonl` contains exactly one `halt_clear_authorized` event with the resolved operator identity, the trimmed rationale, `haltClass` `needs-human`, and the feature slug, and the `appendEvent` spy observed both `.pipeline/HALT` and `.pipeline/HALT.class` still present when the event was appended.
 - The same test asserts `.docs/halted/<slug>.md` is committed with status resolved and cause `operator` by `supersedeHaltRecord`.
 - A parameterized test seeds `HALT.class` as each of `kickback-cap`, `plan-gap`, `over-scope`, `protected-artifact` and asserts exit 0, both markers absent, and the `halt_clear_authorized` event's `haltClass` equals the seeded class.
+- The first CLI test runs the command from an interactive terminal (injected `stdin.isTTY` true), and that interactive run is the one asserted to exit 0 with both markers absent and `last_step` still `build`.
 
 **Files:** `src/conductor/src/cli.ts`, `src/conductor/src/engine/halt-clear-cli.ts`, `src/conductor/src/index.ts`, `src/conductor/test/engine/halt-clear-cli.test.ts`
 

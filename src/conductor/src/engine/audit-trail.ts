@@ -247,6 +247,13 @@ export class AuditTrailWriter {
           event: 'halt_cleared',
           cause: event.cause,
         };
+      case 'halt_clear_authorized':
+        return {
+          origin: 'operator',
+          event: event.type,
+          reason: event.rationale,
+          cause: event.haltClass,
+        };
       case 'kickback_budget_adjustment_authorized':
         return {
           origin: 'operator',

@@ -222,6 +222,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // friction-mapped via `step_retry`, so it writes no record of its own.
   unattributed_progress: 'not-audited-by-design',
   halt_cleared: 'friction-mapped',
+  halt_clear_authorized: 'friction-mapped',
   kickback_budget_adjustment_authorized: 'friction-mapped',
   operator_rewind: 'friction-mapped',
   plan_growth: 'not-audited-by-design',
@@ -801,6 +802,14 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     headAfter: 'b'.repeat(40),
   },
   halt_cleared: { type: 'halt_cleared', step: 'build', cause: 'operator' },
+  halt_clear_authorized: {
+    type: 'halt_clear_authorized',
+    feature: 'my-feature',
+    operator: 'operator',
+    rationale: 'The halted work is now resolved.',
+    haltClass: 'needs-human',
+    step: 'build',
+  },
   operator_rewind: { type: 'operator_rewind', operator: 'operator', target: 'build', demoted: ['build', 'test_suite'] },
   plan_growth: { type: 'plan_growth', authored: 19, added: 3, byGate: { prd_audit: 3 }, remaining: 1 },
   ci_failed: {

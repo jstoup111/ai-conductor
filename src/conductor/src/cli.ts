@@ -408,6 +408,27 @@ export interface KickbackBudgetDispatch {
   format: 'human' | 'json';
 }
 
+export interface HaltClearDispatch {
+  kind: 'halt-clear';
+  feature: string;
+  rationale?: string;
+}
+
+/** Parse the operator halt-clear command without starting the pipeline. */
+export function detectHaltClearCommand(argv: string[]): HaltClearDispatch | null {
+  if (argv[2] !== 'halt' || argv[3] !== 'clear') return null;
+  const values = new Map<string, string>();
+  for (let index = 4; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (!flag || value === undefined || !['--feature', '--rationale'].includes(flag) || values.has(flag)) return null;
+    values.set(flag, value);
+  }
+  const feature = values.get('--feature');
+  if (!feature || feature.includes('/') || feature === '.' || feature === '..') return null;
+  return { kind: 'halt-clear', feature, rationale: values.get('--rationale') };
+}
+
 /** Parse the explicit operator budget-recovery command without booting the pipeline. */
 export function detectKickbackBudgetCommand(argv: string[]): KickbackBudgetDispatch | null {
   if (argv[2] !== 'kickback-budget' || !['inspect', 'raise', 'reset'].includes(argv[3] ?? '')) return null;

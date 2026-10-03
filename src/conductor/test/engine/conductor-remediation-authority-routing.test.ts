@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { execa } from 'execa';
 
 vi.mock('../../src/engine/build-review-effective.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/build-review-effective.js')>(),
@@ -21,6 +22,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
+import { writeState } from '../../src/engine/state.js';
 
 const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'test fixture' },
@@ -841,4 +843,151 @@ describe('planRemediation implementation-only authority routing', () => {
       });
     },
   );
+});
+
+describe('build-stall remediation halt classes', () => {
+  let projectRoot: string;
+  let statePath: string;
+
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'build-stall-remediation-halt-class-'));
+    statePath = join(projectRoot, '.pipeline', 'conduct-state.json');
+    await mkdir(join(projectRoot, '.docs/plans'), { recursive: true });
+    await writeFile(join(projectRoot, '.docs/plans/feature.md'), '# Plan\n\n### Task 1: repair\n', 'utf8');
+    const state: Record<string, unknown> = {
+      session_started_at: Date.now() - 1_000,
+      feature_desc: 'feature',
+      complexity_tier: 'S',
+    };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'build') break;
+      state[step.name] = 'done';
+    }
+    await writeState(statePath, state as ConductState);
+  });
+
+  afterEach(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it.each([
+    {
+      name: 'a classified halt',
+      outcome: { kind: 'halt', detail: 'Plan growth requires operator approval.', haltClass: 'kickback-cap' },
+      haltClass: 'kickback-cap',
+    },
+    {
+      name: 'an unclassified halt',
+      outcome: { kind: 'halt', detail: 'A human decision is required.' },
+      haltClass: 'needs-human',
+    },
+    {
+      name: 'a route to a non-build step',
+      outcome: { kind: 'route', target: 'plan', hint: 'wrong route', evidence: 'wrong route' },
+      haltClass: 'needs-human',
+    },
+    {
+      name: 'no valid remediation dispositions',
+      outcome: { kind: 'none', reason: 'no valid dispositions' },
+      haltClass: 'needs-human',
+    },
+  ])('writes needs-human unless remediation returns $name', async ({ outcome, haltClass }) => {
+    const question = 'Which approved boundary should this repair use?';
+    const runner: StepRunner = {
+      run: async (step) => {
+        if (step === 'build') {
+          await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+          await writeFile(join(projectRoot, '.pipeline/halt-user-input-required'), question, 'utf8');
+          await writeFile(
+            join(projectRoot, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+            'utf8',
+          );
+        }
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'build',
+    });
+    (conductor as unknown as { planRemediation: unknown }).planRemediation = vi.fn().mockResolvedValue(outcome);
+
+    await conductor.run();
+
+    expect(await readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf8')).toBe(haltClass);
+    const halt = await readFile(join(projectRoot, '.pipeline/HALT'), 'utf8');
+    expect(halt).toMatch(new RegExp(`^${question.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    if (outcome.kind === 'halt') expect(halt).toContain(outcome.detail);
+  });
+
+  it('attributes a build-stall marker clear and its halt-record resolution to stall remediation', async () => {
+    const question = 'Which approved boundary should this repair use?';
+    const slug = basename(projectRoot);
+    const recordPath = join(projectRoot, '.docs/halted', `${slug}.md`);
+    await execa('git', ['init', '-q', '-b', 'feature'], { cwd: projectRoot });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: projectRoot });
+    await execa('git', ['config', 'user.name', 'Test User'], { cwd: projectRoot });
+    await mkdir(join(projectRoot, '.docs/halted'), { recursive: true });
+    await writeFile(recordPath, `# Halt: ${slug}\n\nStatus: halted\nClass: needs-human\nStep: build\n`);
+    await execa('git', ['add', '.'], { cwd: projectRoot });
+    await execa('git', ['commit', '-q', '-m', 'seed halted record'], { cwd: projectRoot });
+
+    const runner: StepRunner = {
+      run: async (step) => {
+        if (step === 'build') {
+          await writeFile(join(projectRoot, '.pipeline/halt-user-input-required'), question, 'utf8');
+          await writeFile(
+            join(projectRoot, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+            'utf8',
+          );
+        }
+        return { success: true };
+      },
+    };
+    const events = new ConductorEventEmitter();
+    const haltClearedCauses: string[] = [];
+    const haltClearAuthorizations: unknown[] = [];
+    events.on('halt_cleared', (event) => {
+      if (event.type === 'halt_cleared') haltClearedCauses.push(event.cause);
+    });
+    events.on('halt_clear_authorized', (event) => {
+      if (event.type === 'halt_clear_authorized') haltClearAuthorizations.push(event);
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'build',
+    });
+    (conductor as unknown as { planRemediation: unknown }).planRemediation = vi.fn().mockResolvedValue({
+      kind: 'halt', detail: 'Plan growth requires operator approval.', haltClass: 'kickback-cap',
+    });
+
+    await conductor.run();
+
+    expect(haltClearedCauses).toEqual(['stall-remediation']);
+    expect(haltClearedCauses).not.toContain('operator');
+    expect(haltClearAuthorizations).toEqual([]);
+    const record = await readFile(recordPath, 'utf8');
+    expect(record).toContain('Status: resolved');
+    expect(record).toContain('Resolution cause: stall-remediation');
+    const { stdout: committedRecord } = await execa(
+      'git', ['show', `HEAD:.docs/halted/${slug}.md`], { cwd: projectRoot },
+    );
+    expect(committedRecord).toContain('Resolution cause: stall-remediation');
+  });
 });
