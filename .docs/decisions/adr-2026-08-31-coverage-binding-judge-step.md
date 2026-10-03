@@ -277,6 +277,91 @@ sidecar log.
 > `coverage_binding_judged`'s criterion vocabulary is untouched. Refusals ride the existing
 > `step_refused` and `loop_halt` events. No sidecar log.
 
+> **Amended 2026-10-03 by #2750:** A plan whose tasks cannot be satisfied together with a sealed
+> story criterion, or with an approved ADR decision the plan is subject to, must refuse here before
+> any build task. A coverage claim shows the judge only the tasks its row cites, so an uncited task
+> requiring the opposite outcome was invisible (three 2026-09-25 SHIP halts passed this step with the
+> judge on). D4's "inputs are exactly the claims D1 parses" is widened again by the conflict claims
+> below. Criterion claims (D1–D14), the ADR-obligation layer (D17), and amendment claims (D18–D19)
+> are unchanged. D17's "story criteria are not re-validated here" still holds: conflict claims judge
+> joint satisfiability, they never require or re-check a criterion row
+> (`adr-2026-08-23-criterion-layer-is-structural-at-land`).
+>
+> **D21 — Conflict claims cover every sealed criterion and every subject ADR decision, at every tier.**
+> One conflict claim is assembled per story criterion extracted from the plan's `**Stories:**` file
+> through the shared readability owner (`extractAuthoritativeStoryCriteria`,
+> `adr-2026-09-23-one-owner-for-accepted-story-readability`; the file resolved by the existing
+> `**Stories:**` normalizer), and one per decision of each subject ADR. The subject ADRs are the D16
+> DECIDE-set ADRs plus every ADR in `.docs/decisions/` whose filename stem the plan text cites,
+> keeping only ADRs that `adrApprovalStatus` finds approved and that are not fully superseded: DRAFT
+> ADRs and ADRs whose status is an unambiguous full supersession are excluded, while a partial
+> supersession (for example `SUPERSEDED in part by …`) stays in, as
+> `adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag` constraint 2 rules for the same
+> question. `parseAdrDecisions` is extended to return each citable decision's text beside its id; it
+> remains the only interpreter of a `## Decision` section
+> (`adr-2026-09-02-adr-decision-citability-contract` item 1). When one id labels several passages,
+> its claim carries all of them. A subject ADR that has a `## Decision` section but no citable
+> decision yields one claim carrying that whole section, identified as `<stem>#Decision`. An ADR
+> with no `## Decision` section, or one the parser reports structurally broken, has its conflict
+> claims recorded `not-applicable` and never fails the step (that contract's item 4: no BUILD
+> consumer may require citability). Decisions that an amendment block claimed by D18 introduces are
+> excluded from conflict claims: D18 alone owns whether the plan carries, or contradicts, a branch
+> amendment. Every conflict claim is judged against the plan's full task table: every task id
+> (remediation ids included), its title, and its `Done when` checks. Slice membership is never part
+> of the table (`adr-2026-09-29-plan-slice-manifest` D6). A task with no `Done when` block
+> contributes its title only. A stories file with no extractable criteria, or a plan with no
+> `Done when` block in any task, records its conflict claims `not-applicable` (D8). This applies at
+> tier S, where D17's ADR-obligation layer stays `not-applicable`; "ADR layer" in D17 and in its
+> stories means that obligation layer only. Subject-ADR paths join this step's declared document
+> inputs for post-rebase invalidation
+> (`adr-2026-07-20-post-rebase-delta-aware-invalidation` D1 as amended) and for finish
+> mergeability (`adr-2026-09-11-finish-mergeability-respects-active-review-inputs` D3), so a base
+> that changes a subject ADR re-runs the step.
+>
+> **D22 — The conflict verdict is closed and batch-validated.** Conflict claims are batched apart
+> from criterion and amendment claims under their own result schema. Each batch prompt carries the
+> plan task table once, then per claim the issued id, the kind (`criterion` or `adr-decision`), and
+> the claim text. Per claim, the judge returns exactly one of `consistent`, or `conflicts` with a
+> non-empty `taskIds` (a subset of the plan's task ids) and a non-empty `conflict` that states the
+> incompatible requirement. A claim that is merely uncovered is `consistent`; coverage stays D5's
+> question. Verdict identity is the digest of the claim text plus the digest of the full task table,
+> so any plan task change re-judges every conflict claim. D5's cache, D13's exact-id-set validation
+> (an unknown claim or task id rejects the whole batch as `CoverageBindingPayloadError`), and D14's
+> checkpointing apply; task ids are validated through the shared plan task reference resolver
+> (`adr-2026-08-30-shared-plan-task-reference-resolver` D1). Batches are bounded by
+> `coverage_binding.judge.batch_size` claims and by a fixed prompt byte budget; a claim whose text
+> alone exceeds the budget is dispatched in a batch of its own and is never truncated. The result
+> closed shape is requested in the prompt and parsed strictly, exactly as D18 amendment claims are;
+> no second schema option is added. With D7's key off, conflict claims are
+> recorded `unjudged`, emit their event, and do not block. "Claims" in D1–D14, and the zero-claim
+> outcome those decisions describe, mean criterion coverage claims: a spec with zero coverage claims
+> still completes `done` unless a conflict claim returns `conflicts`.
+> This narrows the #2088 note in `adr-2026-08-23-criterion-layer-is-structural-at-land` that this
+> step "requires nothing" of a spec with zero `criterion` rows: it still requires no row, but with
+> the judge enabled such a spec can refuse on a conflict. It also adds a pass that neither half of
+> `adr-2026-08-09-adr-contradiction-detection-in-two-halves` covers: those halves judge ADRs
+> against stories at DECIDE and never see plan tasks.
+>
+> **D23 — A `conflicts` verdict refuses `needs-human`, first; it never reopens, appends, or routes.**
+> The refusal is D6's (`refused` with kind `needs-human`, written through `writeHaltMarker`; no new
+> halt class), rendering per conflicting claim the criterion text or `<stem>#D<n>` /
+> `<stem>#Decision`, the conflicting task ids with their `Done when` checks, and the judge's
+> `conflict` text. A conflict means the approved plan is self-contradictory, so it takes precedence
+> over D19: when any conflict claim in a run returns `conflicts`, the run refuses and performs no D19
+> reopen, including on a D16 re-run or a post-rebase refresh. Conflict entries are never D19 inputs;
+> D19's digest-absent rule reads criterion coverage claims and amendment claims only. It halts as
+> `needs-human` rather than BUILD's `plan-gap`
+> (`adr-2026-08-22-done-when-evidence-at-task-close` D3) because it is found before any task runs,
+> and a daemon never routes to a DECIDE step (D6). Recovery is the existing amend → reseal → rewind
+> recipe through the operator-only reseal.
+>
+> **D24 — Occurrences ride the spine.** `coverage_binding_conflict_judged` joins the `ConductorEvent`
+> union with an explicit sink row matching its `coverage_binding_*` siblings (persist on, audit and
+> otel off). It is emitted once per conflict claim with the
+> claim kind, the verdict (`consistent | conflicts | not-applicable | unjudged`), and the conflicting
+> task ids. `coverage_binding_judged` and `coverage_binding_amendment_judged` keep their vocabularies.
+> Refusals ride the existing `step_refused` and `loop_halt` events. No sidecar log.
+
 ## Consequences
 
 ### Positive
