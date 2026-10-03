@@ -59,6 +59,12 @@ while IFS= read -r hit; do
     # The compatibility `engineer` verb remains explicitly documented as an alias.
     src/conductor/src/engine/engineer-cli.ts:*'conduct-ts engineer'*'deprecated alias.'*)
       ;;
+    # The managed-session instruction audit recognizes both the canonical and
+    # compatibility command prefixes; it does not invoke either command.
+    'src/conductor/src/engine/session-command-audit.ts:const COMMAND = /\b(?:ai-conductor|conduct-ts)\s+([a-z][a-z0-9-]*)\b/g;')
+      ;;
+    'src/conductor/src/engine/session-command-audit.ts:const COMMAND_PREFIX = /\b(?:ai-conductor|conduct-ts)\b/;')
+      ;;
     # The canonical launcher's own compatibility warning is necessarily named
     # after the deprecated invocation.
     'bin/conduct-ts:')
