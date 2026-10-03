@@ -59,7 +59,7 @@ Follow the module's existing test conventions rather than inventing new ones. Th
 ### Task 2: Withhold the clean verdict unless the scan earned it
 **Story:** Story 1
 **Type:** negative-path
-**Files:** src/conductor/src/engine/overlap-scan.ts, src/conductor/test/engine/overlap-scan.test.ts, src/conductor/test/acceptance/overlap-scan.acceptance.test.ts, src/conductor/test/engine/engineer/coherence-validator.test.ts
+**Files:** src/conductor/src/engine/overlap-scan.ts, src/conductor/test/engine/overlap-scan.test.ts, src/conductor/test/acceptance/overlap-scan.acceptance.test.ts, src/conductor/test/engine/engineer/coherence-validator.test.ts, src/conductor/test/engine/overlap-scan-cli.test.ts
 **Dependencies:** 1
 
 **Steps:**
@@ -67,7 +67,8 @@ Follow the module's existing test conventions rather than inventing new ones. Th
 2. Write real-git acceptance cases on the suite's existing scratch-repository fixture: a mixed present/absent candidate list where a sibling branch changes the present path; an all-present, uncontended list; an all-absent list; and an absent path that a sibling branch creates.
 3. Establish RED, then call the Task 1 helper from the scan entry point after the base is resolved and append the notes to the existing advisory-note list. Do not remove absent candidates from the scanned set, do not add a report field, and leave the branch enumeration, intersection, and blocker sweep untouched.
 4. Update the existing scripted-git cases that assert an exact advisory-note list, in the engine unit suite and the coherence-validator suite, to script the listing call so their candidate paths classify as present; do not loosen those assertions.
-5. Run the focused unit, coherence-validator, and acceptance files through the repository's scoped test runner, confirm the typecheck target that includes test files passes, and commit the focused change.
+5. Add a command-entry case to the overlap-scan CLI suite: a real dispatch whose classification command fails prints the classification-failed note and every sibling-branch overlap found, and exits 0.
+6. Run the focused unit, CLI, coherence-validator, and acceptance files through the repository's scoped test runner, confirm the typecheck target that includes test files passes, and commit the focused change.
 
 **Done when:**
 1. The scan appends one advisory note per absent candidate path, one note when classification failed, and one note stating nothing was scanned when the candidate list is empty.
