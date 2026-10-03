@@ -203,7 +203,7 @@ it('composes one ordered provider context across the interactive run after regis
     runnerProvider: 'compatibilityRuntime.provider',
     runnerContext: 'providerExecution',
     conductorContext: 'providerExecution',
-    preludeContext: 'providerExecution',
+    preludeContext: 'providerExecution: preludeProviderExecution',
     startupOrder: true,
   });
 });
