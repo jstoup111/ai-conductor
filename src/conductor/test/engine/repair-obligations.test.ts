@@ -195,6 +195,32 @@ describe('repair obligations', () => {
     })).resolves.toMatchObject({ ok: true, obligation: { tasks: { '1': { status: 'resolved' } } } });
   });
 
+  it('refuses to close an obligation through a different plan that reuses its task id', async () => {
+    const { projectRoot, statePath } = await createStatePath();
+    const repairs = createRepairObligationStore(projectRoot, statePath);
+    const planA = await repairs.admitOrReplay('plan-a:1', admission({
+      id: 'plan-a:1', taskIds: ['1'],
+      planPath: '.docs/plans/a.md',
+      source: { findingId: 'A-1', authority: 'prd_audit', instruction: 'Repair plan A.' },
+    }));
+    const planB = await repairs.admitOrReplay('plan-b:1', admission({
+      id: 'plan-b:1', taskIds: ['1'],
+      planPath: '.docs/plans/b.md',
+      source: { findingId: 'B-1', authority: 'plan_amendment', instruction: 'Repair plan B.' },
+    }));
+    if (!planA.ok || !planB.ok) throw new Error('expected plan-scoped admissions');
+
+    await expect(repairs.close({
+      planPath: '.docs/plans/b.md', taskId: '1', obligationId: planA.obligation.id,
+      evidence: { kind: 'current-done-when', value: 'wrong plan' },
+    })).resolves.toMatchObject({ ok: false, kind: 'stale' });
+
+    await expect(repairs.read()).resolves.toMatchObject({ ok: true, value: { records: {
+      'plan-a:1': { tasks: { '1': { status: 'open' } } },
+      'plan-b:1': { tasks: { '1': { status: 'open' } } },
+    } } });
+  });
+
   it('isolates plan identities, retains prior rounds, and rejects a stale closure after a later repair', async () => {
     const { projectRoot, statePath } = await createStatePath();
     const repairs = createRepairObligationStore(projectRoot, statePath);

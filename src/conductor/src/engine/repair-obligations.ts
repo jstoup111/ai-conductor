@@ -303,6 +303,10 @@ export function createRepairObligationStore(
           result = { ok: false, kind: 'missing', message: 'Repair obligation or bound task is missing' };
           return current as EngineState;
         }
+        if (obligation.planIdentity !== planIdentity) {
+          result = { ok: false, kind: 'stale', message: 'Repair obligation belongs to a different plan' };
+          return current as EngineState;
+        }
         const currentId = section.currentByPlan[planIdentity]?.[taskId];
         // A later finding from a different authority shares the task's row
         // but does not supersede this repair: both obligations need their
