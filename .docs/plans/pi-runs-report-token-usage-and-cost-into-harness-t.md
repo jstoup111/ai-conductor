@@ -80,6 +80,7 @@ Fix the Pi adapter so that a completed Pi dispatch records the tokens Pi actuall
 - A turn whose `message.usage.input` is a string or missing contributes no tokens, and when it is the only turn the result has no `tokenUsage` key, as asserted in pi-provider-usage.test.ts.
 - A stream with a top-level `usage` object and no `message.usage` returns no `tokenUsage` key, so the top-level object is ignored, as asserted in pi-provider-usage.test.ts.
 - An exit-0 stream whose only assistant turn reports all-zero input, output, cacheRead and cacheWrite returns no `tokenUsage` key, as asserted in pi-provider-usage.test.ts.
+- A conductor-level test asserts the `provider_attempt` event emitted for a no-usage dispatch carries no `tokenUsage` property at all (never input 0 / output 0), so the story's event-level claim is asserted end to end.
 
 **Files:** `src/conductor/src/execution/pi-provider.ts`, `src/conductor/test/execution/pi-provider-usage.test.ts`, `src/conductor/test/fixtures/pi/error-stop-live-capture.jsonl`
 
@@ -98,6 +99,7 @@ Fix the Pi adapter so that a completed Pi dispatch records the tokens Pi actuall
 **Done when:**
 - For the worked stream with exit code 1, `PiProvider.invoke` returns `success: false` and no `tokenUsage` key, as asserted in pi-provider-usage.test.ts.
 - For `error-stop-live-capture.jsonl` with exit 0, `PiProvider.invoke` returns `success: false` with the captured error message and no `tokenUsage` key, as asserted in pi-provider-usage.test.ts.
+- A conductor-level test asserts that for the exit-1 and `stopReason`-`error` dispatches the step fails and the `provider_attempt` event carries no `tokenUsage`.
 - For the worked stream with a malformed line between the assistant turns, the returned `tokenUsage` has input 200 and output 65, as asserted in pi-provider-usage.test.ts.
 
 **Files:** `src/conductor/src/execution/pi-provider.ts`, `src/conductor/test/execution/pi-provider-usage.test.ts`, `src/conductor/test/fixtures/pi/error-stop-live-capture.jsonl`
@@ -162,6 +164,7 @@ Fix the Pi adapter so that a completed Pi dispatch records the tokens Pi actuall
 - For the worked stream with turn two's `cost` object missing and turn two's model `unlisted-model` absent from the test card, the result has no `costUsd` key at all (not 0.0021), as asserted in pi-provider-usage.test.ts.
 - For the worked stream with its own reported costs (0.0021 and 0.0014) plus one `toolResult` `message_end` with input 10, output 5 and `cost.total` 0, and the test card carrying the committed rates, the result has no `costUsd` key and `classifyMetering` returns `cost-unmetered`, as asserted in pi-provider-usage.test.ts.
 - For case (a) `tokenUsage.attributedModel` is `cline/google/gemma-4-31b-it:free` although the dispatch is cost-unmetered, as asserted in pi-provider-usage.test.ts.
+- A conductor-level test asserts the `provider_attempt` event for the cost-unmetered case retains `tokenUsage` with `attributedModel` set despite `cost.total` 0 on an unlisted model.
 
 **Files:** `src/conductor/src/execution/pi-provider.ts`, `src/conductor/test/execution/pi-provider-usage.test.ts`
 
