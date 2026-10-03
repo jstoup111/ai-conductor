@@ -6,12 +6,13 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
+import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import type {
   RemediationCasePrdWideningRecord,
   RemediationCaseRecord,
 } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore, remediationCaseStorePath } from '../../src/engine/remediation-case-store.js';
-import type { RemediationCaseGraph } from '../../src/engine/remediation-case-validator.js';
+import { validateRemediationCaseGraph, type RemediationCaseGraph } from '../../src/engine/remediation-case-validator.js';
 
 const FEATURE = { version: 'v1', repository: 'acme/conductor', feature: 'case-reconciler' } as const;
 const RECORDED_AT = '2026-08-30T12:00:00.000Z';
@@ -176,6 +177,43 @@ describe('remediation case reconciler', () => {
     ] } });
     expect(result.ok && result.state.cases[0]).toEqual(resolved);
     expect(reloaded).toMatchObject({ ok: true, state: { cases: [{ id: resolved.id }, { distinctFrom: [resolved.id] }] } });
+  });
+
+  it.each(['case-v1', 'case-v2'] as const)('treats an undeclared resolved-anchor reuse as a recurrence in %s', async (_mode) => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const resolved = resolvedAnchorCase();
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [resolved] } }));
+
+    const judgement: RemediationCaseJudgement = _mode === 'case-v1'
+      ? {
+        mode: 'case-v1', domain: 'build_review',
+        sourceOutcomes: [{ sourceId: RESOLVED_SOURCE_ID, outcome: 'acted', caseRef: 'undeclared-reuse' }],
+        cases: [{ ...DISTINCT_ANCHOR_ACTION, caseRef: 'undeclared-reuse', distinctFrom: undefined }],
+      }
+      : {
+        mode: 'case-v2', domain: 'build_review',
+        sourceOutcomes: [{ sourceId: RESOLVED_SOURCE_ID, outcome: 'acted', caseRef: 'undeclared-reuse' }],
+        cases: [{
+          ...DISTINCT_ANCHOR_ACTION, caseRef: 'undeclared-reuse', distinctFrom: undefined,
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the distinct concern', admittedTaskIds: ['6'], admissionRationale: 'Task 6 owns the recurrence halt.' }] },
+        }],
+        consistency: { verdict: 'consistent', sourceIds: [RESOLVED_SOURCE_ID], caseRefs: ['undeclared-reuse'], rationale: 'One source has one proposed action.' },
+      };
+    const validated = validateRemediationCaseGraph([RESOLVED_SOURCE_ID], judgement, { admittedTaskIds: ['6'] });
+    if (!validated.ok) throw new Error(`fixture must validate: ${validated.reason}`);
+
+    const result = await reconcileRemediationCases(store, {
+      graph: validated.graph,
+      recordedAt: '2026-10-02T13:00:00.000Z',
+      generateId: () => { throw new Error('a recurrence must not allocate a new case'); },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      recurringCaseIdsByRef: new Map([['undeclared-reuse', ['case-resolved-anchor']]]),
+      state: { cases: [resolved] },
+    });
   });
 
   it('rejects a new case that would give a resolved-anchor source a second unresolved owner', async () => {
