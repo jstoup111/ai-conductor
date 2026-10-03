@@ -41,6 +41,7 @@ import { ModelAvailability } from './model-availability.js';
 import type { ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import {
+  ProviderSetupUnavailableError,
   normalizeProviderSetupUnavailable,
   type ProviderSetupUnavailable,
   type ProviderSetupExhaustion,
@@ -302,6 +303,12 @@ export interface ExecuteProviderCandidatesInput {
   /** Safety boundary for each resolved candidate, after resolution and before fallback. */
   withCandidateSafety?: WithCandidateSafety;
   prepareCandidateSelfHost?: PrepareCandidateSelfHost;
+  /** Candidate setup proving narrow telemetry access under a native read-only review policy. */
+  prepareManagedSessionObservation?: (input: {
+    readonly provider: string;
+    readonly context: ManagedSessionContext;
+    readonly readOnlyReview: boolean;
+  }) => Promise<unknown>;
   warn?: (
     message: string,
     transition: ProviderTransitionWarning,
@@ -788,6 +795,7 @@ export async function executeProviderCandidates({
   onTelemetryError,
   withCandidateSafety,
   prepareCandidateSelfHost,
+  prepareManagedSessionObservation,
   warn,
   options,
   optionsForCandidate,
@@ -973,6 +981,20 @@ export async function executeProviderCandidates({
           : candidateOptions.providerStreamObserverForCandidate?.(providerKey);
         try {
           selfHost = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index });
+          if (candidateOptions.readOnlyReview && candidateOptions.managedSessionContext && prepareManagedSessionObservation) {
+            await prepareManagedSessionObservation({
+              provider: providerKey,
+              context: candidateOptions.managedSessionContext,
+              readOnlyReview: true,
+            });
+          } else if (candidateOptions.readOnlyReview && candidateOptions.managedSessionContext) {
+            throw new ProviderSetupUnavailableError({
+              provider: providerKey,
+              capability: 'managed-observation-destination',
+              reason: 'native read-only review is available, but narrow observation access was not proven for this candidate.',
+              recoveryAction: 'Configure a provider review policy that proves the per-dispatch observation destination is writable while protected paths remain refused.',
+            });
+          }
         } catch (error) {
           setupUnavailable = normalizeProviderSetupUnavailable(error, providerKey);
           if (!setupUnavailable) throw error;
