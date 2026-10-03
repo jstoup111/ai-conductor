@@ -88,6 +88,13 @@ describe('halt clear CLI', () => {
     })).toBe(0);
     const [event] = (await readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     expect(event.haltClass).toBe(haltClass);
+    await expect(access(join(worktree, '.pipeline', 'HALT'))).rejects.toThrow();
+    await expect(access(join(worktree, '.pipeline', 'HALT.class'))).rejects.toThrow();
+    if (haltClass === 'over-scope') {
+      expect(await readFile(join(worktree, '.pipeline', 'HALT.cleared'), 'utf8')).toBe('Await operator decision.\n');
+    } else {
+      await expect(access(join(worktree, '.pipeline', 'HALT.cleared'))).rejects.toThrow();
+    }
   });
 
   it('refuses a feature that is not halted without authorizing a clear', async () => {

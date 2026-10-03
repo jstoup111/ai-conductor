@@ -1,4 +1,4 @@
-import { access, readFile, unlink } from 'node:fs/promises';
+import { access, readFile, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { HaltClearDispatch } from '../cli.js';
@@ -102,7 +102,13 @@ export async function dispatchHaltClearCommand(
     return 1;
   }
   await unlink(join(worktree, HALT_CLASS_MARKER));
-  await unlink(join(worktree, HALT_MARKER));
+  if (haltClass === 'over-scope') {
+    // The over-scope decision block is the carrier the next prd_audit lap
+    // parses (adr-2026-08-24 D3); preserve it rather than discarding it.
+    await rename(join(worktree, HALT_MARKER), join(worktree, '.pipeline', 'HALT.cleared'));
+  } else {
+    await unlink(join(worktree, HALT_MARKER));
+  }
   const recordResult = await (deps.supersedeRecord ?? supersedeHaltRecord)(worktree, command.feature, 'operator');
   if (recordResult.kind !== 'written' && recordResult.kind !== 'noop') {
     const reason = 'reason' in recordResult ? recordResult.reason : 'record was not updated';
