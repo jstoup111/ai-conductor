@@ -231,6 +231,7 @@ import {
   parseTrack,
   parseIntakeSourceRef,
   planStem,
+  FINISH_CHOICE_MARKER,
   readManualTestFailRows,
   BUILD_REVIEW_VERDICT,
   buildReviewFailureDetails,
@@ -243,6 +244,7 @@ import {
   type RemediationDispositionRejection,
   type CompletionContext,
   type CompletionResult,
+  type FinishChoice,
   type PrdAuditReport,
   discardStaleLapBuildReviewFail,
   removeBuildReviewVerdict,
@@ -250,6 +252,7 @@ import {
   stampGateRunIdentity,
   isVerdictRunIdentityStep,
 } from './artifacts.js';
+import { resolveHeadSha, resolvePrDisposition } from './run-provenance.js';
 import { extractStoryCriterionIds } from './story-criteria.js';
 import {
   AS_BUILT_VERDICT_PATH,
@@ -6121,12 +6124,19 @@ export class Conductor {
     await this.commitStateChanges(state, 'complete verified feature run', {
       feature_status: 'complete',
     });
+    const headSha = await resolveHeadSha(this.git, this.projectRoot);
+    const finishChoice = await readFile(join(this.projectRoot, FINISH_CHOICE_MARKER), 'utf-8')
+      .then((choice) => choice.trim() as FinishChoice)
+      .catch(() => undefined);
     await this.events.emit({
       type: 'feature_complete',
-      prUrl: state.pr_url,
       featureDesc: state.feature_desc,
       sessionStartedAt: state.session_started_at,
       ...(state.complexity_tier === undefined ? {} : { tier: state.complexity_tier }),
+      ...(state.pr_url === undefined ? {} : { prUrl: state.pr_url }),
+      ...(headSha === undefined ? {} : { headSha }),
+      ...(state.rebase_base_sha === undefined ? {} : { baseSha: state.rebase_base_sha }),
+      prDisposition: resolvePrDisposition({ prUrl: state.pr_url, finishChoice }),
     });
     // The daemon classifies a run solely by .pipeline/DONE vs .pipeline/HALT.
     // Interactive runs intentionally leave no daemon marker.
@@ -6147,12 +6157,20 @@ export class Conductor {
       Object.prototype.hasOwnProperty.call(OUT_OF_BAND_STEPS, candidate)
         ? (candidate as StepName)
         : undefined;
+    const headSha = await resolveHeadSha(this.git, this.projectRoot);
+    const finishChoice = await readFile(join(this.projectRoot, FINISH_CHOICE_MARKER), 'utf-8')
+      .then((choice) => choice.trim() as FinishChoice)
+      .catch(() => undefined);
+    const effectivePrUrl = prUrl ?? this.haltState.pr_url;
     await this.events.emit({
       type: 'loop_halt',
       ...(step ? { step } : {}),
       reason,
-      prUrl,
+      ...(effectivePrUrl === undefined ? {} : { prUrl: effectivePrUrl }),
       ...(this.haltState.complexity_tier === undefined ? {} : { tier: this.haltState.complexity_tier }),
+      ...(headSha === undefined ? {} : { headSha }),
+      ...(this.haltState.rebase_base_sha === undefined ? {} : { baseSha: this.haltState.rebase_base_sha }),
+      prDisposition: resolvePrDisposition({ prUrl: effectivePrUrl, finishChoice }),
     });
   }
 
@@ -15146,10 +15164,14 @@ export class Conductor {
     // satisfied and the loop topology is unchanged — only the daemon auto-rebases
     // (humans rebase manually in interactive mode).
     if (!this.daemon) {
-      const outcome: RebaseOutcome = { kind: 'noop' };
+      const outcome: RebaseOutcome = { kind: 'noop', baseSha: null };
       this.lastRebaseOutcome = outcome;
       const ranManualTest = getStepStatus(state, 'manual_test') !== 'skipped';
       await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest);
+      if (outcome.baseSha !== null && outcome.baseSha !== undefined) {
+        state.rebase_base_sha = outcome.baseSha;
+        await this.persistPendingStateChanges(state, 'persist rebase base provenance');
+      }
       await emitRebaseEvent(this.events, outcome);
       await recordRebaseStepCompletion(this.stateFilePath, outcome);
       return { success: true };
@@ -15338,6 +15360,17 @@ export class Conductor {
       for (const gate of transition.invalidated) {
         if (state[gate] !== 'skipped') state[gate] = 'pending';
       }
+      // applyRebaseTransition owns the durable state batch. Keep this
+      // conductor's optimistic-concurrency baseline aligned before the
+      // base-provenance write below; otherwise that write re-submits the
+      // pre-transition gate values and is refused as a phantom concurrent
+      // update.
+      this.recordPersistedFields(transition.invalidated.map((gate) => ({
+        field: gate,
+        expected: undefined,
+        intent: 'apply rebase transition',
+        next: 'pending' as const,
+      })));
       // Events describe the durable operation, not the pre-application
       // classification.  The transition is the only authority that knows
       // which effects actually became the completed rebase operation.
@@ -15369,6 +15402,10 @@ export class Conductor {
     if (sealRejectionReason) {
       await writeSealHalt(this.projectRoot, sealRejectionReason, this.events);
     } else {
+      if ('baseSha' in outcome && outcome.baseSha !== null && outcome.baseSha !== undefined) {
+        state.rebase_base_sha = outcome.baseSha;
+        await this.persistPendingStateChanges(state, 'persist rebase base provenance');
+      }
       await emitRebaseEvent(this.events, outcome);
     }
 

@@ -31,6 +31,7 @@ const BASE = 'main';
 interface RebaseStepSubject {
   runRebaseStep(state: ConductState): Promise<StepRunResult>;
   lastRebaseOutcome?: { kind: string };
+  persistedStateSnapshot?: ConductState;
 }
 
 describe('mergeability-first daemon finish', () => {
@@ -168,6 +169,10 @@ describe('mergeability-first daemon finish', () => {
         baseBranch: BASE,
       });
       const subject = conductor as unknown as RebaseStepSubject;
+      // `run()` normally establishes this optimistic-concurrency baseline
+      // before it dispatches the rebase step. This focused fixture enters the
+      // owning step directly, so it supplies the same precondition.
+      subject.persistedStateSnapshot = { ...initialState };
 
       const result = await subject.runRebaseStep(initialState);
 
@@ -234,6 +239,7 @@ describe('mergeability-first daemon finish', () => {
         baseBranch: BASE,
       });
       const subject = conductor as unknown as RebaseStepSubject;
+      subject.persistedStateSnapshot = { ...initialState };
 
       const result = await subject.runRebaseStep(initialState);
       const eventTypes = emit.mock.calls.map(([event]) => String(event.type));

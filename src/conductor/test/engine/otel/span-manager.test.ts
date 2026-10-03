@@ -273,6 +273,25 @@ describe('T10: run span lifecycle — one trace per run', () => {
     expect(roots[0].attributes['conductor.run.outcome']).toBe('halted');
   });
 
+  it('retains a resolved base through a following null rebase base without stamping the second rebase span', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'rebase', index: 0 });
+    await emitter.emit({ type: 'rebase_changed', baseSha: 'B', changedPaths: [] });
+    await emitter.emit({ type: 'step_completed', step: 'rebase', status: 'done' });
+    await emitter.emit({ type: 'step_started', step: 'rebase', index: 1 });
+    await emitter.emit({ type: 'rebase_changed', baseSha: null, changedPaths: [] });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const rebases = spanExporter.getFinishedSpans().filter((span) => span.name === 'rebase');
+    const run = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')!;
+    expect(rebases[0]?.attributes['vcs.base.sha']).toBe('B');
+    expect(rebases[1]?.attributes).not.toHaveProperty('vcs.base.sha');
+    expect(run.attributes['vcs.base.sha']).toBe('B');
+  });
+
   it('two early events create only one root span (not duplicated)', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);

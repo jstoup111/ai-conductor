@@ -208,6 +208,7 @@ afterEach(async () => {
 async function dispatchWithSessionId(
   sessionId?: string | 'unreadable',
   config: HarnessConfig = { otel: { exporter: 'file' } },
+  sourceRef?: string,
 ): Promise<{ repo: string; pipelineDir: string }> {
   const repo = await mkdtemp(join(tmpdir(), 'daemon-otel-wiring-'));
   dirs.push(repo);
@@ -228,7 +229,7 @@ async function dispatchWithSessionId(
     baseBranch: 'main',
     ensureFresh: async () => {},
     watch: false,
-    workSource: { discover: async () => [{ slug: 'feature-a' }] },
+    workSource: { discover: async () => [{ slug: 'feature-a', ...(sourceRef ? { sourceRef } : {}) }] },
     probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
     providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
   });
@@ -296,6 +297,15 @@ describe('daemon OTel visualizer wiring', () => {
       }),
       fixture.scopes[0]?.events,
     );
+  });
+
+  it('passes an optional backlog source ref to the visualizer start context', async () => {
+    await dispatchWithSessionId(undefined, undefined, 'owner/repo#2000');
+    expect(wireOtelVisualizer.mock.calls[0]?.[1]).toMatchObject({ sourceRef: 'owner/repo#2000' });
+
+    wireOtelVisualizer.mockClear();
+    await dispatchWithSessionId();
+    expect(wireOtelVisualizer.mock.calls[0]?.[1]).not.toHaveProperty('sourceRef');
   });
 
   it('propagates valid OTel attributes to daemon metrics and dispatch traces while warning once for rejected operator metadata', async () => {

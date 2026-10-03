@@ -28,7 +28,7 @@ describe('self-host verification entries', () => {
     expect(loaded.config.test_suite).toMatchObject({
       scoped_command: './node_modules/.bin/vitest run {selectors}',
       timeout_seconds: 1800,
-      verification: { mode: 'aggregate' },
+      verification: { mode: 'changed', full_suite: 'once' },
     });
   });
 

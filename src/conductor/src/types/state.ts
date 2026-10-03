@@ -45,6 +45,8 @@ export type ConductState = {
   session_started_at?: number;
   last_step?: StepName;
   pr_url?: string;
+  /** Latest non-null rebase base retained for terminal provenance (adr-014 D18). */
+  rebase_base_sha?: string;
   worktree_dir?: string;
   worktree_branch?: string;
   feature_status?: 'complete';

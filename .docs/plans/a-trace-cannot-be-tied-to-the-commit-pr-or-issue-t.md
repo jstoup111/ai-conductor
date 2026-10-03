@@ -172,6 +172,7 @@ Exported traces gain the commit a run built, the base it was built against, the 
 
 **Done when:**
 - `buildResource` for the traces signal sets `conductor.source.ref` only when `sourceRef` is a non-empty string and `provenance.issue` is true, and the metrics signal never sets it, as asserted in `resource.test.ts`.
+- With OTel enabled and no `otel.provenance` config, `provenance.issue` defaults to true and the trace Resource built for a run with `sourceRef` `jstoup111/ai-conductor#2000` carries `conductor.source.ref` equal to `jstoup111/ai-conductor#2000`, as asserted in `resource.test.ts`.
 - With `provenance.feature` false, the trace Resource has no `conductor.feature` attribute and its `service.instance.id` is the project name, a slash, and the run id.
 - With `provenance.feature` false, the metric Resource attributes and every step-metric data-point `feature` label equal those recorded with the toggle on, as asserted in `resource.test.ts` and `metrics-listener.test.ts`.
 - An `OtelVisualizer` test with an in-memory exporter starts a run with `sourceRef` set, ends one step, and after `forceFlush` and before `stop()` asserts the exported closed step span's Resource carries `conductor.source.ref` while no `conductor.run` span has been exported.
@@ -187,7 +188,7 @@ Exported traces gain the commit a run built, the base it was built against, the 
 **Steps:**
 1. Write failing `OtelVisualizer` tests in `src/conductor/test/engine/otel/otel-visualizer.test.ts` with an in-memory exporter: completion with full provenance; a rebase step span receiving `baseSha`; halt after base `B` with no terminal `baseSha`; bases `B1` then `B2`; force-close via `stop()`; terminal event without `headSha`; rebase outcome with `baseSha: null`. Add `src/conductor/test/engine/otel/span-manager.test.ts` unit cases for the held base. Extend `src/conductor/test/engine/otel/metrics-listener.test.ts` to assert provenance fields create no new series or label.
 2. Verify RED.
-3. Implement: route `rebase_noop`, `rebase_changed`, and `rebase_mergeable_skip` in the `OtelVisualizer` event switch to new `SpanManager` handlers; `SpanManager` in `src/conductor/src/engine/otel/span-manager.ts` sets `vcs.base.sha` on the open `rebase` step span, holds the latest non-null base in memory, and in `closeRunSpan` stamps `vcs.head.sha`, `vcs.base.sha`, `conductor.pr.url`, and `conductor.pr.disposition` (force-close default `unrecorded`). Pattern: the existing `onLoopHalt` halt attributes (search `conductor.run.halt.reason`); omit absent values, never placeholders. No I/O in the span manager (adr-014 D4).
+3. Implement: set `otel: true` for `rebase_noop`, `rebase_changed`, and `rebase_mergeable_skip` in `src/conductor/src/engine/event-sinks.ts` (other sink flags unchanged) so the events reach the visualizer; route `rebase_noop`, `rebase_changed`, and `rebase_mergeable_skip` in the `OtelVisualizer` event switch to new `SpanManager` handlers; `SpanManager` in `src/conductor/src/engine/otel/span-manager.ts` sets `vcs.base.sha` on the open `rebase` step span, holds the latest non-null base in memory, and in `closeRunSpan` stamps `vcs.head.sha`, `vcs.base.sha`, `conductor.pr.url`, and `conductor.pr.disposition` (force-close default `unrecorded`). Pattern: the existing `onLoopHalt` halt attributes (search `conductor.run.halt.reason`); omit absent values, never placeholders. No I/O in the span manager (adr-014 D4).
 4. Verify GREEN and commit.
 
 **Done when:**
@@ -197,7 +198,7 @@ Exported traces gain the commit a run built, the base it was built against, the 
 - A terminal event with no `headSha` yields a root span with no `vcs.head.sha` attribute, and a rebase outcome with `baseSha: null` sets no `vcs.base.sha` and keeps the previously held base.
 - Feeding the same provenance events to `MetricsListener` creates no new metric series and adds no data-point label, as asserted by comparing recorded label sets with and without the provenance fields.
 
-**Files:** src/conductor/src/engine/otel/span-manager.ts; src/conductor/src/engine/otel/otel-visualizer.ts; src/conductor/test/engine/otel/otel-visualizer.test.ts; src/conductor/test/engine/otel/span-manager.test.ts; src/conductor/test/engine/otel/metrics-listener.test.ts
+**Files:** src/conductor/src/engine/otel/span-manager.ts; src/conductor/src/engine/otel/otel-visualizer.ts; src/conductor/src/engine/event-sinks.ts; src/conductor/test/engine/otel/otel-visualizer.test.ts; src/conductor/test/engine/otel/span-manager.test.ts; src/conductor/test/engine/otel/metrics-listener.test.ts
 
 **Dependencies:** Tasks 1, 8
 
@@ -308,3 +309,20 @@ Task 6 ─────────────┴─▶ Task 8 ─▶ Task 9 (al
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-ab1-1: src/conductor/src/daemon-cli.ts:1314 beginFeatureRun — pass ...(item.sourceRef ? { sourceRef: item.sourceRef } : {}) into the wireOtelVisualizer start context; add a RED-first case in src/conductor/test/daemon-otel-wiring.test.ts asserting a backlog item with sourceRef reaches the visualizer start context and an item without one omits the key (preserves Task 7's foreground behavior in visualizer-selection.test.ts)
+**Gate:** as-built
+**Rationale:** REMEDIABLE (99%): daemon-cli.ts:1314-1323 calls wireOtelVisualizer without sourceRef although item.sourceRef is available from daemon-backlog.ts:1111-1181, so daemon traces never carry conductor.source.ref; index.ts:1692 (Task 7) is the only wired caller. Swept: wireOtelVisualizer has exactly two production callers (index.ts:320, daemon-cli.ts:1314), so the daemon site is the whole remainder; approved architecture (adr-014 D20) is unchanged.
+**Parent task:** 7
+**Governing clause:** Task 7
+**Done when:**
+- Task 7 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab1-1 is complete.
+
+### Task rem-as-built-rem-ab2-1: src/conductor/src/engine/conductor.ts:6117 emitLoopHalt — compute effectivePrUrl = prUrl ?? this.haltState.pr_url and use it for both the prUrl field and resolvePrDisposition; add a RED-first case in src/conductor/test/engine/conductor-terminal-marker.test.ts for a halt with haltState.pr_url set and no prUrl argument asserting prUrl and prDisposition 'opened', keeping Task 4's no-PR-URL 'unrecorded' and no-prUrl-key case passing
+**Gate:** as-built
+**Rationale:** REMEDIABLE (98%): conductor.ts:6131-6139 emitLoopHalt derives prUrl/prDisposition only from its transient argument, ignoring this.haltState.pr_url, whereas completeRun (conductor.ts:6103-6106, Task 3) uses state.pr_url — a halt after the SHIP draft PR is stored reports 'unrecorded'; Task 4 Step 3 requires parity with Task 3, so the fix conforms to adr-014 D19 without an architecture change. Swept: emitLoopHalt is the single centralized halt seam (adr-2026-08-11 D2), so no sibling site exists.
+**Governing clause:** adr-014-otel-observability-exporter decision 19
+**Done when:**
+- adr-014-otel-observability-exporter decision 19 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-1 is complete.

@@ -1,7 +1,7 @@
-// Covers: task:2, task:3, task:5, task:6, task:9
+// Covers: task:2, task:3, task:5, task:6, task:7, task:9
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execa } from 'execa';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -13,6 +13,7 @@ import {
 } from '../../src/index.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { registerBuiltins } from '../../src/engine/plugin-loader.js';
+import { resolveRunSourceRef } from '../../src/engine/run-provenance.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type {
   VisualizerFactory,
@@ -154,6 +155,53 @@ describe('visualizer selection', () => {
       harnessVersion: '0.99.20',
       pipelineDir: '/tmp/visualizer-selection',
     });
+  });
+
+  it('resolves the intake source ref into run context without treating absent values as refs', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'visualizer-source-ref-'));
+    try {
+      const feature = 'source-ref-fixture';
+      const intakePath = join(projectRoot, '.docs', 'intake', `${feature}.md`);
+      await mkdir(join(projectRoot, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(projectRoot, '.docs', 'plans', `${feature}.md`), '# plan\n');
+
+      await mkdir(join(projectRoot, '.docs', 'intake'), { recursive: true });
+      await writeFile(intakePath, 'Source-Ref: jstoup111/ai-conductor#2000\n');
+      const sourceRef = await resolveRunSourceRef(projectRoot, feature);
+
+      await rm(intakePath);
+      const noMarker = await resolveRunSourceRef(projectRoot, feature);
+      await writeFile(join(projectRoot, '.docs', 'plans', 'another-feature.md'), '# another plan\n');
+      const unresolvablePlan = await resolveRunSourceRef(projectRoot, 'other-feature');
+
+      await writeFile(intakePath, 'Source-Ref:\njstoup111/ai-conductor#999\n');
+      const emptyMarker = await resolveRunSourceRef(projectRoot, feature);
+
+      expect({
+        sourceRef,
+        noMarker,
+        unresolvablePlan,
+        emptyMarker,
+        startContext: createVisualizerStartContext({
+          runId: 'run-1516',
+          project: projectRoot,
+          feature,
+          sourceRef,
+          branch: undefined,
+          engineVersion: 'dev',
+          harnessVersion: '0.99.20',
+          pipelineDir: join(projectRoot, '.pipeline'),
+        }),
+      }).toEqual({
+        sourceRef: 'jstoup111/ai-conductor#2000',
+        noMarker: undefined,
+        unresolvablePlan: undefined,
+        emptyMarker: undefined,
+        startContext: expect.objectContaining({ sourceRef: 'jstoup111/ai-conductor#2000' }),
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 
   it('derives the checked-out branch and leaves detached HEAD explicitly absent', async () => {

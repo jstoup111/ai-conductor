@@ -13,6 +13,7 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import type { VisualizerFactory } from '../../../src/types/plugin.js';
 
 const PIPELINE_DIR = '/tmp/test-pipeline';
+const DEFAULT_PROVENANCE = { commit: true, pr: true, issue: true, feature: true };
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -20,6 +21,32 @@ afterEach(async () => {
 });
 
 describe('resolveOtelConfig', () => {
+  describe('provenance', () => {
+    it('defaults every provenance field to enabled', () => {
+      expect(resolveOtelConfig({ otel: { exporter: 'file' } }, PIPELINE_DIR)).toMatchObject({
+        provenance: { commit: true, pr: true, issue: true, feature: true },
+      });
+    });
+
+    it.each(['commit', 'pr', 'issue', 'feature'] as const)('retains an explicit false for %s', (key) => {
+      expect(resolveOtelConfig({ otel: { exporter: 'file', provenance: { [key]: false } } }, PIPELINE_DIR))
+        .toMatchObject({ provenance: { [key]: false } });
+    });
+
+    it.each([
+      ['a non-boolean field', { commit: 'no' }, 'otel.provenance.commit'],
+      ['an unknown field', { branch: true }, 'otel.provenance.branch'],
+      ['a scalar block', true, 'otel.provenance'],
+    ])('disables telemetry for %s', (_caseName, provenance, errorPath) => {
+      const result = resolveOtelConfig(
+        { otel: { exporter: 'file', provenance } } as never,
+        PIPELINE_DIR,
+      );
+
+      expect(result).toMatchObject({ enabled: false, error: expect.stringContaining(errorPath) });
+    });
+  });
+
   describe('absent otel block', () => {
     it('returns { enabled: false } with no error when otel is absent', () => {
       const result = resolveOtelConfig({}, PIPELINE_DIR);
@@ -121,6 +148,7 @@ describe('resolveOtelConfig', () => {
         enabled: true,
         exporter: 'otlp',
         endpoint: 'http://localhost:4318',
+        provenance: DEFAULT_PROVENANCE,
       });
       expect(buildExporters(resolved as Extract<typeof resolved, { enabled: true }>).spanExporter)
         .toBeInstanceOf(OTLPHttpTraceExporter);
@@ -218,7 +246,7 @@ describe('resolveOtelConfig', () => {
     it('leaves the resolved result unchanged when headers are absent', () => {
       expect(
         resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, PIPELINE_DIR),
-      ).toEqual({ enabled: true, exporter: 'otlp', endpoint: 'http://localhost:4318' });
+      ).toEqual({ enabled: true, exporter: 'otlp', endpoint: 'http://localhost:4318', provenance: DEFAULT_PROVENANCE });
     });
 
     it.each([undefined, ''])('disables otlp when a referenced environment variable is %p', (value) => {
@@ -270,6 +298,7 @@ describe('resolveOtelConfig', () => {
           exporter: 'otlp',
           endpoint: 'http://localhost:4318',
           headers: { Authorization: 'valid-token' },
+          provenance: DEFAULT_PROVENANCE,
         });
         expect((result as { error?: string }).error).toBeUndefined();
       } finally {
@@ -433,15 +462,16 @@ describe('resolveOtelConfig', () => {
       ];
 
       expect(configs).toEqual([
-        { enabled: true, exporter: 'file', file: `${PIPELINE_DIR}/otel.jsonl`, projectName: 'tenant-a' },
+        { enabled: true, exporter: 'file', file: `${PIPELINE_DIR}/otel.jsonl`, projectName: 'tenant-a', provenance: DEFAULT_PROVENANCE },
         {
           enabled: true,
           exporter: 'otlp',
           endpoint: 'http://localhost:4318',
           projectName: 'tenant-b',
+          provenance: DEFAULT_PROVENANCE,
         },
-        { enabled: true, exporter: 'file', file: `${PIPELINE_DIR}/otel.jsonl` },
-        { enabled: true, exporter: 'file', file: `${PIPELINE_DIR}/otel.jsonl` },
+        { enabled: true, exporter: 'file', file: `${PIPELINE_DIR}/otel.jsonl`, provenance: DEFAULT_PROVENANCE },
+        { enabled: true, exporter: 'file', file: `${PIPELINE_DIR}/otel.jsonl`, provenance: DEFAULT_PROVENANCE },
       ]);
     });
   });

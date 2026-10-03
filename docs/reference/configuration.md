@@ -920,6 +920,19 @@ When a run opens a `conductor.run` root span, its terminal export carries
 `conductor.run.halt.class`. An in-progress root span is not exported until it reaches one of those
 terminal paths.
 
+Trace provenance ties each run to its source change. A field is exported only when its
+`otel.provenance` toggle is enabled and a value resolves; an unresolved value is omitted, never
+defaulted.
+
+| Toggle | Exported trace attributes |
+| --- | --- |
+| `commit` | Root span `vcs.head.sha` (worktree `HEAD` at `feature_complete` or `loop_halt`) and `vcs.base.sha` (latest non-null rebase base, retained in `conduct-state.json` as `rebase_base_sha`). The `rebase` step span also carries `vcs.base.sha`. |
+| `pr` | Root span `conductor.pr.url` when a PR exists, and `conductor.pr.disposition`: `opened` (PR URL known), `none` (finish choice `keep`), or `unrecorded` (no record, including force-closed `terminated` runs). |
+| `issue` | Trace Resource `conductor.source.ref`: the originating intake `Source-Ref` (`owner/repo#N`), from the daemon backlog item or, for interactive runs, the feature's `.docs/intake/<plan-stem>.md`. |
+| `feature` | Trace Resource `conductor.feature`, and `service.instance.id` as `<project>/<feature>`. When disabled, `conductor.feature` is omitted and `service.instance.id` becomes `<project>/<run-id>`. |
+
+Provenance toggles affect traces only; metric Resources and data points are unchanged.
+
 The `conductor.run.outcomes` counter increments once when an opened root run reaches one of those
 terminal paths. Its `outcome` attribute uses the same `complete`, `halted`, and `terminated` taxonomy,
 so dashboards can chart terminal runs without deriving counts from trace-query metrics.
@@ -981,12 +994,24 @@ each sample already represents the whole feature total at that moment.
 | `otel.project_name` | string | No | any non-blank name | project root basename |
 | `otel.worker_name` | string | No | any non-blank name | OS hostname |
 | `otel.attributes` | mapping | No | At most 16 namespaced keys with non-empty literal string values; keys beginning `service.`, `conductor.`, or `host.` are reserved | absent; no custom attributes |
+| `otel.provenance` | mapping | No | only boolean `commit`, `pr`, `issue`, and `feature` keys | every key `true` |
 
 The failure mode is silent-disable-with-an-error-string, not a halt. An unknown exporter yields
 `{ enabled: false, error: "Unknown otel exporter '<x>'. Valid options: otlp, file." }`; `otlp` without an
 endpoint yields `{ enabled: false, error: "otel exporter='otlp' requires an 'endpoint' URL …" }`. An
 unsupported `otel.protocol` also disables telemetry and reports the rejected value plus the accepted
-`http/protobuf` and `grpc` values.
+`http/protobuf` and `grpc` values. A non-mapping `otel.provenance`, an unknown provenance key, or a
+non-boolean provenance value also disables telemetry with an error naming the problem. Omitted
+provenance keys default to `true`:
+
+```yaml
+otel:
+  exporter: otlp
+  endpoint: https://collector.example.test
+  provenance:
+    pr: false
+    issue: false
+```
 
 `otel.headers` supplies HTTP OTLP credentials by reference, never by value. Its only supported
 credential source in this slice is the process environment, using this shape:

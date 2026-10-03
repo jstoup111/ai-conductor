@@ -116,6 +116,7 @@ import { AuditTrailWriter } from './engine/audit-trail.js';
 import { wireInteractiveOtelMetrics, wireOtelVisualizer } from './engine/otel/wire.js';
 import type { OtelVisualizerStartContext } from './engine/otel/wire.js';
 import { resolveEngineVersion } from './engine/shipped-record.js';
+import { resolveRunSourceRef } from './engine/run-provenance.js';
 import {
   detectVersionCommand,
   dispatchVersionCommand,
@@ -571,6 +572,7 @@ interface VisualizerStartContextInput {
   runId: string;
   project: string;
   feature?: string;
+  sourceRef?: string;
   pipelineDir: string;
   branch: string | undefined;
   engineVersion: string | undefined;
@@ -585,6 +587,7 @@ export function createVisualizerStartContext(
     runId: input.runId,
     project: input.project,
     feature: input.feature,
+    ...(input.sourceRef ? { sourceRef: input.sourceRef } : {}),
     branch: input.branch,
     engineVersion: input.engineVersion,
     harnessVersion: input.harnessVersion,
@@ -1690,6 +1693,7 @@ async function main(): Promise<void> {
       runId: sessionId,
       project: projectRoot,
       feature: opts.featureDesc,
+      sourceRef: await resolveRunSourceRef(projectRoot, opts.featureDesc),
       branch: await resolveCurrentBranch(projectRoot),
       engineVersion: resolveEngineVersion(__dirname),
       harnessVersion: await resolveHarnessVersion(__dirname),

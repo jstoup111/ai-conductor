@@ -6,6 +6,14 @@ const VALID_EXPORTERS = ['otlp', 'file'] as const;
 const VALID_OTLP_PROTOCOLS = ['http/protobuf', 'grpc'] as const;
 const DEFAULT_FILE = 'otel.jsonl';
 const MAX_ATTRIBUTES = 16;
+const PROVENANCE_KEYS = ['commit', 'pr', 'issue', 'feature'] as const;
+
+export interface ResolvedOtelProvenance {
+  commit: boolean;
+  pr: boolean;
+  issue: boolean;
+  feature: boolean;
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object') return false;
@@ -75,6 +83,30 @@ function resolveAttributes(attributes: unknown): {
   return { attributes: Object.fromEntries(resolved), warnings };
 }
 
+function resolveProvenance(provenance: unknown): ResolvedOtelProvenance | string {
+  if (provenance === undefined) {
+    return { commit: true, pr: true, issue: true, feature: true };
+  }
+  if (!isPlainObject(provenance)) {
+    return 'otel.provenance must be an object with boolean commit, pr, issue, and feature keys.';
+  }
+  for (const [key, value] of Object.entries(provenance)) {
+    if (!PROVENANCE_KEYS.includes(key as (typeof PROVENANCE_KEYS)[number])) {
+      return `Unknown otel.provenance.${key}.`;
+    }
+    if (typeof value !== 'boolean') {
+      return `otel.provenance.${key} must be a boolean.`;
+    }
+  }
+  const configuredProvenance = provenance as Partial<ResolvedOtelProvenance>;
+  return {
+    commit: configuredProvenance.commit ?? true,
+    pr: configuredProvenance.pr ?? true,
+    issue: configuredProvenance.issue ?? true,
+    feature: configuredProvenance.feature ?? true,
+  };
+}
+
 /**
  * Resolved OTel config. A discriminated union:
  *   { enabled: false }            — exporter is off; error is set if config was invalid
@@ -94,6 +126,7 @@ export type ResolvedOtelConfig =
       workerName?: string;
       attributes?: Record<string, string>;
       attributeWarnings?: string[];
+      provenance: ResolvedOtelProvenance;
     }
   | {
       enabled: true;
@@ -103,6 +136,7 @@ export type ResolvedOtelConfig =
       workerName?: string;
       attributes?: Record<string, string>;
       attributeWarnings?: string[];
+      provenance: ResolvedOtelProvenance;
     };
 
 /**
@@ -123,10 +157,15 @@ export function resolveOtelConfig(
     return { enabled: false };
   }
 
-  const { exporter, endpoint, file, protocol, headers, project_name, worker_name, attributes } = otel;
+  const { exporter, endpoint, file, protocol, headers, project_name, worker_name, attributes, provenance } = otel;
   const projectName = project_name?.trim() || undefined;
   const workerName = worker_name?.trim() || undefined;
   const resolvedAttributes = resolveAttributes(attributes);
+  const resolvedProvenance = resolveProvenance(provenance);
+
+  if (typeof resolvedProvenance === 'string') {
+    return { enabled: false, error: resolvedProvenance };
+  }
 
   // Unknown exporter → disabled + named error listing valid options.
   if (!VALID_EXPORTERS.includes(exporter as (typeof VALID_EXPORTERS)[number])) {
@@ -219,6 +258,7 @@ export function resolveOtelConfig(
       ...(projectName ? { projectName } : {}),
       ...(workerName ? { workerName } : {}),
       ...(resolvedAttributes ? { attributes: resolvedAttributes.attributes, attributeWarnings: resolvedAttributes.warnings } : {}),
+      provenance: resolvedProvenance,
     };
   }
 
@@ -237,6 +277,7 @@ export function resolveOtelConfig(
     ...(projectName ? { projectName } : {}),
     ...(workerName ? { workerName } : {}),
     ...(resolvedAttributes ? { attributes: resolvedAttributes.attributes, attributeWarnings: resolvedAttributes.warnings } : {}),
+    provenance: resolvedProvenance,
   };
 }
 

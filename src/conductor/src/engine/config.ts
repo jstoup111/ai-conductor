@@ -158,7 +158,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   retry_routing: ['enabled'],
   coverage_binding: ['judge'],
   'coverage_binding.judge': ['enabled', 'batch_size'],
-  otel: ['exporter', 'endpoint', 'file', 'protocol', 'headers', 'project_name', 'worker_name', 'attributes'],
+  otel: ['exporter', 'endpoint', 'file', 'protocol', 'headers', 'project_name', 'worker_name', 'attributes', 'provenance'],
   markdown_viewer: ['preset', 'command', 'args', 'mode'],
   mermaid_renderer: ['preset', 'command', 'args', 'mode'],
 } as const;

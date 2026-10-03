@@ -45,6 +45,7 @@ export interface VisualizerStartContext {
   project?: string;
   branch?: string;
   feature?: string;
+  sourceRef?: string;
   engineVersion?: string;
   harnessVersion?: string;
   pipelineDir?: string;

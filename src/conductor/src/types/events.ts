@@ -28,6 +28,9 @@ import type {
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
+/** Closed disposition of pull-request publication for a completed run. */
+export type RunPrDisposition = 'opened' | 'none' | 'unrecorded';
+
 /** Closed reasons why the daemon retained a worktree during reclamation. */
 export type WorktreeReclaimRetainedReason =
   | 'detached'
@@ -1000,7 +1003,16 @@ export type ConductorEvent =
   /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
   | CredentialParkProgressEvent
   | FinishPublicationEvent
-  | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number; tier?: ComplexityTier }
+  | {
+      type: 'feature_complete';
+      prUrl?: string;
+      featureDesc?: string;
+      sessionStartedAt?: number;
+      tier?: ComplexityTier;
+      headSha?: string;
+      baseSha?: string;
+      prDisposition?: RunPrDisposition;
+    }
   | { type: 'dashboard_refresh' }
   | {
       type: 'protected_artifact_rebaseline';
@@ -1367,6 +1379,9 @@ export type ConductorEvent =
       step?: StepName;
       reason: string;
       tier?: ComplexityTier;
+      headSha?: string;
+      baseSha?: string;
+      prDisposition?: RunPrDisposition;
       /** Present when an external BUILD action classifies its own terminal halt. */
       haltClass?: 'plan-gap';
       /**
@@ -1445,6 +1460,7 @@ export type ConductorEvent =
   | {
       /** The branch was already current with the base — rebase was a no-op. */
       type: 'rebase_noop';
+      baseSha?: string | null;
     }
   | {
       /** The branch is behind but cleanly mergeable, so normal finish preserved its history. */
@@ -1462,6 +1478,7 @@ export type ConductorEvent =
       changedPaths: string[];
       /** Complete unfiltered delta, distinct from the gate-invalidation path set. */
       allChangedPaths?: string[];
+      baseSha?: string | null;
     }
   | {
       /** A gate was re-verified post-rebase in gate-first mode. */

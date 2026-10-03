@@ -1,6 +1,6 @@
-// Covers: task:6, task:10
+// Covers: task:6, task:8, task:10
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AggregationTemporality, InMemoryMetricExporter } from '@opentelemetry/sdk-metrics';
@@ -8,6 +8,7 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { otelTracedEventTypes } from '../../../src/engine/event-sinks.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
 import { CapturingSpanExporter } from '../../fixtures/capturing-span-exporter.js';
 
 describe('OtelVisualizer', () => {
@@ -109,6 +110,161 @@ describe('OtelVisualizer', () => {
       invalidPresent: false,
       warnings: { count: 1, message: expect.stringContaining('invalid') },
       metricBatches: [],
+    });
+  });
+
+  it('exports a closed step with its source ref before the root span closes', async () => {
+    const visualizer = makeVisualizer();
+    visualizer.start(emitter, {
+      runId: 'run-1', feature: 'feature', project: 'project', sourceRef: 'jstoup111/ai-conductor#2000',
+    });
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await (visualizer as unknown as { tracerProvider: { forceFlush: () => Promise<void> } }).tracerProvider.forceFlush();
+
+    const exported = spanExporter.getFinishedSpans();
+    expect(exported.find((span) => span.name === 'build')?.resource.attributes['conductor.source.ref'])
+      .toBe('jstoup111/ai-conductor#2000');
+    expect(exported.some((span) => span.name === 'conductor.run')).toBe(false);
+
+    await visualizer.stop();
+  });
+
+  it('projects terminal and rebase provenance through the visualizer while preserving complete events', async () => {
+    const eventsPath = join(pipelineDir, 'events.jsonl');
+    const persister = new EventPersister(eventsPath, emitter);
+    const visualizer = makeVisualizer();
+    persister.start();
+    visualizer.start(emitter, {
+      runId: 'run-1', feature: 'feature', project: 'project', sourceRef: 'owner/repo#2000',
+    });
+
+    await emitter.emit({ type: 'step_started', step: 'rebase', index: 0 });
+    await emitter.emit({ type: 'rebase_noop', baseSha: 'B1' });
+    await emitter.emit({ type: 'rebase_changed', baseSha: 'B2', changedPaths: [] });
+    await emitter.emit({ type: 'step_completed', step: 'rebase', status: 'done' });
+    await emitter.emit({
+      type: 'feature_complete', headSha: 'H', prUrl: 'https://example.test/pr/1', prDisposition: 'opened',
+    });
+    await visualizer.stop();
+    persister.stop();
+
+    const spans = spanExporter.getFinishedSpans();
+    expect(spans.find((span) => span.name === 'rebase')?.attributes['vcs.base.sha']).toBe('B2');
+    expect(spans.find((span) => span.name === 'conductor.run')?.attributes).toMatchObject({
+      'vcs.head.sha': 'H', 'vcs.base.sha': 'B2', 'conductor.pr.url': 'https://example.test/pr/1',
+      'conductor.pr.disposition': 'opened',
+    });
+    expect(JSON.parse((await readFile(eventsPath, 'utf8')).trim().split('\n').at(-1)!)).toMatchObject({
+      type: 'feature_complete', headSha: 'H', prUrl: 'https://example.test/pr/1', prDisposition: 'opened',
+    });
+  });
+
+  it('retains a rebase base on a halt terminal event after a null rebase base', async () => {
+    const visualizer = makeVisualizer();
+    visualizer.start(emitter, { runId: 'run-1', feature: 'feature', project: 'project' });
+
+    await emitter.emit({ type: 'step_started', step: 'rebase', index: 0 });
+    await emitter.emit({ type: 'rebase_changed', baseSha: 'B', changedPaths: [] });
+    await emitter.emit({ type: 'rebase_changed', baseSha: null, changedPaths: [] });
+    await emitter.emit({ type: 'loop_halt', reason: 'halted' });
+    await visualizer.stop();
+
+    expect(spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')?.attributes['vcs.base.sha'])
+      .toBe('B');
+  });
+
+  it('uses unrecorded PR disposition when stopped without a terminal event', async () => {
+    const visualizer = makeVisualizer();
+    visualizer.start(emitter, { runId: 'run-1', feature: 'feature', project: 'project' });
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await visualizer.stop();
+
+    const run = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')!;
+    expect(run.attributes['conductor.pr.disposition']).toBe('unrecorded');
+    expect(run.attributes).not.toHaveProperty('vcs.head.sha');
+    expect(run.attributes).not.toHaveProperty('conductor.pr.url');
+  });
+
+  it('omits a missing terminal head SHA', async () => {
+    const visualizer = makeVisualizer();
+    visualizer.start(emitter, { runId: 'run-1', feature: 'feature', project: 'project' });
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'feature_complete', prDisposition: 'unrecorded' });
+    await visualizer.stop();
+
+    const run = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')!;
+    expect(run.attributes).not.toHaveProperty('vcs.head.sha');
+  });
+
+  it('omits only VCS span attributes when commit provenance is disabled', async () => {
+    const visualizer = new OtelVisualizer(
+      resolveOtelConfig({
+        otel: {
+          exporter: 'otlp', endpoint: 'http://localhost:4318',
+          provenance: { commit: false, pr: true, issue: true, feature: true },
+        },
+      }, pipelineDir),
+      { spanExporter, metricExporter },
+    );
+    visualizer.start(emitter, {
+      runId: 'run-1', feature: 'feature', project: 'project', sourceRef: 'owner/repo#2000',
+    });
+
+    await emitter.emit({ type: 'step_started', step: 'rebase', index: 0 });
+    await emitter.emit({ type: 'rebase_noop', baseSha: 'B' });
+    await emitter.emit({ type: 'feature_complete', headSha: 'H', baseSha: 'B', prUrl: 'https://example.test/pr/1', prDisposition: 'opened' });
+    await visualizer.stop();
+
+    const run = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')!;
+    const rebase = spanExporter.getFinishedSpans().find((span) => span.name === 'rebase')!;
+    expect(run.attributes).not.toHaveProperty('vcs.head.sha');
+    expect(run.attributes).not.toHaveProperty('vcs.base.sha');
+    expect(run.resource.attributes['conductor.source.ref']).toBe('owner/repo#2000');
+    expect(rebase.attributes).not.toHaveProperty('vcs.base.sha');
+    expect(run.attributes).toMatchObject({
+      'conductor.pr.url': 'https://example.test/pr/1', 'conductor.pr.disposition': 'opened',
+    });
+  });
+
+  it('omits only PR span attributes when PR provenance is disabled', async () => {
+    const visualizer = new OtelVisualizer(
+      resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', provenance: { pr: false } } }, pipelineDir),
+      { spanExporter, metricExporter },
+    );
+    visualizer.start(emitter, { runId: 'run-1', feature: 'feature', project: 'project' });
+    await emitter.emit({ type: 'step_started', step: 'rebase', index: 0 });
+    await emitter.emit({ type: 'rebase_noop', baseSha: 'B' });
+    await emitter.emit({ type: 'feature_complete', headSha: 'H', prUrl: 'https://example.test/pr/1', prDisposition: 'opened' });
+    await visualizer.stop();
+
+    const run = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')!;
+    expect(run.attributes).toMatchObject({ 'vcs.head.sha': 'H', 'vcs.base.sha': 'B' });
+    expect(run.attributes).not.toHaveProperty('conductor.pr.url');
+    expect(run.attributes).not.toHaveProperty('conductor.pr.disposition');
+  });
+
+  it('persists provenance events when every export toggle is disabled', async () => {
+    const eventsPath = join(pipelineDir, 'events.jsonl');
+    const persister = new EventPersister(eventsPath, emitter);
+    const visualizer = new OtelVisualizer(
+      resolveOtelConfig({
+        otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', provenance: { commit: false, pr: false, issue: false, feature: false } },
+      }, pipelineDir),
+      { spanExporter, metricExporter },
+    );
+    persister.start();
+    visualizer.start(emitter, { runId: 'run-1', feature: 'feature', project: 'project' });
+    await emitter.emit({ type: 'step_started', step: 'rebase', index: 0 });
+    await emitter.emit({ type: 'feature_complete', headSha: 'H', baseSha: 'B', prUrl: 'https://example.test/pr/1', prDisposition: 'opened' });
+    await visualizer.stop();
+    persister.stop();
+
+    expect(JSON.parse((await readFile(eventsPath, 'utf8')).trim().split('\n').at(-1)!)).toMatchObject({
+      type: 'feature_complete', headSha: 'H', baseSha: 'B', prUrl: 'https://example.test/pr/1', prDisposition: 'opened',
     });
   });
 

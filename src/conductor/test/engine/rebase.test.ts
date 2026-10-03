@@ -32,6 +32,10 @@ import { classifyGateInvalidation } from '../../src/engine/gate-invalidation.js'
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
+import { readState, writeState } from '../../src/engine/state.js';
+import { Conductor } from '../test-conductor.js';
+import type { ConductState } from '../../src/types/index.js';
+import type { StepRunResult } from '../../src/engine/conductor.js';
 
 // A scripted GitRunner: matches argv prefixes to canned results.
 function fakeGit(
@@ -84,6 +88,35 @@ describe('changedPathsSinceMergeBase (Task 1)', () => {
 });
 
 describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
+  it.each([
+    { name: 'resolved', result: { stdout: 'B-current\n' }, expected: 'B-current' },
+    { name: 'unresolvable', result: { exitCode: 1 }, expected: null },
+  ])('returns a current noop with a $name base tip (Task 5)', async ({ result, expected }) => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-current-base-'));
+    try {
+      const { git } = fakeGit([
+        { match: ['rev-parse', '--is-inside-work-tree'], result: { stdout: 'true\n' } },
+        { match: ['diff', '--name-only', '--diff-filter=U'], result: {} },
+        { match: ['remote'], result: { stdout: '' } },
+        { match: ['rev-parse', 'main'], result },
+        { match: ['rev-list', '--count', 'HEAD..main'], result: { stdout: '0\n' } },
+      ]);
+      const events = new ConductorEventEmitter();
+      const seen: Array<string | null> = [];
+      events.on('rebase_noop', (event) => {
+        seen.push(event.type === 'rebase_noop' ? event.baseSha ?? null : null);
+      });
+
+      const outcome = await performRebase(git, root, 'main', { finishMergeabilityCheck: true });
+      await emitRebaseEvent(events, outcome);
+
+      expect(outcome).toEqual({ kind: 'noop', baseSha: expected });
+      expect(seen).toEqual([expected]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('takes both branches of the markdown classifier: docs/base-only.txt skips, while root base-only.txt rebases', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-'));
     try {
@@ -194,10 +227,12 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         finishMergeabilityCheck: true,
         translateAfterRebase,
       });
+      const baseSha = (await g(['rev-parse', 'main'])).stdout.trim();
 
       const after = await snapshot();
       expect(outcome).toMatchObject({
         kind: 'changed',
+        baseSha,
         changedCodePaths: ['base-only.txt'],
         allChangedPaths: ['base-only.txt'],
       });
@@ -1711,9 +1746,44 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 });
 
 describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
-  it('emits the matching event per outcome', async () => {
+  it('records a resolved base in conductor state without replacing it with a later null (Task 5)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-base-state-'));
+    const statePath = join(root, 'conduct-state.json');
     const events = new ConductorEventEmitter();
-    const seen: string[] = [];
+    const perform = vi.fn()
+      .mockResolvedValueOnce({ kind: 'noop', baseSha: 'B-recorded' })
+      .mockResolvedValueOnce({ kind: 'noop', baseSha: null });
+    const state: ConductState = { manual_test: 'skipped' };
+    try {
+      await writeState(statePath, state);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: { run: async (): Promise<StepRunResult> => ({ success: true }) },
+        events,
+        projectRoot: root,
+        daemon: true,
+        performRebase: perform,
+      });
+      // The normal loop establishes this snapshot before calling the native
+      // seam; seed it here because this focused test invokes that seam directly.
+      (conductor as any).persistedStateSnapshot = { ...state };
+
+      await (conductor as any).runRebaseStep(state);
+      await (conductor as any).runRebaseStep(state);
+
+      await expect(readState(statePath)).resolves.toMatchObject({
+        ok: true,
+        value: { rebase_base_sha: 'B-recorded' },
+      });
+      expect(state.rebase_base_sha).toBe('B-recorded');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('emits the resolved base for every rebase outcome that carries one (Task 5)', async () => {
+    const events = new ConductorEventEmitter();
+    const seen: Array<{ type: string; baseSha?: string | null }> = [];
     let conflictHalt: { step?: string } | undefined;
     for (const t of [
       'rebase_noop',
@@ -1723,24 +1793,30 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
       'rebase_untracked_quarantined',
     ] as const) {
       events.on(t, (e) => {
-        seen.push(e.type);
+        seen.push('baseSha' in e
+          ? { type: e.type, baseSha: e.baseSha }
+          : { type: e.type });
         if (e.type === 'rebase_conflict_halt') conflictHalt = e;
       });
     }
-    await emitRebaseEvent(events, { kind: 'noop' });
+    await emitRebaseEvent(events, { kind: 'noop', baseSha: 'B-current' });
     await emitRebaseEvent(events, {
       kind: 'mergeable_skip',
       baseRef: 'origin/main',
       baseSha: 'c6839018bf47',
       baseKind: 'remote',
     });
-    await emitRebaseEvent(events, { kind: 'changed', changedCodePaths: ['src/a.ts'] });
+    await emitRebaseEvent(events, {
+      kind: 'changed', changedCodePaths: ['src/a.ts'], baseSha: 'B-changed',
+    });
+    await emitRebaseEvent(events, { kind: 'noop', baseSha: null });
     await emitRebaseEvent(events, { kind: 'conflict_halt', conflicts: ['x'], reason: 'r' });
     expect(seen).toEqual([
-      'rebase_noop',
-      'rebase_mergeable_skip',
-      'rebase_changed',
-      'rebase_conflict_halt',
+      { type: 'rebase_noop', baseSha: 'B-current' },
+      { type: 'rebase_mergeable_skip', baseSha: 'c6839018bf47' },
+      { type: 'rebase_changed', baseSha: 'B-changed' },
+      { type: 'rebase_noop', baseSha: null },
+      { type: 'rebase_conflict_halt' },
     ]);
     expect(conflictHalt).toMatchObject({ step: 'rebase' });
   });

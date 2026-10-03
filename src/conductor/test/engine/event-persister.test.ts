@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readFile } from 'fs/promises';
 import { join } from 'path';
@@ -11,7 +11,9 @@ import {
 } from '../../src/engine/event-persister.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import type { ConductorEvent, ExecutionContext, ProviderAttemptEvent } from '../../src/types/index.js';
+import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
+import type { MetricsRecorder } from '../../src/engine/otel/metrics.js';
+import type { ConductorEvent, ExecutionContext, ProviderAttemptEvent, RunPrDisposition } from '../../src/types/index.js';
 
 describe('EventPersister', () => {
   let tempDir: string;
@@ -154,6 +156,39 @@ describe('EventPersister', () => {
         activeInterval: { startedAtMs: 1_000, durationMs: 25 },
       },
     ]);
+  });
+
+  it('replays legacy terminal and rebase records without dropping them from persistence or metrics', async () => {
+    const onRunClose = vi.fn();
+    const metrics = new MetricsListener({
+      forFeature: vi.fn(() => ({ onRunClose })),
+    } as unknown as MetricsRecorder, () => 1_000, 'legacy');
+    const legacyRecords = [
+      { type: 'feature_complete', featureDesc: 'legacy feature' },
+      { type: 'loop_halt', reason: 'legacy halt' },
+      { type: 'rebase_noop' },
+      { type: 'rebase_changed', changedPaths: ['src/legacy.ts'] },
+    ] as const;
+    const knownDisposition: RunPrDisposition = 'opened';
+    expect(knownDisposition).toBe('opened');
+    const observed: ConductorEvent[] = [];
+    for (const { type } of legacyRecords) emitter.on(type, (event) => { observed.push(event); });
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+    metrics.start(emitter);
+
+    await expect(Promise.all(legacyRecords.map((record) => emitter.emit(record as ConductorEvent)))).resolves.toEqual([undefined, undefined, undefined, undefined]);
+
+    metrics.stop();
+    persister.stop();
+
+    const records = (await readFile(eventsPath, 'utf-8')).trim().split('\n').map((line) => {
+      const { ts: _ts, ...record } = JSON.parse(line);
+      return record;
+    });
+    expect(observed).toEqual(legacyRecords);
+    expect(records).toEqual(legacyRecords.filter(({ type }) => type !== 'rebase_noop'));
+    expect(onRunClose).toHaveBeenCalledOnce();
   });
 
   it('persists BUILD member settle decisions declared for operator observability', async () => {

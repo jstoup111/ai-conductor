@@ -601,6 +601,9 @@ describe('event sink subscriptions', () => {
       'gate_verdict',
       'kickback',
       'loop_halt',
+      'rebase_noop',
+      'rebase_mergeable_skip',
+      'rebase_changed',
     ] satisfies Array<ConductorEvent['type']>;
     const otel = [
       'daemon_backlog_snapshot',
@@ -626,6 +629,9 @@ describe('event sink subscriptions', () => {
       'gate_verdict',
       'kickback',
       'loop_halt',
+      'rebase_noop',
+      'rebase_mergeable_skip',
+      'rebase_changed',
     ] satisfies Array<ConductorEvent['type']>;
 
     expect(otelEventTypes()).toEqual(otel);

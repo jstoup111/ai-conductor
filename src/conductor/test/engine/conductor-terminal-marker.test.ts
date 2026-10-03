@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:3, task:4
 /**
  * Tests for the daemon terminal-marker guarantee in Conductor.run().
  *
@@ -136,6 +136,206 @@ describe('conductor/terminal-marker-guarantee', () => {
     expect(completed).toBe(true);
     expect(await exists(join(dir, '.pipeline/DONE'))).toBe(true);
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(false);
+  });
+
+  it('stamps the completed feature event with HEAD, rebase base, and opened PR provenance', async () => {
+    const state: ConductState = {
+      rebase_base_sha: 'B',
+      pr_url: 'https://github.com/acme/project/pull/42',
+    };
+    await writeState(statePath, state);
+
+    let completed: Record<string, unknown> | undefined;
+    events.on('feature_complete', (event) => {
+      completed = { ...event };
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      daemon: true,
+      git: async () => ({ exitCode: 0, stdout: 'H\n', stderr: '' }),
+    });
+
+    await (conductor as unknown as {
+      completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
+    }).completeRun(state, 'complete\n');
+
+    expect(completed).toMatchObject({
+      type: 'feature_complete',
+      headSha: 'H',
+      baseSha: 'B',
+      prUrl: 'https://github.com/acme/project/pull/42',
+      prDisposition: 'opened',
+    });
+  });
+
+  it('records none and omits prUrl when finish chose keep without a PR', async () => {
+    const state: ConductState = {};
+    await writeState(statePath, state);
+    await writeFile(join(dir, '.pipeline/finish-choice'), 'keep\n');
+
+    let completed: Record<string, unknown> | undefined;
+    events.on('feature_complete', (event) => {
+      completed = { ...event };
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      git: async () => ({ exitCode: 0, stdout: 'H\n', stderr: '' }),
+    });
+
+    await (conductor as unknown as {
+      completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
+    }).completeRun(state, 'complete\n');
+
+    expect(completed).toMatchObject({ type: 'feature_complete', prDisposition: 'none' });
+    expect(completed).not.toHaveProperty('prUrl');
+  });
+
+  it('still emits completion and writes DONE when HEAD provenance cannot resolve', async () => {
+    const state: ConductState = {};
+    await writeState(statePath, state);
+
+    let completed: Record<string, unknown> | undefined;
+    events.on('feature_complete', (event) => {
+      completed = { ...event };
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      daemon: true,
+      git: async () => ({ exitCode: 1, stdout: '', stderr: 'unavailable' }),
+    });
+
+    await (conductor as unknown as {
+      completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
+    }).completeRun(state, 'complete\n');
+
+    expect(completed).toMatchObject({ type: 'feature_complete', prDisposition: 'unrecorded' });
+    expect(completed).not.toHaveProperty('headSha');
+    expect(await exists(join(dir, '.pipeline/DONE'))).toBe(true);
+  });
+
+  it('omits baseSha when no rebase base was recorded', async () => {
+    const state: ConductState = {};
+    await writeState(statePath, state);
+
+    let completed: Record<string, unknown> | undefined;
+    events.on('feature_complete', (event) => {
+      completed = { ...event };
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      git: async () => ({ exitCode: 0, stdout: 'H\n', stderr: '' }),
+    });
+
+    await (conductor as unknown as {
+      completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
+    }).completeRun(state, 'complete\n');
+
+    expect(completed).toMatchObject({ type: 'feature_complete', headSha: 'H' });
+    expect(completed).not.toHaveProperty('baseSha');
+  });
+
+  it('stamps a loop halt with HEAD, rebase base, and opened PR provenance', async () => {
+    const state: ConductState = {
+      rebase_base_sha: 'B',
+    };
+    let halted: Record<string, unknown> | undefined;
+    events.on('loop_halt', (event) => {
+      halted = { ...event };
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      git: async () => ({ exitCode: 0, stdout: 'H\n', stderr: '' }),
+    });
+    (conductor as unknown as { haltState: ConductState }).haltState = state;
+
+    await (conductor as unknown as {
+      emitLoopHalt(reason: string, prUrl?: string): Promise<void>;
+    }).emitLoopHalt('halted', 'https://github.com/acme/project/pull/42');
+
+    expect(halted).toMatchObject({
+      type: 'loop_halt',
+      headSha: 'H',
+      baseSha: 'B',
+      prUrl: 'https://github.com/acme/project/pull/42',
+      prDisposition: 'opened',
+    });
+  });
+
+  it('uses the halting state PR URL when a halt caller provides none', async () => {
+    const state: ConductState = { pr_url: 'https://github.com/acme/project/pull/42' };
+    let halted: Record<string, unknown> | undefined;
+    events.on('loop_halt', (event) => {
+      halted = { ...event };
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      git: async () => ({ exitCode: 0, stdout: 'H\n', stderr: '' }),
+    });
+    (conductor as unknown as { haltState: ConductState }).haltState = state;
+
+    await (conductor as unknown as { emitLoopHalt(reason: string): Promise<void> }).emitLoopHalt('halted');
+
+    expect(halted).toMatchObject({
+      type: 'loop_halt',
+      prUrl: 'https://github.com/acme/project/pull/42',
+      prDisposition: 'opened',
+    });
+  });
+
+  it('records unrecorded and omits prUrl on a loop halt with no PR or keep choice', async () => {
+    let halted: Record<string, unknown> | undefined;
+    events.on('loop_halt', (event) => {
+      halted = { ...event };
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      git: async () => ({ exitCode: 0, stdout: 'H\n', stderr: '' }),
+    });
+
+    await (conductor as unknown as { emitLoopHalt(reason: string): Promise<void> }).emitLoopHalt('halted');
+
+    expect(halted).toMatchObject({ type: 'loop_halt', prDisposition: 'unrecorded' });
+    expect(halted).not.toHaveProperty('prUrl');
+  });
+
+  it('omits baseSha on a loop halt when no rebase base was recorded', async () => {
+    let halted: Record<string, unknown> | undefined;
+    events.on('loop_halt', (event) => {
+      halted = { ...event };
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      git: async () => ({ exitCode: 0, stdout: 'H\n', stderr: '' }),
+    });
+
+    await (conductor as unknown as { emitLoopHalt(reason: string): Promise<void> }).emitLoopHalt('halted');
+
+    expect(halted).not.toHaveProperty('baseSha');
   });
 
   it('daemon: run-scoped breadcrumb records the last-advanced step and loop exit index', async () => {

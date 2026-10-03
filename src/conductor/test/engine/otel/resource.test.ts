@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:4, task:11
+// Covers: task:1, task:2, task:4, task:8, task:11
 /**
  * T7: buildResource(ctx) — OTel Resource builder.
  * FR-6: service.name, conductor.run.id, conductor.feature, conductor.project.
@@ -8,6 +8,7 @@ import { mkdtemp, readFile, rm, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { buildResource } from '../../../src/engine/otel/resource.js';
+import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 
 describe('buildResource', () => {
   let tempDir: string;
@@ -37,6 +38,52 @@ describe('buildResource', () => {
   it('resource carries conductor.project', () => {
     const resource = buildResource({ pipelineDir, feature: 'my-feature', project: 'my-project' });
     expect(resource.attributes['conductor.project']).toBe('my-project');
+  });
+
+  it('adds a non-empty source ref to traces when issue provenance defaults to enabled', () => {
+    const resolved = resolveOtelConfig({ otel: { exporter: 'file' } }, pipelineDir);
+    if (!resolved.enabled) throw new Error('test OTel config must resolve');
+    const resource = buildResource({
+      pipelineDir,
+      feature: 'my-feature',
+      project: 'my-project',
+      sourceRef: 'jstoup111/ai-conductor#2000',
+      provenance: resolved.provenance,
+    });
+
+    expect(resource.attributes['conductor.source.ref']).toBe('jstoup111/ai-conductor#2000');
+  });
+
+  it.each([
+    ['empty source ref', '', { issue: true, feature: true }],
+    ['disabled issue provenance', 'jstoup111/ai-conductor#2000', { issue: false, feature: true }],
+  ])('does not add a source ref for %s', (_caseName, sourceRef, provenance) => {
+    const resource = buildResource({ pipelineDir, sourceRef, provenance });
+
+    expect(resource.attributes['conductor.source.ref']).toBeUndefined();
+  });
+
+  it('keeps source refs out of metric resources', () => {
+    const resource = buildResource({
+      pipelineDir,
+      sourceRef: 'jstoup111/ai-conductor#2000',
+      provenance: { issue: true, feature: true },
+    }, 'metrics');
+
+    expect(resource.attributes['conductor.source.ref']).toBeUndefined();
+  });
+
+  it('uses project/run identity and omits conductor.feature when feature provenance is disabled', () => {
+    const resource = buildResource({
+      pipelineDir,
+      projectName: 'project-a',
+      feature: 'feature-a',
+      runId: 'run-1',
+      provenance: { issue: true, feature: false },
+    });
+
+    expect(resource.attributes).toMatchObject({ 'service.instance.id': 'project-a/run-1' });
+    expect(resource.attributes['conductor.feature']).toBeUndefined();
   });
 
   it('resource carries a non-empty conductor.run.id', () => {
