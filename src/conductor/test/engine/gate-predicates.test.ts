@@ -423,7 +423,7 @@ describe('engine/artifacts — prd_audit predicate (per-attempt verdict freshnes
       },
       diagnostics: [],
       recordedDispositions: [],
-    }, { attemptId: 'fixture-run', codeStamp: null });
+    }, { attemptId: 'fixture-run', codeStamp: 'fixture-head' });
     return join(dir, '.pipeline/prd-audit.json');
   }
 
@@ -486,7 +486,7 @@ describe('engine/artifacts — verdict-freshness floor regression/fallback', () 
       },
       diagnostics: [],
       recordedDispositions: [],
-    }, { attemptId: 'fixture-run', codeStamp: null });
+    }, { attemptId: 'fixture-run', codeStamp: 'fixture-head' });
     return join(dir, '.pipeline/prd-audit.json');
   }
   async function buildReviewPass() {

@@ -124,7 +124,7 @@ describe('verdict retry-input identity reader', () => {
           },
           diagnostics: [],
           recordedDispositions: [],
-        }, { attemptId: options?.runId ?? 'missing-run-id', codeStamp: null });
+        }, { attemptId: options?.runId ?? 'missing-run-id', codeStamp: 'fixture-head' });
         // The legacy sidecar must not regain authority when gate-code validity
         // is disabled: only the typed verdict's current attempt may complete.
         await writeFile(

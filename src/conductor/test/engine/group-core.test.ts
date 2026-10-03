@@ -596,6 +596,9 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
             },
           },
           sessionStore: sessions,
+          gitRunner: async (args) => args[0] === 'rev-parse' && args[1] === 'HEAD'
+            ? { exitCode: 0, stdout: 'fixture-head\n', stderr: '' }
+            : { exitCode: 1, stdout: '', stderr: 'unexpected git command' },
           providerRuntimes: new ProviderRuntimeSet([
             {
               key: "claude",
