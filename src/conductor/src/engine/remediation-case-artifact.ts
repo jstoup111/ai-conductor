@@ -141,11 +141,34 @@ export type RemediationCaseArtifactRejection =
 
 export type ReadRemediationCaseJudgementResult =
   | { readonly ok: true; readonly judgement: RemediationCaseJudgement }
-  | { readonly ok: false; readonly reason: RemediationCaseArtifactRejection };
+  | {
+    readonly ok: false;
+    readonly reason: RemediationCaseArtifactRejection;
+    /** Identities declared by a parser-rejected case-v2 row, when available. */
+    readonly caseIds?: readonly string[];
+    readonly sourceIds?: readonly string[];
+  };
+
+/** A parser rejection that must retain typed evidence at the coordinator boundary. */
+export class RemediationCaseJudgementRejectedError extends Error {
+  constructor(
+    readonly reason: RemediationCaseArtifactRejection,
+    readonly caseIds: readonly string[],
+    readonly sourceIds: readonly string[],
+  ) {
+    super(reason);
+    this.name = 'RemediationCaseJudgementRejectedError';
+  }
+}
 
 type ParseResult<T> =
   | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly reason: RemediationCaseArtifactRejection };
+  | {
+    readonly ok: false;
+    readonly reason: RemediationCaseArtifactRejection;
+    readonly caseIds?: readonly string[];
+    readonly sourceIds?: readonly string[];
+  };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -286,6 +309,13 @@ function parseCaseRow(value: unknown, mode: RemediationCaseJudgement['mode']): P
       ? ['caseRef', 'disposition', 'priority', 'rationale', 'confidence', 'effect', 'escalation']
       : ['caseRef', 'disposition', 'priority', 'rationale', 'confidence', 'effect'];
   const optionalKeys = mode === 'case-v2' ? ['existingCaseId', 'distinctFrom'] : ['existingCaseId'];
+  if (mode === 'case-v2' && isBoundedString(value.caseRef, MAX_REFERENCE_LENGTH) &&
+    isBoundedString(value.existingCaseId, MAX_REFERENCE_LENGTH) && Array.isArray(value.distinctFrom) &&
+    value.distinctFrom.length > 0 && value.distinctFrom.length <= MAX_CASE_ROWS &&
+    value.distinctFrom.every((id) => isBoundedString(id, MAX_REFERENCE_LENGTH)) &&
+    new Set(value.distinctFrom).size === value.distinctFrom.length) {
+    return { ok: false, reason: 'invalid-case-keys', caseIds: [value.existingCaseId, ...value.distinctFrom] };
+  }
   if (!hasRequiredAndOptionalKeys(value, requiredKeys, optionalKeys) ||
     !isBoundedString(value.caseRef, MAX_REFERENCE_LENGTH) ||
     (value.existingCaseId !== undefined && !isBoundedString(value.existingCaseId, MAX_REFERENCE_LENGTH)) ||
@@ -360,7 +390,16 @@ function parseRemediationCaseJudgement(value: unknown): ParseResult<RemediationC
   const cases: RemediationCaseRow[] = [];
   for (const judgement of value.cases) {
     const parsed = parseCaseRow(judgement, mode);
-    if (!parsed.ok) return parsed;
+    if (!parsed.ok) {
+      return parsed.caseIds
+        ? {
+          ...parsed,
+          sourceIds: sourceOutcomes
+            .filter((source) => isRecord(judgement) && source.caseRef === judgement.caseRef)
+            .map((source) => source.sourceId),
+        }
+        : parsed;
+    }
     cases.push(parsed.value);
   }
   if (mode === 'case-v1') return { ok: true, value: { mode, domain: 'build_review', sourceOutcomes, cases } };

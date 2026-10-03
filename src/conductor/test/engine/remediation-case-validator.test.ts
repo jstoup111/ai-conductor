@@ -461,7 +461,12 @@ describe('remediation case graph validator', () => {
         } as RemediationCaseJudgement;
         expect(validateRemediationCaseGraph(
           [DISTINCT_SOURCE_ID], refute, references,
-        )).toEqual({ ok: false, reason: 'refute-without-binding' });
+        )).toEqual({
+          ok: false,
+          reason: 'refute-without-binding',
+          caseIds: [RESOLVED_ACTION_CASE.id],
+          sourceIds: [DISTINCT_SOURCE_ID],
+        });
       });
     });
 

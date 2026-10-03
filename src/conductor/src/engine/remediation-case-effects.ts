@@ -44,7 +44,13 @@ type DeferralCase = RemediationCaseRecord & {
 };
 
 export type PersistBuildReviewDecisionStopResult =
-  | { readonly ok: true; readonly status: 'persisted' | 'already-persisted'; readonly caseId: string }
+  | {
+    readonly ok: true;
+    readonly status: 'persisted' | 'already-persisted';
+    readonly caseId: string;
+    /** Existing open owners atomically resolved by this decision stop. */
+    readonly supersededCaseIds: readonly string[];
+  }
   | { readonly ok: false; readonly reason: 'invalid-decision-stop' | 'conflicting-case-id' | `case store ${string}` }
   | { readonly ok: false; readonly reason: 'rejected-transition'; readonly caseIds: readonly string[]; readonly sourceIds: readonly string[] }
   | { readonly ok: false; readonly reason: 'malformed-state' };
@@ -89,13 +95,34 @@ export async function persistBuildReviewDecisionStop(input: {
     if (existing) {
       return {
         value: sameDecisionStop(existing, input.record)
-          ? { ok: true as const, status: 'already-persisted' as const, caseId: existing.id }
+          ? { ok: true as const, status: 'already-persisted' as const, caseId: existing.id, supersededCaseIds: [] }
           : { ok: false as const, reason: 'conflicting-case-id' as const },
       };
     }
+    const stopSourceIds = new Set(input.record.sources.map((source) => source.sourceId));
+    const superseded = state.cases.filter((record) => record.id !== input.record.id && record.domain === 'build_review' &&
+      isOpenRemediationCase(record) && record.sources.some((source) => stopSourceIds.has(source.sourceId)));
+    const supersededCaseIds = superseded.map((record) => record.id);
     return {
-      value: { ok: true as const, status: 'persisted' as const, caseId: input.record.id },
-      nextState: { ...state, cases: [...state.cases, input.record] },
+      value: { ok: true as const, status: 'persisted' as const, caseId: input.record.id, supersededCaseIds },
+      nextState: {
+        ...state,
+        cases: [
+          ...state.cases.map((record) => {
+            if (!supersededCaseIds.includes(record.id)) return record;
+            const effect = record.effect.kind !== 'none' && record.effect.status === 'reserved'
+              ? {
+                id: record.effect.id,
+                kind: record.effect.kind,
+                status: 'failed' as const,
+                diagnostic: `superseded by decision stop ${input.record.id}`,
+              }
+              : record.effect;
+            return { ...record, resolution: 'resolved' as const, effect };
+          }),
+          input.record,
+        ],
+      },
     };
   });
   if (mutation.ok) return mutation.value;

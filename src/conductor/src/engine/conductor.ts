@@ -68,7 +68,7 @@ import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
-import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
+import { RemediationCaseJudgementRejectedError, readRemediationCaseJudgement } from './remediation-case-artifact.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import type { BuildReviewFinding } from './build-review-domain.js';
 import { planContractPointers, priorAttemptPointers, readActivePlanPath } from './remediation-context-pointers.js';
@@ -12921,7 +12921,13 @@ export class Conductor {
                       });
                       if (!dispatched.success) throw new Error('remediate dispatch failed');
                       const judgement = await readRemediationCaseJudgement(this.projectRoot, state.session_started_at);
-                      if (!judgement.ok) throw new Error(judgement.reason);
+                      if (!judgement.ok) {
+                        throw new RemediationCaseJudgementRejectedError(
+                          judgement.reason,
+                          judgement.caseIds ?? [],
+                          judgement.sourceIds ?? [],
+                        );
+                      }
                       return judgement.judgement;
                     },
                     // Task 18 Done-when 4: the deferral path is only reachable

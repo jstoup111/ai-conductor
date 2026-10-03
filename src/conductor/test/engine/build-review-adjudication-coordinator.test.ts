@@ -10,7 +10,7 @@ import { persistBuildReviewSuppressions } from '../../src/engine/build-review-su
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
-import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
+import { RemediationCaseJudgementRejectedError, type RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
@@ -860,6 +860,23 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events).toEqual(['remediation_adjudication_started', 'remediation_adjudication_failed']);
   });
 
+  it('preserves typed parser rejection evidence from the remediation judge', async () => {
+    const root = await projectRoot();
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => {
+        throw new RemediationCaseJudgementRejectedError('invalid-case-keys', ['case-existing', 'case-distinct'], [sourceId]);
+      }),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toEqual({ ok: false, detail: expect.stringMatching(/persisted case history is valid; failure kind: invalid-judgement/) });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'invalid-judgement',
+      caseIds: ['case-existing', 'case-distinct'], sourceIds: [sourceId],
+    }));
+  });
+
   it('records validator rejection evidence while confirming persisted history remains valid', async () => {
     const root = await projectRoot();
     const events: RemediationCaseLifecycleEvent[] = [];
@@ -1018,7 +1035,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     }
   });
 
-  it('records both unresolved owners when an unbound escalation stop is rejected by the store', async () => {
+  it('supersedes an unresolved action owner when an unbound escalation stop owns its source', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
     await seedCases(store, {
@@ -1049,17 +1066,20 @@ describe('coordinateBuildReviewAdjudication', () => {
       emit: async (event) => { events.push(event); },
     });
 
-    expect(result).toEqual({
-      ok: false,
-      detail: expect.stringMatching(/persisted case history is valid; failure kind: rejected-transition/),
-    });
-    expect(events).toContainEqual(expect.objectContaining({
-      type: 'remediation_adjudication_failed', failureKind: 'rejected-transition',
-      caseIds: ['case-current-owner', 'case-escalation-stop'], sourceIds: [sourceId],
-    }));
+    expect(result).toMatchObject({ ok: true, route: 'halt' });
+    const persisted = JSON.parse(await readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8')) as RemediationCaseStoreState;
+    expect(persisted.cases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'case-current-owner', resolution: 'resolved', effect: {
+        id: 'effect-current-owner', kind: 'action', status: 'failed', diagnostic: 'superseded by decision stop case-escalation-stop',
+      } }),
+      expect.objectContaining({ id: 'case-escalation-stop', resolution: 'open' }),
+    ]));
+    expect(persisted.cases.filter((record) => record.resolution === 'open')).toEqual([expect.objectContaining({ id: 'case-escalation-stop' })]);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'remediation_case_reconciled', caseId: 'case-current-owner', resolution: 'resolved' }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
   });
 
-  it('records both unresolved owners when the synthetic consistency stop is rejected by the store', async () => {
+  it('supersedes an unresolved action owner when a blocked consistency stop owns its source', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
     await seedCases(store, {
@@ -1090,14 +1110,17 @@ describe('coordinateBuildReviewAdjudication', () => {
       emit: async (event) => { events.push(event); },
     });
 
-    expect(result).toEqual({
-      ok: false,
-      detail: expect.stringMatching(/persisted case history is valid; failure kind: rejected-transition/),
-    });
-    expect(events).toContainEqual(expect.objectContaining({
-      type: 'remediation_adjudication_failed', failureKind: 'rejected-transition',
-      caseIds: ['case-current-owner', 'consistency-stop-lap-1'], sourceIds: [sourceId],
-    }));
+    expect(result).toMatchObject({ ok: true, route: 'halt' });
+    const persisted = JSON.parse(await readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8')) as RemediationCaseStoreState;
+    expect(persisted.cases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'case-current-owner', resolution: 'resolved', effect: {
+        id: 'effect-current-owner', kind: 'action', status: 'failed', diagnostic: 'superseded by decision stop consistency-stop-lap-1',
+      } }),
+      expect.objectContaining({ id: 'consistency-stop-lap-1', resolution: 'open' }),
+    ]));
+    expect(persisted.cases.filter((record) => record.resolution === 'open')).toEqual([expect.objectContaining({ id: 'consistency-stop-lap-1' })]);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'remediation_case_reconciled', caseId: 'case-current-owner', resolution: 'resolved' }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
   });
 
   it('makes a blocked non-action judgement persist only its durable consistency stop', async () => {

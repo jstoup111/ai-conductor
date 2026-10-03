@@ -251,7 +251,22 @@ export function validateRemediationCaseGraph(
       return { ok: false, reason: 'unknown-existing-case' };
     }
     const effectError = validateEffect(caseRow, judgement, references);
-    if (effectError) return { ok: false, reason: effectError };
+    if (effectError) {
+      // An unbound refute still wins over distinctFrom validation, but unlike
+      // other scalar effect failures it carries a rejected declaration. Keep
+      // that declaration's durable and source identities on the event path.
+      if (effectError === 'refute-without-binding' && caseRow.distinctFrom) {
+        return {
+          ok: false,
+          reason: effectError,
+          caseIds: [...caseRow.distinctFrom],
+          sourceIds: judgement.sourceOutcomes
+            .filter((source) => source.caseRef === caseRow.caseRef)
+            .map((source) => source.sourceId),
+        };
+      }
+      return { ok: false, reason: effectError };
+    }
 
     const prior = casesByRef.get(caseRow.caseRef);
     if (prior) {

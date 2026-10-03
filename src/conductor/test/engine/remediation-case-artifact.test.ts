@@ -151,8 +151,19 @@ describe('remediation case artifact', () => {
     await expect(read(judgement)).resolves.toEqual({ ok: true, judgement });
   });
 
+  it('retains declared case and source ids when rejecting both existingCaseId and distinctFrom', async () => {
+    await expect(read({
+      ...CASE_V2,
+      cases: [{ ...CASE_V2.cases[0], distinctFrom: ['remcase-resolved-a'] }],
+    })).resolves.toEqual({
+      ok: false,
+      reason: 'invalid-case-keys',
+      caseIds: ['remcase-existing-repair', 'remcase-resolved-a'],
+      sourceIds: ['customA:finding-1', 'customB:finding-2'],
+    });
+  });
+
   it.each([
-    ['both existingCaseId and distinctFrom', { ...CASE_V2.cases[0], distinctFrom: ['remcase-resolved-a'] }],
     ['an empty distinctFrom list', (({ existingCaseId: _existingCaseId, ...row }) => ({ ...row, distinctFrom: [] }))(CASE_V2.cases[0])],
     ['duplicate ids in distinctFrom', (({ existingCaseId: _existingCaseId, ...row }) => ({ ...row, distinctFrom: ['remcase-resolved-a', 'remcase-resolved-a'] }))(CASE_V2.cases[0])],
   ])('rejects a case-v2 row carrying %s', async (_description, row) => {

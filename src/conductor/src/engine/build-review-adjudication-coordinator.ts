@@ -17,7 +17,7 @@ import { authorizeBuildReviewRemediationActionEffects, orderBuildReviewActionCas
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop } from './remediation-case-effects.js';
-import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
+import { RemediationCaseJudgementRejectedError, type RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds } from './build-review-work-order.js';
@@ -571,7 +571,15 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${freshContext.stop.code}`, { settleAbsentAttempted: true });
   await input.emit?.({ type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId });
   let judgement: RemediationCaseJudgement;
-  try { judgement = await input.judge(freshContext.context); } catch { return failUnlessAccepted('remediate judgement failed', { settleAbsentAttempted: true }); }
+  try { judgement = await input.judge(freshContext.context); } catch (error) {
+    if (error instanceof RemediationCaseJudgementRejectedError) {
+      return failUnlessAccepted(`invalid remediation judgement ${error.reason}`, {
+        settleAbsentAttempted: true,
+        failureEvidence: { failureKind: 'invalid-judgement', caseIds: error.caseIds, sourceIds: error.sourceIds },
+      });
+    }
+    return failUnlessAccepted('remediate judgement failed', { settleAbsentAttempted: true });
+  }
   // The context, not the judge, selects the case contract.  A custom lap's
   // case-v2 consistency decision and admission evidence cannot be shed by
   // answering in the older mode, whose acts would all be authorized.
@@ -738,6 +746,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // map itself. Deriving it here from array positions could not see a replayed
   // judgement converging on an already-stamped case.
   const caseIdsByRef = new Map(reconciled.caseIdsByRef);
+  const supersededDecisionStopCaseIds: string[] = [];
   let persistedConsistencyStop = false;
   for (const proposed of escalationCases) {
     const caseId = proposed.case.existingCaseId ?? generateId();
@@ -759,6 +768,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
         : undefined);
     persistedConsistencyStop ||= ownsBlockedConsistency;
+    supersededDecisionStopCaseIds.push(...persistedStop.supersededCaseIds);
     caseIdsByRef.set(proposed.case.caseRef, persistedStop.caseId);
   }
   if (blockedConsistency && !persistedConsistencyStop) {
@@ -778,6 +788,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       : persistedStop.reason === 'malformed-state'
         ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
         : undefined);
+    supersededDecisionStopCaseIds.push(...persistedStop.supersededCaseIds);
   }
   const durableState = await store.read();
   if (!durableState.ok) return fail(`case store ${durableState.reason}`);
@@ -788,7 +799,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // case absent from this lap's admitted graph is resolved by reconciliation
   // and named by no `caseRef`, so iterating the ref map alone changed durable
   // state with nothing on the event spine.
-  for (const caseId of [...caseIdsByRef.values(), ...reconciled.resolvedAbsentCaseIds]) {
+  for (const caseId of [...caseIdsByRef.values(), ...reconciled.resolvedAbsentCaseIds, ...supersededDecisionStopCaseIds]) {
     if (emittedCaseIds.has(caseId)) continue;
     emittedCaseIds.add(caseId);
     const record = reconciledCasesById.get(caseId);
