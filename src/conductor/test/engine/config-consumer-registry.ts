@@ -217,6 +217,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'otel.project_name': consumer(OTEL_CONFIG),
   'otel.worker_name': consumer(OTEL_CONFIG),
   'otel.attributes': consumer(OTEL_CONFIG),
+  'otel.provenance': consumer(OTEL_CONFIG),
   'build_review.enabled': consumer(RESOLVED_CONFIG),
   'build_review.perTaskFloor': none(
     'retired rubric-container knob: validateConfig warns and deletes it before resolution, so no resolved config ever carries it (adr-2026-08-22-build-review-opt-in-rubric-container)',

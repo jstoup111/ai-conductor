@@ -257,6 +257,14 @@ export interface OtelHeaderEnvironmentReference {
   env: string;
 }
 
+/** Toggles for provenance fields exported with OpenTelemetry traces. */
+export interface OtelProvenanceConfig {
+  commit?: boolean;
+  pr?: boolean;
+  issue?: boolean;
+  feature?: boolean;
+}
+
 /**
  * OpenTelemetry exporter configuration. When present in HarnessConfig, the
  * OTel visualizer plugin is constructed and attached to the event bus.
@@ -279,6 +287,8 @@ export interface OtelConfig {
   worker_name?: string;
   /** Static attributes carried on every exported telemetry signal. */
   attributes?: Record<string, string>;
+  /** Trace provenance fields to export. All fields default to true. */
+  provenance?: OtelProvenanceConfig;
 }
 
 /**
