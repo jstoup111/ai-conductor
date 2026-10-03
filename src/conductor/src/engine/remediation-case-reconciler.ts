@@ -175,7 +175,7 @@ function reconcileState(
       // the judge explicitly declared the new concern distinct.  The durable
       // source link is sufficient bookkeeping; semantic distinction remains
       // the judge's case-v2 declaration, never a prose comparison here.
-      if (caseRow.disposition === 'act' && caseRow.distinctFrom === undefined) {
+      if (caseRow.distinctFrom === undefined) {
         const recurringCaseIds = state.cases
           .filter((record) => record.disposition === 'act' && record.resolution === 'resolved')
           .filter((record) => record.sources.some((link) => sources.some((source) => source.sourceId === link.sourceId)))

@@ -388,23 +388,23 @@ describe('remediation case graph validator', () => {
       });
 
       it.each([
-        ['unknown case', { ...DISTINCT_REFERENCES, priorCases: [], existingCaseIds: [] }, 'unknown-distinct-case'],
+        ['unknown case', { ...DISTINCT_REFERENCES, priorCases: [], existingCaseIds: [] }, 'unknown-distinct-case', 'case-resolved-action'],
         ['open case', {
           ...DISTINCT_REFERENCES,
           priorCases: [{ ...RESOLVED_ACTION_CASE, resolution: 'open' as const }],
-        }, 'invalid-distinct-case'],
+        }, 'invalid-distinct-case', 'case-resolved-action'],
         ['non-action case', {
           ...DISTINCT_REFERENCES,
           priorCases: [{ ...RESOLVED_ACTION_CASE, disposition: 'reject' as const, effect: { kind: 'none' as const } }],
-        }, 'invalid-distinct-case'],
+        }, 'invalid-distinct-case', 'case-resolved-action'],
         ['merged source link', {
           ...DISTINCT_REFERENCES,
           priorCases: [{ ...RESOLVED_ACTION_CASE, sources: [{ ...RESOLVED_ACTION_CASE.sources[0], outcome: 'merged' as const }] }],
-        }, 'invalid-distinct-case'],
-      ] as const)('rejects a declaration naming an invalid distinct %s', (_name, references, reason) => {
+        }, 'invalid-distinct-case', 'case-resolved-action'],
+      ] as const)('rejects a declaration naming an invalid distinct %s', (_name, references, reason, caseId) => {
         expect(validateRemediationCaseGraph(
           [DISTINCT_SOURCE_ID], DISTINCT_JUDGEMENT, references,
-        )).toEqual({ ok: false, reason });
+        )).toEqual({ ok: false, reason, caseIds: [caseId], sourceIds: [DISTINCT_SOURCE_ID] });
       });
 
       it('rejects an omitted resolved action case from the exact declaration', () => {
@@ -412,7 +412,7 @@ describe('remediation case graph validator', () => {
         expect(validateRemediationCaseGraph(
           [DISTINCT_SOURCE_ID], DISTINCT_JUDGEMENT,
           { ...DISTINCT_REFERENCES, existingCaseIds: [RESOLVED_ACTION_CASE.id, second.id], priorCases: [RESOLVED_ACTION_CASE, second] },
-        )).toEqual({ ok: false, reason: 'incomplete-distinct-declaration' });
+        )).toEqual({ ok: false, reason: 'incomplete-distinct-declaration', caseIds: [second.id], sourceIds: [DISTINCT_SOURCE_ID] });
       });
 
       it('rejects a declaration when no resolved case owns one of its sources', () => {
@@ -423,7 +423,22 @@ describe('remediation case graph validator', () => {
         expect(validateRemediationCaseGraph(
           [DISTINCT_SOURCE_ID], DISTINCT_JUDGEMENT,
           { ...DISTINCT_REFERENCES, priorCases: [unrelated] },
-        )).toEqual({ ok: false, reason: 'unnecessary-distinct-declaration' });
+        )).toEqual({ ok: false, reason: 'unnecessary-distinct-declaration', caseIds: [RESOLVED_ACTION_CASE.id], sourceIds: [DISTINCT_SOURCE_ID] });
+      });
+
+      it.each(['defer', 'reject', 'escalate'] as const)('rejects distinctFrom on an unbound non-act %s row', (disposition) => {
+        const effect = disposition === 'defer'
+          ? { kind: 'deferral' as const, exclusionRationale: 'This does not belong in the current plan.' }
+          : { kind: 'none' as const };
+        const outcome = disposition === 'defer' ? 'deferred' : disposition === 'reject' ? 'rejected' : 'escalate';
+        const judgement = {
+          ...DISTINCT_JUDGEMENT,
+          sourceOutcomes: [{ sourceId: DISTINCT_SOURCE_ID, outcome, caseRef: 'case-new' }],
+          cases: [{ ...DISTINCT_JUDGEMENT.cases[0], disposition, effect }],
+        } as RemediationCaseJudgement;
+        expect(validateRemediationCaseGraph(
+          [DISTINCT_SOURCE_ID], judgement, DISTINCT_REFERENCES,
+        )).toEqual({ ok: false, reason: 'invalid-distinct-case', caseIds: [RESOLVED_ACTION_CASE.id], sourceIds: [DISTINCT_SOURCE_ID] });
       });
 
       it.each([

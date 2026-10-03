@@ -887,6 +887,42 @@ describe('coordinateBuildReviewAdjudication', () => {
     }));
   });
 
+  it('records implicated durable cases and declared-row sources for a rejected distinct declaration', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-resolved', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'Resolved anchor.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-resolved', kind: 'action', status: 'applied', workOrderId: 'order-resolved' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const invalid = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'deferred', caseRef: 'case-invalid' }],
+      cases: [{
+        caseRef: 'case-invalid', disposition: 'defer', priority: 'low', confidence: 'high', rationale: 'An invalid declaration.',
+        distinctFrom: ['case-resolved'],
+        effect: { kind: 'deferral', title: 'Track it', body: 'The declaration is invalid.', exclusionRationale: 'It is outside the current plan.' },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['case-invalid'], rationale: 'One row.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => invalid),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toEqual({ ok: false, detail: expect.stringMatching(/invalid remediation judgement invalid-distinct-case/) });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'invalid-judgement',
+      caseIds: ['case-resolved'], sourceIds: [sourceId],
+    }));
+  });
+
   it('records both owners and their source when reconciliation rejects a second unresolved owner', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
