@@ -1655,6 +1655,80 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(judge).toHaveBeenCalledOnce();
   });
 
+  it('keeps a shared source live while its current refutation owner remains open', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [
+        {
+          id: 'case-resolved-anchor', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The original concern was acted on.', resolution: 'resolved',
+          sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+          effect: { id: 'effect-resolved-anchor', kind: 'action', status: 'applied', workOrderId: 'order-resolved-anchor' },
+        },
+        {
+          id: 'case-open-owner', domain: 'build_review', disposition: 'refute', priority: 'high', confidence: 'high',
+          rationale: 'The later concern is still being checked.', resolution: 'open',
+          sources: [{ sourceId, outcome: 'refuted', recordedAt: '2026-10-03T00:00:00.000Z' }], effect: { kind: 'none' },
+          refutation: { claim: 'The later concern is false.', assertions: [{
+            assertion: 'The investigation is not finished.', verdict: 'upheld',
+            evidence: [{ path: 'test/example.test.ts', excerpt: 'fixture' }],
+          }] },
+        },
+      ],
+    });
+    const judge = vi.fn(async (context: unknown) => {
+      expect(context).toMatchObject({ currentFindings: [expect.objectContaining({ sourceId })] });
+      return actionJudgement();
+    });
+
+    await coordinateBuildReviewAdjudication(input(root, judge));
+
+    expect(judge).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['a finalized deferral', {
+      id: 'effect-distinct', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/distinct',
+    }, 'defer', 'deferred'],
+    ['a refutation with no residual effect', { kind: 'none' }, 'refute', 'refuted'],
+    ['a refutation with an applied residual deferral', {
+      id: 'effect-residual', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/residual',
+    }, 'refute', 'refuted'],
+  ] as const)('settles a shared source after %s without a regression halt', async (_description, effect, disposition, outcome) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [
+        {
+          id: 'case-resolved-anchor', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The original concern was acted on.', resolution: 'resolved',
+          sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+          effect: { id: 'effect-resolved-anchor', kind: 'action', status: 'applied', workOrderId: 'order-resolved-anchor' },
+        },
+        {
+          id: 'case-distinct', domain: 'build_review', disposition, priority: 'high', confidence: 'high',
+          rationale: 'The later concern has a finalized disposition.', resolution: 'resolved', distinctFrom: ['case-resolved-anchor'],
+          sources: [{ sourceId, outcome, recordedAt: '2026-10-03T00:00:00.000Z' }], effect,
+          ...(disposition === 'refute' ? { refutation: { claim: 'The later concern is false.', assertions: [{
+            assertion: 'The inspected behavior is present.', verdict: 'refuted' as const,
+            evidence: [{ path: 'test/example.test.ts', excerpt: 'fixture' }],
+          }] } } : {}),
+        },
+      ],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judge = vi.fn(async () => actionJudgement());
+
+    const result = await coordinateBuildReviewAdjudication({ ...input(root, judge), emit: async (event) => { events.push(event); } });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass', dispatchSkipped: true });
+    expect(judge).not.toHaveBeenCalled();
+    expect(events.map((event) => event.type)).not.toContain('remediation_semantic_repeat_halt');
+  });
+
   it('dispatches only the new source when another exact recurrence is settled', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
