@@ -1250,6 +1250,22 @@ PARKED or HALTED. The daemon log should show `↻ resume <slug>` after dispatch.
 **Blast radius:** clearing the halt makes the feature eligible for dispatch again on the next
 poll. Fix the cause first, or it halts again immediately.
 
+#### Audited clear
+
+From an interactive terminal anywhere in the repository, record the authorization and clear the
+marker pair in one step:
+
+```bash
+ai-conductor halt clear --feature <slug> --rationale "<what you fixed>"
+```
+
+The command appends `halt_clear_authorized` to the event spine and audit trail before it touches
+any marker, and refuses without clearing if that record cannot be written. It handles the
+`over-scope` rename below for you; edit the decisions block first. For a budget-cap halt, prefer
+[`kickback-budget`](#kickback-loops): a direct clear changes no budget, so the feature
+re-halts at its next cap check. See [`ai-conductor halt clear`](../reference/cli.md#ai-conductor-halt-clear)
+for flags and exit codes. The manual commands below remain valid but leave no authorization record.
+
 #### OVER_SCOPE decision halt
 
 If `HALT.class` is `over-scope`, do not clear the body unchanged. Edit the fenced
