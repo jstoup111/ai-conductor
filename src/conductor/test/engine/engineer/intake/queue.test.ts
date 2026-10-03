@@ -8,7 +8,11 @@ import { join } from 'node:path';
 import { createFileQueue } from '../../../../src/engine/engineer/intake/queue.js';
 import type { Envelope } from '../../../../src/engine/engineer/intake/port.js';
 
-const readBoundary = vi.hoisted(() => ({ deleteClaimedFile: false, deleted: false }));
+const readBoundary = vi.hoisted(() => ({
+  deleteClaimedFile: false,
+  deleted: false,
+  error: null as Error | null,
+}));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -16,6 +20,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     ...actual,
     async readFile(...args: Parameters<typeof actual.readFile>) {
       const path = args[0];
+      if (readBoundary.error && typeof path === 'string' && path.endsWith('.claimed')) {
+        throw readBoundary.error;
+      }
       if (readBoundary.deleteClaimedFile && !readBoundary.deleted && typeof path === 'string' && path.endsWith('.claimed')) {
         readBoundary.deleted = true;
         await actual.unlink(path);
@@ -41,6 +48,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'queue-list-'));
   readBoundary.deleteClaimedFile = false;
   readBoundary.deleted = false;
+  readBoundary.error = null;
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -96,5 +104,16 @@ describe('FileIntakeQueue.listClaimed', () => {
 
     readBoundary.deleteClaimedFile = true;
     await expect(q.listClaimed()).resolves.toEqual([retained]);
+  });
+
+  it('propagates a non-ENOENT error while reading a claimed envelope', async () => {
+    const q = createFileQueue(join(dir, 'inbox'));
+    const claimed = env('o/a#1', '2026-06-27T00:00:01.000Z');
+    await q.enqueue(claimed);
+    await q.claim();
+    const error = Object.assign(new Error('read failed'), { code: 'EIO' });
+
+    readBoundary.error = error;
+    await expect(q.listClaimed()).rejects.toBe(error);
   });
 });
