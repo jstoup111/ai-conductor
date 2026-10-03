@@ -261,6 +261,7 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
       timeout_seconds: 1800,
       verification: {
         mode: 'changed',
+        full_suite: 'once',
         drift_budget: {
           additional_inputs: 'none',
           dependencies: 'none',
