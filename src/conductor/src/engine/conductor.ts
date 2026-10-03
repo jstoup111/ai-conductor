@@ -258,6 +258,7 @@ import {
   AS_BUILT_VERDICT_PATH,
   asBuiltFindingDetail,
   asBuiltOutcome,
+  asBuiltReviewRequired,
   persistAsBuiltVerdict,
   readAsBuiltVerdict,
   type RecordedAsBuiltFinding,
@@ -13836,16 +13837,20 @@ export class Conductor {
                 if (resolved.review === 'manual') {
                   shouldPrompt = true;
                 } else if (resolved.review === 'conditional') {
-                  const markerPath = join(
-                    this.projectRoot,
-                    '.pipeline',
-                    `review-required-${step.name}`,
-                  );
-                  try {
-                    await accessFile(markerPath);
-                    shouldPrompt = true;
-                  } catch {
-                    // No marker → auto-approve (skill reported no issues).
+                  if (step.name === 'architecture_review_as_built') {
+                    shouldPrompt = await asBuiltReviewRequired(this.projectRoot);
+                  } else {
+                    const markerPath = join(
+                      this.projectRoot,
+                      '.pipeline',
+                      `review-required-${step.name}`,
+                    );
+                    try {
+                      await accessFile(markerPath);
+                      shouldPrompt = true;
+                    } catch {
+                      // No marker → auto-approve (skill reported no issues).
+                    }
                   }
                 }
                 // review === 'auto' → shouldPrompt stays false.

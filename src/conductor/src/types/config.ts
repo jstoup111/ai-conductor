@@ -18,7 +18,8 @@ export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
  *   - manual: always prompt the user
  *   - conditional: auto-approve unless the skill wrote
  *     `.pipeline/review-required-<step>` (signalling it found issues
- *     worth human attention)
+ *     worth human attention), except `architecture_review_as_built`, whose
+ *     conditional review is derived from its typed verdict
  */
 export type ReviewMode = 'auto' | 'manual' | 'conditional';
 
