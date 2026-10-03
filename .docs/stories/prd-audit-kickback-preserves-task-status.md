@@ -28,6 +28,8 @@ existing engine state is lost.
 - Given an existing `task-status.json` with task 2 engine-stamped `completed` (with `evidencedBy`)
   and task 3 `in_progress`, when the engine re-seeds (kickback re-entry), then task 2 remains
   `completed` with its evidence stamp and task 3 remains `in_progress` — merge, never overwrite.
+  This excludes a task with an open repair obligation, which re-seeding restages to `pending`
+  under `adr-2026-09-06-reopened-task-resolution` (decisions 4 and 11).
 - Given the plan gained task 6 via remediation, when the engine re-seeds, then task 6 is upserted
   as `pending` alongside the preserved rows (idempotent: a second re-seed produces a byte-identical
   file).
