@@ -435,6 +435,8 @@ describe('remediation case store', () => {
       .mutate(async () => ({ value: null, nextState: invalidNextState }))).resolves.toEqual({
       ok: false,
       reason: 'rejected-transition',
+      caseIds: ['case-1', 'case-2'],
+      sourceIds: ['testQuality:finding-1'],
     });
     expect(calls).toEqual([]);
     await expect(readFile(statePath, 'utf8')).resolves.toBe(original);

@@ -624,6 +624,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // routing a stop through it would manufacture a deferral-shaped effect.
   const ordinaryCases = admitted.filter((proposed) => proposed.case.disposition !== 'escalate');
   const escalationCases = admitted.filter((proposed) => proposed.case.disposition === 'escalate');
+  // An unbound escalation has no effect, but it can still reuse a resolved
+  // action source. Send only that recurrence question through reconciliation;
+  // a non-recurring stop remains owned by the dedicated writer below.
+  const recurrenceOnlyEscalationCases = escalationCases.filter((proposed) =>
+    proposed.case.existingCaseId === undefined && !proposed.case.distinctFrom?.length);
   const blockedConsistency = judgement.mode === 'case-v2' && judgement.consistency.verdict === 'blocked'
     ? {
       sourceIds: judgement.consistency.sourceIds.filter((sourceId) => liveSourceIds.has(sourceId)),
@@ -636,8 +641,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const recordedAt = new Date().toISOString();
   const generateId = input.generateId ?? randomUUID;
   const reconciled = await reconcileRemediationCases(store, {
-    graph: { ...graph.graph, cases: ordinaryCases }, recordedAt, generateId,
+    graph: { ...graph.graph, cases: [...ordinaryCases, ...recurrenceOnlyEscalationCases] }, recordedAt, generateId,
     attemptedCaseIds,
+    recurrenceOnlyCaseRefs: new Set(recurrenceOnlyEscalationCases.map((proposed) => proposed.case.caseRef)),
     // A mechanically complete lap saw every finding this join could report, so a
     // prior open non-action case absent from it is decided by that absence — the
     // same evidence the exit paths settle on. Leaving it open let stale history
@@ -650,8 +656,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     // and, like every failure above, may be obsolete under a late acceptance.
     if (reconciled.reason === 'store-failure') return fail(`case store ${reconciled.storeReason}`, reconciled.storeReason === 'rejected-transition'
       ? {
-        failureKind: 'rejected-transition', caseIds: [],
-        sourceIds: [...new Set(admitted.flatMap((proposed) => proposed.sources.map((source) => source.sourceId)))],
+        failureKind: 'rejected-transition', caseIds: reconciled.caseIds ?? [],
+        sourceIds: reconciled.sourceIds ?? [...new Set(admitted.flatMap((proposed) => proposed.sources.map((source) => source.sourceId)))],
       }
       : reconciled.storeReason === 'malformed-state'
         ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
@@ -669,6 +675,34 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
           ? reconciled.sourceIds
           : [...new Set(admitted.flatMap((proposed) => proposed.sources.map((source) => source.sourceId)))],
       },
+    });
+  }
+
+  // A recurrence-only escalation is deliberately not a general case
+  // transition. Once reconciliation identifies its resolved action owner,
+  // halt before the decision-stop writer can create a new open stop.
+  const recurringEscalationCases: RemediationCaseRecord[] = [];
+  const emittedRecurringEscalationIds = new Set<string>();
+  const reconciledCasesBeforeStops = new Map(reconciled.state.cases.map((record) => [record.id, record]));
+  for (const [caseRef, recurringCaseIds] of reconciled.recurringCaseIdsByRef ?? []) {
+    if (!recurrenceOnlyEscalationCases.some((proposed) => proposed.case.caseRef === caseRef)) continue;
+    for (const caseId of recurringCaseIds) {
+      if (emittedRecurringEscalationIds.has(caseId)) continue;
+      emittedRecurringEscalationIds.add(caseId);
+      const record = reconciledCasesBeforeStops.get(caseId);
+      if (!record) return fail(`recurring case ${caseId} is unavailable`);
+      recurringEscalationCases.push(record);
+      await input.emit?.({
+        type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: input.aggregate.lapId,
+        caseId, ...(record.effect.kind === 'none' ? {} : { effectId: record.effect.id }), reason: 'regressed',
+      });
+    }
+  }
+  if (recurringEscalationCases.length > 0) {
+    const caseIds = recurringEscalationCases.map((record) => record.id);
+    return failUnlessAccepted(`semantic remediation case regression ${caseIds.join(', ')}`, {
+      settleAbsentAttempted: false,
+      caseSourceIds: recurringEscalationCases.map((record) => new Set(record.sources.map((source) => source.sourceId))),
     });
   }
 
@@ -759,10 +793,13 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const liveSourceIdsBeforeRepeat = new Set([...liveSourceIdsFor(resolved)]
     .filter((sourceId) => !settledSourceIdsAfterReconciliation.has(sourceId)));
   const recurringCases: RemediationCaseRecord[] = [];
+  const emittedRecurringCaseIds = new Set<string>();
   for (const [caseRef, recurringCaseIds] of reconciled.recurringCaseIdsByRef ?? []) {
     const proposed = admitted.find((candidate) => candidate.case.caseRef === caseRef);
     if (!proposed || proposed.sources.every((source) => !liveSourceIdsBeforeRepeat.has(source.sourceId))) continue;
     for (const caseId of recurringCaseIds) {
+      if (emittedRecurringCaseIds.has(caseId)) continue;
+      emittedRecurringCaseIds.add(caseId);
       const record = reconciledCasesById.get(caseId);
       if (!record) return fail(`recurring case ${caseId} is unavailable`);
       recurringCases.push(record);
