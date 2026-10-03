@@ -77,6 +77,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Kickback lap raises are no longer refused after an earlier raise on the same remediation gate. ([implementation PR #2921](https://github.com/jstoup111/ai-conductor/pull/2921)).
 - coverage_binding no longer refuses checks whose pinned outcome entails the criterion. ([implementation PR #2926](https://github.com/jstoup111/ai-conductor/pull/2926)).
 - coverage_binding no longer halts on ADRs that landed on origin/main when the local default branch lags. ([implementation PR #2930](https://github.com/jstoup111/ai-conductor/pull/2930)).
+- Post-rebase coverage_binding, prd_audit and as-built review now reopen only when the feature's own plan, stories, specs or cited ADRs change. ([implementation PR #2928](https://github.com/jstoup111/ai-conductor/pull/2928)).
+- SHIP as-built and PRD audits now report every violating site of a decision in one pass instead of one per remediation lap. ([implementation PR #2932](https://github.com/jstoup111/ai-conductor/pull/2932)).
 
 ## Migration
 
