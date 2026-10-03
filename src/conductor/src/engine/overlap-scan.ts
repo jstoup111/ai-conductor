@@ -203,6 +203,21 @@ export async function runOverlapScan(args: RunOverlapScanArgs): Promise<OverlapR
     return { seamOverlaps: [], blockers: [], indeterminate: [], skipNotes };
   }
 
+  if (candidateFiles.length === 0) {
+    skipNotes.push('nothing was scanned for overlap: no candidate paths were supplied');
+  } else {
+    const classification = await classifyCandidatePaths(git, candidateFiles);
+    if (classification.kind === 'classification-failed') {
+      skipNotes.push(
+        `candidate-path classification failed: git ls-files exited ${classification.exitCode}`,
+      );
+    } else {
+      for (const path of classification.absent) {
+        skipNotes.push(`candidate path is not present in the checkout: ${path}`);
+      }
+    }
+  }
+
   let branches: string[] = [];
   try {
     branches = await enumerateUnmergedBranches(git, base.ref);

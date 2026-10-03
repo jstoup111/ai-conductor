@@ -340,6 +340,71 @@ describe('engine/overlap-scan — runOverlapScan (Task 4)', () => {
   });
 });
 
+describe('engine/overlap-scan — earned clean verdict (Task 2)', () => {
+  it('adds one advisory note for each candidate path absent from the checkout', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: '' } },
+      { match: ['ls-files'], result: { stdout: 'src/present.ts\n' } },
+      { match: ['for-each-ref'], result: { stdout: '' } },
+    ]);
+    const { resolver } = fakeResolver({ kind: 'unblocked' });
+
+    const result = await runOverlapScan({
+      candidateFiles: ['src/present.ts', 'src/missing.ts', 'docs/missing.md'],
+      git,
+      resolver,
+      localBase: 'main',
+    });
+
+    expect(result.skipNotes).toEqual([
+      'candidate path is not present in the checkout: src/missing.ts',
+      'candidate path is not present in the checkout: docs/missing.md',
+    ]);
+    expect(renderReport(result).toLowerCase()).not.toContain('no overlap detected; no open blockers');
+  });
+
+  it('notes that nothing was scanned when no candidate paths are supplied', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: '' } },
+      { match: ['ls-files'], result: { stdout: 'src/present.ts\n' } },
+      { match: ['for-each-ref'], result: { stdout: '' } },
+    ]);
+    const { resolver } = fakeResolver({ kind: 'unblocked' });
+
+    const result = await runOverlapScan({ candidateFiles: [], git, resolver, localBase: 'main' });
+
+    expect(result.skipNotes).toEqual(expect.arrayContaining([
+      expect.stringMatching(/nothing.*scanned|no candidate/i),
+    ]));
+    expect(renderReport(result).toLowerCase()).not.toContain('no overlap detected; no open blockers');
+  });
+
+  it('reports classification failure without losing sibling-branch overlaps', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: '' } },
+      { match: ['ls-files'], result: { exitCode: 128, stderr: 'listing failed' } },
+      { match: ['for-each-ref'], result: { stdout: 'spec/sibling\n' } },
+      { match: ['rev-list', '--count', 'main..spec/sibling'], result: { stdout: '1\n' } },
+      { match: ['merge-base', 'main', 'spec/sibling'], result: { stdout: 'fork\n' } },
+      { match: ['diff', '--name-only', 'fork', 'spec/sibling'], result: { stdout: 'src/foo.ts\n' } },
+    ]);
+    const { resolver } = fakeResolver({ kind: 'unblocked' });
+
+    const result = await runOverlapScan({
+      candidateFiles: ['src/foo.ts'],
+      git,
+      resolver,
+      localBase: 'main',
+    });
+
+    expect(result.seamOverlaps).toEqual([{ branch: 'spec/sibling', files: ['src/foo.ts'] }]);
+    expect(result.skipNotes).toEqual(expect.arrayContaining([
+      expect.stringMatching(/classif|ls-files/i),
+      expect.stringContaining('128'),
+    ]));
+  });
+});
+
 describe('engine/overlap-scan — runOverlapScan advisory degradation (Task 5)', () => {
   it('never throws when enumeration fails — records an advisory skip note', async () => {
     const git: GitRunner = async (args) => {
@@ -365,6 +430,7 @@ describe('engine/overlap-scan — runOverlapScan advisory degradation (Task 5)',
 
   it.each(['throws', 'returns non-zero'] as const)('preserves results and reports an advisory when one branch diff %s', async (failure) => {
     const git: GitRunner = async (args) => {
+      if (args[0] === 'ls-files') return { exitCode: 0, stdout: 'src/foo.ts\n', stderr: '' };
       if (args[0] === 'remote') return { exitCode: 0, stdout: '', stderr: '' };
       if (args[0] === 'for-each-ref') {
         return { exitCode: 0, stdout: 'spec/feature-a\nspec/feature-b\n', stderr: '' };
@@ -402,6 +468,7 @@ describe('engine/overlap-scan — runOverlapScan advisory degradation (Task 5)',
   it('records one advisory note and no overlap when a branch has no merge base', async () => {
     const { git } = fakeGit([
       { match: ['remote'], result: { stdout: '' } },
+      { match: ['ls-files'], result: { stdout: 'src/foo.ts\n' } },
       { match: ['for-each-ref'], result: { stdout: 'spec/unrelated\n' } },
       { match: ['rev-list', '--count', 'main..spec/unrelated'], result: { stdout: '1\n' } },
       { match: ['merge-base', 'main', 'spec/unrelated'], result: { exitCode: 1 } },

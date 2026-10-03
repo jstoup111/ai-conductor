@@ -1,4 +1,4 @@
-// Covers: task:4, task:5, task:11
+// Covers: task:2, task:4, task:5, task:11
 // Test: coherence artifact parser (coherence-validator.ts)
 //
 // Covers parseCoherenceArtifact(text | null):
@@ -2000,6 +2000,7 @@ describe('advisoryDuplicateClaimWarn (fail-open, reuses overlap-scan.ts)', () =>
     const { git } = fakeGit([
       { match: ['symbolic-ref', 'refs/remotes/origin/HEAD'], result: { exitCode: 1 } },
       { match: ['rev-parse', '--verify', 'main'], result: { exitCode: 0 } },
+      { match: ['ls-files'], result: { exitCode: 0, stdout: 'src/foo.ts\n' } },
       { match: ['for-each-ref'], result: { exitCode: 0, stdout: '' } },
     ]);
     const args: RunOverlapScanArgs = {

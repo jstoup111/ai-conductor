@@ -2,7 +2,7 @@
 //
 // Covers: TR-1 (seam overlap named), TR-2 (open blocker surfaced), TR-3 (quiet clean
 // path), TR-4 (advisory degradation on a REAL git failure), TR-5 (exact-intersection,
-// no substring/prefix false match).
+// no substring/prefix false match), task:2 (candidate checkout classification).
 //
 // This suite drives `runOverlapScan` + `renderReport` against a REAL git repo via the
 // REAL `makeGitRunner` (no fake GitRunner) — the per-task TDD specs in
@@ -173,6 +173,83 @@ describe('overlap-scan acceptance — real git plumbing', () => {
     const rendered = renderReport(report);
     expect(rendered.toLowerCase()).toContain('no overlap');
     expect(rendered.toLowerCase()).toContain('no open blocker');
+  });
+
+  it('Task 2: renders the sibling overlap and the absent-candidate notice for a mixed list', async () => {
+    await makeSiblingBranch('spec/other', 'src/conductor.ts', 'export const a = 2;\n');
+
+    const report = await runOverlapScan({
+      candidateFiles: ['src/conductor.ts', 'src/planned-new.ts'],
+      git: makeGitRunner(repo),
+      resolver: noSourceRefResolver,
+      localBase: 'main',
+    });
+
+    const rendered = renderReport(report);
+    expect(rendered).toContain('spec/other');
+    expect(rendered).toContain('src/conductor.ts');
+    expect(rendered).toContain('src/planned-new.ts');
+    expect(rendered.toLowerCase()).not.toContain('no overlap detected; no open blockers');
+  });
+
+  it('Task 2: keeps the existing clean report when every candidate is present and uncontended', async () => {
+    const report = await runOverlapScan({
+      candidateFiles: ['src/conductor.ts', 'README.md'],
+      git: makeGitRunner(repo),
+      resolver: noSourceRefResolver,
+      localBase: 'main',
+    });
+
+    const rendered = renderReport(report);
+    expect(report.skipNotes).toEqual([]);
+    expect(rendered).toBe(
+      'No overlap detected; no open blockers. (Note: renames or name-only diffs may not be detected.)',
+    );
+  });
+
+  it('Task 2: lists all absent candidates without rendering the clean verdict', async () => {
+    const report = await runOverlapScan({
+      candidateFiles: ['src/planned-new.ts', 'docs/another-new.md'],
+      git: makeGitRunner(repo),
+      resolver: noSourceRefResolver,
+      localBase: 'main',
+    });
+
+    const rendered = renderReport(report);
+    expect(rendered).toContain('src/planned-new.ts');
+    expect(rendered).toContain('docs/another-new.md');
+    expect(rendered.toLowerCase()).not.toContain('no overlap detected; no open blockers');
+  });
+
+  it('Task 2: still reports a sibling-created absent candidate as an overlap', async () => {
+    await makeSiblingBranch('spec/creates-planned-file', 'src/planned-new.ts', 'export const planned = true;\n');
+
+    const report = await runOverlapScan({
+      candidateFiles: ['src/planned-new.ts'],
+      git: makeGitRunner(repo),
+      resolver: noSourceRefResolver,
+      localBase: 'main',
+    });
+
+    const rendered = renderReport(report);
+    expect(report.seamOverlaps).toContainEqual({
+      branch: 'spec/creates-planned-file', files: ['src/planned-new.ts'],
+    });
+    expect(rendered).toContain('src/planned-new.ts');
+    expect(rendered.toLowerCase()).not.toContain('no overlap detected; no open blockers');
+  });
+
+  it('Task 2: says nothing was scanned for an empty candidate list', async () => {
+    const report = await runOverlapScan({
+      candidateFiles: [],
+      git: makeGitRunner(repo),
+      resolver: noSourceRefResolver,
+      localBase: 'main',
+    });
+
+    const rendered = renderReport(report);
+    expect(rendered).toMatch(/nothing.*scanned|no candidate/i);
+    expect(rendered.toLowerCase()).not.toContain('no overlap detected; no open blockers');
   });
 
   it('TR-2 happy: an open blocker is surfaced alongside a clean seam-overlap result', async () => {
