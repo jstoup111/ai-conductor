@@ -74,20 +74,20 @@ describe('managed gh observation provisioning', () => {
   });
 
   it.each([
-    ['claude', (managed: ManagedSessionContext, calls: NodeJS.ProcessEnv[]) => new ClaudeProvider(undefined, ((_file, _args, launch: { env?: NodeJS.ProcessEnv }) => {
+    ['claude', (calls: NodeJS.ProcessEnv[]) => new ClaudeProvider(undefined, ((_file: string, _args: string[], launch: { env?: NodeJS.ProcessEnv }) => {
       calls.push(launch.env ?? {}); return Promise.resolve({ stdout: JSON.stringify({ type: 'result', result: 'done' }), stderr: '', exitCode: 0, failed: false } as any);
     }) as never)],
-    ['codex', (managed: ManagedSessionContext, calls: NodeJS.ProcessEnv[]) => new CodexProvider(vi.fn(async () => ({ stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }), exitCode: 0 })) as never, 'codex', undefined, ((_file, _args, launch: { env?: NodeJS.ProcessEnv }) => {
+    ['codex', (calls: NodeJS.ProcessEnv[]) => new CodexProvider(vi.fn(async () => ({ stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }), exitCode: 0 })) as never, 'codex', undefined, ((_file: string, _args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
       calls.push(launch.env ?? {}); return Promise.resolve({ stdout: `${JSON.stringify({ type: 'turn.completed' })}\n`, stderr: '', exitCode: 0, failed: false } as any);
     }) as never)],
-    ['pi', (managed: ManagedSessionContext, calls: NodeJS.ProcessEnv[]) => new PiProvider('pi', ((_file, _args, launch: { env?: NodeJS.ProcessEnv }) => {
+    ['pi', (calls: NodeJS.ProcessEnv[]) => new PiProvider('pi', ((_file: string, _args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
       calls.push(launch.env ?? {}); return Promise.resolve({ stdout: JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } }), stderr: '', exitCode: 0, failed: false } as any);
     }) as never)],
   ] as const)('adds the wrapper only to the prepared %s child environment', async (_provider, create) => {
     const managed = await context();
     const prepared = await prepareManagedGhObservation({ context: managed, environment: { PATH: '/operator/bin' }, resolveExecutable: async () => '/operator/bin/gh', observerModuleUrl: 'file:///observer.mjs' });
     const calls: NodeJS.ProcessEnv[] = [];
-    const provider = create(managed, calls);
+    const provider = create(calls);
     const options: InvokeOptions = { prompt: 'Run.', sessionId: 'session', resume: false, managedSessionContext: managed };
 
     await provider.invoke(options);
