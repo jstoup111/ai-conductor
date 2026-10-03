@@ -715,8 +715,9 @@ Optional object; unset means each provider uses its built-in policy
 | `llm_providers.<id>.model` | non-empty string | Replaces the provider policy's default model for every step |
 | `llm_providers.<id>.model_escalation_order` | array of non-empty strings | Replaces the retry escalation order |
 | `llm_providers.<id>.model_fallback_ladder` | array of non-empty strings | Replaces the availability fallback ladder; takes precedence over [`model_fallback_ladder`](#model_fallback_ladder) |
+| `llm_providers.pi.trust_project_files` | boolean, default `false` | `pi` only. `true` lets unattended Pi dispatches load the project's `.pi` files (the adapter drops `-na`). Read-only review dispatches ignore it. Any other provider id fails with `llm_providers.<id>.trust_project_files is not applicable to provider <id>` |
 
-**Pi requires all three keys**, non-empty, whenever `pi` appears in any provider selection:
+**Pi requires all three model keys**, non-empty, whenever `pi` appears in any provider selection:
 `llm_provider`, `steps.<step>.llm_provider`, or a `build_review` rubric's `llm_provider`. Any authored
 `model` that reaches a Pi dispatch — for example `steps.build.model` when `build`'s first provider is
 `pi` — must also be a Pi id. Pi model ids use `provider/model` form split at the first `/`:
