@@ -1113,7 +1113,9 @@ describe('coordinateBuildReviewAdjudication', () => {
       expect.objectContaining({ id: 'case-escalation-stop', resolution: 'open' }),
     ]));
     expect(persisted.cases.filter((record) => record.resolution === 'open')).toEqual([expect.objectContaining({ id: 'case-escalation-stop' })]);
-    expect(events).toContainEqual(expect.objectContaining({ type: 'remediation_case_reconciled', caseId: 'case-current-owner', resolution: 'resolved' }));
+    expect(events.filter((event) => event.type === 'remediation_case_reconciled' && event.caseId === 'case-current-owner' && event.resolution === 'resolved')).toEqual([
+      expect.objectContaining({ type: 'remediation_case_reconciled', caseId: 'case-current-owner', resolution: 'resolved' }),
+    ]);
     expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
   });
 
@@ -1157,7 +1159,9 @@ describe('coordinateBuildReviewAdjudication', () => {
       expect.objectContaining({ id: 'consistency-stop-lap-1', resolution: 'open' }),
     ]));
     expect(persisted.cases.filter((record) => record.resolution === 'open')).toEqual([expect.objectContaining({ id: 'consistency-stop-lap-1' })]);
-    expect(events).toContainEqual(expect.objectContaining({ type: 'remediation_case_reconciled', caseId: 'case-current-owner', resolution: 'resolved' }));
+    expect(events.filter((event) => event.type === 'remediation_case_reconciled' && event.caseId === 'case-current-owner' && event.resolution === 'resolved')).toEqual([
+      expect.objectContaining({ type: 'remediation_case_reconciled', caseId: 'case-current-owner', resolution: 'resolved' }),
+    ]);
     expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
   });
 

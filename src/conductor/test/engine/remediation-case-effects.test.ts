@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewSettlementObligationCase, renderBuildReviewDeferralIssue, remediationEffectMarker } from '../../src/engine/remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewSettlementObligationCase, persistBuildReviewDecisionStop, renderBuildReviewDeferralIssue, remediationEffectMarker } from '../../src/engine/remediation-case-effects.js';
 import { fileIntakeIssue } from '../../src/engine/engineer/intake/file-issue.js';
 import { sanitizeIntakeText } from '../../src/engine/engineer/intake/sanitize.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
@@ -84,6 +84,48 @@ describe('remediation case effects', () => {
     ['resolved case carries no obligation', { id: 'e', kind: 'deferral', status: 'failed', diagnostic: 'x' }, { resolution: 'resolved' }, false],
   ] as const)('settlement obligation: %s', (_label, effect, overrides, expected) => {
     expect(isBuildReviewSettlementObligationCase(record(effect as RemediationCaseRecord['effect'], overrides as Partial<RemediationCaseRecord>))).toBe(expected);
+  });
+
+  it('atomically supersedes every open owner linked to a decision-stop source while preserving completed effects', async () => {
+    const source = (sourceId: string, outcome: 'acted' | 'deferred') => [{ sourceId, outcome, recordedAt: '2026-10-03T00:00:00.000Z' }];
+    const store = await storeWith({ version: 'v1', feature, cases: [
+      record({ id: 'reserved-action', kind: 'action', status: 'reserved' }, { id: 'action-reserved', disposition: 'act', sources: source('source-action-reserved', 'acted') }),
+      record({ id: 'reserved-deferral', kind: 'deferral', status: 'reserved' }, { id: 'deferral-reserved', sources: source('source-deferral-reserved', 'deferred') }),
+      record({ id: 'applied-action', kind: 'action', status: 'applied', workOrderId: 'order-1' }, { id: 'action-applied', disposition: 'act', sources: source('source-action-applied', 'acted') }),
+      record({ id: 'failed-deferral', kind: 'deferral', status: 'failed', diagnostic: 'original failure' }, { id: 'deferral-failed', sources: source('source-deferral-failed', 'deferred') }),
+      record({ id: 'unrelated', kind: 'deferral', status: 'reserved' }, { id: 'unrelated-open', sources: [{ sourceId: 'other-source', outcome: 'deferred', recordedAt: '2026-10-03T00:00:00.000Z' }] }),
+    ] });
+    const stop: RemediationCaseRecord = {
+      id: 'decision-stop', domain: 'build_review', disposition: 'escalate', priority: 'high', confidence: 'high',
+      rationale: 'An owner decision is required.', resolution: 'open',
+      sources: ['source-action-reserved', 'source-deferral-reserved', 'source-action-applied', 'source-deferral-failed']
+        .map((sourceId) => ({ sourceId, outcome: 'escalate' as const, recordedAt: '2026-10-03T00:00:00.000Z' })),
+      effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+    };
+
+    await expect(persistBuildReviewDecisionStop({ store, record: stop })).resolves.toEqual({
+      ok: true, status: 'persisted', caseId: 'decision-stop',
+      supersededCaseIds: ['action-reserved', 'deferral-reserved', 'action-applied', 'deferral-failed'],
+    });
+    await expect(persistBuildReviewDecisionStop({ store, record: stop })).resolves.toEqual({
+      ok: true, status: 'already-persisted', caseId: 'decision-stop', supersededCaseIds: [],
+    });
+
+    const read = await store.read();
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.state.cases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'action-reserved', resolution: 'resolved', effect: { id: 'reserved-action', kind: 'action', status: 'failed', diagnostic: 'superseded by decision stop decision-stop' } }),
+      expect.objectContaining({ id: 'deferral-reserved', resolution: 'resolved', effect: { id: 'reserved-deferral', kind: 'deferral', status: 'failed', diagnostic: 'superseded by decision stop decision-stop' } }),
+      expect.objectContaining({ id: 'action-applied', resolution: 'resolved', effect: { id: 'applied-action', kind: 'action', status: 'applied', workOrderId: 'order-1' } }),
+      expect.objectContaining({ id: 'deferral-failed', resolution: 'resolved', effect: { id: 'failed-deferral', kind: 'deferral', status: 'failed', diagnostic: 'original failure' } }),
+      expect.objectContaining({ id: 'unrelated-open', resolution: 'open' }),
+      expect.objectContaining({ id: 'decision-stop', resolution: 'open', effect: { kind: 'none' } }),
+    ]));
+    expect(read.state.cases.filter((candidate) => candidate.resolution === 'open')).toEqual([
+      expect.objectContaining({ id: 'unrelated-open' }),
+      expect.objectContaining({ id: 'decision-stop' }),
+    ]);
   });
 
   it('publishes and charges a stable action order once', async () => {
