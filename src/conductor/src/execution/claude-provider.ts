@@ -38,6 +38,20 @@ function claudeDisplayName(): string {
   return providerDescriptor('claude').displayName;
 }
 
+function abortedInvocationResult(): InvokeResult {
+  return {
+    success: false,
+    output: `${claudeDisplayName()} invocation aborted.`,
+    exitCode: 1,
+  };
+}
+
+function isCanceledError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && (error as { isCanceled?: unknown }).isCanceled === true;
+}
+
 /** Print-mode sessions must not leave background tasks outstanding (#2599). */
 const FOREGROUND_ONLY_ENV = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } as const;
 
@@ -638,6 +652,7 @@ export class ClaudeProvider implements LLMProvider {
     // enforceFreshSessionOptions for the 2026-08-14 megatoken incident this
     // deterministically prevents.
     options = enforceFreshSessionOptions(options, 'claude');
+    if (options.abortSignal?.aborted) return abortedInvocationResult();
     // Claude's native JSON-schema mode is a non-interactive print-mode
     // capability. A REPL cannot return its terminal result envelope, so never
     // silently run an unconstrained interactive request.
@@ -662,34 +677,41 @@ export class ClaudeProvider implements LLMProvider {
 
     // Non-REPL print mode receives its prompt through stdin to avoid the argv
     // size limit; the REPL retains inherited stdin and positional prompt behavior.
-    const observed = await observeInterval(this.intervalClock, () =>
-      this.runClaude(args, {
-        ...(promptOnStdin
-          ? { input: options.prompt }
-          : { stdin: options.interactive ? 'inherit' as const : 'ignore' as const }),
-        reject: false,
-        env: this.buildEnv(options),
-        cwd: options.cwd,
-        diagnosticLog: options.diagnosticLog,
-        onActivity: options.onActivity,
-        onProviderStream: options.interactive
-          ? undefined
-          : options.streamConsumer?.onProviderStream ?? options.onProviderStream,
-        onSpawn: options.onSpawn,
-        selfHost: options.selfHost,
-        spawnPermit: options.spawnPermit,
-      }),
-    );
+    try {
+      const observed = await observeInterval(this.intervalClock, () =>
+        this.runClaude(args, {
+          ...(promptOnStdin
+            ? { input: options.prompt }
+            : { stdin: options.interactive ? 'inherit' as const : 'ignore' as const }),
+          reject: false,
+          env: this.buildEnv(options),
+          cwd: options.cwd,
+          ...(options.abortSignal === undefined ? {} : { cancelSignal: options.abortSignal }),
+          diagnosticLog: options.diagnosticLog,
+          onActivity: options.onActivity,
+          onProviderStream: options.interactive
+            ? undefined
+            : options.streamConsumer?.onProviderStream ?? options.onProviderStream,
+          onSpawn: options.onSpawn,
+          selfHost: options.selfHost,
+          spawnPermit: options.spawnPermit,
+        }),
+      );
+      if (options.abortSignal?.aborted || isCanceledError(observed.value)) return abortedInvocationResult();
 
-    return this.classifyCompletion(
-      observed.value,
-      hasMachineEnvelope,
-      observed.interval,
-      options.prompt,
-      hasMachineEnvelope,
-      options.nativeSchema !== undefined,
-      options.diagnosticLog,
-    );
+      return this.classifyCompletion(
+        observed.value,
+        hasMachineEnvelope,
+        observed.interval,
+        options.prompt,
+        hasMachineEnvelope,
+        options.nativeSchema !== undefined,
+        options.diagnosticLog,
+      );
+    } catch (error) {
+      if (options.abortSignal?.aborted || isCanceledError(error)) return abortedInvocationResult();
+      throw error;
+    }
   }
 
   private classifyCompletion(
