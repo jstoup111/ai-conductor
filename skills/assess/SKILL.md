@@ -136,7 +136,7 @@ You are the CTO Orchestrator. Read your persona from agents/cto-orchestrator.md.
 Here are the 9 specialist reports:
 [inline all 9 reports from .pipeline/assessment/]
 
-Use the template from templates/technical-assessment.md.template.
+Use the template at [absolute path of this skill's templates/technical-assessment.md.template].
 Project name: [project name]
 Date: [YYYY-MM-DD]
 
@@ -178,8 +178,8 @@ Save assessment metadata to `.pipeline/conduct-state.json`:
 - [ ] `.pipeline/assessment/` directory created
 - [ ] All 9 specialist reports written (or single report for `--area` mode)
 - [ ] CTO orchestrator report written to `.docs/decisions/technical-assessment-YYYY-MM-DD.md`
-- [ ] Report follows template structure from `templates/technical-assessment.md.template` (harness root,
-  not this skill's directory)
+- [ ] Report follows template structure from `templates/technical-assessment.md.template` (relative to
+  this skill's own directory)
 - [ ] Verdict is one of: HEALTHY, NEEDS_WORK, CRITICAL
 - [ ] Assessment metadata saved to `.pipeline/conduct-state.json`
 - [ ] Report presented to user for review
