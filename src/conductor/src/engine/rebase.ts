@@ -1261,16 +1261,31 @@ export async function resolveReviewInputs(projectRoot: string, delta: string[], 
     }
     inputs.push(`.docs/decisions/adr-${identity}.md`);
   }
-  // Decision records are declared architecture authority, not merely a
-  // same-stem feature artifact.  Governing ADRs use date-prefixed names, so
-  // the synthetic adr-<feature> path above cannot see a rebase that changes
-  // one.  Bind the resolver to the actual decision records present in this
-  // feature checkout; a later decision edit then invalidates its owning
-  // architecture review instead of silently preserving an older judgement.
-  const decisions = await readdir(join(projectRoot, '.docs', 'decisions')).catch(() => []);
-  inputs.push(...decisions
-    .filter((entry) => entry.endsWith('.md'))
-    .map((entry) => `.docs/decisions/${entry}`));
+  // Decision records are inputs only when the feature CITES them.  Binding
+  // every ADR in the checkout made each ADR landed on main reopen
+  // coverage_binding / prd_audit / as-built on nearly every rebase, although
+  // none of those gates read an uncited decision.  Scan the feature's own
+  // documents (plan, coherence, stories, specs/PRD) for decision paths or
+  // `adr-<stem>` references; a cited ADR edit still reopens its reviews.
+  const cited = new Set<string>();
+  for (const doc of [...new Set(inputs.map(repoPath))]) {
+    if (doc.startsWith('.docs/decisions/')) continue;
+    const text = await readFile(join(projectRoot, doc), 'utf8').catch(() => '');
+    for (const stem of citedDecisionStems(text)) cited.add(`.docs/decisions/${stem}.md`);
+  }
+  inputs.push(...cited);
+  return [...new Set(inputs.map(repoPath))];
+}
+
+/** Decision-record stems (`adr-...`) a feature document references, by
+ * path or by bare stem. */
+export function citedDecisionStems(text: string): string[] {
+  const stems = new Set<string>();
+  for (const match of text.matchAll(/(?<![A-Za-z0-9_-])(adr-[A-Za-z0-9][A-Za-z0-9._-]*)/g)) {
+    stems.add(match[1].replace(/\.md$/, '').replace(/[._-]+$/, ''));
+  }
+  return [...stems];
+}
   return [...new Set(inputs.map(repoPath))];
 }
 
