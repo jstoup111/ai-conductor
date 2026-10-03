@@ -15,6 +15,7 @@
     "sourceMap": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "types": ["node"],
     "ignoreDeprecations": "6.0"
   },
   "include": ["src/**/*"],
