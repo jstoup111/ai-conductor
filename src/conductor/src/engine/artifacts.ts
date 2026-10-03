@@ -2660,7 +2660,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         );
         return {
           done: false,
-          reason: `failed to seed task-status from plan: ${err instanceof Error ? err.message : 'unknown error'}`,
+          reason: `task reopen failed: ${err instanceof Error ? err.message : 'unknown error'}`,
         };
       }
 
