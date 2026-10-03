@@ -225,6 +225,12 @@ D8. Order and scope of the startup check. Validation of configured provider name
 > `--no-approve`, and the D15 asset exists and is readable. A custom-policy lap still requires
 > `reviewPolicyCatalog`, so Pi serves custom-policy laps only after #1888 turns it on.
 >
+> **Amended 2026-10-02 by #1888 (operator decision, James Stoup, halt recovery):** #1888 does not
+> turn on `reviewPolicyCatalog` for Pi. Pi custom-policy laps are owned by #2852, as accepted
+> Story 7 records; until #2852 ships, Pi does not serve custom-policy laps. #1888 adds no
+> Pi-specific custom-policy refusal: the existing `nativeSchema` and `readOnlyReview` checks
+> already keep Pi out of those laps.
+>
 > **D18.** Every unattended Pi invocation passes `-na`, so project-local `.pi/` settings,
 > packages and extensions never load, even when `~/.pi/agent/trust.json` holds a saved trust
 > decision for the directory. The operator can deliberately enable them for ordinary steps with
