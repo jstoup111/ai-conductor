@@ -354,6 +354,11 @@ export class TerminalRenderer implements UIRenderer {
         this.region.log(chalk.yellow(`  ⚠ ${event.step} — no progress for ${event.quietMinutes}m (${resolved}/${event.total})${task}`));
         break;
       }
+      case 'build_active_stall': {
+        const resolved = displayBuildPosition(event.resolved, event.total, false);
+        this.region.log(chalk.yellow(`  ⚠ ${event.step} — active without movement for ${event.minutes}m (${resolved}/${event.total}); action ${event.action}`));
+        break;
+      }
       case 'pipeline_closeout':
         this.region.log(chalk.green(`  ✓ closeout ${event.obligation} (${event.endedAt - event.startedAt}ms)`));
         break;

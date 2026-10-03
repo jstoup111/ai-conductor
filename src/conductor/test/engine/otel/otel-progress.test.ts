@@ -106,6 +106,36 @@ describe('Task 15: OTel maps the three build-progress event kinds', () => {
     expect(noProgressEvent!.attributes?.['quietMinutes']).toBe(15);
   });
 
+  it('build_active_stall records its elapsed minutes and action as a span event', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 4 });
+    await emitter.emit({
+      type: 'build_active_stall',
+      step: 'build',
+      minutes: 45,
+      resolved: 3,
+      total: 10,
+      action: 'end_attempt',
+      featureSlug: 'active-build-without-commit',
+    });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'build')!;
+    const activeStall = span.events.find((e) => e.name === 'build_active_stall');
+    expect(activeStall).toBeDefined();
+    expect(activeStall!.attributes).toMatchObject({
+      minutes: 45,
+      resolved: 3,
+      total: 10,
+      action: 'end_attempt',
+      featureSlug: 'active-build-without-commit',
+    });
+  });
+
   it('build_stall records a span event with a reason attribute', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
