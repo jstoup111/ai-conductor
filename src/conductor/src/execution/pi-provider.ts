@@ -284,7 +284,10 @@ export class PiProvider implements LLMProvider {
       };
     }
 
-    const promptCommand = options.prompt.trim().split(/\s+/, 1)[0];
+    // Pi commands are recognized only at the exact start of the first line.
+    // Trimming here would turn ordinary prompt text on a later or indented line
+    // into an executable skill command.
+    const promptCommand = options.prompt.split('\n', 1)[0]?.split(/\s+/, 1)[0];
     const prefix = providerDescriptor('pi').invocationPrefix;
     const cwd = options.cwd ?? this.environment.cwd();
     if (promptCommand?.startsWith(prefix)) {

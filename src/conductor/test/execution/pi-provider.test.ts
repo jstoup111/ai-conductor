@@ -220,6 +220,16 @@ describe('PiProvider', () => {
   });
 
   it.each([
+    ['a blank first line', '\n/skill:pipeline\nBuild it.'],
+    ['whitespace before the first-line command', ' /skill:pipeline\nBuild it.'],
+  ])('does not resolve a skill when the prompt has %s', async (_source, prompt) => {
+    await expect(provider.invoke({ ...invokeOptions, prompt })).resolves.toMatchObject({ success: true });
+
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(stat.mock.calls.flat().filter((path) => String(path).endsWith('/pipeline/SKILL.md'))).toEqual([]);
+  });
+
+  it.each([
     ['no skill catalog entry', [], []],
     ['only the retired PI_HOME catalog', ['/legacy/pi-home/skills/pipeline/SKILL.md'], []],
     ['only the retired project .pi catalog', ['/workspace/project/.pi/skills/pipeline/SKILL.md'], []],

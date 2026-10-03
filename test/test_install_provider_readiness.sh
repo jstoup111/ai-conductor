@@ -62,21 +62,24 @@ else
   exit 1
 fi
 
-# `script` supplies a true TTY; the answer is intentionally harmless until
-# provider selection is implemented, at which point it chooses Claude.
+# `script` supplies a true TTY. Select Claude and Codex together to prove the
+# chooser keeps the legacy two-host selection while offering Pi.
 set +e
 # The test needs only the first interactive question. Bound the real installer
 # so unrelated setup work cannot make this RED assertion hang.
-OUT=$(cd "$CHECKOUT" && printf '1\n' | HOME="$FAKE_HOME" PATH="$STUBS:$PATH" timeout 8s script -qec "$CHECKOUT/bin/install --allow-worktree-root" "$TMP_ROOT/install.log" 2>&1)
+OUT=$(cd "$CHECKOUT" && printf '1,2\n' | HOME="$FAKE_HOME" PATH="$STUBS:$PATH" timeout 8s script -qec "$CHECKOUT/bin/install --allow-worktree-root" "$TMP_ROOT/install.log" 2>&1)
 CODE=$?
 set -e
 
 # One behavior, one assertion: the interactive prompt makes all built-in
 # readiness choices visible before setup continues.
-if printf '%s' "$OUT" | tr '\n' ' ' | grep -qiE 'claude.*codex.*pi'; then
-  echo 'PASS interactive install offers Claude, Codex, and Pi choices'
+if printf '%s' "$OUT" | tr '\n' ' ' | grep -qiE 'claude.*codex.*pi' \
+  && printf '%s' "$OUT" | grep -Fqi 'Claude Code CLI found' \
+  && printf '%s' "$OUT" | grep -Fqi 'Codex CLI found' \
+  && ! printf '%s' "$OUT" | grep -Fqi 'Pi CLI found'; then
+  echo 'PASS interactive install multiselect keeps the Claude and Codex pair while offering Pi'
 else
-  echo 'FAIL interactive install offers Claude, Codex, and Pi choices'
+  echo 'FAIL interactive install multiselect keeps the Claude and Codex pair while offering Pi'
   printf '%s\n' "$OUT"
   exit 1
 fi

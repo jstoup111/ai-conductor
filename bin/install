@@ -1166,19 +1166,44 @@ choose_builtin_provider() {
   [ -n "$PROVIDER_SELECTION" ] || [ "$UPDATE_MODE" = true ] || [ ! -t 0 ] && return 0
 
   echo ""
-  info "Built-in provider — choose the CLI you plan to use:"
+  info "Built-in provider — choose one or more CLIs (comma-separated):"
   echo "    1) Claude"
   echo "    2) Codex"
-  echo "    3) Pi"
-  echo "    4) All: Claude, Codex, and Pi"
+  echo "    3) Both Claude and Codex"
+  echo "    4) Pi"
+  echo "    5) All: Claude, Codex, and Pi"
   local choice
   read -r -p "  Choice [1]: " choice || choice=1
 
   case "$choice" in
     ""|1) PROVIDER_SELECTION="claude" ;;
     2)    PROVIDER_SELECTION="codex" ;;
-    3)    PROVIDER_SELECTION="pi" ;;
-    4)    PROVIDER_SELECTION="claude,codex,pi" ;;
+    3)    PROVIDER_SELECTION="claude,codex" ;;
+    4)    PROVIDER_SELECTION="pi" ;;
+    5)    PROVIDER_SELECTION="claude,codex,pi" ;;
+    *,*)
+      local selection=""
+      local token
+      local -a choices
+      IFS=',' read -r -a choices <<< "$choice"
+      for token in "${choices[@]}"; do
+        case "$token" in
+          1) [[ ",$selection," == *,claude,* ]] || selection="${selection:+$selection,}claude" ;;
+          2) [[ ",$selection," == *,codex,* ]] || selection="${selection:+$selection,}codex" ;;
+          3) [[ ",$selection," == *,claude,* ]] || selection="${selection:+$selection,}claude"
+             [[ ",$selection," == *,codex,* ]] || selection="${selection:+$selection,}codex" ;;
+          4) [[ ",$selection," == *,pi,* ]] || selection="${selection:+$selection,}pi" ;;
+          5) selection="claude,codex,pi" ;;
+          *) selection=""; break ;;
+        esac
+      done
+      if [ -n "$selection" ]; then
+        PROVIDER_SELECTION="$selection"
+      else
+        warn "Unrecognized provider choice '${choice}' — using Claude"
+        PROVIDER_SELECTION="claude"
+      fi
+      ;;
     *)
       warn "Unrecognized provider choice '${choice}' — using Claude"
       PROVIDER_SELECTION="claude"
