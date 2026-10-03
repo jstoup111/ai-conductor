@@ -1,3 +1,0 @@
-Waives: outcome-3, outcome-4
-
-Rationale: On 2026-10-02 the operator chose the minimal scope for #2733 during explore (recorded as the scope boundary in .docs/track/interrupted-intake-claim-still-strands-high-priori.md). With every pending-ledger strand recovered automatically at the next claim, the operator judged changes to the existing recovery verbs (outcome-3) and a mismatch count in brain status (outcome-4) unnecessary for this feature. Each recovering claim still prints one stderr line with the recovered count, but that line is not the queue-health surface outcome-4 names. This waiver covers only these two outcomes. It does not waive any accepted story criterion or task completion check.
