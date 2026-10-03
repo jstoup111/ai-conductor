@@ -879,12 +879,14 @@ export type ConductorEvent =
       byDimension: Array<{
         step: string;
         model?: string;
+        provider?: string;
         source?: 'provider' | 'rate-card';
         costUsd: number;
       }>;
       tokensByDimension: Array<{
         step: string;
         model?: string;
+        provider?: string;
         tokens: { input?: number; output?: number; cacheRead?: number; cacheCreation?: number };
       }>;
     }

@@ -25,12 +25,14 @@ export interface CostRollup {
   byDimension?: Array<{
     step: string;
     model?: string;
+    provider?: string;
     source?: 'provider' | 'rate-card';
     costUsd: number;
   }>;
   tokensByDimension?: Array<{
     step: string;
     model?: string;
+    provider?: string;
     tokens: { input?: number; output?: number; cacheRead?: number; cacheCreation?: number };
   }>;
   dispatches: number;
@@ -85,10 +87,11 @@ function addDimensionRollup(
 
   const step = event.step ?? 'unknown';
   const source = tokenUsage.costSource;
-  const key = dimensionKey(step, event.model, source);
+  const key = dimensionKey(step, event.model, event.provider, source);
   const bucket = buckets.get(key) ?? {
     step,
     ...(event.model === undefined ? {} : { model: event.model }),
+    ...(event.provider === undefined ? {} : { provider: event.provider }),
     ...(source === undefined ? {} : { source }),
     costUsd: 0,
   };
@@ -112,10 +115,11 @@ function addTokenDimensionRollup(
   if (finiteTokens.length === 0) return;
 
   const step = event.step ?? 'unknown';
-  const key = dimensionKey(step, event.model);
+  const key = dimensionKey(step, event.model, event.provider);
   const bucket = buckets.get(key) ?? {
     step,
     ...(event.model === undefined ? {} : { model: event.model }),
+    ...(event.provider === undefined ? {} : { provider: event.provider }),
     tokens: {},
   };
   for (const kind of finiteTokens) {

@@ -175,6 +175,7 @@ export class MetricsRecorder {
       if (!Number.isFinite(bucket.costUsd)) continue;
       const attributes: Record<string, string> = { step: bucket.step, ...tierAttrs };
       if (bucket.model !== undefined) attributes.model = bucket.model;
+      if (bucket.provider !== undefined) attributes.provider = bucket.provider;
       if (bucket.source !== undefined) attributes.source = bucket.source;
       this.instruments.featureStepCostGauge.record(bucket.costUsd, this.withIdentity(attributes));
     }
@@ -184,6 +185,7 @@ export class MetricsRecorder {
         if (typeof value === 'number' && Number.isFinite(value)) {
           const attributes: Record<string, string> = { step: bucket.step, kind, ...tierAttrs };
           if (bucket.model !== undefined) attributes.model = bucket.model;
+          if (bucket.provider !== undefined) attributes.provider = bucket.provider;
           this.instruments.featureStepTokensGauge.record(value, this.withIdentity(attributes));
         }
       }
