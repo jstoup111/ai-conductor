@@ -74,6 +74,17 @@ describe('SessionEventReader', () => {
     expect(await reader.read()).toEqual([expect.objectContaining({ kind: 'diagnostic', code: 'invalid-attribution' })]);
   });
 
+  it('ingests a canonical digit-leading feature slug while retaining a letter-leading dispatch id', async () => {
+    const { root, producer } = await fixture();
+    const digitLeading = { ...event, scope: { kind: 'feature' as const, featureSlug: '2026-repair' } };
+    await writeFile(producer, `${JSON.stringify(digitLeading)}\n`);
+
+    const reader = new SessionEventReader({ projectRoot: root, featureSlug: '2026-repair' });
+    await expect(reader.read()).resolves.toEqual([
+      expect.objectContaining({ kind: 'event', event: digitLeading }),
+    ]);
+  });
+
   it('reports a bounded diagnostic when the producer root is symlinked', async () => {
     const { root } = await fixture();
     const events = join(root, '.pipeline', 'session-events');

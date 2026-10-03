@@ -6,6 +6,7 @@ import {
 } from './session-event-producer.js';
 import type { SessionCommandRefusedEvent } from '../types/events.js';
 import { isSessionEventIdentity } from './session-event-identity.js';
+import { isFeatureSlug } from '../engine/worktree.js';
 
 /**
  * Deterministic daemon-session boundary enforcement for the ai-conductor CLI.
@@ -278,7 +279,7 @@ function isAbsoluteString(value: unknown): value is string {
 
 function isScope(value: unknown): value is SessionEventProducerContext['scope'] {
   return isRecord(value) && (value.kind === 'project'
-    || (value.kind === 'feature' && isIdentity(value.featureSlug)));
+    || (value.kind === 'feature' && isFeatureSlug(value.featureSlug)));
 }
 
 function isIdentity(value: unknown): value is string {

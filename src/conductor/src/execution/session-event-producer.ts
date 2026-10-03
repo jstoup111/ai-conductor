@@ -112,7 +112,8 @@ export class SessionEventProducer {
       if (!validated.ok || validated.path !== this.path) throw new SessionEventProducerError('producer-path-invalid');
       this.appendRecord(this.path, record);
       return this.path;
-    } catch {
+    } catch (error: unknown) {
+      if (error instanceof SessionEventProducerError) throw error;
       throw new SessionEventProducerError('write-failed');
     }
   }

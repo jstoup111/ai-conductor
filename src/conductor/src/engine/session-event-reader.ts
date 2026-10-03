@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 
 import type { ConductorEvent, SessionObservationScope } from '../types/events.js';
 import { isSessionEventIdentity, SESSION_EVENT_IDENTITY } from '../execution/session-event-identity.js';
+import { isFeatureSlug } from './worktree.js';
 
 export const SESSION_EVENTS_DIRECTORY = '.pipeline/session-events';
 export const MAX_SESSION_EVENT_RECORD_BYTES = 4_096;
@@ -195,7 +196,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isScope(value: unknown): value is SessionObservationScope {
-  return isRecord(value) && (value.kind === 'project' || (value.kind === 'feature' && isIdentity(value.featureSlug)));
+  return isRecord(value) && (value.kind === 'project' || (value.kind === 'feature' && isFeatureSlug(value.featureSlug)));
 }
 
 function isSafeValue(value: unknown): boolean {

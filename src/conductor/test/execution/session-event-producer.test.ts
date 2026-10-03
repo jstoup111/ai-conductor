@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -97,6 +97,20 @@ describe('SessionEventProducer', () => {
     await expect(readFile(second.path, 'utf8')).resolves.toContain('event-b');
     await expect(readFile(join(context.projectRoot, '.pipeline', 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(join(context.projectRoot, '.pipeline', 'pipeline-events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('refuses a final producer-file symlink without appending outside its producer root', async () => {
+    const context = await fixture();
+    const outside = join(context.projectRoot, 'outside.jsonl');
+    await writeFile(outside, 'outside-only\n');
+    await symlink(outside, join(context.producerRoot, 'producer-a.jsonl'));
+    const producer = new SessionEventProducer(context, {
+      producerId: 'producer-a', generateId: () => 'event-a', now: () => '2026-10-02T12:00:00.000Z',
+    });
+
+    await expect(producer.append(producer.refusal({ subcommand: 'finish-record' })))
+      .rejects.toMatchObject({ code: 'producer-path-invalid' });
+    await expect(readFile(outside, 'utf8')).resolves.toBe('outside-only\n');
   });
 
   it('does not serialize raw operation inputs or transport errors', () => {
