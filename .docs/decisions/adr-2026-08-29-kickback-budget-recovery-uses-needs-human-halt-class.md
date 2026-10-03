@@ -71,6 +71,18 @@ read-modify-write paths share the existing bounded lease; the adjustment is stag
 idempotent same-schema external event; the CLI never directly clears the halt; adjustment history
 and the pure budget view remain authoritative; and mechanical-fault state remains separate.
 
+> **Amended 2026-10-03 by operator decision (James Stoup, as-built AB-ADR-1 for
+> `needs-human-halt-auto-resumed-at-dispatch-rewind-c`):** D4 carries a narrow exception to "the CLI
+> never directly clears the halt."
+>
+> 1. D4.1: The generic `halt clear` command may directly clear a `kickback-cap` halt. It stays
+>    TTY-bound, requires a resolved operator identity and rationale, and appends its
+>    `halt_clear_authorized` event before it unlinks the marker pair. A direct clear changes no
+>    budget; an exhausted allowance halts again on its next cap check.
+> 2. D4.2: The daemon gains no clearing authority from this amendment. Budget adjustment (reset and
+>    raise) keeps the staged, generation-bound authorization and daemon-side clear of D3 and D5.
+>    Operator-direct clearing is preferred over widening daemon-side clearing.
+
 ### D5 — Raise grows the allowance the live evidence names, including plan growth
 
 > **Amended 2026-09-24 by #2185:** D4 carries forward the superseded ADR's D2 as amended by #2190,
