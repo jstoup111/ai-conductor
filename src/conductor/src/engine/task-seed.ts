@@ -233,10 +233,14 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     if (recordedDigests.kind === 'incompatible') {
       throw new Error(`Unable to seed task status from task digests: ${recordedDigests.message}`);
     }
-
     if (recordedDigests.kind === 'present') {
       const changedTaskIds = Object.entries(currentDigests)
-        .filter(([taskId, digest]) => recordedDigests.digests[taskId] !== undefined && recordedDigests.digests[taskId] !== digest)
+        .filter(([taskId, digest]) => {
+          const recorded = recordedDigests.digests[taskId];
+          // Missing or unrecognised digest versions are a migration baseline,
+          // never evidence that already-completed work changed.
+          return recorded?.startsWith('v1:') === true && recorded !== digest;
+        })
         .map(([taskId]) => taskId);
       if (changedTaskIds.length > 0) {
         const [head, tree, resolvedTaskIds] = await Promise.all([
@@ -257,7 +261,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
               source: {
                 findingId: digest,
                 authority: 'plan_amendment',
-                instruction: `Task ${taskId} plan text changed since it was implemented; reopen it in BUILD.`,
+                instruction: `Task ${taskId}${planTasks.get(taskId)?.name ? ` (${planTasks.get(taskId)!.name})` : ''} plan text changed since it was implemented; reopen it in BUILD.`,
               },
               baseline: {
                 head: head ?? '',
@@ -287,11 +291,10 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     }
     const planIdentity = repairPlanIdentity(projectRoot, resolvedPlanPath);
     const openRepairTaskIds = new Set(
-      Object.entries(repairs.value.currentByPlan[planIdentity] ?? {})
-        .flatMap(([taskId, obligationId]) =>
-          repairs.value.records[obligationId]?.tasks[taskId]?.status === 'open'
-            ? [canonicalTaskId(taskId)]
-            : []),
+      Object.values(repairs.value.records)
+        .filter((obligation) => obligation.planIdentity === planIdentity)
+        .flatMap((obligation) => Object.entries(obligation.tasks)
+          .flatMap(([taskId, task]) => task.status === 'open' ? [canonicalTaskId(taskId)] : [])),
     );
 
     // Load existing task-status.json.
