@@ -595,8 +595,8 @@ describe('sweepStaleReviewArtifacts spares a still-valid verdict, still deletes 
 
     const removed = await sweepStaleReviewArtifacts(s.repo, 'prd_audit', Date.now());
     expect(removed).toEqual([
-      join(s.repo, '.pipeline/prd-audit.md'),
       join(s.repo, '.pipeline/prd-audit.json'),
+      join(s.repo, '.pipeline/prd-audit.md'),
     ]);
 
     const result = await checkStepCompletion(s.repo, 'prd_audit', ctxFor(s.repo));
