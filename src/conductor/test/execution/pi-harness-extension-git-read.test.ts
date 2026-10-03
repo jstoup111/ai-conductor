@@ -103,8 +103,6 @@ describe('harness extension git_read', () => {
     ['--open-files-in-pager=vi', '--open-files-in-pager'],
     ['--ext-diff', '--ext-diff'],
     ['--textconv', '--textconv'],
-    ['--filters', '--filters'],
-    ['--show-signature', '--show-signature'],
     ['--config-env=core.pager=X', '--config-env'],
   ])('throws naming refused option %s and spawns nothing', async (arg, named) => {
     await expect(run({ subcommand: 'show', args: ['HEAD', arg] })).rejects.toThrow(`git_read option not allowed: ${named}`);
@@ -113,6 +111,16 @@ describe('harness extension git_read', () => {
 
   it('throws for -c core.pager=sh and spawns nothing', async () => {
     await expect(run({ subcommand: 'log', args: ['-c', 'core.pager=sh'] })).rejects.toThrow('git_read option not allowed: -c');
+    expect(boundary.calls).toEqual([]);
+  });
+
+  it.each([
+    ['cat-file', '--filters', '--filters'],
+    ['cat-file', '--filt', '--filters'],
+    ['show', '--show-signature', '--show-signature'],
+    ['log', '--show-sig', '--show-signature'],
+  ])('rejects %s option %s before reaching the process boundary', async (subcommand, arg, named) => {
+    await expect(run({ subcommand, args: ['HEAD', arg] })).rejects.toThrow(`git_read option not allowed: ${named}`);
     expect(boundary.calls).toEqual([]);
   });
 

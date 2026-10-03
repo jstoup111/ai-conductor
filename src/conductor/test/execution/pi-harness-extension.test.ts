@@ -81,8 +81,7 @@ describe('materializePiHarnessExtension', () => {
   });
 
   it('keeps the asset source free of import and require statements', () => {
-    expect(PI_HARNESS_EXTENSION_SOURCE).not.toMatch(/(^|[^\w.])import\s*\(/);
-    expect(PI_HARNESS_EXTENSION_SOURCE).not.toMatch(/^\s*import\s/m);
-    expect(PI_HARNESS_EXTENSION_SOURCE).not.toMatch(/\brequire\s*\(/);
+    expect(PI_HARNESS_EXTENSION_SOURCE).not.toMatch(/\bimport\b/);
+    expect(PI_HARNESS_EXTENSION_SOURCE).not.toMatch(/\brequire\b/);
   });
 });

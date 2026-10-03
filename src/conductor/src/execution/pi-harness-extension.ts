@@ -56,7 +56,7 @@ export default function(pi: any) {
         if (bad !== undefined) throw new Error('git_read option not allowed: ' + bad);
         const env: Record<string, string | undefined> = { ...process.env, GIT_PAGER: 'cat', PAGER: 'cat' };
         delete env.GIT_EXTERNAL_DIFF;
-        // Import-free by contract (catalog D15): reach child_process through the runtime.
+        // Module-free by contract (catalog D15): reach child_process through the runtime.
         const childProcess: any = process.getBuiltinModule('node:child_process');
         const stdout: string = await new Promise((resolve, reject) => {
           childProcess.execFile('git', [subcommand, ...args], { cwd: ctx?.cwd, shell: false, env, maxBuffer: 16 * 1024 * 1024 },
@@ -71,7 +71,7 @@ export default function(pi: any) {
   }
   const path = pi.getFlag('conduct-output-schema');
   if (typeof path !== 'string' || path === '') return;
-  // Import-free by contract (catalog D15): reach node:fs through the runtime, not an import.
+  // Module-free by contract (catalog D15): reach node:fs through the runtime.
   const raw = process.getBuiltinModule('node:fs').readFileSync(path, 'utf8');
   pi.registerTool({
     name: 'submit_result',

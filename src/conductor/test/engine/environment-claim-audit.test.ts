@@ -123,10 +123,10 @@ describe('environment claim audit', () => {
 
   it('treats Pi like Claude because its catalog declares no OS sandbox', () => {
     const pi = auditEnvironmentBlockerClaims(INCIDENT_OUTPUT, {
-      provider: 'pi', writeFenceInstalled: false,
+      provider: 'pi', writeFenceInstalled: false, gitGuardInstalled: false,
     });
     const claude = auditEnvironmentBlockerClaims(INCIDENT_OUTPUT, {
-      provider: 'claude', writeFenceInstalled: false,
+      provider: 'claude', writeFenceInstalled: false, gitGuardInstalled: false,
     });
     expect(providerDescriptor('pi').osSandbox).toBe(false);
     expect(pi.refuted.map((claim) => claim.operation)).toEqual(claude.refuted.map((claim) => claim.operation));
