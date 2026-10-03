@@ -191,7 +191,7 @@ from previously prepared worktrees.
 
 ## Git hooks
 
-The engine generates three git hooks per worktree, into `<worktree>/.pipeline/git-hooks/` (mode 0755), and
+The engine generates five git hooks per worktree, into `<worktree>/.pipeline/git-hooks/` (mode 0755), and
 points the worktree at them:
 
 ```bash
@@ -205,6 +205,8 @@ git -C <worktree> config --worktree core.hooksPath <worktree>/.pipeline/git-hook
 | `pre-commit` | every commit in the worktree | While `.pipeline/phase-active` exists and its phase is `BUILD` or `SHIP`, rejects any staged path under a protected artifact directory (`PROTECTED_ARTIFACT_DIRECTORIES` in `protected-artifact-seal.ts` — `.docs/architecture`, `.docs/decisions`, `.docs/plans`, `.docs/specs`, `.docs/stories`) unless an `allow:` prefix in the marker matches it or its stem names the worktree's own feature (from `.pipeline/task-status.json`'s `plan_ref`, date prefix ignored). A malformed or escaping staged path (empty, absolute, or containing `..`/`.`) is always rejected. Provider-agnostic — it fires for any commit in the worktree, regardless of which host or CLI created it, unlike the Claude-only `docs-guard.sh` PreToolUse hook. | **Yes — exit 1** naming every offender and directing the amendment to DECIDE. |
 | `prepare-commit-msg` | every commit in the worktree | Stamps `Task: <id>` from `<worktree>/.pipeline/current-task` using `git interpret-trailers --if-exists replace`. Fires only when no explicit trailer is already present. Abstains on amend, on rebase replay, and on an empty staged diff. | No |
 | `commit-msg` | every commit in the worktree | Validates a supplied `Task:` trailer, checks its staged paths against the active task's declared files, then emits non-blocking warnings for bundling and subject mismatch. An out-of-scope path is reported with a copy-pasteable `Scope: <path> — <rationale>` widening. Containment defaults to report-only; set `build_review.scopeContainmentEnforced: true` to refuse verified violations. | **Yes — exit 1** (git-hook convention) when a supplied trailer uses the `task-N` form or names an id absent from `.pipeline/task-status.json`, or when enforced scope-check returns exit `2`. |
+| `reference-transaction` | every reference transaction | At the `prepared` stage, refuses deleting a local branch whose commits would become unreachable; all other stages and ref changes pass. After an allow it chains to the repository hook. | **Yes — exit 1** on refusal or a chained-hook veto. |
+| `pre-push` | before a push updates its remote | Refuses overwriting remote history that the worktree has not fetched; remote deletions, new refs, fast-forwards, and lease-equivalent updates pass. After an allow it chains to the repository hook. | **Yes — exit 1** on refusal or a chained-hook veto. |
 
 All three hooks chain to `$(git rev-parse --git-common-dir)/hooks/<name>` when one exists and is
 executable. `pre-commit` and `prepare-commit-msg` are pure bash plus `git` and POSIX tools (`pre-commit`
@@ -289,6 +291,10 @@ directory, such as test fixtures, pass through untouched.
   `--config-env` and single-level aliases, whose text is split the way git quotes it. Every other
   spelling git accepts, such as `branch -d -f` or `-df`, passes through unclassified until #2904 ships.
 - Pi provider dispatches, which run unguarded until #2895 ships.
+- An overridden worktree `core.hooksPath`, which bypasses the git-side ref-hook backstop.
+- `git push --no-verify`, which bypasses `pre-push`.
+- Git run from the root checkout, which has no worktree-scoped `core.hooksPath`.
+- Worktrees the engine has not prepared.
 
 ## Self-host sandbox write-fence
 
