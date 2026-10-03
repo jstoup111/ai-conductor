@@ -116,6 +116,15 @@ A current requirement/plan/architecture gap cannot be converted to a non-blockin
 >
 > **D9.1** `distinctFrom` is the only new case-row field, and only unbound rows may carry it.
 
+> **Amended 2026-10-03 by operator decision (James Stoup, as-built AR-AB-D9-2 for
+> `new-review-concern-at-a-resolved-anchor-halts-as-m`):** a decision stop supersedes an open owner.
+>
+> **D9.2** When an escalation or a `blocked` consistency result targets a source that already has an
+> unresolved owning case, that owner is resolved as superseded by the decision stop and its
+> unfinished effect is discarded, then the decision-stop case opens as the sole owner (D6.1 unchanged).
+> No suspended or overlaid case state exists. On decision resolution, recovery re-evaluates against
+> the new approved baseline; a still-needed repair is re-derived, never resumed.
+
 ### D10 — One authority across attended and daemon execution
 
 Extract the review-outcome application path currently nested under the daemon-specific branch into a shared review-domain operation that both custom-policy execution modes call. It invokes the existing adjudication coordinator once, persists a result bound to the current lap, and returns a typed route. Daemon navigation and attended checkpoint presentation consume that result; neither independently recomputes raw findings into a kickback. The daemon must not adjudicate a second time when the shared operation has already settled the lap.
