@@ -22,6 +22,7 @@ import { preparePiSelfHostAuth, type PiSelfHostAuthRunner } from './pi-self-host
 import { applyRateCard, loadRateCard, type RateCard, type RateCardLoader } from './rate-card.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
+import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -481,7 +482,7 @@ export class PiProvider implements LLMProvider {
       stderr: 'pipe',
       cwd: options.cwd,
       env: options.managedSessionContext
-        ? composeManagedSessionEnvironment(options.managedSessionContext, environment)
+        ? composePreparedManagedSessionEnvironment(options.managedSessionContext, composeManagedSessionEnvironment(options.managedSessionContext, environment))
         : environment,
     });
     let aborted = false;

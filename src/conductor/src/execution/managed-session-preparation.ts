@@ -1,5 +1,119 @@
+import { access, chmod, mkdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { delimiter, isAbsolute, join } from 'node:path';
 import type { ManagedSessionContext } from './managed-session-context.js';
 import { ProviderSetupUnavailableError } from '../engine/provider-setup-failure.js';
+import { GH_OBSERVER_EXECUTABLE_NAME, renderGhObserverAsset } from './gh-observer-assets.js';
+import { GH_OBSERVER_REAL_EXECUTABLE_ENV } from './gh-observer.js';
+
+/** Coverage is intentionally bounded: an empty event set is never remote-write proof. */
+export interface ManagedGhObservationCoverage {
+  readonly boundary: 'managed-path-resolved-gh';
+  readonly completeness: 'unknown';
+}
+
+export interface PreparedManagedGhObservation {
+  readonly wrapperDirectory: string;
+  readonly realExecutable: string;
+  readonly coverage: ManagedGhObservationCoverage;
+}
+
+export interface PrepareManagedGhObservationInput {
+  readonly context: ManagedSessionContext;
+  /** The inherited environment is read before the wrapper can change PATH. */
+  readonly environment?: NodeJS.ProcessEnv;
+  /** Injectable resolver keeps ordinary tests off the host executable boundary. */
+  readonly resolveExecutable?: (program: string, environment: NodeJS.ProcessEnv) => Promise<string | undefined>;
+  /** Injectable only for fixture assets; production uses this module's packaged sibling. */
+  readonly observerModuleUrl?: string;
+}
+
+const preparedGhObservations = new WeakMap<ManagedSessionContext, PreparedManagedGhObservation>();
+const UNKNOWN_COMPLETENESS: ManagedGhObservationCoverage = {
+  boundary: 'managed-path-resolved-gh', completeness: 'unknown',
+};
+
+/**
+ * Provision one private `gh` PATH entry for an already-owned managed child.
+ * This never changes process.env: operator commands and unrelated engine
+ * subprocesses retain their original resolution.
+ */
+export async function prepareManagedGhObservation(
+  input: PrepareManagedGhObservationInput,
+): Promise<PreparedManagedGhObservation> {
+  const environment = input.environment ?? process.env;
+  if (!validManagedContext(input.context)) {
+    throw ghUnavailable(input.context.provider, 'the managed-session context is invalid');
+  }
+  const realExecutable = await (input.resolveExecutable ?? resolveExecutable)(GH_OBSERVER_EXECUTABLE_NAME, environment);
+  if (!realExecutable || !isAbsolute(realExecutable)) {
+    throw ghUnavailable(input.context.provider, 'the underlying gh executable could not be resolved before PATH observation setup');
+  }
+  const wrapperDirectory = join(input.context.producerRoot, '.gh-observer');
+  try {
+    await mkdir(wrapperDirectory, { recursive: true });
+    await writeFile(
+      join(wrapperDirectory, GH_OBSERVER_EXECUTABLE_NAME),
+      renderGhObserverAsset(input.observerModuleUrl ?? new URL('./gh-observer.js', import.meta.url).href),
+      { mode: 0o755 },
+    );
+    await chmod(join(wrapperDirectory, GH_OBSERVER_EXECUTABLE_NAME), 0o755);
+  } catch {
+    throw ghUnavailable(input.context.provider, 'the managed gh observer wrapper could not be provisioned');
+  }
+  const prepared = { wrapperDirectory, realExecutable, coverage: UNKNOWN_COMPLETENESS };
+  preparedGhObservations.set(input.context, prepared);
+  return prepared;
+}
+
+/** Apply only a previously prepared managed-child overlay; no ambient mutation. */
+export function composePreparedManagedSessionEnvironment(
+  context: ManagedSessionContext | undefined,
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  if (!context) return environment;
+  const prepared = preparedGhObservations.get(context);
+  if (!prepared) return environment;
+  const inheritedPath = environment.PATH ?? process.env.PATH;
+  return {
+    ...environment,
+    PATH: inheritedPath ? `${prepared.wrapperDirectory}${delimiter}${inheritedPath}` : prepared.wrapperDirectory,
+    [GH_OBSERVER_REAL_EXECUTABLE_ENV]: prepared.realExecutable,
+  };
+}
+
+async function resolveExecutable(program: string, environment: NodeJS.ProcessEnv): Promise<string | undefined> {
+  for (const directory of (environment.PATH ?? '').split(delimiter)) {
+    if (!directory) continue;
+    const candidate = join(directory, program);
+    try {
+      await access(candidate, 1);
+      if (!(await stat(candidate)).isFile()) continue;
+      const resolved = await realpath(candidate);
+      if (isAbsolute(resolved)) return resolved;
+    } catch {
+      // Continue searching the inherited PATH. A missing segment is not proof
+      // that a later operator-supplied segment lacks gh.
+    }
+  }
+  return undefined;
+}
+
+function validManagedContext(context: ManagedSessionContext): boolean {
+  return isAbsolute(context.projectRoot)
+    && isAbsolute(context.worktreeRoot)
+    && isAbsolute(context.producerRoot)
+    && context.dispatchId.trim().length > 0
+    && context.provider.trim().length > 0;
+}
+
+function ghUnavailable(provider: string, reason: string): ProviderSetupUnavailableError {
+  return new ProviderSetupUnavailableError({
+    provider: provider || 'unknown',
+    capability: 'managed-gh-observation',
+    reason,
+    recoveryAction: 'Install an executable gh on the managed provider PATH and ensure the per-dispatch observation destination is writable, then retry.',
+  });
+}
 
 /** The minimum evidence a provider policy must supply before it may write telemetry. */
 export type ObservationDestinationProbeResult =
