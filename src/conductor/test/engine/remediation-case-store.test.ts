@@ -355,14 +355,51 @@ describe('remediation case store', () => {
     ['foreign feature', JSON.stringify({ ...CASE_STATE, feature: { ...FEATURE, feature: 'other-feature' } }), 'foreign-feature'],
     ['malformed JSON', '{not-json', 'malformed-json'],
     ['unknown future envelope', JSON.stringify({ ...CASE_STATE, version: 'v3' }), 'unknown-version'],
+    ['malformed persisted state', JSON.stringify({
+      ...CASE_STATE,
+      cases: [{ ...CASE_STATE.cases[0], effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' } }],
+    }), 'malformed-state'],
   ])('does not overwrite %s while refusing it', async (_description, original, reason) => {
     const projectRoot = await createProjectRoot();
     const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
     await writeFile(statePath, original, 'utf8');
 
-    await expect(new RemediationCaseStore(projectRoot, FEATURE)
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await expect(store.read()).resolves.toEqual({ ok: false, reason });
+    await expect(store
       .mutate(async () => ({ value: null, nextState: CASE_STATE }))).resolves.toEqual({ ok: false, reason });
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(original);
+  });
+
+  it('rejects an invalid next state without replacing valid persisted history', async () => {
+    const projectRoot = await createProjectRoot();
+    const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
+    const original = JSON.stringify(CASE_STATE);
+    const calls: string[] = [];
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(statePath, original, 'utf8');
+    const filesystem: RemediationCaseStoreFilesystem = {
+      readFile: (path) => readFile(path, 'utf8'),
+      mkdir: async () => { calls.push('mkdir'); },
+      writeFile: async () => { calls.push('writeFile'); },
+      rename: async () => { calls.push('rename'); },
+      rm: async () => { calls.push('rm'); },
+    };
+    const invalidNextState: RemediationCaseStoreState = {
+      ...CASE_STATE,
+      cases: [
+        CASE_STATE.cases[0],
+        { ...CASE_STATE.cases[0], id: 'case-2', effect: { id: 'effect-2', kind: 'action', status: 'reserved' } },
+      ],
+    };
+
+    await expect(new RemediationCaseStore(projectRoot, FEATURE, { filesystem })
+      .mutate(async () => ({ value: null, nextState: invalidNextState }))).resolves.toEqual({
+      ok: false,
+      reason: 'rejected-transition',
+    });
+    expect(calls).toEqual([]);
     await expect(readFile(statePath, 'utf8')).resolves.toBe(original);
   });
 
