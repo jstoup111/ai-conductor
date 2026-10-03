@@ -22,6 +22,8 @@ export interface ReconcileRemediationCasesInput {
   readonly resolveAbsentOpenNonActionCases?: boolean;
   /** Case identities known by the caller to belong to another feature/domain. */
   readonly foreignCaseIds?: readonly string[];
+  /** Rows that need recurrence detection but remain owned by a separate writer. */
+  readonly recurrenceOnlyCaseRefs?: ReadonlySet<string>;
 }
 
 export type RemediationCaseReconciliationRejection =
@@ -58,7 +60,7 @@ export type ReconcileRemediationCasesResult =
       readonly caseIds: readonly string[];
       readonly sourceIds: readonly string[];
     }
-  | { readonly ok: false; readonly reason: 'store-failure'; readonly storeReason: RemediationCaseStoreFailureReason };
+  | { readonly ok: false; readonly reason: 'store-failure'; readonly storeReason: RemediationCaseStoreFailureReason; readonly caseIds?: readonly string[]; readonly sourceIds?: readonly string[] };
 
 /** Explicit durable bindings, never prose similarity or tree movement, decide reuse. */
 export type RemediationCaseReuseDisposition = 'resume' | 'reuse' | 'halt-repeat' | 'halt-regression';
@@ -175,7 +177,7 @@ function reconcileState(
       // the judge explicitly declared the new concern distinct.  The durable
       // source link is sufficient bookkeeping; semantic distinction remains
       // the judge's case-v2 declaration, never a prose comparison here.
-      if (caseRow.distinctFrom === undefined) {
+      if (!caseRow.distinctFrom?.length) {
         const recurringCaseIds = state.cases
           .filter((record) => record.disposition === 'act' && record.resolution === 'resolved')
           .filter((record) => record.sources.some((link) => sources.some((source) => source.sourceId === link.sourceId)))
@@ -185,6 +187,10 @@ function reconcileState(
           continue;
         }
       }
+      // Escalation rows still need the same resolved-source recurrence gate,
+      // but a non-recurring stop is persisted by the coordinator's dedicated
+      // decision-stop seam rather than this general transition writer.
+      if (input.recurrenceOnlyCaseRefs?.has(caseRow.caseRef)) continue;
       // `distinctFrom` is an admitted declaration that this proposal is not
       // the open case with otherwise matching sources.  It must therefore
       // reach the owner check and (when unowned) stamp its own durable case.
@@ -397,7 +403,14 @@ export async function reconcileRemediationCases(
       ? { value: reconciliation, ...(reconciliation.changed ? { nextState: reconciliation.state } : {}) }
       : { value: reconciliation };
   });
-  if (!mutation.ok) return { ok: false, reason: 'store-failure', storeReason: mutation.reason };
+  if (!mutation.ok) return {
+    ok: false,
+    reason: 'store-failure',
+    storeReason: mutation.reason,
+    ...(mutation.reason === 'rejected-transition' && 'caseIds' in mutation
+      ? { caseIds: mutation.caseIds, sourceIds: mutation.sourceIds }
+      : {}),
+  };
   return mutation.value.ok
     ? {
         ok: true,

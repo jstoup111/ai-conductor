@@ -201,6 +201,7 @@ export interface RemediationCaseStoreMutation<Value> {
 
 export type RemediationCaseStoreMutationResult<Value> =
   | { readonly ok: true; readonly value: Value }
+  | { readonly ok: false; readonly reason: 'rejected-transition'; readonly caseIds: readonly string[]; readonly sourceIds: readonly string[] }
   | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason };
 
 const defaultFilesystem: RemediationCaseStoreFilesystem = {
@@ -221,6 +222,33 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 
 function boundedString(value: unknown, maxLength = MAX_TEXT_LENGTH): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength;
+}
+
+/**
+ * A rejected transition is not persisted, but its proposed raw state can still
+ * identify the unresolved owners that made it invalid. Keep that evidence on
+ * the failure result without relaxing the parser or touching the file.
+ */
+function rejectedTransitionOwners(value: unknown): { readonly caseIds: readonly string[]; readonly sourceIds: readonly string[] } {
+  if (!isRecord(value) || !Array.isArray(value.cases)) return { caseIds: [], sourceIds: [] };
+  const ownersBySource = new Map<string, Set<string>>();
+  for (const record of value.cases) {
+    if (!isRecord(record) || record.resolution !== 'open' || !boundedString(record.id) || !Array.isArray(record.sources)) continue;
+    for (const source of record.sources) {
+      if (!isRecord(source) || !boundedString(source.sourceId)) continue;
+      const owners = ownersBySource.get(source.sourceId) ?? new Set<string>();
+      owners.add(record.id);
+      ownersBySource.set(source.sourceId, owners);
+    }
+  }
+  const caseIds = new Set<string>();
+  const sourceIds: string[] = [];
+  for (const [sourceId, owners] of ownersBySource) {
+    if (owners.size < 2) continue;
+    sourceIds.push(sourceId);
+    for (const caseId of owners) caseIds.add(caseId);
+  }
+  return { caseIds: [...caseIds], sourceIds };
 }
 
 function validTimestamp(value: unknown): value is string {
@@ -680,7 +708,7 @@ export class RemediationCaseStore {
       if (!mutation.nextState) return { ok: true, value: mutation.value };
 
       const parsed = parseState(mutation.nextState);
-      if (!parsed.ok) return { ok: false, reason: 'rejected-transition' };
+      if (!parsed.ok) return { ok: false, reason: 'rejected-transition', ...rejectedTransitionOwners(mutation.nextState) };
       if (!sameFeature(parsed.state.feature, this.feature)) return { ok: false, reason: 'foreign-feature' };
       const replaced = await this.atomicReplace(parsed.state);
       return replaced.ok
