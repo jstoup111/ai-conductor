@@ -11,6 +11,10 @@ const cli = resolve(process.cwd(), 'src/intake-file-cli.ts');
 const tsx = resolve(process.cwd(), 'node_modules/.bin/tsx');
 const tsconfig = resolve(process.cwd(), 'tsconfig.json');
 const roots: string[] = [];
+// tsx's CLI creates an IPC socket below TMPDIR.  The fixture's physical
+// directory stays within Vitest's run root, while this Linux pathname keeps
+// the socket name below the Unix-domain length limit in deep worktrees.
+const childTmpdir = process.platform === 'linux' ? '/proc/self/cwd' : undefined;
 
 interface GhCall {
   readonly cwd: string;
@@ -52,9 +56,9 @@ exit 19
       GH_CAPTURE: capture,
       HOME: home,
       PATH: `${stubDirectory}:${process.env.PATH ?? '/usr/bin:/bin'}`,
-      TMPDIR: root,
-      TMP: root,
-      TEMP: root,
+      TMPDIR: childTmpdir ?? root,
+      TMP: childTmpdir ?? root,
+      TEMP: childTmpdir ?? root,
     },
   };
 }
