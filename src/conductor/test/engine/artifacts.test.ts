@@ -2968,6 +2968,87 @@ describe('engine/artifacts', () => {
         await rm(bareDir, { recursive: true, force: true });
       });
 
+      it('#2014: reopens rewritten tasks through the production build predicate despite pre-boundary trailers', async () => {
+        await execa('git', ['init', '-b', 'main'], { cwd: dir });
+        await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+        await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+        await writeFile(join(dir, 'README.md'), '# Test\n');
+        await execa('git', ['add', 'README.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
+
+        const planPath = join(dir, '.docs/plans/phase-1.md');
+        const originalPlan = [
+          '### Task 1: First task',
+          '**Story:** 1',
+          'Implement the original first behavior.',
+          '',
+          '### Task 2: Second task',
+          '**Story:** 1',
+          'Implement the original second behavior.',
+          '',
+        ].join('\n');
+        await writePlan(originalPlan);
+        await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'docs: add original plan'], { cwd: dir });
+
+        await mkdir(join(dir, 'src'), { recursive: true });
+        await writeFile(join(dir, 'src/first.ts'), 'export const first = true;\n');
+        await execa('git', ['add', 'src/first.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: implement first\n\nTask: 1\n'], { cwd: dir });
+        await writeFile(join(dir, 'src/second.ts'), 'export const second = true;\n');
+        await execa('git', ['add', 'src/second.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: implement second\n\nTask: 2\n'], { cwd: dir });
+
+        const ctx = { projectRoot: dir, planPath };
+        // The initial seed reconstructs both completed rows from their Task:
+        // trailers and records the digest baseline that the amendment changes.
+        expect(await checkStepCompletion(dir, 'build', ctx)).toEqual({ done: true });
+
+        await writePlan(originalPlan
+          .replace('Implement the original first behavior.', 'Implement the rewritten first behavior.')
+          .replace('Implement the original second behavior.', 'Implement the rewritten second behavior.'));
+        await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'docs: rewrite both task descriptions'], { cwd: dir });
+        const amendmentHead = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+
+        const result = await checkStepCompletion(dir, 'build', ctx);
+
+        expect(result).toMatchObject({ done: false });
+        expect(result.reason).toContain('1, 2');
+        expect(result.reason).toContain('1 "First task"');
+        expect(result.reason).toContain('2 "Second task"');
+
+        const status = JSON.parse(await readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+        expect(status.tasks).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: '1', status: 'pending' }),
+          expect.objectContaining({ id: '2', status: 'pending' }),
+        ]));
+
+        const state = JSON.parse(await readFile(join(dir, '.pipeline/engine-state.json'), 'utf8'));
+        const obligations = Object.values(state.repairObligations.records) as Array<{
+          source: { authority: string };
+          baseline: { head: string };
+          settlement: string;
+          tasks: Record<string, { status: string }>;
+        }>;
+        expect(obligations).toHaveLength(2);
+        for (const taskId of ['1', '2']) {
+          expect(obligations).toContainEqual(expect.objectContaining({
+            source: expect.objectContaining({ authority: 'plan_amendment' }),
+            baseline: expect.objectContaining({ head: amendmentHead }),
+            settlement: 'settled',
+            tasks: { [taskId]: { status: 'open' } },
+          }));
+        }
+
+        // The only trailers remain before each repair boundary, so neither
+        // historic trailer can revive the reopened task.
+        expect(await checkStepCompletion(dir, 'build', ctx)).toMatchObject({
+          done: false,
+          reason: expect.stringContaining('1, 2'),
+        });
+      });
+
       // #859: bug fix — the build predicate previously computed `unresolved`
       // by filtering task-status.json rows only, ignoring Task:-trailered
       // commits entirely. A build where every task is trailer-evidenced but
