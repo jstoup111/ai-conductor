@@ -70,6 +70,8 @@ import type { Envelope } from './engineer/intake/port.js';
 import { createBlockerResolver } from './blocker-resolver.js';
 import { ghIssueLabelReader } from './backlog-priority.js';
 import { createDeliveryGuardedQueue, getIssueState } from './engineer/intake/delivery-guard.js';
+import { INTAKE_CLAIM_LEASE_WAIT_MS, withIntakeClaimLease } from './engineer/intake/claim-lease.js';
+import { reconcileStrandedClaims } from './engineer/intake/reconcile-strands.js';
 import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
@@ -482,6 +484,8 @@ export interface DispatchEngineerOpts {
   registryPath?: string;
   /** Override the engineer dir (for tests). */
   engineerDir?: string;
+  /** Bound the intake claim lease wait; production uses the five-minute default. */
+  intakeClaimLeaseWaitMs?: number;
   /** Print to stdout (default: process.stdout.write). */
   print?: (s: string) => void;
   /** Print to stderr (default: process.stderr.write). */
@@ -1514,80 +1518,87 @@ export async function dispatchEngineer(
       const claimConfigResult = await loadConfig(process.cwd());
       const claimConfig = claimConfigResult.ok ? claimConfigResult.config : undefined;
 
-      // Wrap the queue with the delivery guard decorator (Task 8: integration point).
-      // The guard is transparent to claimUnblocked; it only filters/heals problematic
-      // candidates via ledger + gh state checks.
-      const guardedQueue = createDeliveryGuardedQueue(queue, ledger, {
-        gh,
-        logger: { info: (msg) => printErr(msg) },
-        config: claimConfig,
-      });
+      return withIntakeClaimLease(engDir, async () => {
+        const reconciliation = await reconcileStrandedClaims({ queue, ledger });
+        if (reconciliation.released.length > 0) {
+          printErr(`released ${reconciliation.released.length} stranded intake claim(s)`);
+        }
 
-      // Fresh resolver per claim call — createBlockerResolver()'s memo is scoped
-      // to a single walk, so reusing one across calls would leak stale verdicts
-      // (see daemon-backlog.ts:210-221 for the same rule on the daemon side).
-      const resolver = createBlockerResolver({ run: (args) => gh(args, { cwd: process.cwd() }) });
-      // Claim-time label read — no cache: a relabel between claims must be
-      // honored on the very next claim (TR-1 happy 3). A throwing reader is
-      // handled inside claimUnblocked (falls back to drain order, warns once
-      // via `log`) — never caught here.
-      const labelReader = ghIssueLabelReader((args) => gh(args, { cwd: process.cwd() }));
-      const outcome = await claimUnblocked({
-        queue: guardedQueue as unknown as DependencyClaimQueue,
-        resolveDependency: (sourceRef) => resolver.resolve(sourceRef ?? ''),
-        resolveBands: (refs) => resolveClaimBands(labelReader, refs),
-        log: (...args: unknown[]) => printErr(args.map((a) => String(a)).join(' ')),
-      });
+        // Wrap the queue with the delivery guard decorator (Task 8: integration point).
+        // The guard is transparent to claimUnblocked; it only filters/heals problematic
+        // candidates via ledger + gh state checks.
+        const guardedQueue = createDeliveryGuardedQueue(queue, ledger, {
+          gh,
+          logger: { info: (msg) => printErr(msg) },
+          config: claimConfig,
+        });
 
-      if (outcome.kind === 'empty') {
-        print(JSON.stringify({ kind: 'claim', empty: true }));
-        return 0;
-      }
-      if (outcome.kind === 'all-blocked') {
+        // Fresh resolver per claim call — createBlockerResolver()'s memo is scoped
+        // to a single walk, so reusing one across calls would leak stale verdicts
+        // (see daemon-backlog.ts:210-221 for the same rule on the daemon side).
+        const resolver = createBlockerResolver({ run: (args) => gh(args, { cwd: process.cwd() }) });
+        // Claim-time label read — no cache: a relabel between claims must be
+        // honored on the very next claim (TR-1 happy 3). A throwing reader is
+        // handled inside claimUnblocked (falls back to drain order, warns once
+        // via `log`) — never caught here.
+        const labelReader = ghIssueLabelReader((args) => gh(args, { cwd: process.cwd() }));
+        const outcome = await claimUnblocked({
+          queue: guardedQueue as unknown as DependencyClaimQueue,
+          resolveDependency: (sourceRef) => resolver.resolve(sourceRef ?? ''),
+          resolveBands: (refs) => resolveClaimBands(labelReader, refs),
+          log: (...args: unknown[]) => printErr(args.map((a) => String(a)).join(' ')),
+        });
+
+        if (outcome.kind === 'empty') {
+          print(JSON.stringify({ kind: 'claim', empty: true }));
+          return 0;
+        }
+        if (outcome.kind === 'all-blocked') {
+          print(
+            JSON.stringify({
+              kind: 'claim',
+              allBlocked: true,
+              entries: outcome.entries.map(({ envelope: e, verdict }) => {
+                const entryEnvelope = e as unknown as Envelope;
+                return {
+                  text: entryEnvelope.text,
+                  source: entryEnvelope.source,
+                  sourceRef: entryEnvelope.sourceRef,
+                  verdict,
+                };
+              }),
+            }),
+          );
+          return 0;
+        }
+
+        // claimUnblocked's ClaimableEnvelope is a structural subset of the real
+        // Envelope produced by the file queue — narrow back to the concrete type
+        // for ack()/ledger.transition() below.
+        const envelope = outcome.envelope as unknown as Envelope;
+        // Remove from the inbox now that we own it — the ledger carries lifecycle from here.
+        await queue.ack(envelope);
+        try {
+          await ledger.transition(envelope.source, envelope.sourceRef, 'claimed');
+        } catch (error: unknown) {
+          if (error instanceof CorruptLedgerError) throw error;
+          // Entry may be absent for a non-recording source — advisory transition.
+        }
+        // FR-13: persist a claim record so `engineer worktree --source-ref` can later
+        // resolve the Desired-outcome body without the skill ever passing --body itself.
+        await persistClaimRecord(engDir, envelope.sourceRef, envelope.text, envelope.inbound);
         print(
           JSON.stringify({
             kind: 'claim',
-            allBlocked: true,
-            entries: outcome.entries.map(({ envelope: e, verdict }) => {
-              const entryEnvelope = e as unknown as Envelope;
-              return {
-                text: entryEnvelope.text,
-                source: entryEnvelope.source,
-                sourceRef: entryEnvelope.sourceRef,
-                verdict,
-              };
-            }),
+            text: envelope.text,
+            body: envelope.text,
+            source: envelope.source,
+            sourceRef: envelope.sourceRef,
+            inbound: envelope.inbound,
           }),
         );
         return 0;
-      }
-
-      // claimUnblocked's ClaimableEnvelope is a structural subset of the real
-      // Envelope produced by the file queue — narrow back to the concrete type
-      // for ack()/ledger.transition() below.
-      const envelope = outcome.envelope as unknown as Envelope;
-      // Remove from the inbox now that we own it — the ledger carries lifecycle from here.
-      await queue.ack(envelope);
-      try {
-        await ledger.transition(envelope.source, envelope.sourceRef, 'claimed');
-      } catch (error: unknown) {
-        if (error instanceof CorruptLedgerError) throw error;
-        // Entry may be absent for a non-recording source — advisory transition.
-      }
-      // FR-13: persist a claim record so `engineer worktree --source-ref` can later
-      // resolve the Desired-outcome body without the skill ever passing --body itself.
-      await persistClaimRecord(engDir, envelope.sourceRef, envelope.text, envelope.inbound);
-      print(
-        JSON.stringify({
-          kind: 'claim',
-          text: envelope.text,
-          body: envelope.text,
-          source: envelope.source,
-          sourceRef: envelope.sourceRef,
-          inbound: envelope.inbound,
-        }),
-      );
-      return 0;
+      }, { waitTimeoutMs: opts.intakeClaimLeaseWaitMs ?? INTAKE_CLAIM_LEASE_WAIT_MS });
     }
 
     // ── forget ──────────────────────────────────────────────────────────────────
