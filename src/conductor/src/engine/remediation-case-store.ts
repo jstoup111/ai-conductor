@@ -59,6 +59,8 @@ export interface RemediationCaseRecord {
   readonly resolution: 'open' | 'resolved';
   readonly sources: readonly RemediationCaseSourceLink[];
   readonly effect: RemediationCaseEffect;
+  /** Resolved build-review cases this case was explicitly declared distinct from. */
+  readonly distinctFrom?: readonly string[];
   /** Present only for a persisted `refute` disposition; parseState enforces the pairing. */
   readonly refutation?: RemediationCaseRefutation;
   /** Present only for a persisted decision-owner stop; it carries no external effect. */
@@ -171,6 +173,7 @@ export type RemediationCaseStoreFailureReason =
   | 'foreign-feature'
   | 'foreign-domain'
   | 'malformed-state'
+  | 'rejected-transition'
   | 'lock-timeout'
   | 'lock-failed'
   | 'atomic-replace-failed'
@@ -198,6 +201,7 @@ export interface RemediationCaseStoreMutation<Value> {
 
 export type RemediationCaseStoreMutationResult<Value> =
   | { readonly ok: true; readonly value: Value }
+  | { readonly ok: false; readonly reason: 'rejected-transition'; readonly caseIds: readonly string[]; readonly sourceIds: readonly string[] }
   | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason };
 
 const defaultFilesystem: RemediationCaseStoreFilesystem = {
@@ -218,6 +222,33 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 
 function boundedString(value: unknown, maxLength = MAX_TEXT_LENGTH): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength;
+}
+
+/**
+ * A rejected transition is not persisted, but its proposed raw state can still
+ * identify the unresolved owners that made it invalid. Keep that evidence on
+ * the failure result without relaxing the parser or touching the file.
+ */
+function rejectedTransitionOwners(value: unknown): { readonly caseIds: readonly string[]; readonly sourceIds: readonly string[] } {
+  if (!isRecord(value) || !Array.isArray(value.cases)) return { caseIds: [], sourceIds: [] };
+  const ownersBySource = new Map<string, Set<string>>();
+  for (const record of value.cases) {
+    if (!isRecord(record) || record.resolution !== 'open' || !boundedString(record.id) || !Array.isArray(record.sources)) continue;
+    for (const source of record.sources) {
+      if (!isRecord(source) || !boundedString(source.sourceId)) continue;
+      const owners = ownersBySource.get(source.sourceId) ?? new Set<string>();
+      owners.add(record.id);
+      ownersBySource.set(source.sourceId, owners);
+    }
+  }
+  const caseIds = new Set<string>();
+  const sourceIds: string[] = [];
+  for (const [sourceId, owners] of ownersBySource) {
+    if (owners.size < 2) continue;
+    sourceIds.push(sourceId);
+    for (const caseId of owners) caseIds.add(caseId);
+  }
+  return { caseIds: [...caseIds], sourceIds };
 }
 
 function validTimestamp(value: unknown): value is string {
@@ -292,17 +323,25 @@ function parseRefutation(value: unknown): RemediationCaseRefutation | undefined 
     : { claim: value.claim, assertions: assertions as RemediationCaseRefutation['assertions'] };
 }
 
+function parseDistinctFrom(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_CASES ||
+    !value.every((id) => boundedString(id, MAX_REFERENCE_LENGTH)) || new Set(value).size !== value.length) return undefined;
+  return value;
+}
+
 function parseCase(value: unknown):
   | { readonly ok: true; readonly record: RemediationCaseRecord }
   | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state' } {
   if (!isRecord(value)) return { ok: false, reason: 'malformed-state' };
+  const optionalDistinctFrom = Object.hasOwn(value, 'distinctFrom') ? ['distinctFrom'] : [];
   const expectedKeys = value.disposition === 'refute'
-    ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'refutation']
+    ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'refutation', ...optionalDistinctFrom]
     : value.disposition === 'escalate'
       ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect',
         ...(Object.hasOwn(value, 'escalation') ? ['escalation'] : []),
-        ...(Object.hasOwn(value, 'consistencyStop') ? ['consistencyStop'] : [])]
-    : ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect'];
+        ...(Object.hasOwn(value, 'consistencyStop') ? ['consistencyStop'] : []),
+        ...optionalDistinctFrom]
+    : ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', ...optionalDistinctFrom];
   if (!exactKeys(value, expectedKeys)) return { ok: false, reason: 'malformed-state' };
   if (value.domain !== 'build_review') return { ok: false, reason: 'foreign-domain' };
   if (!boundedString(value.id, MAX_REFERENCE_LENGTH) ||
@@ -313,6 +352,7 @@ function parseCase(value: unknown):
     value.sources.length === 0 || value.sources.length > MAX_SOURCES_PER_CASE) return { ok: false, reason: 'malformed-state' };
   const sources = value.sources.map(parseSourceLink);
   const effect = parseEffect(value.effect, value.disposition);
+  const distinctFrom = Object.hasOwn(value, 'distinctFrom') ? parseDistinctFrom(value.distinctFrom) : undefined;
   const refutation = value.disposition === 'refute' ? parseRefutation(value.refutation) : undefined;
   const escalation = value.disposition === 'escalate' && isRecord(value.escalation) &&
     exactKeys(value.escalation, ['owner']) && oneOf(value.escalation.owner, ['product', 'plan', 'architecture'] as const)
@@ -326,6 +366,7 @@ function parseCase(value: unknown):
     ? { sourceIds: value.consistencyStop.sourceIds, rationale: value.consistencyStop.rationale }
     : undefined;
   if (sources.some((source) => source === undefined) || effect === undefined ||
+    Object.hasOwn(value, 'distinctFrom') && distinctFrom === undefined ||
     value.disposition === 'refute' && refutation === undefined ||
     value.disposition === 'escalate' && escalation === undefined && consistencyStop === undefined) return { ok: false, reason: 'malformed-state' };
   return { ok: true, record: {
@@ -338,6 +379,7 @@ function parseCase(value: unknown):
     resolution: value.resolution,
     sources: sources as RemediationCaseSourceLink[],
     effect,
+    ...(distinctFrom === undefined ? {} : { distinctFrom }),
     ...(refutation === undefined ? {} : { refutation }),
     ...(escalation === undefined ? {} : { escalation }),
     ...(consistencyStop === undefined ? {} : { consistencyStop }),
@@ -461,13 +503,12 @@ function parseBuildReviewCases(value: unknown):
   | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state' } {
   if (!Array.isArray(value) || value.length > MAX_CASES) return { ok: false, reason: 'malformed-state' };
   // Canonical identity: one row per case id, one case per durable effect id,
-  // one link per source within a case. Downstream readers index by these ids
-  // (`new Map(cases.map(...))`), which would silently collapse a duplicate
-  // while the array kept both rows — so duplicates are rejected here, before
-  // any caller can consume or mutate the state.
+  // one link per source within a case, and one unresolved owner per source.
+  // Downstream readers index these current owners by source id, while resolved
+  // links remain durable history and therefore do not compete for ownership.
   const caseIds = new Set<string>();
   const effectIds = new Set<string>();
-  const sourceIds = new Set<string>();
+  const unresolvedSourceOwners = new Map<string, string>();
   const cases: RemediationCaseRecord[] = [];
   for (const caseValue of value) {
     const parsed = parseRemediationCaseDomainRecord(caseValue);
@@ -480,12 +521,14 @@ function parseBuildReviewCases(value: unknown):
       if (effectIds.has(record.effect.id)) return { ok: false, reason: 'malformed-state' };
       effectIds.add(record.effect.id);
     }
+    const caseSourceIds = new Set<string>();
     for (const source of record.sources) {
-      // Global, not per-case: a source id repeated across two canonical cases
-      // is ambiguous durable history in exactly the way a repeat within one
-      // case is, and both readers index sources back to a single case.
-      if (sourceIds.has(source.sourceId)) return { ok: false, reason: 'malformed-state' };
-      sourceIds.add(source.sourceId);
+      if (caseSourceIds.has(source.sourceId)) return { ok: false, reason: 'malformed-state' };
+      caseSourceIds.add(source.sourceId);
+      if (record.resolution === 'open') {
+        if (unresolvedSourceOwners.has(source.sourceId)) return { ok: false, reason: 'malformed-state' };
+        unresolvedSourceOwners.set(source.sourceId, record.id);
+      }
     }
     cases.push(record);
   }
@@ -665,7 +708,7 @@ export class RemediationCaseStore {
       if (!mutation.nextState) return { ok: true, value: mutation.value };
 
       const parsed = parseState(mutation.nextState);
-      if (!parsed.ok) return parsed;
+      if (!parsed.ok) return { ok: false, reason: 'rejected-transition', ...rejectedTransitionOwners(mutation.nextState) };
       if (!sameFeature(parsed.state.feature, this.feature)) return { ok: false, reason: 'foreign-feature' };
       const replaced = await this.atomicReplace(parsed.state);
       return replaced.ok

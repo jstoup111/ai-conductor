@@ -3,6 +3,7 @@ import type {
   RemediationCaseRow,
   RemediationCaseSourceRow,
 } from './remediation-case-artifact.js';
+import type { RemediationCaseRecord } from './remediation-case-store.js';
 
 export type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 
@@ -35,12 +36,18 @@ export type RemediationCaseGraphRejection =
   | 'missing-admission-task'
   | 'duplicate-admission-task'
   | 'unknown-admission-task'
-  | 'missing-admission-rationale';
+  | 'missing-admission-rationale'
+  | 'unknown-distinct-case'
+  | 'invalid-distinct-case'
+  | 'incomplete-distinct-declaration'
+  | 'unnecessary-distinct-declaration';
 
 /** Engine-supplied identities; provider output cannot expand either set. */
 export interface RemediationCaseValidationReferences {
   readonly existingCaseIds?: readonly string[];
   readonly admittedTaskIds?: readonly string[];
+  /** Durable build-review history used to validate an unbound v2 distinct declaration. */
+  readonly priorCases?: readonly RemediationCaseRecord[];
 }
 
 export interface ProposedRemediationCase {
@@ -59,7 +66,13 @@ export interface RemediationCaseGraph {
 
 export type ValidateRemediationCaseGraphResult =
   | { readonly ok: true; readonly graph: RemediationCaseGraph }
-  | { readonly ok: false; readonly reason: RemediationCaseGraphRejection };
+  | {
+      readonly ok: false;
+      readonly reason: RemediationCaseGraphRejection;
+      /** Durable cases and current sources implicated by a rejected declaration. */
+      readonly caseIds?: readonly string[];
+      readonly sourceIds?: readonly string[];
+    };
 
 function hasOwn(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
@@ -167,6 +180,53 @@ function validateConsistency(
   return undefined;
 }
 
+function validateDistinctFrom(
+  caseRow: RemediationCaseRow,
+  sources: readonly RemediationCaseSourceRow[],
+  references: RemediationCaseValidationReferences,
+): Exclude<ValidateRemediationCaseGraphResult, { readonly ok: true }> | undefined {
+  if (!caseRow.distinctFrom) return undefined;
+
+  const sourceIds = sources.map((source) => source.sourceId);
+  const declarationFailure = (
+    reason: Extract<RemediationCaseGraphRejection,
+      'unknown-distinct-case' | 'invalid-distinct-case' | 'incomplete-distinct-declaration' | 'unnecessary-distinct-declaration'>,
+    caseIds: readonly string[],
+  ): Exclude<ValidateRemediationCaseGraphResult, { readonly ok: true }> => ({
+    ok: false, reason, caseIds, sourceIds,
+  });
+
+  const priorCasesById = new Map((references.priorCases ?? []).map((record) => [record.id, record]));
+  for (const caseId of caseRow.distinctFrom) {
+    if (!priorCasesById.has(caseId)) return declarationFailure('unknown-distinct-case', [caseId]);
+  }
+
+  if (caseRow.disposition !== 'act') return declarationFailure('invalid-distinct-case', caseRow.distinctFrom);
+
+  const sourceIdSet = new Set(sourceIds);
+  for (const caseId of caseRow.distinctFrom) {
+    const record = priorCasesById.get(caseId)!;
+    if (record.resolution !== 'resolved' || record.disposition !== 'act') return declarationFailure('invalid-distinct-case', [caseId]);
+    const matchingLinks = record.sources.filter((source) => sourceIdSet.has(source.sourceId));
+    if (matchingLinks.length > 0 && matchingLinks.every((source) => source.outcome === 'merged')) {
+      return declarationFailure('invalid-distinct-case', [caseId]);
+    }
+  }
+  const expected = new Set((references.priorCases ?? [])
+    .filter((record) => record.resolution === 'resolved' && record.disposition === 'act')
+    .filter((record) => record.sources.some((source) => sourceIdSet.has(source.sourceId) && source.outcome !== 'merged'))
+    .map((record) => record.id));
+
+  if (expected.size === 0) return declarationFailure('unnecessary-distinct-declaration', caseRow.distinctFrom);
+  for (const caseId of caseRow.distinctFrom) {
+    if (!expected.has(caseId)) return declarationFailure('invalid-distinct-case', [caseId]);
+  }
+  for (const caseId of expected) {
+    if (!caseRow.distinctFrom.includes(caseId)) return declarationFailure('incomplete-distinct-declaration', [caseId]);
+  }
+  return undefined;
+}
+
 /**
  * Validates a provider result as one all-or-nothing graph over the frozen
  * current source set. It has no persistence or effect boundary: callers only
@@ -234,6 +294,14 @@ export function validateRemediationCaseGraph(
     if (!sourcesByCase.has(caseRow.caseRef)) return { ok: false, reason: 'unreferenced-case' };
   }
   if (judgement.mode === 'case-v2') {
+    for (const proposed of judgement.cases) {
+      const distinctError = validateDistinctFrom(
+        proposed,
+        sourcesByCase.get(proposed.caseRef) ?? [],
+        references,
+      );
+      if (distinctError) return distinctError;
+    }
     const consistencyError = validateConsistency(currentSources, casesByRef, judgement);
     if (consistencyError) return { ok: false, reason: consistencyError };
   }

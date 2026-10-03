@@ -6,12 +6,13 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
+import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import type {
   RemediationCasePrdWideningRecord,
   RemediationCaseRecord,
 } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore, remediationCaseStorePath } from '../../src/engine/remediation-case-store.js';
-import type { RemediationCaseGraph } from '../../src/engine/remediation-case-validator.js';
+import { validateRemediationCaseGraph, type RemediationCaseGraph } from '../../src/engine/remediation-case-validator.js';
 
 const FEATURE = { version: 'v1', repository: 'acme/conductor', feature: 'case-reconciler' } as const;
 const RECORDED_AT = '2026-08-30T12:00:00.000Z';
@@ -45,6 +46,29 @@ const ACTION_CASE = {
   confidence: 'high',
   effect: { kind: 'action', route: 'build', tasks: [{ title: 'Cover the changed behavior' }] },
 } as const;
+
+const RESOLVED_SOURCE_ID = 'testQuality:resolved-anchor';
+
+function resolvedAnchorCase(overrides: Partial<RemediationCaseRecord> = {}): RemediationCaseRecord {
+  return {
+    id: 'case-resolved-anchor', domain: 'build_review', disposition: 'act', priority: 'high',
+    rationale: 'The original concern needed a focused repair.', confidence: 'high', resolution: 'resolved',
+    sources: [{ sourceId: RESOLVED_SOURCE_ID, outcome: 'acted', recordedAt: RECORDED_AT }],
+    effect: { id: 'effect-resolved-anchor', kind: 'action', status: 'applied', workOrderId: 'order-resolved-anchor' },
+    ...overrides,
+  };
+}
+
+const DISTINCT_ANCHOR_ACTION = {
+  ...ACTION_CASE,
+  caseRef: 'distinct-anchor-action',
+  rationale: 'This is a distinct concern despite the same resolved source anchor.',
+  distinctFrom: ['case-resolved-anchor'],
+} as const;
+
+function distinctAnchorGraph(caseRow: RemediationCaseGraph['cases'][number]['case'] = DISTINCT_ANCHOR_ACTION): RemediationCaseGraph {
+  return graph(caseRow, [{ sourceId: RESOLVED_SOURCE_ID, outcome: 'acted', caseRef: caseRow.caseRef }]);
+}
 
 const REFUTATION = {
   claim: 'The alleged coverage gap is already covered by the focused regression test.',
@@ -128,6 +152,151 @@ describe('remediation case reconciler', () => {
         }],
       },
     });
+  });
+
+  it('stamps an admitted distinct case without changing the resolved anchor history', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const resolved = resolvedAnchorCase();
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [resolved] } }));
+
+    const result = await reconcileRemediationCases(store, {
+      graph: distinctAnchorGraph(), recordedAt: '2026-10-02T13:00:00.000Z',
+      generateId: generatedIds('case-distinct-anchor', 'effect-distinct-anchor'),
+    });
+    const reloaded = await store.read();
+
+    expect(result).toMatchObject({ ok: true, state: { cases: [
+      resolved,
+      {
+        id: 'case-distinct-anchor', disposition: 'act', resolution: 'open',
+        distinctFrom: ['case-resolved-anchor'],
+        sources: [{ sourceId: RESOLVED_SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-02T13:00:00.000Z' }],
+        effect: { id: 'effect-distinct-anchor', kind: 'action', status: 'reserved' },
+      },
+    ] } });
+    expect(result.ok && result.state.cases[0]).toEqual(resolved);
+    expect(reloaded).toMatchObject({ ok: true, state: { cases: [{ id: resolved.id }, { distinctFrom: [resolved.id] }] } });
+  });
+
+  it.each(['case-v1', 'case-v2'] as const)('treats an undeclared resolved-anchor reuse as a recurrence in %s', async (_mode) => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const resolved = resolvedAnchorCase();
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [resolved] } }));
+
+    const judgement: RemediationCaseJudgement = _mode === 'case-v1'
+      ? {
+        mode: 'case-v1', domain: 'build_review',
+        sourceOutcomes: [{ sourceId: RESOLVED_SOURCE_ID, outcome: 'acted', caseRef: 'undeclared-reuse' }],
+        cases: [{ ...DISTINCT_ANCHOR_ACTION, caseRef: 'undeclared-reuse', distinctFrom: undefined }],
+      }
+      : {
+        mode: 'case-v2', domain: 'build_review',
+        sourceOutcomes: [{ sourceId: RESOLVED_SOURCE_ID, outcome: 'acted', caseRef: 'undeclared-reuse' }],
+        cases: [{
+          ...DISTINCT_ANCHOR_ACTION, caseRef: 'undeclared-reuse', distinctFrom: undefined,
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the distinct concern', admittedTaskIds: ['6'], admissionRationale: 'Task 6 owns the recurrence halt.' }] },
+        }],
+        consistency: { verdict: 'consistent', sourceIds: [RESOLVED_SOURCE_ID], caseRefs: ['undeclared-reuse'], rationale: 'One source has one proposed action.' },
+      };
+    const validated = validateRemediationCaseGraph([RESOLVED_SOURCE_ID], judgement, { admittedTaskIds: ['6'] });
+    if (!validated.ok) throw new Error(`fixture must validate: ${validated.reason}`);
+
+    const result = await reconcileRemediationCases(store, {
+      graph: validated.graph,
+      recordedAt: '2026-10-02T13:00:00.000Z',
+      generateId: () => { throw new Error('a recurrence must not allocate a new case'); },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      recurringCaseIdsByRef: new Map([['undeclared-reuse', ['case-resolved-anchor']]]),
+      state: { cases: [resolved] },
+    });
+  });
+
+  it.each([
+    ['defer', 'deferred', { kind: 'deferral', exclusionRationale: 'Track this outside the current plan.' }],
+    ['reject', 'rejected', { kind: 'none' }],
+    ['escalate', 'escalate', { kind: 'none' }],
+  ] as const)('treats an undeclared resolved-anchor reuse as a recurrence for an unbound %s row', async (disposition, outcome, effect) => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const resolved = resolvedAnchorCase();
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [resolved] } }));
+    const caseRow = { ...ACTION_CASE, caseRef: `undeclared-${disposition}`, disposition, effect } as RemediationCaseGraph['cases'][number]['case'];
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph(caseRow, [{ sourceId: RESOLVED_SOURCE_ID, outcome, caseRef: caseRow.caseRef }]),
+      recordedAt: '2026-10-02T13:00:00.000Z',
+      generateId: () => { throw new Error('a recurrence must not allocate a new case'); },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      recurringCaseIdsByRef: new Map([[caseRow.caseRef, ['case-resolved-anchor']]]),
+      state: { cases: [resolved] },
+    });
+  });
+
+  it('rejects a new case that would give a resolved-anchor source a second unresolved owner', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: {
+      ...state,
+      cases: [
+        resolvedAnchorCase(),
+        durableAction({
+          id: 'case-current-anchor-owner',
+          sources: [{ sourceId: RESOLVED_SOURCE_ID, outcome: 'acted', recordedAt: RECORDED_AT }],
+        }),
+      ],
+    } }));
+    const before = await readFile(remediationCaseStorePath(projectRoot), 'utf8');
+
+    const result = await reconcileRemediationCases(store, {
+      graph: distinctAnchorGraph(), recordedAt: '2026-10-02T13:00:00.000Z',
+      generateId: generatedIds('case-distinct-anchor', 'effect-distinct-anchor'),
+    });
+
+    expect([result, await readFile(remediationCaseStorePath(projectRoot), 'utf8')]).toEqual([
+      {
+        ok: false, reason: 'second-unresolved-owner',
+        caseIds: ['case-current-anchor-owner', 'case-distinct-anchor'], sourceIds: [RESOLVED_SOURCE_ID],
+      },
+      before,
+    ]);
+  });
+
+  it('leaves the case store byte-identical when any graph row is rejected', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [resolvedAnchorCase()] } }));
+    const before = await readFile(remediationCaseStorePath(projectRoot), 'utf8');
+    const valid = distinctAnchorGraph().cases[0]!;
+    const rejected = {
+      ...ACTION_CASE, caseRef: 'unknown-bound-action', existingCaseId: 'missing-case',
+    } as const;
+
+    const result = await reconcileRemediationCases(store, {
+      graph: {
+        sourceOutcomes: [
+          ...valid.sources,
+          { sourceId: 'testQuality:other-finding', outcome: 'acted', caseRef: rejected.caseRef },
+        ],
+        cases: [
+          valid,
+          { case: rejected, sources: [{ sourceId: 'testQuality:other-finding', outcome: 'acted', caseRef: rejected.caseRef }] },
+        ],
+      },
+      recordedAt: '2026-10-02T13:00:00.000Z',
+      generateId: generatedIds('case-distinct-anchor', 'effect-distinct-anchor'),
+    });
+
+    expect([result, await readFile(remediationCaseStorePath(projectRoot), 'utf8')]).toEqual([
+      { ok: false, reason: 'unknown-case-binding' }, before,
+    ]);
   });
 
   it('reuses an exact settled custom non-action case without a new identity, but retains history after its policy identity changes', async () => {

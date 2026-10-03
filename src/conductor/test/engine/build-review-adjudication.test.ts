@@ -95,6 +95,35 @@ describe('reduceBuildReviewAdjudication', () => {
     })).route).toBe('halt');
   });
 
+  it('routes a shared current source from its unresolved action owner instead of its resolved history', () => {
+    const resolvedHistory: RemediationCaseRecord = {
+      ...action(),
+      id: 'case-resolved-history',
+      resolution: 'resolved',
+    };
+    const currentOwner: RemediationCaseRecord = {
+      ...action(),
+      id: 'case-current-owner',
+      sources: [{ sourceId: 'finding-1', outcome: 'merged', recordedAt: '2026-10-02T00:00:00.000Z' }],
+    };
+
+    expect(reduceBuildReviewAdjudication(reducerInput({ cases: [resolvedHistory, currentOwner] })))
+      .toMatchObject({ route: 'build', remainingMechanical: false, reason: 'applied action effect' });
+  });
+
+  it('passes when resolved-only history is absent from the current lap', () => {
+    const resolvedHistory: RemediationCaseRecord = {
+      ...decisionStop('architecture'),
+      id: 'case-resolved-history',
+      resolution: 'resolved',
+    };
+
+    expect(reduceBuildReviewAdjudication(reducerInput({
+      currentSourceIds: [],
+      cases: [resolvedHistory],
+    }))).toMatchObject({ route: 'pass', remainingMechanical: false });
+  });
+
   it('never routes an old applied action to BUILD when it covers no current source', () => {
     expect(reduceBuildReviewAdjudication(reducerInput({
       currentSourceIds: ['finding-2'],

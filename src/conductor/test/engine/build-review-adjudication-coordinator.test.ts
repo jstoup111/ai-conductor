@@ -14,7 +14,7 @@ import type { RemediationCaseJudgement } from '../../src/engine/remediation-case
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
-import { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-ledger.js';
+import { chargeBuildReviewEffectInLedger, readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import type { EffectMarkerTrackerClient } from '../../src/engine/tracker-client.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 
@@ -64,7 +64,11 @@ const findingId = rawSource.findingId;
 const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
 const CUSTOM_DIGEST = `sha256:${'c'.repeat(64)}`;
 
-function customMixedAggregate(criteria?: readonly string[], regionHash = `sha256:${'a'.repeat(64)}`) {
+function customMixedAggregate(
+  criteria?: readonly string[],
+  regionHash = `sha256:${'a'.repeat(64)}`,
+  includeTestQualitySibling = false,
+) {
   const declaration = {
     version: 'v1' as const, rubricId: 'security', semanticSkill: 'security-review',
     question: 'Does the changed code preserve the security boundary?',
@@ -97,7 +101,12 @@ function customMixedAggregate(criteria?: readonly string[], regionHash = `sha256
     results: {
       testQuality: {
         kind: 'judged', rubric: 'testQuality', lapId: 'lap-custom-mixed' as never,
-        snapshotDigest: 'snapshot-custom-mixed', contractVersion: 'v3', findings: [], verdict: 'PASS',
+        snapshotDigest: 'snapshot-custom-mixed', contractVersion: 'v3',
+        findings: includeTestQualitySibling ? [{
+          concernKind: 'test-insensitive', summary: 'The sibling changed test is insensitive.', evidenceLocations: ['test/sibling.test.ts:1'],
+          anchor: { rubric: 'testQuality', locus: { path: 'test/sibling.test.ts', contentHash: 'sha256:sibling', display: 'sibling test' } },
+        }] : [],
+        verdict: includeTestQualitySibling ? 'FAIL' : 'PASS',
       },
     },
     customResults: {
@@ -355,7 +364,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
     await seedCases(store, {
-      version: 'v1', feature,
+      version: 'v2', feature, prdWideningCases: [], suppressions: [],
       cases: [{
         id: 'security-case', domain: 'build_review', disposition: 'act', priority: 'critical', confidence: 'high',
         rationale: 'The query must be parameterized.', resolution: 'open',
@@ -849,6 +858,233 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect(result).toEqual({ ok: false, detail: 'remediate judgement failed' });
     expect(events).toEqual(['remediation_adjudication_started', 'remediation_adjudication_failed']);
+  });
+
+  it('records validator rejection evidence while confirming persisted history remains valid', async () => {
+    const root = await projectRoot();
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const invalid = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: 'testQuality:unknown', outcome: 'acted', caseRef: 'case-invalid' }],
+      cases: [{
+        caseRef: 'case-invalid', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Invalid source identity.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Do not persist this case' }] },
+      }],
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => invalid),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      detail: expect.stringMatching(/persisted case history is valid; failure kind: invalid-judgement/),
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'invalid-judgement',
+      caseIds: [], sourceIds: ['testQuality:unknown'],
+    }));
+  });
+
+  it('records implicated durable cases and declared-row sources for a rejected distinct declaration', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-resolved', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'Resolved anchor.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-resolved', kind: 'action', status: 'applied', workOrderId: 'order-resolved' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const invalid = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'deferred', caseRef: 'case-invalid' }],
+      cases: [{
+        caseRef: 'case-invalid', disposition: 'defer', priority: 'low', confidence: 'high', rationale: 'An invalid declaration.',
+        distinctFrom: ['case-resolved'],
+        effect: { kind: 'deferral', title: 'Track it', body: 'The declaration is invalid.', exclusionRationale: 'It is outside the current plan.' },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['case-invalid'], rationale: 'One row.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => invalid),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toEqual({ ok: false, detail: expect.stringMatching(/invalid remediation judgement invalid-distinct-case/) });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'invalid-judgement',
+      caseIds: ['case-resolved'], sourceIds: [sourceId],
+    }));
+  });
+
+  it('records both owners and their source when reconciliation rejects a second unresolved owner', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [
+        {
+          id: 'case-resolved', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'Resolved anchor.', resolution: 'resolved',
+          sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+          effect: { id: 'effect-resolved', kind: 'action', status: 'applied', workOrderId: 'order-resolved' },
+        },
+        {
+          id: 'case-current-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'Current owner.', resolution: 'open',
+          sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+          effect: { id: 'effect-current-owner', kind: 'action', status: 'reserved' },
+        },
+      ],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      ...actionJudgement(),
+      cases: [{ ...actionJudgement().cases[0]!, distinctFrom: ['case-resolved'] }],
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), generateId: sequentialIds('case-second-owner'),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      detail: expect.stringMatching(/persisted case history is valid; failure kind: reconciliation-rejected/),
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'reconciliation-rejected',
+      caseIds: ['case-current-owner', 'case-second-owner-1'], sourceIds: [sourceId],
+    }));
+  });
+
+  it('keeps a rejected store transition distinct from malformed persisted history', async () => {
+    const root = await projectRoot();
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const mutate = vi.spyOn(RemediationCaseStore.prototype, 'mutate')
+      .mockResolvedValueOnce({
+        ok: false, reason: 'rejected-transition',
+        caseIds: ['case-current-owner', 'case-next-owner'], sourceIds: [sourceId],
+      } as never);
+
+    try {
+      const result = await coordinateBuildReviewAdjudication({
+        ...input(root, async () => actionJudgement()),
+        emit: async (event) => { events.push(event); },
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        detail: expect.stringMatching(/persisted case history is valid; failure kind: rejected-transition/),
+      });
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'remediation_adjudication_failed', failureKind: 'rejected-transition',
+        caseIds: ['case-current-owner', 'case-next-owner'], sourceIds: [sourceId],
+      }));
+    } finally {
+      mutate.mockRestore();
+    }
+  });
+
+  it('records both unresolved owners when an unbound escalation stop is rejected by the store', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-current-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The current owner remains unresolved.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-current-owner', kind: 'action', status: 'reserved' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'unbound-stop' }],
+      cases: [{
+        caseRef: 'unbound-stop', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'An owner decision is required.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: {
+        verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['unbound-stop'],
+        rationale: 'The single proposed stop is consistent.',
+      },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), generateId: () => 'case-escalation-stop',
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      detail: expect.stringMatching(/persisted case history is valid; failure kind: rejected-transition/),
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'rejected-transition',
+      caseIds: ['case-current-owner', 'case-escalation-stop'], sourceIds: [sourceId],
+    }));
+  });
+
+  it('records both unresolved owners when the synthetic consistency stop is rejected by the store', async () => {
+    const root = await projectRoot();
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'rejected', caseRef: 'rejected-case' }],
+      cases: [{
+        caseRef: 'rejected-case', disposition: 'reject', priority: 'low', confidence: 'high',
+        rationale: 'The proposed repair should not proceed.', effect: { kind: 'none' },
+      }],
+      consistency: {
+        verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['rejected-case'],
+        rationale: 'The rejected proposal leaves an unresolved consistency conflict.',
+      },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), generateId: () => 'case-reject-owner',
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      detail: expect.stringMatching(/persisted case history is valid; failure kind: rejected-transition/),
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'rejected-transition',
+      caseIds: ['case-reject-owner', 'consistency-stop-lap-1'], sourceIds: [sourceId],
+    }));
+  });
+
+  it('classifies persisted duplicate unresolved owners as malformed history', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+      version: 'v2', feature, suppressions: [], prdWideningCases: [],
+      cases: ['case-a', 'case-b'].map((id) => ({
+        id, domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: id,
+        resolution: 'open', sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: `effect-${id}`, kind: 'action', status: 'reserved' },
+      })),
+    }), 'utf8');
+    const events: RemediationCaseLifecycleEvent[] = [];
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'persisted-malformed',
+    }));
   });
 
   it('fails closed before reconciliation when durable attempt evidence is invalid', async () => {
@@ -1383,6 +1619,298 @@ describe('coordinateBuildReviewAdjudication', () => {
     }));
   });
 
+  it('halts an undeclared reuse of every resolved action case without a malformed-state diagnostic', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const resolved = (id: string) => ({
+      id, domain: 'build_review' as const, disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+      rationale: `The earlier repair for ${id} was applied.`, resolution: 'resolved' as const,
+      sources: [{ sourceId, outcome: 'acted' as const, recordedAt: '2026-10-02T00:00:00.000Z' }],
+      effect: { id: `effect-${id}`, kind: 'action' as const, status: 'applied' as const, workOrderId: `order-${id}` },
+    });
+    await seedCases(store, { version: 'v1', feature, cases: [resolved('case-r'), resolved('case-r2')] });
+    const events: RemediationCaseLifecycleEvent[] = [];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-r, case-r2' });
+    expect(events.filter((event) => event.type === 'remediation_semantic_repeat_halt')).toEqual([
+      expect.objectContaining({ caseId: 'case-r', reason: 'regressed' }),
+      expect.objectContaining({ caseId: 'case-r2', reason: 'regressed' }),
+    ]);
+    expect(events.filter((event) => event.type === 'remediation_adjudication_failed')
+      .some((event) => event.reason.includes('malformed-state'))).toBe(false);
+  });
+
+  it('halts an unbound escalation from v1 history that reuses a resolved action source without persisting a stop', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The prior repair was applied.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-r', kind: 'action', status: 'applied', workOrderId: 'order-r' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'stop-r' }],
+      cases: [{
+        caseRef: 'stop-r', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'The approved plan needs a decision.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['stop-r'], rationale: 'The stop is internally consistent.' },
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-r' });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_semantic_repeat_halt', caseId: 'case-r', reason: 'regressed',
+    }));
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({ id: 'case-r' })] } });
+  });
+
+  it('halts an undeclared resolved-source reuse in case-v2 without a malformed-state diagnostic', async () => {
+    const root = await projectRoot();
+    const custom = customMixedAggregate();
+    const customSourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(custom)!
+      .find((candidate) => candidate.rubric === 'security')!);
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-custom-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The earlier custom-policy repair was applied.', resolution: 'resolved',
+        sources: [{ sourceId: customSourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-custom-r', kind: 'action', status: 'applied', workOrderId: 'order-custom-r' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: customSourceId, outcome: 'acted', caseRef: 'custom-reuse' }],
+      cases: [{
+        caseRef: 'custom-reuse', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The judge did not declare this concern distinct.',
+        effect: { kind: 'action', route: 'build', tasks: [{
+          title: 'Repair the authorization boundary.', admittedTaskIds: ['34'],
+          admissionRationale: 'Task 34 owns the custom-policy repair.',
+        }] },
+      }],
+      consistency: {
+        verdict: 'consistent', sourceIds: [customSourceId], caseRefs: ['custom-reuse'],
+        rationale: 'The proposed repair is internally consistent.',
+      },
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: custom, mechanical: 'retry',
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '34', contract: 'custom-policy repair' }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-custom-r' });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_semantic_repeat_halt', caseId: 'case-custom-r', reason: 'regressed',
+    }));
+    expect(events.filter((event) => event.type === 'remediation_adjudication_failed')
+      .some((event) => event.reason.includes('malformed-state'))).toBe(false);
+  });
+
+  it('halts an unbound case-v2 escalation that reuses a resolved action source without persisting a stop', async () => {
+    const root = await projectRoot();
+    const custom = customMixedAggregate();
+    const customSourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(custom)!
+      .find((candidate) => candidate.rubric === 'security')!);
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v2', feature, prdWideningCases: [], suppressions: [],
+      cases: [{
+        id: 'case-custom-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The prior repair was applied.', resolution: 'resolved',
+        sources: [{ sourceId: customSourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-custom-r', kind: 'action', status: 'applied', workOrderId: 'order-custom-r' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: customSourceId, outcome: 'escalate', caseRef: 'stop-custom-r' }],
+      cases: [{
+        caseRef: 'stop-custom-r', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'The approved plan needs a decision.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [customSourceId], caseRefs: ['stop-custom-r'], rationale: 'The stop is internally consistent.' },
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: custom, mechanical: 'retry',
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '34', contract: 'custom-policy repair' }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-custom-r' });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_semantic_repeat_halt', caseId: 'case-custom-r', reason: 'regressed',
+    }));
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({ id: 'case-custom-r' })] } });
+  });
+
+  it('emits one regressed occurrence when two case refs reuse different sources of one resolved case', async () => {
+    const root = await projectRoot();
+    const sources = projectBuildReviewAggregateSources(mixedAggregate)!;
+    const firstSourceId = buildReviewAdjudicationSourceId(sources[0]!);
+    const secondSourceId = buildReviewAdjudicationSourceId(sources[1]!);
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The prior repair was applied.', resolution: 'resolved',
+        sources: [
+          { sourceId: firstSourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' },
+          { sourceId: secondSourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' },
+        ],
+        effect: { id: 'effect-r', kind: 'action', status: 'applied', workOrderId: 'order-r' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [
+        { sourceId: firstSourceId, outcome: 'acted', caseRef: 'case-first' },
+        { sourceId: secondSourceId, outcome: 'acted', caseRef: 'case-second' },
+      ],
+      cases: ['case-first', 'case-second'].map((caseRef) => ({
+        caseRef, disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+        rationale: 'The prior repair needs another action.',
+        effect: { kind: 'action' as const, route: 'build' as const, tasks: [{ title: 'Repair the finding again.' }] },
+      })),
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: mixedAggregate, emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-r' });
+    expect(events.filter((event) => event.type === 'remediation_semantic_repeat_halt')).toEqual([
+      expect.objectContaining({ caseId: 'case-r', reason: 'regressed' }),
+    ]);
+  });
+
+  it('publishes declared distinct and sibling actions in one work order, charging their new route once', async () => {
+    const root = await projectRoot();
+    const mixed = customMixedAggregate(undefined, undefined, true);
+    const sources = projectBuildReviewAggregateSources(mixed)!;
+    const declaredSourceId = buildReviewAdjudicationSourceId(sources.find((source) => source.rubric === 'security')!);
+    const siblingSourceId = buildReviewAdjudicationSourceId(sources.find((source) => source.rubric === 'testQuality')!);
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The earlier repair was applied.', resolution: 'resolved',
+        sources: [{ sourceId: declaredSourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-r', kind: 'action', status: 'applied', workOrderId: 'order-r' },
+      }],
+    });
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [
+        { sourceId: declaredSourceId, outcome: 'acted', caseRef: 'case-distinct' },
+        { sourceId: siblingSourceId, outcome: 'acted', caseRef: 'case-sibling' },
+      ],
+      cases: [
+        {
+          caseRef: 'case-distinct', distinctFrom: ['case-r'], disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'This finding is distinct from the resolved repair.',
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the distinct security finding.', admittedTaskIds: ['34'], admissionRationale: 'Task 34 owns this repair.' }] },
+        },
+        {
+          caseRef: 'case-sibling', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The unrelated sibling needs its own repair.',
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the sibling test.', admittedTaskIds: ['34'], admissionRationale: 'Task 34 owns this repair.' }] },
+        },
+      ],
+      consistency: { verdict: 'consistent', sourceIds: [declaredSourceId, siblingSourceId], caseRefs: ['case-distinct', 'case-sibling'], rationale: 'Both repairs are independently admitted.' },
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: mixed, mechanical: 'retry', generateId: sequentialIds('declared'),
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '34', contract: 'coordinator integration' }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    const order = JSON.parse(await readFile(join(root, '.pipeline/build-review-work-order.json'), 'utf8')) as { cases: Array<{ caseId: string }> };
+    expect(order.cases).toHaveLength(2);
+    const ledger = await readKickbackLedger(root);
+    expect(ledger.gates.build_review?.chargedEffectIds).toHaveLength(1);
+
+    const persisted = await store.read();
+    if (!persisted.ok) throw new Error(persisted.reason);
+    const distinct = persisted.state.cases.find((record) => record.distinctFrom?.includes('case-r'))!;
+    const sibling = persisted.state.cases.find((record) => record.id !== 'case-r' && record.id !== distinct.id)!;
+    await markBuildReviewWorkOrderAttempted(root, feature);
+    const repeated: RemediationCaseJudgement = {
+      ...judgement,
+      cases: judgement.cases.map((row) => ({
+        ...row,
+        existingCaseId: row.caseRef === 'case-distinct' ? distinct.id : sibling.id,
+        distinctFrom: undefined,
+      })),
+    };
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const repeat = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => repeated), aggregate: mixed, mechanical: 'retry',
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '34', contract: 'coordinator integration' }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+      emit: async (event) => { events.push(event); },
+    });
+    expect(repeat).toMatchObject({ ok: false, detail: expect.stringContaining(`semantic remediation case repeat ${distinct.id}`) });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_semantic_repeat_halt', caseId: distinct.id, reason: 'already-attempted',
+    }));
+  });
+
+  it('keeps the existing exhaustion halt for a declared distinct action', async () => {
+    const root = await projectRoot();
+    const custom = customMixedAggregate();
+    const sourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(custom)!.find((source) => source.rubric === 'security')!);
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, { version: 'v1', feature, cases: [{
+      id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Applied.', resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }], effect: { id: 'effect-r', kind: 'action', status: 'applied', workOrderId: 'order-r' },
+    }] });
+    const declared: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review', sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'case-distinct' }],
+      cases: [{ caseRef: 'case-distinct', distinctFrom: ['case-r'], disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Distinct.', effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair it.', admittedTaskIds: ['34'], admissionRationale: 'Task 34 owns it.' }] } }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['case-distinct'], rationale: 'One admitted repair.' },
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => declared), aggregate: custom, mechanical: 'retry', generateId: sequentialIds('exhausted'),
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '34', contract: 'coordinator integration' }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+      chargeEffect: async () => ({
+        status: 'charged' as const, exhausted: true, cumulativeExhausted: false,
+        entry: { count: 3, cumulative: 3, treeHash: 'tree-1', lastReason: 'fixture', priorVerdict: false, resolvedBefore: 1 },
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: expect.stringContaining('build-review kickback budget exhausted') });
+  });
+
   it.each([
     ['an applied deferral', 'defer', 'deferred', { id: 'effect-durable', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/1' }],
     ['a rejection', 'reject', 'rejected', { kind: 'none' }],
@@ -1464,6 +1992,80 @@ describe('coordinateBuildReviewAdjudication', () => {
     await coordinateBuildReviewAdjudication(input(root, judge));
 
     expect(judge).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a shared source live while its current refutation owner remains open', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [
+        {
+          id: 'case-resolved-anchor', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The original concern was acted on.', resolution: 'resolved',
+          sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+          effect: { id: 'effect-resolved-anchor', kind: 'action', status: 'applied', workOrderId: 'order-resolved-anchor' },
+        },
+        {
+          id: 'case-open-owner', domain: 'build_review', disposition: 'refute', priority: 'high', confidence: 'high',
+          rationale: 'The later concern is still being checked.', resolution: 'open',
+          sources: [{ sourceId, outcome: 'refuted', recordedAt: '2026-10-03T00:00:00.000Z' }], effect: { kind: 'none' },
+          refutation: { claim: 'The later concern is false.', assertions: [{
+            assertion: 'The investigation is not finished.', verdict: 'upheld',
+            evidence: [{ path: 'test/example.test.ts', excerpt: 'fixture' }],
+          }] },
+        },
+      ],
+    });
+    const judge = vi.fn(async (context: unknown) => {
+      expect(context).toMatchObject({ currentFindings: [expect.objectContaining({ sourceId })] });
+      return actionJudgement();
+    });
+
+    await coordinateBuildReviewAdjudication(input(root, judge));
+
+    expect(judge).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['a finalized deferral', {
+      id: 'effect-distinct', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/distinct',
+    }, 'defer', 'deferred'],
+    ['a refutation with no residual effect', { kind: 'none' }, 'refute', 'refuted'],
+    ['a refutation with an applied residual deferral', {
+      id: 'effect-residual', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/residual',
+    }, 'refute', 'refuted'],
+  ] as const)('settles a shared source after %s without a regression halt', async (_description, effect, disposition, outcome) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [
+        {
+          id: 'case-resolved-anchor', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The original concern was acted on.', resolution: 'resolved',
+          sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+          effect: { id: 'effect-resolved-anchor', kind: 'action', status: 'applied', workOrderId: 'order-resolved-anchor' },
+        },
+        {
+          id: 'case-distinct', domain: 'build_review', disposition, priority: 'high', confidence: 'high',
+          rationale: 'The later concern has a finalized disposition.', resolution: 'resolved', distinctFrom: ['case-resolved-anchor'],
+          sources: [{ sourceId, outcome, recordedAt: '2026-10-03T00:00:00.000Z' }], effect,
+          ...(disposition === 'refute' ? { refutation: { claim: 'The later concern is false.', assertions: [{
+            assertion: 'The inspected behavior is present.', verdict: 'refuted' as const,
+            evidence: [{ path: 'test/example.test.ts', excerpt: 'fixture' }],
+          }] } } : {}),
+        },
+      ],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judge = vi.fn(async () => actionJudgement());
+
+    const result = await coordinateBuildReviewAdjudication({ ...input(root, judge), emit: async (event) => { events.push(event); } });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass', dispatchSkipped: true });
+    expect(judge).not.toHaveBeenCalled();
+    expect(events.map((event) => event.type)).not.toContain('remediation_semantic_repeat_halt');
   });
 
   it('dispatches only the new source when another exact recurrence is settled', async () => {

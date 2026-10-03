@@ -226,7 +226,8 @@ function renderCase(caseRecord: RemediationCaseRecord): string {
     : `${caseRecord.effect.kind}/${caseRecord.effect.status}`;
   const assertions = caseRecord.refutation?.assertions
     .map((assertion) => `${assertion.assertion} (${assertion.verdict})`).join('; ') ?? 'none';
-  return `Autonomous case outcome: ${caseRecord.id}; disposition: ${caseRecord.disposition}; resolution: ${caseRecord.resolution}; source ids: ${caseRecord.sources.map((source) => source.sourceId).join(', ') || 'none'}; effect: ${effect}; claim: ${caseRecord.refutation?.claim ?? 'none'}; assertions: ${assertions}; rationale: ${caseRecord.rationale}`;
+  const distinctFrom = caseRecord.distinctFrom ? `; distinct from: ${caseRecord.distinctFrom.join(', ')}` : '';
+  return `Autonomous case outcome: ${caseRecord.id}; disposition: ${caseRecord.disposition}; resolution: ${caseRecord.resolution}; source ids: ${caseRecord.sources.map((source) => source.sourceId).join(', ') || 'none'}; effect: ${effect}; claim: ${caseRecord.refutation?.claim ?? 'none'}; assertions: ${assertions}; rationale: ${caseRecord.rationale}${distinctFrom}`;
 }
 
 function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>, accepted: readonly AcceptedDisposition[], cases: readonly RemediationCaseRecord[], faults: readonly ExhaustedMechanicalFault[], lastMechanicalFault: KickbackGateEntry['lastMechanicalFault']): string {

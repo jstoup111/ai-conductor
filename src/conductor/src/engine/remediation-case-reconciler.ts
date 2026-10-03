@@ -22,6 +22,8 @@ export interface ReconcileRemediationCasesInput {
   readonly resolveAbsentOpenNonActionCases?: boolean;
   /** Case identities known by the caller to belong to another feature/domain. */
   readonly foreignCaseIds?: readonly string[];
+  /** Rows that need recurrence detection but remain owned by a separate writer. */
+  readonly recurrenceOnlyCaseRefs?: ReadonlySet<string>;
 }
 
 export type RemediationCaseReconciliationRejection =
@@ -40,6 +42,8 @@ export type ReconcileRemediationCasesResult =
       readonly ok: true;
       readonly state: RemediationCaseStoreState;
       readonly caseIdsByRef: ReadonlyMap<string, string>;
+      /** Unbound action proposals that reuse resolved action-source history. */
+      readonly recurringCaseIdsByRef?: ReadonlyMap<string, readonly string[]>;
       /**
        * Every case this reconciliation transitioned that no current `caseRef`
        * points at — today, prior attempted action cases absent from the
@@ -50,7 +54,13 @@ export type ReconcileRemediationCasesResult =
       readonly resolvedAbsentCaseIds: readonly string[];
     }
   | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection }
-  | { readonly ok: false; readonly reason: 'store-failure'; readonly storeReason: RemediationCaseStoreFailureReason };
+  | {
+      readonly ok: false;
+      readonly reason: 'second-unresolved-owner';
+      readonly caseIds: readonly string[];
+      readonly sourceIds: readonly string[];
+    }
+  | { readonly ok: false; readonly reason: 'store-failure'; readonly storeReason: RemediationCaseStoreFailureReason; readonly caseIds?: readonly string[]; readonly sourceIds?: readonly string[] };
 
 /** Explicit durable bindings, never prose similarity or tree movement, decide reuse. */
 export type RemediationCaseReuseDisposition = 'resume' | 'reuse' | 'halt-repeat' | 'halt-regression';
@@ -70,9 +80,16 @@ type Reconciliation =
       readonly state: RemediationCaseStoreState;
       readonly changed: boolean;
       readonly caseIdsByRef: ReadonlyMap<string, string>;
+      readonly recurringCaseIdsByRef?: ReadonlyMap<string, readonly string[]>;
       readonly resolvedAbsentCaseIds: readonly string[];
     }
-  | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection };
+  | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection }
+  | {
+      readonly ok: false;
+      readonly reason: 'second-unresolved-owner';
+      readonly caseIds: readonly string[];
+      readonly sourceIds: readonly string[];
+    };
 
 function isDurableId(value: string): boolean {
   return value.trim().length > 0 && value.length <= 256;
@@ -144,15 +161,42 @@ function reconcileState(
   }
 
   const referencedExisting = new Set<string>();
+  const graphBoundExistingIds = new Set(
+    input.graph.cases.flatMap(({ case: caseRow }) => caseRow.existingCaseId === undefined ? [] : [caseRow.existingCaseId]),
+  );
   const replacements = new Map<string, RemediationCaseRecord>();
   const additions: RemediationCaseRecord[] = [];
   const caseIdsByRef = new Map<string, string>();
+  const recurringCaseIdsByRef = new Map<string, readonly string[]>();
   const claimed = new Set<string>();
 
   for (const proposed of input.graph.cases) {
     const { case: caseRow, sources } = proposed;
     if (!caseRow.existingCaseId) {
-      const converged = convergedCaseFor(state, proposed, claimed);
+      // A new action against a resolved action source is a regression unless
+      // the judge explicitly declared the new concern distinct.  The durable
+      // source link is sufficient bookkeeping; semantic distinction remains
+      // the judge's case-v2 declaration, never a prose comparison here.
+      if (!caseRow.distinctFrom?.length) {
+        const recurringCaseIds = state.cases
+          .filter((record) => record.disposition === 'act' && record.resolution === 'resolved')
+          .filter((record) => record.sources.some((link) => sources.some((source) => source.sourceId === link.sourceId)))
+          .map((record) => record.id);
+        if (recurringCaseIds.length > 0) {
+          recurringCaseIdsByRef.set(caseRow.caseRef, recurringCaseIds);
+          continue;
+        }
+      }
+      // Escalation rows still need the same resolved-source recurrence gate,
+      // but a non-recurring stop is persisted by the coordinator's dedicated
+      // decision-stop seam rather than this general transition writer.
+      if (input.recurrenceOnlyCaseRefs?.has(caseRow.caseRef)) continue;
+      // `distinctFrom` is an admitted declaration that this proposal is not
+      // the open case with otherwise matching sources.  It must therefore
+      // reach the owner check and (when unowned) stamp its own durable case.
+      const converged = caseRow.distinctFrom === undefined
+        ? convergedCaseFor(state, proposed, claimed)
+        : undefined;
       if (converged) {
         claimed.add(converged.id);
         caseIdsByRef.set(caseRow.caseRef, converged.id);
@@ -162,6 +206,20 @@ function reconcileState(
       const caseId = takeId(input.generateId, usedIds);
       if (typeof caseId !== 'string' || caseId === 'id-generation-failed' || caseId === 'id-collision') {
         return { ok: false, reason: caseId };
+      }
+      for (const source of sources) {
+        const owner = state.cases.find((record) =>
+          record.resolution === 'open' && !graphBoundExistingIds.has(record.id) &&
+          record.sources.some((link) => link.sourceId === source.sourceId),
+        );
+        if (owner) {
+          return {
+            ok: false,
+            reason: 'second-unresolved-owner',
+            caseIds: [owner.id, caseId],
+            sourceIds: [source.sourceId],
+          };
+        }
       }
       const effectId = caseRow.disposition === 'reject' || caseRow.disposition === 'escalate'
         ? undefined
@@ -183,6 +241,7 @@ function reconcileState(
           recordedAt: input.recordedAt,
         })),
         effect: effectFor(caseRow, effectId),
+        ...(caseRow.distinctFrom === undefined ? {} : { distinctFrom: caseRow.distinctFrom }),
         ...(caseRow.escalation === undefined ? {} : { escalation: caseRow.escalation }),
       });
       continue;
@@ -325,6 +384,7 @@ function reconcileState(
     state: { ...state, cases: [...cases, ...additions] },
     changed,
     caseIdsByRef,
+    ...(recurringCaseIdsByRef.size === 0 ? {} : { recurringCaseIdsByRef }),
     resolvedAbsentCaseIds,
   };
 }
@@ -343,12 +403,20 @@ export async function reconcileRemediationCases(
       ? { value: reconciliation, ...(reconciliation.changed ? { nextState: reconciliation.state } : {}) }
       : { value: reconciliation };
   });
-  if (!mutation.ok) return { ok: false, reason: 'store-failure', storeReason: mutation.reason };
+  if (!mutation.ok) return {
+    ok: false,
+    reason: 'store-failure',
+    storeReason: mutation.reason,
+    ...(mutation.reason === 'rejected-transition' && 'caseIds' in mutation
+      ? { caseIds: mutation.caseIds, sourceIds: mutation.sourceIds }
+      : {}),
+  };
   return mutation.value.ok
     ? {
         ok: true,
         state: mutation.value.state,
         caseIdsByRef: mutation.value.caseIdsByRef,
+        ...(mutation.value.recurringCaseIdsByRef === undefined ? {} : { recurringCaseIdsByRef: mutation.value.recurringCaseIdsByRef }),
         resolvedAbsentCaseIds: mutation.value.resolvedAbsentCaseIds,
       }
     : mutation.value;

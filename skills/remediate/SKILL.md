@@ -101,7 +101,7 @@ Each `caseRef` is a provider-local reference to one canonical row in `cases`; it
 Several source rows may reference one canonical case only when the judgement is that they are the same
 repair case.
 
-Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`, `priority`,
+Each `case-v1` `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`, `priority`,
 `rationale`, `confidence`, `effect`; a `refute` row additionally carries `refutation`:
 
 - `caseRef` is the provider-local reference used by source rows. `existingCaseId`, when supplied by
@@ -146,6 +146,12 @@ When the engine stamps `mode: "case-v2"`, write exactly the v1 graph fields plus
 current sources and canonical case rows, and gives bounded, evidence-grounded rationale. Do not
 drop merge rows: every merged source still cites its canonical case, so the graph retains its
 original source and merge provenance.
+
+Each `case-v2` `cases` row retains the v1 fields and an unbound row may additionally carry optional
+`distinctFrom`; a row binding `existingCaseId` must not carry it. Declare `distinctFrom` only when
+the judge concludes the concern is not the resolved case recurring. It names exactly the resolved
+action cases linking the row's sources. If a row at those sources omits `distinctFrom`, the engine
+treats it as a regression of those cases.
 
 For a v2 `act`, every effect task is exactly `{ "title": "...", "admittedTaskIds": ["..."],
 "admissionRationale": "..." }`. `admittedTaskIds` names the existing active-plan tasks that admit

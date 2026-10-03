@@ -1,4 +1,4 @@
-// Covers: task:19, task:rem-as-built-rem-ab2-4
+// Covers: task:11, task:19, task:rem-as-built-rem-ab2-4
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -77,6 +77,80 @@ function actionAggregate(lapId: string, findings: readonly { readonly name: stri
 }
 
 describe('remediation case recovery', () => {
+  it('recovers a malformed-state halt with a declaration and preserves the resolved anchor on an undeclared retry', async () => {
+    const projectRoot = await root();
+    const aggregate = actionAggregate('resolved-anchor-recovery', [{ name: 'new concern at the resolved anchor', path: 'test/resolved-anchor.test.ts' }]);
+    const source = projectBuildReviewAggregateSources(aggregate)![0]!;
+    const sourceId = buildReviewAdjudicationSourceId(source);
+    const anchor = {
+      id: 'case-resolved-anchor', domain: 'build_review' as const, disposition: 'act' as const,
+      priority: 'high' as const, rationale: 'The earlier repair was applied.', confidence: 'high' as const,
+      resolution: 'resolved' as const,
+      sources: [{ sourceId, outcome: 'acted' as const, recordedAt: '2026-10-02T00:00:00.000Z' }],
+      effect: { id: 'effect-resolved-anchor', kind: 'action' as const, status: 'applied' as const, workOrderId: 'order-resolved-anchor' },
+    };
+    const savedByDefectiveEngine = JSON.stringify({ version: 'v1', feature, cases: [anchor] });
+    const pipeline = join(projectRoot, '.pipeline');
+    const statePath = join(pipeline, 'remediation-cases.json');
+    const haltPath = join(pipeline, 'HALT');
+    const anchorBytes = JSON.stringify(anchor);
+    await mkdir(pipeline, { recursive: true });
+    await writeFile(statePath, savedByDefectiveEngine, 'utf8');
+    await writeFile(haltPath, 'case store malformed-state', 'utf8');
+
+    const declared: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'declared-distinct' }],
+      cases: [{
+        caseRef: 'declared-distinct', distinctFrom: [anchor.id], disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'This is a new concern, not a recurrence of the resolved repair.',
+        effect: { kind: 'action', route: 'build', tasks: [{
+          title: 'Repair the newly identified concern', admittedTaskIds: ['11'],
+          admissionRationale: 'Task 11 owns recovery from this malformed-state halt.',
+        }] },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['declared-distinct'], rationale: 'The one action owns the one live source.' },
+    };
+
+    await rm(haltPath);
+    const declaredResult = await coordinateBuildReviewAdjudication({
+      projectRoot, feature, aggregate, operatorResolvedFindingIds: new Set<string>(), mechanical: 'healthy',
+      judge: async () => declared, chargeInput: { treeHash: 'recovery-tree', resolvedCount: 1, reason: 'recovery fixture' },
+      generateId: (() => { const ids = ['case-declared-distinct', 'effect-declared-distinct']; return () => ids.shift()!; })(),
+      readPlanContract: async () => ({ path: '.docs/plans/recovery.md', pointers: [], admittedTaskContracts: [{ id: '11', contract: 'recovery integration' }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '11', status: 'in_progress' }] }),
+    });
+    expect(declaredResult).toMatchObject({ ok: true, route: 'build' });
+    const declaredState = await new RemediationCaseStore(projectRoot, feature).read();
+    if (!declaredState.ok) throw new Error(`declared recovery must read: ${declaredState.reason}`);
+    expect(JSON.stringify(declaredState.state.cases.find((record) => record.id === anchor.id))).toBe(anchorBytes);
+    expect(declaredState.state.cases).toContainEqual(expect.objectContaining({
+      id: 'case-declared-distinct', distinctFrom: [anchor.id], resolution: 'open', sources: [{ sourceId, outcome: 'acted', recordedAt: expect.any(String) }],
+    }));
+
+    // Recreate the exact halted artifact to exercise the alternate recovery
+    // judgement; recovery never requires a human to edit case history.
+    await writeFile(statePath, savedByDefectiveEngine, 'utf8');
+    await writeFile(haltPath, 'case store malformed-state', 'utf8');
+    await rm(haltPath);
+    const undeclared: RemediationCaseJudgement = {
+      ...declared,
+      cases: [{ ...declared.cases[0]!, distinctFrom: undefined, rationale: 'The judge did not declare this distinct.' }],
+    };
+    const regressed = await coordinateBuildReviewAdjudication({
+      projectRoot, feature, aggregate, operatorResolvedFindingIds: new Set<string>(), mechanical: 'healthy',
+      judge: async () => undeclared, chargeInput: { treeHash: 'recovery-tree', resolvedCount: 1, reason: 'recovery fixture' },
+      readPlanContract: async () => ({ path: '.docs/plans/recovery.md', pointers: [], admittedTaskContracts: [{ id: '11', contract: 'recovery integration' }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '11', status: 'in_progress' }] }),
+    });
+    expect(regressed).toEqual({ ok: false, detail: `semantic remediation case regression ${anchor.id}` });
+    expect(regressed.detail).not.toMatch(/delete|accept/i);
+    const undeclaredState = await new RemediationCaseStore(projectRoot, feature).read();
+    if (!undeclaredState.ok) throw new Error(`undeclared recovery must read: ${undeclaredState.reason}`);
+    expect(undeclaredState.state.cases).toHaveLength(1);
+    expect(JSON.stringify(undeclaredState.state.cases[0])).toBe(anchorBytes);
+  });
+
   it('replays custom decision, work, and charge boundaries by their original durable ids', async () => {
     const projectRoot = await root();
     const store = new RemediationCaseStore(projectRoot, feature);

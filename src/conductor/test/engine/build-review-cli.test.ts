@@ -183,6 +183,50 @@ describe('build-review findings CLI', () => {
     expect(print).toHaveBeenCalledWith(expect.stringContaining('Autonomous case outcomes: none'));
   });
 
+  // Covers: task:13
+  it('renders declared distinct lineage while preserving undeclared case output byte-for-byte', async () => {
+    const undeclaredCase = {
+      id: 'case-undeclared', domain: 'build_review' as const, disposition: 'act' as const, priority: 'high' as const,
+      rationale: 'The independently declared concern needs a bounded fix.', confidence: 'high' as const, resolution: 'open' as const,
+      sources: [{ sourceId: 'testQuality:sha256:distinct', outcome: 'acted' as const, recordedAt: '2026-10-02T00:00:00.000Z' }],
+      effect: { id: 'effect-undeclared', kind: 'action' as const, status: 'reserved' as const },
+    };
+    const declaredCase = { ...undeclaredCase, id: 'case-declared', effect: { id: 'effect-declared', kind: 'action' as const, status: 'reserved' as const }, distinctFrom: ['case-prior-a', 'case-prior-b'] };
+    const shared = {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(aggregate),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      readMechanicalFaults: async () => 0,
+    };
+    const undeclaredHuman = vi.fn();
+    const undeclaredJson = vi.fn();
+    const declaredHuman = vi.fn();
+    const declaredJson = vi.fn();
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+      ...shared, createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [undeclaredCase] } }) }), print: undeclaredHuman,
+    })).resolves.toBe(0);
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      ...shared, createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [undeclaredCase] } }) }), print: undeclaredJson,
+    })).resolves.toBe(0);
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+      ...shared, createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [declaredCase] } }) }), print: declaredHuman,
+    })).resolves.toBe(0);
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      ...shared, createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [declaredCase] } }) }), print: declaredJson,
+    })).resolves.toBe(0);
+
+    const legacyLine = 'Autonomous case outcome: case-undeclared; disposition: act; resolution: open; source ids: testQuality:sha256:distinct; effect: action/reserved; claim: none; assertions: none; rationale: The independently declared concern needs a bounded fix.';
+    expect(undeclaredHuman.mock.calls[0]![0]).toContain(legacyLine);
+    expect(undeclaredHuman.mock.calls[0]![0]).not.toContain('distinct from:');
+    expect(JSON.stringify(JSON.parse(undeclaredJson.mock.calls[0]![0] as string).cases[0])).toBe(JSON.stringify(undeclaredCase));
+
+    expect(declaredHuman.mock.calls[0]![0]).toContain('Autonomous case outcome: case-declared; disposition: act; resolution: open; source ids: testQuality:sha256:distinct; effect: action/reserved; claim: none; assertions: none; rationale: The independently declared concern needs a bounded fix.; distinct from: case-prior-a, case-prior-b');
+    expect(JSON.parse(declaredJson.mock.calls[0]![0] as string).cases[0]).toMatchObject({
+      id: 'case-declared', distinctFrom: ['case-prior-a', 'case-prior-b'],
+    });
+  });
+
   it('records reduced coverage for an interactive resolved local operator using the engine-derived cause', async () => {
     const appendReducedCoverageIfCurrent = vi.fn(async (input, validate) => {
       expect(await validate([])).toBe(true);

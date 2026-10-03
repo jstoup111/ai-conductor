@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:4
+// Covers: task:1, task:2, task:3, task:4
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,6 +65,28 @@ const REFUTED_CASE_STATE: RemediationCaseStoreState = {
     effect: { kind: 'none' },
     refutation: REFUTATION,
   }],
+};
+
+const RESOLVED_ACTION_CASE = {
+  ...CASE_STATE.cases[0],
+  id: 'case-resolved',
+  resolution: 'resolved' as const,
+  effect: {
+    id: 'effect-resolved',
+    kind: 'action' as const,
+    status: 'applied' as const,
+    workOrderId: 'work-order-resolved',
+  },
+};
+
+const OPEN_CASE_AT_RESOLVED_SOURCE = {
+  ...CASE_STATE.cases[0],
+  id: 'case-open',
+  effect: {
+    id: 'effect-open',
+    kind: 'action' as const,
+    status: 'reserved' as const,
+  },
 };
 const PRD_WIDENING_CASE = {
   id: 'prd-case-1',
@@ -157,6 +179,65 @@ describe('remediation case store', () => {
       ok: true,
       state: CASE_STATE,
     });
+  });
+
+  it('round-trips an optional distinctFrom declaration only when persisted on a build-review case', async () => {
+    const projectRoot = await createProjectRoot();
+    const writer = new RemediationCaseStore(projectRoot, FEATURE);
+    const declaredState: RemediationCaseStoreState = {
+      ...CASE_STATE,
+      cases: [{ ...CASE_STATE.cases[0], distinctFrom: ['case-resolved'] }],
+    };
+
+    await expect(writer.mutate(async () => ({ value: 'seeded' as const, nextState: declaredState })))
+      .resolves.toEqual({ ok: true, value: 'seeded' });
+    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
+      ok: true,
+      state: declaredState,
+    });
+    const undeclared = await new RemediationCaseStore(projectRoot, FEATURE).read();
+    if (!undeclared.ok) throw new Error('the declared store must remain readable');
+    expect(Object.hasOwn(undeclared.state.cases[0]!, 'distinctFrom')).toBe(true);
+
+    const undeclaredRoot = await createProjectRoot();
+    const undeclaredStore = new RemediationCaseStore(undeclaredRoot, FEATURE);
+    await expect(undeclaredStore.mutate(async () => ({ value: 'seeded' as const, nextState: CASE_STATE })))
+      .resolves.toEqual({ ok: true, value: 'seeded' });
+    const undeclaredRead = await undeclaredStore.read();
+    if (!undeclaredRead.ok) throw new Error('the undeclared store must remain readable');
+    expect(Object.hasOwn(undeclaredRead.state.cases[0]!, 'distinctFrom')).toBe(false);
+  });
+
+  it('reads a resolved and an open build-review case at one source without altering either case', async () => {
+    const projectRoot = await createProjectRoot();
+    const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
+    const state: RemediationCaseStoreState = {
+      ...CASE_STATE,
+      cases: [RESOLVED_ACTION_CASE, OPEN_CASE_AT_RESOLVED_SOURCE],
+    };
+    const serialized = JSON.stringify(state);
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(statePath, serialized, 'utf8');
+
+    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({ ok: true, state });
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(serialized);
+  });
+
+  it.each([
+    ['v1', { version: 'v1', feature: FEATURE, cases: CASE_STATE.cases, suppressions: [] }],
+    ['v2', CASE_STATE],
+  ] as const)('reads an existing %s state with unique sources without writing it', async (_version, persistedState) => {
+    const projectRoot = await createProjectRoot();
+    const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
+    const serialized = JSON.stringify(persistedState);
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(statePath, serialized, 'utf8');
+
+    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
+      ok: true,
+      state: { ...CASE_STATE, suppressions: [] },
+    });
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(serialized);
   });
 
   it.each([
@@ -300,15 +381,64 @@ describe('remediation case store', () => {
   it.each([
     ['foreign feature', JSON.stringify({ ...CASE_STATE, feature: { ...FEATURE, feature: 'other-feature' } }), 'foreign-feature'],
     ['malformed JSON', '{not-json', 'malformed-json'],
-    ['unknown future envelope', JSON.stringify({ ...CASE_STATE, version: 'v3' }), 'unknown-version'],
+    ['malformed persisted state', JSON.stringify({
+      ...CASE_STATE,
+      cases: [{ ...CASE_STATE.cases[0], effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' } }],
+    }), 'malformed-state'],
   ])('does not overwrite %s while refusing it', async (_description, original, reason) => {
     const projectRoot = await createProjectRoot();
     const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
     await writeFile(statePath, original, 'utf8');
 
-    await expect(new RemediationCaseStore(projectRoot, FEATURE)
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await expect(store.read()).resolves.toEqual({ ok: false, reason });
+    await expect(store
       .mutate(async () => ({ value: null, nextState: CASE_STATE }))).resolves.toEqual({ ok: false, reason });
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(original);
+  });
+
+  it('fails closed on an unknown envelope version without rewriting recovery history', async () => {
+    const projectRoot = await createProjectRoot();
+    const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
+    const original = JSON.stringify({ ...CASE_STATE, version: 'v3' });
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(statePath, original, 'utf8');
+
+    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({ ok: false, reason: 'unknown-version' });
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(original);
+  });
+
+  it('rejects an invalid next state without replacing valid persisted history', async () => {
+    const projectRoot = await createProjectRoot();
+    const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
+    const original = JSON.stringify(CASE_STATE);
+    const calls: string[] = [];
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(statePath, original, 'utf8');
+    const filesystem: RemediationCaseStoreFilesystem = {
+      readFile: (path) => readFile(path, 'utf8'),
+      mkdir: async () => { calls.push('mkdir'); },
+      writeFile: async () => { calls.push('writeFile'); },
+      rename: async () => { calls.push('rename'); },
+      rm: async () => { calls.push('rm'); },
+    };
+    const invalidNextState: RemediationCaseStoreState = {
+      ...CASE_STATE,
+      cases: [
+        CASE_STATE.cases[0],
+        { ...CASE_STATE.cases[0], id: 'case-2', effect: { id: 'effect-2', kind: 'action', status: 'reserved' } },
+      ],
+    };
+
+    await expect(new RemediationCaseStore(projectRoot, FEATURE, { filesystem })
+      .mutate(async () => ({ value: null, nextState: invalidNextState }))).resolves.toEqual({
+      ok: false,
+      reason: 'rejected-transition',
+      caseIds: ['case-1', 'case-2'],
+      sourceIds: ['testQuality:finding-1'],
+    });
+    expect(calls).toEqual([]);
     await expect(readFile(statePath, 'utf8')).resolves.toBe(original);
   });
 

@@ -52,9 +52,18 @@ function currentSourceCoverageIsConsistent(
   const current = new Set(currentSourceIds);
   if (current.size !== currentSourceIds.length) return false;
   const outcomes = new Map<string, string>();
+  const sourcesWithUnresolvedOwners = new Set(cases
+    .filter(isOpenRemediationCase)
+    .flatMap((record) => record.sources)
+    .filter((source) => current.has(source.sourceId))
+    .map((source) => source.sourceId));
   for (const record of cases) {
     for (const source of record.sources) {
       if (!current.has(source.sourceId)) continue;
+      // A resolved link is durable history, not present-tense coverage. Once a
+      // source has an unresolved owner, only that owner's outcome may route
+      // the current lap or contradict its coverage.
+      if (!isOpenRemediationCase(record) && sourcesWithUnresolvedOwners.has(source.sourceId)) continue;
       const previous = outcomes.get(source.sourceId);
       if (previous !== undefined && previous !== source.outcome) return false;
       outcomes.set(source.sourceId, source.outcome);
