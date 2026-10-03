@@ -4056,7 +4056,7 @@ export function adrApprovalStatus(content: string): { approved: boolean; found: 
 }
 
 export type AdrDecisionParseResult =
-  | { kind: 'decisions'; ids: Set<string> }
+  | { kind: 'decisions'; ids: Set<string>; passages: Map<string, string[]>; section: string }
   | { kind: 'diagnostic'; reason: 'missing-decision-heading'; detail: string };
 
 const ADR_DECISION_HEADING_RE = /^\s{0,3}##\s+Decision\s*$/i;
@@ -4092,19 +4092,35 @@ export function parseAdrDecisions(content: string): AdrDecisionParseResult {
     };
   }
 
-  const ids = new Set<string>();
+  const sectionLines: string[] = [];
+  const decisionStarts: Array<{ id: string; line: number }> = [];
   for (const line of lines.slice(sectionStart + 1)) {
     if (ADR_SECTION_HEADING_RE.test(line)) break;
+    sectionLines.push(line);
     const decisionLine = line.replace(/^\s{0,3}>\s?/, '');
     // `\*{0,2}` before the digit, never after it: `**1.` must match while
     // `**12.` must not answer for decision 1, so the `.` stays required.
     const numberedItem = decisionLine.match(/^\s*\*{0,2}(\d+)\.\s+\S/);
     const dHeading = decisionLine.match(/^\s*#{0,6}\s*\*{0,2}D(\d+)\b/);
     const id = numberedItem?.[1] ?? dHeading?.[1];
-    if (id !== undefined) ids.add(id);
+    if (id !== undefined) decisionStarts.push({ id, line: sectionLines.length - 1 });
   }
 
-  return { kind: 'decisions', ids };
+  const ids = new Set<string>();
+  const passages = new Map<string, string[]>();
+  for (const [index, decision] of decisionStarts.entries()) {
+    const nextDecision = decisionStarts[index + 1];
+    const passage = sectionLines
+      .slice(decision.line, nextDecision?.line)
+      .map((line) => line.replace(/^\s{0,3}>\s?/, ''))
+      .join('\n');
+    ids.add(decision.id);
+    const existingPassages = passages.get(decision.id) ?? [];
+    existingPassages.push(passage);
+    passages.set(decision.id, existingPassages);
+  }
+
+  return { kind: 'decisions', ids, passages, section: sectionLines.join('\n').trim() };
 }
 
 /**
