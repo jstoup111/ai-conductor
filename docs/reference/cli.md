@@ -1060,6 +1060,49 @@ malformed, mismatched, or already-consumed grant authorizes nothing and the run 
 Clearing `.pipeline/HALT` or `.pipeline/HALT.class` is not an authorization; use the
 [DECIDE-entry recovery procedure](../runbooks/stalled-or-stuck-feature.md#the-halt-refused-a-decide-entry).
 
+## `ai-conductor halt clear`
+
+```bash
+ai-conductor halt clear --feature <slug> --rationale "<why the cause is resolved>"
+```
+
+Clears a live halt after recording who authorized it and why — the audited alternative to removing
+`.pipeline/HALT` and `.pipeline/HALT.class` by hand. Run it from any directory inside the
+repository; it resolves the main checkout and the worktree `.worktrees/<slug>`.
+
+| Flag | Required | Effect |
+| --- | --- | --- |
+| `--feature <slug>` | yes | Feature worktree slug. A slash, `.`, or `..` is rejected. |
+| `--rationale <reason>` | yes | Operator rationale. Must be non-empty and at most 2000 bytes. |
+
+**Interactive-operator only.** The command requires `process.stdin.isTTY` and a machine-scoped
+operator identity resolved like [`kickback-budget`](#ai-conductor-kickback-budget): user-config
+`spec_owner`, otherwise the `gh`-authenticated login.
+
+In order, it:
+
+1. Appends a `halt_clear_authorized` event (feature, operator, rationale, halt class, and the
+   recorded `last_step`) to the worktree's `events.jsonl` and an `operator`-origin record to the
+   audit trail. The audit writer is fail-closed: if either write fails, the command refuses and
+   leaves the halt in place.
+2. Removes `HALT.class`, then removes `HALT` — except for an `over-scope` halt, whose body is
+   **renamed** to `.pipeline/HALT.cleared` so the next `prd_audit` lap can harvest the edited
+   `over-scope-decisions` block. Edit that block before running the command.
+3. Supersedes the feature's halt record with cause `operator`. A record failure prints
+   `halt clear: warning — halt record …` but does not undo the clear.
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Halt cleared. |
+| `1` | Worktree missing, feature not halted, no operator identity, or the authorization event could not be recorded. Nothing is cleared. |
+| `2` | Non-interactive terminal or invalid rationale. Nothing is cleared. |
+
+Any halt class is accepted, including `kickback-cap`. A direct clear changes no budget, so an
+exhausted allowance halts again on its next cap check; use
+[`kickback-budget raise` or `reset`](#ai-conductor-kickback-budget) to recover a budget halt. The
+command grants the daemon no clearing authority. Fix the halt's cause first — see
+[clear a halt and let the feature resume](../runbooks/stalled-or-stuck-feature.md#clear-a-halt-and-let-the-feature-resume).
+
 ## `ai-conductor rewind`
 
 ```bash

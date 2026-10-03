@@ -959,6 +959,18 @@ describe('task-progress', () => {
       expect(written).toContain(detail);
     });
 
+    it('writeStallHalt preserves an explicit remediation halt class', async () => {
+      const question = 'Which remediation boundary should own this repair?';
+      const detail = 'Plan-growth allowance is exhausted.';
+
+      await writeStallHalt(dir, question, detail, undefined, 'kickback-cap');
+
+      expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toMatch(
+        /^Which remediation boundary should own this repair\?\n\nPlan-growth allowance is exhausted\./,
+      );
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('kickback-cap');
+    });
+
     it('writeStallHalt with null question uses placeholder', async () => {
       const placeholder = '(agent wrote no reason into halt-user-input-required)';
       const detail = 'remediation failed';

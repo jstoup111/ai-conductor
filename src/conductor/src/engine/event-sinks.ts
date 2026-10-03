@@ -188,6 +188,7 @@ export const EVENT_SINKS = {
   unattributed_dispatch: { render: false, persist: false, audit: false, otel: false },
   unattributed_progress: { render: true, persist: true, audit: false, otel: false },
   halt_cleared: { render: false, persist: false, audit: true, otel: false },
+  halt_clear_authorized: { render: false, persist: true, audit: true, otel: false },
   kickback_budget_adjustment_authorized: { render: false, persist: true, audit: true, otel: false },
   ci_failed: { render: true, persist: false, audit: false, otel: false },
   ci_repair_diagnostic: { render: true, persist: true, audit: false, otel: false },
