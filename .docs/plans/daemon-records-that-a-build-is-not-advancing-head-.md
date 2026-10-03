@@ -238,6 +238,8 @@ Classify every build-progress emission into three activity states. Record a once
 - An aborted Claude result carries no `rateLimited`, `authFailure` or `sessionExpired` signal.
 - A Claude invocation without `abortSignal` passes no `cancelSignal` option to its subprocess.
 - With a real child process that ignores SIGTERM, aborting a Claude invocation still terminates the child by SIGKILL after the execa grace period and the invocation resolves `success: false`, as asserted in `test/execution/claude-provider-abort.test.ts`.
+- An aborted Claude result is classified by the retry path as an ordinary failure that consumes the retry budget, never taking the rate-limit, authentication or session-expired recovery path that leaves the budget untouched.
+- A Claude invocation without `abortSignal` behaves exactly as before: its subprocess options, result fields and classification are identical to the pre-change adapter for the same scripted output.
 
 **Files:** src/conductor/src/execution/claude-provider.ts; src/conductor/test/execution/claude-provider-abort.test.ts
 
@@ -259,6 +261,8 @@ Classify every build-progress emission into three activity states. Record a once
 - An aborted Codex result carries no `rateLimited`, `authFailure` or `sessionExpired` signal.
 - A Codex invocation without `abortSignal` passes no `cancelSignal` option to its subprocess.
 - With a real child process that ignores SIGTERM, aborting a Codex invocation still terminates the child by SIGKILL after the execa grace period and the invocation resolves `success: false`, as asserted in `test/execution/codex-provider-abort.test.ts`.
+- An aborted Codex result is classified by the retry path as an ordinary failure that consumes the retry budget, never taking the rate-limit, authentication or session-expired recovery path that leaves the budget untouched.
+- A Codex invocation without `abortSignal` behaves exactly as before: its subprocess options, result fields and classification are identical to the pre-change adapter for the same scripted output.
 
 **Files:** src/conductor/src/execution/codex-provider.ts; src/conductor/test/execution/codex-provider-abort.test.ts
 
