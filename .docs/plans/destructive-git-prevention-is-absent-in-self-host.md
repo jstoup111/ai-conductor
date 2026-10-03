@@ -712,3 +712,11 @@ Twenty-three tasks deliver an engine-generated `git` argv guard, provisioned fai
 **Done when:**
 - adr-2026-09-23-engine-git-guard-on-agent-path decision 8 is satisfied by this task.
 - Re-run as-built and confirm task rem-as-built-rem-as-built-adr-d8-quote-removal-1 is complete.
+
+### Task rem-as-built-rem-as-built-adr-d10-parser-limit-1: docs/reference/settings-and-hooks.md 'What the guard does NOT cover' list (~:280-287) — add a bullet that only the canonical spellings of each refused form, plus the global-option and single-level alias spellings the tests name, are classified; every other spelling git accepts (for example `branch -d -f` / `-df`, `--config-env=<name>=<envvar>`, alias text quoted as git quotes it) passes through unclassified until #2904; and a bullet that Pi provider dispatches are unguarded until #2895; keep the refusal table, the alias sentence and the existing bullets unchanged
+**Gate:** as-built
+**Rationale:** The ADR D5 amendment (2026-10-02) defers non-canonical git spellings to #2904 as a recorded D10 limit, but docs/reference/settings-and-hooks.md:280-287 ('What the guard does NOT cover') omits it. The 2026-10-01 D2 amendment's Pi exclusion (#2895) is also missing there, and pi-provider.ts has no guard call. None of Tasks 1-23 owns this document. The existing task rem-as-built-rem-as-built-rem-adr-d10-2 asserts that Pi is guarded, which contradicts the amended ADR, so it cannot admit the fix and a new file-scoped doc task is appended. The block-destructive-git.sh hook row and the refusal table stay unchanged.
+**Governing clause:** adr-2026-09-23-engine-git-guard-on-agent-path decision 10
+**Done when:**
+- adr-2026-09-23-engine-git-guard-on-agent-path decision 10 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-as-built-adr-d10-parser-limit-1 is complete.
