@@ -225,8 +225,12 @@ describe('conductor/build-progress-watcher wiring', () => {
     const activityEvents: unknown[] = [];
     const activeStalls: unknown[] = [];
     const stalls: unknown[] = [];
-    events.on('build_progress', (event) => activityEvents.push(event));
-    events.on('build_active_stall', (event) => activeStalls.push(event));
+    events.on('build_progress', (event) => {
+      activityEvents.push(event);
+    });
+    events.on('build_active_stall', (event) => {
+      activeStalls.push(event);
+    });
     events.on('build_stall', (event) => {
       if (event.type === 'build_stall') stalls.push(event);
     });
@@ -268,7 +272,9 @@ describe('conductor/build-progress-watcher wiring', () => {
       }),
     };
     const stalls: Array<Extract<import('../src/types/events.js').ConductorEvent, { type: 'build_stall' }>> = [];
-    events.on('build_stall', (event) => stalls.push(event));
+    events.on('build_stall', (event) => {
+      if (event.type === 'build_stall') stalls.push(event);
+    });
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -298,7 +304,9 @@ describe('conductor/build-progress-watcher wiring', () => {
       }),
     };
     const stalls: Array<Extract<import('../src/types/events.js').ConductorEvent, { type: 'build_stall' }>> = [];
-    events.on('build_stall', (event) => stalls.push(event));
+    events.on('build_stall', (event) => {
+      if (event.type === 'build_stall') stalls.push(event);
+    });
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -332,7 +340,9 @@ describe('conductor/build-progress-watcher wiring', () => {
       }),
     };
     const stalls: Array<Extract<import('../src/types/events.js').ConductorEvent, { type: 'build_stall' }>> = [];
-    events.on('build_stall', (event) => stalls.push(event));
+    events.on('build_stall', (event) => {
+      if (event.type === 'build_stall') stalls.push(event);
+    });
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -375,7 +385,9 @@ describe('conductor/build-progress-watcher wiring', () => {
       }),
     };
     const stalls: Array<Extract<import('../src/types/events.js').ConductorEvent, { type: 'build_stall' }>> = [];
-    events.on('build_stall', (event) => stalls.push(event));
+    events.on('build_stall', (event) => {
+      if (event.type === 'build_stall') stalls.push(event);
+    });
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -410,7 +422,9 @@ describe('conductor/build-progress-watcher wiring', () => {
       }),
     };
     const stalls: Array<Extract<import('../src/types/events.js').ConductorEvent, { type: 'build_stall' }>> = [];
-    events.on('build_stall', (event) => stalls.push(event));
+    events.on('build_stall', (event) => {
+      if (event.type === 'build_stall') stalls.push(event);
+    });
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,

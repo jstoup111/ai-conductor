@@ -635,8 +635,8 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     resolvedBefore: 0,
     resolvedAfter: 1,
   },
-  build_progress: { type: 'build_progress', step: 'build', resolved: 1, total: 3 },
-  build_no_progress: { type: 'build_no_progress', step: 'build', quietMinutes: 5, resolved: 1, total: 3 },
+  build_progress: { type: 'build_progress', step: 'build', resolved: 1, total: 3, activity: 'quiet' },
+  build_no_progress: { type: 'build_no_progress', step: 'build', quietMinutes: 5, resolved: 1, total: 3, activity: 'quiet' },
   pipeline_closeout: {
     type: 'pipeline_closeout',
     obligation: 'evaluator',

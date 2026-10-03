@@ -68,6 +68,7 @@ describe('Task 15: OTel maps the three build-progress event kinds', () => {
       resolved: 3,
       total: 10,
       currentTaskId: 'T4',
+      activity: 'quiet',
     });
     await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
@@ -93,6 +94,7 @@ describe('Task 15: OTel maps the three build-progress event kinds', () => {
       quietMinutes: 15,
       resolved: 3,
       total: 10,
+      activity: 'quiet',
     });
     await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
@@ -165,7 +167,7 @@ describe('Task 15: OTel maps the three build-progress event kinds', () => {
     vis.start(emitter);
 
     await expect(
-      emitter.emit({ type: 'build_progress', step: 'build', resolved: 1, total: 5 }),
+      emitter.emit({ type: 'build_progress', step: 'build', resolved: 1, total: 5, activity: 'quiet' }),
     ).resolves.toBeUndefined();
 
     await emitter.emit({ type: 'feature_complete' });
@@ -190,7 +192,7 @@ describe('Task 16: OTel negative paths for build-progress events', () => {
       emitter.emit({ type: 'step_started', step: 'build', index: 4 }),
     ).resolves.toBeUndefined();
     await expect(
-      emitter.emit({ type: 'build_progress', step: 'build', resolved: 1, total: 5 }),
+      emitter.emit({ type: 'build_progress', step: 'build', resolved: 1, total: 5, activity: 'quiet' }),
     ).resolves.toBeUndefined();
     await expect(
       emitter.emit({
@@ -199,6 +201,7 @@ describe('Task 16: OTel negative paths for build-progress events', () => {
         quietMinutes: 15,
         resolved: 1,
         total: 5,
+        activity: 'quiet',
       }),
     ).resolves.toBeUndefined();
     await expect(
@@ -230,6 +233,7 @@ describe('Task 16: OTel negative paths for build-progress events', () => {
         quietMinutes: 15,
         resolved: 1,
         total: 5,
+        activity: 'quiet',
       }),
     ).resolves.toBeUndefined();
     expect(Date.now() - start).toBeLessThan(50);
