@@ -188,7 +188,7 @@ Exported traces gain the commit a run built, the base it was built against, the 
 **Steps:**
 1. Write failing `OtelVisualizer` tests in `src/conductor/test/engine/otel/otel-visualizer.test.ts` with an in-memory exporter: completion with full provenance; a rebase step span receiving `baseSha`; halt after base `B` with no terminal `baseSha`; bases `B1` then `B2`; force-close via `stop()`; terminal event without `headSha`; rebase outcome with `baseSha: null`. Add `src/conductor/test/engine/otel/span-manager.test.ts` unit cases for the held base. Extend `src/conductor/test/engine/otel/metrics-listener.test.ts` to assert provenance fields create no new series or label.
 2. Verify RED.
-3. Implement: route `rebase_noop`, `rebase_changed`, and `rebase_mergeable_skip` in the `OtelVisualizer` event switch to new `SpanManager` handlers; `SpanManager` in `src/conductor/src/engine/otel/span-manager.ts` sets `vcs.base.sha` on the open `rebase` step span, holds the latest non-null base in memory, and in `closeRunSpan` stamps `vcs.head.sha`, `vcs.base.sha`, `conductor.pr.url`, and `conductor.pr.disposition` (force-close default `unrecorded`). Pattern: the existing `onLoopHalt` halt attributes (search `conductor.run.halt.reason`); omit absent values, never placeholders. No I/O in the span manager (adr-014 D4).
+3. Implement: set `otel: true` for `rebase_noop`, `rebase_changed`, and `rebase_mergeable_skip` in `src/conductor/src/engine/event-sinks.ts` (other sink flags unchanged) so the events reach the visualizer; route `rebase_noop`, `rebase_changed`, and `rebase_mergeable_skip` in the `OtelVisualizer` event switch to new `SpanManager` handlers; `SpanManager` in `src/conductor/src/engine/otel/span-manager.ts` sets `vcs.base.sha` on the open `rebase` step span, holds the latest non-null base in memory, and in `closeRunSpan` stamps `vcs.head.sha`, `vcs.base.sha`, `conductor.pr.url`, and `conductor.pr.disposition` (force-close default `unrecorded`). Pattern: the existing `onLoopHalt` halt attributes (search `conductor.run.halt.reason`); omit absent values, never placeholders. No I/O in the span manager (adr-014 D4).
 4. Verify GREEN and commit.
 
 **Done when:**
@@ -198,7 +198,7 @@ Exported traces gain the commit a run built, the base it was built against, the 
 - A terminal event with no `headSha` yields a root span with no `vcs.head.sha` attribute, and a rebase outcome with `baseSha: null` sets no `vcs.base.sha` and keeps the previously held base.
 - Feeding the same provenance events to `MetricsListener` creates no new metric series and adds no data-point label, as asserted by comparing recorded label sets with and without the provenance fields.
 
-**Files:** src/conductor/src/engine/otel/span-manager.ts; src/conductor/src/engine/otel/otel-visualizer.ts; src/conductor/test/engine/otel/otel-visualizer.test.ts; src/conductor/test/engine/otel/span-manager.test.ts; src/conductor/test/engine/otel/metrics-listener.test.ts
+**Files:** src/conductor/src/engine/otel/span-manager.ts; src/conductor/src/engine/otel/otel-visualizer.ts; src/conductor/src/engine/event-sinks.ts; src/conductor/test/engine/otel/otel-visualizer.test.ts; src/conductor/test/engine/otel/span-manager.test.ts; src/conductor/test/engine/otel/metrics-listener.test.ts
 
 **Dependencies:** Tasks 1, 8
 
