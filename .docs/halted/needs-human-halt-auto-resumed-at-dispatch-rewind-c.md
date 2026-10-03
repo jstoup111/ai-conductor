@@ -1,23 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-10-03T18:16:57.050Z
+Status: halted
 Slug: needs-human-halt-auto-resumed-at-dispatch-rewind-c
 Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-needs-human-halt-auto-resumed-at-dispatch-rewind-c
-Head SHA: c3cc8289cd97dc65a1a82308818a19bc899fcb98
-Halted at: 2026-10-03T17:03:29.443Z
+Head SHA: 4f19941ea4f9b81833400710dd3e13ea6e04e0a8
+Halted at: 2026-10-03T19:09:42.164Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — Blocking findings: AB-REACH-1 (REMEDIABLE; plan task 5): Verified, 96% confidence: halt-class propagation is only partially wired. The first build-stall remediation consumer passes outcome.haltClass at conductor.ts:12161-12167, but the later reachable outcome.kind === 'halt' consumer at conductor.ts:13191-13199 omits it and silently falls back to needs-human.; AB-ADR-1 (DESIGN; adr-2026-08-29-kickback-budget-recovery-uses-needs-human-halt-class decision 4): Verified, 98% confidence: cli.ts:418-429, index.ts:870-873, and halt-clear-cli.ts:75,90-106 allow a generic kickback-cap clear that directly deletes the halt pair. D4 requires staged, generation-bound authorization and daemon-side clearing. Because the sealed plan explicitly requires direct kickback-cap clearing, resolution needs a human architectural decision.; AB-ADR-2 (REMEDIABLE; adr-2026-08-24-over-scope-decision-block-and-durable-refusals decision 3): Verified, 98% confidence: halt-clear-cli.ts:104-105 unlinks an over-scope HALT instead of preserving its operator-edited decision block as HALT.cleared. This discards the approved carrier before the next prd_audit lap can parse it.
+Need DECIDE/plan amendment: Task 2 must preserve an over-scope HALT as HALT.cleared under ADR 2026-08-24 D3, and Task 5 must propagate outcome.haltClass at conductor.ts:13191 before BUILD can continue.
 
-Blocking findings:
-AB-REACH-1 (REMEDIABLE; plan task 5): Verified, 96% confidence: halt-class propagation is only partially wired. The first build-stall remediation consumer passes outcome.haltClass at conductor.ts:12161-12167, but the later reachable outcome.kind === 'halt' consumer at conductor.ts:13191-13199 omits it and silently falls back to needs-human.; AB-ADR-1 (DESIGN; adr-2026-08-29-kickback-budget-recovery-uses-needs-human-halt-class decision 4): Verified, 98% confidence: cli.ts:418-429, index.ts:870-873, and halt-clear-cli.ts:75,90-106 allow a generic kickback-cap clear that directly deletes the halt pair. D4 requires staged, generation-bound authorization and daemon-side clearing. Because the sealed plan explicitly requires direct kickback-cap clearing, resolution needs a human architectural decision.; AB-ADR-2 (REMEDIABLE; adr-2026-08-24-over-scope-decision-block-and-durable-refusals decision 3): Verified, 98% confidence: halt-clear-cli.ts:104-105 unlinks an over-scope HALT instead of preserving its operator-edited decision block as HALT.cleared. This discards the approved carrier before the next prd_audit lap can parse it.
+
+stall:plan-amendment-scope (build: No DECIDE or plan amendment is needed: both repairs are admitted by existing approved tasks and were graded REMEDIABLE (not DESIGN) by the as-built review recorded in .docs/halted/needs-human-halt-auto-resumed-at-dispatch-rewind-c.md (AB-REACH-1 plan task 5, AB-ADR-2 adr-2026-08-24 D3; AB-ADR-1 was separately resolved by the kickback-budget D4 amendment in 3b641b2ca). (1) Task 5 Step 3 says to 'pass outcome.haltClass from the outcome.kind === "halt" branch of the build-stall path in conductor.ts' and its Files list conductor.ts; conductor.ts:13191-13193 is the second build-stall remediation halt branch (budget-gated stall path, same planRemediation outcome as the already-fixed site at conductor.ts:12161-12166), so reopen Task 5 and pass outcome.haltClass as the trailing writeStallHalt argument there, leaving the misroute/none/budget-exhausted writeStallHalt calls at 13143, 13205, 13215 on the needs-human default as Task 5 requires, and add a case to conductor-remediation-authority-routing.test.ts that reaches the 13191 branch with haltClass kickback-cap and asserts HALT.class reads kickback-cap (keep the existing S2.1-S2.3 cases unchanged). (2) Task 2 Files include src/conductor/src/engine/halt-clear-cli.ts and its Done-when only requires .pipeline/HALT and .pipeline/HALT.class to be absent, which a rename satisfies; approved ADR adr-2026-08-24-over-scope-decision-block-and-durable-refusals D3 makes HALT.cleared the carrier the next prd_audit lap parses, so reopen Task 2 and change halt-clear-cli.ts:104-105 so that when the read class is over-scope it unlinks HALT.class and renames HALT to HALT.cleared (other classes keep unlink), still after the halt_clear_authorized append; extend the existing over-scope row of the parameterized test in halt-clear-cli.test.ts to assert HALT.cleared exists with the original body byte-identical, while every class keeps its existing assertions (exit 0, both markers absent, event haltClass) so S1.1-S1.4 coverage survives. Commit each fix with the existing Task 5 / Task 2 ids; append no new plan task.) — remediation produced no dispatchable build work; the implicated task(s) are already evidence-complete — human needed
 ```
