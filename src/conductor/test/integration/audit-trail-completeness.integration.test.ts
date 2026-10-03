@@ -127,6 +127,11 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // Ownership refusals remain durable in the event ledger and terminal, but
   // are deliberately outside the audit-trail friction vocabulary.
   github_operation_refused: 'not-audited-by-design',
+  session_command_refused: 'not-audited-by-design',
+  github_bypass_attempt: 'not-audited-by-design',
+  github_bypass_result: 'not-audited-by-design',
+  github_possible_bypass: 'not-audited-by-design',
+  session_event_delivery_diagnostic: 'not-audited-by-design',
   github_write_credential_fallback: 'not-audited-by-design',
   bot_co_author_skipped: 'not-audited-by-design',
   provider_discovery: 'not-audited-by-design',
@@ -444,6 +449,31 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     operation: 'issue.comment.create',
     reason: 'other-owner',
     remedy: 'ask-resource-owner',
+  },
+  session_command_refused: {
+    type: 'session_command_refused', eventId: 'refusal-1',
+    sourceTime: '2026-10-02T12:00:00.000Z', dispatchId: 'dispatch-1',
+    provider: 'codex', scope: { kind: 'feature', featureSlug: 'feature' }, subcommand: 'finish-record',
+  },
+  github_bypass_attempt: {
+    type: 'github_bypass_attempt', eventId: 'attempt-1',
+    sourceTime: '2026-10-02T12:00:01.000Z', dispatchId: 'dispatch-1',
+    provider: 'codex', scope: { kind: 'feature', featureSlug: 'feature' }, operation: 'pr.edit',
+  },
+  github_bypass_result: {
+    type: 'github_bypass_result', eventId: 'result-1',
+    sourceTime: '2026-10-02T12:00:02.000Z', dispatchId: 'dispatch-1',
+    provider: 'codex', scope: { kind: 'feature', featureSlug: 'feature' }, attemptId: 'attempt-1', outcome: 'cli-failed',
+  },
+  github_possible_bypass: {
+    type: 'github_possible_bypass', eventId: 'possible-1',
+    sourceTime: '2026-10-02T12:00:03.000Z', dispatchId: 'dispatch-1',
+    provider: 'codex', scope: { kind: 'feature', featureSlug: 'feature' }, operation: 'unknown',
+  },
+  session_event_delivery_diagnostic: {
+    type: 'session_event_delivery_diagnostic', eventId: 'delivery-1',
+    sourceTime: '2026-10-02T12:00:04.000Z', dispatchId: 'dispatch-1',
+    provider: 'codex', scope: { kind: 'feature', featureSlug: 'feature' }, code: 'write-failed',
   },
   github_write_credential_fallback: {
     type: 'github_write_credential_fallback',

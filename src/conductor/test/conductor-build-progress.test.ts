@@ -17,8 +17,6 @@ vi.mock('execa', () => ({ execa: vi.fn() }));
 const starts: string[] = [];
 const stops: string[] = [];
 const constructedWith: Array<{ projectRoot: string; step: string }> = [];
-const closeoutTailStarts: string[] = [];
-const closeoutTailStops: string[] = [];
 let endAttemptOnStart = false;
 let endAttemptCallsOnStart = 0;
 let endAttemptCallCountsByWatcher: number[] = [];
@@ -57,23 +55,6 @@ vi.mock('../src/engine/build-progress-watcher.js', () => {
   return { BuildProgressWatcher: FakeBuildProgressWatcher };
 });
 
-vi.mock('../src/engine/closeout-tail.js', () => {
-  class FakeCloseoutEventTail {
-    private readonly projectRoot: string;
-
-    constructor({ projectRoot }: { projectRoot: string }) {
-      this.projectRoot = projectRoot;
-    }
-    start(): void {
-      closeoutTailStarts.push(this.projectRoot);
-    }
-    stop(): void {
-      closeoutTailStops.push('build');
-    }
-  }
-  return { CloseoutEventTail: FakeCloseoutEventTail };
-});
-
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import { Conductor } from '../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../src/engine/conductor.js';
@@ -106,8 +87,6 @@ describe('conductor/build-progress-watcher wiring', () => {
     starts.length = 0;
     stops.length = 0;
     constructedWith.length = 0;
-    closeoutTailStarts.length = 0;
-    closeoutTailStops.length = 0;
     endAttemptOnStart = false;
     endAttemptCallsOnStart = 0;
     endAttemptCallCountsByWatcher = [];
@@ -141,8 +120,6 @@ describe('conductor/build-progress-watcher wiring', () => {
 
     expect(starts.filter((s) => s === 'build').length).toBe(1);
     expect(stops.filter((s) => s === 'build').length).toBe(1);
-    expect(closeoutTailStarts).toEqual([dir]);
-    expect(closeoutTailStops).toEqual(['build']);
   });
 
   it('never constructs a watcher for plan or finish steps', async () => {
@@ -194,11 +171,9 @@ describe('conductor/build-progress-watcher wiring', () => {
 
     expect(starts.filter((s) => s === 'build').length).toBe(1);
     expect(stops.filter((s) => s === 'build').length).toBe(1);
-    expect(closeoutTailStarts).toEqual([dir]);
-    expect(closeoutTailStops).toEqual(['build']);
   });
 
-  it('stops the closeout tail when the build step rejects', async () => {
+  it('stops the build watcher when the build step rejects', async () => {
     const rejectingRunner: StepRunner = {
       run: vi.fn(async (step: StepName): Promise<StepRunResult> =>
         step === 'build' ? { success: false, output: 'rejected' } : { success: true }),
@@ -216,8 +191,8 @@ describe('conductor/build-progress-watcher wiring', () => {
 
     await conductor.run();
 
-    expect(closeoutTailStarts).toEqual([dir]);
-    expect(closeoutTailStops).toEqual(['build']);
+    expect(starts.filter((s) => s === 'build')).toHaveLength(1);
+    expect(stops.filter((s) => s === 'build')).toHaveLength(1);
   });
 
   it('constructs no watcher at all when build_progress.enabled is false', async () => {
