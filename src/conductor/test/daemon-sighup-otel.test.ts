@@ -1,4 +1,5 @@
 // Covers: task:18
+import { existsSync, readdirSync } from 'node:fs';
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -49,15 +50,39 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
   it('stops OTel before removing its listener and re-raising SIGHUP through the injected process adapter', async () => {
     const probe = processProbe();
     const root = await mkdtemp(join(tmpdir(), 'daemon-sighup-otel-'));
-    const daemonOtel = wireDaemonOtel({ otel: {
+    const spoolDirectory = join(root, '.daemon', 'otel-spool');
+    let leasePresentAtKill: boolean | undefined;
+    let spoolFilesAtKill: string[] | undefined;
+    probe.kill.mockImplementation((pid: number, signal: NodeJS.Signals) => {
+      leasePresentAtKill = existsSync(join(spoolDirectory, 'lease.json'));
+      const traceDirectory = join(spoolDirectory, 'traces');
+      spoolFilesAtKill = existsSync(traceDirectory) ? readdirSync(traceDirectory) : [];
+      probe.calls.push(`kill:${pid}:${signal}`);
+    });
+    const config = { otel: {
       exporter: 'otlp', endpoint: 'http://127.0.0.1:1', spool: { enabled: true },
-    } }, {
+    } } as const;
+    const daemonOtel = wireDaemonOtel(config, {
       mainRoot: root, project: root, projectName: 'test', rootEvents: new ConductorEventEmitter(),
     });
     expect(daemonOtel).not.toBeNull();
+    const stop = daemonOtel!.stop.bind(daemonOtel);
+    daemonOtel!.stop = async () => {
+      await stop();
+      probe.calls.push('otel-stop');
+    };
+    const events = new ConductorEventEmitter();
+    const visualizer = wireOtelVisualizer(config, {
+      pipelineDir: join(root, '.pipeline'), runId: 'run', feature: 'feature', project: root,
+      branch: 'feature', engineVersion: 'test', harnessVersion: 'test',
+    }, events, daemonOtel!.spoolRuntime);
+    if (!visualizer) throw new Error('expected dispatch visualizer');
+    await events.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await events.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
 
     installDaemonOtelSighupHandler({
       daemonOtel,
+      activeDispatchVisualizers: new Set([{ stop: visualizer.stop.bind(visualizer) }]),
       processAdapter: probe.adapter,
       awaitStop: async (operation) => operation,
     });
@@ -67,9 +92,11 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
     expect(probe.adapter.on).toHaveBeenCalledWith('SIGHUP', expect.any(Function));
     await probe.listeners.get('SIGHUP')!();
 
-    await expect(access(join(root, '.daemon', 'otel-spool', 'lease.json'))).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(probe.calls).toEqual(['on:SIGHUP', 'off:SIGHUP', 'kill:481:SIGHUP']);
+    await expect(access(join(spoolDirectory, 'lease.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(probe.calls).toEqual(['on:SIGHUP', 'otel-stop', 'off:SIGHUP', 'kill:481:SIGHUP']);
     expect(probe.kill).toHaveBeenCalledWith(481, 'SIGHUP');
+    expect(leasePresentAtKill).toBe(false);
+    expect(spoolFilesAtKill).toHaveLength(1);
     await rm(root, { recursive: true, force: true });
   });
 
@@ -125,8 +152,13 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
   it('abandons a hanging OTel stop at the bounded export timeout and still re-raises SIGHUP', async () => {
     const probe = processProbe();
     const stop = vi.fn(() => new Promise<void>(() => {}));
+    let releaseTimeout!: () => void;
+    const exportTimeoutElapsed = new Promise<void>((resolve) => {
+      releaseTimeout = resolve;
+    });
     const awaitStop = vi.fn(async (_operation: Promise<void>, timeoutMs: number) => {
       expect(timeoutMs).toBe(DAEMON_OTEL_SIGHUP_STOP_TIMEOUT_MS);
+      await exportTimeoutElapsed;
       return 'timed-out' as const;
     });
 
@@ -135,11 +167,14 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
       processAdapter: probe.adapter,
       awaitStop,
     });
-    await probe.listeners.get('SIGHUP')!();
+    const handling = probe.listeners.get('SIGHUP')!();
 
     // stop() starts after the persistence hooks settle, inside the bounded operation.
     await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
     expect(awaitStop).toHaveBeenCalledOnce();
+    expect(probe.calls).toEqual(['on:SIGHUP']);
+    releaseTimeout();
+    await handling;
     expect(probe.calls).toEqual(['on:SIGHUP', 'off:SIGHUP', 'kill:481:SIGHUP']);
   });
 });
