@@ -285,9 +285,8 @@ directory, such as test fixtures, pass through untouched.
 - Interactive and inline runs, and any dispatch whose working directory is not an engine-prepared worktree.
 - `build_review` dispatches, which run without the guard by design.
 - Custom providers, which build their own child environment.
-- Non-canonical git spellings. The canonical spelling of each refused form is classified, plus the
-  global-option spellings the guard's tests name (including `--config-env`, `--attr-source` and
-  `--super-prefix`) and single-level aliases, whose text is split the way git quotes it. Every other
+- Non-canonical git spellings. The canonical spelling of each refused form is classified, plus
+  `--config-env` and single-level aliases, whose text is split the way git quotes it. Every other
   spelling git accepts, such as `branch -d -f` or `-df`, passes through unclassified until #2904 ships.
 - Pi provider dispatches, which run unguarded until #2895 ships.
 
