@@ -36,14 +36,8 @@ Run everything from `src/conductor` unless stated otherwise.
 `npm test` expands to:
 
 ```bash
-node scripts/run-vitest-shards.mjs
+node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 && echo 'AGGREGATE_TEST_SUITE_PASS'
 ```
-
-The aggregate launcher divides the ordinary suite into fresh Vitest
-batches of at most five files and 128 KiB of test source. This keeps a large fixture
-from sharing a fork merely because it fits the file-count limit, keeping each fork below
-the 8 GiB worker ceiling
-as the suite grows while running every included test exactly once.
 
 `AGGREGATE_TEST_SUITE_PASS` is a human-readable shell success indicator. The pre-SHIP `test_suite`
 gate classifies the aggregate command's exit code and records its evidence; it does not inspect this
@@ -221,7 +215,7 @@ so a bare `npm test` discovers 1185 files and excludes the 16 opt-in smoke files
 | `test/types/` | 3 | Type-level contracts. | `npm test -- test/types` |
 | `test/fixtures/` | 5 | Fixture helpers and their executable contract tests. | `npm test -- test/fixtures` |
 
-Runner shape (`src/conductor/vitest.config.ts`): `pool: 'forks'` with top-level `maxWorkers: 1`,
+Runner shape (`src/conductor/vitest.config.ts`): `pool: 'forks'` with top-level `maxWorkers: 2`,
 `testTimeout: 20000`, `hookTimeout: 30000`, `environment: 'node'`. No reporter is configured in the file
 — it comes from the command line. Vitest 4 removed `poolOptions` and `minWorkers`; isolated generated
 smoke fixtures set `maxWorkers: 1`.

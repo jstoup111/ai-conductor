@@ -60,7 +60,7 @@ else if (args[0] === 'api' && args[1] === 'repos/acme/app/issues/43' && process.
       ...environment,
       HOME: home,
       PATH: `${bin}:${process.env.PATH ?? ''}`,
-      TMPDIR: root,
+      TMPDIR: '/tmp',
       GH_CALLS: callsPath,
       ...(options.failPost43 ? { FAIL_POST_43: '1' } : {}),
       ...(options.failRead43 ? { FAIL_READ_43: '1' } : {}),
