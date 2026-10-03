@@ -46,6 +46,7 @@ Let a judge-declared new concern at a source already linked from a resolved acti
 - A persisted store whose same source id is linked by two unresolved cases fails `RemediationCaseStore.load` with reason `malformed-state`, as asserted by a store test over that fixture.
 - A source id repeated within one case still fails `RemediationCaseStore.load` with reason `malformed-state`.
 - Pre-change v1 and v2 store fixtures with globally unique sources load through `RemediationCaseStore.load` with identical parsed state and no write, as asserted by a byte comparison of each file after the read.
+- Any store written before this change — every store the pre-change validator accepted, covering v1, v2, an empty case list, and a store carrying suppressions and PRD-widening cases — is read by the fixed engine and parses unchanged with no migration step and no rewrite on read, as asserted by a parameterized load-and-byte-compare test over those fixtures.
 
 **Files:**
 - src/conductor/src/engine/remediation-case-store.ts
