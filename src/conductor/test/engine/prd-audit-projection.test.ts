@@ -82,6 +82,14 @@ Audit the feature requirements against the delivered source.
 **Files:** src.ts
 **Done when:**
 - The published behavior preserves the documented outcome.
+
+### Task task-b: Preserve the negative obligation
+
+**Story:** Story beta.2
+**Files:** src.ts
+**Done when:**
+- The published behavior reports the documented gap.
+- The report remains attributable to Story beta.2.
 `);
   await writeFile(join(root, '.docs', 'stories', 'audit-fixture.md'), `# Stories
 
@@ -92,6 +100,14 @@ Audit the feature requirements against the delivered source.
 
 ### Negative Paths
 - Given the feature omits the documented behavior, when its source is audited, then the audit reports the gap.
+
+## Story beta.2: Preserve negative obligations
+
+### Happy Path
+- Given the audit receives documented evidence, when the negative obligation is satisfied, then the audit retains its attribution.
+
+### Negative Paths
+- Given the negative obligation is omitted, when the audit evaluates the feature, then the audit reports the attributable gap.
 `);
   await writeFile(join(root, '.docs', 'specs', 'audit-fixture.md'), `# PRD
 
@@ -192,6 +208,53 @@ describe('PRD-audit feature projection', () => {
   it('independently resolves populated feature obligations, scoped changes, and attributable history', async () => {
     const result = await buildPrdAuditProjection(await fixture());
 
+    if (!result.ok) throw new Error(`projection failed: ${result.fault.dimension}`);
+    expect(result.projection.criteria).toEqual([
+      {
+        id: 'Salpha.1.1',
+        storyId: 'alpha.1',
+        kind: 'happy',
+        text: 'Given the feature is audited, when its source meets the documented behavior, then the audit can pass.',
+        requirementIds: [],
+      },
+      {
+        id: 'Salpha.1.2',
+        storyId: 'alpha.1',
+        kind: 'negative',
+        text: 'Given the feature omits the documented behavior, when its source is audited, then the audit reports the gap.',
+        requirementIds: [],
+      },
+      {
+        id: 'Sbeta.2.1',
+        storyId: 'beta.2',
+        kind: 'happy',
+        text: 'Given the audit receives documented evidence, when the negative obligation is satisfied, then the audit retains its attribution.',
+        requirementIds: [],
+      },
+      {
+        id: 'Sbeta.2.2',
+        storyId: 'beta.2',
+        kind: 'negative',
+        text: 'Given the negative obligation is omitted, when the audit evaluates the feature, then the audit reports the attributable gap.',
+        requirementIds: [],
+      },
+    ]);
+    expect(result.projection.tasks).toEqual([
+      {
+        id: 'task-a',
+        storyIds: ['alpha.1'],
+        doneWhen: ['The published behavior preserves the documented outcome.'],
+      },
+      {
+        id: 'task-b',
+        storyIds: ['beta.2'],
+        doneWhen: [
+          'The published behavior reports the documented gap.',
+          'The report remains attributable to Story beta.2.',
+        ],
+      },
+    ]);
+
     expect(result).toMatchObject({
       ok: true,
       projection: {
@@ -200,11 +263,20 @@ describe('PRD-audit feature projection', () => {
         criteria: [
           { id: 'Salpha.1.1', storyId: 'alpha.1', kind: 'happy' },
           { id: 'Salpha.1.2', storyId: 'alpha.1', kind: 'negative' },
+          { id: 'Sbeta.2.1', storyId: 'beta.2', kind: 'happy' },
+          { id: 'Sbeta.2.2', storyId: 'beta.2', kind: 'negative' },
         ],
         tasks: [{
           id: 'task-a',
           storyIds: ['alpha.1'],
           doneWhen: ['The published behavior preserves the documented outcome.'],
+        }, {
+          id: 'task-b',
+          storyIds: ['beta.2'],
+          doneWhen: [
+            'The published behavior reports the documented gap.',
+            'The report remains attributable to Story beta.2.',
+          ],
         }],
         prd: { sources: [
           {
@@ -254,11 +326,20 @@ describe('PRD-audit feature projection', () => {
         criteria: [
           { id: 'Salpha.1.1', kind: 'happy' },
           { id: 'Salpha.1.2', kind: 'negative' },
+          { id: 'Sbeta.2.1', kind: 'happy' },
+          { id: 'Sbeta.2.2', kind: 'negative' },
         ],
         tasks: [{
           id: 'task-a',
           storyIds: ['alpha.1'],
           doneWhen: ['The published behavior preserves the documented outcome.'],
+        }, {
+          id: 'task-b',
+          storyIds: ['beta.2'],
+          doneWhen: [
+            'The published behavior reports the documented gap.',
+            'The report remains attributable to Story beta.2.',
+          ],
         }],
         prd: { kind: 'absent' },
         coherence: { kind: 'absent' },
@@ -311,10 +392,18 @@ describe('PRD-audit feature projection', () => {
         criteria: [
           { id: 'Salpha.1.1', text: 'Given the feature is audited, when its source meets the documented behavior, then the audit can pass.' },
           { id: 'Salpha.1.2', text: 'Given the feature omits the documented behavior, when its source is audited, then the audit reports the gap.' },
+          { id: 'Sbeta.2.1', text: 'Given the audit receives documented evidence, when the negative obligation is satisfied, then the audit retains its attribution.' },
+          { id: 'Sbeta.2.2', text: 'Given the negative obligation is omitted, when the audit evaluates the feature, then the audit reports the attributable gap.' },
         ],
         tasks: [{
           id: 'task-a',
           doneWhen: ['The published behavior preserves the documented outcome.'],
+        }, {
+          id: 'task-b',
+          doneWhen: [
+            'The published behavior reports the documented gap.',
+            'The report remains attributable to Story beta.2.',
+          ],
         }],
         prd: { sources: expect.arrayContaining([
           expect.objectContaining({
