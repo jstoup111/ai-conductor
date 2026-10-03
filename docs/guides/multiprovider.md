@@ -201,6 +201,7 @@ records the exhausted provider and deadline; see [artifacts](../reference/artifa
 | Readiness check | none; failures are classified from process signals and output | explicit `codex doctor --json --summary` before every dispatch, failing closed | none; boot probes `pi --version` |
 | Isolated-home variable | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` | unsupported |
 | Model selection | harness model table | harness model table | required `llm_providers.pi` block; boot validates ids with `pi --list-models` |
+| Project-local `.pi` files | n/a | n/a | ignored (`-na`) unless `llm_providers.pi.trust_project_files: true` |
 | Provider-specific features | self-host and custom build-review policies | self-host and custom build-review policies | unsupported; the engine refuses before spawning |
 
 Codex and Pi share the `~/.agents/skills` catalog; Claude reads the same skills from

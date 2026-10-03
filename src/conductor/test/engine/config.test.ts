@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:2.1, task:4, task:5, task:9, task:3, pi-per-step-model-selection-via-wrapped-providers:task:5, task:1
+// Covers: task:1, task:2, task:2.1, task:4, task:5, task:9, task:3, pi-per-step-model-selection-via-wrapped-providers:task:5, task:1, pi-runs-stay-contained-despite-pi-having-no-permis:task:12
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -4147,6 +4147,43 @@ steps:
           type: 'validation_error',
           message: expect.stringMatching(/llm_providers.*unknown provider.*claude.*codex.*pi/i),
         },
+      });
+    });
+
+    describe('trust_project_files (Pi containment Task 12)', () => {
+      it('accepts a boolean llm_providers.pi.trust_project_files', () => {
+        expect(validateConfig({ llm_providers: { pi: { trust_project_files: true } } })).toMatchObject({ ok: true });
+        expect(validateConfig({ llm_providers: { pi: { trust_project_files: false } } })).toMatchObject({ ok: true });
+      });
+
+      it('rejects a non-boolean value naming the key and the boolean type', () => {
+        const result = validateConfig({ llm_providers: { pi: { trust_project_files: 'yes' } } });
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: { type: 'validation_error', message: 'llm_providers.pi.trust_project_files must be a boolean' },
+        });
+      });
+
+      it('rejects a misspelled key with the unknown-key error naming it', () => {
+        const result = validateConfig({ llm_providers: { pi: { trust_project_fils: true } } });
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: { type: 'validation_error', message: 'Unknown key in llm_providers.pi: "trust_project_fils"' },
+        });
+      });
+
+      it.each(['claude', 'codex'])('rejects the key as not applicable to provider %s', (provider) => {
+        const result = validateConfig({ llm_providers: { [provider]: { trust_project_files: true } } });
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: `llm_providers.${provider}.trust_project_files is not applicable to provider ${provider}`,
+          },
+        });
       });
     });
 

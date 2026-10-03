@@ -124,7 +124,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'dispatch_start_timeout_seconds',
   ],
   defaults: ['model', 'effort', 'max_retries', 'escalate'],
-  llm_providers: ['model', 'model_escalation_order', 'model_fallback_ladder'],
+  llm_providers: ['model', 'model_escalation_order', 'model_fallback_ladder', 'trust_project_files'],
   phases: ['model', 'effort', 'max_retries', 'escalate', 'by_tier'],
   steps: ['llm_provider', 'provider_substitution', 'model', 'effort', 'max_retries', 'disable', 'escalate', 'skill', 'hooks', 'by_tier', 'after', 'enforcement', 'completion_artifact', 'gate', 'kickback_target', 'when', 'parallel'],
   conductor: ['update_channel', 'auto_check', 'current_version', 'last_checked_at'],
@@ -3097,6 +3097,11 @@ function validateProviderModelConfigs(raw: unknown): ConfigError | null {
       if (!allowedKeys.has(key)) {
         return { type: 'validation_error', message: `Unknown key in ${path}: "${key}"` };
       }
+    }
+    if (policy.trust_project_files !== undefined) {
+      const descriptor = BUILT_IN_PROVIDERS.find((candidate) => candidate.id === providerId);
+      if (!descriptor || !('projectFileTrust' in descriptor && descriptor.projectFileTrust === true)) return { type: 'validation_error', message: `${path}.trust_project_files is not applicable to provider ${providerId}` };
+      if (typeof policy.trust_project_files !== 'boolean') return { type: 'validation_error', message: `${path}.trust_project_files must be a boolean` };
     }
     if (policy.model !== undefined && (typeof policy.model !== 'string' || policy.model.trim() === '')) {
       return { type: 'validation_error', message: `${path}.model must be a non-empty string` };

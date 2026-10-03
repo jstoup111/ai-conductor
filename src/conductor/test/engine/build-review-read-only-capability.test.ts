@@ -1,5 +1,6 @@
+// Covers: task:11
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -7,6 +8,8 @@ import { promisify } from 'node:util';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { probeReadOnlyReviewCapability } from '../../src/engine/build-review-read-only-capability.js';
+import { materializePiHarnessExtension } from '../../src/execution/pi-harness-extension.js';
+import { PiProvider } from '../../src/execution/pi-provider.js';
 
 const tempRoot = mkdtempSync(join(tmpdir(), 'read-only-capability-'));
 const scratchDir = join(tempRoot, '.pipeline', 'read-only-capability');
@@ -125,5 +128,107 @@ describe('probeReadOnlyReviewCapability', () => {
       provider: 'other', platform: 'linux', status: 'unavailable', reason: 'provider has no read-only review mode',
     });
     expect(runProcess).not.toHaveBeenCalled();
+  });
+
+  describe('pi', () => {
+    const PI_HELP = [
+      'Options:',
+      '  --tools <list>          Comma-separated tool allowlist',
+      '  --no-extensions, -ne    Disable extension discovery',
+      '  --extension, -e <path>  Load an extension file',
+      '  --no-approve, -na       Ignore project-local resources',
+    ].join('\n');
+    const helpRunner = (stdout: string, exitCode = 0, stderr = '') => vi.fn(async () => ({ exitCode, stdout, stderr }));
+    const materialized = vi.fn(async () => join(tempRoot, 'asset.ts'));
+    const piInvoke = vi.spyOn(PiProvider.prototype, 'invoke');
+
+    const probePi = (runProcess: ReturnType<typeof helpRunner> | ReturnType<typeof vi.fn>, materializePiExtension = materialized) =>
+      probeReadOnlyReviewCapability({ provider: 'pi', platform: 'linux', runProcess: runProcess as never, scratchDir, materializePiExtension });
+
+    const expectOnlyHelp = (runProcess: ReturnType<typeof vi.fn>) => {
+      for (const call of runProcess.mock.calls) expect(call[1]).toEqual(['--help']);
+      expect(piInvoke).not.toHaveBeenCalled();
+    };
+
+    it('is available when help lists every flag and the asset materializes', async () => {
+      const runProcess = helpRunner(PI_HELP);
+
+      await expect(probePi(runProcess)).resolves.toEqual({ provider: 'pi', platform: 'linux', status: 'available' });
+      expect(runProcess).toHaveBeenCalledWith('pi', ['--help']);
+      expect(materialized).toHaveBeenCalled();
+      expectOnlyHelp(runProcess);
+    });
+
+    it('reports a missing --no-approve', async () => {
+      const runProcess = helpRunner(PI_HELP.split('\n').filter((line) => !line.includes('--no-approve')).join('\n'));
+
+      await expect(probePi(runProcess)).resolves.toEqual({
+        provider: 'pi', platform: 'linux', status: 'unavailable', reason: 'Pi help does not list --no-approve',
+      });
+      expectOnlyHelp(runProcess);
+    });
+
+    it('does not let --no-extensions stand in for a missing --extension', async () => {
+      const runProcess = helpRunner(PI_HELP.split('\n').filter((line) => !line.includes('--extension,')).join('\n'));
+
+      await expect(probePi(runProcess)).resolves.toEqual({
+        provider: 'pi', platform: 'linux', status: 'unavailable', reason: 'Pi help does not list --extension',
+      });
+    });
+
+    it.each([
+      ['--extension', '--extension-preview', 'Pi help does not list --extension'],
+      ['--no-approve', '--no-approve-preview', 'Pi help does not list --no-approve'],
+    ])('does not treat a longer Pi help token as %s', async (missingFlag, deceptiveFlag, reason) => {
+      const runProcess = helpRunner(
+        PI_HELP
+          .split('\n')
+          .filter((line) => !line.includes(`${missingFlag},`))
+          .concat(`  ${deceptiveFlag} <value>  Deceptive option`)
+          .join('\n'),
+      );
+      const materializePiExtension = vi.fn(async () => join(tempRoot, 'unexpected-asset.ts'));
+
+      await expect(probePi(runProcess, materializePiExtension)).resolves.toEqual({
+        provider: 'pi', platform: 'linux', status: 'unavailable', reason,
+      });
+      expect(materializePiExtension).not.toHaveBeenCalled();
+      expectOnlyHelp(runProcess);
+    });
+
+    it('names the unavailable executable when pi is not found, without throwing', async () => {
+      const runProcess = vi.fn(async () => { throw Object.assign(new Error('spawn pi ENOENT'), { code: 'ENOENT' }); });
+
+      await expect(probePi(runProcess)).resolves.toEqual({
+        provider: 'pi', platform: 'linux', status: 'unavailable', reason: 'Pi executable pi is unavailable',
+      });
+      expectOnlyHelp(runProcess);
+    });
+
+    it('carries the exit code and stderr when help exits non-zero', async () => {
+      const runProcess = helpRunner('', 2, 'boom');
+
+      await expect(probePi(runProcess)).resolves.toEqual({
+        provider: 'pi', platform: 'linux', status: 'unavailable', reason: 'pi help exited 2: boom',
+      });
+      expectOnlyHelp(runProcess);
+    });
+
+    it.skipIf(process.getuid?.() === 0)('names the asset path when its directory is not writable', async () => {
+      const home = join(tempRoot, 'locked-home');
+      const assetDir = join(home, '.ai-conductor', 'pi');
+      mkdirSync(assetDir, { recursive: true });
+      chmodSync(assetDir, 0o500);
+      const runProcess = helpRunner(PI_HELP);
+      try {
+        const result = await probePi(runProcess, vi.fn(() => materializePiHarnessExtension({ homeDir: home })));
+
+        expect(result).toMatchObject({ provider: 'pi', platform: 'linux', status: 'unavailable' });
+        expect(result.status === 'unavailable' && result.reason).toMatch(new RegExp(`${assetDir}/harness-extension-[0-9a-f]{16}\\.ts`));
+        expectOnlyHelp(runProcess);
+      } finally {
+        chmodSync(assetDir, 0o700);
+      }
+    });
   });
 });

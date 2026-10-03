@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
+import { PiProvider } from '../../src/execution/pi-provider.js';
 import {
   DAEMON_SESSION_MARKER,
   guardDaemonSessionInvocation,
@@ -198,6 +199,34 @@ function codexCapture() {
   return { calls, provider: new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory as any) };
 }
 
+function piCapture() {
+  const calls: CapturedSpawn[] = [];
+  const subprocessFactory = vi.fn(
+    (_file: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
+      calls.push({ args: [...args], env: options.env });
+      return Promise.resolve({
+        stdout: JSON.stringify({
+          type: 'message_end',
+          message: { role: 'assistant', content: 'Done.' },
+        }),
+        stderr: '',
+        exitCode: 0,
+      }) as any;
+    },
+  );
+  // Provision HARNESS.md so Pi's invocation preflight reaches the spawn.
+  const provider = new PiProvider('pi', subprocessFactory, {
+    stat: async (path) => ({
+      isFile: () => path === '/home/agent/.agents/skills/HARNESS.md',
+      isDirectory: () => false,
+    }),
+    env: {},
+    homeDir: () => '/home/agent',
+    cwd: () => '/workspace',
+  });
+  return { calls, provider };
+}
+
 describe('daemon-session marker injection (claude adapter)', () => {
   it('stamps CONDUCT_DAEMON_SESSION=1 into every invoke() session env', async () => {
     const { calls, provider } = claudeCapture();
@@ -253,6 +282,18 @@ describe('daemon-session marker injection (codex adapter)', () => {
     const env = calls[0]!.env!;
     expect(env[DAEMON_SESSION_MARKER]).toBe('1');
     expect(env.CODEX_HOME).toBe('/throwaway/home');
+  });
+});
+
+describe('daemon-session marker injection (pi adapter)', () => {
+  it('prevents a Pi child session from recursively invoking ai-conductor', async () => {
+    const { calls, provider } = piCapture();
+    await provider.invoke(baseOptions);
+
+    expect(guardDaemonSessionInvocation(argvFor('daemon', 'restart'), calls[0]!.env)).toMatchObject({
+      allowed: false,
+      message: expect.stringContaining('ai-conductor may not be invoked from inside a daemon-managed session'),
+    });
   });
 });
 

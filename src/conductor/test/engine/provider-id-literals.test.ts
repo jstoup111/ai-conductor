@@ -12,11 +12,11 @@ const testRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(testRoot, '../..');
 const sourceRoot = join(conductorRoot, 'src');
 const catalogModule = 'execution/provider-catalog.ts';
-const ADAPTER_MODULE_BY_PROVIDER_ID = {
-  claude: 'execution/claude-provider.ts',
-  codex: 'execution/codex-provider.ts',
-  pi: 'execution/pi-provider.ts',
-} as const satisfies Readonly<Record<(typeof BUILT_IN_PROVIDERS)[number]['id'], string>>;
+const ADAPTER_MODULES_BY_PROVIDER_ID = {
+  claude: ['execution/claude-provider.ts'],
+  codex: ['execution/codex-provider.ts'],
+  pi: ['execution/pi-provider.ts', 'execution/pi-harness-extension.ts'],
+} as const satisfies Readonly<Record<(typeof BUILT_IN_PROVIDERS)[number]['id'], readonly string[]>>;
 
 interface ProviderLiteralFinding {
   readonly file: string;
@@ -35,7 +35,7 @@ async function sourceFiles(directory: string): Promise<readonly string[]> {
 }
 
 function declaredAdapterModules(): ReadonlySet<string> {
-  return new Set(Object.values(ADAPTER_MODULE_BY_PROVIDER_ID));
+  return new Set(Object.values(ADAPTER_MODULES_BY_PROVIDER_ID).flat());
 }
 
 function findProviderLiterals(
@@ -48,9 +48,15 @@ function findProviderLiterals(
   const forbiddenLiterals = new Set<string>(BUILT_IN_PROVIDERS.flatMap(
     ({ id, displayName }) => [id, displayName],
   ));
-  const adapter = adapterModules.has(module)
-    ? BUILT_IN_PROVIDERS.find(({ id }) => ADAPTER_MODULE_BY_PROVIDER_ID[id] === module)
+  const adapterProviderId = adapterModules.has(module)
+    ? Object.entries(ADAPTER_MODULES_BY_PROVIDER_ID).find(([, modules]) => {
+      const providerModules: readonly string[] = modules;
+      return providerModules.includes(module);
+    })?.[0]
     : undefined;
+  const adapter = adapterProviderId === undefined
+    ? undefined
+    : BUILT_IN_PROVIDERS.find(({ id }) => id === adapterProviderId);
   const foreignProviders = adapter === undefined
     ? BUILT_IN_PROVIDERS
     : BUILT_IN_PROVIDERS.filter(({ id }) => id !== adapter.id);
@@ -119,16 +125,18 @@ async function productionProviderLiteralFindings(): Promise<readonly ProviderLit
 }
 
 describe('structural: built-in provider literals', () => {
-  it('declares exactly one existing adapter module for each built-in provider', async () => {
+  it('declares existing provider-owned modules for each built-in provider', async () => {
     const catalogIds = BUILT_IN_PROVIDERS.map(({ id }) => id);
-    const adapterEntries = Object.entries(ADAPTER_MODULE_BY_PROVIDER_ID);
+    const adapterEntries = Object.entries(ADAPTER_MODULES_BY_PROVIDER_ID);
     const adapterIds = adapterEntries.map(([id]) => id);
     const modules = new Set((await sourceFiles(sourceRoot)).map((path) => relative(sourceRoot, path)));
 
     expect(adapterIds).toHaveLength(catalogIds.length);
     expect(new Set(adapterIds)).toEqual(new Set(catalogIds));
-    for (const [, adapterModule] of adapterEntries) {
-      expect(modules).toContain(adapterModule);
+    for (const [, adapterModules] of adapterEntries) {
+      for (const adapterModule of adapterModules) {
+        expect(modules).toContain(adapterModule);
+      }
     }
   });
 

@@ -82,6 +82,8 @@ export interface BuiltInProviderDescriptor {
   readonly optInModelIds: readonly string[];
   /** Whether unattended provider commands run in an OS sandbox. */
   readonly osSandbox: boolean;
+  /** This provider has an explicit opt-in for project-owned provider files. */
+  readonly projectFileTrust?: boolean;
   readonly capabilities: ProviderCapabilityFlags;
   /** Provider-native mechanics for launching an interactive composer session. */
   readonly interactiveLaunch?: InteractiveLaunch;
@@ -204,7 +206,11 @@ export const BUILT_IN_PROVIDERS = [
     modelCatalog: { argv: ['--list-models'], parse: parsePiModelListing },
     optInModelIds: [],
     osSandbox: false,
-    capabilities: {} as const satisfies ProviderCapabilityFlags,
+    projectFileTrust: true,
+    capabilities: {
+      readOnlyReview: true,
+      nativeSchema: true,
+    } as const satisfies ProviderCapabilityFlags,
     diagnosticEnvelopes: [],
   },
 ] as const satisfies readonly BuiltInProviderDescriptor[];
