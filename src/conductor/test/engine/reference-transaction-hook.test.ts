@@ -1,6 +1,6 @@
 // Covers: task:2, task:3
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -158,6 +158,17 @@ describe('reference-transaction hook', () => {
     expect((await fixture.git(fixture.worktree, 'rev-parse', branch)).stdout).toBe(tip);
     expect((await fixture.git(fixture.worktree, 'branch', '-D', branch)).exitCode).not.toBe(0);
     expect((await fixture.git(fixture.worktree, 'rev-parse', branch)).stdout).toBe(tip);
+  });
+
+  it('chains an allowed reference transaction to the repository hook', async () => {
+    const fixture = await createFixture(true);
+    const log = join(fixture.dir, 'reference-transaction.log');
+    const hook = join(fixture.root, '.git', 'hooks', 'reference-transaction');
+    await writeFile(hook, `#!/bin/bash\ncat > ${JSON.stringify(log)}\n`);
+    await chmod(hook, 0o755);
+
+    expect((await fixture.git(fixture.worktree, 'branch', 'chained-ref')).exitCode).toBe(0);
+    expect(await readFile(log, 'utf8')).toContain('refs/heads/chained-ref');
   });
 
   it.each([

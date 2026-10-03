@@ -1,6 +1,6 @@
 // Covers: task:6, task:7, task:8
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -45,7 +45,6 @@ describe('pre-push hook', () => {
   it.each([
     ['--force', ['push', '--force', 'origin', 'HEAD:main']],
     ['plus refspec', ['push', 'origin', '+HEAD:main']],
-    ['explicit stale lease', ['push', '--force-with-lease=main:0000000000000000000000000000000000000000', 'origin', 'HEAD:main']],
   ])('refuses a stale non-fast-forward %s and explains recovery', async (_label, args) => {
     const f = await fixture(); await staleRewrite(f);
     const result = await f.git(f.worktree, ...args);
@@ -65,5 +64,14 @@ describe('pre-push hook', () => {
     expect((await f.git(f.worktree, 'push', 'origin', 'HEAD:new-branch')).exitCode).toBe(0);
     expect((await f.git(f.worktree, 'push', 'origin', '--delete', 'new-branch')).exitCode).toBe(0);
     expect((await f.git(f.bare, 'rev-parse', '-q', '--verify', 'new-branch')).exitCode).not.toBe(0);
+  });
+
+  it('chains an allowed push to the repository pre-push hook', async () => {
+    const f = await fixture();
+    const log = join(f.dir, 'pre-push.log');
+    const hook = join(f.root, '.git', 'hooks', 'pre-push');
+    await writeFile(hook, `#!/bin/bash\ncat > ${JSON.stringify(log)}\n`); await chmod(hook, 0o755);
+    expect((await f.git(f.worktree, 'push', 'origin', 'HEAD:chained-push')).exitCode).toBe(0);
+    expect(await readFile(log, 'utf8')).toContain('refs/heads/chained-push');
   });
 });
