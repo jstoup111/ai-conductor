@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, constants, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -55,6 +55,7 @@ describe('managed gh observation provisioning', () => {
     });
     expect(env.PATH).toBe(`${prepared.wrapperDirectory}:/operator/bin`);
     expect(await readFile(join(prepared.wrapperDirectory, 'gh'), 'utf8')).toContain('runGhObserverFromEnvironment');
+    await expect(access(join(prepared.wrapperDirectory, 'gh'), constants.X_OK)).resolves.toBeUndefined();
     expect(prepared.coverage).toEqual({ boundary: 'managed-path-resolved-gh', completeness: 'unknown' });
   });
 
