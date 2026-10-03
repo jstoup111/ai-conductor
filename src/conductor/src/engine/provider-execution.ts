@@ -55,6 +55,7 @@ import {
 } from '../execution/provider-catalog.js';
 import type { ManagedSessionContext } from '../execution/managed-session-context.js';
 import { prepareManagedGhObservation } from '../execution/managed-session-preparation.js';
+import type { ManagedGhObservationCoverage } from '../execution/managed-session-preparation.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -112,6 +113,8 @@ export interface ProviderExecutionResult extends InvokeResult, ProviderAttributi
   attempts: ProviderAttemptMetadata[];
   /** Lifecycle-supervisor marker outcome, when preparation recovery was exhausted. */
   haltMarkerWrite?: HaltMarkerWriteResult;
+  /** PATH, custom-client, and MCP gaps remain explicitly unknown. */
+  managedGhObservationCoverage?: ManagedGhObservationCoverage;
 }
 
 export type ProviderTransitionWarning =
@@ -924,6 +927,7 @@ export async function executeProviderCandidates({
     // so the step keys the schema home whenever no auxiliary member does.
     const schemaScratchMember = auxiliaryMember ?? step;
     let invocationResult: Promise<InvokeResult> | undefined;
+    let managedGhObservationCoverage: ManagedGhObservationCoverage | undefined;
     const teardownCallbacks: Array<() => Promise<void>> = [];
     const supportsNativeSchemaCapability =
       runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
@@ -1001,9 +1005,10 @@ export async function executeProviderCandidates({
           // runtimes and policy-only providers receive the context as data but
           // must not acquire a filesystem wrapper as a side effect.
           if (ownedCandidateOptions.managedSessionContext && runtime.provider.lifecycleCapability?.synchronousSpawnPermit === true) {
-            await prepareManagedGhObservation({
+            const observation = await prepareManagedGhObservation({
               context: ownedCandidateOptions.managedSessionContext,
             });
+            managedGhObservationCoverage = observation.coverage;
           }
           if (ownedCandidateOptions.readOnlyReview && ownedCandidateOptions.managedSessionContext && prepareManagedSessionObservation) {
             await prepareManagedSessionObservation({
@@ -1121,6 +1126,7 @@ export async function executeProviderCandidates({
         exitCode: lastResult.exitCode ?? 1,
         preferredProvider,
         attempts,
+        ...(managedGhObservationCoverage ? { managedGhObservationCoverage } : {}),
       };
     }
     let result: InvokeResult;
