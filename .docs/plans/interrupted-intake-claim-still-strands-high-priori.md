@@ -14,7 +14,7 @@ Seven tasks make `compose claim` hold an intake claim lease for its whole walk a
 
 - **Decision source:** `adr-011-async-intake-queue-and-github-source` decision 6 (amended 2026-10-02). Scope is the operator-confirmed minimal boundary in `.docs/track/interrupted-intake-claim-still-strands-high-priori.md`: no change to `compose unclaim`, `compose requeue --stale`, `brain status`, or `.claimed` envelopes whose ledger entry is `done` or absent.
 - **Claim lease (Task 1).** A second `createConductStateLease` instance, path `«engineer dir»/inbox` (lease directory `inbox.lease`), label `intake claim`, default wait bound `INTAKE_CLAIM_LEASE_WAIT_MS` = 5 minutes, sized to a full banded walk (one sequential label read per pending entry plus issue-state and dependency reads). Pattern: the ledger's `withLedgerLease` — preserve pid ownership, the transient owner-metadata retry, release in `finally`, fail closed on `recovery_refused`; allowed variation is the longer bound. Search hints: `withLedgerLease`, `createConductStateLease`.
-- **Reconciliation (Tasks 2-3).** The file queue gains `listClaimed()` (typed `FileIntakeQueue`; the `IntakeQueue` port is unchanged). `reconcileStrandedClaims` reads the ledger once via `ledger.list()` (which fails closed on a corrupt ledger before any rename), then releases only pending-ledger `.claimed` envelopes through the queue's existing `release` mapping. Safety rests on two verified facts: a successful claim acks the winner before the ledger becomes `claimed`, and the claim walk is the only producer of `.claimed` files — so under the lease every pending/`.claimed` pair is a dead walk's strand.
+- **Reconciliation (Tasks 2-3).** The file queue gains `listClaimed()` (Task 8 lifts it onto the `IntakeQueue` port per the 2026-10-03 adr-011 amendment, decision 7, so reconciliation depends only on the port). `reconcileStrandedClaims` reads the ledger once via `ledger.list()` (which fails closed on a corrupt ledger before any rename), then releases only pending-ledger `.claimed` envelopes through the queue's existing `release` mapping. Safety rests on two verified facts: a successful claim acks the winner before the ledger becomes `claimed`, and the claim walk is the only producer of `.claimed` files — so under the lease every pending/`.claimed` pair is a dead walk's strand.
 - **Wiring (Task 4, integration owner).** The `claim` case of `engineer-cli.ts` runs lease → reconcile → existing delivery-guarded `claimUnblocked` walk → winner ack and ledger transition → lease release. `claimUnblocked`, the delivery guard and banding are unchanged. Lock order: the ledger lease is only ever taken inside the claim lease.
 - **Negative coverage (Tasks 5-7)** drive the real `dispatchEngineer` claim path with fixture engineer dirs, an injected gh runner and real files; no real GitHub call, no `git stash`.
 
@@ -58,7 +58,7 @@ Approved amendments to `adr-011-async-intake-queue-and-github-source` and `adr-2
 **Done when:**
 - `createFileQueue(dir).listClaimed()` returns the parsed envelope of every `.claimed` file in the inbox and none of the `.json` files, as asserted by the queue unit test.
 - `listClaimed()` skips a `.claimed` file deleted between `readdir` and `readFile` instead of throwing.
-- The `IntakeQueue` port type is unchanged and the existing queue unit and acceptance tests pass unmodified.
+- Task 2 leaves the existing `enqueue`/`claim`/`ack`/`release` signatures unchanged and the existing queue unit and acceptance tests pass unmodified.
 
 ### Task 3: Reconcile stranded claims against the ledger
 
@@ -155,9 +155,26 @@ Approved amendments to `adr-011-async-intake-queue-and-github-source` and `adr-2
 - When a claim run's only effects are recovery and an `empty` or `all-blocked` outcome, `ledger.json` is byte-identical before and after the claim, and when recovery precedes handing out a pending envelope, every ledger entry other than the claimed winner keeps its status, attempts and timestamps unchanged.
 - Stale-claim reaping of `claimed` ledger entries is unchanged: `engineer-cli-claim-stale-reap.acceptance.test.ts` passes unmodified.
 
+### Task 8: Put claimed-envelope listing on the IntakeQueue port
+
+**Story:** 1
+**Type:** infrastructure
+**Files:** `src/conductor/src/engine/engineer/intake/queue.ts`, `src/conductor/src/engine/engineer/intake/reconcile-strands.ts`, `src/conductor/src/engine/engineer-cli.ts`, `src/conductor/test/engine/engineer/intake/queue.test.ts`, `src/conductor/test/engine/engineer/intake/reconcile-strands.test.ts`
+**Dependencies:** Task 3, Task 4
+
+**Steps:**
+1. Write a failing test that drives `reconcileStrandedClaims` with an in-memory `IntakeQueue` test double (no file queue) carrying a pending-ledger strand; confirm RED because reconciliation requires `FileIntakeQueue`.
+2. Add `listClaimed(): Promise<Envelope[]>` to the `IntakeQueue` interface, fold `FileIntakeQueue` back into `IntakeQueue` (the file queue already implements it), and retype `reconcileStrandedClaims` and the `engineer-cli.ts` claim composition to accept `IntakeQueue`.
+3. Run the tests to GREEN and commit.
+
+**Done when:**
+- The `IntakeQueue` interface declares `listClaimed()` and no production module imports or names a `FileIntakeQueue` type.
+- `reconcileStrandedClaims` accepts an `IntakeQueue`, and a unit test driving it with a non-file in-memory `IntakeQueue` double releases the pending-ledger strand through that double's `release`.
+- The `engineer-cli.ts` claim composition passes the queue to reconciliation typed as `IntakeQueue`, and the existing claim, strand-scope and lease CLI tests pass unmodified.
+
 ## Task Dependency Graph
 
-Independent starts: Task 1, Task 2. Task 2 → Task 3. Tasks 1 + 3 → Task 4. Task 4 → Tasks 5, 6, 7 (Task 6 also edits `engineer-cli.ts`, so it serializes after Task 4's change; Tasks 5 and 7 are test-only and can run concurrently).
+Independent starts: Task 1, Task 2. Task 2 → Task 3. Tasks 1 + 3 → Task 4. Tasks 3 + 4 → Task 8. Task 4 → Tasks 5, 6, 7 (Task 6 also edits `engineer-cli.ts`, so it serializes after Task 4's change; Tasks 5 and 7 are test-only and can run concurrently).
 
 ## Integration ownership
 
@@ -198,10 +215,11 @@ All ten citable decisions of the two amended ADRs are dispositioned.
 |---|---|---|---|
 | adr-011-async-intake-queue-and-github-source#D1 | no-change | none | The IntakeSource capture interface and poll() are untouched; reconciliation and the claim lease live entirely on the claim path. |
 | adr-011-async-intake-queue-and-github-source#D2 | no-change | none | The github-issues adapter, its gh issue list polling and Envelope shape are untouched. |
-| adr-011-async-intake-queue-and-github-source#D3 | task | task-2 | The `IntakeQueue` port type is unchanged and the existing queue unit and acceptance tests pass unmodified. |
+| adr-011-async-intake-queue-and-github-source#D3 | task | task-8 | The `IntakeQueue` interface declares `listClaimed()` and no production module imports or names a `FileIntakeQueue` type. |
 | adr-011-async-intake-queue-and-github-source#D4 | task | task-1 | `claim-lease.ts` imports `createConductStateLease` from `conduct-state-lease.ts` and does not import `daemon-lock.ts`. |
 | adr-011-async-intake-queue-and-github-source#D5 | no-change | none | Poll-on-launch and the standalone poll subcommand are untouched; only the claim command changes. |
 | adr-011-async-intake-queue-and-github-source#D6 | task | task-4, task-5 | When the hold outlasts the injected wait bound, `claim` exits 1, stderr contains `claim in progress` and the holder pid |
+| adr-011-async-intake-queue-and-github-source#D7 | task | task-8 | `reconcileStrandedClaims` accepts an `IntakeQueue`, and a unit test driving it with a non-file in-memory `IntakeQueue` double releases the pending-ledger strand through that double's `release`. |
 | adr-2026-07-10-intake-claim-priority-banding#D1 | no-change | none | claimUnblocked ordering inside the walk is unchanged; the walk now merely runs after reconciliation under the claim lease. |
 | adr-2026-07-10-intake-claim-priority-banding#D2 | no-change | none | Claim-time band resolution from issue labels via resolveClaimBands is unchanged. |
 | adr-2026-07-10-intake-claim-priority-banding#D3 | no-change | none | Fail-open to receivedAt FIFO on a label-reader throw is unchanged. |
