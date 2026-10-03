@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { dispatchEngineer, type DispatchEngineerOpts } from '../../../src/engine/engineer-cli.js';
-import { createLedger, type LedgerEntry } from '../../../src/engine/engineer/intake/ledger.js';
+import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 import { createFileQueue } from '../../../src/engine/engineer/intake/queue.js';
 import type { Envelope } from '../../../src/engine/engineer/intake/port.js';
 
