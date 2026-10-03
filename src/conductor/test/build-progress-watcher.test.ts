@@ -1656,6 +1656,14 @@ describe('BuildProgressWatcher active-stall bounds and clearing', () => {
     );
   }
 
+  async function writeNoEvidenceAttempts(noEvidenceAttempts: number): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/task-evidence.json'),
+      JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts, migrationGrandfather: [] }),
+    );
+  }
+
   function activeStallEvents(): Extract<ConductorEvent, { type: 'build_active_stall' }>[] {
     return emitSpy.mock.calls
       .map((call) => call[0] as ConductorEvent)
@@ -1801,5 +1809,59 @@ describe('BuildProgressWatcher active-stall bounds and clearing', () => {
 
     expect(activeStallEvents()).toEqual([]);
     expect(endAttempt).not.toHaveBeenCalled();
+  });
+
+  it('does not let evidence-only updates defer or re-arm an active-stall episode', async () => {
+    await writeTasks(5, 21);
+    let clock = Date.UTC(2026, 8, 28, 12, 0, 0);
+    const endAttempt = vi.fn();
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      config: { build_progress: { active_stall_minutes: 45, active_stall_action: 'end_attempt' } },
+      now: () => clock,
+      endAttempt,
+    });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    // This visible evidence update has a fresh provider heartbeat, but is not
+    // build movement: it must be emitted as active-not-committing and retain
+    // the original movement deadline.
+    clock += 40 * 60 * 1000;
+    await writeHeartbeat(clock);
+    await writeNoEvidenceAttempts(1);
+    await tick(watcher);
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({
+        tickReason: 'task-delta',
+        noEvidenceAttempts: 1,
+        activity: 'active-not-committing',
+      }),
+    ]);
+    expect(activeStallEvents()).toEqual([]);
+
+    // A second evidence-only update at the original deadline must end the
+    // attempt, rather than extending it from the first counter bump.
+    clock += 5 * 60 * 1000;
+    await writeHeartbeat(clock);
+    await writeNoEvidenceAttempts(2);
+    await tick(watcher);
+    expect(activeStallEvents()).toHaveLength(1);
+    expect(activeStallEvents()[0]).toMatchObject({ minutes: 45, action: 'end_attempt' });
+    expect(endAttempt).toHaveBeenCalledOnce();
+
+    // A further counter bump is another emitted change but cannot re-arm the
+    // already-fired movement episode.
+    clock += 5 * 60 * 1000;
+    await writeHeartbeat(clock);
+    await writeNoEvidenceAttempts(3);
+    await tick(watcher);
+    watcher.stop();
+
+    expect(activeStallEvents()).toHaveLength(1);
+    expect(endAttempt).toHaveBeenCalledOnce();
   });
 });

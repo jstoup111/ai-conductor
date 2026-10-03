@@ -242,6 +242,12 @@ export class BuildProgressWatcher {
    * bumped) so a later quiet stretch can fire again.
    */
   private lastChangeAt: number | null = null;
+  /**
+   * Active-stall state is intentionally stricter than the quiet episode:
+   * evidence-counter updates remain observable changes, but do not prove that
+   * build work moved. Only task/HEAD movement resets this deadline.
+   */
+  private lastMovementAt: number | null = null;
   private quietFired = false;
   private activeStallFired = false;
 
@@ -296,8 +302,8 @@ export class BuildProgressWatcher {
    * committing work; otherwise only a fresh heartbeat from this dispatch is
    * evidence of active, non-committing work.
    */
-  private async classifyActivity(changed: boolean): Promise<BuildActivity> {
-    if (changed) return 'active-committing';
+  private async classifyActivity(moved: boolean): Promise<BuildActivity> {
+    if (moved) return 'active-committing';
     const lastActivityAt = await this.readDispatchActivityAt();
     if (lastActivityAt === undefined) return 'quiet';
 
@@ -321,6 +327,41 @@ export class BuildProgressWatcher {
       // Heartbeat visibility is best-effort telemetry; failure is quiet, not
       // a reason to abort or suppress the watcher tick.
       return undefined;
+    }
+  }
+
+  /** Emit one active-stall warning per movement episode. */
+  private async checkActiveStall(
+    activity: BuildActivity,
+    resolved: number,
+    total: number,
+  ): Promise<void> {
+    if (
+      this.lastMovementAt === null ||
+      this.activeStallFired ||
+      activity !== 'active-not-committing'
+    ) {
+      return;
+    }
+
+    const activeStallElapsed = this.now() - this.lastMovementAt;
+    const activeStallMs = this.resolvedConfig.active_stall_minutes * 60 * 1000;
+    if (activeStallElapsed < activeStallMs) return;
+
+    this.activeStallFired = true;
+    await this.events.emit({
+      type: 'build_active_stall',
+      step: this.step,
+      minutes: Math.floor(activeStallElapsed / 60000),
+      resolved,
+      total,
+      lastCommitAt: this.lastCommitAt,
+      lastActivityAt: await this.readDispatchActivityAt(),
+      action: this.resolvedConfig.active_stall_action,
+      featureSlug: this.featureSlug,
+    });
+    if (this.resolvedConfig.active_stall_action === 'end_attempt') {
+      this.endAttempt?.('active_stall');
     }
   }
 
@@ -402,14 +443,14 @@ export class BuildProgressWatcher {
     };
 
     const headMoved = Boolean(head && previous?.head && head !== previous.head);
-    const taskDelta =
+    const taskMoved =
       previous === null ||
       snapshot.resolved !== previous.resolved ||
       snapshot.total !== previous.total ||
-      snapshot.currentTaskId !== previous.currentTaskId ||
-      snapshot.noEvidenceAttempts !== previous.noEvidenceAttempts;
-    const changed =
-      taskDelta || headMoved;
+      snapshot.currentTaskId !== previous.currentTaskId;
+    const moved = taskMoved || headMoved;
+    const evidenceChanged = snapshot.noEvidenceAttempts !== previous?.noEvidenceAttempts;
+    const changed = moved || evidenceChanged;
 
     if (!changed) {
       // Retain a newly available HEAD silently. It establishes a comparison
@@ -419,35 +460,9 @@ export class BuildProgressWatcher {
 
       const activity = await this.classifyActivity(false);
 
-      // Active-stall tracking is separate from the quiet episode: an active
-      // provider heartbeat means the build is not quiet, but it may still be
-      // making no observable progress. Warn once per such episode, and leave
-      // any attempt-ending policy to the explicit opt-in action.
-      if (
-        this.lastChangeAt !== null &&
-        !this.activeStallFired &&
-        activity === 'active-not-committing'
-      ) {
-        const activeStallElapsed = this.now() - this.lastChangeAt;
-        const activeStallMs = this.resolvedConfig.active_stall_minutes * 60 * 1000;
-        if (activeStallElapsed >= activeStallMs) {
-          this.activeStallFired = true;
-          await this.events.emit({
-            type: 'build_active_stall',
-            step: this.step,
-            minutes: Math.floor(activeStallElapsed / 60000),
-            resolved,
-            total,
-            lastCommitAt: this.lastCommitAt,
-            lastActivityAt: await this.readDispatchActivityAt(),
-            action: this.resolvedConfig.active_stall_action,
-            featureSlug: this.featureSlug,
-          });
-          if (this.resolvedConfig.active_stall_action === 'end_attempt') {
-            this.endAttempt?.('active_stall');
-          }
-        }
-      }
+      // An active heartbeat may show a live provider without any observable
+      // build movement. Its elapsed bound is independent of quiet episodes.
+      await this.checkActiveStall(activity, resolved, total);
 
       // Quiet-episode check (Task 7): fire build_no_progress exactly once
       // per quiet episode once quiet_minutes has elapsed since the last
@@ -531,7 +546,15 @@ export class BuildProgressWatcher {
     // again.
     this.lastChangeAt = this.now();
     this.quietFired = false;
-    this.activeStallFired = false;
+    if (moved) {
+      this.lastMovementAt = this.now();
+      this.activeStallFired = false;
+    }
+
+    const activity = await this.classifyActivity(moved);
+    // Evidence-only updates still pass through this check: they are emitted
+    // changes, but must neither defer nor re-arm an active-stall episode.
+    await this.checkActiveStall(activity, resolved, total);
 
     // Change-driven emission resets the heartbeat clock so a heartbeat never
     // fires immediately on the heels of a real change (no interleaved
@@ -549,11 +572,11 @@ export class BuildProgressWatcher {
       // change-driven progress (including task-pointer and evidence updates)
       // is a task delta; `headMoved` independently records whether a commit
       // landed alongside it.
-      tickReason: taskDelta ? 'task-delta' : 'head-moved',
+      tickReason: taskMoved || evidenceChanged ? 'task-delta' : 'head-moved',
       headMoved,
       lastCommitAt: this.lastCommitAt,
       noEvidenceAttempts,
-      activity: await this.classifyActivity(changed),
+      activity,
       featureSlug: this.featureSlug,
     });
   }
