@@ -13,6 +13,7 @@ import type {
 import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
 import { resolveExecutionIdentity, type ExecutionScope } from './execution-identity.js';
 import { persistedEventTypes } from './event-sinks.js';
+import { CloseoutEventTail } from './closeout-tail.js';
 
 const MAX_CI_REPAIR_DIAGNOSTIC_BYTES = 8_192;
 const CI_REPAIR_STAGES = new Set<CiRepairDiagnosticStage>(['context', 'log-enrichment', 'branch', 'readiness', 'execution', 'guard', 'verification', 'publication']);
@@ -342,7 +343,7 @@ export async function withFeatureEventPersistence<T>(input: {
   try {
     return await input.run(scope.events);
   } finally {
-    scope.stop();
+    await scope.drain();
   }
 }
 
@@ -353,16 +354,43 @@ export function startFeatureEventPersistence(
   worktreePath: string,
   globalEvents: ConductorEventEmitter,
   slug?: string,
-): { events: ConductorEventEmitter; stop: () => void } {
+): { events: ConductorEventEmitter; stop: () => void; drain: () => Promise<void> } {
   const featureEvents = new ForwardingEventEmitter(globalEvents, slug ?? basename(worktreePath));
   const persister = new EventPersister(
     join(worktreePath, FEATURE_EVENT_LOG_PATH),
     featureEvents,
   );
   persister.start();
+  // Session producers can run during any feature step.  The feature scope is
+  // therefore the sole lifecycle owner: it starts before provider invocation
+  // and drains before feature listeners detach, rather than adding a daemon
+  // observer or coupling the tail to BUILD.
+  const tail = new CloseoutEventTail({ projectRoot: worktreePath, events: featureEvents });
+  tail.start();
+  let drainPromise: Promise<void> | undefined;
   return {
     events: featureEvents,
-    stop: () => persister.stop(),
+    // Keep the legacy synchronous stop contract for existing short-lived
+    // callers. Feature shutdowns use drain() to settle in-flight reads first.
+    stop: () => {
+      tail.stop();
+      persister.stop();
+    },
+    drain: () => {
+      if (!drainPromise) {
+        drainPromise = (async () => {
+          tail.stop();
+          // The first poll joins any interval-triggered read already in
+          // flight; the second is the bounded final pass after that read has
+          // settled, so a producer record completed at the boundary is not
+          // detached with the feature listeners.
+          await tail.poll();
+          await tail.poll();
+          persister.stop();
+        })();
+      }
+      return drainPromise;
+    },
   };
 }
 
