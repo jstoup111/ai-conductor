@@ -113,6 +113,7 @@ describe('relocated Vitest temporary lifecycle', () => {
       snapshotTmpdirEntries: async (path: string) => { snapshotted.push(path); return { exists: true, entries: leakedEntry ? new Set(['bypass-leak']) : new Set<string>() }; },
       diffTmpdirEntries: (_before: unknown, after: { entries: Set<string> }) => ({ stray: [...after.entries], ignored: [] }),
       vitestOwnTmpdirEntries: () => [],
+      runIdFromRunRoot: () => 'run-id',
     }));
     vi.doMock('./tmux-leak-guard.js', () => ({ snapshotDaemonSessions: () => ({ sessions: [], failed: false }), sweepStaleDaemonSessions: () => ({ killed: [] }), reapLeakedDaemonSessions: () => ({ killed: [], indeterminate: [] }) }));
     vi.doMock('./signals-leak-guard.js', () => ({ snapshotEngineerSignals: async () => ({ exists: false, lines: [] }), diffEngineerSignals: () => ({ addedTestProjectLines: 0 }) }));
@@ -174,6 +175,7 @@ describe('relocated Vitest temporary lifecycle', () => {
         snapshotTmpdirEntries: async () => ({ exists: true, entries: new Set<string>() }),
         diffTmpdirEntries: () => ({ stray: [], ignored: [] }),
         vitestOwnTmpdirEntries: () => [],
+        runIdFromRunRoot: () => 'run-id',
       }));
       vi.doMock('./tmux-leak-guard.js', () => ({ snapshotDaemonSessions: () => ({ sessions: [], failed: false }), sweepStaleDaemonSessions: () => ({ killed: [] }), reapLeakedDaemonSessions: () => ({ killed: [], indeterminate: [] }) }));
       vi.doMock('./signals-leak-guard.js', () => ({ snapshotEngineerSignals: async () => ({ exists: false, lines: [] }), diffEngineerSignals: () => ({ addedTestProjectLines: 0 }) }));

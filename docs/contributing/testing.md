@@ -76,14 +76,30 @@ before assuming a race in the code under test.
 
 ### Deterministic daemon end-to-end fixture
 
-`test/engine/daemon-e2e-fixture.test.ts` drives a committed fixture from
+`test/engine/daemon-e2e-fixture.e2e.test.ts` drives a committed fixture from
 `test/fixtures/daemon-e2e/` through the real daemon claim, Conductor build,
 evidence, completion-gate, and local finish path. A scripted provider fake is
 the only external boundary; it makes real local Git commits while the internal
 pipeline remains production code. The negative case proves missing task
 evidence halts instead of completing.
 
-This test runs in ordinary CI without a separate workflow job.
+This test belongs to the end-to-end tier described below.
+
+### End-to-end tier
+
+Files named `*.e2e.test.ts` use real tmux sockets or drive the whole daemon. They are
+the slowest and most load-sensitive tests, so `vitest.config.ts` excludes them from the
+default suite (`npm test`, and therefore the `test_suite` gate). `vitest.e2e.config.ts`
+runs them with the ordinary runtime guards:
+
+```bash
+npm run test:e2e
+```
+
+CI runs the tier in its own `conductor-e2e` job, which `ci-gate` requires, so every PR
+still executes it. `test/structural/e2e-tier.test.ts` keeps the exclusion, the config,
+the script, and the CI job in step. Name a new test `*.e2e.test.ts` only when it needs a
+real tmux server or a whole-daemon drive; mock the process boundary otherwise.
 `vitest.config.ts` includes `test/**/*.test.ts` and excludes only smoke paths
 and `*.smoke.test.ts` names, so the existing `conductor` job's `npm test`
 invocation runs it and reports through `ci-gate`.
@@ -335,6 +351,14 @@ kill-switches:
   applies only to the project directory created directly under the real temporary directory, not
   to its contents or any other entry. Fix the call site; widening `IGNORED_TMPDIR_PREFIXES` is
   only for a genuine false positive from a new concurrent tool.
+
+  The real temporary directory is shared with every concurrent suite on the host (other worktrees,
+  daemon builds), so two shapes are attributed rather than blamed on this run. A bare 21-character
+  nanoid is another Vitest process's project directory — one started without the package scripts'
+  redirect — and is ignored. A fixture that must live in the real temporary directory (outside the
+  run root's `GIT_CEILING_DIRECTORIES`, or a short tmux socket path) takes its `mkdtemp` prefix from
+  `externalFixturePrefix(label)` in `test/tmpdir-leak-guard.ts`: the `acx-<run id>-` name lets each
+  run fail on its own leftovers and ignore another run's in-flight fixtures.
 
 The parked-marker leak guard (#1251) runs last of all, after the tmpdir check, so any more specific
 guard failure still throws first. It resolves the real repository's `.daemon/parked` directory (via

@@ -2,16 +2,15 @@
 // The production CLI and local Git are real; `gh` is a process-boundary stub.
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile, spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
+import { externalFixturePrefix } from '../tmpdir-leak-guard.js';
 
 const execFileP = promisify(execFile);
 const cli = resolve(process.cwd(), 'src/intake-file-cli.ts');
 const tsx = resolve(process.cwd(), 'node_modules/.bin/tsx');
 const roots: string[] = [];
-const externalTmpdir = process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR ?? tmpdir();
 
 interface GhCall {
   readonly cwd: string;
@@ -29,7 +28,7 @@ async function git(cwd: string, args: string[]): Promise<void> {
 }
 
 async function makeFixture(): Promise<Fixture> {
-  const root = await mkdtemp(join(externalTmpdir, 'intake-file-cli-overlap-'));
+  const root = await mkdtemp(externalFixturePrefix('intake-overlap'));
   roots.push(root);
   const repository = join(root, 'target');
   const bin = join(root, 'bin');
