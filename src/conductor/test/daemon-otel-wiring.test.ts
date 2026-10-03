@@ -28,7 +28,7 @@ type ResolveEngineVersion = typeof import('../src/engine/shipped-record.js').res
 type ResolveHarnessVersion = typeof import('../src/engine/version-report.js').resolveHarnessVersion;
 type BuildExporters = typeof import('../src/engine/otel/transport.js').buildExporters;
 
-const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DAEMON_SESSION_ID = /^d-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const fixture = vi.hoisted(() => ({
   worktreePath: '',
@@ -601,7 +601,7 @@ describe('daemon OTel visualizer wiring', () => {
     const context = wireOtelVisualizer.mock.calls[0]?.[1];
     const scopeSessionId = fixture.scopes[0]?.sessionId;
 
-    expect(scopeSessionId).toMatch(UUID_V4);
+    expect(scopeSessionId).toMatch(DAEMON_SESSION_ID);
     expect(context?.runId).toBe(scopeSessionId);
     expect(existsSync(join(pipelineDir, 'conduct-session-id'))).toBe(false);
     expect(fixture.runnerSessionIds).toEqual([scopeSessionId]);
@@ -612,7 +612,7 @@ describe('daemon OTel visualizer wiring', () => {
     const context = wireOtelVisualizer.mock.calls[0]?.[1];
     const scopeSessionId = fixture.scopes[0]?.sessionId;
 
-    expect(scopeSessionId).toMatch(UUID_V4);
+    expect(scopeSessionId).toMatch(DAEMON_SESSION_ID);
     expect(context?.runId).toBe(scopeSessionId);
     expect(context?.runId).not.toBe('unreadable');
   });

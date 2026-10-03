@@ -120,7 +120,9 @@ describe('feature session-event lifecycle', () => {
 
     const events = new ConductorEventEmitter();
     const received: string[] = [];
-    events.on('session_command_refused', (event) => received.push(event.eventId));
+    events.on('session_command_refused', (event) => {
+      if (event.type === 'session_command_refused') received.push(event.eventId);
+    });
     const tail = startSessionEventTail(root, events);
 
     await tail.drain();

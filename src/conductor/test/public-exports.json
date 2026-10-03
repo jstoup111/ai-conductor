@@ -13,6 +13,7 @@
   "createProgram",
   "createVisualizerStartContext",
   "deriveMode",
+  "dispatchCliEntry",
   "dispatchNonDispatchingCliCommand",
   "detectBuildReviewAcceptCommand",
   "detectBuildReviewFindingsCommand",

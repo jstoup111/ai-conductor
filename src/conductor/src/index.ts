@@ -1680,6 +1680,7 @@ async function dispatchCliCommand(): Promise<void> {
   // every exit drains records before subscribers detach.
   const sessionTail = startSessionEventTail(projectRoot, events);
   let subscriber: Awaited<ReturnType<typeof bootDispatchingCliProviders>>;
+  let visualizerList: ReturnType<typeof buildInteractiveVisualizers> = [];
   try {
     subscriber = await bootDispatchingCliProviders({
     command: 'inline',
@@ -1769,7 +1770,7 @@ async function dispatchCliCommand(): Promise<void> {
       pipelineDir,
     }),
   };
-  const visualizerList = buildInteractiveVisualizers(
+  visualizerList = buildInteractiveVisualizers(
     registry,
     visualizerContext.config,
     visualizerContext,
