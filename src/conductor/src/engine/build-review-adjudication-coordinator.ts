@@ -179,16 +179,20 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
    * the merge with `sources.some(...)` settled every source on the record,
    * so one merged source silently retired its unmerged siblings.
    */
-  const finalizedSourceIds = (cases: readonly RemediationCaseRecord[]): ReadonlySet<string> =>
-    new Set(cases.flatMap((record) =>
-      record.disposition === 'refute' && (record.effect.kind === 'none' || record.effect.status === 'applied')
+  const finalizedSourceIds = (cases: readonly RemediationCaseRecord[]): ReadonlySet<string> => {
+    const unresolvedSourceIds = new Set(cases
+      .filter((record) => record.resolution === 'open')
+      .flatMap((record) => record.sources.map((source) => source.sourceId)));
+    return new Set(cases.flatMap((record) =>
+      record.resolution === 'resolved' && record.disposition === 'refute' && (record.effect.kind === 'none' || record.effect.status === 'applied')
         ? record.sources.map((source) => source.sourceId)
-        : record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
-        ? record.sources.map((source) => source.sourceId)
-        : record.resolution === 'resolved' && record.effect.kind !== 'none' && record.effect.status === 'applied'
-          ? record.sources.filter((source) => source.outcome === 'merged').map((source) => source.sourceId)
-          : [],
-    ));
+        : record.resolution === 'resolved' && record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
+          ? record.sources.map((source) => source.sourceId)
+          : record.resolution === 'resolved' && record.effect.kind !== 'none' && record.effect.status === 'applied'
+            ? record.sources.filter((source) => source.outcome === 'merged').map((source) => source.sourceId)
+            : [],
+    ).filter((sourceId) => !unresolvedSourceIds.has(sourceId)));
+  };
   const fail = async (
     detail: string,
     evidence?: AdjudicationFailureEvidence,
@@ -747,7 +751,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   if (allOperatorResolved(resolved)) {
     return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved });
   }
-  const liveSourceIdsBeforeRepeat = liveSourceIdsFor(resolved);
+  const settledSourceIdsAfterReconciliation = finalizedSourceIds(durableState.state.cases);
+  const liveSourceIdsBeforeRepeat = new Set([...liveSourceIdsFor(resolved)]
+    .filter((sourceId) => !settledSourceIdsAfterReconciliation.has(sourceId)));
   const recurringCases: RemediationCaseRecord[] = [];
   for (const [caseRef, recurringCaseIds] of reconciled.recurringCaseIdsByRef ?? []) {
     const proposed = admitted.find((candidate) => candidate.case.caseRef === caseRef);
