@@ -75,6 +75,8 @@ Follow the module's existing test conventions rather than inventing new ones. Th
 3. A real-git case whose candidate paths are all present and uncontended renders exactly the existing single clean line unchanged, and a real-git case whose candidate paths are all absent renders no clean line.
 4. A scripted-git case proves a failing classification command still returns every sibling-branch overlap found in that run and never throws.
 5. A real-git case proves a candidate path absent from the checkout but created by a sibling branch is still reported as an overlap on that branch.
+6. A real-git case with an empty candidate list renders the nothing-scanned note and does not contain the clean "no overlap detected" line.
+7. A real dispatch whose classification command fails prints the classification-failed note and every sibling-branch overlap found, and returns exit code 0.
 
 ### Task 3: Capture every path passed to the candidate-file option
 **Story:** Story 2
@@ -92,6 +94,7 @@ Follow the module's existing test conventions rather than inventing new ones. Th
 1. Parsing `--files` followed by several bare tokens yields every token as a candidate path, and a repeated `--files` yields the union of every occurrence's values in the order given.
 2. Parsing `--files` immediately followed by another recognized option and its value yields an empty candidate list and leaves that option's own parsed value correct.
 3. A real dispatch over a space-separated mixed candidate list prints the present path's sibling-branch overlap line and the absent path's notice and returns exit code 0.
+4. Parsing a repeated `--files` where some occurrences carry comma-separated values yields every value from every occurrence as a candidate path, in the order given.
 
 ## Coverage Check
 
