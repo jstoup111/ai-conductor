@@ -54,7 +54,10 @@ export class SessionEventProducer {
     readonly context: SessionEventProducerContext,
     dependencies: SessionEventProducerDependencies = {},
   ) {
-    this.producerId = dependencies.producerId ?? randomUUID();
+    // UUIDs may begin with a digit, while producer file identities are
+    // deliberately letter-prefixed. Keep the random portion but make the
+    // default producer usable for production entry-point observations.
+    this.producerId = dependencies.producerId ?? `producer-${randomUUID()}`;
     if (!isIdentity(this.producerId)) throw new SessionEventProducerError('producer-path-invalid');
     this.path = join(context.producerRoot, `${this.producerId}.jsonl`);
     this.generateId = dependencies.generateId ?? randomUUID;

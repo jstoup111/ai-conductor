@@ -5,7 +5,7 @@ export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.j
 
 import type { RunMode } from './types/index.js';
 import { recoverCommandState, replaceCommandState } from './engine/command-state.js';
-import { guardDaemonSessionInvocation } from './execution/daemon-session.js';
+import { emitDaemonSessionRefusal, guardDaemonSessionInvocation } from './execution/daemon-session.js';
 
 export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMode {
   if (opts.auto && opts.interactive) {
@@ -786,6 +786,9 @@ async function main(): Promise<void> {
   // harness's own skills/hooks mandate. See execution/daemon-session.ts.
   const daemonSessionVerdict = guardDaemonSessionInvocation(process.argv);
   if (!daemonSessionVerdict.allowed) {
+    await emitDaemonSessionRefusal(daemonSessionVerdict, {
+      diagnostic: (message) => console.error(`Error: ${message}`),
+    });
     console.error(`Error: ${daemonSessionVerdict.message}`);
     process.exitCode = 1;
     return;
