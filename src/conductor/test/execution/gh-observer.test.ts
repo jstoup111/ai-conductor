@@ -59,6 +59,18 @@ describe('runObservedGh', () => {
     expect(append.mock.calls[1]![0]).toMatchObject({ type: 'github_bypass_result', outcome: 'cli-failed' });
   });
 
+  it('records an unknown result when the child closes without an exit status or signal', async () => {
+    const eventProducer = producer();
+    const append = vi.spyOn(eventProducer, 'append').mockResolvedValue('/events');
+    const terminal = { exitCode: null, signal: undefined };
+    const transport = vi.fn<GhObserverTransport>().mockResolvedValue(terminal);
+
+    await expect(runObservedGh({ realExecutable: '/usr/bin/gh', argv: ['pr', 'create'], stdin: process.stdin, stdout: process.stdout, stderr: process.stderr, producer: eventProducer, transport })).resolves.toBe(terminal);
+
+    expect(transport).toHaveBeenCalledOnce();
+    expect(append.mock.calls[1]![0]).toMatchObject({ type: 'github_bypass_result', outcome: 'unknown' });
+  });
+
   it('reports an unknown terminal result after a transport failure without retrying or swallowing the original error', async () => {
     const eventProducer = producer();
     const append = vi.spyOn(eventProducer, 'append').mockResolvedValue('/events');

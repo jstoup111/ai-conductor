@@ -84,7 +84,11 @@ export async function runObservedGh(invocation: ObservedGhInvocation): Promise<G
     const terminal = await invocation.transport(invocation.realExecutable, invocation.argv, streamsOf(invocation));
     if (attempt !== undefined) {
       await appendObserved(invocation, invocation.producer.bypassResult(attempt, {
-        outcome: terminal.exitCode === 0 ? 'cli-succeeded' : 'cli-failed',
+        // A close without either terminal observation cannot prove failure:
+        // preserve the transport result while recording the observation gap.
+        outcome: terminal.exitCode === null && terminal.signal === undefined
+          ? 'unknown'
+          : terminal.exitCode === 0 ? 'cli-succeeded' : 'cli-failed',
       }));
     }
     return terminal;
