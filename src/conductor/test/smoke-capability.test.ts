@@ -61,6 +61,13 @@ describe('smoke capability declarations', () => {
     })).toEqual({ outcome: 'skipped', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' });
   });
 
+  it('names the missing provider binary for a credentialed advisory skip', () => {
+    expect(resolveAdvisorySmokeFile('test/example.smoke.test.ts', 'credentialed:pi', {
+      hasCommand: () => false,
+      environment: { PI_API_KEY: 'token' },
+    })).toEqual({ outcome: 'skipped', unmet: 'pi' });
+  });
+
   // Covers: task:20
   it('skips the Pi live leg by its named credential without invoking it', async () => {
     const runVitest = vi.fn();

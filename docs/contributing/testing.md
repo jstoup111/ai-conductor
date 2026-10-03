@@ -197,9 +197,9 @@ failing in groups but passing in isolation.
 
 ## Test tiers
 
-846 `*.test.ts` files live under `src/conductor/test/`. Vitest includes `test/**/*.test.ts` and
-excludes `test/smoke/**` and `**/*.smoke.test.ts` (`src/conductor/vitest.config.ts:18-19`), so a bare
-`npm test` discovers 835 files and excludes the 11 opt-in smoke files.
+1205 `*.test.ts` files live under `src/conductor/test/`. Vitest includes `test/**/*.test.ts` and
+excludes `test/smoke/**`, `**/*.smoke.test.ts` and `**/*.e2e.test.ts` (`src/conductor/vitest.config.ts:17-20`),
+so a bare `npm test` discovers 1185 files and excludes the 16 opt-in smoke files and 4 e2e files.
 
 | Directory | Files | Covers | Run just this tier |
 | --- | --- | --- | --- |
@@ -421,21 +421,22 @@ glob-discovered smoke tier from `src/conductor`:
 npm run smoke
 ```
 
-The smoke config includes `test/smoke/**` and every `*.smoke.test.ts` file. It currently discovers ten
+The smoke config includes `test/smoke/**` and every `*.smoke.test.ts` file. It currently discovers sixteen
 files. Each declares exactly one required capability beside the test:
 
 | Capability | Current files | Requirement |
 | --- | --- | --- |
 | `hermetic` | `finish-record`, `surgical-finish-retry` | No external binary or credential. |
-| `toolchain` | `publish-interrupted`, `backlog-priority`, `codex-provider`, `daemon-tmux` | A local toolchain or network-backed setup. |
-| `credentialed:claude` | `claude-provider`, `build-token-auth`, `daemon-e2e-live-claude` | `CLAUDE_CODE_OAUTH_TOKEN`. |
-| `credentialed:codex` | `daemon-e2e-live-codex` | `CODEX_API_KEY`. |
+| `toolchain` | `publish-interrupted`, `backlog-priority`, `gh-version-floor`, `github-bot-credential`, `codex-provider`, `daemon-tmux` | A local toolchain or network-backed setup. |
+| `credentialed:claude` | `claude-provider`, `claude-subagent-stream`, `build-token-auth`, `daemon-e2e-live-claude`, `git-guard-claude` | `CLAUDE_CODE_OAUTH_TOKEN` and the `claude` binary. |
+| `credentialed:codex` | `daemon-e2e-live-codex`, `git-guard-codex` | `CODEX_API_KEY` and the `codex` binary. |
+| `credentialed:pi` | `daemon-e2e-live-pi` | `PI_API_KEY` and the `pi` binary. |
 
 `publish-interrupted.smoke.test.ts` is `toolchain`, not hermetic: it creates a worktree and runs the
 real `bin/setup`, which may install dependencies. Select one production smoke file with
 `npm run smoke -- <smoke_file>`. `npm run smoke` runs in advisory mode by default
-(`SMOKE_MODE` unset or anything but `gate`): a file whose capability is unmet — no toolchain binary
-or that provider's credential — is skipped, not failed, and a run that executed zero smoke assertions
+(`SMOKE_MODE` unset or anything but `gate`): a file whose capability is unmet — no toolchain binary,
+or that provider's credential or binary — is skipped, not failed, and a run that executed zero smoke assertions
 for a file still fails that file. Set `SMOKE_MODE=gate` for the fail-closed release variant: a complete-tier
 run fails when any required capability is unmet, and it requires at least one executed
 `credentialed:claude` or `credentialed:codex` file — an all-skipped credentialed tier can never pass.

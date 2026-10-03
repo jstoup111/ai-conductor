@@ -18,3 +18,9 @@
  */
 
 export { scrubTmuxEnvironment } from './tmux-environment.js';
+
+/** Prepend the worktree-local git guard without mutating the caller's env. */
+export function withGitGuardPath(env: NodeJS.ProcessEnv, guardDir: string | null): NodeJS.ProcessEnv {
+  if (!guardDir) return { ...env };
+  return { ...env, PATH: env.PATH ? `${guardDir}:${env.PATH}` : guardDir };
+}

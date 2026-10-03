@@ -1,0 +1,105 @@
+import { access, chmod, lstat, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { delimiter, isAbsolute, join, normalize, resolve } from 'node:path';
+import { execa } from 'execa';
+import { GIT_GUARD_SCRIPT } from './git-hook-assets.js';
+
+const pipeline = (cwd: string) => join(cwd, '.pipeline');
+export const gitGuardPath = (cwd: string) => join(pipeline(cwd), 'bin', 'git');
+
+export async function resolveRealGit(pathEnv = process.env.PATH ?? ''): Promise<string> {
+  for (const entry of pathEnv.split(delimiter)) {
+    // A relative entry is relative to whichever directory the eventual child
+    // chooses. The guard data must instead name one stable, absolute binary.
+    if (!entry || !isAbsolute(entry)) continue;
+    const resolvedEntry = await realpath(entry).catch(() => normalize(entry));
+    if (resolvedEntry.endsWith(join('.pipeline', 'bin'))) continue;
+    const candidate = join(entry, 'git');
+    try {
+      await access(candidate, constants.X_OK);
+      const canonicalCandidate = await realpath(candidate).catch(() => candidate);
+      // Never accept a PATH spelling which resolves back to a guard script.
+      // Content is checked as well because a copied guard can sit elsewhere.
+      if (canonicalCandidate.endsWith(join('.pipeline', 'bin', 'git'))
+        || (await readFile(canonicalCandidate, 'utf8').catch(() => '')) === GIT_GUARD_SCRIPT) continue;
+      return canonicalCandidate;
+    } catch { /* continue */ }
+  }
+  throw new Error('unable to resolve real git executable');
+}
+
+export async function writeGitGuard(worktreePath: string): Promise<string> {
+  const target = gitGuardPath(worktreePath);
+  const dataDir = join(pipeline(worktreePath), 'git-guard');
+  try {
+    await mkdir(join(pipeline(worktreePath), 'bin'), { recursive: true });
+    await mkdir(dataDir, { recursive: true });
+    const realGit = await resolveRealGit();
+    const commonDir = (await execa(realGit, ['-C', worktreePath, 'rev-parse', '--path-format=absolute', '--git-common-dir'])).stdout.trim();
+    await writeRegularFile(target, GIT_GUARD_SCRIPT, 0o755);
+    await writeRegularFile(join(dataDir, 'real-git'), realGit + '\n');
+    await writeRegularFile(join(dataDir, 'common-dir'), commonDir + '\n');
+  } catch (error) {
+    throw new Error(`unable to provision git guard ${target}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return join(pipeline(worktreePath), 'bin');
+}
+
+/** Replace links and special files rather than following them while repairing. */
+async function writeRegularFile(path: string, content: string, mode?: number): Promise<void> {
+  try {
+    const info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink()) await unlink(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  await writeFile(path, content, 'utf8');
+  if (mode !== undefined) await chmod(path, mode);
+}
+
+async function isRegularFile(path: string): Promise<boolean> {
+  try {
+    const info = await lstat(path);
+    return info.isFile() && !info.isSymbolicLink();
+  } catch { return false; }
+}
+
+export async function ensureGitGuardForDispatch(cwd: string | undefined): Promise<string | null> {
+  if (!cwd) return null;
+  const expectedHooks = join(pipeline(cwd), 'git-hooks');
+  // Adapter-only callers commonly have no repository at all. A worktree's
+  // `.git` entry, however, is enough to make its worktree-scoped config
+  // authoritative even when a damaged `.pipeline` directory has vanished.
+  try { await access(join(cwd, '.git')); } catch { return null; }
+  let configured = '';
+  try { configured = (await execa('git', ['-C', cwd, 'config', '--worktree', '--get', 'core.hooksPath'])).stdout.trim(); } catch (error) {
+    if ((error as { exitCode?: number }).exitCode === 1) return null;
+    throw new Error(`unable to verify git guard ${gitGuardPath(cwd)}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (configured !== expectedHooks) return null;
+  const target = gitGuardPath(cwd);
+  let valid = false;
+  try {
+    const [content, info, realGit, commonDir, scriptRegular, realRegular, commonRegular] = await Promise.all([
+      readFile(target, 'utf8'), stat(target),
+      readFile(join(pipeline(cwd), 'git-guard', 'real-git'), 'utf8'),
+      readFile(join(pipeline(cwd), 'git-guard', 'common-dir'), 'utf8'),
+      isRegularFile(target),
+      isRegularFile(join(pipeline(cwd), 'git-guard', 'real-git')),
+      isRegularFile(join(pipeline(cwd), 'git-guard', 'common-dir')),
+    ]);
+    const resolvedRealGit = await realpath(realGit.trim());
+    valid = content === GIT_GUARD_SCRIPT && scriptRegular && realRegular && commonRegular &&
+      isAbsolute(realGit.trim()) && !resolvedRealGit.startsWith(resolve(pipeline(cwd), 'bin')) &&
+      (await readFile(resolvedRealGit, 'utf8').catch(() => '')) !== GIT_GUARD_SCRIPT && isAbsolute(commonDir.trim()) &&
+      (info.mode & 0o777) === 0o755;
+  } catch { /* repair */ }
+  if (!valid) await writeGitGuard(cwd);
+  try {
+    const [info, regular] = await Promise.all([stat(target), isRegularFile(target)]);
+    if (!regular || (info.mode & 0o777) !== 0o755) throw new Error('guard is not a regular executable file');
+  } catch (error) {
+    throw new Error(`git guard repair failed: ${target}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return join(pipeline(cwd), 'bin');
+}

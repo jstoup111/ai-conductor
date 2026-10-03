@@ -12,8 +12,102 @@ set -e
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
 
-# Scannable copy: drop single- and double-quoted spans (content and quotes).
-SCAN=$(printf '%s' "$COMMAND" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")
+# Scannable copy: first drop quoted spans while finding heredoc openers, then
+# drop heredoc bodies and finally drop remaining single- and double-quoted
+# spans (content and quotes). A heredoc delimiter may be quoted, but its body is
+# command data rather than shell syntax and must never be interpreted as a git
+# operation by this hook.
+SCAN=$(COMMAND="$COMMAND" python3 - <<'PY'
+import os
+import re
+
+heredoc_start = re.compile(
+    r"(?<!<)<<(?P<strip>-?)(?!<)[ \t]*(?P<word>(?:\\.|'[^']*'|\"[^\"]*\"|[^\s;|&])+)"
+)
+
+def comment_start(line):
+    quote = None
+    escaped = False
+    for i, char in enumerate(line):
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "#" and (i == 0 or line[i - 1].isspace() or line[i - 1] in ";|&"):
+            return i
+    return len(line)
+
+def shell_quote_removal(word):
+    return re.sub(r"\\(.)|['\"]", lambda match: match.group(1) or "", word)
+
+def arithmetic_expansion_spans(line, depth):
+    spans = []
+    start = 0 if depth else None
+    i = 0
+    while i < len(line):
+        if start is None:
+            if line.startswith("$((", i):
+                start = i
+                depth = 1
+                i += 3
+                continue
+            if line.startswith("((", i):
+                start = i
+                depth = 1
+                i += 2
+                continue
+        elif line[i] == "(":
+            depth += 1
+        elif line[i] == ")":
+            if depth == 1 and line.startswith(")", i + 1):
+                spans.append((start, i + 2))
+                start = None
+                i += 2
+                continue
+            depth -= 1
+        i += 1
+    if start is not None:
+        spans.append((start, len(line)))
+    return spans, depth
+
+delimiters = []
+arithmetic_depth = 0
+
+for line in os.environ["COMMAND"].splitlines(keepends=True):
+    if delimiters:
+        candidate = line.rstrip("\n")
+        delimiter, strip_tabs = delimiters[0]
+        if strip_tabs:
+            candidate = candidate.lstrip("\t")
+        if candidate == delimiter:
+            delimiters.pop(0)
+        continue
+
+    # A quoted literal such as echo '<<EOF' is not a heredoc opener.  Preserve
+    # its shape for later quote stripping but mask it before opener detection.
+    # Preserve quoted delimiter tokens after << or <<- with arbitrary shell
+    # whitespace; all other quoted literals stay masked before opener parsing.
+    comment = comment_start(line)
+    visible_line = line[:comment] + " " * (len(line) - comment)
+    opener_spans = [(m.start(), m.end()) for m in heredoc_start.finditer(visible_line)]
+    def mask_quote(match):
+        if any(start <= match.start() and match.end() <= end for start, end in opener_spans):
+            return match.group()
+        return " " * len(match.group())
+    opener_line = re.sub(r"'[^']*'|\"[^\"]*\"", mask_quote, visible_line)
+    print(line, end="")
+    arithmetic_spans, arithmetic_depth = arithmetic_expansion_spans(line, arithmetic_depth)
+    for match in heredoc_start.finditer(opener_line):
+        if not any(start <= match.start() < end for start, end in arithmetic_spans):
+            delimiters.append((shell_quote_removal(match.group("word").rstrip()), match.group("strip") == "-"))
+PY
+)
+SCAN=$(printf '%s' "$SCAN" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")
 
 # Patterns that are destructive and hard to reverse
 # Allow --force-with-lease (safe) but block exact bare --force/-f tokens.

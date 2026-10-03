@@ -231,8 +231,10 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
    `npm run typecheck` for TypeScript). Already run as the Phase 4 pre-check; re-confirm clean here.
 4. Working tree is clean (no uncommitted changes outside this task)
 5. **Pre-diff sensitivity check** — for every NEW or CHANGED test in this task that claims to
-   cover new or changed behavior: verify it FAILS against the pre-diff implementation (stash or
-   revert the production diff, run the test, restore). A test that still passes proves nothing
+   cover new or changed behavior: create a temporary detached worktree at the base commit (`git worktree add --detach «tmp» «base»`), copy only the new or changed test files into it, run them there, then remove that temporary worktree with `git worktree remove --force «tmp»`.
+   Change no worktree's files beyond adding those copies, the temporary one included: never set
+   uncommitted work aside, and never discard, roll back or overwrite paths to reach the base
+   version. A test that still passes proves nothing
    and will fail the tautology review rubric one expensive lap later. A value computed by the
    test but never asserted on is an automatic fail of this check. Exempt: tasks under the
    **No Legitimate RED for Already-Existing Behavior** and **Removal Boundary** sections, and

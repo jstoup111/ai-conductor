@@ -2,6 +2,112 @@ import { PROTECTED_ARTIFACT_DIRECTORIES } from './protected-artifact-seal.js';
 import { resolveCanonicalLauncher, shellQuote } from './canonical-launcher.js';
 
 /**
+ * A PATH-shadowing git wrapper for agent processes. Runtime values are data
+ * files beside the wrapper so this source remains deterministic and auditable.
+ */
+export const GIT_GUARD_SCRIPT = `#!/usr/bin/env bash
+set -u
+guard_dir="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+real_git="$(cat "$guard_dir/../git-guard/real-git")"
+feature_common="$(cat "$guard_dir/../git-guard/common-dir")"
+
+refuse() {
+  printf 'ai-conductor git guard: refused %s — %s. Safe alternative: %s.\\n' "$1" "$2" "$3" >&2
+  exit 1
+}
+
+# Keep the original argv for exec; classify after one safe non-shell alias expansion.
+args=("$@")
+i=0
+while [[ $i -lt \${#args[@]} ]]; do
+  case "\${args[$i]}" in
+    -C|--git-dir|--work-tree|-c|--namespace|--config-env|--attr-source|--super-prefix) ((i+=2)); continue ;;
+    --config-env=*|--attr-source=*|--super-prefix=*) ((i++)); continue ;;
+    -C*|-c*|--git-dir=*|--work-tree=*|--namespace=*|--exec-path=*) ((i++)); continue ;;
+    --exec-path|--no-pager|--paginate|-P|--no-optional-locks|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-replace-objects|--no-lazy-fetch|--no-advice|--bare) ((i++)); continue ;;
+  esac
+  break
+done
+command="\${args[$i]:-}"
+# These are Git's own non-destructive query commands.  Keep this a static
+# built-in-only set: consulting config for one of these commands both adds an
+# observable real-git call and incorrectly treats a built-in as an alias.
+if [[ -n "$command" ]] && [[ ! "$command" =~ ^(add|annotate|blame|bugreport|cat-file|check-attr|check-ignore|check-mailmap|check-ref-format|column|config|count-objects|describe|diff|diff-files|diff-index|diff-tree|fetch|for-each-ref|fsck|get-tar-commit-id|grep|help|ls-files|ls-remote|ls-tree|log|merge-base|name-rev|range-diff|rev-list|rev-parse|show|show-branch|show-index|show-ref|status|var|verify-commit|verify-pack|verify-tag|whatchanged|worktree)$ ]]; then
+  alias_value="$($real_git "\${args[@]:0:$i}" config --get "alias.$command" 2>/dev/null || true)"
+  if [[ -n "$alias_value" && "$alias_value" != '!'* ]]; then
+    # Git aliases use quote-aware split_cmdline semantics, not bash's plain
+    # word splitting.  Keep shell bang aliases above out of this path.
+    expanded=(); token=''; quote=''; started=false
+    for ((p=0; p<\${#alias_value}; p++)); do
+      ch="\${alias_value:p:1}"
+      if [[ -n "$quote" ]]; then
+        if [[ "$ch" == "$quote" ]]; then quote=''; started=true
+        elif [[ "$ch" == '\\' && "$quote" != "'" && $((p + 1)) -lt \${#alias_value} ]]; then ((p++)); token+="\${alias_value:p:1}"; started=true
+        else token+="$ch"; started=true; fi
+      elif [[ "$ch" == "'" || "$ch" == '"' ]]; then quote="$ch"; started=true
+      elif [[ "$ch" == '\\' && $((p + 1)) -lt \${#alias_value} ]]; then ((p++)); token+="\${alias_value:p:1}"; started=true
+      elif [[ "$ch" =~ [[:space:]] ]]; then
+        if [[ "$started" == true ]]; then expanded+=("$token"); token=''; started=false; fi
+      else token+="$ch"; started=true; fi
+    done
+    [[ -n "$quote" ]] && expanded=()
+    [[ "$started" == true ]] && expanded+=("$token")
+    args=("\${args[@]:0:$i}" "\${expanded[@]}" "\${args[@]:$((i+1))}")
+    command="\${args[$i]:-}"
+  fi
+fi
+
+destructive=false
+reason=''
+alternative=''
+case "$command" in
+  push)
+    for a in "\${args[@]:$((i+1))}"; do
+      [[ "$a" == --force || "$a" == -f || "$a" == +* ]] && { destructive=true; reason='bare force push can rewrite remote history'; alternative='git push --force-with-lease'; break; }
+    done ;;
+  reset)
+    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --hard ]] && { destructive=true; reason='hard reset discards working-tree changes'; alternative='git reset --keep <target>'; break; }; done ;;
+  clean)
+    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --force || ( "$a" == -?* && "$a" != --* && "$a" == *f* ) ]] && { destructive=true; reason='forced clean deletes untracked files'; alternative='git clean -n then remove named paths'; break; }; done ;;
+  checkout)
+    has_paths=false; safe_side=false
+    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == -- ]] && has_paths=true; [[ "$a" == --ours || "$a" == --theirs || "$a" == --merge || "$a" == -m ]] && safe_side=true; done
+    [[ "$has_paths" == true && "$safe_side" == false ]] && { destructive=true; reason='path checkout discards working-tree changes'; alternative='commit a WIP first or use a temporary worktree'; } ;;
+  restore)
+    safe_side=false; staged=false; worktree=false
+    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --ours || "$a" == --theirs || "$a" == --merge ]] && safe_side=true; [[ "$a" == --staged || "$a" == -S ]] && staged=true; [[ "$a" == --worktree || "$a" == -W ]] && worktree=true; done
+    [[ "$safe_side" == false && ( "$staged" == false || "$worktree" == true ) ]] && { destructive=true; reason='restore discards working-tree changes'; alternative='commit a WIP first or use a temporary worktree'; } ;;
+  branch)
+    force=false; force_delete=false; delete=false; names=()
+    for a in "\${args[@]:$((i+1))}"; do
+      [[ "$a" == -D ]] && force_delete=true
+      [[ "$a" == --force ]] && force=true
+      [[ "$a" == -d || "$a" == --delete ]] && delete=true
+      [[ "$a" != -* ]] && names+=("$a")
+    done
+    if [[ "$force_delete" == true || ( "$force" == true && "$delete" == true ) ]] && (( \${#names[@]} > 0 )); then
+      for name in "\${names[@]}"; do
+        reachable=false
+        while IFS= read -r ref; do
+          [[ "$ref" == "refs/heads/$name" ]] && continue
+          if "$real_git" "\${args[@]:0:$i}" merge-base --is-ancestor "refs/heads/$name" "$ref" >/dev/null 2>&1; then
+            reachable=true
+            break
+          fi
+        done < <("$real_git" "\${args[@]:0:$i}" for-each-ref --format='%(refname)' refs/heads refs/remotes)
+        [[ "$reachable" == false ]] && { destructive=true; reason='force deletion would make commits unreachable'; alternative='git branch -d <branch>'; break; }
+      done
+    fi ;;
+esac
+
+if [[ "$destructive" == true ]]; then
+  common="$($real_git "\${args[@]:0:$i}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  [[ "$common" == "$feature_common" ]] && refuse "$command" "$reason" "$alternative"
+fi
+exec "$real_git" "\${args[@]}"
+`;
+
+/**
  * Git hook scripts embedded as engine assets
  *
  * Both hooks are written to .pipeline/git-hooks/ at worktree provisioning

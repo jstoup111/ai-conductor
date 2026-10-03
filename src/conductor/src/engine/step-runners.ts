@@ -3468,6 +3468,7 @@ export class DefaultStepRunner implements StepRunner {
             })}\n\n${renderAuxiliarySkillInvocation(entry.skill, context.candidate.providerKey)}`,
             cwd: source?.headPath ?? this.projectDir,
             readOnlyReview: true,
+            reviewDispatch: true,
           },
           invoke: (options) => context.invoke(options, async (rung, invoke) => {
           const semanticIdentity = semanticIdentityFor(rung.model);
@@ -4091,6 +4092,7 @@ export class DefaultStepRunner implements StepRunner {
                     prompt: `${renderAuxiliarySkillInvocation(branch.skillName, context.candidate.providerKey)}\n\n${prompt}`,
                     cwd: materialized?.headPath ?? this.projectDir,
                     dangerouslySkipPermissions: true,
+                    reviewDispatch: true,
                     interactive: false,
                   },
                   invoke: (options) => context.invoke(options),
@@ -4153,6 +4155,7 @@ export class DefaultStepRunner implements StepRunner {
                   changes: inputs.sourceSnapshot.sourceChanges ?? [], view: materialized,
                 })}`}`,
                 ...(customPolicyLap ? { readOnlyReview: true } : {}),
+                reviewDispatch: true,
                 interactive: false,
                 },
                 invoke: (options) => context.invoke(options, async (rung, invoke) => {
@@ -4241,6 +4244,7 @@ export class DefaultStepRunner implements StepRunner {
           prompt: `${renderAuxiliarySkillInvocation(branch.skillName, this.providerKey)}\n\n${prompt}`,
           dangerouslySkipPermissions: true,
           cwd: this.projectDir,
+          reviewDispatch: true,
           interactive: false,
         },
         invoke: (options) => this.provider.invoke({

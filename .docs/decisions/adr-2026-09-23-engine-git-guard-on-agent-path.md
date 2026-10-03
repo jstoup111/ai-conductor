@@ -55,6 +55,14 @@ Option A.
    writes it through the existing fail-closed preventive-hook provisioning, following the
    preventive-control precedent in adr-2026-08-07-provider-neutral-commit-gate-for-protected-artifacts.
    A write failure fails preparation and never proceeds silently.
+
+   > **Amended 2026-09-28 by #1354 (operator decision):** the guard does not bake values into its
+   > source. `«worktree»/.pipeline/bin/git` is the static `GIT_GUARD_SCRIPT` asset, so the
+   > interpreter-source inventory can check it like every other embedded hook asset. The two values
+   > are written at preparation time as data files, `«worktree»/.pipeline/git-guard/real-git` and
+   > `«worktree»/.pipeline/git-guard/common-dir`, through the same fail-closed provisioning, and the
+   > guard reads them at run time. This matches the approved plan and feature diagram (2026-09-23).
+
 2. **Every provider adapter's child-environment construction is the enforcement point.** When the
    dispatch working directory is an engine-prepared worktree, the adapter prepends
    `«worktree»/.pipeline/bin` to the child `PATH`. An engine-prepared worktree is one whose
@@ -65,6 +73,17 @@ Option A.
    (adr-2026-08-27-daemon-dispatcher-executor-seam), and review allowlisting and credential
    stripping are unchanged. For Codex, the prepended `PATH` also goes into
    `shell_environment_policy.set`, so the policy-built shell environment carries it explicitly.
+
+   > **Amended 2026-09-28 by #1354 (operator decision):** review dispatches are out of the guard's
+   > scope. adr-2026-09-10-portable-build-review-policy D5.1 retired review mount composition, and a
+   > review launches from a materialized detached checkout that is not an engine-prepared worktree,
+   > so no guard is prepended for it. This is a recorded limit under D10.
+
+   > **Amended 2026-10-01 by #1354 (operator decision):** the Pi provider is out of this decision's
+   > scope. Pi became a built-in provider after this ADR was approved; its adapter's guard
+   > enforcement is delivered by #2895, which builds on this decision's adapter seam. Until #2895
+   > ships, Pi dispatches are unguarded, and this is a recorded limit under D10.
+
 3. **The guard is re-verified before every guarded dispatch, fail-closed.** Before prepending, the
    engine confirms the guard's content and mode match the embedded asset, and rewrites it if they
    do not. If it still cannot be confirmed, the dispatch is not launched and fails with a message
@@ -89,9 +108,27 @@ Option A.
    - A single-level non-shell git alias is expanded before classification.
 
    > **Amended 2026-09-23 by #1354:** conflict-check found that the unmerged-branch rule above refuses the #334 smoke cleanup (a branch created at `HEAD` in the root checkout) and disagrees with parked-feature reconciliation when a local `main` lags. The rule now refuses `branch -D` and `--delete --force` only when the branch tip is not reachable from any other local branch or remote-tracking ref, which is when commits would become unreachable. The ancestor-of-default-branch case is a subset of this rule and stays allowed.
+
+   > **Amended 2026-10-02 by #1354 (operator decision):** this decision's matrix is delivered for the
+   > canonical spellings of each refused form, and for the global-option and alias spellings that
+   > #1354's tests name. Parsing every other spelling git accepts is delivered by #2904. That
+   > includes global options such as `--config-env=<name>=<envvar>` and alias text quoted the way
+   > git quotes it. Until #2904 ships, those spellings are a recorded limit under D10.
+
+   > **Amended 2026-10-03 by #1354 (operator decision):** the shipped guard already classifies the
+   > `--config-env`, `--attr-source` and `--super-prefix` global options and splits alias text the
+   > way git quotes it, delivered by this feature's remediation tasks ahead of #2904. Those spellings
+   > are therefore not a recorded limit under D10, and the D10 control inventory says so. Every other
+   > non-canonical spelling, such as `branch -d -f` or `-df`, stays a recorded limit until #2904.
 6. **Every refusal explains itself.** It exits non-zero without running `git`. Its stderr names the
    refused operation, why it is refused, and the safe alternative: `--force-with-lease`,
    `reset --keep`, `branch -d`, `clean -n`, or committing a WIP first or using a temporary worktree.
+
+   > **Amended 2026-09-28 by #1354 (operator decision):** "without running `git`" means the refused
+   > command, and any command that can change repository state, never reaches the real `git`. The
+   > read-only queries the guard uses to classify the command (`rev-parse`, `config`,
+   > `for-each-ref`, `merge-base`) may run first.
+
 
    > **Amended 2026-09-23 by #1354:** conflict-check found that the self-host environment-claim audit (#1106) treats the write-fence as the only environmental control and refutes any claimed `git push` blocker. A refusal from this guard is a real environmental control, so the audit does not refute a claimed blocker naming a push form the guard refuses (a bare force push). It still refutes a claimed blocker for a plain or lease push.
 7. **Engine git is unaffected by construction, and there is no bypass variable.** Engine rewrites
@@ -103,6 +140,11 @@ Option A.
    `hooks/claude/block-destructive-git.sh` is not removed. Its scanner drops heredoc bodies as well
    as quoted spans before matching, so text that merely describes a destructive command is not
    refused.
+
+   > **Amended 2026-10-02 by #1354 (operator decision):** the heredoc and quote handling covers the
+   > forms #1354's tests name. Bash quote removal on heredoc delimiters (`<<\EOF`, `<<E"OF"`) and
+   > ignoring openers inside comments are delivered by #2904. The hook is early feedback, not the
+   > enforcement point (D2), so these gaps cost a false refusal or a missed early warning only.
 9. **Skill text agrees with the guard.** The `tdd` skill's pre-diff counterfactual runs in a
    temporary detached worktree, never by discarding changes in the build worktree.
 10. **Coverage is proven by executable tests and documented limits.**
@@ -114,6 +156,15 @@ Option A.
       `docs/reference/settings-and-hooks.md`: absolute-path `git`, shell startup files that put
       another `git` earlier on `PATH`, shell aliases, interactive and inline runs with no prepared
       worktree, and custom providers.
+
+    > **Amended 2026-09-28 by #1354 (operator decision):** the stub real `git` records the guard's
+    > read-only classification queries; the proof is that it records no refused subcommand and no
+    > state-changing subcommand. Review dispatches (D2 amendment) are added to the recorded limits.
+
+    > **Amended 2026-10-01 by #1354 (operator decision):** the provider × run-mode cells, the live
+    > guard smoke, and the control-inventory coverage cover Claude and Codex only. The Pi adapter
+    > cells, a Pi live guard smoke, and Pi's inventory entry are delivered by #2895. Pi dispatches
+    > are added to the recorded limits in `docs/reference/settings-and-hooks.md`.
 
 ## Consequences
 
@@ -136,3 +187,5 @@ Option A.
 - [ ] #2693: a git-side `reference-transaction`/`pre-push` backstop for ref moves that bypass the
       guard.
 - [ ] #1352: OS-level sealing for the adversarial bypass class.
+- [ ] #2895: destructive-git guard enforcement and proof for the Pi provider adapter.
+- [ ] #2904: git-faithful option, alias and heredoc parsing for the guard and operator hook.

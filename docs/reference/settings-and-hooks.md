@@ -133,7 +133,7 @@ Ten scripts live in `hooks/claude/`. Alphabetized.
 
 | Script | Trigger | What it does | Can block? |
 | --- | --- | --- | --- |
-| `block-destructive-git.sh` | `PreToolUse` / `Bash` | Strips quoted spans from the command, then pattern-matches destructive git. Emits a non-blocking NOTE on ad-hoc `git rebase`. | **Yes — exit 2** on `git push --force`/`-f`, `git reset --hard`, `git branch -D` of a not-provably-merged branch, `git clean -f`, and `git checkout -- .` / `git restore .`. `--force-with-lease` is explicitly allowed. |
+| `block-destructive-git.sh` | `PreToolUse` / `Bash` | Strips quoted spans and heredoc bodies from the command, then pattern-matches destructive git. Early feedback only; the [engine git guard](#engine-git-guard) is the enforcing control. Emits a non-blocking NOTE on ad-hoc `git rebase`. | **Yes — exit 2** on `git push --force`/`-f`, `git reset --hard`, `git branch -D` of a not-provably-merged branch, `git clean -f`, and `git checkout -- .` / `git restore .`. `--force-with-lease` is explicitly allowed. |
 | `diagram-coverage-check.sh` | `PostToolUse` / `Edit\|Write` | Warns that diagrams may be stale when a structural file is edited (Rails `app/{models,controllers,services,jobs}`, `config/routes.rb`, `db/migrate/`, compose files, `Procfile`, or `src/{models,controllers,services}`) and `.docs/architecture/` exists. | No |
 | `docs-guard.sh` | `PreToolUse` / `Edit\|Write\|NotebookEdit` | Inert (exits 0 without reading stdin) unless `.pipeline/phase-active` exists. Otherwise reads a bounded payload (`timeout 3 head -c 1048576`), extracts `tool_input.file_path` or `tool_input.notebook_path` via `node -e`, recognizes physical and symlinked project-root spellings, and checks both the requested path and its filesystem-resolved destination. A `.docs/` candidate is default-denied unless its literal `allow:` prefix in the marker matches; both candidates must pass. | **Yes — exit 2** on an undeterminable target (fail-closed) and on any unallowlisted `.docs/` candidate. Block message names the phase and step. |
 | `lint-after-edit.sh` | `PostToolUse` / `Edit\|Write` | Invoked per edit, but does **not** lint per edit. Queues the edited path under `$TMPDIR/ai-conductor-lint/<repo-hash>/` and stays silent until a batch boundary, then lints the whole queue and clears it. A boundary is `.pipeline/current-task` changing, or — outside a pipeline, where no task marker exists — `LINT_DEBOUNCE_SECONDS` (default 120) elapsing since the queue opened. Dispatches by type: `.ts`/`.tsx` → ESLint (one batched invocation), `.sh` and bash-shebang files → `shellcheck --severity=error`, `.rb` → `bundle exec standardrb --no-fix`. Each is skipped silently when its tool or project context is absent. Queue state is deliberately kept out of `.pipeline/`, which is engine-owned. | No — always exits 0 |
@@ -238,6 +238,57 @@ from the historical behavior, where every git-hook failure was swallowed and log
 
 Trailer semantics — which trailers are gates and which are telemetry — are documented in
 [artifacts](artifacts.md).
+
+## Engine git guard
+
+The engine writes a `git` argv guard into every worktree it prepares and puts it first on the child
+`PATH` of every Claude and Codex dispatch into that worktree, in self-host and non-self-host runs. Pi
+dispatches are not guarded yet; Pi enforcement is tracked by #2895. It is
+the enforcing control for destructive git; the operator hook above is Claude-only early feedback
+(adr-2026-09-23-engine-git-guard-on-agent-path).
+
+| Path | Contents |
+| --- | --- |
+| `<worktree>/.pipeline/bin/git` | The static `GIT_GUARD_SCRIPT` asset from `git-hook-assets.ts`, a regular file with mode 0755. |
+| `<worktree>/.pipeline/git-guard/real-git` | The absolute path of the real `git`, resolved from the daemon's `PATH` with every `.pipeline/bin` entry excluded. |
+| `<worktree>/.pipeline/git-guard/common-dir` | The feature repository's absolute git common directory. |
+
+A worktree counts as engine-prepared when its worktree-scoped `core.hooksPath` is its own
+`.pipeline/git-hooks`. Worktree preparation writes the three files fail-closed. Before each dispatch the
+engine re-verifies them and rewrites any that differ. If it cannot, the dispatch does not launch and
+fails naming the guard path. The daemon's own `process.env` is never changed, so engine git (rebase,
+quarantine, shipped-record, spec landing, setup triage) runs the real `git`. There is no bypass
+variable. Runtime values live only in the `.pipeline/git-guard` sidecars; they are never baked into
+the static shim. `build_review` dispatches are read-only and intentionally exempt from the guard.
+
+The guard refuses these forms when the target repository's common directory is the feature
+repository's (the feature worktree, its sibling worktrees and the root checkout). It exits 1, prints
+the refused operation, the reason and the safe alternative to stderr, and never passes the refused
+command to the real `git`.
+
+| Refused | Safe alternative |
+| --- | --- |
+| `push` with `--force`, `-f` or a `+` refspec, even beside `--force-with-lease` | `git push --force-with-lease` |
+| `reset --hard` | `git reset --keep <target>` |
+| `branch -D` or `--delete --force` when the tip is reachable from no other local branch or remote-tracking ref | `git branch -d <branch>` |
+| `clean` with `-f` or `--force` | `git clean -n`, then remove named paths |
+| `checkout [<tree-ish>] -- <paths>` and `restore <paths>` without `--ours`, `--theirs` or `--merge` (`restore --staged` alone passes) | Commit a WIP first, or use a temporary worktree |
+
+A single-level non-shell alias is expanded before classification. Repositories with a different common
+directory, such as test fixtures, pass through untouched.
+
+### What the guard does NOT cover
+
+- An absolute-path `git` invocation, such as `/usr/bin/git`, bypasses `PATH`.
+- Shell startup files that put another `git` earlier on `PATH`.
+- Shell aliases and functions named `git`.
+- Interactive and inline runs, and any dispatch whose working directory is not an engine-prepared worktree.
+- `build_review` dispatches, which run without the guard by design.
+- Custom providers, which build their own child environment.
+- Non-canonical git spellings. The canonical spelling of each refused form is classified, plus
+  `--config-env` and single-level aliases, whose text is split the way git quotes it. Every other
+  spelling git accepts, such as `branch -d -f` or `-df`, passes through unclassified until #2904 ships.
+- Pi provider dispatches, which run unguarded until #2895 ships.
 
 ## Self-host sandbox write-fence
 

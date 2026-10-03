@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execa } from 'execa';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
@@ -103,6 +104,11 @@ describe('provider lifecycle supervision at the real provider boundary', () => {
   it('replaces a five-minute preparation wedge while rejecting its late Codex spawn and allowing quiet fallback completion', async () => {
     const root = await mkdtemp(join(tmpdir(), 'provider-lifecycle-supervision-'));
     roots.push(root);
+    // Event persistence creates .pipeline before either adapter invokes. The
+    // dispatch guard therefore requires the fixture to be a real worktree,
+    // even though this test exercises the provider lifecycle rather than Git.
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: root });
+    await execa('git', ['config', '--worktree', 'core.hooksPath', join(root, 'unmanaged-hooks')], { cwd: root });
     const clock = createLifecycleClock();
     const firstDoctorStarted = deferred<void>();
     const firstDoctor = deferred<ReturnType<typeof readyCodexDoctorResult>>();

@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:14, task:rem-as-built-rem-as-built-adr-d8-quote-removal-1
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -71,6 +71,34 @@ describe('block-destructive-git hook force-push protection', () => {
     expect(denial.hookSpecificOutput?.permissionDecision).toBe('deny');
     expect(denial.hookSpecificOutput?.permissionDecisionReason).toMatch(/force.*push/i);
   }
+
+  it('drops every heredoc body on a multi-heredoc command but scans later commands', () => {
+    const allowed = invoke("cat <<A <<'B'\ngit reset --hard\nA\ngit push --force\nB");
+    expect(allowed.status).toBe(0);
+    const refused = invoke("cat <<A <<'B'\nignored\nA\nignored\nB\ngit reset --hard");
+    expect(refused.status).toBe(2);
+  });
+
+  it('does not mistake a quoted heredoc-looking literal for an opener', () => {
+    const result = invoke("echo '<<EOF'\ngit reset --hard");
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('git reset --hard');
+  });
+
+  it.each(["cat <<\\EOF", 'cat <<E"OF"'])('removes shell quoting from the %s heredoc delimiter', (opener) => {
+    const allowed = invoke(`${opener}\ngit reset --hard\nEOF`);
+    expect(allowed.status).toBe(0);
+
+    const refused = invoke(`${opener}\ngit reset --hard\nEOF\ngit reset --hard`);
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain('git reset --hard');
+  });
+
+  it('does not treat a heredoc-looking comment as an opener', () => {
+    const result = invoke('# <<EOF\ngit reset --hard');
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('git reset --hard');
+  });
 
   const separators: Array<[string, string]> = [
     ['&&', ' && '],
@@ -208,5 +236,70 @@ describe('block-destructive-git hook force-push protection', () => {
     expect(result.status).toBe(0);
     expect(result.calledGitOrGh).toBe(false);
     expect(result.stderr).not.toMatch(/force.*push/i);
+  });
+
+  it.each([
+    "cat <<'EOF'\ngit reset --hard\ngit push --force\nEOF",
+    'cat <<EOF\ngit reset --hard\ngit push --force\nEOF',
+  ])('allows destructive text contained only in a heredoc: %s', (command) => {
+    const result = invoke(command);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.calledGitOrGh).toBe(false);
+  });
+
+  it.each([
+    "cat <<  'EOF'\ngit reset --hard\nEOF",
+    'cat <<\t"EOF"\ngit reset --hard\nEOF',
+    "cat <<-   'EOF'\ngit reset --hard\nEOF",
+  ])('allows destructive text in a spaced quoted heredoc opener: %s', (command) => {
+    const result = invoke(command);
+    expect(result.status).toBe(0);
+    expect(result.calledGitOrGh).toBe(false);
+  });
+
+  it.each([
+    "cat <<  'EOF'\ngit reset --hard\nEOF\ngit reset --hard",
+    'cat <<\t"EOF"\ngit reset --hard\nEOF\ngit reset --hard',
+    "cat <<-   'EOF'\ngit reset --hard\nEOF\ngit reset --hard",
+  ])('denies a real hard reset after a spaced quoted heredoc opener: %s', (command) => {
+    const result = invoke(command);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/git reset --hard is destructive and irreversible/i);
+  });
+
+  it('denies a real hard reset after a heredoc body', () => {
+    const result = invoke("cat <<'EOF'\ngit reset --hard\nEOF\ngit reset --hard");
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.calledGitOrGh).toBe(false);
+    expect(result.stderr).toMatch(/git reset --hard is destructive and irreversible/i);
+  });
+
+  it.each([
+    ['a here-string', 'cat <<< "harmless input"\ngit reset --hard'],
+    ['an arithmetic left shift', ': $((1 << 2))\ngit reset --hard'],
+    ['a multiline arithmetic left shift', ': $((1\n<< 2))\ngit reset --hard'],
+  ])('denies a real hard reset after %s', (_syntax, command) => {
+    const result = invoke(command);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.calledGitOrGh).toBe(false);
+    expect(result.stderr).toMatch(/git reset --hard is destructive and irreversible/i);
+  });
+
+  it.each([
+    ['git clean -f', /git clean -f permanently removes untracked files/i],
+    ['git branch -D unmerged', /force-delete UNMERGED branch/i],
+    ['git checkout -- .', /discards all unstaged changes/i],
+  ])('continues to deny %s', (command, refusal) => {
+    const result = invoke(command);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(refusal);
   });
 });

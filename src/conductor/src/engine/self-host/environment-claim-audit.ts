@@ -9,7 +9,8 @@
 //
 // That blocker could not exist. The step ran under the `claude` provider, which
 // is dispatched with `--dangerously-skip-permissions`, no OS sandbox, and full
-// environment inheritance; and the only environmental control installed for it
+// environment inheritance; and its environmental controls are the write fence
+// plus the worktree-local git guard, whose narrow destructive forms are known.
 // is the write fence, whose generated script denies nothing but writes under the
 // live harness checkout outside the build worktree. The fabricated blocker
 // arrived formatted exactly like the four genuinely-verified gate results above
@@ -102,6 +103,8 @@ export interface DispatchEnvironmentFacts {
   provider: string;
   /** Whether the self-build write fence was provisioned for this dispatch. */
   writeFenceInstalled: boolean;
+  /** Whether this exact provider spawn received the worktree git guard. */
+  gitGuardInstalled: boolean;
 }
 
 /** Result of auditing one dispatch's output. */
@@ -162,6 +165,15 @@ function detectClaims(output: string): RefutedEnvironmentClaim[] {
   return claims;
 }
 
+/** The guard refuses only genuinely bare force forms, wherever push puts them. */
+function isGuardRefusedForcePushClaim(claim: string): boolean {
+  const push = claim.match(/git\s+push\b([^`]*)/i);
+  if (!push) return false;
+  return push[1].trim().split(/\s+/).map((argument) => argument.replace(/^[.,;:!?\)\]\('"`]+|[.,;:!?\)\]\('"`]+$/g, '')).some((argument) =>
+    argument === '--force' || argument === '-f' || (argument.startsWith('+') && !argument.startsWith('++')),
+  );
+}
+
 function renderFacts(facts: DispatchEnvironmentFacts): string[] {
   const lines: string[] = [
     `  - provider: ${facts.provider} — dispatched with no OS sandbox and full environment inheritance; ` +
@@ -174,6 +186,9 @@ function renderFacts(facts: DispatchEnvironmentFacts): string[] {
           'matching the operation above.'
       : '  - write fence: NOT installed for this dispatch. No fence rule of any kind applied.',
   );
+  lines.push(facts.gitGuardInstalled
+    ? '  - git guard: installed on this provider spawn.'
+    : '  - git guard: NOT installed on this provider spawn.');
   return lines;
 }
 
@@ -203,7 +218,9 @@ export function auditEnvironmentBlockerClaims(
   const deniable = facts.writeFenceInstalled
     ? writeFenceDeniableOperations()
     : new Set<AuditedOperation>();
-  const refuted = detectClaims(output).filter((claim) => !deniable.has(claim.operation));
+  const refuted = detectClaims(output).filter((claim) =>
+    !deniable.has(claim.operation) && !(claim.operation === 'git push' && facts.gitGuardInstalled && isGuardRefusedForcePushClaim(claim.claim)),
+  );
   if (refuted.length === 0) return none;
 
   // Each quote carries the marker so a later attempt that echoes the whole

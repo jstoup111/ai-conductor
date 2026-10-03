@@ -27,6 +27,8 @@ import {
 } from './provider-diagnostics.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
+import { withGitGuardPath } from './child-environment.js';
+import { ensureGitGuardForDispatch } from '../engine/git-guard.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
@@ -306,6 +308,10 @@ export class CodexProvider implements LLMProvider {
     // session id, but the invariant is enforced uniformly at every adapter
     // entry so no future arg-building change can resurrect reuse.
     options = enforceFreshSessionOptions(options, 'codex');
+    let guardDir: string | null;
+    try { guardDir = options.reviewDispatch ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
+      return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
+    }
     const repl = options.interactive === true;
     const jsonOutput = !repl;
     // A real interactive session leaves authorization to the operator. Auto
@@ -330,10 +336,16 @@ export class CodexProvider implements LLMProvider {
         };
       }
     }
+    const invocationEnv = this.invocationEnv(options, authentication);
+    // execa extends this overlay with process.env. Materialize the inherited
+    // PATH once so the child environment and Codex's shell policy cannot drift.
+    const childEnv = guardDir
+      ? withGitGuardPath({ ...invocationEnv, PATH: invocationEnv.PATH ?? process.env.PATH }, guardDir)
+      : invocationEnv;
     const command = {
       executable: options.selfHost?.executable ?? this.executable,
-      args: [...this.selfHostArgs(options), ...this.buildArgs(options, !repl, schemaFile)],
-      env: this.invocationEnv(options, authentication),
+      args: [...this.selfHostArgs(options), ...this.buildArgs(options, !repl, schemaFile, guardDir, childEnv.PATH)],
+      env: childEnv,
     };
     let streamedTokenUsage: TokenUsage | undefined;
 
@@ -378,7 +390,7 @@ export class CodexProvider implements LLMProvider {
     const structured = options.nativeSchema !== undefined && completion.finalStructuredResult !== undefined
       ? { finalStructuredResult: fromCodexStrictResult(options.nativeSchema, completion.finalStructuredResult) }
       : {};
-    return { ...completion, ...structured, tokenUsage, observedIntervals: [interval] };
+    return { ...completion, ...structured, tokenUsage, observedIntervals: [interval], gitGuardInstalled: guardDir !== null };
   }
 
   /**
@@ -977,7 +989,7 @@ export class CodexProvider implements LLMProvider {
     );
   }
 
-  private buildArgs(options: InvokeOptions, unattended: boolean, schemaFile?: string): string[] {
+  private buildArgs(options: InvokeOptions, unattended: boolean, schemaFile?: string, guardDir?: string | null, guardedPath?: string): string[] {
     const args = ['exec'];
 
     if (options.model) args.push('--model', options.model);
@@ -1015,6 +1027,7 @@ export class CodexProvider implements LLMProvider {
         if (memoryRoot) args.push('--add-dir', memoryRoot);
       }
     }
+    if (guardDir && guardedPath !== undefined) args.push('--config', `shell_environment_policy.set.PATH=${JSON.stringify(guardedPath)}`);
     if (options.cwd) args.push('--cd', options.cwd);
     if (!options.interactive) args.push('--json');
     if (schemaFile) args.push('--output-schema', schemaFile);

@@ -32,7 +32,7 @@ const INCIDENT_OUTPUT = [
   'Human review required.',
 ].join('\n');
 
-const CLAUDE_DISPATCH = { provider: 'claude', writeFenceInstalled: true } as const;
+const CLAUDE_DISPATCH = { provider: 'claude', writeFenceInstalled: true, gitGuardInstalled: true } as const;
 
 describe('environment claim audit', () => {
   it('recognizes only assertions of unbounded command denial across the full output', () => {
@@ -64,7 +64,7 @@ describe('environment claim audit', () => {
     ].join('\n');
     const cases = [
       [blanketDenial, CLAUDE_DISPATCH, [], true],
-      [blanketDenial, { provider: 'claude', writeFenceInstalled: false }, [], true],
+      [blanketDenial, { provider: 'claude', writeFenceInstalled: false, gitGuardInstalled: false }, [], true],
       [ordinaryClaim, CLAUDE_DISPATCH, ['gh'], false],
     ] as const;
 
@@ -113,6 +113,7 @@ describe('environment claim audit', () => {
     const audit = auditEnvironmentBlockerClaims(INCIDENT_OUTPUT, {
       provider: 'codex',
       writeFenceInstalled: false,
+      gitGuardInstalled: false,
     });
 
     expect(audit).toEqual({ refuted: [], message: null });
@@ -122,6 +123,7 @@ describe('environment claim audit', () => {
     const audit = auditEnvironmentBlockerClaims(INCIDENT_OUTPUT, {
       provider: 'some-future-provider',
       writeFenceInstalled: false,
+      gitGuardInstalled: false,
     });
 
     expect(audit).toEqual({ refuted: [], message: null });
@@ -138,6 +140,33 @@ describe('environment claim audit', () => {
       refuted: [],
       message: null,
     });
+  });
+
+  it('leaves only guard-refused bare force-push claims unrefuted', () => {
+    const cases = [
+      ['The sandbox blocks `git push origin --force`.', true],
+      ['The sandbox blocks `git push -f origin main`.', true],
+      ['The sandbox blocks `git push origin +feature`.', true],
+      ['The sandbox blocks `git push --force-with-lease origin main`.', false],
+      ['The sandbox blocks `git push --force-if-includes origin main`.', false],
+      ['The sandbox blocks `git push origin main`.', false],
+    ] as const;
+    expect(cases.map(([output, exempt]) => {
+      const audit = auditEnvironmentBlockerClaims(output, CLAUDE_DISPATCH);
+      return (audit.message === null) === exempt;
+    })).toEqual(cases.map(() => true));
+  });
+
+  it('normalizes punctuation and quoting only for guarded bare force forms', () => {
+    const guarded = [
+      'The sandbox blocks `git push --force`.',
+      'The sandbox blocks git push -f,',
+      'The sandbox blocks `git push --force`',
+      'The sandbox blocks git push origin +HEAD:main.',
+    ];
+    expect(guarded.map((output) => auditEnvironmentBlockerClaims(output, CLAUDE_DISPATCH).message)).toEqual([null, null, null, null]);
+    expect(auditEnvironmentBlockerClaims('The sandbox blocks git push --force-with-lease.', CLAUDE_DISPATCH).message).not.toBeNull();
+    expect(auditEnvironmentBlockerClaims(guarded[0]!, { ...CLAUDE_DISPATCH, gitGuardInstalled: false }).message).not.toBeNull();
   });
 
   it('leaves ordinary sandbox prose that blames nothing alone', () => {
@@ -171,7 +200,7 @@ describe('environment claim audit', () => {
   it('refutes even when no fence was installed at all', () => {
     const audit = auditEnvironmentBlockerClaims(
       'Cannot proceed: the sandbox blocks `gh pr create`.',
-      { provider: 'claude', writeFenceInstalled: false },
+      { provider: 'claude', writeFenceInstalled: false, gitGuardInstalled: false },
     );
 
     expect(audit.refuted.map((r) => r.operation)).toEqual(['gh']);

@@ -1030,14 +1030,22 @@ export class FullSuiteVerifier {
       // their original fail-closed diagnostic and must not start an unrelated
       // inspection after acquisition has already failed.
       if (acquired.message.startsWith('Unable to acquire full-suite verification lock within ')) {
-        const resolved = await this.resolveInspection(options);
-        if (
-          'context' in resolved &&
-          (resolved.inspection.status === 'CURRENT' ||
-            resolved.inspection.status === 'PRESERVED_WITHIN_BUDGET')
-        ) {
-          return { status: 'REUSED', evidence: resolved.inspection.evidence };
+        const reused = await this.reuseCurrentEvidenceAfterLockContention(options);
+        if (reused !== undefined) return reused;
+
+        // PASS is written before release, but a contender can observe its
+        // timeout in the narrow publication window. Yield once, then re-read
+        // the proof before reporting an internal error.
+        try {
+          await (this.options.lock?.wait ?? delay)(
+            this.options.lock?.retryDelayMs ?? DEFAULT_LOCK_RETRY_MS,
+          );
+        } catch {
+          // Retain the original contention diagnostic if this best-effort
+          // settlement wait is interrupted.
         }
+        const settledReuse = await this.reuseCurrentEvidenceAfterLockContention(options);
+        if (settledReuse !== undefined) return settledReuse;
       }
       return {
         status: 'FAILED',
@@ -1056,6 +1064,22 @@ export class FullSuiteVerifier {
       };
     }
     return result;
+  }
+
+  private async reuseCurrentEvidenceAfterLockContention(
+    options: FullSuiteVerifyOptions,
+  ): Promise<
+    Extract<FullSuiteVerifierResult, { status: 'REUSED' }> | undefined
+  > {
+    const resolved = await this.resolveInspection(options);
+    if (
+      'context' in resolved &&
+      (resolved.inspection.status === 'CURRENT' ||
+        resolved.inspection.status === 'PRESERVED_WITHIN_BUDGET')
+    ) {
+      return { status: 'REUSED', evidence: resolved.inspection.evidence };
+    }
+    return undefined;
   }
 
   private async ensureLocked(

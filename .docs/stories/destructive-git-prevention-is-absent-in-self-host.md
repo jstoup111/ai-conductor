@@ -112,7 +112,7 @@ As a build agent, I want a refusal to tell me what was blocked and what to do in
 
 ### Negative Paths
 
-- **Given** a guarded agent shell, **When** a refused command runs, **Then** the real git is never invoked for that command, as a stub real git that records every call shows.
+- **Given** a guarded agent shell, **When** a refused command runs, **Then** the real git never runs the refused command or any command that can change repository state; only the read-only queries the guard uses to classify it (`rev-parse`, `config`, `for-each-ref`, `merge-base`) reach the real git, as a stub real git that records every call shows.
 - **Given** a guarded agent shell, **When** an allowed command fails inside git (for example a push rejected as non-fast-forward), **Then** the message and exit status the agent sees are git's own, with no refusal text added.
 
 ### Done When
@@ -130,7 +130,7 @@ As the harness operator, I want the guard present for Claude and Codex in both s
 
 - **Given** an engine-prepared feature worktree and an empty operator home (no `~/.claude/settings.json`, no Codex config), **When** the daemon dispatches Claude non-self-host, Claude self-host, Codex non-self-host, and Codex self-host into that worktree, **Then** each child environment's `PATH` begins with that worktree's guard directory.
 - **Given** a Codex dispatch into an engine-prepared worktree, **When** the engine builds the Codex invocation, **Then** the shell-environment policy passed to Codex carries the same guarded `PATH`.
-- **Given** a contained build_review dispatch into an engine-prepared worktree, **When** the reviewer's shell resolves `git`, **Then** it resolves to the guard.
+- **Given** a build_review dispatch, **When** the engine builds the review's child environment, **Then** no guard directory is prepended to its `PATH`, because review dispatches are outside the guard's scope (ADR D2 amendment, 2026-09-28).
 
 ### Negative Paths
 
@@ -143,7 +143,7 @@ As the harness operator, I want the guard present for Claude and Codex in both s
 - [ ] An adapter test per provider × run-mode cell with an empty operator home asserts the child `PATH` begins with the worktree guard directory
 - [ ] A Codex adapter test asserts the invocation carries the guarded `PATH` in its shell-environment policy
 - [ ] An adapter test asserts a non-prepared working directory leaves `PATH` unchanged and the daemon `process.env.PATH` is never mutated
-- [ ] A contained-review launch test asserts `git` resolves to the worktree guard inside the review containment profile
+- [ ] A review-exemption test asserts a build_review dispatch launches with no guard directory on its child `PATH`
 
 ## Story 7: A missing or altered guard is restored before launch, or the dispatch does not launch
 
@@ -154,13 +154,13 @@ As the harness operator, I want the guard verified at every dispatch, so that a 
 ### Happy Path
 
 - **Given** an engine-prepared worktree whose guard file was deleted, edited, or had its execute bit removed, **When** the next dispatch into that worktree is prepared, **Then** the guard is rewritten from the embedded asset with mode 0755 before the provider launches, and the dispatch proceeds guarded.
-- **Given** a fresh worktree being prepared, **When** worktree preparation completes, **Then** the guard exists as a regular file (not a symlink) with mode 0755, and embeds the absolute path of a real git that is not itself the guard.
+- **Given** a fresh worktree being prepared, **When** worktree preparation completes, **Then** the guard exists as a regular file (not a symlink) with mode 0755 whose content is the static embedded asset, and a sidecar data file beside it records the absolute path of a real git that is not itself the guard, which the guard reads at run time.
 
 ### Negative Paths
 
 - **Given** an engine-prepared worktree whose guard cannot be rewritten (for example its directory is read-only), **When** a dispatch into it is prepared, **Then** the provider is not launched and the dispatch fails with a message naming the guard path.
 - **Given** worktree preparation whose guard write fails, **When** preparation runs, **Then** preparation fails with a message naming the guard, instead of logging a skip and continuing.
-- **Given** a daemon whose own `PATH` contains a `.pipeline/bin` directory, **When** the guard is written, **Then** the embedded real-git path does not point into any `.pipeline/bin` directory.
+- **Given** a daemon whose own `PATH` contains a `.pipeline/bin` directory, spelled with or without a trailing slash, **When** the guard is written, **Then** the real-git path recorded in the sidecar data file does not point into any `.pipeline/bin` directory.
 
 ### Done When
 
@@ -221,7 +221,7 @@ As a build agent following the `tdd` skill, I want its pre-diff counterfactual c
 
 ### Negative Paths
 
-- **Given** the `tdd` skill, **When** its counterfactual step is read, **Then** it tells the agent neither to stash nor to check out, restore, or reset paths in any worktree, including the temporary one.
+- **Given** the `tdd` skill, **When** its counterfactual step is read, **Then** it names no stash, path checkout, restore, or reset command and tells the agent to change no worktree's files, the temporary one included, beyond adding the test copies.
 
 ### Done When
 
@@ -241,13 +241,13 @@ As the harness operator, I want proof from real provider sessions that agent she
 ### Negative Paths
 
 - **Given** an advisory-mode smoke run without a provider's credentials or binary, **When** that provider's guard smoke file runs, **Then** its case is reported as skipped with the missing prerequisite named, never as passed.
-- **Given** a gate-mode smoke run that selects a provider's credentialed leg without that provider's credentials, **When** the guard smoke file runs, **Then** the run fails naming the missing credential and does not skip.
+- **Given** a gate-mode smoke run that selects a provider's credentialed leg without that provider's credentials, **When** the guard smoke file runs, **Then** its case is reported as a non-gating skip naming the missing credential, never as passed.
 - **Given** the default (non-smoke) test suite, **When** it runs, **Then** no live provider session is started.
 
 ### Done When
 
 - [ ] Two smoke files exist, one declaring `credentialed:claude` and one declaring `credentialed:codex`, each asserting guard resolution and a refused `git clean -f`
-- [ ] The smoke-runner discovery test accepts both files; advisory mode skips with a named prerequisite, gate mode fails, and the default suite excludes both
+- [ ] The smoke-runner discovery test accepts both files; advisory and gate mode both report a named non-gating skip, and the default suite excludes both
 
 ## Story 12: A truthful report of a guard refusal is not refuted as a fabricated blocker
 
