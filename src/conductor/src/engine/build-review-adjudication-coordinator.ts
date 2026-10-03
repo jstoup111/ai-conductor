@@ -615,8 +615,13 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     if (!evidence.ok) return failUnlessAccepted(evidence.reason, { settleAbsentAttempted: true });
   }
   const liveSourceIds = liveSourceIdsFor(resolved);
-  const admitted = graph.graph.cases.filter((proposed) =>
-    proposed.sources.some((source) => liveSourceIds.has(source.sourceId)) &&
+  // Keep recurrence candidates rooted in the validated live graph, rather
+  // than in effect-authorized rows. A blocked or escalated v2 judgement
+  // withholds every action, but an unbound action at a resolved source still
+  // needs D6.3 recurrence handling before a consistency stop can be written.
+  const liveGraphCases = graph.graph.cases.filter((proposed) =>
+    proposed.sources.some((source) => liveSourceIds.has(source.sourceId)));
+  const admitted = liveGraphCases.filter((proposed) =>
     (proposed.case.disposition !== 'act' || authorizedActionRefs.has(proposed.case.caseRef)),
   );
   const blockedConsistency = judgement.mode === 'case-v2' && judgement.consistency.verdict === 'blocked'
@@ -635,19 +640,24 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const ordinaryCases = admitted.filter((proposed) => proposed.case.disposition !== 'escalate'
     && !blockedConsistency?.sourceIds.some((sourceId) => proposed.sources.some((source) => source.sourceId === sourceId)));
   const escalationCases = admitted.filter((proposed) => proposed.case.disposition === 'escalate');
-  // Unbound escalations and blocked ordinary rows have no durable case
-  // transition here, but either can reuse a resolved action source. Keep the
-  // recurrence graph and the halt filter derived from this one list so a
-  // blocked row cannot bypass D6.3 on its way to the consistency-stop writer.
+  // Unbound escalations, blocked ordinary rows, and withheld action rows have
+  // no durable case transition here, but each can reuse a resolved action
+  // source. Keep the recurrence graph and halt filter derived from this one
+  // list so none bypasses D6.3 on its way to the consistency-stop writer.
   const isUnboundRecurrenceCandidate = (proposed: typeof admitted[number]) =>
     proposed.case.existingCaseId === undefined && !proposed.case.distinctFrom?.length;
   const blockedOrdinaryRecurrenceCases = admitted.filter((proposed) =>
-    proposed.case.disposition !== 'escalate' &&
+    proposed.case.disposition !== 'escalate' && proposed.case.disposition !== 'act' &&
     isUnboundRecurrenceCandidate(proposed) &&
     (blockedConsistency?.sourceIds.some((sourceId) => proposed.sources.some((source) => source.sourceId === sourceId)) ?? false));
+  const withheldActionRecurrenceCases = liveGraphCases.filter((proposed) =>
+    proposed.case.disposition === 'act' &&
+    isUnboundRecurrenceCandidate(proposed) &&
+    !authorizedActionRefs.has(proposed.case.caseRef));
   const recurrenceOnlyCases = [
     ...escalationCases.filter(isUnboundRecurrenceCandidate),
     ...blockedOrdinaryRecurrenceCases,
+    ...withheldActionRecurrenceCases,
   ];
   const recordedAt = new Date().toISOString();
   const generateId = input.generateId ?? randomUUID;

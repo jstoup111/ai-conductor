@@ -1126,6 +1126,58 @@ describe('coordinateBuildReviewAdjudication', () => {
     })]);
   });
 
+  it('halts a blocked unbound act row at a resolved action anchor before persisting or effecting it', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The prior repair was applied.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-r', kind: 'action', status: 'applied', workOrderId: 'order-r' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'withheld-act-case' }],
+      cases: [{
+        caseRef: 'withheld-act-case', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The proposed repair needs a focused assertion.',
+        effect: { kind: 'action', route: 'build', tasks: [{
+          title: 'Repair the finding again.', admittedTaskIds: ['6'],
+          admissionRationale: 'Task 6 owns recurrence handling at resolved anchors.',
+        }] },
+      }],
+      consistency: {
+        verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['withheld-act-case'],
+        rationale: 'The proposed action conflicts with the resolved repair.',
+      },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement),
+      readPlanContract: async () => ({
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{ id: '6', contract: 'Resolved-anchor recurrence handling.' }],
+      }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '6', status: 'in_progress' }] }),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-r' });
+    expect(events.filter((event) => event.type === 'remediation_semantic_repeat_halt')).toEqual([
+      expect.objectContaining({ caseId: 'case-r', reason: 'regressed' }),
+    ]);
+    expect(events.some((event) => event.type === 'remediation_effect_reserved' || event.type === 'remediation_effect_applied')).toBe(false);
+    const persisted = await store.read();
+    expect(persisted).toMatchObject({ ok: true });
+    if (!persisted.ok) throw new Error(`case store read failed: ${persisted.reason}`);
+    expect(persisted.state.cases.map((record) => record.id)).toEqual(['case-r']);
+    await expect(readFile(join(root, '.pipeline', 'build-review-work-order.json'), 'utf8')).rejects.toThrow();
+  });
+
   it('halts a blocked reject row that reuses a resolved action source before persisting its consistency stop', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
