@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-03T15:52:51.404Z
 Slug: daemon-records-that-a-build-is-not-advancing-head-
 Class: needs-human
 Halting step: unknown
