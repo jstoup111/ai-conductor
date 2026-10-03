@@ -38,6 +38,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Intake claims recover stranded work and wait safely for concurrent claims. ([implementation PR #2934](https://github.com/jstoup111/ai-conductor/pull/2934)).
 - Operators can opt Pi dispatches into project-local .pi files with llm_providers.pi.trust_project_files, which stays off by default. ([implementation PR #2896](https://github.com/jstoup111/ai-conductor/pull/2896)).
 - Operators review non-clean as-built architecture verdicts before an interactive run proceeds. ([implementation PR #2939](https://github.com/jstoup111/ai-conductor/pull/2939)).
+- Operators clear halted features through an audited command that records authorization before resuming dispatch. ([implementation PR #2951](https://github.com/jstoup111/ai-conductor/pull/2951)).
 
 ### Changed
 
