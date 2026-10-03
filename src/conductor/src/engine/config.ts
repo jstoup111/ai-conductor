@@ -2610,15 +2610,18 @@ function validateBuildProgressBlock(raw: unknown): ConfigError | null {
   }
 
   // A poll cadence beyond the active-stall window could miss the whole
-  // episode before the watcher has a chance to report or end it.
+  // episode before the watcher has a chance to report or end it. Validate
+  // against the resolved default too: validation preserves an omitted value,
+  // while the watcher resolves that omission to 45 minutes.
+  const activeStallMinutes =
+    typeof obj.active_stall_minutes === 'number' ? obj.active_stall_minutes : 45;
   if (
     typeof obj.poll_seconds === 'number' &&
-    typeof obj.active_stall_minutes === 'number' &&
-    obj.poll_seconds > obj.active_stall_minutes * 60
+    obj.poll_seconds > activeStallMinutes * 60
   ) {
     return {
       type: 'validation_error',
-      message: `build_progress.poll_seconds (${obj.poll_seconds}s) must not exceed build_progress.active_stall_minutes (${obj.active_stall_minutes}m = ${obj.active_stall_minutes * 60}s)`,
+      message: `build_progress.poll_seconds (${obj.poll_seconds}s) must not exceed build_progress.active_stall_minutes (${activeStallMinutes}m = ${activeStallMinutes * 60}s)`,
     };
   }
 
