@@ -611,3 +611,19 @@ Task 9 ───────┴─▶ Task 15 (also needs 5, 10) ─┬─▶ Ta
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-adr-d5-1: src/conductor/src/engine/otel/wire.ts:256-260 (wireDaemonOtel stop) and wire.ts:126-129 (stopInteractiveSpoolIfUnused) — wrap drainer.stop() and lease.release() so a rejection emits one renderer_error ('[otel] spool lease or drainer failed: <detail>', rendererName 'otel', same text as reportSpoolRuntimeFailure at wire.ts:348) and stop() resolves instead of rejecting; extract one shared helper used by both sites and reportSpoolRuntimeFailure so the warning text cannot drift; keep the existing release-on-stop behaviour asserted by Task 16/17 tests
+**Gate:** as-built
+**Rationale:** Verified (95%): the daemon metrics stop() at src/conductor/src/engine/otel/wire.ts:259 and the interactive stopInteractiveSpoolIfUnused at wire.ts:128 both await drainer.stop() and lease.release() unguarded. SpoolLease.release (spool-lease.ts:123) can rethrow non-ENOENT fs errors. Normal daemon shutdown at daemon-cli.ts:2830 awaits daemonOtel.stop() with no catch, so an unwritable spool fails shutdown, which violates ADR-014 D5 failure isolation. The SIGHUP path (daemon-cli.ts:526-534) already catches and is not changed. The architecture is unchanged; the fix sits inside Task 16's wire.ts scope and reuses the existing renderer_error path (reportSpoolRuntimeFailure, wire.ts:348). Sweep: wire.ts:354 already catches, and no other unguarded release sites were found. Existing Task 9/16/17 release assertions are kept.
+**Governing clause:** adr-014-otel-observability-exporter decision 5
+**Done when:**
+- adr-014-otel-observability-exporter decision 5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-d5-1 is complete.
+
+### Task rem-as-built-rem-adr-d5-2: src/conductor/test/engine/otel/spool-daemon-wiring.test.ts — add tests where the SpoolLease filesystem's unlink/rename rejects with EACCES: wireDaemonOtel().stop() resolves (does not throw), exactly one renderer_error with rendererName 'otel' naming the lease failure is emitted on rootEvents, and the same holds for the interactive wiring stop (wireInteractiveOtelMetrics/wireOtelVisualizer); keep all existing Task 16/17 assertions unchanged
+**Gate:** as-built
+**Rationale:** Verified (95%): the daemon metrics stop() at src/conductor/src/engine/otel/wire.ts:259 and the interactive stopInteractiveSpoolIfUnused at wire.ts:128 both await drainer.stop() and lease.release() unguarded. SpoolLease.release (spool-lease.ts:123) can rethrow non-ENOENT fs errors. Normal daemon shutdown at daemon-cli.ts:2830 awaits daemonOtel.stop() with no catch, so an unwritable spool fails shutdown, which violates ADR-014 D5 failure isolation. The SIGHUP path (daemon-cli.ts:526-534) already catches and is not changed. The architecture is unchanged; the fix sits inside Task 16's wire.ts scope and reuses the existing renderer_error path (reportSpoolRuntimeFailure, wire.ts:348). Sweep: wire.ts:354 already catches, and no other unguarded release sites were found. Existing Task 9/16/17 release assertions are kept.
+**Governing clause:** adr-014-otel-observability-exporter decision 5
+**Done when:**
+- adr-014-otel-observability-exporter decision 5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-d5-2 is complete.
