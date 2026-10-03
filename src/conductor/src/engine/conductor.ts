@@ -16373,6 +16373,7 @@ export function buildRemediationHint(
   source = 'prd-audit',
   evidenceFile = '.pipeline/prd-audit.md',
 ): string {
+  // ai-conductor:session-command-context=managed
   const lines = fixes.map((g) => {
     const tasks = g.tasks.length ? ` Tasks: ${g.tasks.map((t) => t.title).join('; ')}` : '';
     return `- ${g.id} [${g.disposition}]: ${g.rationale}.${tasks}`;
@@ -16398,6 +16399,7 @@ export function buildRemediationHint(
     'the as-built code is re-audited after this step:\n' +
     lines.join('\n')
   );
+  // /ai-conductor:session-command-context
 }
 
 /**
