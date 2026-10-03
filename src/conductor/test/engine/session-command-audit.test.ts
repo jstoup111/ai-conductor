@@ -71,4 +71,29 @@ describe('session command instruction discovery', () => {
       ]);
     }
   });
+
+  it('finds blocked commands assembled by retry and remediation prompt constants', () => {
+    const source = [
+      "const retryPrompt = 'Retry with ai-conductor ' + 'daemon park feature';",
+      "const remediationPrompt = `Remediate with ai-conductor ${'config'} set owner`;",
+    ].join('\n');
+
+    expect(auditSessionCommandSource({ file: 'engine/retry.ts', source, family: 'engine' })).toEqual([
+      expect.objectContaining({ line: 1, column: 33, subcommand: 'daemon', reason: expect.stringMatching(/blocked subcommand: daemon/i) }),
+      expect.objectContaining({ line: 2, column: 43, subcommand: 'config', reason: expect.stringMatching(/blocked subcommand: config/i) }),
+    ]);
+  });
+
+  it('fails closed when a managed command construction cannot be resolved', () => {
+    const source = [
+      "const retrySubcommand = process.env.RETRY_SUBCOMMAND;",
+      "const retryPrompt = 'Retry with ai-conductor ' + retrySubcommand;",
+      "const remediationPrompt = `Remediate with ai-conductor ${retrySubcommand}`;",
+    ].join('\n');
+
+    expect(auditSessionCommandSource({ file: 'engine/remediation.ts', source, family: 'engine' })).toEqual([
+      expect.objectContaining({ line: 2, column: 33, subcommand: 'unknown', reason: expect.stringMatching(/unresolved.command/i) }),
+      expect.objectContaining({ line: 3, column: 43, subcommand: 'unknown', reason: expect.stringMatching(/unresolved.command/i) }),
+    ]);
+  });
 });
