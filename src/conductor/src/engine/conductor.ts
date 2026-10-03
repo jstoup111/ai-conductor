@@ -6302,9 +6302,11 @@ export class Conductor {
     executionContext?: ExecutionContext,
     /** Charges an admitted BUILD repair immediately before provider invocation. */
     settlePendingRepair?: () => Promise<boolean>,
+    /** Cancels the provider invocation when this daemon attempt ends. */
+    abortSignal?: AbortSignal,
   ): Promise<StepRunResult> {
     if (!this.liveBoundaryCoordinator) {
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, undefined, executionContext, settlePendingRepair);
+      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, undefined, executionContext, settlePendingRepair, abortSignal);
     }
     await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'queued' });
     return this.liveBoundaryCoordinator.runDispatch(async (openWindow) => {
@@ -6314,7 +6316,7 @@ export class Conductor {
         return { success: false, operatorParkedBeforeDispatch: true };
       }
       await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'admitted' });
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow, executionContext, settlePendingRepair);
+      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow, executionContext, settlePendingRepair, abortSignal);
     });
   }
 
@@ -6333,6 +6335,8 @@ export class Conductor {
     executionContext?: ExecutionContext,
     /** Charges an admitted BUILD repair immediately before provider invocation. */
     settlePendingRepair?: () => Promise<boolean>,
+    /** Cancels the provider invocation when this daemon attempt ends. */
+    abortSignal?: AbortSignal,
   ): Promise<StepRunResult> {
     const identityOption = verdictRunId ? { runId: verdictRunId } : {};
     const executionContextOption = executionContext ? { executionContext } : {};
@@ -6431,6 +6435,7 @@ export class Conductor {
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
+          ...(abortSignal === undefined ? {} : { abortSignal }),
           ...this.buildReviewCapabilityOption(name),
         });
       }
@@ -6461,6 +6466,7 @@ export class Conductor {
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
+          ...(abortSignal === undefined ? {} : { abortSignal }),
           ...this.buildReviewCapabilityOption(name),
         });
       } finally {
@@ -6650,6 +6656,7 @@ export class Conductor {
         retryReason: retryHint,
         ...identityOption,
         ...executionContextOption,
+        ...(abortSignal === undefined ? {} : { abortSignal }),
         ...this.buildReviewCapabilityOption(name),
       });
     } finally {
@@ -10621,6 +10628,7 @@ export class Conductor {
                                 : undefined,
                               serialExecutionContext,
                               settleBuildPendingRepair,
+                              buildAttemptController?.signal,
                             )
                           : await (async (): Promise<StepRunResult> => {
                             // PRD widening preparation stays outside the
