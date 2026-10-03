@@ -21,6 +21,7 @@ import { materializePiHarnessExtension } from './pi-harness-extension.js';
 import { preparePiSelfHostAuth, type PiSelfHostAuthRunner } from './pi-self-host-auth.js';
 import { applyRateCard, loadRateCard, type RateCard, type RateCardLoader } from './rate-card.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
+import { composeManagedSessionEnvironment } from './managed-session-context.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -466,6 +467,12 @@ export class PiProvider implements LLMProvider {
     // must not create an unobservable subprocess after the signal fired.
     if (abortSignal?.aborted) return abortedInvocationResult();
 
+    // Apply the marker after the self-host overlay, then explicitly mask
+    // tmux's implicit target variables so execa cannot inherit the daemon
+    // pane from its parent environment.
+    const environment = scrubTmuxEnvironment(withDaemonSessionMarker({
+      ...(options.selfHost?.env ?? {}),
+    }));
     const subprocess = this.subprocessFactory(this.executable, args, {
       reject: false,
       input: options.prompt,
@@ -473,12 +480,9 @@ export class PiProvider implements LLMProvider {
       stdout: 'pipe',
       stderr: 'pipe',
       cwd: options.cwd,
-      // Apply the marker after the self-host overlay, then explicitly mask
-      // tmux's implicit target variables so execa cannot inherit the daemon
-      // pane from its parent environment.
-      env: scrubTmuxEnvironment(withDaemonSessionMarker({
-        ...(options.selfHost?.env ?? {}),
-      })),
+      env: options.managedSessionContext
+        ? composeManagedSessionEnvironment(options.managedSessionContext, environment)
+        : environment,
     });
     let aborted = false;
     const abort = () => {

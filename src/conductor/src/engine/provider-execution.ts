@@ -52,6 +52,7 @@ import {
   findBuiltInProviderDescriptor,
   supportsProviderCapability,
 } from '../execution/provider-catalog.js';
+import type { ManagedSessionContext } from '../execution/managed-session-context.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -332,6 +333,8 @@ export interface ProviderExecutionContext {
   warn?: ExecuteProviderCandidatesInput['warn'];
   /** Feature-owned persisted sink for provider subprocess diagnostics. */
   diagnosticLog?: (message: string) => void;
+  /** Immutable identity established by the daemon before provider dispatch. */
+  managedSessionContext?: ManagedSessionContext;
 }
 
 function hasRecoveryPrecedence(result: InvokeResult): boolean {
