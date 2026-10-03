@@ -53,7 +53,12 @@ export type ReconcileRemediationCasesResult =
        */
       readonly resolvedAbsentCaseIds: readonly string[];
     }
-  | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection }
+  | {
+      readonly ok: false;
+      readonly reason: RemediationCaseReconciliationRejection;
+      readonly caseIds?: readonly string[];
+      readonly sourceIds?: readonly string[];
+    }
   | {
       readonly ok: false;
       readonly reason: 'second-unresolved-owner';
@@ -83,7 +88,12 @@ type Reconciliation =
       readonly recurringCaseIdsByRef?: ReadonlyMap<string, readonly string[]>;
       readonly resolvedAbsentCaseIds: readonly string[];
     }
-  | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection }
+  | {
+      readonly ok: false;
+      readonly reason: RemediationCaseReconciliationRejection;
+      readonly caseIds?: readonly string[];
+      readonly sourceIds?: readonly string[];
+    }
   | {
       readonly ok: false;
       readonly reason: 'second-unresolved-owner';
@@ -248,11 +258,19 @@ function reconcileState(
     }
 
     const existingCaseId = caseRow.existingCaseId;
-    if (foreignIds.has(existingCaseId)) return { ok: false, reason: 'foreign-case-binding' };
+    if (foreignIds.has(existingCaseId)) return {
+      ok: false, reason: 'foreign-case-binding', caseIds: [existingCaseId], sourceIds: sources.map((source) => source.sourceId),
+    };
     const existing = existingById.get(existingCaseId);
-    if (!existing) return { ok: false, reason: 'unknown-case-binding' };
-    if (existing.domain !== 'build_review') return { ok: false, reason: 'foreign-case-binding' };
-    if (referencedExisting.has(existingCaseId)) return { ok: false, reason: 'duplicate-case-binding' };
+    if (!existing) return {
+      ok: false, reason: 'unknown-case-binding', caseIds: [existingCaseId], sourceIds: sources.map((source) => source.sourceId),
+    };
+    if (existing.domain !== 'build_review') return {
+      ok: false, reason: 'foreign-case-binding', caseIds: [existingCaseId], sourceIds: sources.map((source) => source.sourceId),
+    };
+    if (referencedExisting.has(existingCaseId)) return {
+      ok: false, reason: 'duplicate-case-binding', caseIds: [existingCaseId], sourceIds: sources.map((source) => source.sourceId),
+    };
     const admitsRefutation = caseRow.disposition === 'refute'
       && existing.disposition === 'act'
       && existing.resolution === 'open'
@@ -268,8 +286,12 @@ function reconcileState(
       && existing.disposition === 'act'
       && existing.effect.kind === 'action'
       && existing.effect.status === 'applied';
-    if (caseRow.disposition === 'refute' && existing.refutation) return { ok: false, reason: 'refutation-repeat' };
-    if (existing.disposition !== caseRow.disposition && !admitsRefutation && !admitsDeferral) return { ok: false, reason: 'illegal-disposition-transition' };
+    if (caseRow.disposition === 'refute' && existing.refutation) return {
+      ok: false, reason: 'refutation-repeat', caseIds: [existingCaseId], sourceIds: sources.map((source) => source.sourceId),
+    };
+    if (existing.disposition !== caseRow.disposition && !admitsRefutation && !admitsDeferral) return {
+      ok: false, reason: 'illegal-disposition-transition', caseIds: [existingCaseId], sourceIds: sources.map((source) => source.sourceId),
+    };
     referencedExisting.add(existingCaseId);
     claimed.add(existingCaseId);
     caseIdsByRef.set(caseRow.caseRef, existingCaseId);
@@ -289,7 +311,9 @@ function reconcileState(
             : link);
           continue;
         }
-        if (historical.outcome !== source.outcome) return { ok: false, reason: 'illegal-source-link' };
+        if (historical.outcome !== source.outcome) return {
+          ok: false, reason: 'illegal-source-link', caseIds: [existingCaseId], sourceIds: [source.sourceId],
+        };
         continue;
       }
       appendedSources.push({ sourceId: source.sourceId, outcome: source.outcome, recordedAt: input.recordedAt });

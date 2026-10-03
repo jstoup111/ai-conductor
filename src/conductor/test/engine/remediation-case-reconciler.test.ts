@@ -295,7 +295,7 @@ describe('remediation case reconciler', () => {
     });
 
     expect([result, await readFile(remediationCaseStorePath(projectRoot), 'utf8')]).toEqual([
-      { ok: false, reason: 'unknown-case-binding' }, before,
+      { ok: false, reason: 'unknown-case-binding', caseIds: ['missing-case'], sourceIds: ['testQuality:other-finding'] }, before,
     ]);
   });
 
@@ -430,7 +430,9 @@ describe('remediation case reconciler', () => {
         attemptedCaseIds: [],
       });
 
-      expect(result).toEqual({ ok: false, reason: 'illegal-disposition-transition' });
+      expect(result).toEqual({
+        ok: false, reason: 'illegal-disposition-transition', caseIds: ['case-1'], sourceIds: ['testQuality:finding-1'],
+      });
     });
   });
 
@@ -468,7 +470,7 @@ describe('remediation case reconciler', () => {
     });
 
     expect([result, await readFile(remediationCaseStorePath(projectRoot), 'utf8')]).toEqual([
-      { ok: false, reason: 'illegal-source-link' }, before,
+      { ok: false, reason: 'illegal-source-link', caseIds: ['case-1'], sourceIds: ['testQuality:finding-1'] }, before,
     ]);
   });
 
@@ -509,7 +511,7 @@ describe('remediation case reconciler', () => {
     });
 
     expect([result, await readFile(remediationCaseStorePath(projectRoot), 'utf8')]).toEqual([
-      { ok: false, reason }, before,
+      { ok: false, reason, caseIds: ['case-1'], sourceIds: ['testQuality:finding-2'] }, before,
     ]);
   });
 
@@ -694,7 +696,7 @@ describe('remediation case reconciler', () => {
     });
 
     expect([result, await readFile(remediationCaseStorePath(projectRoot)).catch(() => 'missing')]).toEqual([
-      { ok: false, reason }, before,
+      { ok: false, reason, caseIds: [existingCaseId], sourceIds: ['testQuality:finding-1'] }, before,
     ]);
   });
 
@@ -715,7 +717,7 @@ describe('remediation case reconciler', () => {
     });
 
     expect([result, await readFile(remediationCaseStorePath(projectRoot), 'utf8')]).toEqual([
-      { ok: false, reason: 'illegal-disposition-transition' }, before,
+      { ok: false, reason: 'illegal-disposition-transition', caseIds: ['case-1'], sourceIds: ['testQuality:finding-1'] }, before,
     ]);
   });
   it.each([

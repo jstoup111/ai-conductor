@@ -619,16 +619,6 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     proposed.sources.some((source) => liveSourceIds.has(source.sourceId)) &&
     (proposed.case.disposition !== 'act' || authorizedActionRefs.has(proposed.case.caseRef)),
   );
-  // Escalations have no effect id and use Task 31's dedicated durable owner
-  // stop writer. The general reconciler owns ordinary case/effect transitions;
-  // routing a stop through it would manufacture a deferral-shaped effect.
-  const ordinaryCases = admitted.filter((proposed) => proposed.case.disposition !== 'escalate');
-  const escalationCases = admitted.filter((proposed) => proposed.case.disposition === 'escalate');
-  // An unbound escalation has no effect, but it can still reuse a resolved
-  // action source. Send only that recurrence question through reconciliation;
-  // a non-recurring stop remains owned by the dedicated writer below.
-  const recurrenceOnlyEscalationCases = escalationCases.filter((proposed) =>
-    proposed.case.existingCaseId === undefined && !proposed.case.distinctFrom?.length);
   const blockedConsistency = judgement.mode === 'case-v2' && judgement.consistency.verdict === 'blocked'
     ? {
       sourceIds: judgement.consistency.sourceIds.filter((sourceId) => liveSourceIds.has(sourceId)),
@@ -638,6 +628,18 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   if (blockedConsistency && blockedConsistency.sourceIds.length === 0) {
     return fail('blocked consistency stop has no live sources');
   }
+  // Escalations have no effect id and use Task 31's dedicated durable owner
+  // stop writer. The general reconciler owns ordinary case/effect transitions;
+  // routing a stop through it would manufacture a deferral-shaped effect.
+  // A blocked consistency stop is itself the sole open owner for its sources.
+  const ordinaryCases = admitted.filter((proposed) => proposed.case.disposition !== 'escalate'
+    && !blockedConsistency?.sourceIds.some((sourceId) => proposed.sources.some((source) => source.sourceId === sourceId)));
+  const escalationCases = admitted.filter((proposed) => proposed.case.disposition === 'escalate');
+  // An unbound escalation has no effect, but it can still reuse a resolved
+  // action source. Send only that recurrence question through reconciliation;
+  // a non-recurring stop remains owned by the dedicated writer below.
+  const recurrenceOnlyEscalationCases = escalationCases.filter((proposed) =>
+    proposed.case.existingCaseId === undefined && !proposed.case.distinctFrom?.length);
   const recordedAt = new Date().toISOString();
   const generateId = input.generateId ?? randomUUID;
   const reconciled = await reconcileRemediationCases(store, {
@@ -664,7 +666,14 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         : undefined);
     if (reconciled.reason === 'refutation-repeat') {
       const repeatedCaseId = admitted.find((proposed) => proposed.case.disposition === 'refute')?.case.existingCaseId;
-      return failUnlessAccepted(`refutation repeat ${repeatedCaseId ?? 'unknown'}`, { settleAbsentAttempted: false });
+      return failUnlessAccepted(`refutation repeat ${repeatedCaseId ?? 'unknown'}`, {
+        settleAbsentAttempted: false,
+        failureEvidence: {
+          failureKind: 'reconciliation-rejected',
+          caseIds: reconciled.caseIds ?? (repeatedCaseId === undefined ? [] : [repeatedCaseId]),
+          sourceIds: reconciled.sourceIds ?? [...new Set(admitted.flatMap((proposed) => proposed.sources.map((source) => source.sourceId)))],
+        },
+      });
     }
     return failUnlessAccepted(`case reconciliation ${reconciled.reason}`, {
       settleAbsentAttempted: true,
