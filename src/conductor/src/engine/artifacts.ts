@@ -1037,7 +1037,14 @@ export async function sweepStaleReviewArtifacts(
 ): Promise<string[]> {
   if (!STALE_SWEEP_STEPS.has(step) || sessionStartedAt === undefined) return [];
   const removed: string[] = [];
-  for (const f of await findArtifactFiles(dir, step)) {
+  // The typed PRD verdict is the registered artifact, but a legacy report can
+  // outlive it. Include that derived path in the sweep without registering it
+  // as completion authority, so a stale legacy-only report cannot survive to
+  // influence the next dispatch.
+  const artifacts = step === 'prd_audit'
+    ? [join(dir, PRD_AUDIT_REPORT_PATH), ...await findArtifactFiles(dir, step)]
+    : await findArtifactFiles(dir, step);
+  for (const f of new Set(artifacts)) {
     if (await fileIsFreshSinceSession(f, sessionStartedAt)) continue; // fresh → keep
     if (await sweptArtifactStillValid(dir, step, config, expectedRunId)) continue; // still code-valid → spare
     // The as-built report is a derived view of the typed verdict. Never leave
@@ -1045,8 +1052,8 @@ export async function sweepStaleReviewArtifacts(
     const targets = step === 'architecture_review_as_built'
       ? [f, join(dir, AS_BUILT_REPORT_PATH)]
       : step === 'prd_audit'
-        ? [f, join(dir, PRD_AUDIT_VERDICT_PATH), join(dir, PRD_AUDIT_REPORT_PATH)]
-      : [f];
+        ? [join(dir, PRD_AUDIT_REPORT_PATH), join(dir, PRD_AUDIT_VERDICT_PATH)]
+        : [f];
     for (const target of targets) {
       try {
         await rm(target);

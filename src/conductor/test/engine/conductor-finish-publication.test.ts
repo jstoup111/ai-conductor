@@ -997,9 +997,9 @@ describe('Conductor FINISH publication routing', () => {
     expect(finishPublication.advance).toHaveBeenCalledTimes(2);
     expect(ensure).not.toHaveBeenCalled();
     expect(inspect).not.toHaveBeenCalled();
-    expect(after.ok && [after.value.manual_test, after.value.prd_audit, after.value.architecture_review_as_built]).toEqual(['in_progress', 'stale', 'done']);
+    expect(after.ok && [after.value.manual_test, after.value.prd_audit, after.value.architecture_review_as_built]).toEqual(['in_progress', 'done', 'done']);
     expect(verdicts.manual_test).toMatchObject({ satisfied: false });
-    expect(verdicts.prd_audit).toMatchObject({ satisfied: false });
+    expect(verdicts.prd_audit).toMatchObject({ satisfied: true });
     expect(verdicts.architecture_review_as_built).toMatchObject({ satisfied: true });
     expect(kickbacks).toEqual([{ from: 'finish', to: 'manual_test' }]);
   });
