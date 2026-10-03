@@ -1994,6 +1994,55 @@ steps:
       });
     });
 
+    it('requires changed_command with a {base} placeholder for changed mode', async () => {
+      const config = join(tmpDir, '.ai-conductor', 'config.yml');
+      await writeFile(config, 'test_suite:\n  command: npm test\n  verification:\n    mode: changed\n');
+      expect(await loadConfig(tmpDir)).toMatchObject({
+        ok: false,
+        error: { message: expect.stringMatching(/changed_command must be configured/) },
+      });
+
+      await writeFile(config, 'test_suite:\n  command: npm test\n  changed_command: npm test\n  verification:\n    mode: changed\n');
+      expect(await loadConfig(tmpDir)).toMatchObject({
+        ok: false,
+        error: { message: expect.stringMatching(/\{base\}/) },
+      });
+
+      await writeFile(config, 'test_suite:\n  command: npm test\n  changed_command: npm test -- --changed {base}\n  verification:\n    mode: changed\n');
+      expect(await loadConfig(tmpDir)).toMatchObject({
+        ok: true,
+        config: { test_suite: { verification: { mode: 'changed' } } },
+      });
+    });
+
+    it('validates test_suite.verification.full_suite for changed mode only', async () => {
+      const config = join(tmpDir, '.ai-conductor', 'config.yml');
+      const changed = (extra: string) =>
+        `test_suite:\n  command: npm test\n  changed_command: npm test -- --changed {base}\n  verification:\n    mode: changed\n${extra}`;
+      await writeFile(config, changed(''));
+      expect(await loadConfig(tmpDir)).toMatchObject({
+        ok: true,
+        config: { test_suite: { verification: { full_suite: 'before_publish' } } },
+      });
+      for (const value of ['before_publish', 'once', 'skip']) {
+        await writeFile(config, changed(`    full_suite: ${value}\n`));
+        expect(await loadConfig(tmpDir)).toMatchObject({
+          ok: true,
+          config: { test_suite: { verification: { mode: 'changed', full_suite: value } } },
+        });
+      }
+      await writeFile(config, changed('    full_suite: sometimes\n'));
+      expect(await loadConfig(tmpDir)).toMatchObject({
+        ok: false,
+        error: { message: expect.stringMatching(/full_suite "sometimes" must be/) },
+      });
+      await writeFile(config, 'test_suite:\n  command: npm test\n  verification:\n    mode: aggregate\n    full_suite: once\n');
+      expect(await loadConfig(tmpDir)).toMatchObject({
+        ok: false,
+        error: { message: expect.stringMatching(/full_suite is only valid when .*"changed"/) },
+      });
+    });
+
     it('rejects an unknown verification key by name', async () => {
       await writeFile(
         join(tmpDir, '.ai-conductor', 'config.yml'),

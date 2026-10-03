@@ -296,6 +296,8 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   // scoped_command.
   'test_suite.command': consumer(FULL_SUITE_EXECUTOR),
   'test_suite.scoped_command': consumer(STEP_RUNNERS),
+  // changed-mode laps substitute the merge-base into changed_command.
+  'test_suite.changed_command': consumer(FULL_SUITE_VERIFIER),
   'test_suite.working_directory': consumer(FULL_SUITE_EXECUTOR),
   'test_suite.timeout_seconds': consumer(FULL_SUITE_EXECUTOR),
   'test_suite.inputs': consumer(FULL_SUITE_FINGERPRINT),
@@ -308,6 +310,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'test_suite.commands[].working_directory': consumer(FULL_SUITE_EXECUTOR),
   'test_suite.commands[].timeout_seconds': consumer(FULL_SUITE_EXECUTOR),
   'test_suite.verification.mode': consumer(FULL_SUITE_VERIFIER),
+  'test_suite.verification.full_suite': consumer(FULL_SUITE_VERIFIER),
   'test_suite.verification.drift_budget': consumer(FULL_SUITE_VERIFIER),
 
   // ── build_progress ────────────────────────────────────────────────────────

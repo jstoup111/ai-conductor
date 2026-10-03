@@ -435,7 +435,11 @@ export interface HarnessSelfHostConfig {
   };
 }
 
-export type TestSuiteVerificationMode = 'aggregate' | 'scoped';
+/**
+ * `changed` runs `changed_command` (changed-only tests against the merge-base)
+ * on BUILD laps and requires an aggregate-basis PASS at the FINISH fence.
+ */
+export type TestSuiteVerificationMode = 'aggregate' | 'scoped' | 'changed';
 
 /** Closed vocabulary shared by full-suite fingerprints and drift budgets. */
 export type TestSuiteDriftCategory =
@@ -452,8 +456,18 @@ export type TestSuiteDriftCategory =
 export type TestSuiteDriftBudgetBound = 'none' | 'unlimited' | number;
 
 /** Fully resolved verification settings with a bound for every drift category. */
+/**
+ * When `changed` mode runs the aggregate suite before publication:
+ * `before_publish` requires a current aggregate PASS at FINISH/SHIP;
+ * `once` requires one aggregate PASS per feature, then changed-only laps suffice;
+ * `skip` never requires it (the changed-only PASS satisfies FINISH/SHIP).
+ */
+export type TestSuiteFullSuitePolicy = 'before_publish' | 'once' | 'skip';
+
 export interface TestSuiteVerificationConfig {
   mode: TestSuiteVerificationMode;
+  /** Only meaningful (and only accepted) with mode `changed`; defaults to `before_publish`. */
+  full_suite?: TestSuiteFullSuitePolicy;
   drift_budget: Record<TestSuiteDriftCategory, TestSuiteDriftBudgetBound>;
 }
 
@@ -469,6 +483,8 @@ export interface TestSuiteConfig {
   command?: string;
   commands?: TestSuiteCommandConfig[];
   scoped_command?: string;
+  /** Changed-only lap command; `{base}` is replaced with the merge-base SHA. */
+  changed_command?: string;
   working_directory?: string;
   timeout_seconds?: number;
   inputs?: string[];

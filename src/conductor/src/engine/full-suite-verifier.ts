@@ -61,7 +61,9 @@ export type FullSuiteStaleReason =
   | 'source_changed'
   | 'test_infrastructure_changed'
   | 'tests_changed'
-  | 'unbudgetable_drift';
+  | 'unbudgetable_drift'
+  /** Changed-only lap PASS presented where an aggregate PASS is required (FINISH fence). */
+  | 'aggregate_required';
 
 type FullSuiteBudgetBound = 'none' | number;
 
@@ -144,7 +146,66 @@ export type FullSuiteGitRunner = (args: string[]) => Promise<FullSuiteGitResult>
 
 export type FullSuiteScopedSelection =
   | { status: 'SELECTED'; selectors: string[] }
+  | { status: 'CHANGED'; base: string }
   | { status: 'EMPTY' };
+
+/** Options for a single inspection or verification. */
+export interface FullSuiteVerifyOptions {
+  /**
+   * Require aggregate-basis evidence. A `changed` mode lap PASS is STALE
+   * (`aggregate_required`) and execution runs the aggregate command. The
+   * FINISH validation fence sets this so the full suite runs once before SHIP.
+   */
+  requireAggregate?: boolean;
+}
+
+/**
+ * Paths whose change cannot be trusted to a changed-only run: anything that
+ * is not plain source or a test file (dependencies, config, environment,
+ * migrations, declared inputs, test infrastructure), any non-test file under a
+ * test directory (setup, helpers, fixtures), test-runner configuration of any
+ * name, and build/test scripts.
+ */
+export function changedOnlyRequiresAggregate(path: string): boolean {
+  const category = classifyFullSuiteFingerprintPath(path);
+  if (category !== 'source' && category !== 'tests') return true;
+  const normalized = path.toLowerCase();
+  const base = normalized.split('/').pop() ?? normalized;
+  if (/^(vitest|jest|playwright|cypress)(\.[^/]*)?\.config\.[^/]+$/.test(base)) return true;
+  if (/(^|\/)scripts\//.test(normalized)) return true;
+  if (
+    category === 'tests' &&
+    !/\.(test|spec)\.[^/]+$/.test(base)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Derive the merge-base for a changed-only lap run. Fails closed to EMPTY
+ * (aggregate execution) when the base or the changed set cannot be computed,
+ * when nothing changed, or when any changed path requires the full suite.
+ */
+export async function deriveFullSuiteChangedSelection(
+  git: FullSuiteGitRunner,
+): Promise<FullSuiteScopedSelection> {
+  try {
+    const branch = await originDefaultBranch(git);
+    if (!branch) return { status: 'EMPTY' };
+    const mergeBase = await git(['merge-base', `origin/${branch}`, 'HEAD']);
+    const base = mergeBase.exitCode === 0 ? mergeBase.stdout.trim() : '';
+    if (!/^[0-9a-f]{7,64}$/.test(base)) return { status: 'EMPTY' };
+    const paths = await changedPathsBetween(git, base, 'HEAD');
+    const status = await git(['status', '--porcelain']);
+    if (status.exitCode !== 0) return { status: 'EMPTY' };
+    const all = [...paths, ...porcelainPaths(status.stdout)];
+    if (all.length === 0 || all.some(changedOnlyRequiresAggregate)) return { status: 'EMPTY' };
+    return { status: 'CHANGED', base };
+  } catch {
+    return { status: 'EMPTY' };
+  }
+}
 
 /**
  * Derive scoped test selectors from the current feature's merge-base surface.
@@ -926,8 +987,8 @@ export class FullSuiteVerifier {
     }
   }
 
-  async inspect(): Promise<FullSuiteInspectionResult> {
-    const resolved = await this.resolveInspection();
+  async inspect(options: FullSuiteVerifyOptions = {}): Promise<FullSuiteInspectionResult> {
+    const resolved = await this.resolveInspection(options);
     this.resolvedInspections.set(resolved.inspection, resolved);
     return resolved.inspection;
   }
@@ -950,7 +1011,10 @@ export class FullSuiteVerifier {
     this.recordedPreservations.add(inspection);
   }
 
-  async ensure(inspection?: FullSuiteInspectionResult): Promise<FullSuiteVerifierResult> {
+  async ensure(
+    inspection?: FullSuiteInspectionResult,
+    options: FullSuiteVerifyOptions = {},
+  ): Promise<FullSuiteVerifierResult> {
     const acquired = await acquireFullSuiteLock(
       this.options.projectRoot,
       this.options.lock,
@@ -966,7 +1030,7 @@ export class FullSuiteVerifier {
       // their original fail-closed diagnostic and must not start an unrelated
       // inspection after acquisition has already failed.
       if (acquired.message.startsWith('Unable to acquire full-suite verification lock within ')) {
-        const resolved = await this.resolveInspection();
+        const resolved = await this.resolveInspection(options);
         if (
           'context' in resolved &&
           (resolved.inspection.status === 'CURRENT' ||
@@ -981,7 +1045,7 @@ export class FullSuiteVerifier {
         message: acquired.message,
       };
     }
-    const result = await this.ensureLocked(inspection);
+    const result = await this.ensureLocked(inspection, options);
     const released = await acquired.handle.release();
     if (!released.ok) {
       return {
@@ -994,16 +1058,30 @@ export class FullSuiteVerifier {
     return result;
   }
 
-  private async ensureLocked(inspection?: FullSuiteInspectionResult): Promise<FullSuiteVerifierResult> {
+  private async ensureLocked(
+    inspection: FullSuiteInspectionResult | undefined,
+    options: FullSuiteVerifyOptions,
+  ): Promise<FullSuiteVerifierResult> {
     const {
       projectRoot,
       environment = process.env,
       execute = executeFullSuite,
       readEvidence = readFullSuiteEvidence,
-      writeEvidence = writeFullSuiteEvidence,
+      writeEvidence: rawWriteEvidence = writeFullSuiteEvidence,
     } = this.options;
 
     try {
+      // `changed` mode: carry the feature's first aggregate-PASS marker across
+      // every evidence write so `full_suite: once` is durable.
+      const priorAggregatePassedAt = await this.priorAggregatePassedAt();
+      const writeEvidence: typeof writeFullSuiteEvidence = (root, evidence, secrets) =>
+        rawWriteEvidence(
+          root,
+          priorAggregatePassedAt === undefined || evidence.aggregatePassedAt !== undefined
+            ? evidence
+            : { ...evidence, aggregatePassedAt: priorAggregatePassedAt },
+          secrets,
+        );
       // An inspection supplied by an execution-owning caller is also its record of
       // pre-lock drift. Do not mutate or replace that object. A stale result, though,
       // cannot decide whether to execute after waiting for another verifier: that
@@ -1011,8 +1089,8 @@ export class FullSuiteVerifier {
       const resolved = inspection === undefined || (
         inspection.status !== 'CURRENT' && inspection.status !== 'PRESERVED_WITHIN_BUDGET'
       )
-        ? await this.resolveInspection()
-        : this.resolvedInspections.get(inspection) ?? await this.resolveInspection();
+        ? await this.resolveInspection(options)
+        : this.resolvedInspections.get(inspection) ?? await this.resolveInspection(options);
       if (!('context' in resolved)) {
         const failure = resolved.inspection;
         if (failure.reason === 'internal_error') return failure;
@@ -1071,7 +1149,13 @@ export class FullSuiteVerifier {
       const selection = resolved.context.selection;
       let execution: FullSuiteExecutionResult;
       try {
-        execution = verificationMode === 'scoped' && selection.status === 'SELECTED'
+        execution = verificationMode === 'changed' && selection.status === 'CHANGED'
+          ? await execute({
+            projectRoot,
+            testSuite: changedOnlyTestSuite(testSuite, selection.base),
+            environment,
+          })
+          : verificationMode === 'scoped' && selection.status === 'SELECTED'
           ? await executeScopedFullSuite({
             projectRoot,
             testSuite,
@@ -1164,11 +1248,16 @@ export class FullSuiteVerifier {
         selectors: verificationMode === 'scoped' && selection.status === 'SELECTED'
           ? selection.selectors
           : [],
-        executionBasis: verificationMode === 'scoped'
+        executionBasis: verificationMode === 'changed'
+          ? selection.status === 'CHANGED' ? 'changed' : 'aggregate'
+          : verificationMode === 'scoped'
           ? selection.status === 'SELECTED'
             ? 'scoped'
             : 'scoped-empty-selection-aggregate'
           : 'aggregate',
+        ...(verificationMode === 'changed' && selection.status !== 'CHANGED'
+          ? { aggregatePassedAt: priorAggregatePassedAt ?? execution.endedAt }
+          : {}),
       };
       try {
         await writeEvidence(projectRoot, evidence, secretValues);
@@ -1209,7 +1298,34 @@ export class FullSuiteVerifier {
     }
   }
 
-  private async resolveInspection(): Promise<ResolvedInspection> {
+  private async priorAggregatePassedAt(): Promise<string | undefined> {
+    const { readEvidence = readFullSuiteEvidence } = this.options;
+    try {
+      const prior = await readEvidence(this.options.projectRoot);
+      return prior.evidence?.aggregatePassedAt;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Apply `test_suite.verification.full_suite` to a caller's aggregate
+   * requirement: `skip` drops it; `once` drops it after the feature's first
+   * recorded aggregate PASS; `before_publish` keeps it.
+   */
+  private async effectiveRequireAggregate(
+    testSuite: TestSuiteConfig,
+    options: FullSuiteVerifyOptions,
+  ): Promise<boolean> {
+    if (options.requireAggregate !== true) return false;
+    if (testSuite.verification?.mode !== 'changed') return true;
+    const policy = testSuite.verification.full_suite ?? 'before_publish';
+    if (policy === 'skip') return false;
+    if (policy === 'once') return (await this.priorAggregatePassedAt()) === undefined;
+    return true;
+  }
+
+  private async resolveInspection(options: FullSuiteVerifyOptions = {}): Promise<ResolvedInspection> {
     const {
       projectRoot,
       environment = process.env,
@@ -1251,11 +1367,16 @@ export class FullSuiteVerifier {
       }
       const aggregateTestSuite: AggregateTestSuiteConfig = testSuite as AggregateTestSuiteConfig;
       const verificationMode = aggregateTestSuite.verification?.mode ?? 'aggregate';
-      const selection = verificationMode === 'scoped'
+      const requireAggregate = await this.effectiveRequireAggregate(aggregateTestSuite, options);
+      const selection: FullSuiteScopedSelection = verificationMode === 'scoped'
         ? await deriveFullSuiteScopedSelection(
           this.options.git ?? productionFullSuiteGitRunner(projectRoot),
         )
-        : { status: 'EMPTY' as const };
+        : verificationMode === 'changed' && !requireAggregate
+          ? await deriveFullSuiteChangedSelection(
+            this.options.git ?? productionFullSuiteGitRunner(projectRoot),
+          )
+          : { status: 'EMPTY' as const };
       const fingerprintResult = await fingerprint({
         projectRoot,
         testSuite: aggregateTestSuite,
@@ -1311,6 +1432,12 @@ export class FullSuiteVerifier {
       if (persisted.evidence.mode !== verificationMode) {
         return {
           inspection: { status: 'STALE', reason: 'fingerprint_mismatch' },
+          context,
+        };
+      }
+      if (requireAggregate && persisted.evidence.executionBasis === 'changed') {
+        return {
+          inspection: { status: 'STALE', reason: 'aggregate_required' },
           context,
         };
       }
@@ -1419,6 +1546,18 @@ function buildFailEvidence(
     reason: execution.reason,
     exitCode: execution.exitCode,
     signal: execution.signal,
+  };
+}
+
+/** The changed-only lap command, substituted for the aggregate sequence. */
+function changedOnlyTestSuite(
+  testSuite: AggregateTestSuiteConfig,
+  base: string,
+): AggregateTestSuiteConfig {
+  const { commands: _commands, ...rest } = testSuite;
+  return {
+    ...rest,
+    command: (testSuite.changed_command ?? '').replaceAll('{base}', base),
   };
 }
 

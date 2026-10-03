@@ -46,6 +46,17 @@ before Vitest loads, so use `npm test -- <selectors>` rather than invoking `vite
 runner launches the package-local Vitest binary when available, so direct `node scripts/run-vitest.mjs`
 invocations need no PATH changes.
 
+### Changed-only BUILD laps, one full run before SHIP
+
+This repository sets `test_suite.verification.mode: changed` in `.ai-conductor/config.yml`. Each BUILD
+lap's `test_suite` gate runs only the tests Vitest relates to files changed since the merge-base with
+`origin/main` (`--changed <merge-base>`), plus the integrity suite. The FINISH validation fence requires
+full-suite evidence, so the aggregate `npm test` runs once before the PR opens. Any change to
+dependencies, config, test setup/helpers, a Vitest config, or `scripts/` makes the lap run the full suite
+instead. The repository sets `test_suite.verification.full_suite: once`, so that full run happens once
+per feature: after the first full-suite PASS, later laps' changed-only passes satisfy publication and the
+full suite is not re-run. See [configuration](../reference/configuration.md#test_suite).
+
 ### The engine-dist guard
 
 Thirteen test files spawn the real `bin/ai-conductor`, which exits 1 when `src/conductor/dist` is

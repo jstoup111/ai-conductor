@@ -269,6 +269,26 @@ byte copy, still deterministic and refuse-to-clobber.
 
 > **Amended 2026-10-01 by #2709:** The previously excluded managed auto-mode initialization path is now governed by adr-2026-10-01-daemon-session-command-contracts D2 (operator-approved in composer chat). Managed prelude refresh requires initialized configuration; absent or unsafe setup returns an operator-bootstrap requirement before provider dispatch. Neither the provider nor the engine initializes configuration on that managed path. The unmarked operator bootstrap retains initialization, and D8.1–D8.3's refusal of marked config calls remains in force.
 
+> **Amended 2026-10-03 (operator-approved test-suite hotfix):** D2's `verification.mode` vocabulary
+> gains a third value, `changed`, with a sibling key `test_suite.changed_command` (must contain
+> `{base}`). In `changed` mode a BUILD-lap run executes `changed_command` against the merge-base with
+> `origin/<default>` and records `executionBasis: changed`. Publication requires aggregate-basis
+> evidence: the FINISH validation fence and the SHIP-phase completion re-check inspect with
+> `requireAggregate`, under which a changed-basis PASS is `STALE` with reason `aggregate_required`, and
+> the re-dispatched `test_suite` runs the aggregate command once. Selection fails closed to the aggregate
+> command when the base or change set is uncomputable, empty, or touches any path that is not plain
+> source or a test file. `aggregate` and `scoped` semantics are unchanged; absent config is unchanged.
+
+> **Amended 2026-10-03 (operator-approved test-suite hotfix, full-suite policy):** `changed` mode gains
+> `test_suite.verification.full_suite`, accepted only with `mode: changed` (any other mode is a
+> validation error) and closed to three values. `before_publish` (default) keeps the amendment above:
+> publication requires a current aggregate-basis PASS. `once` requires one aggregate-basis PASS per
+> feature: the first such PASS stamps `aggregatePassedAt` into the test-suite evidence, every later
+> evidence write (PASS or FAIL) carries it forward, and once present a changed-basis PASS satisfies the
+> FINISH fence and SHIP re-check so the aggregate is never re-dispatched. `skip` never requires the
+> aggregate: a changed-basis PASS satisfies publication. Changed-only laps still gate every BUILD lap,
+> and fail-closed aggregate selection is unchanged under all three values. No new event or file.
+
 ## Consequences
 
 ### Positive

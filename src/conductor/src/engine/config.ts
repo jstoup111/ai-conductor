@@ -148,9 +148,9 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'architecture_review_as_built.checks': ['tiers'],
   assess: ['stale_after_days', 'stale_after_commits'],
   tracker: ['backend', 'transport', 'credentials', 'site', 'project_key'],
-  test_suite: ['command', 'commands', 'scoped_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment', 'verification'],
+  test_suite: ['command', 'commands', 'scoped_command', 'changed_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment', 'verification'],
   'test_suite.commands[]': TEST_SUITE_COMMAND_ENTRY_KEYS,
-  'test_suite.verification': ['mode', 'drift_budget'],
+  'test_suite.verification': ['mode', 'full_suite', 'drift_budget'],
   build_progress: ['poll_seconds', 'quiet_minutes', 'heartbeat_minutes', 'enabled'],
   provider_stream: ['min_interval_ms'],
   build_progress_halt: ['enabled', 'attempt_ceiling', 'dispatch_ceiling'],
@@ -2232,6 +2232,21 @@ function validateTestSuiteBlock(
     }
   }
 
+  if (raw.changed_command !== undefined) {
+    if (typeof raw.changed_command !== 'string' || raw.changed_command.trim() === '') {
+      return {
+        type: 'validation_error',
+        message: 'test_suite.changed_command must be a non-empty string',
+      };
+    }
+    if (!raw.changed_command.includes('{base}')) {
+      return {
+        type: 'validation_error',
+        message: 'test_suite.changed_command must contain the "{base}" placeholder',
+      };
+    }
+  }
+
   if (raw.scoped_command !== undefined) {
     if (typeof raw.scoped_command !== 'string' || raw.scoped_command.trim() === '') {
       return {
@@ -2282,6 +2297,7 @@ function validateTestSuiteBlock(
   const verificationError = validateTestSuiteVerification(
     raw.verification,
     raw.scoped_command,
+    raw.changed_command,
   );
   if (verificationError) return verificationError;
 
@@ -2354,6 +2370,7 @@ const DEFAULT_TEST_SUITE_DRIFT_BUDGET: Record<
 function validateTestSuiteVerification(
   raw: unknown,
   scopedCommand: unknown,
+  changedCommand?: unknown,
 ): ConfigError | null {
   if (raw === undefined) return null;
   if (!isPlainObject(raw)) {
@@ -2370,11 +2387,38 @@ function validateTestSuiteVerification(
     }
   }
 
-  if (raw.mode !== undefined && raw.mode !== 'aggregate' && raw.mode !== 'scoped') {
+  if (
+    raw.mode !== undefined &&
+    raw.mode !== 'aggregate' &&
+    raw.mode !== 'scoped' &&
+    raw.mode !== 'changed'
+  ) {
     return {
       type: 'validation_error',
-      message: `test_suite.verification.mode ${JSON.stringify(raw.mode)} must be "aggregate" or "scoped"`,
+      message: `test_suite.verification.mode ${JSON.stringify(raw.mode)} must be "aggregate", "scoped", or "changed"`,
     };
+  }
+
+  if (raw.mode === 'changed' && changedCommand === undefined) {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.changed_command must be configured when test_suite.verification.mode is "changed"',
+    };
+  }
+
+  if (raw.full_suite !== undefined) {
+    if (raw.full_suite !== 'before_publish' && raw.full_suite !== 'once' && raw.full_suite !== 'skip') {
+      return {
+        type: 'validation_error',
+        message: `test_suite.verification.full_suite ${JSON.stringify(raw.full_suite)} must be "before_publish", "once", or "skip"`,
+      };
+    }
+    if (raw.mode !== 'changed') {
+      return {
+        type: 'validation_error',
+        message: 'test_suite.verification.full_suite is only valid when test_suite.verification.mode is "changed"',
+      };
+    }
   }
 
   if (raw.mode === 'scoped' && scopedCommand === undefined) {
@@ -2427,10 +2471,19 @@ function validateTestSuiteVerification(
 function resolveTestSuiteVerification(raw: unknown): TestSuiteVerificationConfig {
   const verification = isPlainObject(raw) ? raw : {};
   const rawBudget = isPlainObject(verification.drift_budget) ? verification.drift_budget : {};
-  const mode = verification.mode === 'scoped' ? 'scoped' : 'aggregate';
+  const mode = verification.mode === 'scoped' || verification.mode === 'changed'
+    ? verification.mode
+    : 'aggregate';
 
   return {
     mode,
+    ...(mode === 'changed'
+      ? {
+          full_suite: verification.full_suite === 'once' || verification.full_suite === 'skip'
+            ? verification.full_suite
+            : 'before_publish' as const,
+        }
+      : {}),
     drift_budget: Object.fromEntries(
       TEST_SUITE_DRIFT_CATEGORIES.map((category) => {
         const bound = rawBudget[category];

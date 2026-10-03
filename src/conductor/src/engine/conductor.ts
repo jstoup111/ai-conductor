@@ -2555,6 +2555,12 @@ export class Conductor {
   private retainedFullSuiteInspection:
     | Awaited<ReturnType<FullSuiteVerifier['inspect']>>
     | undefined;
+  /**
+   * Set when the FINISH validation fence rejects test_suite: the next
+   * test_suite dispatch must produce aggregate-basis evidence (the one full
+   * run before SHIP in `changed` verification mode).
+   */
+  private testSuiteRequiresAggregate = false;
   private featureDesc?: string;
   private worktreeBranch?: string;
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
@@ -3229,8 +3235,30 @@ export class Conductor {
       this.modelPolicyForStep('finish'),
       this.config,
     );
-    const ctx = await this.completionCtx(state);
+    // Publication requires aggregate-basis suite evidence: a `changed` mode
+    // lap PASS is STALE here, so the fence routes back to one full run.
+    const ctx = {
+      ...(await this.completionCtx(state)),
+      fullSuiteInspect: () => this.fullSuiteVerifier.inspect({ requireAggregate: true }),
+    };
     const nonGreen: Array<{ name: StepName; verdict: GateObjectiveVerdict; reason: string }> = [];
+
+    // `changed` verification mode: BUILD laps attest only changed-related
+    // tests, so publication re-checks test_suite for an aggregate-basis PASS.
+    // Other modes keep their existing fence membership unchanged.
+    if (
+      this.config.test_suite?.verification?.mode === 'changed' &&
+      getStepStatus(state, 'test_suite') !== 'skipped'
+    ) {
+      const verdict = await computeAndWriteVerdict(this.projectRoot, 'test_suite', ctx);
+      if (!verdict.satisfied) {
+        nonGreen.push({
+          name: 'test_suite',
+          verdict,
+          reason: verdict.reason ?? 'aggregate full-suite PASS required before publication',
+        });
+      }
+    }
 
     for (const member of membership.members) {
       if (member.outcome.kind === 'skipped') continue;
@@ -9723,6 +9751,7 @@ export class Conductor {
           const nonGreen = await this.nonGreenFinishValidators(state);
           if (nonGreen.length > 0) {
             for (const member of nonGreen) {
+              if (member.name === 'test_suite') this.testSuiteRequiresAggregate = true;
               finishFenceEvidenceTargets.add(member.name);
               await this.saveConductorStepStatus(state, member.name, 'stale');
               await emitTracked({
@@ -14245,8 +14274,9 @@ export class Conductor {
 
   private async runTestSuiteStep(): Promise<StepRunResult> {
     this.retainedFullSuiteInspection = undefined;
-    const inspection = await this.fullSuiteVerifier.inspect();
-    const verification = await this.fullSuiteVerifier.ensure(inspection);
+    const verifyOptions = { requireAggregate: this.testSuiteRequiresAggregate };
+    const inspection = await this.fullSuiteVerifier.inspect(verifyOptions);
+    const verification = await this.fullSuiteVerifier.ensure(inspection, verifyOptions);
     if (verification.status === 'FAILED') {
       if (verification.evidence?.entries !== undefined) {
         await this.events.emit({
@@ -14331,6 +14361,7 @@ export class Conductor {
           : 'fresh-evidence-required',
       });
     }
+    this.testSuiteRequiresAggregate = false;
     return {
       success: true,
       output: `Full test suite ${verification.status}`,

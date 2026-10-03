@@ -33,13 +33,14 @@ type FullSuiteNonSignalFailureReason = Exclude<FullSuiteFailureReason, 'signal'>
  */
 type FullSuiteEvidenceWriteVersion = typeof FULL_SUITE_EVIDENCE_VERSION | typeof FULL_SUITE_LIST_EVIDENCE_VERSION | 3;
 
-export type FullSuiteEvidenceMode = 'aggregate' | 'scoped';
+export type FullSuiteEvidenceMode = 'aggregate' | 'scoped' | 'changed';
 
 /** The closed execution route that produced a PASS. */
 export type FullSuiteExecutionBasis =
   | 'aggregate'
   | 'scoped'
-  | 'scoped-empty-selection-aggregate';
+  | 'scoped-empty-selection-aggregate'
+  | 'changed';
 
 export type FullSuiteDriftCategoryCounts = Record<
   FullSuiteFingerprintCategory,
@@ -65,6 +66,12 @@ export interface FullSuitePassEvidence {
   selectors?: string[];
   /** Defaults from the recorded mode; scoped-empty records its aggregate fallback explicitly. */
   executionBasis?: FullSuiteExecutionBasis;
+  /**
+   * `changed` mode: when this feature's first aggregate-basis PASS was
+   * recorded. Carried forward across later evidence writes so
+   * `full_suite: once` survives restarts and later changed-only laps.
+   */
+  aggregatePassedAt?: string;
   /** Starts empty for a new PASS epoch; later tasks append drift observations. */
   driftLedger?: FullSuiteDriftLedgerEntry[];
   worktreeClean?: boolean;
@@ -99,6 +106,8 @@ interface FullSuiteFailEvidenceBase {
   outcome: 'FAIL';
   fingerprint: string | null;
   provenanceHeadSha: string | null;
+  /** See FullSuitePassEvidence.aggregatePassedAt; carried across FAIL writes. */
+  aggregatePassedAt?: string;
   worktreeClean?: boolean;
   command: string | null;
   workingDirectory: string | null;
@@ -276,14 +285,15 @@ function isDriftLedgerEntry(value: unknown): value is FullSuiteDriftLedgerEntry 
 }
 
 function isPassMode(value: unknown): value is FullSuiteEvidenceMode {
-  return value === 'aggregate' || value === 'scoped';
+  return value === 'aggregate' || value === 'scoped' || value === 'changed';
 }
 
 function isOptionalExecutionBasis(value: unknown): value is FullSuiteExecutionBasis | undefined {
   return value === undefined ||
     value === 'aggregate' ||
     value === 'scoped' ||
-    value === 'scoped-empty-selection-aggregate';
+    value === 'scoped-empty-selection-aggregate' ||
+    value === 'changed';
 }
 
 function isSelectors(value: unknown): value is string[] {
@@ -386,6 +396,7 @@ function isPassEvidence(
     isPassMode(value.mode) &&
     isSelectors(value.selectors) &&
     isOptionalExecutionBasis(value.executionBasis) &&
+    (value.aggregatePassedAt === undefined || isNonEmptyString(value.aggregatePassedAt)) &&
     Array.isArray(value.driftLedger) && value.driftLedger.every(isDriftLedgerEntry) &&
     isOptionalBoolean(value.worktreeClean) &&
     isNullableBoundedNonEmptyString(value.command) &&
@@ -414,6 +425,7 @@ function isFailEvidence(
     FAILURE_REASONS.has(reason as FullSuiteFailureReason) &&
     isNullableNonEmptyString(value.fingerprint) &&
     isNullableNonEmptyString(value.provenanceHeadSha) &&
+    (value.aggregatePassedAt === undefined || isNonEmptyString(value.aggregatePassedAt)) &&
     isOptionalBoolean(value.worktreeClean) &&
     isNullableBoundedNonEmptyString(value.command) &&
     isNullableBoundedNonEmptyString(value.workingDirectory) &&

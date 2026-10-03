@@ -637,11 +637,13 @@ The project-owned aggregate verification command run by the pre-SHIP `test_suite
 | `test_suite.commands[].working_directory` | string | No | Relative project-root-contained directory. Overrides `test_suite.working_directory` for that entry. | shared setting, then project root |
 | `test_suite.commands[].timeout_seconds` | number | No | Finite and `> 0`. Overrides `test_suite.timeout_seconds` for that entry. | shared setting, then 1800 s |
 | `test_suite.scoped_command` | string | No | Non-empty after trim and must contain `{selectors}`. `ai-conductor scoped-run <selectors...>` replaces that placeholder with the selected tests; it never falls back to `command`. (`config.ts:1223-1236`) | none; scoped runs are unavailable |
+| `test_suite.changed_command` | string | No | Non-empty after trim and must contain `{base}`, which is replaced with the merge-base SHA against `origin/<default>`. Used only by `verification.mode: changed`. | none |
 | `test_suite.working_directory` | string | No | Must be relative and resolve inside the project root. Absolute paths, `..` escapes, and symlinks whose realpath escapes the root are hard errors. Applies to scalar aggregate and scoped commands, and is the shared fallback for list entries; `ai-conductor scoped-run` rebases project-root-relative selectors onto it. | project root |
 | `test_suite.timeout_seconds` | number | No | Finite and `> 0`. Shared fallback for list entries. | 1800 s (`DEFAULT_FULL_SUITE_TIMEOUT_MS`, `src/conductor/src/engine/full-suite-executor.ts`) |
 | `test_suite.inputs` | string[] | No | Array of strings (`config.ts:1276-1287`) | none |
 | `test_suite.environment` | string[] | No | Array of strings | none |
-| `test_suite.verification.mode` | `aggregate` \| `scoped` | No | `scoped` requires `test_suite.scoped_command`; unknown modes are rejected | `aggregate` |
+| `test_suite.verification.mode` | `aggregate` \| `scoped` \| `changed` | No | `scoped` requires `test_suite.scoped_command`; `changed` requires `test_suite.changed_command`; unknown modes are rejected | `aggregate` |
+| `test_suite.verification.full_suite` | `before_publish` \| `once` \| `skip` | No | Only valid with `verification.mode: changed` (rejected with any other mode); unknown values are rejected | `before_publish` (in `changed` mode) |
 | `test_suite.verification.drift_budget` | category → `none` \| positive integer \| `unlimited` | No | Only budgetable fingerprint categories are accepted; dependency, migration, environment, and project-config drift always re-runs | all categories `none` |
 
 `environment` holds environment variable **names**, not values. Each value is HMAC'd into the full-suite
@@ -662,6 +664,27 @@ the evidence stale. An empty scoped selection deliberately runs the aggregate co
 that basis in evidence and the existing verification event. `drift_budget` is cumulative from the
 attested PASS: a declared within-budget change preserves that PASS; every other mismatch re-runs the
 aggregate or scoped command as configured.
+
+`verification.mode: changed` runs `changed_command` on each BUILD-lap `test_suite` dispatch and records
+`executionBasis: changed`. That PASS satisfies the BUILD gate but not publication: the FINISH validation
+fence (and the SHIP-phase completion re-check) require an aggregate-basis PASS, so a changed-basis PASS
+reads `STALE` (`aggregate_required`) there and the fence routes back to `test_suite`, which runs the
+aggregate `command`/`commands` exactly once. A lap fails closed to the aggregate command when the
+merge-base or changed set cannot be computed, when nothing changed, or when any changed path is not a
+plain source or test file (dependencies, project config, environment, migrations, declared inputs, test
+setup/helpers/fixtures, any `*.config.*` for a test runner, or anything under `scripts/`).
+
+`verification.full_suite` controls that publication requirement in `changed` mode:
+
+- `before_publish` (default): as above — publication needs a current aggregate-basis PASS, re-run
+  whenever later changes make it stale.
+- `once`: the aggregate must pass once per feature. The first aggregate-basis PASS is stamped into the
+  test-suite evidence (`aggregatePassedAt`) and carried across every later evidence write, so restarts
+  and re-kicks honour it; after that a changed-basis PASS satisfies FINISH/SHIP and the aggregate is not
+  re-dispatched, even when later laps change code.
+- `skip`: the aggregate never runs for publication; the changed-basis PASS satisfies FINISH/SHIP.
+
+In every case each BUILD lap still runs the changed-only command (or fails closed to the aggregate).
 
 ## llm_provider
 
