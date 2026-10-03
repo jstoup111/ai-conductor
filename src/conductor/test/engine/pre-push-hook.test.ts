@@ -64,5 +64,6 @@ describe('pre-push hook', () => {
     await commit(f, f.worktree, 'fast-forward.txt'); expect((await f.git(f.worktree, 'push', 'origin', 'HEAD:main')).exitCode).toBe(0);
     expect((await f.git(f.worktree, 'push', 'origin', 'HEAD:new-branch')).exitCode).toBe(0);
     expect((await f.git(f.worktree, 'push', 'origin', '--delete', 'new-branch')).exitCode).toBe(0);
+    expect((await f.git(f.bare, 'rev-parse', '-q', '--verify', 'new-branch')).exitCode).not.toBe(0);
   });
 });
