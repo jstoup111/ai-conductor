@@ -164,3 +164,14 @@ built to stop. The problem is not that the list is too narrow; it is that the gu
    never approval to act on it. Retaining conductor authority under D1 widens what the session may
    be *asked* to do; it does not relax what it may do *unasked*, and the monitor adds no standing
    consent of its own.
+
+> **Amended 2026-10-03 (operator-approved as-built resolution, AR-005):** D3's "every unmarked
+> session" outran this feature's approved scope. Routing the composer through the seam was built
+> and refused by the operator as over-scope (NC.1, reverted in 930498285). One decision is added:
+>
+> 8. **D3's sole-seam rule covers monitor-launched guided sessions; the composer is exempt.** The
+>    `compose` command's own interactive sessions (`engineer-cli.ts`) keep their direct spawn, with
+>    their interactive Codex argv and `CONDUCT_ENGINEER_PERMISSION_MODE` unchanged. They are
+>    operator-launched foreground sessions under D1 and are not marked, but they are not required to
+>    pass through the seam. Folding them into the seam is separate future work, not an obligation
+>    of this ADR.
