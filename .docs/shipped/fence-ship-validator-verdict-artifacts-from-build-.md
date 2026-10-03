@@ -4,6 +4,12 @@ spec_hash: dfc88f4dc121a1d7b72fc9ee9db9987441659505110cedffaa421dc512a88ba3
 pr: https://github.com/jstoup111/ai-conductor/pull/2908
 shipped: 2026-10-03
 engine_version: 20261002T011715Z-89506a82fed2
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "skills/pipeline/SKILL.md:262-263, skills/tdd/SKILL.md:40-41, test/test_skill_pipeline_contract.sh:128 — a sixth path, `.pipeline/prd-audit.json`, is fenced beyond the plan's five-artifact list"
+    accepted: true
 ---
 
 ## Cost
