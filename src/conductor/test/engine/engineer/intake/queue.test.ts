@@ -1,5 +1,5 @@
 // Covers: task:2
-// Unit: FileIntakeQueue.listClaimed() plus existing IntakeQueue.list()/remove() behavior.
+// Unit: IntakeQueue.listClaimed() plus existing IntakeQueue.list()/remove() behavior.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -78,7 +78,7 @@ describe('IntakeQueue.list/remove', () => {
   });
 });
 
-describe('FileIntakeQueue.listClaimed', () => {
+describe('IntakeQueue.listClaimed', () => {
   it('returns sorted claimed envelopes and excludes pending envelopes', async () => {
     const q = createFileQueue(join(dir, 'inbox'));
     const older = env('o/a#1', '2026-06-27T00:00:01.000Z');

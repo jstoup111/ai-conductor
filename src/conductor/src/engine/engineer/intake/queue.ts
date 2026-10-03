@@ -27,14 +27,10 @@ export interface IntakeQueue {
   release(e: Envelope): Promise<void>;
   /** List all pending (un-claimed) Envelopes currently in the inbox. */
   list(): Promise<Envelope[]>;
-  /** Remove a pending Envelope from the inbox. Benign no-op if already absent. */
-  remove(e: Envelope): Promise<void>;
-}
-
-/** File-backed queue capabilities that are not part of the IntakeQueue port. */
-export interface FileIntakeQueue extends IntakeQueue {
   /** List all claimed (in-flight) Envelopes currently in the inbox. */
   listClaimed(): Promise<Envelope[]>;
+  /** Remove a pending Envelope from the inbox. Benign no-op if already absent. */
+  remove(e: Envelope): Promise<void>;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -82,7 +78,7 @@ function toClaimed(filename: string): string {
  * Filenames sort lexicographically oldest-first because ISO-8601 strings
  * sort correctly after `:` → `_` substitution.
  */
-export function createFileQueue(dir: string): FileIntakeQueue {
+export function createFileQueue(dir: string): IntakeQueue {
   return {
     // ── enqueue ─────────────────────────────────────────────────────────────
 

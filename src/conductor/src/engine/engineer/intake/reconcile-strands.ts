@@ -1,8 +1,8 @@
 import type { Ledger } from './ledger.js';
-import type { FileIntakeQueue } from './queue.js';
+import type { IntakeQueue } from './queue.js';
 
 export interface ReconcileStrandedClaimsDependencies {
-  queue: FileIntakeQueue;
+  queue: IntakeQueue;
   ledger: Ledger;
 }
 

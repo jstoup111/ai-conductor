@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CorruptLedgerError, createLedger } from '../../../../src/engine/engineer/intake/ledger.js';
-import { createFileQueue } from '../../../../src/engine/engineer/intake/queue.js';
+import { createFileQueue, type IntakeQueue } from '../../../../src/engine/engineer/intake/queue.js';
 import { reconcileStrandedClaims } from '../../../../src/engine/engineer/intake/reconcile-strands.js';
 import type { Envelope } from '../../../../src/engine/engineer/intake/port.js';
 
@@ -20,6 +20,44 @@ afterEach(async () => {
 });
 
 describe('reconcileStrandedClaims', () => {
+  it('releases a pending-ledger claim through an in-memory IntakeQueue', async () => {
+    const envelope: Envelope = {
+      id: 'in-memory#1',
+      source: 'github-issues',
+      sourceRef: 'o/a#1',
+      text: 'claimed claim',
+      status: 'pending',
+      receivedAt: '2026-10-02T00:00:01.000Z',
+    };
+    const claimed = [envelope];
+    const pending: Envelope[] = [];
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const queue: IntakeQueue = {
+      enqueue: async (entry) => { pending.push(entry); },
+      claim: async () => pending.shift() ?? null,
+      ack: async () => undefined,
+      release: async (entry) => {
+        claimed.splice(claimed.indexOf(entry), 1);
+        pending.push(entry);
+      },
+      list: async () => pending,
+      listClaimed: async () => claimed,
+      remove: async (entry) => {
+        const index = pending.indexOf(entry);
+        if (index !== -1) pending.splice(index, 1);
+      },
+    };
+    await ledger.record({ source: envelope.source, sourceRef: envelope.sourceRef });
+
+    const result = await reconcileStrandedClaims({ queue, ledger });
+
+    expect({ result, claimed, pending }).toEqual({
+      result: { released: ['o/a#1'] },
+      claimed: [],
+      pending: [envelope],
+    });
+  });
+
   it('releases only pending claimed envelopes and returns their sourceRefs', async () => {
     const queue = createFileQueue(join(dir, 'inbox'));
     const ledger = createLedger(join(dir, 'ledger.json'));
