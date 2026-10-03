@@ -70,6 +70,15 @@ multi-worker claim). 9.3b must not build that now, but must not foreclose it eit
    >    This is not the #243 session claim lease (`adr-2026-07-22-heartbeat-lease-deferred`): it is held
    >    only for one `compose claim` command, and the accepted duplicate-processing window is unchanged.
 
+   > **Amended 2026-10-03 by #2733 (operator-approved as-built resolution):** decision 6's
+   > reconciliation must list claimed envelopes, and decision 3 requires any future backend to be a
+   > drop-in with zero claim-loop changes. Listing claimed envelopes is therefore part of the port:
+   >
+   > 7. **`IntakeQueue` declares `listClaimed()`.** The port is `enqueue/claim/ack/release/listClaimed`;
+   >    `listClaimed()` returns the envelopes currently held by a claim. Decision 6 reconciliation
+   >    and the claim loop depend only on `IntakeQueue`, never on a file-backend type, so a future
+   >    backend implements `listClaimed()` and inherits strand recovery with no loop changes.
+
 ## Rationale
 - Processing is human-gated, so for **re-queryable pull sources** capture latency is irrelevant —
   a background poller buys no throughput at solo scale and adds a supervised process + concurrency
