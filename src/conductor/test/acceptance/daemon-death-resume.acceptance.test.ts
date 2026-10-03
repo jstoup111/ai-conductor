@@ -1,5 +1,5 @@
 /**
- * Covers: S7.1, S7.2, S7.3, S7.4, S7.5, task:13
+ * Covers: S1.1, S2.1, S3.1, S3.2, S3.4, task:1, task:3, task:5
  *
  * A real local Git repository supplies the Task-trailer boundary. The spec
  * drives the production daemon-state, task-seed, resume-selection, backlog,
@@ -18,7 +18,10 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { findResumeIndex } from '../../src/engine/conductor.js';
+import {
+  findResumeIndex,
+  seedBuildTaskTelemetry,
+} from '../../src/engine/conductor.js';
 import {
   discoverBacklog,
   type BacklogTreeSource,
@@ -35,6 +38,7 @@ interface TaskRow {
   name: string;
   status: 'pending' | 'in_progress' | 'completed';
   commit?: string;
+  restored_from?: string;
 }
 
 interface TaskStatusFixture {
@@ -122,7 +126,7 @@ async function readTaskStatus(root: string): Promise<TaskStatusFixture> {
   return JSON.parse(await readFile(join(root, '.pipeline/task-status.json'), 'utf8')) as TaskStatusFixture;
 }
 
-describe('Story 7 — a feature interrupted by daemon death resumes committed progress', () => {
+describe('task-status recovery after abrupt daemon death', () => {
   let root: string;
 
   beforeEach(async () => {
@@ -188,11 +192,13 @@ describe('Story 7 — a feature interrupted by daemon death resumes committed pr
       memory: 'done',
     }));
     await persistDaemonBaseState(join(pipeline, 'conduct-state.json'), state, resumedState);
-    await seedTaskStatus(root, PLAN_REL);
+    await seedBuildTaskTelemetry(root, FEATURE);
 
     const seeded = await readTaskStatus(root);
     expect(seeded.tasks.slice(0, 18).map((row) => JSON.stringify(row))).toEqual(completedBefore);
-    expect(seeded.tasks.find((row) => row.status !== 'completed')?.id).toBe('19');
+    expect(seeded.tasks.find((row) => row.id === '19')).toMatchObject({
+      status: 'pending',
+    });
     expect(await readFile(join(pipeline, 'events.jsonl'), 'utf8')).toBe(eventsBefore);
     expect(await readFile(join(pipeline, 'conduct-state.json'), 'utf8')).toBe(stateBefore);
 
@@ -202,12 +208,22 @@ describe('Story 7 — a feature interrupted by daemon death resumes committed pr
   });
 
   it('restores a missing completed row from its Task trailer', async () => {
-    // The #1102 reconstruction shape: the branch forked from origin/main, the
-    // worktree's gitignored task-status.json was lost, and the re-seed
-    // restores trailer-proven rows from the merge-base..HEAD range.
     await git(root, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
     const commits = await commitTasks(root, 18);
-    await rm(join(root, '.pipeline/task-status.json'), { force: true });
+    const existingRows = [
+      ...Array.from({ length: 17 }, (_, index): TaskRow => ({
+        id: String(index + 1),
+        name: `Work ${index + 1}`,
+        status: 'completed',
+        commit: commits.get(String(index + 1)),
+      })),
+      ...Array.from({ length: 7 }, (_, index): TaskRow => ({
+        id: String(index + 19),
+        name: `Work ${index + 19}`,
+        status: 'pending',
+      })),
+    ];
+    await writeTaskStatus(root, existingRows);
 
     await seedTaskStatus(root, PLAN_REL);
 
@@ -215,11 +231,13 @@ describe('Story 7 — a feature interrupted by daemon death resumes committed pr
     expect(seeded.tasks.find((row) => row.id === '18')).toMatchObject({
       status: 'completed',
       commit: commits.get('18'),
+      restored_from: 'task-trailer',
     });
+    expect(seeded.tasks.filter((row) => row.id !== '18')).toEqual(existingRows);
     expect(seeded.tasks.find((row) => row.status !== 'completed')?.id).toBe('19');
   });
 
-  it('keeps an uncommitted in-flight task in_progress and re-dispatches it rather than treating it as complete', async () => {
+  it('resets an uncommitted in-flight task to pending at the pre-BUILD dispatch seed', async () => {
     await writeTaskStatus(
       root,
       Array.from({ length: 25 }, (_, index): TaskRow => ({
@@ -229,11 +247,11 @@ describe('Story 7 — a feature interrupted by daemon death resumes committed pr
       })),
     );
 
-    await seedTaskStatus(root, PLAN_REL);
+    await seedBuildTaskTelemetry(root, FEATURE);
 
     const seeded = await readTaskStatus(root);
     const row19 = seeded.tasks.find((row) => row.id === '19');
-    expect(row19).toMatchObject({ status: 'in_progress' });
+    expect(row19).toMatchObject({ status: 'pending' });
     expect(row19?.commit).toBeUndefined();
     expect(seeded.tasks.some((row) => row.status === 'completed')).toBe(false);
   });
@@ -271,5 +289,49 @@ describe('Story 7 — a feature interrupted by daemon death resumes committed pr
     expect(dispatched).toHaveBeenCalledWith(expect.objectContaining({ slug: FEATURE }));
     expect(result.processed).toEqual([expect.objectContaining({ slug: FEATURE, status: 'done' })]);
     await expect(readFile(haltPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('dispatches after a corrupt task-status file and restores every trailer-proven row', async () => {
+    await git(root, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    const commits = await commitTasks(root, 18);
+    await mkdir(join(root, '.docs/stories'), { recursive: true });
+    await mkdir(join(root, '.docs/complexity'), { recursive: true });
+    await mkdir(join(root, '.docs/coherence'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, `.docs/stories/${FEATURE}.md`), '**Status:** Accepted\n# Stories\n');
+    await writeFile(join(root, `.docs/complexity/${FEATURE}.md`), '# Complexity\n\nTier: M\n');
+    await writeFile(
+      join(root, `.docs/coherence/${FEATURE}.md`),
+      '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n' +
+        '|---|---|---|---|---|\n' +
+        '| story | S3 | Task 5 | covered | corrupt-ledger recovery |\n',
+    );
+    await writeFile(join(root, '.pipeline/task-status.json'), '{abrupt-death');
+    const dispatched = vi.fn(async () => ({ slug: FEATURE, status: 'done' as const }));
+
+    const result = await runDaemon(
+      {
+        discoverBacklog: async () => (
+          await discoverBacklog(root, async () => false, undefined, {
+            treeSource: workingTreeSource(root),
+          })
+        ).items,
+        runFeature: dispatched,
+        isHalted: async () => false,
+      },
+      { concurrency: 1, once: true },
+    );
+
+    expect(dispatched).toHaveBeenCalledOnce();
+    expect(result.processed).toEqual([expect.objectContaining({ slug: FEATURE, status: 'done' })]);
+
+    await seedBuildTaskTelemetry(root, FEATURE);
+    const seeded = await readTaskStatus(root);
+    for (let task = 1; task <= 18; task += 1) {
+      expect(seeded.tasks.find((row) => row.id === String(task))).toMatchObject({
+        status: 'completed',
+        commit: commits.get(String(task)),
+      });
+    }
   });
 });
