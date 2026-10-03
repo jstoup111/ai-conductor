@@ -389,6 +389,22 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     expect(haltedLedger.gates[exhaustedGate]?.capEvidence?.haltGeneration).toEqual(expect.any(String));
   });
 
+  it('records a raised lap cap as the cap evidence limit so the next raise matches', async () => {
+    await runBuild({
+      receiptId: 'raised-lap-exhausted', taskIds: ['rem-1'],
+      charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+    }, {
+      version: 1,
+      gates: { architecture_review_as_built: { ...entry(3), effectiveLapCap: 3 } },
+      growth: { authored: 4, added: 0, byGate: {} },
+    });
+
+    const ledger = await readKickbackLedger(dir);
+    expect(ledger.gates.architecture_review_as_built?.capEvidence).toMatchObject({
+      allowance: 'laps', consumed: 3, limit: 3,
+    });
+  });
+
   it('fails closed before BUILD for a malformed pending repair', async () => {
     const { build } = await runBuild({ receiptId: '', taskIds: [], charges: {} }, {
       version: 1, gates: { prd_audit: entry(), architecture_review_as_built: entry() }, growth: { authored: 4, added: 0, byGate: {} },
