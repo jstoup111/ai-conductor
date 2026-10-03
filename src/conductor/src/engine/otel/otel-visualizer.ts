@@ -36,6 +36,7 @@ import type { ConductorEvent } from '../../types/events.js';
 import { otelTracedEventTypes } from '../event-sinks.js';
 import type { VisualizerPlugin, VisualizerStartContext } from '../../types/plugin.js';
 import type { ResolvedOtelConfig } from './otel-config.js';
+import type { ResolvedOtelProvenance } from './otel-config.js';
 import { buildResource } from './resource.js';
 import { buildExporters } from './transport.js';
 import { SpanManager } from './span-manager.js';
@@ -119,6 +120,8 @@ export class OtelVisualizer implements VisualizerPlugin {
   private readonly projectNameOverride?: string;
   /** Validated operator-supplied attributes carried by this run's Resource. */
   private readonly attributes: Record<string, string>;
+  /** Resolved provenance gates for trace Resource attributes. */
+  private readonly provenance: ResolvedOtelProvenance;
   private tracerProvider: BasicTracerProvider | null = null;
   private spanManager: SpanManager | null = null;
   /** Selects authoritative invoked attempts before they reach open span state. */
@@ -193,6 +196,9 @@ export class OtelVisualizer implements VisualizerPlugin {
       project: ctx.project,
     };
     this.attributes = config.enabled ? config.attributes ?? {} : {};
+    this.provenance = config.enabled
+      ? config.provenance
+      : { commit: true, pr: true, issue: true, feature: true };
     if (config.enabled && config.projectName) this.projectNameOverride = config.projectName;
     if (config.enabled && config.attributeWarnings?.length) {
       ctx.onWarning?.(`[otel] ${config.attributeWarnings.join(' ')}`);
@@ -383,6 +389,8 @@ export class OtelVisualizer implements VisualizerPlugin {
       runId: context.runId,
       feature: context.feature,
       project: context.project,
+      sourceRef: context.sourceRef,
+      provenance: this.provenance,
       projectName: this.projectNameOverride ?? (context.project ? basename(context.project) : undefined),
       ...(Object.prototype.hasOwnProperty.call(context, 'branch') ? { branch: context.branch } : {}),
       ...(Object.prototype.hasOwnProperty.call(context, 'engineVersion')

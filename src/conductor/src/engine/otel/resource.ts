@@ -3,6 +3,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import { resourceFromAttributes, type Resource } from '@opentelemetry/resources';
+import type { ResolvedOtelProvenance } from './otel-config.js';
 
 const SERVICE_NAME = 'ai-conductor';
 
@@ -24,6 +25,10 @@ export interface ResourceContext {
   engineVersion?: string;
   /** Released harness version: a non-empty string resolves; own empty/undefined is unresolved; omission is not supplied. */
   harnessVersion?: string;
+  /** Originating intake issue reference, carried on trace Resources when enabled. */
+  sourceRef?: string;
+  /** Resolved OTel provenance controls relevant to Resource identity. */
+  provenance?: Pick<ResolvedOtelProvenance, 'issue' | 'feature'>;
   /**
    * Override the run id. When supplied, the session-id file and generated id
    * are both bypassed. Used by tests that need deterministic run ids.
@@ -59,15 +64,6 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
   const workerName = ctx.workerName ?? 'unknown';
   const branch = normalizeIdentity(ctx, 'branch');
 
-  const traceStable = {
-    'service.name': SERVICE_NAME,
-    // Trace identity intentionally remains feature scoped.  Metrics use the
-    // stable project/worker identity below.
-    'service.instance.id': `${projectName}/${feature}`,
-    'conductor.feature': feature,
-    'conductor.project': project,
-    'conductor.branch': branch,
-  };
   // Every value above is fixed for a feature's lifetime, so `target_info` holds
   // one row per feature rather than one per run. Resolving the run id is also
   // skipped here: it writes the session-id file as a side effect, and the
@@ -84,10 +80,26 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
     'service.version': normalizeIdentity(ctx, 'harnessVersion'),
   });
 
+  const runId = ctx.runId ?? resolveRunId(ctx.pipelineDir);
+  const featureEnabled = ctx.provenance?.feature ?? true;
+  const issueEnabled = ctx.provenance?.issue ?? true;
+  const traceStable = {
+    'service.name': SERVICE_NAME,
+    // Trace identity intentionally remains feature scoped.  Metrics use the
+    // stable project/worker identity below.
+    'service.instance.id': featureEnabled ? `${projectName}/${feature}` : `${projectName}/${runId}`,
+    ...(featureEnabled ? { 'conductor.feature': feature } : {}),
+    'conductor.project': project,
+    'conductor.branch': branch,
+  };
+
   return resourceFromAttributes({
     ...ctx.attributes,
     ...traceStable,
-    'conductor.run.id': ctx.runId ?? resolveRunId(ctx.pipelineDir),
+    ...(issueEnabled && typeof ctx.sourceRef === 'string' && ctx.sourceRef.length > 0
+      ? { 'conductor.source.ref': ctx.sourceRef }
+      : {}),
+    'conductor.run.id': runId,
     'conductor.engine.version': normalizeIdentity(ctx, 'engineVersion'),
     'service.version': normalizeIdentity(ctx, 'harnessVersion'),
   });

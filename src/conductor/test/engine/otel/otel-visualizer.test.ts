@@ -1,4 +1,4 @@
-// Covers: task:6, task:10
+// Covers: task:6, task:8, task:10
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -110,6 +110,24 @@ describe('OtelVisualizer', () => {
       warnings: { count: 1, message: expect.stringContaining('invalid') },
       metricBatches: [],
     });
+  });
+
+  it('exports a closed step with its source ref before the root span closes', async () => {
+    const visualizer = makeVisualizer();
+    visualizer.start(emitter, {
+      runId: 'run-1', feature: 'feature', project: 'project', sourceRef: 'jstoup111/ai-conductor#2000',
+    });
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await (visualizer as unknown as { tracerProvider: { forceFlush: () => Promise<void> } }).tracerProvider.forceFlush();
+
+    const exported = spanExporter.getFinishedSpans();
+    expect(exported.find((span) => span.name === 'build')?.resource.attributes['conductor.source.ref'])
+      .toBe('jstoup111/ai-conductor#2000');
+    expect(exported.some((span) => span.name === 'conductor.run')).toBe(false);
+
+    await visualizer.stop();
   });
 
   it('ignores lifecycle-only provider attempts without overwriting an invoked attempt on the step span', async () => {

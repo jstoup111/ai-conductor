@@ -13,6 +13,7 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { MetricsListener } from '../../../src/engine/otel/metrics-listener.js';
 import { MetricsRecorder } from '../../../src/engine/otel/metrics.js';
+import { buildResource } from '../../../src/engine/otel/resource.js';
 import type { ConductorEvent } from '../../../src/types/events.js';
 
 interface MetricPoint {
@@ -70,6 +71,50 @@ function resourceAttributes(exporter: InMemoryMetricExporter): Record<string, un
 }
 
 describe('MetricsListener dispatch dimensions', () => {
+  it('keeps metric resources and step labels unchanged when feature provenance is disabled', async () => {
+    const createProjection = (featureEnabled: boolean) => {
+      const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+      const provider = new MeterProvider({
+        resource: buildResource({
+          pipelineDir: '/unused-for-metrics', project: 'project', projectName: 'project', workerName: 'worker',
+          feature: 'feature', provenance: { issue: true, feature: featureEnabled },
+        }, 'metrics'),
+        readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+      });
+      const emitter = new ConductorEventEmitter();
+      const listener = new MetricsListener(
+        new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+        undefined,
+        'feature',
+      );
+      listener.start(emitter);
+      return { exporter, provider, emitter, listener };
+    };
+    const enabled = createProjection(true);
+    const disabled = createProjection(false);
+
+    try {
+      await enabled.emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+      await enabled.emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+      await disabled.emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+      await disabled.emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+      await Promise.all([enabled.provider.forceFlush(), disabled.provider.forceFlush()]);
+
+      const enabledResource = resourceAttributes(enabled.exporter);
+      const disabledResource = resourceAttributes(disabled.exporter);
+      const enabledLabels = attributesFor(enabled.exporter, 'conductor.step.duration', 'build');
+      const disabledLabels = attributesFor(disabled.exporter, 'conductor.step.duration', 'build');
+
+      expect(enabledResource).toEqual(disabledResource);
+      expect(enabledLabels).toEqual({ step: 'build', project: 'project', worker: 'worker', feature: 'feature' });
+      expect(disabledLabels).toEqual(enabledLabels);
+    } finally {
+      enabled.listener.stop();
+      disabled.listener.stop();
+      await Promise.all([enabled.provider.shutdown(), disabled.provider.shutdown()]);
+    }
+  });
+
   it('keeps the terminal-event tier for complete and halt outcomes before daemon dispatch-end', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     const provider = new MeterProvider({
