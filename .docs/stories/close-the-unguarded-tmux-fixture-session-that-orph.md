@@ -8,25 +8,25 @@ Tier: S
 
 Approved by the operator on 2026-09-06 (delegated). Scope is the ordinary suite's one real tmux fixture session that the leak guard cannot see, and the runner-level kill-switch condition that permitted it. The guard's two-signal kill contract and production daemon restart behavior are unchanged.
 
-## Story 1: Every real tmux session the suite creates is reachable by the leak guard
+## Story 1: Every real tmux session the suite creates is owned and reclaimed
 
-As the operator of the machine that runs this suite, I want every real tmux session a test creates to be visible to the leak guard, so that an interrupted run cannot strand a keepalive loop that no later run will ever reap.
+As the operator of the machine that runs this suite, I want every real tmux session a test creates to live on a server the test run owns and to be reclaimed even after an interrupted run, so that no run can strand a keepalive loop.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- Given the restart-wiring test has created its real tmux session, when the leak guard lists live daemon sessions, then that session's name appears in the listing.
-- Given the restart-wiring test completes or fails, when its cleanup has run, then the leak guard's listing no longer contains that session name.
+- Given the restart-wiring test has created its real tmux session on its private fixture server, when that fixture server lists its sessions, then that session's name appears in the listing.
+- Given the restart-wiring test completes or fails, when its cleanup has run, then its fixture server is no longer running and the session no longer exists.
 
 #### Negative Paths
 
-- Given a previous run was interrupted and left a restart-wiring fixture session running with a temp-directory pane working directory, when the next run's pre-run sweep executes, then that session is killed and a session in the same listing whose pane working directory is a real repository checkout is left running.
+- Given a previous run was interrupted and left a restart-wiring fixture server running, when the next run's pre-run sweep executes, then that server is stopped, and a session whose pane working directory is a real repository checkout, present in a listing the leak guard inspects, is left running.
 
 ### Done When
 
-- [ ] A real-tmux assertion inside the restart-wiring test observes its own live session in the leak guard's session listing, and observes it absent after cleanup.
-- [ ] An injected-runner regression case proves the pre-run sweep kills a restart-wiring-shaped leaked session and spares an operator repository session present in the same listing.
+- [ ] A real-tmux assertion inside the restart-wiring test observes its own live session on its fixture server, and observes the server stopped after cleanup.
+- [ ] An injected-runner regression case proves the leak guard's pre-run sweep kills a restart-wiring-shaped leaked session and spares an operator repository session present in the same listing.
 
 ## Story 2: The real-exec kill-switch cannot be evaded by choosing a session name
 
