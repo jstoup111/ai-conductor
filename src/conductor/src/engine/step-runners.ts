@@ -1256,8 +1256,14 @@ export class DefaultStepRunner implements StepRunner {
             requirements,
             tasks: projection.projection.tasks,
           });
-          const head = await this.gitRunner(['rev-parse', 'HEAD']);
-          const codeStamp = head.exitCode === 0 && head.stdout.trim().length > 0 ? head.stdout.trim() : null;
+          let codeStamp: string | null = null;
+          try {
+            const head = await this.gitRunner(['rev-parse', 'HEAD']);
+            codeStamp = head.exitCode === 0 && head.stdout.trim().length > 0 ? head.stdout.trim() : null;
+          } catch {
+            // A stamp is required authority evidence. Treat a Git invocation
+            // failure exactly like an empty or non-zero rev-parse result.
+          }
           if (codeStamp === null) {
             return {
               ...this.toStepRunResult(step, result),

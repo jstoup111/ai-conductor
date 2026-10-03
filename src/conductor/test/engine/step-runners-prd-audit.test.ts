@@ -106,6 +106,11 @@ async function expectNoVerdict(root: string): Promise<void> {
   await expect(access(join(root, PRD_AUDIT_VERDICT_PATH))).rejects.toMatchObject({ code: 'ENOENT' });
 }
 
+async function expectNoPrdAuditEvidence(root: string): Promise<void> {
+  await expectNoVerdict(root);
+  await expect(access(join(root, PRD_AUDIT_REPORT_PATH))).rejects.toMatchObject({ code: 'ENOENT' });
+}
+
 function dispatchedProjection(invoke: ReturnType<typeof vi.fn>) {
   const prompt = invoke.mock.calls[0]![0].prompt;
   const prefix = 'PRD-AUDIT EVIDENCE (engine-owned, versioned):\n';
@@ -233,23 +238,37 @@ describe('PRD audit typed provider dispatch', () => {
     expect(persisted.judgment.criterionJudgments).not.toContainEqual(expect.objectContaining({ criterionId: 'S999.1' }));
   });
 
-  it('fails before persistence when the reviewed code stamp is unavailable', async () => {
+  it.each([
+    [
+      'complete judgment when git cannot run',
+      { success: true, output: 'done', finalStructuredResult: passingJudgment } as InvokeResult,
+      async () => { throw new Error('git unavailable'); },
+    ],
+    [
+      'incomplete judgment when git returns an empty stamp',
+      {
+        success: true,
+        output: 'done',
+        finalStructuredResult: { ...passingJudgment, criterionJudgments: [passingJudgment.criterionJudgments[0]] },
+      } as InvokeResult,
+      async () => ({ stdout: '  ', stderr: 'empty HEAD', exitCode: 0 }),
+    ],
+  ] as const)('fails before persistence for a %s', async (_caseName, result, unavailableHead) => {
     const root = await fixture();
-    const unavailableHead: GitRunner = async () => ({ stdout: '', stderr: 'not a git worktree', exitCode: 128 });
     const { runner: subject } = runner(
       root,
-      { success: true, output: 'done', finalStructuredResult: passingJudgment } as InvokeResult,
+      result,
       true,
       undefined,
       'auto',
-      unavailableHead,
+      unavailableHead as GitRunner,
     );
 
     await expect(subject.run('prd_audit', { complexity_tier: 'S' })).resolves.toMatchObject({
       success: false,
       output: expect.stringContaining('reviewed code stamp unavailable'),
     });
-    await expectNoVerdict(root);
+    await expectNoPrdAuditEvidence(root);
   });
 
   it.each([
