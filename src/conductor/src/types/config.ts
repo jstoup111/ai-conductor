@@ -296,6 +296,10 @@ export interface BuildProgressConfig {
   heartbeat_minutes?: number;
   /** Master on/off switch for build progress events. Defaults to true. */
   enabled?: boolean;
+  /** Minutes of active-but-non-committing work before a stall is reported. Defaults to 45. */
+  active_stall_minutes?: number;
+  /** Action when active-but-non-committing work reaches the stall bound. Defaults to warn. */
+  active_stall_action?: 'warn' | 'end_attempt';
 }
 
 /** Live provider-stream observation cadence. Non-positive intervals use the default. */
@@ -569,7 +573,8 @@ export interface HarnessConfig {
   /**
    * Intra-step build progress event config. Absent block resolves to
    * defaults: { poll_seconds: 30, quiet_minutes: 15, heartbeat_minutes: 5,
-   * enabled: true }. See `resolveBuildProgressConfig` in engine/config.ts.
+   * enabled: true, active_stall_minutes: 45, active_stall_action: 'warn' }.
+   * See `resolveBuildProgressConfig` in engine/config.ts.
    */
   build_progress?: BuildProgressConfig;
   /** Live provider-stream observation cadence. See `provider_stream` in the configuration reference. */

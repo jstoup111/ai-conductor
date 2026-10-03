@@ -318,6 +318,8 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_progress.quiet_minutes': consumer(BUILD_PROGRESS_WATCHER),
   'build_progress.heartbeat_minutes': consumer(BUILD_PROGRESS_WATCHER),
   'build_progress.enabled': consumer(BUILD_PROGRESS_WATCHER),
+  'build_progress.active_stall_minutes': consumer(BUILD_PROGRESS_WATCHER),
+  'build_progress.active_stall_action': consumer(BUILD_PROGRESS_WATCHER),
 
   // ── provider_stream ───────────────────────────────────────────────────────
   'provider_stream.min_interval_ms': consumer(STEP_RUNNERS),
