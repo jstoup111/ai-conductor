@@ -149,8 +149,10 @@ describe('engineer claim intake lease contention', () => {
     const contender = claimOptions({ waitMs: 0 });
 
     try {
-      await expect(dispatchEngineer({ kind: 'claim' }, contender.opts))
-        .rejects.toThrow(new RegExp(`claim in progress.*${HOLDER_PID}`));
+      expect(await dispatchEngineer({ kind: 'claim' }, contender.opts)).toBe(1);
+      expect(contender.err).toContainEqual(
+        expect.stringMatching(new RegExp(`engineer claim: .*claim in progress.*${HOLDER_PID}`)),
+      );
       expect(await inboxNames()).toEqual(beforeInbox);
       expect(await readFile(join(engineerDir, 'ledger.json'), 'utf8')).toBe(beforeLedger);
       expect(contender.calls).toEqual([]);
@@ -189,8 +191,10 @@ describe('engineer claim intake lease contention', () => {
     resolverControl.throwOnResolve = true;
     const failing = claimOptions();
 
-    await expect(dispatchEngineer({ kind: 'claim' }, failing.opts))
-      .rejects.toThrow('injected resolver failure');
+    expect(await dispatchEngineer({ kind: 'claim' }, failing.opts)).toBe(1);
+    expect(failing.err).toContainEqual(
+      expect.stringMatching(/engineer claim: injected resolver failure/),
+    );
     expect(await inboxNames()).toEqual([
       '2026-10-03T00_00_00.000Z__506.json',
       '2026-10-03T00_01_00.000Z__507.json',
