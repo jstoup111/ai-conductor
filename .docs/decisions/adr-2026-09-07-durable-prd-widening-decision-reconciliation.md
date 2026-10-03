@@ -120,6 +120,8 @@ Once relationships are durable, derive accepted, blocking-refused, blocking-unde
 
 An absent current finding may make its refusal presently moot, but does not delete the refusal or history. Recurrence is reconciled against the retained case. A changed/refused widening cannot be silently converted into a repair task by this slice.
 
+> **Amended 2026-10-03 by #2931:** A refused widening is now explicitly, not silently, converted into bounded removal/rework when every blocking finding is refused. Routing consumes this decision's classification unchanged, and the task binds the refusal decision id. See adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework.
+
 > **Amended 2026-09-30 by #2521:** D8.1 computes current-source freshness from the canonical
 > source-bearing typed judgment, excluding derived report formatting and recorded-disposition
 > projections. Keep source/code/feature/decision-revision/version checks and increment the

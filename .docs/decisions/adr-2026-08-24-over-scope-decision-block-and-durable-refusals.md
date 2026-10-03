@@ -98,6 +98,8 @@ representable state: the candidate's `accepted: false` field is written but neve
 
    > **Amended 2026-09-07 by #2429:** A currently refused finding remains blocking and creates no repair task. It may expose an explicit revise-decision entry naming the prior decision, with no default acceptance; an old clear cannot reverse it. See adr-2026-09-07-durable-prd-widening-decision-reconciliation D3 and D8.
 
+   > **Amended 2026-10-03 by #2931:** A durable refusal is no longer a dead end. When every blocking finding is refused (none pending, no projection defect), the gate routes to the existing `prd_audit` remediation planner with engine-supplied refusal evidence. Removal/rework-only `rem-prd-audit-*` tasks are bound to the refusal decision id and bounded by the existing `gates.prd_audit` lap and growth allowance. A spent lap allowance halts with this decision's refused block (growth overflow at BUILD dispatch keeps the `kickback-cap` halt). Pending and accept are unchanged. See adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework.
+
 7. **Fail-closed evidentiary defects.** A malformed block, an entry naming a criterion the
    audit did not flag, or an accept/refuse without rationale is an evidentiary defect
    (adr-2026-08-24 evidentiary-defects-are-not-waivable): nothing is recorded, a spine event
