@@ -1055,6 +1055,104 @@ Content
   });
 
   describe('Task 3: rewritten plan tasks reopen through repair obligations', () => {
+    it.each([
+      ['absent taskDigests', undefined],
+      ['an unknown digest prefix', { '1': 'v99:legacy-digest' }],
+    ])('records a fresh baseline without repair admission for %s', async (_caseName, priorDigests) => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      const planText = '# Plan\n\n## Task 1: Already completed\nCurrent plan text.\n';
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const statePath = join(dir, '.pipeline/engine-state.json');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(planPath, planText);
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [{ id: '1', name: 'Already completed', status: 'completed', commit: 'finished' }],
+      }));
+      await fsPromises.writeFile(statePath, JSON.stringify({
+        activePlanPath: planPath,
+        ...(priorDigests === undefined ? {} : {
+          taskDigests: { version: 1, byPlan: { '.docs/plans/test.md': priorDigests } },
+        }),
+      }));
+
+      reopenObservation.active = true;
+      reopenObservation.events = [];
+      try {
+        await seedTaskStatus(dir, planPath);
+      } finally {
+        reopenObservation.active = false;
+      }
+
+      const state = JSON.parse(await fsPromises.readFile(statePath, 'utf8'));
+      expect(reopenObservation.events).toEqual(['recordTaskDigests']);
+      expect(state.repairObligations).toBeUndefined();
+      expect(state.taskDigests).toEqual({
+        version: 1,
+        byPlan: { '.docs/plans/test.md': Object.fromEntries(planTaskDigests(planText)) },
+      });
+      expect(JSON.parse(await fsPromises.readFile(statusPath, 'utf8')).tasks).toEqual([
+        expect.objectContaining({ id: '1', status: 'completed', commit: 'finished' }),
+      ]);
+    });
+
+    it('recreates trailer-completed worktree state and records a fresh baseline without repair admission', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      const planText = '# Plan\n\n## Task 1: Completed before recreation\n';
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'task-seed@example.test'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Task Seed Test'], { cwd: dir });
+      await fsPromises.writeFile(planPath, planText);
+      await execa('git', ['add', '.docs/plans/test.md'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'initial plan'], { cwd: dir });
+      // A local ref is enough to model origin/main for the fail-closed
+      // merge-base range used by trailer restoration.
+      await execa('git', ['branch', 'origin/main'], { cwd: dir });
+      await fsPromises.writeFile(join(dir, 'completed.txt'), 'completed\n');
+      await execa('git', ['add', 'completed.txt'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'complete task\n\nTask: 1'], { cwd: dir });
+
+      reopenObservation.active = true;
+      reopenObservation.events = [];
+      try {
+        await seedTaskStatus(dir, planPath);
+      } finally {
+        reopenObservation.active = false;
+      }
+
+      const state = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/engine-state.json'), 'utf8'));
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(reopenObservation.events).toEqual(['recordTaskDigests']);
+      expect(state.repairObligations).toBeUndefined();
+      expect(state.taskDigests).toEqual({
+        version: 1,
+        byPlan: { '.docs/plans/test.md': Object.fromEntries(planTaskDigests(planText)) },
+      });
+      expect(status.tasks).toEqual([
+        expect.objectContaining({ id: '1', status: 'completed', restored_from: 'task-trailer' }),
+      ]);
+    });
+
+    it('fails closed with the neutral seed reason when taskDigests has an incompatible version', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(planPath, '# Plan\n\n## Task 1: Current task\n');
+      await fsPromises.writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: planPath,
+        taskDigests: { version: 2, byPlan: {} },
+      }));
+
+      await expect(seedTaskStatus(dir, planPath)).rejects.toThrow('taskDigests section is incompatible');
+      const result = await checkStepCompletion(dir, 'build', { projectRoot: dir, planPath });
+      expect(result).toEqual(expect.objectContaining({
+        done: false,
+        reason: expect.stringContaining('failed to seed task-status from plan'),
+      }));
+      expect(result.reason).not.toContain('task reopen failed');
+    });
+
     it('is idempotent across A-to-B-to-A rewrites, leaves the ledger alone, and closes every coexisting repair', async () => {
       const planPath = join(dir, '.docs/plans/test.md');
       const statePath = join(dir, '.pipeline/engine-state.json');
