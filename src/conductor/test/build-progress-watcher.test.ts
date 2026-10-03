@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:4
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1503,5 +1503,123 @@ describe('BuildProgressWatcher injectable clock', () => {
     watcher.stop();
 
     expect(buildProgressEvents()).toHaveLength(1);
+  });
+});
+
+describe('BuildProgressWatcher active-stall warn episodes', () => {
+  let dir: string;
+  let emitter: ConductorEventEmitter;
+  let emitSpy: MockInstance<typeof emitter.emit>;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-active-stall-test-'));
+    emitter = new ConductorEventEmitter();
+    emitSpy = vi.spyOn(emitter, 'emit');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function writeTasks(resolved: number, total: number): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const tasks = Array.from({ length: total }, (_, i) => ({
+      id: String(i + 1),
+      status: i < resolved ? 'completed' : 'pending',
+    }));
+    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  }
+
+  async function writeHeartbeat(timestamp: number): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/step-heartbeat'),
+      JSON.stringify({ step: 'build', ts: new Date(timestamp).toISOString() }),
+    );
+  }
+
+  function activeStallEvents(): Extract<ConductorEvent, { type: 'build_active_stall' }>[] {
+    return emitSpy.mock.calls
+      .map((call) => call[0] as ConductorEvent)
+      .filter((event): event is Extract<ConductorEvent, { type: 'build_active_stall' }> =>
+        event.type === 'build_active_stall');
+  }
+
+  function tick(watcher: BuildProgressWatcher): Promise<void> {
+    return (watcher as unknown as { tick(): Promise<void> }).tick();
+  }
+
+  it('warns once for active work, does not invoke endAttempt, and re-arms after movement', async () => {
+    await writeTasks(5, 21);
+    let clock = Date.UTC(2026, 8, 28, 12, 0, 0);
+    const endAttempt = vi.fn();
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      featureSlug: 'my-feature',
+      config: { build_progress: { active_stall_minutes: 45 } },
+      now: () => clock,
+      endAttempt,
+    });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    clock += 44 * 60 * 1000 + 59 * 1000;
+    await writeHeartbeat(clock);
+    clock += 1_000;
+    await tick(watcher);
+
+    expect(activeStallEvents()).toEqual([
+      expect.objectContaining({
+        action: 'warn',
+        minutes: 45,
+        resolved: 5,
+        total: 21,
+        lastActivityAt: clock - 1_000,
+        featureSlug: 'my-feature',
+      }),
+    ]);
+    expect(activeStallEvents()[0]).toHaveProperty('lastCommitAt', undefined);
+    expect(endAttempt).not.toHaveBeenCalled();
+
+    clock += 5 * 60 * 1000;
+    await writeHeartbeat(clock);
+    await tick(watcher);
+    expect(activeStallEvents()).toHaveLength(1);
+
+    await writeTasks(6, 21);
+    await tick(watcher);
+    clock += 44 * 60 * 1000 + 59 * 1000;
+    await writeHeartbeat(clock);
+    clock += 1_000;
+    await tick(watcher);
+    watcher.stop();
+
+    expect(activeStallEvents()).toHaveLength(2);
+    expect(activeStallEvents()[1]).toMatchObject({ action: 'warn', minutes: 45, resolved: 6 });
+    expect(endAttempt).not.toHaveBeenCalled();
+  });
+
+  it('does not warn when the bound elapses on a quiet tick', async () => {
+    await writeTasks(5, 21);
+    let clock = Date.UTC(2026, 8, 28, 12, 0, 0);
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      config: { build_progress: { active_stall_minutes: 45 } },
+      now: () => clock,
+    });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    clock += 45 * 60 * 1000;
+    await tick(watcher);
+    watcher.stop();
+
+    expect(activeStallEvents()).toEqual([]);
   });
 });
