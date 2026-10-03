@@ -171,6 +171,7 @@ export type RemediationCaseStoreFailureReason =
   | 'foreign-feature'
   | 'foreign-domain'
   | 'malformed-state'
+  | 'rejected-transition'
   | 'lock-timeout'
   | 'lock-failed'
   | 'atomic-replace-failed'
@@ -666,7 +667,7 @@ export class RemediationCaseStore {
       if (!mutation.nextState) return { ok: true, value: mutation.value };
 
       const parsed = parseState(mutation.nextState);
-      if (!parsed.ok) return parsed;
+      if (!parsed.ok) return { ok: false, reason: 'rejected-transition' };
       if (!sameFeature(parsed.state.feature, this.feature)) return { ok: false, reason: 'foreign-feature' };
       const replaced = await this.atomicReplace(parsed.state);
       return replaced.ok
