@@ -592,6 +592,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // is what made any pre-existing acceptance un-adjudicable.
   const graph = validateRemediationCaseGraph(dispatchSourceIds, judgement, {
     existingCaseIds: prior.state.cases.map((record) => record.id),
+    // `distinctFrom` is validated against durable resolved-case evidence, not
+    // merely its identifiers.  The coordinator is the production boundary
+    // that owns both the case-store read and the subsequent work-order route.
+    priorCases: prior.state.cases,
     admittedTaskIds: planContract.admittedTaskContracts?.map((task) => task.id) ?? [],
   });
   if (!graph.ok) return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, {

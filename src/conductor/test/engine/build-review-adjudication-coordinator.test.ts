@@ -14,7 +14,7 @@ import type { RemediationCaseJudgement } from '../../src/engine/remediation-case
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
-import { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-ledger.js';
+import { chargeBuildReviewEffectInLedger, readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import type { EffectMarkerTrackerClient } from '../../src/engine/tracker-client.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 
@@ -64,7 +64,11 @@ const findingId = rawSource.findingId;
 const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
 const CUSTOM_DIGEST = `sha256:${'c'.repeat(64)}`;
 
-function customMixedAggregate(criteria?: readonly string[], regionHash = `sha256:${'a'.repeat(64)}`) {
+function customMixedAggregate(
+  criteria?: readonly string[],
+  regionHash = `sha256:${'a'.repeat(64)}`,
+  includeTestQualitySibling = false,
+) {
   const declaration = {
     version: 'v1' as const, rubricId: 'security', semanticSkill: 'security-review',
     question: 'Does the changed code preserve the security boundary?',
@@ -97,7 +101,12 @@ function customMixedAggregate(criteria?: readonly string[], regionHash = `sha256
     results: {
       testQuality: {
         kind: 'judged', rubric: 'testQuality', lapId: 'lap-custom-mixed' as never,
-        snapshotDigest: 'snapshot-custom-mixed', contractVersion: 'v3', findings: [], verdict: 'PASS',
+        snapshotDigest: 'snapshot-custom-mixed', contractVersion: 'v3',
+        findings: includeTestQualitySibling ? [{
+          concernKind: 'test-insensitive', summary: 'The sibling changed test is insensitive.', evidenceLocations: ['test/sibling.test.ts:1'],
+          anchor: { rubric: 'testQuality', locus: { path: 'test/sibling.test.ts', contentHash: 'sha256:sibling', display: 'sibling test' } },
+        }] : [],
+        verdict: includeTestQualitySibling ? 'FAIL' : 'PASS',
       },
     },
     customResults: {
@@ -1570,6 +1579,109 @@ describe('coordinateBuildReviewAdjudication', () => {
     }));
     expect(events.filter((event) => event.type === 'remediation_adjudication_failed')
       .some((event) => event.reason.includes('malformed-state'))).toBe(false);
+  });
+
+  it('publishes declared distinct and sibling actions in one work order, charging their new route once', async () => {
+    const root = await projectRoot();
+    const mixed = customMixedAggregate(undefined, undefined, true);
+    const sources = projectBuildReviewAggregateSources(mixed)!;
+    const declaredSourceId = buildReviewAdjudicationSourceId(sources.find((source) => source.rubric === 'security')!);
+    const siblingSourceId = buildReviewAdjudicationSourceId(sources.find((source) => source.rubric === 'testQuality')!);
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The earlier repair was applied.', resolution: 'resolved',
+        sources: [{ sourceId: declaredSourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-r', kind: 'action', status: 'applied', workOrderId: 'order-r' },
+      }],
+    });
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [
+        { sourceId: declaredSourceId, outcome: 'acted', caseRef: 'case-distinct' },
+        { sourceId: siblingSourceId, outcome: 'acted', caseRef: 'case-sibling' },
+      ],
+      cases: [
+        {
+          caseRef: 'case-distinct', distinctFrom: ['case-r'], disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'This finding is distinct from the resolved repair.',
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the distinct security finding.', admittedTaskIds: ['34'], admissionRationale: 'Task 34 owns this repair.' }] },
+        },
+        {
+          caseRef: 'case-sibling', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The unrelated sibling needs its own repair.',
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the sibling test.', admittedTaskIds: ['34'], admissionRationale: 'Task 34 owns this repair.' }] },
+        },
+      ],
+      consistency: { verdict: 'consistent', sourceIds: [declaredSourceId, siblingSourceId], caseRefs: ['case-distinct', 'case-sibling'], rationale: 'Both repairs are independently admitted.' },
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: mixed, mechanical: 'retry', generateId: sequentialIds('declared'),
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '34', contract: 'coordinator integration' }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    const order = JSON.parse(await readFile(join(root, '.pipeline/build-review-work-order.json'), 'utf8')) as { cases: Array<{ caseId: string }> };
+    expect(order.cases).toHaveLength(2);
+    const ledger = await readKickbackLedger(root);
+    expect(ledger.gates.build_review?.chargedEffectIds).toHaveLength(1);
+
+    const persisted = await store.read();
+    if (!persisted.ok) throw new Error(persisted.reason);
+    const distinct = persisted.state.cases.find((record) => record.distinctFrom?.includes('case-r'))!;
+    const sibling = persisted.state.cases.find((record) => record.id !== 'case-r' && record.id !== distinct.id)!;
+    await markBuildReviewWorkOrderAttempted(root, feature);
+    const repeated: RemediationCaseJudgement = {
+      ...judgement,
+      cases: judgement.cases.map((row) => ({
+        ...row,
+        existingCaseId: row.caseRef === 'case-distinct' ? distinct.id : sibling.id,
+        distinctFrom: undefined,
+      })),
+    };
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const repeat = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => repeated), aggregate: mixed, mechanical: 'retry',
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '34', contract: 'coordinator integration' }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+      emit: async (event) => { events.push(event); },
+    });
+    expect(repeat).toMatchObject({ ok: false, detail: expect.stringContaining(`semantic remediation case repeat ${distinct.id}`) });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_semantic_repeat_halt', caseId: distinct.id, reason: 'already-attempted',
+    }));
+  });
+
+  it('keeps the existing exhaustion halt for a declared distinct action', async () => {
+    const root = await projectRoot();
+    const custom = customMixedAggregate();
+    const sourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(custom)!.find((source) => source.rubric === 'security')!);
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, { version: 'v1', feature, cases: [{
+      id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Applied.', resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }], effect: { id: 'effect-r', kind: 'action', status: 'applied', workOrderId: 'order-r' },
+    }] });
+    const declared: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review', sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'case-distinct' }],
+      cases: [{ caseRef: 'case-distinct', distinctFrom: ['case-r'], disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Distinct.', effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair it.', admittedTaskIds: ['34'], admissionRationale: 'Task 34 owns it.' }] } }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['case-distinct'], rationale: 'One admitted repair.' },
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => declared), aggregate: custom, mechanical: 'retry', generateId: sequentialIds('exhausted'),
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '34', contract: 'coordinator integration' }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+      chargeEffect: async () => ({
+        status: 'charged' as const, exhausted: true, cumulativeExhausted: false,
+        entry: { count: 3, cumulative: 3, treeHash: 'tree-1', lastReason: 'fixture', priorVerdict: false, resolvedBefore: 1 },
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: expect.stringContaining('build-review kickback budget exhausted') });
   });
 
   it.each([
