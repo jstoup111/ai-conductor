@@ -30,6 +30,56 @@ export interface RunOverlapScanArgs {
 }
 
 /**
+ * Classify candidate paths against Git's tracked and untracked working-tree
+ * paths. The raw candidate spelling is retained in the result so callers can
+ * report precisely what they supplied, while comparison stays repo-relative.
+ */
+export async function classifyCandidatePaths(
+  git: GitRunner,
+  candidates: string[],
+): Promise<
+  | { kind: 'classified'; absent: string[] }
+  | { kind: 'classification-failed'; exitCode: number }
+> {
+  const normalize = (path: string): string => path.replace(/\\/g, '/').replace(/^\.\//, '');
+
+  try {
+    const listing = await git(['ls-files', '--cached', '--others', '--exclude-standard']);
+    if (listing.exitCode !== 0) {
+      return { kind: 'classification-failed', exitCode: listing.exitCode };
+    }
+
+    const present = new Set(
+      listing.stdout
+        .split('\n')
+        .filter((path) => path.length > 0)
+        .map(normalize),
+    );
+    const seenCandidates = new Set<string>();
+    const absent: string[] = [];
+
+    for (const raw of candidates) {
+      const candidate = normalize(raw);
+      if (!present.has(candidate) && !seenCandidates.has(candidate)) {
+        seenCandidates.add(candidate);
+        absent.push(raw);
+      }
+    }
+
+    return { kind: 'classified', absent };
+  } catch (error) {
+    const exitCode =
+      typeof error === 'object' &&
+      error !== null &&
+      'exitCode' in error &&
+      typeof error.exitCode === 'number'
+        ? error.exitCode
+        : 1;
+    return { kind: 'classification-failed', exitCode };
+  }
+}
+
+/**
  * Candidate sibling branches to scan for overlap: local `spec/*` branches
  * (in-flight DECIDE/BUILD work authored by this harness) plus any
  * remote-tracking `spec/*` heads (open-PR branches fetched to a remote,
