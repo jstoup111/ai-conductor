@@ -27,6 +27,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { realpathSync, writeSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import { execa } from 'execa';
+import { v4 as uuidv4 } from 'uuid';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { Conductor, createProvenanceGuardedFinishPresentationRepair } from './engine/conductor.js';
@@ -575,6 +576,16 @@ async function readHarnessVersion(): Promise<string> {
     /* fall through to the module-relative probe */
   }
   return resolveHarnessVersion(__dirname);
+}
+
+/** Reuse the persisted foreground run id when resuming; mint one otherwise. */
+export async function resolveForegroundRunId(pipelineDir: string): Promise<string> {
+  try {
+    const persisted = await readFile(join(pipelineDir, 'conduct-session-id'), 'utf-8');
+    return persisted.trim() || uuidv4();
+  } catch {
+    return uuidv4();
+  }
 }
 
 interface VisualizerStartContextInput {
@@ -1641,9 +1652,11 @@ async function dispatchCliCommand(): Promise<void> {
     }
   }
 
-  // The OTel run id may be a legacy bare UUID. Dispatch directories use the
-  // shared letter-prefixed grammar, so never reuse that identifier here.
-  const sessionId = createSessionEventIdentity();
+  // Foreground resume reuses the persisted run id (conductor.run.id stays
+  // stable across resumes). That id may be a legacy bare UUID, so the
+  // prelude dispatch directory gets its own letter-prefixed identity.
+  const sessionId = await resolveForegroundRunId(pipelineDir);
+  const preludeDispatchId = createSessionEventIdentity();
 
   // Set up terminal UI with live dashboard (needed before registry initialization)
   const rendererOpts = {
@@ -1715,14 +1728,14 @@ async function dispatchCliCommand(): Promise<void> {
   );
   const preludeProvider = providerExecution.configuredProviders[0];
   if (!preludeProvider) throw new Error('Project prelude requires a configured provider');
-  const preludeProducerRoot = join(pipelineDir, 'session-events', sessionId);
+  const preludeProducerRoot = join(pipelineDir, 'session-events', preludeDispatchId);
   await mkdir(preludeProducerRoot, { recursive: true });
   const preparedPreludeContext = await prepareManagedSessionContext({
     projectRoot,
     worktreeRoot: projectRoot,
     producerRoot: preludeProducerRoot,
     scope: { kind: 'project' },
-    dispatchId: sessionId,
+    dispatchId: preludeDispatchId,
     provider: preludeProvider,
   });
   if (!preparedPreludeContext.ok) {
