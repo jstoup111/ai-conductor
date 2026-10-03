@@ -904,6 +904,44 @@ describe('coordinateBuildReviewAdjudication', () => {
     }));
   });
 
+  it('emits declared distinct case and source identities for an unbound refute', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-resolved-anchor', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The earlier concern was repaired.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-resolved-anchor', kind: 'action', status: 'applied', workOrderId: 'order-resolved-anchor' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'refuted', caseRef: 'case-unbound-refute' }],
+      cases: [{
+        caseRef: 'case-unbound-refute', distinctFrom: ['case-resolved-anchor'], disposition: 'refute', priority: 'high', confidence: 'high',
+        rationale: 'The later concern is a distinct refutation.', effect: { kind: 'none' },
+        refutation: { claim: 'The later concern is false.', assertions: [{
+          assertion: 'The inspected behavior is present.', verdict: 'refuted', evidence: [{ path: 'test/example.test.ts', excerpt: 'fixture' }],
+        }] },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['case-unbound-refute'], rationale: 'One refutation was considered.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toEqual({ ok: false, detail: expect.stringMatching(/invalid remediation judgement refute-without-binding/) });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'invalid-judgement',
+      caseIds: ['case-resolved-anchor'], sourceIds: [sourceId],
+    }));
+  });
+
   it('records the declared durable identity and source for an unknown case binding', async () => {
     const root = await projectRoot();
     const events: RemediationCaseLifecycleEvent[] = [];
