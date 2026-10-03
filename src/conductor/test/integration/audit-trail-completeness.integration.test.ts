@@ -54,6 +54,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   AuditedEventType,
   'friction-mapped' | 'not-audited-by-design'
 > = {
+  otel_spool_drop: 'not-audited-by-design',
+  otel_spool_backlog: 'not-audited-by-design',
   daemon_backlog_snapshot: 'not-audited-by-design',
   daemon_memory_sample: 'not-audited-by-design',
   daemon_heap_dump_written: 'not-audited-by-design',
@@ -233,6 +235,12 @@ const EVENT_TYPE_CLASSIFICATION: Record<
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
 const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
+  otel_spool_drop: {
+    type: 'otel_spool_drop', signal: 'traces', reason: 'rejected', batches: 1, items: 1,
+  },
+  otel_spool_backlog: {
+    type: 'otel_spool_backlog', signal: 'metrics', files: 1, bytes: 1, oldestAgeMs: 0, lastFailureClass: 'network',
+  },
   daemon_backlog_snapshot: {
     type: 'daemon_backlog_snapshot',
     counts: { eligible: 0, waiting: 0, blocked: 0, gated: 0, parked: 0 },

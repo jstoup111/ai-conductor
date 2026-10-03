@@ -10,6 +10,10 @@ export interface SinkDeclaration {
 }
 
 export const EVENT_SINKS = {
+  // ADR-014 D17: spool health must survive the process without becoming input
+  // to the spool itself, a renderer stream, or aggregate usage accounting.
+  otel_spool_drop: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
+  otel_spool_backlog: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
   daemon_backlog_snapshot: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   daemon_memory_sample: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
   daemon_heap_dump_written: { render: false, persist: true, audit: false, otel: false, otelTrace: false },

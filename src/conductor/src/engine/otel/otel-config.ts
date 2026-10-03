@@ -4,6 +4,7 @@ import type { HarnessConfig } from '../../types/config.js';
 
 const VALID_EXPORTERS = ['otlp', 'file'] as const;
 const VALID_OTLP_PROTOCOLS = ['http/protobuf', 'grpc'] as const;
+const DEFAULT_SPOOL_MAX_BYTES = 512 * 1024 * 1024;
 const DEFAULT_FILE = 'otel.jsonl';
 const MAX_ATTRIBUTES = 16;
 const PROVENANCE_KEYS = ['commit', 'pr', 'issue', 'feature'] as const;
@@ -121,7 +122,11 @@ export type ResolvedOtelConfig =
       exporter: 'otlp';
       endpoint: string;
       protocol?: 'http/protobuf' | 'grpc';
+      spool?: { enabled: boolean; maxBytes: number };
+      spoolWarnings?: string[];
       headers?: Record<string, string>;
+      /** Validated references retained so the drainer resolves credentials at send time. */
+      headerReferences?: Record<string, { env: string }>;
       projectName?: string;
       workerName?: string;
       attributes?: Record<string, string>;
@@ -157,7 +162,7 @@ export function resolveOtelConfig(
     return { enabled: false };
   }
 
-  const { exporter, endpoint, file, protocol, headers, project_name, worker_name, attributes, provenance } = otel;
+  const { exporter, endpoint, file, protocol, headers, project_name, worker_name, attributes, provenance, spool } = otel;
   const projectName = project_name?.trim() || undefined;
   const workerName = worker_name?.trim() || undefined;
   const resolvedAttributes = resolveAttributes(attributes);
@@ -197,6 +202,22 @@ export function resolveOtelConfig(
         error: 'otel headers must be a mapping from header names to { env: <variable name> } references.',
       };
     }
+    const maxBytes = spool?.max_bytes ?? DEFAULT_SPOOL_MAX_BYTES;
+    if (!Number.isInteger(maxBytes) || maxBytes <= 0) {
+      return {
+        enabled: false,
+        error: 'otel.spool.max_bytes must be a positive integer number of bytes.',
+      };
+    }
+
+    if (protocol === 'grpc' && spool?.enabled === true) {
+      return {
+        enabled: false,
+        error: 'otel.spool.enabled: true is unsupported with protocol: grpc; use protocol: http/protobuf to enable the spool.',
+      };
+    }
+
+    const spoolIsInactiveForGrpc = protocol === 'grpc' && spool?.enabled === undefined;
 
     if (hasHeaderEntries(headers) && protocol === 'grpc') {
       return {
@@ -206,6 +227,7 @@ export function resolveOtelConfig(
     }
 
     const resolvedHeaders: Record<string, string> = Object.create(null);
+    const headerReferences: Record<string, { env: string }> = Object.create(null);
     if (headers && hasHeaderEntries(headers)) {
       for (const [header, reference] of Object.entries(headers)) {
         const headerName = renderedHeaderName(header);
@@ -246,6 +268,7 @@ export function resolveOtelConfig(
           };
         }
         resolvedHeaders[header] = value;
+        headerReferences[header] = { env: environmentVariable };
       }
     }
 
@@ -253,8 +276,11 @@ export function resolveOtelConfig(
       enabled: true,
       exporter: 'otlp',
       endpoint,
+      spool: { enabled: spoolIsInactiveForGrpc ? false : spool?.enabled ?? true, maxBytes },
+      ...(spoolIsInactiveForGrpc ? { spoolWarnings: ['otel spool is inactive for grpc protocol; use protocol: http/protobuf to enable it.'] } : {}),
       ...(protocol ? { protocol } : {}),
       ...(hasHeaderEntries(headers) ? { headers: resolvedHeaders } : {}),
+      ...(hasHeaderEntries(headers) ? { headerReferences } : {}),
       ...(projectName ? { projectName } : {}),
       ...(workerName ? { workerName } : {}),
       ...(resolvedAttributes ? { attributes: resolvedAttributes.attributes, attributeWarnings: resolvedAttributes.warnings } : {}),

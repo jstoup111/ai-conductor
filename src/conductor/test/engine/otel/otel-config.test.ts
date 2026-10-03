@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:6, task:11
+// Covers: task:2, task:1, task:6, task:11
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -44,6 +44,78 @@ describe('resolveOtelConfig', () => {
       );
 
       expect(result).toMatchObject({ enabled: false, error: expect.stringContaining(errorPath) });
+    });
+  });
+
+  describe('spool', () => {
+    it('defaults an OTLP spool to enabled with a 512 MiB cap', () => {
+      expect(
+        resolveOtelConfig(
+          { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+          PIPELINE_DIR,
+        ),
+      ).toMatchObject({
+        enabled: true,
+        spool: { enabled: true, maxBytes: 536_870_912 },
+      });
+    });
+
+    it('honors an explicit disabled spool while leaving file export unspooled', () => {
+      const otlp = resolveOtelConfig(
+        { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', spool: { enabled: false } } },
+        PIPELINE_DIR,
+      );
+      const file = resolveOtelConfig({ otel: { exporter: 'file' } }, PIPELINE_DIR);
+
+      expect({ otlp, hasFileSpool: Object.hasOwn(file, 'spool') }).toMatchObject({
+        otlp: { enabled: true, spool: { enabled: false, maxBytes: 536_870_912 } },
+        hasFileSpool: false,
+      });
+    });
+
+    it.each([0, -1, 'big'])('refuses max_bytes %j unless it is a positive integer byte count', (max_bytes) => {
+      const result = resolveOtelConfig(
+        { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', spool: { max_bytes } } as never },
+        PIPELINE_DIR,
+      );
+
+      expect(result).toMatchObject({
+        enabled: false,
+        error: expect.stringMatching(/otel\.spool\.max_bytes.*positive integer.*bytes/i),
+      });
+    });
+
+    it('keeps default gRPC export direct and records one inactive-spool warning', () => {
+      expect(
+        resolveOtelConfig(
+          { otel: { exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc' } },
+          PIPELINE_DIR,
+        ),
+      ).toMatchObject({
+        enabled: true,
+        protocol: 'grpc',
+        spool: { enabled: false, maxBytes: 536_870_912 },
+        spoolWarnings: [expect.stringMatching(/spool.*inactive.*grpc/i)],
+      });
+    });
+
+    it('refuses an explicitly enabled spool for gRPC with the HTTP/protobuf remedy', () => {
+      expect(
+        resolveOtelConfig(
+          {
+            otel: {
+              exporter: 'otlp',
+              endpoint: 'http://localhost:4317',
+              protocol: 'grpc',
+              spool: { enabled: true },
+            },
+          },
+          PIPELINE_DIR,
+        ),
+      ).toMatchObject({
+        enabled: false,
+        error: expect.stringMatching(/protocol:\s*http\/protobuf/i),
+      });
     });
   });
 
@@ -149,6 +221,7 @@ describe('resolveOtelConfig', () => {
         exporter: 'otlp',
         endpoint: 'http://localhost:4318',
         provenance: DEFAULT_PROVENANCE,
+        spool: { enabled: true, maxBytes: 536_870_912 },
       });
       expect(buildExporters(resolved as Extract<typeof resolved, { enabled: true }>).spanExporter)
         .toBeInstanceOf(OTLPHttpTraceExporter);
@@ -246,7 +319,13 @@ describe('resolveOtelConfig', () => {
     it('leaves the resolved result unchanged when headers are absent', () => {
       expect(
         resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, PIPELINE_DIR),
-      ).toEqual({ enabled: true, exporter: 'otlp', endpoint: 'http://localhost:4318', provenance: DEFAULT_PROVENANCE });
+      ).toEqual({
+        enabled: true,
+        exporter: 'otlp',
+        endpoint: 'http://localhost:4318',
+        provenance: DEFAULT_PROVENANCE,
+        spool: { enabled: true, maxBytes: 536_870_912 },
+      });
     });
 
     it.each([undefined, ''])('disables otlp when a referenced environment variable is %p', (value) => {
@@ -299,6 +378,8 @@ describe('resolveOtelConfig', () => {
           endpoint: 'http://localhost:4318',
           headers: { Authorization: 'valid-token' },
           provenance: DEFAULT_PROVENANCE,
+          headerReferences: { Authorization: { env: 'OTEL_TEST_AUTHORIZATION' } },
+          spool: { enabled: true, maxBytes: 536_870_912 },
         });
         expect((result as { error?: string }).error).toBeUndefined();
       } finally {
@@ -469,6 +550,7 @@ describe('resolveOtelConfig', () => {
           endpoint: 'http://localhost:4318',
           projectName: 'tenant-b',
           provenance: DEFAULT_PROVENANCE,
+          spool: { enabled: true, maxBytes: 536_870_912 },
         },
         { enabled: true, exporter: 'file', file: `${PIPELINE_DIR}/otel.jsonl`, provenance: DEFAULT_PROVENANCE },
         { enabled: true, exporter: 'file', file: `${PIPELINE_DIR}/otel.jsonl`, provenance: DEFAULT_PROVENANCE },

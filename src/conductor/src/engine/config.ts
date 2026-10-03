@@ -158,7 +158,8 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   retry_routing: ['enabled'],
   coverage_binding: ['judge'],
   'coverage_binding.judge': ['enabled', 'batch_size'],
-  otel: ['exporter', 'endpoint', 'file', 'protocol', 'headers', 'project_name', 'worker_name', 'attributes', 'provenance'],
+  otel: ['exporter', 'endpoint', 'file', 'protocol', 'headers', 'project_name', 'worker_name', 'attributes', 'provenance', 'spool'],
+  'otel.spool': ['enabled', 'max_bytes'],
   markdown_viewer: ['preset', 'command', 'args', 'mode'],
   mermaid_renderer: ['preset', 'command', 'args', 'mode'],
 } as const;
@@ -1483,6 +1484,32 @@ export function validateConfig(
   }
 
   // build_progress — intra-step build progress event cadence knobs.
+  if (obj.otel !== undefined && isPlainObject(obj.otel)) {
+    const otel = normalizeKeyedBlock(
+      'otel',
+      obj.otel,
+      CONFIG_CONSUMER_KEY_SETS.otel.map((key) => ({
+        key,
+        isValid: (value: unknown) => key !== 'spool' || isPlainObject(value),
+      })),
+      warnings,
+    );
+    if (otel.spool !== undefined && isPlainObject(otel.spool)) {
+      otel.spool = normalizeKeyedBlock(
+        'otel.spool',
+        otel.spool,
+        CONFIG_CONSUMER_KEY_SETS['otel.spool'].map((key) => ({
+          key,
+          // Preserve any supplied max_bytes value for resolveOtelConfig(), which
+          // owns the range/type error and disables telemetry safely.
+          isValid: (value: unknown) => key === 'enabled' ? typeof value === 'boolean' : value !== undefined,
+        })),
+        warnings,
+      );
+    }
+    obj.otel = otel;
+  }
+
   if (obj.build_progress !== undefined) {
     const err = validateBuildProgressBlock(obj.build_progress);
     if (err) return { ok: false, error: err };
