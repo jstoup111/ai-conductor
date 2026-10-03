@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-// Covers: task:2, task:3
+// Covers: task:2, task:3, task:4
 import { access, mkdtemp, mkdir, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -73,7 +73,7 @@ describe('halt clear CLI', () => {
     await expect(access(join(worktree, '.pipeline', 'HALT.class'))).rejects.toThrow();
     expect(await readFile(statePath)).toEqual(beforeState);
     expect(sawMarkersAtAppend).toBe(true);
-    const events = (await readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+    const events = (await readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     expect(events).toEqual([expect.objectContaining({
       type: 'halt_clear_authorized', feature: slug, operator: 'op', rationale: 'plan amended and resealed', haltClass: 'needs-human',
     })]);
@@ -86,7 +86,7 @@ describe('halt clear CLI', () => {
     expect(await dispatchHaltClearCommand(command!, {
       cwd: root, resolveMainRoot: async () => root, resolveOperator: () => 'op', isInteractive: () => true, print: () => {},
     })).toBe(0);
-    const [event] = (await readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+    const [event] = (await readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     expect(event.haltClass).toBe(haltClass);
   });
 
@@ -167,5 +167,46 @@ describe('halt clear CLI', () => {
 
     expect(out.join('\n')).toContain("feature 'unknown-feature' is unavailable");
     await expect(readdir(root)).resolves.toEqual(before);
+  });
+
+  it('keeps halt markers when authorization event append fails', async () => {
+    const { root, slug, worktree } = await fixture();
+    const out: string[] = [];
+    const command = detectHaltClearCommand(['node', 'ai-conductor', 'halt', 'clear', '--feature', slug, '--rationale', 'resolved']);
+
+    expect(await dispatchHaltClearCommand(command!, {
+      cwd: root,
+      resolveMainRoot: async () => root,
+      resolveOperator: () => 'op',
+      isInteractive: () => true,
+      appendEvent: () => { throw new Error('event store unavailable'); },
+      print: (line) => out.push(line),
+    })).not.toBe(0);
+
+    await expect(access(join(worktree, '.pipeline', 'HALT'))).resolves.toBeUndefined();
+    await expect(access(join(worktree, '.pipeline', 'HALT.class'))).resolves.toBeUndefined();
+    expect(out.join('\n')).toContain('event store unavailable');
+  });
+
+  it('clears halt markers but warns when the durable record cannot be pushed', async () => {
+    const { root, slug, worktree } = await fixture();
+    const out: string[] = [];
+    const command = detectHaltClearCommand(['node', 'ai-conductor', 'halt', 'clear', '--feature', slug, '--rationale', 'resolved']);
+
+    expect(await dispatchHaltClearCommand(command!, {
+      cwd: root,
+      resolveMainRoot: async () => root,
+      resolveOperator: () => 'op',
+      isInteractive: () => true,
+      supersedeRecord: async () => ({ kind: 'pushFailed', reason: 'remote down' }),
+      print: (line) => out.push(line),
+    })).toBe(0);
+
+    await expect(access(join(worktree, '.pipeline', 'HALT'))).rejects.toThrow();
+    await expect(access(join(worktree, '.pipeline', 'HALT.class'))).rejects.toThrow();
+    const events = (await readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'halt_clear_authorized' });
+    expect(out.join('\n')).toContain('remote down');
   });
 });

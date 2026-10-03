@@ -21,6 +21,7 @@ export interface HaltClearCliDeps {
   print?: (message: string) => void;
   resolveMainRoot?: (cwd: string) => Promise<string>;
   appendEvent?: (worktree: string, event: HaltClearEvent) => void | Promise<void>;
+  supersedeRecord?: typeof supersedeHaltRecord;
 }
 
 async function appendAuthorizationEvent(
@@ -60,7 +61,8 @@ export async function dispatchHaltClearCommand(
     print('halt clear: requires an interactive local operator terminal.');
     return 2;
   }
-  if (!isAcceptableOperatorRationale(command.rationale)) {
+  const rationale = command.rationale?.trim();
+  if (!isAcceptableOperatorRationale(command.rationale) || !rationale) {
     print('halt clear: invalid rationale.');
     return 2;
   }
@@ -89,10 +91,9 @@ export async function dispatchHaltClearCommand(
     type: 'halt_clear_authorized',
     feature: command.feature,
     operator: operator.trim(),
-    rationale: command.rationale.trim(),
+    rationale,
     haltClass,
     step,
-    ts: new Date().toISOString(),
   };
   try {
     await appendAuthorizationEvent(worktree, event, deps.appendEvent);
@@ -102,6 +103,10 @@ export async function dispatchHaltClearCommand(
   }
   await unlink(join(worktree, HALT_CLASS_MARKER));
   await unlink(join(worktree, HALT_MARKER));
-  await supersedeHaltRecord(worktree, command.feature, 'operator');
+  const recordResult = await (deps.supersedeRecord ?? supersedeHaltRecord)(worktree, command.feature, 'operator');
+  if (recordResult.kind !== 'written' && recordResult.kind !== 'noop') {
+    const reason = 'reason' in recordResult ? recordResult.reason : 'record was not updated';
+    print(`halt clear: warning — halt record ${recordResult.kind}: ${reason}`);
+  }
   return 0;
 }
