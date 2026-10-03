@@ -279,6 +279,16 @@ byte copy, still deterministic and refuse-to-clobber.
 > command when the base or change set is uncomputable, empty, or touches any path that is not plain
 > source or a test file. `aggregate` and `scoped` semantics are unchanged; absent config is unchanged.
 
+> **Amended 2026-10-03 (operator-approved test-suite hotfix, full-suite policy):** `changed` mode gains
+> `test_suite.verification.full_suite`, accepted only with `mode: changed` (any other mode is a
+> validation error) and closed to three values. `before_publish` (default) keeps the amendment above:
+> publication requires a current aggregate-basis PASS. `once` requires one aggregate-basis PASS per
+> feature: the first such PASS stamps `aggregatePassedAt` into the test-suite evidence, every later
+> evidence write (PASS or FAIL) carries it forward, and once present a changed-basis PASS satisfies the
+> FINISH fence and SHIP re-check so the aggregate is never re-dispatched. `skip` never requires the
+> aggregate: a changed-basis PASS satisfies publication. Changed-only laps still gate every BUILD lap,
+> and fail-closed aggregate selection is unchanged under all three values. No new event or file.
+
 ## Consequences
 
 ### Positive

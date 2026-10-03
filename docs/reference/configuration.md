@@ -643,6 +643,7 @@ The project-owned aggregate verification command run by the pre-SHIP `test_suite
 | `test_suite.inputs` | string[] | No | Array of strings (`config.ts:1276-1287`) | none |
 | `test_suite.environment` | string[] | No | Array of strings | none |
 | `test_suite.verification.mode` | `aggregate` \| `scoped` \| `changed` | No | `scoped` requires `test_suite.scoped_command`; `changed` requires `test_suite.changed_command`; unknown modes are rejected | `aggregate` |
+| `test_suite.verification.full_suite` | `before_publish` \| `once` \| `skip` | No | Only valid with `verification.mode: changed` (rejected with any other mode); unknown values are rejected | `before_publish` (in `changed` mode) |
 | `test_suite.verification.drift_budget` | category → `none` \| positive integer \| `unlimited` | No | Only budgetable fingerprint categories are accepted; dependency, migration, environment, and project-config drift always re-runs | all categories `none` |
 
 `environment` holds environment variable **names**, not values. Each value is HMAC'd into the full-suite
@@ -672,6 +673,18 @@ aggregate `command`/`commands` exactly once. A lap fails closed to the aggregate
 merge-base or changed set cannot be computed, when nothing changed, or when any changed path is not a
 plain source or test file (dependencies, project config, environment, migrations, declared inputs, test
 setup/helpers/fixtures, any `*.config.*` for a test runner, or anything under `scripts/`).
+
+`verification.full_suite` controls that publication requirement in `changed` mode:
+
+- `before_publish` (default): as above — publication needs a current aggregate-basis PASS, re-run
+  whenever later changes make it stale.
+- `once`: the aggregate must pass once per feature. The first aggregate-basis PASS is stamped into the
+  test-suite evidence (`aggregatePassedAt`) and carried across every later evidence write, so restarts
+  and re-kicks honour it; after that a changed-basis PASS satisfies FINISH/SHIP and the aggregate is not
+  re-dispatched, even when later laps change code.
+- `skip`: the aggregate never runs for publication; the changed-basis PASS satisfies FINISH/SHIP.
+
+In every case each BUILD lap still runs the changed-only command (or fails closed to the aggregate).
 
 ## llm_provider
 

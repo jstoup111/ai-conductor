@@ -66,6 +66,12 @@ export interface FullSuitePassEvidence {
   selectors?: string[];
   /** Defaults from the recorded mode; scoped-empty records its aggregate fallback explicitly. */
   executionBasis?: FullSuiteExecutionBasis;
+  /**
+   * `changed` mode: when this feature's first aggregate-basis PASS was
+   * recorded. Carried forward across later evidence writes so
+   * `full_suite: once` survives restarts and later changed-only laps.
+   */
+  aggregatePassedAt?: string;
   /** Starts empty for a new PASS epoch; later tasks append drift observations. */
   driftLedger?: FullSuiteDriftLedgerEntry[];
   worktreeClean?: boolean;
@@ -100,6 +106,8 @@ interface FullSuiteFailEvidenceBase {
   outcome: 'FAIL';
   fingerprint: string | null;
   provenanceHeadSha: string | null;
+  /** See FullSuitePassEvidence.aggregatePassedAt; carried across FAIL writes. */
+  aggregatePassedAt?: string;
   worktreeClean?: boolean;
   command: string | null;
   workingDirectory: string | null;
@@ -388,6 +396,7 @@ function isPassEvidence(
     isPassMode(value.mode) &&
     isSelectors(value.selectors) &&
     isOptionalExecutionBasis(value.executionBasis) &&
+    (value.aggregatePassedAt === undefined || isNonEmptyString(value.aggregatePassedAt)) &&
     Array.isArray(value.driftLedger) && value.driftLedger.every(isDriftLedgerEntry) &&
     isOptionalBoolean(value.worktreeClean) &&
     isNullableBoundedNonEmptyString(value.command) &&
@@ -416,6 +425,7 @@ function isFailEvidence(
     FAILURE_REASONS.has(reason as FullSuiteFailureReason) &&
     isNullableNonEmptyString(value.fingerprint) &&
     isNullableNonEmptyString(value.provenanceHeadSha) &&
+    (value.aggregatePassedAt === undefined || isNonEmptyString(value.aggregatePassedAt)) &&
     isOptionalBoolean(value.worktreeClean) &&
     isNullableBoundedNonEmptyString(value.command) &&
     isNullableBoundedNonEmptyString(value.workingDirectory) &&

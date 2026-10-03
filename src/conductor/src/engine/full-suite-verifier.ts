@@ -1067,10 +1067,21 @@ export class FullSuiteVerifier {
       environment = process.env,
       execute = executeFullSuite,
       readEvidence = readFullSuiteEvidence,
-      writeEvidence = writeFullSuiteEvidence,
+      writeEvidence: rawWriteEvidence = writeFullSuiteEvidence,
     } = this.options;
 
     try {
+      // `changed` mode: carry the feature's first aggregate-PASS marker across
+      // every evidence write so `full_suite: once` is durable.
+      const priorAggregatePassedAt = await this.priorAggregatePassedAt();
+      const writeEvidence: typeof writeFullSuiteEvidence = (root, evidence, secrets) =>
+        rawWriteEvidence(
+          root,
+          priorAggregatePassedAt === undefined || evidence.aggregatePassedAt !== undefined
+            ? evidence
+            : { ...evidence, aggregatePassedAt: priorAggregatePassedAt },
+          secrets,
+        );
       // An inspection supplied by an execution-owning caller is also its record of
       // pre-lock drift. Do not mutate or replace that object. A stale result, though,
       // cannot decide whether to execute after waiting for another verifier: that
@@ -1244,6 +1255,9 @@ export class FullSuiteVerifier {
             ? 'scoped'
             : 'scoped-empty-selection-aggregate'
           : 'aggregate',
+        ...(verificationMode === 'changed' && selection.status !== 'CHANGED'
+          ? { aggregatePassedAt: priorAggregatePassedAt ?? execution.endedAt }
+          : {}),
       };
       try {
         await writeEvidence(projectRoot, evidence, secretValues);
@@ -1282,6 +1296,33 @@ export class FullSuiteVerifier {
         message: 'Full-suite verification failed',
       };
     }
+  }
+
+  private async priorAggregatePassedAt(): Promise<string | undefined> {
+    const { readEvidence = readFullSuiteEvidence } = this.options;
+    try {
+      const prior = await readEvidence(this.options.projectRoot);
+      return prior.evidence?.aggregatePassedAt;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Apply `test_suite.verification.full_suite` to a caller's aggregate
+   * requirement: `skip` drops it; `once` drops it after the feature's first
+   * recorded aggregate PASS; `before_publish` keeps it.
+   */
+  private async effectiveRequireAggregate(
+    testSuite: TestSuiteConfig,
+    options: FullSuiteVerifyOptions,
+  ): Promise<boolean> {
+    if (options.requireAggregate !== true) return false;
+    if (testSuite.verification?.mode !== 'changed') return true;
+    const policy = testSuite.verification.full_suite ?? 'before_publish';
+    if (policy === 'skip') return false;
+    if (policy === 'once') return (await this.priorAggregatePassedAt()) === undefined;
+    return true;
   }
 
   private async resolveInspection(options: FullSuiteVerifyOptions = {}): Promise<ResolvedInspection> {
@@ -1326,11 +1367,12 @@ export class FullSuiteVerifier {
       }
       const aggregateTestSuite: AggregateTestSuiteConfig = testSuite as AggregateTestSuiteConfig;
       const verificationMode = aggregateTestSuite.verification?.mode ?? 'aggregate';
+      const requireAggregate = await this.effectiveRequireAggregate(aggregateTestSuite, options);
       const selection: FullSuiteScopedSelection = verificationMode === 'scoped'
         ? await deriveFullSuiteScopedSelection(
           this.options.git ?? productionFullSuiteGitRunner(projectRoot),
         )
-        : verificationMode === 'changed' && options.requireAggregate !== true
+        : verificationMode === 'changed' && !requireAggregate
           ? await deriveFullSuiteChangedSelection(
             this.options.git ?? productionFullSuiteGitRunner(projectRoot),
           )
@@ -1393,7 +1435,7 @@ export class FullSuiteVerifier {
           context,
         };
       }
-      if (options.requireAggregate === true && persisted.evidence.executionBasis === 'changed') {
+      if (requireAggregate && persisted.evidence.executionBasis === 'changed') {
         return {
           inspection: { status: 'STALE', reason: 'aggregate_required' },
           context,

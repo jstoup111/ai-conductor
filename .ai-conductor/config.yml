@@ -126,7 +126,7 @@ test_suite:
   # `changed` mode: each BUILD-lap test_suite run executes only the tests
   # Vitest relates to files changed since the merge-base with origin/<default>
   # ({base}), plus the integrity suite. The FINISH validation fence requires an
-  # aggregate-basis PASS, so `commands` above runs in full exactly once before
+  # aggregate-basis PASS (subject to verification.full_suite), so `commands` runs in full before
   # SHIP. Changes to dependencies, config, test infrastructure (setup, helpers,
   # vitest configs) or scripts/ fail closed to the full `commands` sequence.
   changed_command: 'node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 --passWithNoTests --changed {base} && cd ../.. && test/test_harness_integrity.sh'
@@ -157,6 +157,9 @@ test_suite:
   # re-run.
   verification:
     mode: changed
+    # One aggregate PASS per feature; afterwards changed-only laps satisfy
+    # FINISH/SHIP (before_publish = re-run when stale; skip = never).
+    full_suite: once
     drift_budget:
       source: 6
       tests: 3

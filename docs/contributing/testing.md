@@ -53,7 +53,9 @@ lap's `test_suite` gate runs only the tests Vitest relates to files changed sinc
 `origin/main` (`--changed <merge-base>`), plus the integrity suite. The FINISH validation fence requires
 full-suite evidence, so the aggregate `npm test` runs once before the PR opens. Any change to
 dependencies, config, test setup/helpers, a Vitest config, or `scripts/` makes the lap run the full suite
-instead. See [configuration](../reference/configuration.md#test_suite).
+instead. The repository sets `test_suite.verification.full_suite: once`, so that full run happens once
+per feature: after the first full-suite PASS, later laps' changed-only passes satisfy publication and the
+full suite is not re-run. See [configuration](../reference/configuration.md#test_suite).
 
 ### The engine-dist guard
 

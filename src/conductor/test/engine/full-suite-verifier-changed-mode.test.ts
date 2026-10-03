@@ -34,7 +34,7 @@ function gitWith(changed: string[], options: { mergeBase?: number } = {}): FullS
   };
 }
 
-async function changedModeProject(): Promise<string> {
+async function changedModeProject(fullSuite?: string): Promise<string> {
   const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-changed-mode-'));
   scratches.push(projectRoot);
   const config = join(projectRoot, '.ai-conductor/config.yml');
@@ -45,6 +45,7 @@ async function changedModeProject(): Promise<string> {
     "  changed_command: 'node suite.mjs --changed {base}'",
     '  verification:',
     '    mode: changed',
+    ...(fullSuite === undefined ? [] : [`    full_suite: ${fullSuite}`]),
     '',
   ].join('\n'));
   return projectRoot;
@@ -67,10 +68,21 @@ function recordingExecute(projectRoot: string, commands: string[]) {
   };
 }
 
-const fixedFingerprint = async () => ({
+const fingerprintAt = (digest: string) => async () => ({
   ok: true as const,
-  fingerprint: { digest: 'sha256:changed', headSha: 'head', categoryFingerprints: CATEGORY_FINGERPRINTS },
+  fingerprint: { digest, headSha: 'head', categoryFingerprints: CATEGORY_FINGERPRINTS },
 });
+const fixedFingerprint = fingerprintAt('sha256:changed');
+
+function verifierFor(projectRoot: string, commands: string[], digest: string) {
+  return new FullSuiteVerifier({
+    projectRoot,
+    execute: recordingExecute(projectRoot, commands),
+    fingerprint: fingerprintAt(digest),
+    git: gitWith(['src/a.ts']),
+    worktreeStatus: async () => '',
+  } as never);
+}
 
 describe('changed-only test_suite selection', () => {
   it.each([
@@ -137,5 +149,52 @@ describe('FullSuiteVerifier changed mode', () => {
     } as never).ensure();
     expect(result).toMatchObject({ status: 'EXECUTED', evidence: { executionBasis: 'aggregate' } });
     expect(commands).toEqual(['node suite.mjs --all']);
+  });
+});
+
+describe('test_suite.verification.full_suite policy at publication', () => {
+  it('before_publish: a changed-only PASS never satisfies publication; the aggregate re-runs after later changes', async () => {
+    const projectRoot = await changedModeProject('before_publish');
+    const commands: string[] = [];
+    await verifierFor(projectRoot, commands, 'sha256:one').ensure(undefined, { requireAggregate: true });
+    await verifierFor(projectRoot, commands, 'sha256:two').ensure();
+    const ship = verifierFor(projectRoot, commands, 'sha256:two');
+    await expect(ship.inspect({ requireAggregate: true }))
+      .resolves.toEqual({ status: 'STALE', reason: 'aggregate_required' });
+    await ship.ensure(undefined, { requireAggregate: true });
+    expect(commands).toEqual(['node suite.mjs --all', `node suite.mjs --changed ${BASE}`, 'node suite.mjs --all']);
+  });
+
+  it('once: requires the aggregate until the first aggregate PASS, then changed-only laps satisfy publication', async () => {
+    const projectRoot = await changedModeProject('once');
+    const commands: string[] = [];
+    await verifierFor(projectRoot, commands, 'sha256:one').ensure();
+    await expect(verifierFor(projectRoot, commands, 'sha256:one').inspect({ requireAggregate: true }))
+      .resolves.toEqual({ status: 'STALE', reason: 'aggregate_required' });
+
+    const first = await verifierFor(projectRoot, commands, 'sha256:one').ensure(undefined, { requireAggregate: true });
+    expect(first).toMatchObject({ evidence: { executionBasis: 'aggregate', aggregatePassedAt: expect.any(String) } });
+
+    // Later lap changes code; a fresh verifier stands in for a restart / re-kick.
+    const lap = await verifierFor(projectRoot, commands, 'sha256:two').ensure();
+    expect(lap).toMatchObject({ evidence: { executionBasis: 'changed', aggregatePassedAt: expect.any(String) } });
+    const ship = verifierFor(projectRoot, commands, 'sha256:two');
+    await expect(ship.inspect({ requireAggregate: true })).resolves.toMatchObject({ status: 'CURRENT' });
+    await expect(ship.ensure(undefined, { requireAggregate: true })).resolves.toMatchObject({ status: 'REUSED' });
+    expect(commands).toEqual([
+      `node suite.mjs --changed ${BASE}`,
+      'node suite.mjs --all',
+      `node suite.mjs --changed ${BASE}`,
+    ]);
+  });
+
+  it('skip: the changed-only PASS satisfies publication and the aggregate never runs', async () => {
+    const projectRoot = await changedModeProject('skip');
+    const commands: string[] = [];
+    await verifierFor(projectRoot, commands, 'sha256:one').ensure();
+    const ship = verifierFor(projectRoot, commands, 'sha256:one');
+    await expect(ship.inspect({ requireAggregate: true })).resolves.toMatchObject({ status: 'CURRENT' });
+    await expect(ship.ensure(undefined, { requireAggregate: true })).resolves.toMatchObject({ status: 'REUSED' });
+    expect(commands).toEqual([`node suite.mjs --changed ${BASE}`]);
   });
 });

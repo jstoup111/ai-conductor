@@ -310,6 +310,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'test_suite.commands[].working_directory': consumer(FULL_SUITE_EXECUTOR),
   'test_suite.commands[].timeout_seconds': consumer(FULL_SUITE_EXECUTOR),
   'test_suite.verification.mode': consumer(FULL_SUITE_VERIFIER),
+  'test_suite.verification.full_suite': consumer(FULL_SUITE_VERIFIER),
   'test_suite.verification.drift_budget': consumer(FULL_SUITE_VERIFIER),
 
   // ── build_progress ────────────────────────────────────────────────────────

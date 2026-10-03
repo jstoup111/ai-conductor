@@ -150,7 +150,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   tracker: ['backend', 'transport', 'credentials', 'site', 'project_key'],
   test_suite: ['command', 'commands', 'scoped_command', 'changed_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment', 'verification'],
   'test_suite.commands[]': TEST_SUITE_COMMAND_ENTRY_KEYS,
-  'test_suite.verification': ['mode', 'drift_budget'],
+  'test_suite.verification': ['mode', 'full_suite', 'drift_budget'],
   build_progress: ['poll_seconds', 'quiet_minutes', 'heartbeat_minutes', 'enabled'],
   provider_stream: ['min_interval_ms'],
   build_progress_halt: ['enabled', 'attempt_ceiling', 'dispatch_ceiling'],
@@ -2406,6 +2406,21 @@ function validateTestSuiteVerification(
     };
   }
 
+  if (raw.full_suite !== undefined) {
+    if (raw.full_suite !== 'before_publish' && raw.full_suite !== 'once' && raw.full_suite !== 'skip') {
+      return {
+        type: 'validation_error',
+        message: `test_suite.verification.full_suite ${JSON.stringify(raw.full_suite)} must be "before_publish", "once", or "skip"`,
+      };
+    }
+    if (raw.mode !== 'changed') {
+      return {
+        type: 'validation_error',
+        message: 'test_suite.verification.full_suite is only valid when test_suite.verification.mode is "changed"',
+      };
+    }
+  }
+
   if (raw.mode === 'scoped' && scopedCommand === undefined) {
     return {
       type: 'validation_error',
@@ -2462,6 +2477,13 @@ function resolveTestSuiteVerification(raw: unknown): TestSuiteVerificationConfig
 
   return {
     mode,
+    ...(mode === 'changed'
+      ? {
+          full_suite: verification.full_suite === 'once' || verification.full_suite === 'skip'
+            ? verification.full_suite
+            : 'before_publish' as const,
+        }
+      : {}),
     drift_budget: Object.fromEntries(
       TEST_SUITE_DRIFT_CATEGORIES.map((category) => {
         const bound = rawBudget[category];

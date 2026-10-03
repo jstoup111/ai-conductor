@@ -456,8 +456,18 @@ export type TestSuiteDriftCategory =
 export type TestSuiteDriftBudgetBound = 'none' | 'unlimited' | number;
 
 /** Fully resolved verification settings with a bound for every drift category. */
+/**
+ * When `changed` mode runs the aggregate suite before publication:
+ * `before_publish` requires a current aggregate PASS at FINISH/SHIP;
+ * `once` requires one aggregate PASS per feature, then changed-only laps suffice;
+ * `skip` never requires it (the changed-only PASS satisfies FINISH/SHIP).
+ */
+export type TestSuiteFullSuitePolicy = 'before_publish' | 'once' | 'skip';
+
 export interface TestSuiteVerificationConfig {
   mode: TestSuiteVerificationMode;
+  /** Only meaningful (and only accepted) with mode `changed`; defaults to `before_publish`. */
+  full_suite?: TestSuiteFullSuitePolicy;
   drift_budget: Record<TestSuiteDriftCategory, TestSuiteDriftBudgetBound>;
 }
 
