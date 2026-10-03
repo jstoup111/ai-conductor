@@ -1346,7 +1346,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const sessionId = uuidv4();
     const persistence = startFeatureEventPersistence(worktree.path, events, item.slug);
     const featureEvents = persistence.events;
-    const providerExecution = createProviderExecution(featureEvents, featureLogFor(item.slug));
+    const featureLog = featureLogFor(item.slug);
+    const providerExecution = createProviderExecution(featureEvents, featureLog);
     const provider = providerExecution.configuredProviders[0];
     let managedSessionContext: ManagedSessionContext;
     try {
@@ -1375,7 +1376,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       metrics: false,
       harnessVersion: await resolveHarnessVersion(__dirname),
     }, featureEvents);
-    const featureLog = featureLogFor(item.slug);
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
     const renderableEvents = renderedEventTypes();
     for (const type of renderableEvents) featureEvents.on(type, renderEvent);
@@ -1383,12 +1383,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const stop = (): Promise<void> => {
       if (stopPromise) return stopPromise;
       stopPromise = (async () => {
-        // Drain producer-backed observations while the feature renderers and
-        // canonical persister are still subscribed. This is deliberately
-        // before visualizer/renderer teardown so final records retain the
-        // same feature attribution as records delivered during dispatch.
-        await persistence.drain();
+        // OTel shutdown can itself report a renderer error. Stop it while the
+        // feature persister remains subscribed, then drain producers before
+        // detaching feature renderers.
         await visualizer?.stop();
+        await persistence.drain();
         await daemonOtel?.flush();
         for (const type of renderableEvents) featureEvents.off(type, renderEvent);
       })();

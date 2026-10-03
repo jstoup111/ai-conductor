@@ -571,6 +571,10 @@ describe('conductor auth-park: daemon-token mode', () => {
   });
 
   it('keeps degraded-preflight recovery on the selected Codex model ladder without mutating provider state', async () => {
+    // This case owns the BUILD authentication ladder, not FINISH publication.
+    // Keep its fixture at that boundary so a missing production coordinator
+    // cannot turn a successful ladder recovery into an unrelated halt.
+    await writeState(statePath, { ...READY_STATE, finish: 'done' });
     const probeFailed = {
       provider: 'codex' as const,
       source: 'cached-login' as const,
