@@ -858,7 +858,7 @@ Add a reusable test helper.
       await loadAutoheal();
       const fixturePath = join(
         __dirname,
-        '../../../../.docs/plans/2026-07-12-rtk-hook-preservation.md',
+        '../fixtures/plans/2026-07-12-rtk-hook-preservation.md',
       );
       const planText = await readFile(fixturePath, 'utf-8');
 
@@ -1135,7 +1135,7 @@ describe('parsePlanTaskVerifyOnly', () => {
   // Regression (Task 2, verify-only-prove-closed-task-evidence plan): the new
   // `**Verify-only:**` marker grammar (Task 1) must be inert against the
   // existing committed plan corpus, none of which carries the marker. Sweeps
-  // representative real fixtures under .docs/plans/ — spanning both header
+  // representative real plans (copied to test/fixtures/plans/) — spanning both header
   // grammars (`### Task N:` and bare `### T<N>` shorthand) — and asserts
   // parsePlanTaskVerifyOnly yields zero true entries and parsePlanTaskPaths'
   // output is unchanged (snapshotted) for the same plan text.
@@ -1148,7 +1148,7 @@ describe('parsePlanTaskVerifyOnly', () => {
 
     it.each(fixtures)('%s: zero verify-only true entries, unchanged parsePlanTaskPaths', async (fixture) => {
       const mod = await loadAutoheal();
-      const fixturePath = join(__dirname, '../../../../.docs/plans/', fixture);
+      const fixturePath = join(__dirname, '../fixtures/plans/', fixture);
       const planText = await readFile(fixturePath, 'utf-8');
 
       const pathsResult = parsePlanTaskPaths(planText);

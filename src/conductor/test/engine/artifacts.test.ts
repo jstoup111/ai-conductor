@@ -3504,7 +3504,7 @@ describe('engine/artifacts', () => {
           // incident plan as non-empty, independent of evidence/completion.
           const fixturePath = join(
             __dirname,
-            '../../../../.docs/plans/2026-07-12-rtk-hook-preservation.md',
+            '../fixtures/plans/2026-07-12-rtk-hook-preservation.md',
           );
           const fixtureText = await readFile(fixturePath, 'utf-8');
           await writePlan(fixtureText);
