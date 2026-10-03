@@ -395,6 +395,28 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(order.attemptedCaseIds).toHaveLength(1);
   });
 
+  it('preserves parser rejection identities through the production remediate dispatch', async () => {
+    const run = await fixture({
+      judgement: {
+        mode: 'case-v2', domain: 'build_review',
+        sourceOutcomes: [{ sourceId: SOURCE_ID, outcome: 'acted', caseRef: 'case-invalid' }],
+        cases: [{
+          caseRef: 'case-invalid', existingCaseId: 'case-existing', distinctFrom: ['case-distinct'],
+          disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Invalid mutually exclusive keys.',
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'This must not be routed.' }] },
+        }],
+        consistency: { verdict: 'consistent', sourceIds: [SOURCE_ID], caseRefs: ['case-invalid'], rationale: 'Invalid row is rejected before consistency.' },
+      },
+    });
+
+    expect(run.dispatched).toEqual(['build_review', 'remediate']);
+    expect(run.lifecycle).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'invalid-judgement',
+      caseIds: ['case-existing', 'case-distinct'], sourceIds: [SOURCE_ID],
+    }));
+    expect(run.lifecycle).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_completed' }));
+  });
+
   it('selects case-v2 for a custom source and releases only its shared authorized action after settlement', async () => {
     const customSource = projectBuildReviewAggregateSources(customAggregate())![0]!;
     const run = await fixture({
