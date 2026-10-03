@@ -19,6 +19,7 @@ import {
   epochAnchoredMonotonicClock,
   observeInterval,
   type IntervalClock,
+  type ObservedInterval,
 } from './observed-interval.js';
 import {
   deriveProviderExitFacts,
@@ -37,6 +38,14 @@ import { providerDescriptor } from './provider-catalog.js';
 
 function codexDisplayName(): string {
   return providerDescriptor('codex').displayName;
+}
+
+function abortedInvocationResult(): InvokeResult {
+  return {
+    success: false,
+    output: `${codexDisplayName()} invocation aborted.`,
+    exitCode: 1,
+  };
 }
 
 // These are deliberately Codex-specific rather than reusing Claude's error
@@ -306,6 +315,7 @@ export class CodexProvider implements LLMProvider {
     // session id, but the invariant is enforced uniformly at every adapter
     // entry so no future arg-building change can resurrect reuse.
     options = enforceFreshSessionOptions(options, 'codex');
+    if (options.abortSignal?.aborted) return abortedInvocationResult();
     const repl = options.interactive === true;
     const jsonOutput = !repl;
     // A real interactive session leaves authorization to the operator. Auto
@@ -337,23 +347,35 @@ export class CodexProvider implements LLMProvider {
     };
     let streamedTokenUsage: TokenUsage | undefined;
 
-    const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
-      const subprocess = this.spawnCodex(command.executable, command.args, {
-        reject: false,
-        input: this.composePrompt(options),
-        stdin: 'pipe',
-        stdout: options.diagnosticLog ? 'pipe' : repl ? ['pipe', 'inherit'] : 'pipe',
-        stderr: options.diagnosticLog ? 'pipe' : repl ? ['pipe', 'inherit'] : 'pipe',
-        cwd: options.cwd,
-        env: command.env,
-      }, {
-        ...options,
-        onProviderStream: repl ? undefined : options.streamConsumer?.onProviderStream ?? options.onProviderStream,
-      }, repl ? undefined : (usage) => {
-        streamedTokenUsage = accumulateTokenUsage(streamedTokenUsage, usage);
+    let result: Awaited<ResultPromise>;
+    let interval: ObservedInterval;
+    try {
+      const observed = await observeInterval(this.intervalClock, async () => {
+        const subprocess = this.spawnCodex(command.executable, command.args, {
+          reject: false,
+          input: this.composePrompt(options),
+          stdin: 'pipe',
+          stdout: options.diagnosticLog ? 'pipe' : repl ? ['pipe', 'inherit'] : 'pipe',
+          stderr: options.diagnosticLog ? 'pipe' : repl ? ['pipe', 'inherit'] : 'pipe',
+          cwd: options.cwd,
+          env: command.env,
+        }, {
+          ...options,
+          onProviderStream: repl ? undefined : options.streamConsumer?.onProviderStream ?? options.onProviderStream,
+        }, repl ? undefined : (usage) => {
+          streamedTokenUsage = accumulateTokenUsage(streamedTokenUsage, usage);
+        });
+        return subprocess;
       });
-      return subprocess;
-    });
+      result = observed.value;
+      interval = observed.interval;
+    } catch (error) {
+      if (options.abortSignal?.aborted || (error as { isCanceled?: unknown }).isCanceled === true) {
+        return abortedInvocationResult();
+      }
+      throw error;
+    }
+    if (options.abortSignal?.aborted) return abortedInvocationResult();
 
     this.logDiagnostics(result, options.diagnosticLog);
 
@@ -443,11 +465,14 @@ export class CodexProvider implements LLMProvider {
     executable: string,
     args: readonly string[],
     options: ExecaOptions,
-    watchdogOptions: Pick<InvokeOptions, 'onActivity' | 'onProviderStream' | 'onSpawn' | 'spawnPermit'>,
+    watchdogOptions: Pick<InvokeOptions, 'abortSignal' | 'onActivity' | 'onProviderStream' | 'onSpawn' | 'spawnPermit'>,
     onTokenUsage?: (usage: TokenUsage) => void,
   ): ResultPromise {
     this.assertSpawnPermitted(watchdogOptions.spawnPermit);
-    const subprocess = this.subprocessFactory(executable, args, options);
+    const subprocess = this.subprocessFactory(executable, args, {
+      ...options,
+      ...(watchdogOptions.abortSignal === undefined ? {} : { cancelSignal: watchdogOptions.abortSignal }),
+    });
     this.wireActivityWatchdog(subprocess, watchdogOptions, onTokenUsage);
     return subprocess;
   }
