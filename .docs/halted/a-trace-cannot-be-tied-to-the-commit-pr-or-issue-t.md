@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-03T07:36:27.488Z
 Slug: a-trace-cannot-be-tied-to-the-commit-pr-or-issue-t
 Class: needs-human
 Halting step: unknown
