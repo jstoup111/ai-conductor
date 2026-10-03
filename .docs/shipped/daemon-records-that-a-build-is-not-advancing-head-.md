@@ -4,6 +4,12 @@ spec_hash: aa0c6f3ad0f5a8210624343591818d5a8717f27a20e5ea0caf72c69c8597f3ac
 pr: https://github.com/jstoup111/ai-conductor/pull/2952
 shipped: 2026-10-03
 engine_version: 20261003T154506Z-bedb65cf8e47
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: S5.5
+    summary: "src/conductor/src/engine/config.ts:2612-2626 — poll bound also enforced against the resolved 45-minute default when the key is omitted"
+    accepted: true
 ---
 
 ## Cost
