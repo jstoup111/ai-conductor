@@ -54,6 +54,7 @@ import {
   supportsProviderCapability,
 } from '../execution/provider-catalog.js';
 import type { ManagedSessionContext } from '../execution/managed-session-context.js';
+import { prepareManagedGhObservation } from '../execution/managed-session-preparation.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -981,6 +982,14 @@ export async function executeProviderCandidates({
           : candidateOptions.providerStreamObserverForCandidate?.(providerKey);
         try {
           selfHost = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index });
+          // Only a native provider adapter owns a managed child process. Test
+          // runtimes and policy-only providers receive the context as data but
+          // must not acquire a filesystem wrapper as a side effect.
+          if (candidateOptions.managedSessionContext && runtime.provider.lifecycleCapability?.synchronousSpawnPermit === true) {
+            await prepareManagedGhObservation({
+              context: candidateOptions.managedSessionContext,
+            });
+          }
           if (candidateOptions.readOnlyReview && candidateOptions.managedSessionContext && prepareManagedSessionObservation) {
             await prepareManagedSessionObservation({
               provider: providerKey,

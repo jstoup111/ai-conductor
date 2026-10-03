@@ -27,6 +27,7 @@ import { enforceFreshSessionOptions } from './fresh-session.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
+import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
 import {
   inferRateLimitWaitSeconds,
   rateLimitDurationUnitAlternation,
@@ -926,7 +927,7 @@ export class ClaudeProvider implements LLMProvider {
       ...FOREGROUND_ONLY_ENV,
     });
     return scrubTmuxEnvironment(options.managedSessionContext
-      ? composeManagedSessionEnvironment(options.managedSessionContext, environment)
+      ? composePreparedManagedSessionEnvironment(options.managedSessionContext, composeManagedSessionEnvironment(options.managedSessionContext, environment))
       : environment);
   }
 }

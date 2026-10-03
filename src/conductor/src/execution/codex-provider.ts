@@ -29,6 +29,7 @@ import { enforceFreshSessionOptions } from './fresh-session.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
+import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
@@ -1039,7 +1040,7 @@ export class CodexProvider implements LLMProvider {
       ...auth,
     });
     return scrubTmuxEnvironment(options.managedSessionContext
-      ? composeManagedSessionEnvironment(options.managedSessionContext, environment)
+      ? composePreparedManagedSessionEnvironment(options.managedSessionContext, composeManagedSessionEnvironment(options.managedSessionContext, environment))
       : environment);
   }
 

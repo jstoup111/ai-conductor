@@ -7,6 +7,7 @@ import { providerDescriptor } from './provider-catalog.js';
 import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
+import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
 
 export type PiSubprocessFactory = (
@@ -221,7 +222,7 @@ export class PiProvider implements LLMProvider {
       stderr: 'pipe',
       cwd: options.cwd,
       env: options.managedSessionContext
-        ? composeManagedSessionEnvironment(options.managedSessionContext, environment)
+        ? composePreparedManagedSessionEnvironment(options.managedSessionContext, composeManagedSessionEnvironment(options.managedSessionContext, environment))
         : environment,
     });
     let aborted = false;
