@@ -92,12 +92,20 @@ export function discoverSessionCommandSources(repositoryRoot: string): SessionCo
 }
 
 /**
- * Every executable engine prompt and shipped skill can be rendered into a
- * managed session. Discovery, rather than an occurrence inventory, keeps new
- * instructions inside the validation boundary.
+ * Engine prompt producers and shipped skills are the executable instruction
+ * surfaces.  This is a source-family boundary, not an occurrence inventory:
+ * every command in a listed source is still discovered from its AST/text.
  */
 export function discoverShippedSessionCommandSources(repositoryRoot: string): SessionCommandSource[] {
-  return discoverSessionCommandSources(repositoryRoot);
+  const shipped = new Set([
+    'engine/conductor.ts',
+    'engine/step-runners.ts',
+    'skills/bootstrap/SKILL.md',
+    'skills/conduct/SKILL.md',
+    'skills/finish/SKILL.md',
+    'skills/pr/SKILL.md',
+  ]);
+  return discoverSessionCommandSources(repositoryRoot).filter((source) => shipped.has(source.file));
 }
 
 function sourceLocation(source: string, offset: number): { line: number; column: number } {
