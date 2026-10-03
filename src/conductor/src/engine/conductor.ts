@@ -10404,6 +10404,10 @@ export class Conductor {
             : undefined;
           let buildAttemptSettled = false;
           let activeStallEndedAttempt = false;
+          // A second-or-later ended attempt with no task or commit movement
+          // belongs to the established completion-miss stall branch below,
+          // rather than generic failed-attempt retry accounting.
+          let activeStallEndedNoTaskProgress = false;
           const buildWatcher: BuildProgressWatcher | null =
             step.name === 'build' && resolveBuildProgressConfig(this.config).enabled
               ? new BuildProgressWatcher({
@@ -10756,17 +10760,24 @@ export class Conductor {
               !headMovedThisAttempt
                 ? 'no_task_progress'
                 : 'active_stall';
+            activeStallEndedNoTaskProgress = reason === 'no_task_progress';
             lastBuildStallReason = reason === 'no_task_progress'
               ? `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))`
               : `build stalled: active without movement for ` +
                 `${resolveBuildProgressConfig(this.config).active_stall_minutes} minutes`;
-            await emitTracked({
-              type: 'build_stall',
-              step: step.name,
-              reason,
-              resolvedBefore: resolvedTasksBefore,
-              resolvedAfter: resolvedTasksAfter,
-            });
+            // The no-task-progress branch emits this event when it performs
+            // the existing remediation/HALT routing below. Defer to that
+            // authoritative emission so the ended attempt remains one stall
+            // episode rather than producing a duplicate event.
+            if (!activeStallEndedNoTaskProgress) {
+              await emitTracked({
+                type: 'build_stall',
+                step: step.name,
+                reason,
+                resolvedBefore: resolvedTasksBefore,
+                resolvedAfter: resolvedTasksAfter,
+              });
+            }
           }
 
           // Rebase setup exhaustion is a pre-invocation environmental refusal.
@@ -11226,7 +11237,7 @@ export class Conductor {
             result = { ...result, success: true };
           }
 
-          if (!result.success) {
+          if (!result.success && !activeStallEndedNoTaskProgress) {
             // D3: a verdict dispatch that returns a non-success outcome still
             // needs its post-settle write observation before this serial loop
             // retries, exhausts, or honors a step-authored HALT. Keep the
