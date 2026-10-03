@@ -1,9 +1,14 @@
 import { parseIntakeSourceRef, planStem, resolveFeaturePlanPath, type FinishChoice } from './artifacts.js';
-import type { GitRunner } from './rebase.js';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export type PrDisposition = 'opened' | 'none' | 'unrecorded';
+
+/** The read-only subset needed to resolve terminal HEAD provenance. */
+type HeadGitRunner = (
+  args: string[],
+  opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' },
+) => Promise<{ exitCode?: number; stdout: string }>;
 
 /** Classify the terminal PR state without conflating no PR with no record. */
 export function resolvePrDisposition({
@@ -19,11 +24,11 @@ export function resolvePrDisposition({
 }
 
 /** Resolve the current worktree HEAD without allowing provenance failure to block a run. */
-export async function resolveHeadSha(git: GitRunner): Promise<string | undefined> {
+export async function resolveHeadSha(git: HeadGitRunner, cwd: string): Promise<string | undefined> {
   try {
-    const result = await git(['rev-parse', 'HEAD']);
+    const result = await git(['rev-parse', 'HEAD'], { cwd });
     const headSha = result.stdout.trim();
-    return result.exitCode === 0 && headSha ? headSha : undefined;
+    return (result.exitCode === undefined || result.exitCode === 0) && headSha ? headSha : undefined;
   } catch {
     return undefined;
   }

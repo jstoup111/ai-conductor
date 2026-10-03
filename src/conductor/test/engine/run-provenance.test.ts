@@ -24,32 +24,32 @@ describe('engine/run-provenance', () => {
 
   describe('resolveHeadSha', () => {
     it('returns the trimmed output from git rev-parse HEAD', async () => {
-      const calls: string[][] = [];
-      const git: GitRunner = async (args) => {
-        calls.push(args);
+      const calls: Array<{ args: string[]; cwd: string | undefined }> = [];
+      const git: GitRunner = async (args, opts) => {
+        calls.push({ args, cwd: opts?.cwd });
         return { exitCode: 0, stdout: '  abc123  \n', stderr: '' };
       };
 
-      await expect(resolveHeadSha(git)).resolves.toBe('abc123');
-      expect(calls).toEqual([['rev-parse', 'HEAD']]);
+      await expect(resolveHeadSha(git, '/repo')).resolves.toBe('abc123');
+      expect(calls).toEqual([{ args: ['rev-parse', 'HEAD'], cwd: '/repo' }]);
     });
 
     it('returns undefined when git exits non-zero', async () => {
       const git: GitRunner = async () => ({ exitCode: 1, stdout: 'abc123\n', stderr: 'failed' });
 
-      await expect(resolveHeadSha(git)).resolves.toBeUndefined();
+      await expect(resolveHeadSha(git, '/repo')).resolves.toBeUndefined();
     });
 
     it('returns undefined when git prints no SHA', async () => {
       const git: GitRunner = async () => ({ exitCode: 0, stdout: ' \n', stderr: '' });
 
-      await expect(resolveHeadSha(git)).resolves.toBeUndefined();
+      await expect(resolveHeadSha(git, '/repo')).resolves.toBeUndefined();
     });
 
     it('returns undefined without throwing when the git runner rejects', async () => {
       const git: GitRunner = async () => Promise.reject(new Error('git unavailable'));
 
-      await expect(resolveHeadSha(git)).resolves.toBeUndefined();
+      await expect(resolveHeadSha(git, '/repo')).resolves.toBeUndefined();
     });
   });
 });

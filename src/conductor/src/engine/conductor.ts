@@ -6124,7 +6124,7 @@ export class Conductor {
     await this.commitStateChanges(state, 'complete verified feature run', {
       feature_status: 'complete',
     });
-    const headSha = await resolveHeadSha(this.git);
+    const headSha = await resolveHeadSha(this.git, this.projectRoot);
     const finishChoice = await readFile(join(this.projectRoot, FINISH_CHOICE_MARKER), 'utf-8')
       .then((choice) => choice.trim() as FinishChoice)
       .catch(() => undefined);
@@ -6157,7 +6157,7 @@ export class Conductor {
       Object.prototype.hasOwnProperty.call(OUT_OF_BAND_STEPS, candidate)
         ? (candidate as StepName)
         : undefined;
-    const headSha = await resolveHeadSha(this.git);
+    const headSha = await resolveHeadSha(this.git, this.projectRoot);
     const finishChoice = await readFile(join(this.projectRoot, FINISH_CHOICE_MARKER), 'utf-8')
       .then((choice) => choice.trim() as FinishChoice)
       .catch(() => undefined);
