@@ -1,10 +1,8 @@
 // Covers: task:16
-import { execFile as execFileCallback } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { wireDaemonOtel, wireInteractiveOtelMetrics, wireOtelVisualizer } from '../../../src/engine/otel/wire.js';
@@ -13,8 +11,8 @@ import { SpoolDrainer } from '../../../src/engine/otel/spool-drainer.js';
 import { SpoolStore } from '../../../src/engine/otel/spool-store.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
-const execFile = promisify(execFileCallback);
 const leaseUnlinkFailures = vi.hoisted(() => new Set<string>());
+const interactiveSpoolDirectories = vi.hoisted(() => new Map<string, string>());
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const filesystem = await importOriginal<typeof import('node:fs/promises')>();
@@ -29,6 +27,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
+vi.mock('../../../src/engine/otel/spool-wiring.js', async (importOriginal) => {
+  const wiring = await importOriginal<typeof import('../../../src/engine/otel/spool-wiring.js')>();
+  return {
+    ...wiring,
+    resolveSpoolDirSync: (startDir: string) => interactiveSpoolDirectories.get(startDir) ?? wiring.resolveSpoolDirSync(startDir),
+  };
+});
+
 const directories: string[] = [];
 const servers: Server[] = [];
 
@@ -39,9 +45,7 @@ async function temporaryDirectory(): Promise<string> {
 }
 
 async function temporaryProject(): Promise<string> {
-  const directory = await temporaryDirectory();
-  await execFile('git', ['init', '--initial-branch=main', directory]);
-  return directory;
+  return temporaryDirectory();
 }
 
 async function closedEndpoint(): Promise<string> {
@@ -71,13 +75,16 @@ async function listeningEndpoint(onRequest: (path: string) => void): Promise<{ e
 }
 
 async function eventually(predicate: () => boolean | Promise<boolean>): Promise<void> {
-  for (let turn = 0; turn < 1_000 && !(await predicate()); turn += 1) {
+  for (let turn = 0; turn < 1_000; turn += 1) {
+    if (await predicate()) return;
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
+  throw new Error('timed out waiting for expected OTel wiring state');
 }
 
 afterEach(async () => {
   leaseUnlinkFailures.clear();
+  interactiveSpoolDirectories.clear();
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -125,6 +132,7 @@ describe('daemon OTel spool wiring', () => {
 
   it('contains an EACCES lease unlink during interactive visualizer and metrics shutdown', async () => {
     const project = await temporaryProject();
+    interactiveSpoolDirectories.set(project, join(project, '.daemon', 'otel-spool'));
     const events = new ConductorEventEmitter();
     const failures: Array<{ rendererName: string; error: string }> = [];
     events.on('renderer_error', (event) => {
