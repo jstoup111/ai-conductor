@@ -36,6 +36,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Telemetry exporters retain buffered OTLP data across transient delivery outages. ([implementation PR #2868](https://github.com/jstoup111/ai-conductor/pull/2868)).
 - Daemon operators can configure detection and automatic termination of active builds that stop advancing. ([implementation PR #2952](https://github.com/jstoup111/ai-conductor/pull/2952)).
 - Intake claims recover stranded work and wait safely for concurrent claims. ([implementation PR #2934](https://github.com/jstoup111/ai-conductor/pull/2934)).
+- Operators can opt Pi dispatches into project-local .pi files with llm_providers.pi.trust_project_files, which stays off by default. ([implementation PR #2896](https://github.com/jstoup111/ai-conductor/pull/2896)).
+- Operators review non-clean as-built architecture verdicts before an interactive run proceeds. ([implementation PR #2939](https://github.com/jstoup111/ai-conductor/pull/2939)).
 
 ### Changed
 
