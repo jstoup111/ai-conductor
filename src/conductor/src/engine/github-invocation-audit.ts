@@ -28,7 +28,7 @@ import { join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { GITHUB_OPERATION_REGISTRY, type GithubOperationName } from './github-operations.js';
 import {
-  auditSessionCommandSource,
+  auditManagedSessionInstructionSource,
   discoverShippedSessionCommandSources,
 } from './session-command-audit.js';
 
@@ -852,11 +852,14 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
   // This is intentionally part of the established boundary audit command:
   // session instructions can ask a provider to cross the same ownership
   // boundary even though they are prose rather than a child-process call.
-  const sessionRepositoryRoot = existsSync(join(conductorRoot, 'src', 'engine'))
-    ? conductorRoot
-    : join(conductorRoot, '..', '..');
+  // Runtime code lives under src/conductor, but shipped skills live at the
+  // repository root. Prefer that root whenever it is present.
+  const repositoryCandidate = join(conductorRoot, '..', '..');
+  const sessionRepositoryRoot = existsSync(join(repositoryCandidate, 'skills'))
+    ? repositoryCandidate
+    : conductorRoot;
   const sessionSources = discoverShippedSessionCommandSources(sessionRepositoryRoot);
-  for (const instruction of sessionSources.flatMap(auditSessionCommandSource)) {
+  for (const instruction of sessionSources.flatMap(auditManagedSessionInstructionSource)) {
     if (!instruction.reason) continue;
     findings.push({
       file: instruction.file,

@@ -44,6 +44,11 @@ export function slugify(name: string): string {
     .slice(0, 50);
 }
 
+/** Canonical grammar for daemon feature directory and branch slugs. */
+export function isFeatureSlug(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(value);
+}
+
 export interface WorktreeInfo {
   name: string;
   path: string;

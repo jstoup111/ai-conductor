@@ -1,6 +1,7 @@
-import { realpath } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { isSessionEventIdentity } from './session-event-identity.js';
+import { isFeatureSlug } from '../engine/worktree.js';
 
 /** The explicit owner of a managed session; cwd is deliberately not an input. */
 export type ManagedSessionScope =
@@ -125,6 +126,11 @@ export async function validateManagedSessionProducerPath(
     if (!within(context.producerRoot, canonicalParent)) {
       return { ok: false, code: 'producer-path-outside-root' };
     }
+    try {
+      if ((await lstat(resolved)).isSymbolicLink()) return { ok: false, code: 'producer-path-outside-root' };
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, code: 'producer-path-unresolvable' };
+    }
     return { ok: true, path: resolve(canonicalParent, basename(resolved)) };
   } catch {
     return { ok: false, code: 'producer-path-unresolvable' };
@@ -141,5 +147,5 @@ function nonEmpty(value: unknown): value is string {
 }
 
 function isScope(value: ManagedSessionScope | undefined): value is ManagedSessionScope {
-  return value?.kind === 'project' || (value?.kind === 'feature' && isSessionEventIdentity(value.featureSlug));
+  return value?.kind === 'project' || (value?.kind === 'feature' && isFeatureSlug(value.featureSlug));
 }

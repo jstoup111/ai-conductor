@@ -79,6 +79,16 @@ describe('prepareManagedSessionContext', () => {
       .resolves.toEqual({ ok: false, code: 'producer-path-outside-root' });
     await expect(validateManagedSessionProducerPath(prepared.context, 'escape/event.jsonl'))
       .resolves.toEqual({ ok: false, code: 'producer-path-outside-root' });
+
+    await symlink(join(outside, 'event.jsonl'), join(prepared.context.producerRoot, 'event.jsonl'));
+    await expect(validateManagedSessionProducerPath(prepared.context, 'event.jsonl'))
+      .resolves.toEqual({ ok: false, code: 'producer-path-outside-root' });
+  });
+
+  it('accepts a canonical digit-leading feature slug while retaining a letter-leading dispatch id', async () => {
+    const { context } = await fixture();
+    await expect(prepareManagedSessionContext({ ...context, scope: { kind: 'feature', featureSlug: '2026-repair' }, daemonFeature: true }))
+      .resolves.toMatchObject({ ok: true, context: { scope: { kind: 'feature', featureSlug: '2026-repair' }, dispatchId: 'dispatch-1' } });
   });
 
   it('creates explicit project scope without manufacturing a feature from child cwd', async () => {

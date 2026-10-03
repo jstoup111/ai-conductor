@@ -25,4 +25,17 @@ describe('managed session instruction contexts', () => {
 
     expect(auditManagedSessionInstructionSource({ file: 'engine/step-runners.ts', source, family: 'engine' })).toEqual([]);
   });
+
+  it('audits a managed retry-shaped producer without relying on its identifier', () => {
+    const source = [
+      'export function buildRetryHint() {',
+      '  // ai-conductor:session-command-context=managed',
+      "  return 'Run ' + 'ai-conductor daemon park feature';",
+      '  // /ai-conductor:session-command-context',
+      '}',
+    ].join('\n');
+
+    expect(auditManagedSessionInstructionSource({ file: 'engine/conductor.ts', source, family: 'engine' }))
+      .toEqual([expect.objectContaining({ subcommand: 'daemon', reason: expect.stringMatching(/blocked/i) })]);
+  });
 });

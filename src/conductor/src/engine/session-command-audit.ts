@@ -91,24 +91,11 @@ export function discoverSessionCommandSources(repositoryRoot: string): SessionCo
   return sources.sort((left, right) => left.file.localeCompare(right.file));
 }
 
-function namedPrompt(node: ts.Node): boolean {
-  return (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && /prompt/i.test(node.name.text))
-    || ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) && node.name !== undefined && ts.isIdentifier(node.name) && /prompt/i.test(node.name.text))
-    || (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name) && /prompt/i.test(node.name.text));
-}
-
-function belongsToPromptProducer(node: ts.Node): boolean {
-  for (let current: ts.Node | undefined = node; current !== undefined && !ts.isSourceFile(current); current = current.parent) {
-    if (namedPrompt(current)) return true;
-  }
-  return false;
-}
-
 /**
- * Engine prompt producers and shipped skills are the executable instruction
- * surfaces. Engine instructions are selected by their prompt-producing AST
- * context rather than a file or command occurrence inventory, so CLI/help
- * text remains outside the provider-instruction boundary.
+ * Engine instruction regions and shipped skills are the executable instruction
+ * surfaces. Region membership comes from the explicit session-command context
+ * declaration, not a producer identifier: retry and remediation producers do
+ * not need to be named "prompt" to be audited.
  */
 export function discoverShippedSessionCommandSources(repositoryRoot: string): SessionCommandSource[] {
   return discoverSessionCommandSources(repositoryRoot);
@@ -211,7 +198,6 @@ function commandLocations(input: SessionCommandSource): Array<{ line: number; co
   collect(parsed);
   const visit = (node: ts.Node): void => {
     if (stringConstructionRoot(node)) {
-      if (!belongsToPromptProducer(node)) return;
       const result = constantString(node, parsed, constants);
       const text = resolvedText(result);
       const matched = addResolved(result);

@@ -69,8 +69,8 @@ describe('github-boundary-audit command', () => {
   });
 
   it('fails through the production entry point for newly discovered blocked engine and skill instructions', async () => {
-    const root = await fixtureRoot("export const systemPrompt = 'Run ai-conductor daemon park feature';\n");
-    await writeFile(join(root, 'src', 'engine', 'step-runners.ts'), "export const systemPrompt = 'Run ai-conductor daemon park feature';\n");
+    const root = await fixtureRoot("// ai-conductor:session-command-context=managed\nexport const systemPrompt = 'Run ai-conductor daemon park feature';\n// /ai-conductor:session-command-context\n");
+    await writeFile(join(root, 'src', 'engine', 'step-runners.ts'), "// ai-conductor:session-command-context=managed\nexport const buildRetryHint = 'Run ai-conductor daemon park feature';\n// /ai-conductor:session-command-context\n");
     await fixtureSkill(root, '```bash\nai-conductor config init\n```\n');
     await mkdir(join(root, 'skills', 'bootstrap'), { recursive: true });
     await writeFile(join(root, 'skills', 'bootstrap', 'SKILL.md'), '```bash\nai-conductor config init\n```\n');

@@ -1108,6 +1108,7 @@ export async function executeProviderCandidates({
           rateLimited: true,
           preferredProvider,
           attempts,
+          ...(managedGhObservationCoverage ? { managedGhObservationCoverage } : {}),
         };
       }
       const diagnostic = attempts
@@ -1232,6 +1233,7 @@ export async function executeProviderCandidates({
         resolvedEffort: resolved.effort,
         attempts,
         ...(observedIntervals.length ? { observedIntervals } : {}),
+        ...(managedGhObservationCoverage ? { managedGhObservationCoverage } : {}),
       };
     }
 
@@ -1264,6 +1266,7 @@ export async function executeProviderCandidates({
           preferredProvider,
           attempts,
           ...(observedIntervals.length ? { observedIntervals } : {}),
+          ...(managedGhObservationCoverage ? { managedGhObservationCoverage } : {}),
         };
       }
     }
@@ -1299,6 +1302,7 @@ export async function executeProviderCandidates({
             }
           : {}),
         ...(observedIntervals.length ? { observedIntervals } : {}),
+        ...(managedGhObservationCoverage ? { managedGhObservationCoverage } : {}),
       };
     }
 

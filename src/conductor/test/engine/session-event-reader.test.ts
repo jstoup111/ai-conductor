@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile, appendFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, appendFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -72,5 +72,17 @@ describe('SessionEventReader', () => {
     await writeFile(producer, `${JSON.stringify({ ...event, scope: { kind: 'feature', featureSlug: 'other-feature' } })}\n`);
     const reader = new SessionEventReader({ projectRoot: root, featureSlug: 'feature-a' });
     expect(await reader.read()).toEqual([expect.objectContaining({ kind: 'diagnostic', code: 'invalid-attribution' })]);
+  });
+
+  it('reports a bounded diagnostic when the producer root is symlinked', async () => {
+    const { root } = await fixture();
+    const events = join(root, '.pipeline', 'session-events');
+    const outside = join(root, 'outside-events');
+    await mkdir(outside);
+    await rm(events, { recursive: true });
+    await symlink(outside, events);
+
+    expect(await new SessionEventReader({ projectRoot: root }).read())
+      .toEqual([expect.objectContaining({ kind: 'diagnostic', code: 'invalid-attribution', path: events })]);
   });
 });

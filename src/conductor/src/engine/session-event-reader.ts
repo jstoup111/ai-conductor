@@ -78,7 +78,10 @@ export class SessionEventReader {
     // paths are authoritative filesystem ownership, not a convenience hint.
     try {
       const rootStat = await lstat(root);
-      if (rootStat.isSymbolicLink() || resolve(await realpath(root)) !== resolve(root)) return [];
+      if (rootStat.isSymbolicLink() || resolve(await realpath(root)) !== resolve(root)) {
+        this.pending.push({ kind: 'diagnostic', path: root, byteOffset: 0, code: 'invalid-attribution' });
+        return [];
+      }
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw error;

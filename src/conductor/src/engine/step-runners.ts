@@ -5518,6 +5518,7 @@ export class DefaultStepRunner implements StepRunner {
     tier?: ComplexityTier,
     prdWideningReviewContext?: StepRunOptions['prdWideningReviewContext'],
   ): Promise<string> {
+    // ai-conductor:session-command-context=managed
     const stepDef = this.stepRegistry.find((candidate) => candidate.name === step)
       ?? getStepDefinition(step);
     // Out-of-band steps (e.g. `remediate`) have no position in the linear
@@ -5664,6 +5665,7 @@ export class DefaultStepRunner implements StepRunner {
       prompt = `RETRY: ${retryReason}\n${prompt}`;
     }
 
+    // /ai-conductor:session-command-context
     return prompt;
   }
 

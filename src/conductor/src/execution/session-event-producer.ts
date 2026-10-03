@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { closeSync, constants, mkdirSync, openSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type {
@@ -13,6 +13,7 @@ import type {
 } from '../types/events.js';
 import { createSessionEventIdentity, isSessionEventIdentity } from './session-event-identity.js';
 import { validateManagedSessionProducerPath } from './managed-session-context.js';
+import { isFeatureSlug } from '../engine/worktree.js';
 
 /** PIPE_BUF-safe ceiling for one producer-owned JSONL record, including its newline. */
 export const MAX_SESSION_EVENT_RECORD_BYTES = 4_096;
@@ -65,7 +66,8 @@ export class SessionEventProducer {
     this.now = dependencies.now ?? (() => new Date().toISOString());
     this.appendRecord = dependencies.append ?? ((path, record) => {
       mkdirSync(context.producerRoot, { recursive: true });
-      appendFileSync(path, record, 'utf8');
+      const descriptor = openSync(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+      try { writeSync(descriptor, record, undefined, 'utf8'); } finally { closeSync(descriptor); }
     });
   }
 
@@ -128,7 +130,7 @@ export class SessionEventProducer {
 }
 
 function safeScope(scope: SessionObservationScope): SessionObservationScope {
-  return scope.kind === 'feature' && isIdentity(scope.featureSlug)
+  return scope.kind === 'feature' && isFeatureSlug(scope.featureSlug)
     ? { kind: 'feature', featureSlug: scope.featureSlug }
     : { kind: 'project' };
 }
