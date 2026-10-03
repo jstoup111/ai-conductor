@@ -31,7 +31,7 @@ proceeds instead of halting on a setup-ordering artifact.
 - Given the same preconditions, when the seed runs, then the build proceeds to dispatch on the FIRST attempt (no reliance on `attempt >= 2`), so no `.pipeline/halt-*` marker referencing "task-status.json is missing" is ever written for a fresh legitimate dispatch.
 
 #### Negative Paths
-- Given `.pipeline/task-status.json` ALREADY exists with `in_progress`/`completed` rows (a resumed or retried build with real prior progress), when the pre-dispatch seed runs, then existing task progress is preserved — the seed merges (never resets completed/in-progress rows back to pending) and no prior evidence attribution is lost.
+- Given `.pipeline/task-status.json` ALREADY exists with `in_progress`/`completed` rows (a resumed or retried build with real prior progress), when the pre-dispatch seed runs, then existing task progress is preserved — the seed merges (never resets completed rows back to pending, and resets an in-progress row to pending only when no branch-scoped `Task:` trailer exists for it, per `adr-2026-09-06-reopened-task-resolution` decision 12) and no prior evidence attribution is lost.
 - Given the pre-dispatch seed itself fails (e.g. `.pipeline/` is not writable so the seed write throws), when the guard path runs, then the build does NOT silently dispatch as if healthy — a clear diagnostic naming the seed-write failure is surfaced (retryable/halt per existing step-retry semantics), distinct from the "attribution machinery broken: task-status.json is missing" wording.
 
 ### Done When
