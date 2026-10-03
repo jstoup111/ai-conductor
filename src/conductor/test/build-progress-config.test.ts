@@ -111,6 +111,15 @@ describe('validateConfig — build_progress fail-closed validation', () => {
       .toMatch(/poll_seconds.*must not exceed.*active_stall_minutes/);
   });
 
+  it('rejects a poll interval exceeding the resolved default active-stall bound', () => {
+    const result = validateConfig({
+      build_progress: { poll_seconds: 3_000, quiet_minutes: 60 },
+    });
+
+    expect(result.ok ? 'accepted poll interval beyond default active stall bound' : result.error.message)
+      .toBe('build_progress.poll_seconds (3000s) must not exceed build_progress.active_stall_minutes (45m = 2700s)');
+  });
+
   it('reports an unknown active-stall key through the build_progress unknown-key path', () => {
     const result = validateConfig({ build_progress: { active_stall_minuts: 45 } });
 
