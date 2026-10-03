@@ -1329,10 +1329,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const stop = (): Promise<void> => {
       if (stopPromise) return stopPromise;
       stopPromise = (async () => {
+        // Drain producer-backed observations while the feature renderers and
+        // canonical persister are still subscribed. This is deliberately
+        // before visualizer/renderer teardown so final records retain the
+        // same feature attribution as records delivered during dispatch.
+        await persistence.drain();
         await visualizer?.stop();
         await daemonOtel?.flush();
         for (const type of renderableEvents) featureEvents.off(type, renderEvent);
-        persistence.stop();
       })();
       return stopPromise;
     };
@@ -2576,7 +2580,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                   log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
                   return { kind: outcome.kind };
                 } finally {
-                  featureScope.stop();
+                  await featureScope.drain();
                 }
               } catch (err: any) {
                 log(`[autoresolve] error resolving ${entry.prUrl}: ${err?.message || err}`);

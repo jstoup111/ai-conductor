@@ -145,7 +145,6 @@ import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { ExecutionLifecycle } from './execution-lifecycle.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
-import { CloseoutEventTail } from './closeout-tail.js';
 import {
   resolveBuildProgressConfig,
   resolveGateCodeValidityConfig,
@@ -10345,15 +10344,6 @@ export class Conductor {
                 })
               : null;
           buildWatcher?.start();
-          const closeoutTail: CloseoutEventTail | null =
-            step.name === 'build'
-              ? new CloseoutEventTail({
-                  projectRoot: this.projectRoot,
-                  events: this.events,
-                })
-              : null;
-          closeoutTail?.start();
-
           // Approved DECIDE artifacts are a durable BUILD/SHIP boundary. Verify
           // every attempt before writing phase markers or starting dispatch; a
           // resume therefore cannot accept a dirty workspace as a new baseline.
@@ -10414,7 +10404,6 @@ export class Conductor {
           let result: StepRunResult;
           if (protectedArtifactIssue) {
             buildWatcher?.stop();
-            closeoutTail?.stop();
             const dispatchIssue = protectedArtifactIssue;
             result = {
               success: false,
@@ -10615,7 +10604,6 @@ export class Conductor {
                           })());
           } finally {
             buildWatcher?.stop();
-            closeoutTail?.stop();
             // Task 4 (#788): the phase-active marker is written for any
             // BUILD/SHIP step, not gated on step.name === 'build'.
             removePhaseMarker(this.projectRoot);
