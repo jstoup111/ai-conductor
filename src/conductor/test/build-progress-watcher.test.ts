@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -374,6 +374,7 @@ describe('BuildProgressWatcher change-driven emission', () => {
     expect(last.commitCount).toBe(1);
     expect(last.tickReason).toBe('head-moved');
     expect(last.headMoved).toBe(true);
+    expect(last.activity).toBe('active-committing');
   });
 
   it('carries the HEAD committer time on the first tick, then reuses it on heartbeat without a second Git probe', async () => {
@@ -608,7 +609,9 @@ describe('BuildProgressWatcher change-driven emission', () => {
     watcher.stop();
 
     expect(buildProgressEvents()).toEqual([
-      expect.objectContaining({ type: 'build_progress', resolved: 5, total: 21, headMoved: false }),
+      expect.objectContaining({
+        type: 'build_progress', resolved: 5, total: 21, headMoved: false,
+      }),
     ]);
   });
 
@@ -816,6 +819,14 @@ describe('BuildProgressWatcher heartbeat re-emission', () => {
     await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
   }
 
+  async function writeHeartbeat(timestamp: number, step: string = 'build'): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/step-heartbeat'),
+      JSON.stringify({ step, ts: new Date(timestamp).toISOString() }),
+    );
+  }
+
   function buildProgressEvents(): Extract<ConductorEvent, { type: 'build_progress' }>[] {
     return emitSpy.mock.calls
       .map((call) => call[0] as ConductorEvent)
@@ -861,6 +872,57 @@ describe('BuildProgressWatcher heartbeat re-emission', () => {
     expect(events[0].tickReason).toBe('heartbeat');
     expect(events[0]).toHaveProperty('headMoved', false);
     expect(events[0].commitCount).toBeUndefined();
+    expect(events[0].activity).toBe('quiet');
+  });
+
+  it('classifies a heartbeat-period emission with a fresh dispatch-owned heartbeat as active-not-committing', async () => {
+    await writeTasks(5, 21);
+    let clock = Date.UTC(2026, 8, 28, 12, 0, 0);
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      config: { build_progress: { heartbeat_minutes: 5, quiet_minutes: 15 } },
+      now: () => clock,
+    });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    clock += 4 * 60 * 1000 + 59 * 1000;
+    await writeHeartbeat(clock);
+    clock += 1_000;
+    await tick(watcher);
+    watcher.stop();
+
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({ tickReason: 'heartbeat', activity: 'active-not-committing' }),
+    ]);
+  });
+
+  it('does not classify a heartbeat emission as active-committing when its HEAD probe fails', async () => {
+    await writeTasks(5, 21);
+    let clock = 0;
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      config: { build_progress: { heartbeat_minutes: 5 } },
+      now: () => clock,
+    });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+    gitProbe.throws = true;
+
+    clock += 5 * 60 * 1000;
+    await tick(watcher);
+    watcher.stop();
+    gitProbe.throws = false;
+
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({ tickReason: 'heartbeat', activity: 'quiet' }),
+    ]);
   });
 
   it('resets the heartbeat clock on a change-driven emission (no interleaved duplicates)', async () => {
@@ -1011,6 +1073,7 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
     expect(e.resolved).toBe(5);
     expect(e.total).toBe(21);
     expect(e.featureSlug).toBe('my-feature');
+    expect(e.activity).toBe('quiet');
   });
 
   it('carries the HEAD committer time on a quiet warning', async () => {
@@ -1057,6 +1120,25 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
 
     expect(noProgressEvents()).toHaveLength(1);
     expect(noProgressEvents()[0].lastActivityAt).toBe(pulseAt);
+    expect(noProgressEvents()[0].activity).toBe('active-not-committing');
+  });
+
+  it('classifies a dispatch-owned heartbeat older than quiet_minutes as quiet', async () => {
+    await writeTasks(5, 21);
+    let clock = Date.UTC(2026, 8, 28, 12, 0, 0);
+    const watcher = makeWatcher(() => clock);
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    await writeHeartbeat(clock + 1_000);
+    clock += 16 * 60 * 1000;
+    await tick(watcher);
+    watcher.stop();
+
+    expect(noProgressEvents()).toEqual([
+      expect.objectContaining({ resolved: 5, total: 21, activity: 'quiet' }),
+    ]);
   });
 
   it.each([
@@ -1099,6 +1181,7 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
         total: 21,
         currentTaskId: undefined,
         lastCommitAt: undefined,
+        activity: 'quiet',
         featureSlug: 'my-feature',
       },
     ]);

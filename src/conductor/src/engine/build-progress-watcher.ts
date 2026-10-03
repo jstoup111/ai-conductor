@@ -10,6 +10,7 @@ import type { ResolvedBuildProgressConfig } from './config.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import type { StepName } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
+import type { BuildActivity } from '../types/events.js';
 
 /**
  * A point-in-time read of build progress for a project: how many tasks are
@@ -284,6 +285,34 @@ export class BuildProgressWatcher {
     }
   }
 
+  /**
+   * Classify the current build tick without letting optional heartbeat
+   * telemetry suppress its progress event. A change is direct evidence of
+   * committing work; otherwise only a fresh heartbeat from this dispatch is
+   * evidence of active, non-committing work.
+   */
+  private async classifyActivity(changed: boolean): Promise<BuildActivity> {
+    if (changed) return 'active-committing';
+    if (this.dispatchStartedAtMs === null) return 'quiet';
+
+    try {
+      const heartbeat = await readStepHeartbeat(this.projectRoot);
+      if (!heartbeatBelongsToDispatch(heartbeat, this.step, this.dispatchStartedAtMs)) {
+        return 'quiet';
+      }
+      const timestamp = Date.parse(heartbeat.ts);
+      if (!Number.isFinite(timestamp)) return 'quiet';
+      const ageMs = Math.max(0, this.now() - timestamp);
+      return ageMs < this.resolvedConfig.quiet_minutes * 60 * 1000
+        ? 'active-not-committing'
+        : 'quiet';
+    } catch {
+      // Heartbeat visibility is best-effort telemetry; failure is quiet, not
+      // a reason to abort or suppress the watcher tick.
+      return 'quiet';
+    }
+  }
+
   private async tick(): Promise<void> {
     // Task-status read keeps its own try/catch and early-return: a
     // missing/corrupt task-status.json is treated as "no data, skip this
@@ -410,6 +439,7 @@ export class BuildProgressWatcher {
             currentTaskId: snapshot.currentTaskId,
             lastCommitAt: this.lastCommitAt,
             ...(lastActivityAt === undefined ? {} : { lastActivityAt }),
+            activity: await this.classifyActivity(false),
             featureSlug: this.featureSlug,
           });
         }
@@ -435,6 +465,7 @@ export class BuildProgressWatcher {
           headMoved: false,
           lastCommitAt: this.lastCommitAt,
           noEvidenceAttempts,
+          activity: await this.classifyActivity(false),
           featureSlug: this.featureSlug,
         });
       }
@@ -491,6 +522,7 @@ export class BuildProgressWatcher {
       headMoved,
       lastCommitAt: this.lastCommitAt,
       noEvidenceAttempts,
+      activity: await this.classifyActivity(changed),
       featureSlug: this.featureSlug,
     });
   }
