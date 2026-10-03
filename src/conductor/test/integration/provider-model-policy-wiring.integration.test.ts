@@ -203,7 +203,7 @@ it('composes one ordered provider context across the interactive run after regis
     runnerProvider: 'compatibilityRuntime.provider',
     runnerContext: 'providerExecution',
     conductorContext: 'providerExecution',
-    preludeContext: 'providerExecution',
+    preludeContext: 'providerExecution: preludeProviderExecution',
     startupOrder: true,
   });
 });
@@ -261,6 +261,12 @@ it('composes isolated provider execution state for every daemon feature after on
   const featureExecution = featureProperties.find(
     (property) => property.name?.getText(daemonFile) === 'providerExecution',
   );
+  const featureProviderExecution = featureRunFunction?.body && ts.isBlock(featureRunFunction.body)
+    ? featureRunFunction.body.statements
+      .filter(ts.isVariableStatement)
+      .flatMap((statement) => statement.declarationList.declarations)
+      .find((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === 'providerExecution')
+    : undefined;
   const compact = daemonSource.replace(/\s+/g, ' ');
   const featureBody = runnerSource.slice(
     runnerSource.indexOf('return async (item: BacklogItem)'),
@@ -315,12 +321,10 @@ it('composes isolated provider execution state for every daemon feature after on
         'ProviderSessionStore',
     featureInjectsScopedRuntimeLogger:
       featureExecution !== undefined &&
-      ts.isPropertyAssignment(featureExecution) &&
-      ts.isCallExpression(featureExecution.initializer) &&
-      featureExecution.initializer.expression.getText(daemonFile) ===
-        'createProviderExecution' &&
-      featureExecution.initializer.arguments[1]?.getText(daemonFile) ===
-        'featureLog',
+      featureProviderExecution?.initializer !== undefined &&
+      ts.isCallExpression(featureProviderExecution.initializer) &&
+      featureProviderExecution.initializer.expression.getText(daemonFile) === 'createProviderExecution' &&
+      featureProviderExecution.initializer.arguments[1]?.getText(daemonFile) === 'featureLog',
     factoryInjectedAtFeatureBoundary:
       /providerExecution:\s*createProviderExecution/.test(daemonSource) &&
       (featureBody.match(/deps\.providerExecution\?\.\(\)/g)?.length ?? 0) === 1,

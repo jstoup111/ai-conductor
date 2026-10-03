@@ -40,6 +40,7 @@ import type {
 import type { MutationProvenanceRequest } from './owner-gate/mutation-provenance.js';
 import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
 import { classifyGhAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
+import { resolvePrivateGhObserverPassthrough } from '../execution/gh-observer.js';
 
 const execFileP = promisify(execFileCb);
 const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
@@ -383,7 +384,7 @@ export function makeProductionGh(): GhRunner {
       }
     }
     try {
-      const result = await execFileP('gh', args, {
+      const result = await execFileP(resolvePrivateGhObserverPassthrough(), args, {
         cwd: opts.cwd,
         maxBuffer: opts.maxBuffer ?? GH_STDOUT_MAX_BUFFER,
         timeout: opts.timeout,

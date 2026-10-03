@@ -145,7 +145,6 @@ import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { ExecutionLifecycle } from './execution-lifecycle.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
-import { CloseoutEventTail } from './closeout-tail.js';
 import {
   resolveBuildProgressConfig,
   resolveGateCodeValidityConfig,
@@ -2063,12 +2062,15 @@ export function renderExhaustedMechanicalBuildReviewHalt(
         `; Last recorded fault: ${lastMechanicalFault.rubric} closed cause ${lastMechanicalFault.reason} ` +
         `on lap ${lastMechanicalFault.lapId} (${lastMechanicalFault.detail}).`);
   }
-  return [
+  // ai-conductor:session-command-context=operator-only
+  const message = [
     `build_review mechanical fault allowance exhausted: ${consumed} of ${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed.`,
     `Current lap ${aggregate.lapId}: ${failure.rubric} closed cause ${failure.reason} (${failure.detail}).`,
     `1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap ${aggregate.lapId} --rubric ${failure.rubric} --rationale "<rationale>".`,
     '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
   ].join('\n');
+  // /ai-conductor:session-command-context
+  return message;
 }
 
 /** Render the closed recovery for a custom review with no read-only candidate. */
@@ -3256,7 +3258,17 @@ export class Conductor {
     options: StepRunOptions,
   ): Promise<StepRunResult> {
     if (!this.finishPublication) {
-      return this.stepRunner.run('finish', state, options);
+      // Compatibility-only test and embedding callers can still supply their
+      // own FINISH runner. An engine-managed provider session must never get
+      // the legacy recording assignment: production wires the coordinator.
+      if (!this.providerExecution) return this.stepRunner.run('finish', state, options);
+      return {
+        success: false,
+        publicationDisposition: {
+          kind: 'human_required',
+          reason: 'publication_coordinator_unavailable',
+        },
+      };
     }
 
     const publicationDisposition = await this.finishPublication.advance({
@@ -10332,15 +10344,6 @@ export class Conductor {
                 })
               : null;
           buildWatcher?.start();
-          const closeoutTail: CloseoutEventTail | null =
-            step.name === 'build'
-              ? new CloseoutEventTail({
-                  projectRoot: this.projectRoot,
-                  events: this.events,
-                })
-              : null;
-          closeoutTail?.start();
-
           // Approved DECIDE artifacts are a durable BUILD/SHIP boundary. Verify
           // every attempt before writing phase markers or starting dispatch; a
           // resume therefore cannot accept a dirty workspace as a new baseline.
@@ -10401,7 +10404,6 @@ export class Conductor {
           let result: StepRunResult;
           if (protectedArtifactIssue) {
             buildWatcher?.stop();
-            closeoutTail?.stop();
             const dispatchIssue = protectedArtifactIssue;
             result = {
               success: false,
@@ -10539,7 +10541,7 @@ export class Conductor {
                       ? await this.runRebaseStep(state)
                       : step.name === 'test_suite'
                         ? await this.runTestSuiteStep()
-                        : step.name === 'finish' && this.finishPublication
+                        : step.name === 'finish'
                           ? await this.runFinishPublication(state, {
                               retryReason: retryHint,
                               attempt,
@@ -10602,7 +10604,6 @@ export class Conductor {
                           })());
           } finally {
             buildWatcher?.stop();
-            closeoutTail?.stop();
             // Task 4 (#788): the phase-active marker is written for any
             // BUILD/SHIP step, not gated on step.name === 'build'.
             removePhaseMarker(this.projectRoot);
@@ -15935,6 +15936,8 @@ export function buildRetryHint(
   missing?: 'recording' | 'presentation' | 'uncommitted' | 'other',
   pipelineDirArg?: string,
 ): string {
+  // ai-conductor:session-command-context=managed
+  void pipelineDirArg;
   const r = reason ?? 'unknown';
   if (step === 'finish' && missing === 'presentation') {
     // A publication defect: every evidence check passed and only the PR's own
@@ -15959,16 +15962,11 @@ export function buildRetryHint(
     );
   }
   if (step === 'finish' && missing === 'recording') {
-    const dirArg = pipelineDirArg ?? '.pipeline';
     return (
       `Previous attempt did not satisfy the completion check: ${r}. ` +
       'The finish work itself appears done — only the outcome was not recorded. ' +
-      'Do NOT repeat the full /finish walk. Instead, determine the finish outcome ' +
-      '(pr | merge-local | keep | discard) from current repo state and run ONLY:\n' +
-      `  ai-conductor finish-record --choice <choice> [--pr-url <url>] --pipeline-dir ${dirArg}\n` +
-      'IMPORTANT: do NOT `cd` elsewhere before running it; use this exact `--pipeline-dir` value ' +
-      'regardless of the current working directory. The step is NOT complete until ' +
-      '`finish-record` exits 0.'
+      'Do NOT repeat the full /finish walk. The engine-owned publication coordinator ' +
+      'will re-observe the existing result, record completion when authorized, and verify it.'
     );
   }
   if (step === 'manual_test') {
@@ -16004,6 +16002,7 @@ export function buildRetryHint(
       );
     }
   }
+  // /ai-conductor:session-command-context
   return `Previous attempt did not satisfy the completion check: ${r}. Finish the work now.`;
 }
 

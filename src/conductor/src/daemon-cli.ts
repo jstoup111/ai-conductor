@@ -54,6 +54,11 @@ import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
 import { CODEX_PROVIDER, providerDescriptor } from './execution/provider-catalog.js';
+import {
+  prepareManagedSessionContext,
+  type ManagedSessionContext,
+} from './execution/managed-session-context.js';
+import { createSessionEventIdentity } from './execution/session-event-identity.js';
 import { createProviderAvailability, restoreProviderAvailabilityFromDaemonLedger } from './engine/provider-availability.js';
 import {
   normalizeProviderSelection,
@@ -83,7 +88,7 @@ import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-label
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { forwardedFeatureOf, isForwardedFromFeature, startDaemonEventPersistence, startFeatureEventPersistence } from './engine/event-persister.js';
 import { heapDumpOptionsFromConfig, startDaemonMemorySampler } from './engine/daemon-memory.js';
-import { renderedEventTypes } from './engine/event-sinks.js';
+import { formatSessionOccurrence, renderedEventTypes } from './engine/event-sinks.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
 import { formatGithubCredentialFallback, formatGithubOperationRefusal } from './engine/github-operations.js';
 import { createBotCoAuthorResolver, formatBotCoAuthorSkipped, installDaemonBotCoAuthor } from './engine/bot-co-author.js';
@@ -855,6 +860,40 @@ export function createForcedSetupPrepare(
 }
 
 /**
+ * Establish the one immutable context for a daemon feature dispatch. The
+ * daemon owns both roots and the dispatch identity, so this deliberately
+ * accepts no cwd-derived input.
+ */
+export async function prepareDaemonFeatureManagedSessionContext(input: {
+  readonly projectRoot: string;
+  readonly worktreeRoot: string;
+  readonly featureSlug: string;
+  readonly dispatchId: string;
+  readonly provider: string;
+}): Promise<ManagedSessionContext> {
+  const producerRoot = join(
+    input.worktreeRoot,
+    '.pipeline',
+    'session-events',
+    input.dispatchId,
+  );
+  await mkdir(producerRoot, { recursive: true });
+  const prepared = await prepareManagedSessionContext({
+    projectRoot: input.projectRoot,
+    worktreeRoot: input.worktreeRoot,
+    producerRoot,
+    scope: { kind: 'feature', featureSlug: input.featureSlug },
+    dispatchId: input.dispatchId,
+    provider: input.provider,
+    daemonFeature: true,
+  });
+  if (!prepared.ok) {
+    throw new Error(`daemon managed-session context refused: ${prepared.code}`);
+  }
+  return prepared.context;
+}
+
+/**
  * Daemon entry (Phase 6). Drains the backlog of features with existing
  * stories+plan, running each in its own worktree via the gate loop
  * (verifyArtifacts + the engine's unconditional fresh-session-per-step),
@@ -1305,9 +1344,26 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     return featureLog;
   };
   const beginFeatureRun = async (worktree: FeatureWorktree, item: BacklogItem) => {
-    const sessionId = uuidv4();
+    const sessionId = createSessionEventIdentity();
     const persistence = startFeatureEventPersistence(worktree.path, events, item.slug);
     const featureEvents = persistence.events;
+    const featureLog = featureLogFor(item.slug);
+    const providerExecution = createProviderExecution(featureEvents, featureLog);
+    const provider = providerExecution.configuredProviders[0];
+    let managedSessionContext: ManagedSessionContext;
+    try {
+      if (!provider) throw new Error('daemon feature dispatch requires a configured provider');
+      managedSessionContext = await prepareDaemonFeatureManagedSessionContext({
+        projectRoot,
+        worktreeRoot: worktree.path,
+        featureSlug: item.slug,
+        dispatchId: sessionId,
+        provider,
+      });
+    } catch (error) {
+      persistence.stop();
+      throw error;
+    }
     const pipelineDir = join(worktree.path, '.pipeline');
     const persistedSessionId = await readFile(join(pipelineDir, 'conduct-session-id'), 'utf8')
       .catch(() => undefined);
@@ -1321,7 +1377,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       metrics: false,
       harnessVersion: await resolveHarnessVersion(__dirname),
     }, featureEvents);
-    const featureLog = featureLogFor(item.slug);
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
     const renderableEvents = renderedEventTypes();
     for (const type of renderableEvents) featureEvents.on(type, renderEvent);
@@ -1329,10 +1384,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const stop = (): Promise<void> => {
       if (stopPromise) return stopPromise;
       stopPromise = (async () => {
+        // OTel shutdown can itself report a renderer error. Stop it while the
+        // feature persister remains subscribed, then drain producers before
+        // detaching feature renderers.
         await visualizer?.stop();
+        await persistence.drain();
         await daemonOtel?.flush();
         for (const type of renderableEvents) featureEvents.off(type, renderEvent);
-        persistence.stop();
       })();
       return stopPromise;
     };
@@ -1341,7 +1399,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       rootEvents: events,
       sessionId,
       visualizer,
-      providerExecution: createProviderExecution(featureEvents, featureLog),
+      providerExecution: { ...providerExecution, managedSessionContext },
       log: featureLog,
       stop,
     };
@@ -2576,7 +2634,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                   log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
                   return { kind: outcome.kind };
                 } finally {
-                  featureScope.stop();
+                  await featureScope.drain();
                 }
               } catch (err: any) {
                 log(`[autoresolve] error resolving ${entry.prUrl}: ${err?.message || err}`);
@@ -2964,6 +3022,21 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'github_operation_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatGithubOperationRefusal(event))}`);
+      break;
+    case 'session_command_refused':
+      log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatSessionOccurrence(event))}`);
+      break;
+    case 'github_bypass_attempt':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(formatSessionOccurrence(event))}`);
+      break;
+    case 'github_bypass_result':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(formatSessionOccurrence(event))}`);
+      break;
+    case 'github_possible_bypass':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(formatSessionOccurrence(event))}`);
+      break;
+    case 'session_event_delivery_diagnostic':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(formatSessionOccurrence(event))}`);
       break;
     case 'github_write_credential_fallback':
       log(`${dot} ${chalk.yellow('↻')} ${chalk.yellow(formatGithubCredentialFallback(event))}`);

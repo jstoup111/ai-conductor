@@ -1,6 +1,7 @@
 import type { ObservedInterval } from './observed-interval.js';
 import type { ProviderSetupExhaustion } from '../engine/provider-setup-failure.js';
 import type { ProviderWith } from './provider-catalog.js';
+import type { ManagedSessionContext } from './managed-session-context.js';
 
 export interface TokenUsage {
   /**
@@ -325,6 +326,11 @@ export interface InvokeOptions {
    * omitted, the subprocess inherits the parent process cwd.
    */
   cwd?: string;
+  /**
+   * Engine-established managed-session ownership. Provider adapters apply this
+   * after candidate environment overlays; callers cannot derive it from cwd.
+   */
+  managedSessionContext?: ManagedSessionContext;
   /**
    * Optional feature-scoped sink for subprocess diagnostics. Daemon feature
    * runs supply their persisted logger; ordinary CLI runs leave this unset and

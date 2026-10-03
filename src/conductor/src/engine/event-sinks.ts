@@ -10,6 +10,14 @@ export interface SinkDeclaration {
 }
 
 export const EVENT_SINKS = {
+  // Session processes cannot reach the in-process emitter. Their same-schema
+  // producer records are projected through the existing tail before these
+  // canonical sinks consume them.
+  session_command_refused: { render: true, persist: true, audit: false, otel: false },
+  github_bypass_attempt: { render: true, persist: true, audit: false, otel: false },
+  github_bypass_result: { render: true, persist: true, audit: false, otel: false },
+  github_possible_bypass: { render: true, persist: true, audit: false, otel: false },
+  session_event_delivery_diagnostic: { render: true, persist: true, audit: false, otel: false },
   daemon_backlog_snapshot: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   daemon_memory_sample: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
   daemon_heap_dump_written: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
@@ -216,6 +224,35 @@ export function auditedEventTypes(): ConductorEvent['type'][] {
 
 export function renderedEventTypes(): ConductorEvent['type'][] {
   return eventTypesFor('render');
+}
+
+type RenderedSessionOccurrence = Extract<ConductorEvent,
+  { type: 'session_command_refused' }
+  | { type: 'github_bypass_attempt' }
+  | { type: 'github_bypass_result' }
+  | { type: 'github_possible_bypass' }
+  | { type: 'session_event_delivery_diagnostic' }
+>;
+
+/**
+ * Render the closed, producer-sanitized fields of a managed-session occurrence.
+ * A local CLI outcome is deliberately not represented as remote-state proof.
+ */
+export function formatSessionOccurrence(event: RenderedSessionOccurrence): string {
+  const scope = event.scope.kind === 'feature' ? `feature ${event.scope.featureSlug}` : 'project';
+  const source = `${scope}; provider ${event.provider}; dispatch ${event.dispatchId}; event ${event.eventId}`;
+  switch (event.type) {
+    case 'session_command_refused':
+      return `managed session command refused: ${event.subcommand} (${source})`;
+    case 'github_bypass_attempt':
+      return `GitHub bypass attempt: ${event.operation} (${source})`;
+    case 'github_bypass_result':
+      return `GitHub bypass result: local CLI ${event.outcome}; remote outcome unverified (attempt ${event.attemptId}; ${source})`;
+    case 'github_possible_bypass':
+      return `possible bypass: ${event.operation} (${source})`;
+    case 'session_event_delivery_diagnostic':
+      return `session event delivery diagnostic: ${event.code} (${source})`;
+  }
 }
 
 export function otelEventTypes(): OtelEventType[] {

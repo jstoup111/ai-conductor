@@ -28,6 +28,8 @@ import {
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
+import { composeManagedSessionEnvironment } from './managed-session-context.js';
+import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
@@ -1033,12 +1035,13 @@ export class CodexProvider implements LLMProvider {
     // can unset it.
     // tmux target variables are masked in the overlay (execa extends
     // process.env underneath it) so the child cannot resolve the daemon's pane.
-    return scrubTmuxEnvironment(withDaemonSessionMarker(
-      {
-        ...(options.selfHost?.env ?? {}),
-        ...auth,
-      },
-    ));
+    const environment = withDaemonSessionMarker({
+      ...(options.selfHost?.env ?? {}),
+      ...auth,
+    });
+    return scrubTmuxEnvironment(options.managedSessionContext
+      ? composePreparedManagedSessionEnvironment(options.managedSessionContext, composeManagedSessionEnvironment(options.managedSessionContext, environment))
+      : environment);
   }
 
   private selfHostArgs(options: InvokeOptions): readonly string[] {

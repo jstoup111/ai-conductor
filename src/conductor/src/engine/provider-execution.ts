@@ -41,6 +41,7 @@ import { ModelAvailability } from './model-availability.js';
 import type { ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import {
+  ProviderSetupUnavailableError,
   normalizeProviderSetupUnavailable,
   type ProviderSetupUnavailable,
   type ProviderSetupExhaustion,
@@ -52,6 +53,8 @@ import {
   findBuiltInProviderDescriptor,
   supportsProviderCapability,
 } from '../execution/provider-catalog.js';
+import type { ManagedSessionContext } from '../execution/managed-session-context.js';
+import { prepareManagedGhObservation } from '../execution/managed-session-preparation.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -301,6 +304,12 @@ export interface ExecuteProviderCandidatesInput {
   /** Safety boundary for each resolved candidate, after resolution and before fallback. */
   withCandidateSafety?: WithCandidateSafety;
   prepareCandidateSelfHost?: PrepareCandidateSelfHost;
+  /** Candidate setup proving narrow telemetry access under a native read-only review policy. */
+  prepareManagedSessionObservation?: (input: {
+    readonly provider: string;
+    readonly context: ManagedSessionContext;
+    readonly readOnlyReview: boolean;
+  }) => Promise<unknown>;
   warn?: (
     message: string,
     transition: ProviderTransitionWarning,
@@ -332,6 +341,8 @@ export interface ProviderExecutionContext {
   warn?: ExecuteProviderCandidatesInput['warn'];
   /** Feature-owned persisted sink for provider subprocess diagnostics. */
   diagnosticLog?: (message: string) => void;
+  /** Immutable identity established by the daemon before provider dispatch. */
+  managedSessionContext?: ManagedSessionContext;
 }
 
 function hasRecoveryPrecedence(result: InvokeResult): boolean {
@@ -785,6 +796,7 @@ export async function executeProviderCandidates({
   onTelemetryError,
   withCandidateSafety,
   prepareCandidateSelfHost,
+  prepareManagedSessionObservation,
   warn,
   options,
   optionsForCandidate,
@@ -970,6 +982,28 @@ export async function executeProviderCandidates({
           : candidateOptions.providerStreamObserverForCandidate?.(providerKey);
         try {
           selfHost = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index });
+          // Only a native provider adapter owns a managed child process. Test
+          // runtimes and policy-only providers receive the context as data but
+          // must not acquire a filesystem wrapper as a side effect.
+          if (candidateOptions.managedSessionContext && runtime.provider.lifecycleCapability?.synchronousSpawnPermit === true) {
+            await prepareManagedGhObservation({
+              context: candidateOptions.managedSessionContext,
+            });
+          }
+          if (candidateOptions.readOnlyReview && candidateOptions.managedSessionContext && prepareManagedSessionObservation) {
+            await prepareManagedSessionObservation({
+              provider: providerKey,
+              context: candidateOptions.managedSessionContext,
+              readOnlyReview: true,
+            });
+          } else if (candidateOptions.readOnlyReview && candidateOptions.managedSessionContext) {
+            throw new ProviderSetupUnavailableError({
+              provider: providerKey,
+              capability: 'managed-observation-destination',
+              reason: 'native read-only review is available, but narrow observation access was not proven for this candidate.',
+              recoveryAction: 'Configure a provider review policy that proves the per-dispatch observation destination is writable while protected paths remain refused.',
+            });
+          }
         } catch (error) {
           setupUnavailable = normalizeProviderSetupUnavailable(error, providerKey);
           if (!setupUnavailable) throw error;
