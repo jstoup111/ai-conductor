@@ -60,7 +60,7 @@ work but never committed it can never be routed onward as complete.
 
 - Given every plan task is resolved and the worktree is dirty with `src/a.ts` modified, when the build predicate is evaluated, then it returns `done: false` and the reason names `src/a.ts`.
 - Given the same conditions, when the predicate returns, then the result carries a distinct `missing: 'uncommitted'` classification so callers can tell this miss apart from an unresolved-task miss.
-- Given a dirty tree with seven offending paths, when the predicate builds its reason, then it names the first three and reports the remaining count, matching the existing unresolved-task truncation format.
+- Given a dirty tree with seven offending paths, when the predicate builds its reason, then it names the first three and reports the remaining count, in the form: first three paths, then the count of remaining paths.
 - Given the predicate returns not-done for uncommitted work, when the conductor records the failure, then `step_failed.error` carries that reason verbatim, so the operator reads the paths without running `git status` (O2).
 
 ### Negative Paths
@@ -72,7 +72,7 @@ work but never committed it can never be routed onward as complete.
 
 ### Done When
 - [ ] The `build` predicate consults `ctx.worktreeStatus` after the task-resolution check and returns `{ done: false, missing: 'uncommitted', reason }` on a non-empty result.
-- [ ] Reason format and truncation match the existing unresolved-task reason.
+- [ ] The dirty-tree reason names the first three offending paths and the count of the remaining paths.
 - [ ] Ordering tests pin halt-marker > plan > task-resolution > uncommitted.
 
 ---
