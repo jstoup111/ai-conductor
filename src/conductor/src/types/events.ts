@@ -419,6 +419,23 @@ export type ConductorEvent =
       remaining: number;
     }
   | {
+      /**
+       * Post-rebase regrade judgement for a replay that changed the feature's
+       * own contribution: which document-bound judged gates reopen, and why.
+       * `fail-closed` means the judgement was unavailable or invalid and every
+       * candidate reopened.
+       */
+      type: 'rebase_regrade_judged';
+      step: 'rebase';
+      outcome: 'regrade' | 'preserve' | 'fail-closed';
+      candidates: string[];
+      reopened: string[];
+      changedFiles: string[];
+      completedHead: string;
+      rationale?: string;
+      reason?: string;
+    }
+  | {
       /** One terminal judgement of a criterion-to-Done-when binding claim. */
       type: 'coverage_binding_judged';
       step: 'coverage_binding';

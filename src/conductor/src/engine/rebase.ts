@@ -46,6 +46,14 @@ import {
 import type { ReplayEvidence } from './gate-verdicts.js';
 import { currentPreservedJudgeIdentity, gateVerdictStillValid, isApplicableOriginalPass } from './gate-code-validity.js';
 import type { RebasePreservedCandidate } from './rebase-transition.js';
+import {
+  REBASE_REGRADE_GATES,
+  computeOwnContributionDelta,
+  judgeRebaseRegrade,
+  type RebaseRegradeGate,
+  type RebaseRegradeJudge,
+} from './rebase-regrade-judgement.js';
+import type { ConductorEvent } from '../types/events.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -2321,6 +2329,12 @@ export async function applyRebaseVerdicts(
     preservationBasis?: 'test_suite_drift_budget';
   }>,
   git?: GitRunner,
+  regrade?: {
+    /** Provider boundary for the post-rebase regrade judgement. */
+    judge?: RebaseRegradeJudge;
+    /** Event-spine sink for the `rebase_regrade_judged` verdict. */
+    emit?: (event: Extract<ConductorEvent, { type: 'rebase_regrade_judged' }>) => Promise<void>;
+  },
 ): Promise<{
   satisfied: boolean;
   kickedBack: StepName[];
@@ -2470,9 +2484,51 @@ export async function applyRebaseVerdicts(
   const replayComparison = git && outcome.replay
     ? await compareReplayTree(git, outcome.replay)
     : undefined;
-  const replayPartition = outcome.featureSurface !== undefined && replayComparison
+  const classifiedReplay = outcome.featureSurface !== undefined && replayComparison
     ? classifyReplayGateInvalidation(delta, outcome.featureSurface, ranManualTest, replayComparison, outcome.documentInputs)
     : undefined;
+  // ADR-2026-07-20 amendment: a replay that CHANGED the feature's own
+  // contribution leaves the document-bound judged gates' inputs intact, so
+  // the path classifier preserves them — but whether the resolved diff now
+  // warrants a new grade is a judgement call.  Machinery scopes the bounded
+  // own-diff delta and validates the closed verdict; an LLM judges.  Missing,
+  // failed, or invalid judgement reopens every candidate (fail-closed).
+  let replayPartition = classifiedReplay;
+  if (classifiedReplay && replayComparison?.kind === 'changed' && git) {
+    const candidates: RebaseRegradeGate[] = [];
+    for (const gate of REBASE_REGRADE_GATES) {
+      if (!classifiedReplay.preserved.includes(gate)) continue;
+      if (isSkipVerdict(await readVerdict(projectRoot, gate))) continue;
+      candidates.push(gate);
+    }
+    if (candidates.length > 0) {
+      const decision = await judgeRebaseRegrade(
+        () => computeOwnContributionDelta(git, replayComparison.identity, candidates),
+        candidates,
+        regrade?.judge,
+      );
+      await regrade?.emit?.({
+        type: 'rebase_regrade_judged',
+        step: 'rebase',
+        outcome: decision.outcome,
+        candidates: [...decision.candidates],
+        reopened: [...decision.reopen],
+        changedFiles: [...decision.changedFiles],
+        completedHead: replayComparison.identity.completedHead,
+        ...(decision.rationale === undefined ? {} : { rationale: decision.rationale }),
+        ...(decision.reason === undefined ? {} : { reason: decision.reason }),
+      });
+      if (decision.reopen.length > 0) {
+        const reopen = new Set<string>(decision.reopen);
+        replayPartition = {
+          preserved: classifiedReplay.preserved.filter((gate) => !reopen.has(gate)),
+          invalidated: [...classifiedReplay.invalidated, ...decision.reopen],
+          candidates: classifiedReplay.candidates.map((candidate) =>
+            reopen.has(candidate.gate) ? { ...candidate, decision: 'invalidate' as const } : candidate),
+        };
+      }
+    }
+  }
   const partition = outcome.featureSurface !== undefined
     ? replayPartition ?? classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
     : undefined;
