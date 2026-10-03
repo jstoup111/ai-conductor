@@ -1,5 +1,9 @@
+// Covers: S2.1, S2.2, S2.3
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildConflictTaskTable } from '../../src/engine/coverage-binding-conflict-inputs.js';
+import { buildConflictTaskTable, resolveConflictSubjectAdrs } from '../../src/engine/coverage-binding-conflict-inputs.js';
 
 describe('buildConflictTaskTable', () => {
   it('returns every plan task, including remediation tasks, with titles and Done when checks', () => {
@@ -46,5 +50,36 @@ describe('buildConflictTaskTable', () => {
     expect(Object.keys(row!)).toEqual(['id', 'title', 'doneWhen']);
     expect(JSON.stringify(row)).not.toContain('slice');
     expect(JSON.stringify(row)).not.toContain('Foundation slice');
+  });
+});
+
+describe('resolveConflictSubjectAdrs', () => {
+  it('returns approved DECIDE-set and cited ADRs, including partial supersessions', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'coverage-binding-conflict-inputs-'));
+    const decisions = join(projectRoot, '.docs', 'decisions');
+
+    try {
+      await mkdir(decisions, { recursive: true });
+      await Promise.all([
+        writeFile(join(decisions, 'adr-changed.md'), '**Status:** APPROVED\n'),
+        writeFile(join(decisions, 'adr-cited.md'), '**Status:** Approved\n'),
+        writeFile(join(decisions, 'adr-partial.md'), '**Status:** SUPERSEDED in part by adr-replacement\n'),
+        writeFile(join(decisions, 'adr-draft.md'), '**Status:** DRAFT\n'),
+        writeFile(join(decisions, 'adr-superseded.md'), '**Status:** SUPERSEDED by adr-replacement\n'),
+        writeFile(join(decisions, 'adr-uncited.md'), '**Status:** APPROVED\n'),
+      ]);
+
+      await expect(resolveConflictSubjectAdrs({
+        projectRoot,
+        planText: 'Cites adr-cited, adr-partial, adr-draft, adr-superseded, and adr-missing.',
+        decideSetAdrPaths: new Set(['.docs/decisions/adr-changed.md']),
+      })).resolves.toEqual([
+        '.docs/decisions/adr-changed.md',
+        '.docs/decisions/adr-cited.md',
+        '.docs/decisions/adr-partial.md',
+      ]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 });
