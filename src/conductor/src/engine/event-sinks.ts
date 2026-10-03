@@ -14,6 +14,14 @@ export const EVENT_SINKS = {
   // to the spool itself, a renderer stream, or aggregate usage accounting.
   otel_spool_drop: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
   otel_spool_backlog: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
+  // Session processes cannot reach the in-process emitter. Their same-schema
+  // producer records are projected through the existing tail before these
+  // canonical sinks consume them.
+  session_command_refused: { render: true, persist: true, audit: false, otel: false },
+  github_bypass_attempt: { render: true, persist: true, audit: false, otel: false },
+  github_bypass_result: { render: true, persist: true, audit: false, otel: false },
+  github_possible_bypass: { render: true, persist: true, audit: false, otel: false },
+  session_event_delivery_diagnostic: { render: true, persist: true, audit: false, otel: false },
   daemon_backlog_snapshot: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   daemon_memory_sample: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
   daemon_heap_dump_written: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
