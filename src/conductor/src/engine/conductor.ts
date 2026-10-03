@@ -11516,6 +11516,7 @@ export class Conductor {
               step.name,
               dispatchRunId,
               this.currentAttemptStartedAt,
+              result.output,
             );
             if (handshake?.routeClass === 'absent' && handshake.reason) {
               lastVerdictHandshakeFailure = handshake.reason;
