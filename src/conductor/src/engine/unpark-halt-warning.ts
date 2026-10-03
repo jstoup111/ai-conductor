@@ -34,19 +34,17 @@ export async function describeLiveHalt(worktreePath: string): Promise<string[] |
 
   const slug = basename(worktreePath);
   const warning = `'${slug}' still has a live HALT (class: ${haltClass}) — it will not resume until the HALT is cleared.`;
-  const recovery = recoveryLine({ worktreePath, slug, haltPath, haltClassPath, haltClass });
+  const recovery = recoveryLine({ slug, haltPath, haltClassPath, haltClass });
 
   return [warning, recovery];
 }
 
 function recoveryLine({
-  worktreePath,
   slug,
   haltPath,
   haltClassPath,
   haltClass,
 }: {
-  worktreePath: string;
   slug: string;
   haltPath: string;
   haltClassPath: string;
@@ -57,7 +55,7 @@ function recoveryLine({
   }
 
   if (haltClass === OVER_SCOPE_HALT_CLASS) {
-    return `To resume: record each decision in ${haltPath}, then mv ${haltPath} ${worktreePath}/.pipeline/HALT.cleared; rm -f ${haltClassPath}`;
+    return `To resume: record each decision in ${haltPath}, then ai-conductor halt clear --feature ${slug} --rationale "<why>" (do not rm the HALT — that discards the decisions)`;
   }
 
   if (haltClass === KICKBACK_CAP_HALT_CLASS) {

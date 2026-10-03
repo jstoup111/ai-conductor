@@ -859,6 +859,26 @@ describe('prd_audit kickback', () => {
     expect(pendingOnly).not.toContain('keeps the prior decision unchanged');
   });
 
+  it('names the payload-preserving halt clear command instead of an unspecified clear (#2576)', () => {
+    const pendingOnly = renderOverScopeDecisionBlock([{ criterion: 'S5.6', summary: 'Widened.', relation: 'outside-visible' }]);
+    const reviseDecision = renderOverScopeDecisionBlock([{
+      kind: 'revise-decision',
+      criterion: 'NC.8',
+      summary: 'A previously refused scope expansion.',
+      relation: 'outside-visible',
+      offerEntryId: 'prd-case-8',
+      originalSource: { id: 'prd-audit:NC.8', snapshot: 'Original refusal evidence.' },
+      originalCaseId: 'prd-case-8',
+      priorDecision: { id: 'decision-8', revision: 1 },
+    }]);
+
+    for (const rendered of [pendingOnly, reviseDecision]) {
+      expect(rendered).toContain('ai-conductor halt clear --feature <slug>');
+      expect(rendered).toContain('Do not delete this file');
+      expect(rendered).not.toMatch(/clear this halt/i);
+    }
+  });
+
   it('treats pending, absent, malformed, unknown, and invalid decision entries safely', () => {
     expect(parseClearedOverScopeDecisions('ordinary halt', new Map([['S3.1', 'x']]))).toEqual({ kind: 'absent' });
     expect(parseClearedOverScopeDecisions('```json over-scope-decisions\n{ nope\n```', new Map([['S3.1', 'x']]))).toMatchObject({ defects: [{ kind: 'malformed-block' }] });
