@@ -2585,17 +2585,23 @@ export type ReadCurrentPrdAuditVerdictResult =
 export async function prdAuditVerdictIdentity(
   dir: string,
   verdict: PersistedPrdAuditVerdict,
-  input: Pick<CompletionContext, 'attemptRunId' | 'config' | 'git'>,
+  input: Pick<CompletionContext, 'attemptRunId' | 'config' | 'git'> & { skipCodeValidity?: boolean },
 ): Promise<PrdAuditVerdictIdentity> {
   let codeStampStillValid = false;
   let codeStampValidity: 'preserve' | 'rerun' | undefined;
-  if (verdict.codeStamp !== null && resolveGateCodeValidityConfig(input.config).enabled) {
+  const staleRunIdentity =
+    input.attemptRunId !== undefined && verdict.attemptId !== input.attemptRunId;
+  if (
+    (!input.skipCodeValidity || staleRunIdentity) &&
+    verdict.codeStamp !== null &&
+    resolveGateCodeValidityConfig(input.config).enabled
+  ) {
     const git = input.git ?? makeGitRunner(dir);
     // A failed validity probe is an uncomputable delta, which ADR D2 scores
     // fail-closed as rerun.  Keep that decision inside the shared reader so a
     // caller cannot accidentally recover the stored PASS after a git failure.
     codeStampValidity = await gateVerdictStillValid({ projectRoot: dir, git }, 'prd_audit', verdict.codeStamp)
-      .catch(() => 'rerun');
+      .catch(() => 'rerun' as const);
     codeStampStillValid = codeStampValidity === 'preserve';
   }
   const codeStampInvalidated = codeStampValidity === 'rerun';
@@ -2603,13 +2609,13 @@ export async function prdAuditVerdictIdentity(
     codeStampStillValid,
     codeStampInvalidated,
     ...(codeStampValidity === undefined ? {} : { codeStampValidity }),
-    staleRunIdentity: codeStampInvalidated && input.attemptRunId !== undefined && verdict.attemptId !== input.attemptRunId,
+    staleRunIdentity: codeStampInvalidated && staleRunIdentity,
   };
 }
 
 export async function readCurrentPrdAuditVerdict(
   dir: string,
-  input: Pick<CompletionContext, 'attemptRunId' | 'config' | 'git'>,
+  input: Pick<CompletionContext, 'attemptRunId' | 'config' | 'git'> & { skipCodeValidity?: boolean },
 ): Promise<ReadCurrentPrdAuditVerdictResult> {
   const stored = await readPrdAuditVerdict(dir);
   if (stored.kind === 'absent') {
@@ -2618,18 +2624,18 @@ export async function readCurrentPrdAuditVerdict(
   if (stored.kind === 'unreadable') return stored;
 
   const identity = await prdAuditVerdictIdentity(dir, stored.value, input);
-  if (identity.codeStampInvalidated) {
-    return {
-      kind: 'invalidated',
-      identity,
-      reason: `${PRD_AUDIT_VERDICT_PATH} code stamp is no longer preservable (gate-code-validity returned ${identity.codeStampValidity}); a fresh audit is required`,
-    };
-  }
   if (identity.staleRunIdentity) {
     return {
       kind: 'invalidated',
       identity,
       reason: `${PRD_AUDIT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${input.attemptRunId}`,
+    };
+  }
+  if (identity.codeStampInvalidated) {
+    return {
+      kind: 'invalidated',
+      identity,
+      reason: `${PRD_AUDIT_VERDICT_PATH} code stamp is no longer preservable (gate-code-validity returned ${identity.codeStampValidity}); a fresh audit is required`,
     };
   }
   return { kind: 'present', value: stored.value, identity };

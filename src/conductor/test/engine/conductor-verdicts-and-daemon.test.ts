@@ -27,6 +27,16 @@ vi.mock('../../src/engine/rebase.js', async () => {
     }),
   };
 });
+vi.mock('../../src/engine/pr-labels.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/pr-labels.js')>();
+  return {
+    ...actual,
+    // These orchestration fixtures do not exercise git history. A clean
+    // injected result makes their typed audit stamps preservable without
+    // probing the non-repository temporary fixture directory.
+    makeProductionGit: () => async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+  };
+});
 vi.mock('../../src/engine/kickback-ledger.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/kickback-ledger.js')>();
   return {
@@ -88,6 +98,12 @@ const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
   adrCompliance: { enabled: false, reason: 'fixture' },
   diagramDrift: { enabled: false, reason: 'fixture' },
 };
+
+const INVALIDATING_PRD_AUDIT_GIT: GitRunner = async () => ({
+  stdout: '',
+  exitCode: 1,
+  stderr: 'fixture cannot preserve the reviewed code stamp',
+});
 
 /**
  * The as-built report is a derived view. Conductor fixtures must write the
@@ -498,6 +514,7 @@ describe('engine/conductor', () => {
         stateFilePath: statePath,
         stepRunner: createMockStepRunner({ success: true }),
         events,
+        git: INVALIDATING_PRD_AUDIT_GIT,
       });
 
       await expect(
@@ -876,6 +893,7 @@ describe('engine/conductor', () => {
         stateFilePath: statePath,
         stepRunner: createMockStepRunner({ success: true }),
         events,
+        git: INVALIDATING_PRD_AUDIT_GIT,
         fromStep: 'prd_audit',
         verifyArtifacts: true,
         mode: 'auto',
@@ -927,6 +945,7 @@ describe('engine/conductor', () => {
         stateFilePath: statePath,
         stepRunner: createMockStepRunner({ success: true }),
         events,
+        git: INVALIDATING_PRD_AUDIT_GIT,
         fromStep: 'prd_audit',
         verifyArtifacts: true,
         mode: 'auto',

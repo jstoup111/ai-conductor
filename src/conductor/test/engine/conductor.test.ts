@@ -102,6 +102,12 @@ const NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER: GroupBranchLifecycleObserver = {
   onSettled: () => undefined,
 };
 
+// These remediation fixtures exercise typed finding admission, not the
+// separate code-validity policy. Their persisted audit was reviewed at
+// `fixture-head`, and this runner proves that no gate-surface change occurred
+// after it.
+const PRESERVABLE_PRD_AUDIT_GIT = async () => ({ exitCode: 0, stdout: '', stderr: '' });
+
 function failingBuildReviewAggregate(summary: string) {
   const lapId = parseBuildReviewLapId('fixture-lap')!;
   return joinBuildReviewRubricOutcomes({
@@ -954,6 +960,7 @@ describe('engine/conductor', () => {
         },
         events,
         projectRoot: dir,
+        git: PRESERVABLE_PRD_AUDIT_GIT,
       });
 
       const outcome = await (conductor as any).planRemediation(
@@ -1007,6 +1014,7 @@ describe('engine/conductor', () => {
         },
         events,
         projectRoot: dir,
+        git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
       });
 
@@ -1118,6 +1126,7 @@ describe('engine/conductor', () => {
         stateFilePath: statePath,
         projectRoot: dir,
         events,
+        git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { prd_audit: { max_remediation_laps: 2 } } as never,
         stepRunner: { run: async (step) => {
           if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: [{
@@ -1174,6 +1183,7 @@ describe('engine/conductor', () => {
         stateFilePath: statePath,
         projectRoot: dir,
         events,
+        git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { prd_audit: { max_remediation_laps: 2 } } as never,
         stepRunner: { run: async (step) => {
           if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
@@ -1229,6 +1239,7 @@ describe('engine/conductor', () => {
       await writeKickbackLedger(dir, { version: 1, gates: {}, growth: { authored: 8, added: 0, byGate: {} } });
       const conductor = new Conductor({
         stateFilePath: statePath, projectRoot: dir, events,
+        git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
         stepRunner: { run: async (step) => {
           if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: [

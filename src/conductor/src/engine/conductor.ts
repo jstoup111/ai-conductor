@@ -2919,13 +2919,20 @@ export class Conductor {
           return { done: false, routeClass: 'absent', retrySignal: 'structured-result-missing', reason: absentReason };
         }
         const current = await readCurrentPrdAuditVerdict(this.projectRoot, {
-          attemptRunId: expectedRunId, config: this.config, git: this.git,
+          attemptRunId: expectedRunId,
+          config: this.config,
+          git: this.prdAuditGit(),
+          // The dispatch just wrote this verdict. The handshake verifies its
+          // run identity and completeness; code-validity is for later reuse.
+          skipCodeValidity: true,
         });
         if (current.kind !== 'present') {
+          const staleRunIdentity =
+            current.kind === 'invalidated' && current.identity.staleRunIdentity;
           return {
             done: false,
             routeClass: 'absent',
-            retrySignal: 'structured-result-missing',
+            retrySignal: staleRunIdentity ? 'stale-run-identity' : 'structured-result-missing',
             verdictFreshness: {
               artifact: join(this.projectRoot, PRD_AUDIT_VERDICT_PATH),
               floorSource: 'run-identity',
@@ -4155,7 +4162,7 @@ export class Conductor {
     attemptRunId = this.currentRunId,
   ): Promise<PrdAuditPlanGapRoute> {
     const current = await readCurrentPrdAuditVerdict(this.projectRoot, {
-      attemptRunId, config: this.config, git: this.git,
+      attemptRunId, config: this.config, git: this.prdAuditGit(),
     });
     if (current.kind === 'unreadable' || current.kind === 'invalidated') {
       this.prdAuditProjectionRefusal = `Cannot route PRD-audit findings: ${current.reason}`;
@@ -4222,6 +4229,32 @@ export class Conductor {
     return { kind: 'record', findings };
   }
 
+  /**
+   * Adapt the conductor's PR-operation Git seam to the verdict-validity
+   * reader's richer result contract. The audit is always rooted at this
+   * worktree; a failed probe is represented as a non-zero result so the
+   * shared reader preserves its fail-closed rerun behavior.
+   */
+  private prdAuditGit(): RebaseGitRunner {
+    return async (args) => {
+      try {
+        const result = await this.git(args, { cwd: this.projectRoot });
+        const detailed = result as { stdout: string; stderr?: string; exitCode?: number };
+        return {
+          exitCode: detailed.exitCode ?? 0,
+          stdout: detailed.stdout,
+          stderr: detailed.stderr ?? '',
+        };
+      } catch (error) {
+        return {
+          exitCode: 1,
+          stdout: '',
+          stderr: error instanceof Error ? error.message : String(error),
+        };
+      }
+    };
+  }
+
   /** Read OVER_SCOPE verdict rows after incorporating an operator-cleared halt acceptance. */
   /**
    * True when the current prd-audit report still carries FIXABLE or PLAN_GAP
@@ -4236,7 +4269,7 @@ export class Conductor {
     // typed verdict is fail-closed so an accepted scope decision cannot hide a
     // concurrent repair or plan blocker.
     const current = await readCurrentPrdAuditVerdict(this.projectRoot, {
-      attemptRunId, config: this.config, git: this.git,
+      attemptRunId, config: this.config, git: this.prdAuditGit(),
     });
     if (current.kind !== 'present' || !current.value.complete) return true;
     return current.value.judgment.criterionJudgments.some(
@@ -4474,7 +4507,7 @@ export class Conductor {
     const freshness = {
       sample: async () => {
         const currentVerdict = await readCurrentPrdAuditVerdict(this.projectRoot, {
-          attemptRunId, config: this.config, git: this.git,
+          attemptRunId, config: this.config, git: this.prdAuditGit(),
         });
         const currentTyped = currentVerdict.kind === 'present' && currentVerdict.value.complete
           ? prdAuditTypedRouteReport(currentVerdict.value)
@@ -4588,7 +4621,7 @@ export class Conductor {
     attemptRunId = this.currentRunId,
   ): Promise<PrdAuditOverScopeRoute> {
     const current = await readCurrentPrdAuditVerdict(this.projectRoot, {
-      attemptRunId, config: this.config, git: this.git,
+      attemptRunId, config: this.config, git: this.prdAuditGit(),
     });
     if (current.kind === 'unreadable' || current.kind === 'invalidated') {
       this.prdAuditProjectionRefusal = `Cannot route PRD-audit findings: ${current.reason}`;
@@ -4779,7 +4812,7 @@ export class Conductor {
       // typed-verdict migration; normal lifecycle handling will request a
       // current audit instead.
       const current = await readCurrentPrdAuditVerdict(this.projectRoot, {
-        attemptRunId: this.currentRunId, config: this.config, git: this.git,
+        attemptRunId: this.currentRunId, config: this.config, git: this.prdAuditGit(),
       });
       if (current.kind === 'absent') {
         return { kind: 'none', reason: `prd-audit has no current typed verdict at ${PRD_AUDIT_VERDICT_PATH}` };
