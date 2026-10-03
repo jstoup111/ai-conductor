@@ -7,6 +7,8 @@ import { planTaskDigests } from '../../src/engine/plan-task-parse.js';
 // Covers: task:3, task:5
 import { seedTaskStatus } from '../../src/engine/task-seed.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { completeTaskDoneWhen, resolveTaskIds } from '../../src/engine/task-progress.js';
+import { admitAndRestageRepair } from '../../src/engine/repair-restage.js';
 
 const reopenObservation = vi.hoisted(() => ({
   active: false,
@@ -1053,6 +1055,63 @@ Content
   });
 
   describe('Task 3: rewritten plan tasks reopen through repair obligations', () => {
+    it('is idempotent across A-to-B-to-A rewrites, leaves the ledger alone, and closes every coexisting repair', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      const statePath = join(dir, '.pipeline/engine-state.json');
+      const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+      const planA = '# Plan\n\n## Task 1: Rewritten task\nOriginal text.\n\n**Done when:**\n1. The reopened task is complete.\n';
+      const planB = '# Plan\n\n## Task 1: Rewritten task\nChanged text.\n\n**Done when:**\n1. The reopened task is complete.\n';
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(planPath, planA);
+      await seedTaskStatus(dir, planPath);
+      await fsPromises.writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
+        tasks: [{ id: '1', status: 'completed' }],
+      }));
+      const ledger = JSON.stringify({
+        version: 1, gates: {}, growth: { authored: 0, added: 0, byGate: {} },
+      }, null, 2);
+      await fsPromises.writeFile(ledgerPath, ledger);
+
+      await fsPromises.writeFile(planPath, planB);
+      await seedTaskStatus(dir, planPath);
+      await fsPromises.writeFile(planPath, planA);
+      await seedTaskStatus(dir, planPath);
+      const afterSecondRewrite = JSON.parse(await fsPromises.readFile(statePath, 'utf8'));
+      const amendments = Object.values(afterSecondRewrite.repairObligations.records) as Array<{
+        id: string; source: { authority: string }; baseline: unknown; tasks: Record<string, { status: string; evidence?: unknown }>;
+      }>;
+      const openAmendments = amendments.filter((record) =>
+        record.source.authority === 'plan_amendment' && record.tasks['1']?.status === 'open',
+      );
+      expect(openAmendments).toHaveLength(1);
+      expect(amendments.find((record) => record.id !== openAmendments[0].id && record.source.authority === 'plan_amendment'))
+        .toMatchObject({ tasks: { '1': { status: 'resolved', evidence: { kind: 'superseded-by-plan-amendment' } } } });
+
+      // Two additional BUILD entries reconstruct their stores from disk. They
+      // must replay, not manufacture new repairs or move the boundary.
+      const baseline = openAmendments[0].baseline;
+      await seedTaskStatus(dir, planPath);
+      await seedTaskStatus(dir, planPath);
+      const afterTripleSeed = JSON.parse(await fsPromises.readFile(statePath, 'utf8'));
+      const replayedOpen = (Object.values(afterTripleSeed.repairObligations.records) as typeof amendments)
+        .filter((record) => record.source.authority === 'plan_amendment' && record.tasks['1']?.status === 'open');
+      expect(replayedOpen).toEqual([expect.objectContaining({ baseline })]);
+      await expect(fsPromises.readFile(ledgerPath, 'utf8')).resolves.toBe(ledger);
+
+      await expect(admitAndRestageRepair({
+        projectRoot: dir, planPath, taskIds: ['1'], findingIds: ['coverage-claim'],
+        sourceAuthority: 'coverage_binding', instruction: 'Reconcile coverage.', gates: ['coverage_binding'],
+      })).resolves.toMatchObject({ kind: 'restaged' });
+      const chargedLedger = JSON.parse(await fsPromises.readFile(ledgerPath, 'utf8'));
+      expect(chargedLedger).toMatchObject({ gates: { coverage_binding: { laps: 1 } } });
+      expect(chargedLedger.pendingRepair).toBeUndefined();
+
+      await expect(completeTaskDoneWhen(dir, '1', [{ index: 1, evidence: 'completed after rewrite' }]))
+        .resolves.toEqual({ kind: 'completed' });
+      expect(await resolveTaskIds(dir, ['1'])).toEqual(new Set(['1']));
+    });
+
     it('admits and settles before recording the new digest, then restages the completed row without repair-restage', async () => {
       const planPath = join(dir, '.docs/plans/test.md');
       const statusPath = join(dir, '.pipeline/task-status.json');

@@ -303,9 +303,17 @@ export function createRepairObligationStore(
           result = { ok: false, kind: 'missing', message: 'Repair obligation or bound task is missing' };
           return current as EngineState;
         }
-        if (section.currentByPlan[planIdentity]?.[taskId] !== input.obligationId) {
-          result = { ok: false, kind: 'stale', message: 'Repair obligation has been superseded for this task' };
-          return current as EngineState;
+        const currentId = section.currentByPlan[planIdentity]?.[taskId];
+        // A later finding from a different authority shares the task's row
+        // but does not supersede this repair: both obligations need their
+        // own closure evidence. Only a newer admission from the same
+        // authority makes the old record stale (notably plan amendments).
+        if (currentId !== input.obligationId) {
+          const currentRecord = currentId === undefined ? undefined : section.records[currentId];
+          if (!currentRecord || currentRecord.source.authority === obligation.source.authority) {
+            result = { ok: false, kind: 'stale', message: 'Repair obligation has been superseded for this task' };
+            return current as EngineState;
+          }
         }
         if (obligation.tasks[taskId].status === 'open') {
           obligation.tasks[taskId] = { status: 'resolved', evidence: clone(input.evidence) };
