@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-03T15:53:16.356Z
 Slug: prompt-operator-review-on-non-clean-as-built-verdi
 Class: needs-human
 Halting step: unknown
