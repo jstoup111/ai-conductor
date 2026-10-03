@@ -7,7 +7,7 @@ import { join } from 'node:path';
 
 import { dispatchEngineer, type DispatchEngineerOpts } from '../../../src/engine/engineer-cli.js';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
-import { createFileQueue, type FileIntakeQueue } from '../../../src/engine/engineer/intake/queue.js';
+import { createFileQueue, type IntakeQueue } from '../../../src/engine/engineer/intake/queue.js';
 import type { Envelope } from '../../../src/engine/engineer/intake/port.js';
 
 const SOURCE = 'github-issues';
@@ -25,7 +25,7 @@ function envelope(id: string): Envelope {
   };
 }
 
-function capture(queue?: FileIntakeQueue) {
+function capture(queue?: IntakeQueue) {
   const out: string[] = [];
   const err: string[] = [];
   const ghCalls: string[][] = [];
@@ -43,7 +43,7 @@ function capture(queue?: FileIntakeQueue) {
   return { out, err, ghCalls, opts };
 }
 
-async function strand(queue: FileIntakeQueue, ledger: ReturnType<typeof createLedger>, item: Envelope): Promise<void> {
+async function strand(queue: IntakeQueue, ledger: ReturnType<typeof createLedger>, item: Envelope): Promise<void> {
   await queue.enqueue(item);
   await queue.claim();
   await ledger.record({ source: item.source, sourceRef: item.sourceRef });
@@ -70,7 +70,7 @@ describe('engineer claim stranded-envelope recovery faults', () => {
     await queue.enqueue(item);
 
     const released: string[] = [];
-    const retainingQueue: FileIntakeQueue = {
+    const retainingQueue: IntakeQueue = {
       ...queue,
       release: async (entry) => {
         released.push(entry.sourceRef);
@@ -152,7 +152,7 @@ describe('engineer claim stranded-envelope recovery faults', () => {
     await strand(queue, ledger, vanished);
     await strand(queue, ledger, recovered);
     let removed = false;
-    const deletingQueue: FileIntakeQueue = {
+    const deletingQueue: IntakeQueue = {
       ...queue,
       release: async (item) => {
         if (!removed) {

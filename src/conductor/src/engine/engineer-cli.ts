@@ -45,7 +45,7 @@ import { ensureRunning, type EnsureRunningOpts } from './daemon-lock.js';
 // deterministic engineer commands and the interactive launch pre-poll.
 import { brainLoopAlive } from './engineer/brain-liveness.js';
 import { CorruptLedgerError, createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
-import { createFileQueue, type FileIntakeQueue } from './engineer/intake/queue.js';
+import { createFileQueue, type IntakeQueue } from './engineer/intake/queue.js';
 import {
   createGithubIntakeAuthorization,
   createGithubIssuesAdapter,
@@ -389,7 +389,7 @@ function parseDurationMs(input: string | undefined): number | null {
  * pending alone would strand the idea. `capturedAt` retains its FIFO position.
  */
 async function enqueueRecoveredEnvelope(
-  queue: ReturnType<typeof createFileQueue>,
+  queue: IntakeQueue,
   entry: LedgerEntry,
   nowMs: number = Date.now(),
 ): Promise<void> {
@@ -486,8 +486,8 @@ export interface DispatchEngineerOpts {
   engineerDir?: string;
   /** Bound the intake claim lease wait; production uses the five-minute default. */
   intakeClaimLeaseWaitMs?: number;
-  /** Injectable file queue for claim recovery fault tests; production creates the inbox queue. */
-  intakeFileQueue?: FileIntakeQueue;
+  /** Injectable intake queue for claim recovery fault tests; production creates the inbox queue. */
+  intakeFileQueue?: IntakeQueue;
   /** Print to stdout (default: process.stdout.write). */
   print?: (s: string) => void;
   /** Print to stderr (default: process.stderr.write). */
@@ -820,7 +820,7 @@ export function buildIntake(deps: {
 }): {
   reader: ReturnType<typeof createRegistryReader>;
   ledger: ReturnType<typeof createLedger>;
-  queue: ReturnType<typeof createFileQueue>;
+  queue: IntakeQueue;
   adapter: IntakeBackend;
 } {
   const reader = createRegistryReader(deps.registryPath ? { registryPath: deps.registryPath } : {});
@@ -1512,7 +1512,7 @@ export async function dispatchEngineer(
     case 'claim': {
       const engDir = engineerDir ?? resolveEngineerDir({});
       const { ledger, queue: productionQueue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr, events: opts.events });
-      const queue = opts.intakeFileQueue ?? productionQueue;
+      const queue: IntakeQueue = opts.intakeFileQueue ?? productionQueue;
 
       // Resolve the project-level config (`.ai-conductor/config.yml` at cwd) so an
       // operator's `stale_claim_window_hours` override reaches the reap pass below —
