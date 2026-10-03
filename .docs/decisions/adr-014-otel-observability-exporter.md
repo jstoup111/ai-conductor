@@ -552,6 +552,45 @@ Relevant existing facts (evidence):
 >     silently discards stale points (suspected, not verified, for Datadog metric intake) is
 >     invisible to the drop count.
 
+> **Amended 2026-10-02 by #2000 (run provenance on traces):** an exported trace names the feature,
+> branch, and run, but not the commit it built, the base it was built against, the pull request it
+> opened, or the tracker issue that asked for it, although the engine holds all four while the run
+> executes. Decision 10 already places every unbounded value on traces only; Decision 11 already
+> requires dimensions to travel on the events that describe them. Three decisions extend the
+> contract; every earlier decision stands, and no metric data-point or `target_info` label changes.
+>
+> 18. **Provenance rides existing events and is resolved at the emit site.** `feature_complete` and
+>     `loop_halt` gain optional `headSha`, `baseSha`, and `prDisposition` fields, stamped by the
+>     existing terminal seams (`completeRun` and the centralized `emitLoopHalt`, the D14 precedent);
+>     `headSha` is the worktree `HEAD` at emit time. Every rebase outcome event (`rebase_noop`,
+>     `rebase_changed`, `rebase_mergeable_skip`) carries the `baseSha` the rebase resolved, or `null`
+>     when unresolvable. The originating tracker reference is resolved once at run start from the
+>     feature's intake marker `Source-Ref:` and passed in the visualizer start context. No new event
+>     type is added, and no projection reads git, `conduct-state.json`, or the intake marker
+>     (Decision 4).
+> 19. **Placement: issue on the trace resource, commit and PR on the root span, base also on the
+>     rebase step span.** The trace Resource gains `conductor.source.ref`, so every exported span —
+>     including the closed step spans of a run that later crashes — carries it. HEAD moves with every
+>     task commit and rebase, so the built commit is a close-time value: the `conductor.run` root span
+>     is stamped at close with `vcs.head.sha`, `vcs.base.sha`, `conductor.pr.url`, and
+>     `conductor.pr.disposition`. `vcs.base.sha` is also set on the rebase step span when its outcome
+>     event arrives, and the SpanManager holds the latest base value in memory so a later halt
+>     without one still stamps it. `conductor.pr.disposition` is a closed enum: `opened` (a PR URL is
+>     present), `none` (the finish choice was `keep`, so no PR is expected), and `unrecorded` (the run
+>     closed with neither, including the force-close default). An absent value is omitted; the
+>     disposition alone distinguishes "no PR" from "PR not recorded". All four values are trace-only.
+> 20. **`otel.provenance` toggles each provenance group; every toggle defaults on.**
+>     `otel.provenance` is a mapping under the existing `otel:` block with boolean keys `commit`
+>     (`vcs.head.sha`, `vcs.base.sha`), `pr` (`conductor.pr.url`, `conductor.pr.disposition`),
+>     `issue` (`conductor.source.ref`), and `feature` (`conductor.feature`), each defaulting to
+>     `true`, resolved once in `resolveOtelConfig` and carried on `ResolvedOtelConfig`. A non-boolean
+>     value or an unknown key is a config validation error. A disabled toggle omits its attributes
+>     entirely, never a placeholder. `feature: false` also changes the trace Resource's
+>     `service.instance.id` from `«project»/«feature»` to `«project»/«run-id»`; it does not touch the
+>     metric Resource or any metric data-point label, whose `feature` label Decisions 10 and 14 keep
+>     for bounded series. Events persisted to the spine are unaffected by every toggle: the toggles
+>     govern export only.
+
 ## Consequences
 
 **Positive**
