@@ -231,6 +231,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   ci_repair_diagnostic: 'not-audited-by-design',
   attribution_divergence: 'not-audited-by-design',
   acceptance_red: 'not-audited-by-design',
+  build_active_stall: 'not-audited-by-design',
 };
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
@@ -635,8 +636,8 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     resolvedBefore: 0,
     resolvedAfter: 1,
   },
-  build_progress: { type: 'build_progress', step: 'build', resolved: 1, total: 3 },
-  build_no_progress: { type: 'build_no_progress', step: 'build', quietMinutes: 5, resolved: 1, total: 3 },
+  build_progress: { type: 'build_progress', step: 'build', resolved: 1, total: 3, activity: 'quiet' },
+  build_no_progress: { type: 'build_no_progress', step: 'build', quietMinutes: 5, resolved: 1, total: 3, activity: 'quiet' },
   pipeline_closeout: {
     type: 'pipeline_closeout',
     obligation: 'evaluator',
@@ -820,6 +821,14 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     phase: 'detected',
   },
   attribution_divergence: { type: 'attribution_divergence', feature: 'my-feature', taskId: '1' },
+  build_active_stall: {
+    type: 'build_active_stall',
+    step: 'build',
+    minutes: 30,
+    resolved: 2,
+    total: 5,
+    action: 'warn',
+  },
   acceptance_red: {
     type: 'acceptance_red',
     state: 'required',

@@ -354,6 +354,11 @@ export class TerminalRenderer implements UIRenderer {
         this.region.log(chalk.yellow(`  ⚠ ${event.step} — no progress for ${event.quietMinutes}m (${resolved}/${event.total})${task}`));
         break;
       }
+      case 'build_active_stall': {
+        const resolved = displayBuildPosition(event.resolved, event.total, false);
+        this.region.log(chalk.yellow(`  ⚠ ${event.step} — active without movement for ${event.minutes}m (${resolved}/${event.total}); action ${event.action}`));
+        break;
+      }
       case 'pipeline_closeout':
         this.region.log(chalk.green(`  ✓ closeout ${event.obligation} (${event.endedAt - event.startedAt}ms)`));
         break;
@@ -399,5 +404,5 @@ export class TerminalRenderer implements UIRenderer {
 }
 
 const DEDICATED_EVENT_TYPES = new Set<ConductorEvent['type']>([
-  'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'github_operation_refused', 'github_write_credential_fallback', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'provider_fallback', 'session_policy', 'rate_limit', 'session_reset', 'credentials_park_progress', 'tier_skip', 'config_skip', 'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached', 'renderer_error', 'pipeline_tail_diagnostic', 'when_skip', 'parallel_started', 'parallel_completed', 'parallel_failure', 'build_progress', 'unattributed_progress', 'build_no_progress', 'pipeline_closeout', 'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
+  'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'github_operation_refused', 'github_write_credential_fallback', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'provider_fallback', 'session_policy', 'rate_limit', 'session_reset', 'credentials_park_progress', 'tier_skip', 'config_skip', 'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached', 'renderer_error', 'pipeline_tail_diagnostic', 'when_skip', 'parallel_started', 'parallel_completed', 'parallel_failure', 'build_progress', 'unattributed_progress', 'build_no_progress', 'build_active_stall', 'pipeline_closeout', 'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
 ]);

@@ -238,6 +238,8 @@ Classify every build-progress emission into three activity states. Record a once
 - An aborted Claude result carries no `rateLimited`, `authFailure` or `sessionExpired` signal.
 - A Claude invocation without `abortSignal` passes no `cancelSignal` option to its subprocess.
 - With a real child process that ignores SIGTERM, aborting a Claude invocation still terminates the child by SIGKILL after the execa grace period and the invocation resolves `success: false`, as asserted in `test/execution/claude-provider-abort.test.ts`.
+- An aborted Claude result is classified by the retry path as an ordinary failure that consumes the retry budget, never taking the rate-limit, authentication or session-expired recovery path that leaves the budget untouched.
+- A Claude invocation without `abortSignal` behaves exactly as before: its subprocess options, result fields and classification are identical to the pre-change adapter for the same scripted output.
 
 **Files:** src/conductor/src/execution/claude-provider.ts; src/conductor/test/execution/claude-provider-abort.test.ts
 
@@ -259,6 +261,8 @@ Classify every build-progress emission into three activity states. Record a once
 - An aborted Codex result carries no `rateLimited`, `authFailure` or `sessionExpired` signal.
 - A Codex invocation without `abortSignal` passes no `cancelSignal` option to its subprocess.
 - With a real child process that ignores SIGTERM, aborting a Codex invocation still terminates the child by SIGKILL after the execa grace period and the invocation resolves `success: false`, as asserted in `test/execution/codex-provider-abort.test.ts`.
+- An aborted Codex result is classified by the retry path as an ordinary failure that consumes the retry budget, never taking the rate-limit, authentication or session-expired recovery path that leaves the budget untouched.
+- A Codex invocation without `abortSignal` behaves exactly as before: its subprocess options, result fields and classification are identical to the pre-change adapter for the same scripted output.
 
 **Files:** src/conductor/src/execution/codex-provider.ts; src/conductor/test/execution/codex-provider-abort.test.ts
 
@@ -370,3 +374,11 @@ Task 8, Task 11, Task 12, Task 13 (independent)
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-as-built-d8-1: src/conductor/src/engine/build-progress-watcher.ts:404-412 and :529-556 — split movement from change: compute `moved = headMoved || resolved/total/currentTaskId differ from previous` (excluding noEvidenceAttempts), keep `changed = moved || noEvidenceAttempts differs` for the existing build_progress emission, tickReason and quiet-episode re-arm (lastChangeAt/quietFired unchanged), and add a separate `lastMovementAt` that only `moved` bumps; use lastMovementAt for the active-stall elapsed time at :431, reset activeStallFired only when `moved`, pass `moved` (not `changed`) to classifyActivity at :556 so an evidence-only emission is classified from the heartbeat, and run the active-stall check on evidence-only change ticks as well as no-change ticks. Keep the existing assertions at test/build-progress-watcher.test.ts:330-336 and :576-600 (Task 3 coverage). Add tests in test/build-progress-watcher.test.ts: a noEvidenceAttempts-only bump with a fresh dispatch heartbeat emits build_progress with activity active-not-committing, does not delay the build_active_stall deadline measured from the last movement, does not re-arm a fired episode, and under end_attempt still calls endAttempt at the original deadline
+**Gate:** as-built
+**Rationale:** REMEDIABLE conforming drift against adr-2026-07-10 D8, within Task 3/5 scope (build-progress-watcher.ts): build-progress-watcher.ts:404-412 folds a noEvidenceAttempts-only change into taskDelta, so lines 529-556 reset the active-stall clock (lastChangeAt), clear activeStallFired, skip the active-stall check (only evaluated on !changed at :414-450) and stamp activity active-committing, letting the D2 thrash counter defeat the bound. Fix separates movement (HEAD or resolved/total/currentTaskId) from the broader change set; the pre-existing quiet-episode and build_progress emission semantics for an evidence-only bump (merge-base behaviour, covered at test/build-progress-watcher.test.ts:330-336 and :576-600) are preserved. Sibling sweep: classifyActivity (:299) is the only other consumer of the change flag; daemon-cli/OTel renderers read the emitted activity and need no change.
+**Governing clause:** adr-2026-07-10-intra-step-build-progress-events decision 8
+**Done when:**
+- adr-2026-07-10-intra-step-build-progress-events decision 8 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-as-built-d8-1 is complete.

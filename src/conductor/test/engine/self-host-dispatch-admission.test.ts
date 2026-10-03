@@ -120,4 +120,33 @@ describe('self-host dispatch admission', () => {
     expect(settlePendingRepair).not.toHaveBeenCalled();
     expect(runner.run).not.toHaveBeenCalled();
   });
+
+  it('threads the active attempt abort signal into a self-host build runner', async () => {
+    const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+    const conductor = new Conductor({
+      stateFilePath: '/test/worktree/conduct-state.json', projectRoot: '/test/worktree',
+      events: new ConductorEventEmitter(), stepRunner: runner, daemon: true, selfHost: true,
+      featureSlug: 'abort-signal', providerExecution: {} as ProviderExecutionContext,
+      config: { llm_provider: 'claude', harness_self_host: { live_containment: false, build_auth: { mode: 'api-key' } } },
+    });
+    const attempt = new AbortController();
+
+    await (conductor as unknown as {
+      runSelfBuildDispatch(step: 'build', state: ConductState, hint?: string, verdict?: string, context?: unknown, settle?: () => Promise<boolean>, abortSignal?: AbortSignal): Promise<StepRunResult>;
+    }).runSelfBuildDispatch(
+      'build',
+      { feature_desc: 'abort-signal' } as ConductState,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      attempt.signal,
+    );
+
+    expect(runner.run).toHaveBeenCalledWith(
+      'build',
+      expect.anything(),
+      expect.objectContaining({ abortSignal: attempt.signal }),
+    );
+  });
 });

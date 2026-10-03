@@ -151,6 +151,7 @@ describe('daemon.log renders build progress/no-progress/stall; daemon status fre
       currentTaskId: '21',
       currentTaskName: 'Wire watcher into conductor',
       featureSlug: 'emit-intra-step-build-progress-and-stall-as-events',
+      activity: 'quiet',
     };
     const noProgressEvent: ConductorEvent = {
       type: 'build_no_progress',
@@ -160,6 +161,7 @@ describe('daemon.log renders build progress/no-progress/stall; daemon status fre
       total: 21,
       currentTaskId: '21',
       featureSlug: 'emit-intra-step-build-progress-and-stall-as-events',
+      activity: 'quiet',
     };
     const stallEvent: ConductorEvent = {
       type: 'build_stall',
@@ -206,6 +208,7 @@ describe('daemon.log renders build progress/no-progress/stall; daemon status fre
       total: 21,
       currentTaskId: '21',
       featureSlug: 'emit-intra-step-build-progress-and-stall-as-events',
+      activity: 'quiet',
     };
     renderDaemonEvent(progressEvent, (line) => sink.write(line));
     await sink.close();

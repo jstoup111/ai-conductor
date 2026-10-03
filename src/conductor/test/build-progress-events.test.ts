@@ -18,6 +18,7 @@ describe('ConductorEvent union includes build_progress and build_no_progress', (
       step: 'build',
       resolved: 5,
       total: 21,
+      activity: 'quiet',
     };
 
     expect(event.type).toBe('build_progress');
@@ -34,6 +35,7 @@ describe('ConductorEvent union includes build_progress and build_no_progress', (
       commitCount: 3,
       noEvidenceAttempts: 0,
       featureSlug: 'emit-intra-step-build-progress-and-stall-as-events',
+      activity: 'quiet',
     };
 
     expect(event.type).toBe('build_progress');
@@ -51,6 +53,7 @@ describe('ConductorEvent union includes build_progress and build_no_progress', (
       quietMinutes: 15,
       resolved: 20,
       total: 21,
+      activity: 'quiet',
     };
 
     expect(event.type).toBe('build_no_progress');
@@ -66,6 +69,7 @@ describe('ConductorEvent union includes build_progress and build_no_progress', (
       currentTaskId: '21',
       lastCommitAt: 1720000000000,
       featureSlug: 'emit-intra-step-build-progress-and-stall-as-events',
+      activity: 'quiet',
     };
 
     expect(event.type).toBe('build_no_progress');

@@ -17,7 +17,7 @@ describe('Config-driven renderer selection', () => {
     registry.markInitialized();
     const renderer = registry.get<UIRenderer>('ui_renderer', 'json-stdout');
     const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    await renderer.handle({ type: 'build_progress', step: 'build', resolved: 1, total: 2 });
+    await renderer.handle({ type: 'build_progress', step: 'build', resolved: 1, total: 2, activity: 'quiet' });
     expect(write).toHaveBeenCalledOnce();
   });
 

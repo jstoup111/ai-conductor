@@ -1125,10 +1125,13 @@ the block is a hard error.
 | `build_progress.quiet_minutes` | number | Finite and `> 0` | `15` |
 | `build_progress.heartbeat_minutes` | number | Finite and `> 0` | `5` |
 | `build_progress.enabled` | boolean | Boolean | `true` |
+| `build_progress.active_stall_minutes` | number | Finite and `> 0` | `45` |
+| `build_progress.active_stall_action` | string | `warn` or `end_attempt` | `warn` |
 
 Cross-field rule (`config.ts:1274-1285`): `poll_seconds` must not exceed `quiet_minutes * 60`. Violating
 it is a hard error naming both values — otherwise a step could be declared stalled before it was polled
-once.
+once. `poll_seconds` also must not exceed `active_stall_minutes * 60`, checked against the resolved
+`45` when `active_stall_minutes` is omitted.
 
 Consumed by `src/conductor/src/engine/build-progress-watcher.ts:206`; `.enabled` gates the build step's
 watcher at `src/conductor/src/engine/conductor.ts:3712`.
@@ -1137,6 +1140,21 @@ When the watcher emits a quiet warning, the daemon log also shows `provider acti
 the current build dispatch has a valid `step-heartbeat`. The age is display-only: a missing, stale,
 malformed, or unreadable heartbeat leaves the existing quiet warning unchanged and never affects the
 running provider's lifecycle.
+
+**Active stall.** A build step is *active without movement* when its current-dispatch
+`step-heartbeat` is younger than `quiet_minutes` but neither the resolved/total task counts, the
+current task id, nor HEAD has moved. Evidence-counter updates are not movement. Once that state
+lasts `active_stall_minutes` since the last movement, the watcher emits one `build_active_stall`
+event per movement episode, then applies `active_stall_action`:
+
+- `warn` — report only; the provider keeps running.
+- `end_attempt` — abort the current provider attempt. The ended attempt is a failed attempt that
+  spends the ordinary retry budget and records `build_stall` with reason `active_stall`. On
+  attempt 2 or later with no resolved-task or HEAD movement, it routes through the existing
+  [`no_task_progress`](../runbooks/stalled-or-stuck-feature.md#no_task_progress) breaker
+  instead.
+
+A provider with no fresh heartbeat is *quiet*, not active, and is never ended by this policy.
 
 ## provider_stream
 

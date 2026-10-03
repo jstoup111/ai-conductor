@@ -14,6 +14,8 @@ import type { ConductorEvent } from '../src/types/index.js';
 import { openDaemonLog, formatDaemonLogLine } from '../src/engine/daemon-log.js';
 import { computeStatusRow } from '../src/engine/daemon-observe-cli.js';
 
+type BuildProgressEvent = Extract<ConductorEvent, { type: 'build_progress' }>;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Task 11: daemon.log renders the three intra-step build kinds
 // (adr-2026-07-10-intra-step-build-progress-events).
@@ -72,6 +74,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       currentTaskId: '21',
       currentTaskName: 'Wire watcher into conductor',
       featureSlug: 'emit-intra-step-build-progress-and-stall-as-events',
+      activity: 'quiet',
     });
 
     expect(line).toBeDefined();
@@ -93,6 +96,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       currentTaskId: '21',
       featureSlug: 'surface-commit-recency',
       lastCommitAt: Date.now() - minutes * 60_000,
+      activity: 'quiet',
     });
 
     expect(line).toContain('21/21');
@@ -109,6 +113,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       currentTaskId: '21',
       currentTaskName: 'Name commit age',
       featureSlug: 'surface-commit-recency',
+      activity: 'quiet',
     });
 
     expect(line).toContain('21/21');
@@ -118,7 +123,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
   });
 
   it('renders a minimal build_progress event (no currentTaskName/featureSlug) without throwing', () => {
-    const [line] = lines({ type: 'build_progress', step: 'build', resolved: 5, total: 21 });
+    const [line] = lines({ type: 'build_progress', step: 'build', resolved: 5, total: 21, activity: 'quiet' });
     expect(line).toContain('5/21');
   });
 
@@ -129,29 +134,31 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       resolved: 0,
       total: 18,
       currentTaskId: '1',
+      activity: 'quiet',
     });
     expect(line).toContain('1/18');
     expect(line).not.toContain('0/18');
   });
 
   it('renders an all-done build as N/N, not N+1/N, when there is no current task (Story 2.1)', () => {
-    const [line] = lines({ type: 'build_progress', step: 'build', resolved: 18, total: 18 });
+    const [line] = lines({ type: 'build_progress', step: 'build', resolved: 18, total: 18, activity: 'quiet' });
     expect(line).toContain('18/18');
     expect(line).not.toContain('19/18');
   });
 
   it('renders a plain resolved count unincremented when there is no current task (Story 2.2)', () => {
-    const [line] = lines({ type: 'build_progress', step: 'build', resolved: 5, total: 21 });
+    const [line] = lines({ type: 'build_progress', step: 'build', resolved: 5, total: 21, activity: 'quiet' });
     expect(line).toContain('5/21');
   });
 
   it('does not mutate the input event object (Story 2.3)', () => {
-    const event: ConductorEvent = {
+    const event: BuildProgressEvent = {
       type: 'build_progress',
       step: 'build',
       resolved: 0,
       total: 18,
       currentTaskId: '1',
+      activity: 'quiet',
     };
     const originalResolved = event.resolved;
     lines(event);
@@ -165,6 +172,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       resolved: 20,
       total: 21,
       featureSlug: 'emit-intra-step-build-progress-and-stall-as-events',
+      activity: 'quiet',
     })[0];
 
     const [noProgressLine] = lines({
@@ -175,12 +183,46 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       total: 21,
       currentTaskId: '21',
       featureSlug: 'emit-intra-step-build-progress-and-stall-as-events',
+      activity: 'quiet',
     });
 
     expect(noProgressLine).toBeDefined();
     expect(noProgressLine).toContain('15');
     expect(noProgressLine).toContain('21/21');
     expect(noProgressLine).not.toBe(progressLine);
+  });
+
+  it('renders active stalls with the step, feature slug, elapsed minutes, and chosen action', () => {
+    const [line] = lines({
+      type: 'build_active_stall',
+      step: 'build',
+      minutes: 45,
+      resolved: 20,
+      total: 21,
+      action: 'warn',
+      featureSlug: 'active-build-without-commit',
+    });
+
+    expect(line).toContain('build');
+    expect(line).toContain('active-build-without-commit');
+    expect(line).toContain('45m');
+    expect(line).toContain('warn');
+  });
+
+  it('renders legacy build_no_progress payloads without activity byte-identically', () => {
+    const legacy = JSON.parse(JSON.stringify({
+      type: 'build_no_progress',
+      step: 'build',
+      quietMinutes: 15,
+      resolved: 20,
+      total: 21,
+      currentTaskId: '21',
+      featureSlug: 'legacy-no-activity',
+    })) as ConductorEvent;
+
+    expect(lines(legacy)).toEqual([
+      '· ⚠ build quiet 15m (21/21) · legacy-no-activity',
+    ]);
   });
 
   it('renders build_no_progress with a 1-based parenthetical count when a current task is set (Story 1.4)', () => {
@@ -191,6 +233,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       resolved: 0,
       total: 18,
       currentTaskId: '1',
+      activity: 'quiet',
     });
     expect(line).toContain('1/18');
     expect(line).not.toContain('0/18');
@@ -205,6 +248,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       total: 21,
       currentTaskId: '21',
       lastCommitAt: Date.now() - 7 * 60_000,
+      activity: 'quiet',
     });
 
     expect(line).toContain('quiet 15m (21/21)');
@@ -222,6 +266,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       lastCommitAt: Date.now() - 7 * 60_000,
       lastActivityAt: Date.now() - 27_000,
       featureSlug: 'show-provider-activity-age',
+      activity: 'quiet',
     });
 
     expect(line).toContain('quiet 15m (21/21) · last commit 7m ago · provider activity 27s ago · show-provider-activity-age');
@@ -237,6 +282,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       currentTaskId: '21',
       lastActivityAt: Date.now() - 22 * 60_000,
       featureSlug: 'show-provider-activity-age',
+      activity: 'quiet',
     });
 
     expect(line).toContain('provider activity 22m0s ago');
@@ -251,6 +297,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       total: 21,
       currentTaskId: '21',
       featureSlug: 'surface-commit-recency',
+      activity: 'quiet',
     });
 
     expect(line).toContain('quiet 15m (21/21)');
@@ -268,6 +315,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       currentTaskId: '21',
       lastCommitAt: Date.now() - 7 * 60_000,
       featureSlug: 'show-provider-activity-age',
+      activity: 'quiet',
     });
 
     expect(line).toBe('· ⚠ build quiet 15m (21/21) · last commit 7m ago · show-provider-activity-age');
@@ -283,6 +331,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       currentTaskId: '21',
       lastActivityAt: Date.now() + 5 * 60_000,
       featureSlug: 'show-provider-activity-age',
+      activity: 'quiet',
     });
 
     expect(line).toBe('· ⚠ build quiet 15m (21/21) · provider activity 0s ago · show-provider-activity-age');
@@ -298,6 +347,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       currentTaskId: '21',
       lastActivityAt: Date.now() + 5 * 60_000 + 1_000,
       featureSlug: 'show-provider-activity-age',
+      activity: 'quiet',
     });
 
     expect(line).toBe('· ⚠ build quiet 15m (21/21) · provider activity 0s ago · show-provider-activity-age');
@@ -311,6 +361,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       quietMinutes: 15,
       resolved: 20,
       total: 21,
+      activity: 'quiet',
     });
     expect(line).toContain('⚠');
   });
@@ -432,7 +483,7 @@ describe('daemon status freshness integration: build_progress heartbeat', () => 
     const repo = join(root, 'repo');
     await mkdir(repo, { recursive: true });
 
-    const event: ConductorEvent = {
+    const event: BuildProgressEvent = {
       type: 'build_progress',
       step: 'build',
       resolved: 20,
@@ -440,6 +491,7 @@ describe('daemon status freshness integration: build_progress heartbeat', () => 
       currentTaskId: '21',
       currentTaskName: 'Wire watcher into conductor',
       featureSlug: 'emit-intra-step-build-progress-and-stall-as-events',
+      activity: 'quiet',
     };
 
     // Mirrors runDaemonMode's log() sink: renderDaemonEvent produces the line,

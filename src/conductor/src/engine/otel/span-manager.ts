@@ -512,6 +512,26 @@ export class SpanManager {
     targetSpan.addEvent('build_no_progress', attrs);
   }
 
+  onBuildActiveStall(event: Extract<ConductorEvent, { type: 'build_active_stall' }>): void {
+    this.ensureRunSpan();
+    const state = this.stateFor(event.step);
+    const targetSpan = state?.span ?? this.runSpan;
+    if (!targetSpan) {
+      this.warn(`build_active_stall for '${event.step}' received but no span available — dropping`);
+      return;
+    }
+    const attrs: Record<string, string | number> = {
+      minutes: event.minutes,
+      resolved: event.resolved,
+      total: event.total,
+      action: event.action,
+    };
+    if (event.lastCommitAt !== undefined) attrs.lastCommitAt = event.lastCommitAt;
+    if (event.lastActivityAt !== undefined) attrs.lastActivityAt = event.lastActivityAt;
+    if (event.featureSlug !== undefined) attrs.featureSlug = event.featureSlug;
+    targetSpan.addEvent('build_active_stall', attrs);
+  }
+
   onBuildStall(event: Extract<ConductorEvent, { type: 'build_stall' }>): void {
     this.ensureRunSpan();
     const state = this.stateFor(event.step);

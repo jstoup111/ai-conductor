@@ -22,13 +22,14 @@ describe('TerminalSubscriber subscription list', () => {
     const subscriber = new TerminalSubscriber(emitter);
     subscriber.start([{ name: 'capture', handle: onRender, stop: async () => {} }]);
 
-    const progress: ConductorEvent = { type: 'build_progress', step: 'build', resolved: 1, total: 2 };
+    const progress: ConductorEvent = { type: 'build_progress', step: 'build', resolved: 1, total: 2, activity: 'quiet' };
     const noProgress: ConductorEvent = {
       type: 'build_no_progress',
       step: 'build',
       quietMinutes: 15,
       resolved: 1,
       total: 2,
+      activity: 'quiet',
     };
     const stall: ConductorEvent = { type: 'build_stall' } as ConductorEvent;
 
@@ -60,7 +61,7 @@ describe('json-stdout renderer fan-out for progress/stall events', () => {
   });
 
   it('emits exactly one {...event, ts} JSON line per build_progress event via dispatchRenderers', async () => {
-    const event: ConductorEvent = { type: 'build_progress', step: 'build', resolved: 5, total: 21 };
+    const event: ConductorEvent = { type: 'build_progress', step: 'build', resolved: 5, total: 21, activity: 'quiet' };
 
     await dispatchRenderers([subscriber], event);
 
@@ -80,6 +81,7 @@ describe('json-stdout renderer fan-out for progress/stall events', () => {
       quietMinutes: 15,
       resolved: 20,
       total: 21,
+      activity: 'quiet',
     };
 
     await dispatchRenderers([subscriber], event);
@@ -113,7 +115,7 @@ describe('json-stdout renderer fan-out for progress/stall events', () => {
       stop: vi.fn(async () => {}),
     };
 
-    const event: ConductorEvent = { type: 'build_progress', step: 'build', resolved: 1, total: 2 };
+    const event: ConductorEvent = { type: 'build_progress', step: 'build', resolved: 1, total: 2, activity: 'quiet' };
 
     await dispatchRenderers([throwingRenderer, subscriber], event);
     // Allow the fire-and-forget renderer_error re-dispatch to land.

@@ -151,7 +151,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   test_suite: ['command', 'commands', 'scoped_command', 'changed_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment', 'verification'],
   'test_suite.commands[]': TEST_SUITE_COMMAND_ENTRY_KEYS,
   'test_suite.verification': ['mode', 'full_suite', 'drift_budget'],
-  build_progress: ['poll_seconds', 'quiet_minutes', 'heartbeat_minutes', 'enabled'],
+  build_progress: ['poll_seconds', 'quiet_minutes', 'heartbeat_minutes', 'enabled', 'active_stall_minutes', 'active_stall_action'],
   provider_stream: ['min_interval_ms'],
   build_progress_halt: ['enabled', 'attempt_ceiling', 'dispatch_ceiling'],
   gate_code_validity: ['enabled'],
@@ -2600,6 +2600,28 @@ function validateBuildProgressBlock(raw: unknown): ConfigError | null {
   if (obj.enabled !== undefined && typeof obj.enabled !== 'boolean') {
     return { type: 'validation_error', message: 'build_progress.enabled must be a boolean' };
   }
+  if (obj.active_stall_minutes !== undefined) {
+    if (
+      typeof obj.active_stall_minutes !== 'number' ||
+      !Number.isFinite(obj.active_stall_minutes) ||
+      obj.active_stall_minutes <= 0
+    ) {
+      return {
+        type: 'validation_error',
+        message: 'build_progress.active_stall_minutes must be a positive number',
+      };
+    }
+  }
+  if (
+    obj.active_stall_action !== undefined &&
+    obj.active_stall_action !== 'warn' &&
+    obj.active_stall_action !== 'end_attempt'
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'build_progress.active_stall_action must be warn or end_attempt',
+    };
+  }
 
   // Cross-field: the poll cadence must not exceed the quiet/stall window, or
   // a step could be declared stalled before it was ever polled once.
@@ -2611,6 +2633,22 @@ function validateBuildProgressBlock(raw: unknown): ConfigError | null {
     return {
       type: 'validation_error',
       message: `build_progress.poll_seconds (${obj.poll_seconds}s) must not exceed build_progress.quiet_minutes (${obj.quiet_minutes}m = ${obj.quiet_minutes * 60}s)`,
+    };
+  }
+
+  // A poll cadence beyond the active-stall window could miss the whole
+  // episode before the watcher has a chance to report or end it. Validate
+  // against the resolved default too: validation preserves an omitted value,
+  // while the watcher resolves that omission to 45 minutes.
+  const activeStallMinutes =
+    typeof obj.active_stall_minutes === 'number' ? obj.active_stall_minutes : 45;
+  if (
+    typeof obj.poll_seconds === 'number' &&
+    obj.poll_seconds > activeStallMinutes * 60
+  ) {
+    return {
+      type: 'validation_error',
+      message: `build_progress.poll_seconds (${obj.poll_seconds}s) must not exceed build_progress.active_stall_minutes (${activeStallMinutes}m = ${activeStallMinutes * 60}s)`,
     };
   }
 
@@ -3506,12 +3544,15 @@ const BUILD_PROGRESS_DEFAULTS: ResolvedBuildProgressConfig = {
   quiet_minutes: 15,
   heartbeat_minutes: 5,
   enabled: true,
+  active_stall_minutes: 45,
+  active_stall_action: 'warn',
 };
 
 /**
  * Resolve the `build_progress:` block from `config`, filling in defaults for
  * any unset field. A wholly absent block resolves to all defaults
- * (poll_seconds: 30, quiet_minutes: 15, heartbeat_minutes: 5, enabled: true).
+ * (poll_seconds: 30, quiet_minutes: 15, heartbeat_minutes: 5, enabled: true,
+ * active_stall_minutes: 45, active_stall_action: 'warn').
  * Never throws — unknown/malformed inputs simply fall back to defaults for
  * the affected field.
  *
@@ -3580,5 +3621,9 @@ export function resolveBuildProgressConfig(
     heartbeat_minutes:
       buildProgress.heartbeat_minutes ?? BUILD_PROGRESS_DEFAULTS.heartbeat_minutes,
     enabled: buildProgress.enabled ?? BUILD_PROGRESS_DEFAULTS.enabled,
+    active_stall_minutes:
+      buildProgress.active_stall_minutes ?? BUILD_PROGRESS_DEFAULTS.active_stall_minutes,
+    active_stall_action:
+      buildProgress.active_stall_action ?? BUILD_PROGRESS_DEFAULTS.active_stall_action,
   };
 }

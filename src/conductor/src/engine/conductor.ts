@@ -1596,6 +1596,8 @@ export interface ComplexityAssessment extends ProviderAttributionMetadata {
 }
 
 export interface StepRunOptions {
+  /** Per-dispatch cancellation authority for the provider invocation. */
+  abortSignal?: AbortSignal;
   /** Configured skill path for a concurrent-group branch dispatch. */
   branchSkill?: string;
   /** Daemon-start capability observations for custom build-review candidates. */
@@ -6319,9 +6321,11 @@ export class Conductor {
     executionContext?: ExecutionContext,
     /** Charges an admitted BUILD repair immediately before provider invocation. */
     settlePendingRepair?: () => Promise<boolean>,
+    /** Cancels the provider invocation when this daemon attempt ends. */
+    abortSignal?: AbortSignal,
   ): Promise<StepRunResult> {
     if (!this.liveBoundaryCoordinator) {
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, undefined, executionContext, settlePendingRepair);
+      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, undefined, executionContext, settlePendingRepair, abortSignal);
     }
     await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'queued' });
     return this.liveBoundaryCoordinator.runDispatch(async (openWindow) => {
@@ -6331,7 +6335,7 @@ export class Conductor {
         return { success: false, operatorParkedBeforeDispatch: true };
       }
       await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'admitted' });
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow, executionContext, settlePendingRepair);
+      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow, executionContext, settlePendingRepair, abortSignal);
     });
   }
 
@@ -6350,6 +6354,8 @@ export class Conductor {
     executionContext?: ExecutionContext,
     /** Charges an admitted BUILD repair immediately before provider invocation. */
     settlePendingRepair?: () => Promise<boolean>,
+    /** Cancels the provider invocation when this daemon attempt ends. */
+    abortSignal?: AbortSignal,
   ): Promise<StepRunResult> {
     const identityOption = verdictRunId ? { runId: verdictRunId } : {};
     const executionContextOption = executionContext ? { executionContext } : {};
@@ -6448,6 +6454,7 @@ export class Conductor {
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
+          ...(abortSignal === undefined ? {} : { abortSignal }),
           ...this.buildReviewCapabilityOption(name),
         });
       }
@@ -6478,6 +6485,7 @@ export class Conductor {
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
+          ...(abortSignal === undefined ? {} : { abortSignal }),
           ...this.buildReviewCapabilityOption(name),
         });
       } finally {
@@ -6667,6 +6675,7 @@ export class Conductor {
         retryReason: retryHint,
         ...identityOption,
         ...executionContextOption,
+        ...(abortSignal === undefined ? {} : { abortSignal }),
         ...this.buildReviewCapabilityOption(name),
       });
     } finally {
@@ -10387,6 +10396,18 @@ export class Conductor {
           // no watcher instance is constructed at all (not merely started as
           // a no-op), so operators who disable the feature pay zero overhead
           // and the existing post-hoc stall-breaker (below) is unaffected.
+          // This controller belongs solely to one build attempt. It is
+          // deliberately not registered with the daemon-wide shutdown set:
+          // an active-stall policy ends this provider attempt, not the run.
+          const buildAttemptController = step.name === 'build'
+            ? new AbortController()
+            : undefined;
+          let buildAttemptSettled = false;
+          let activeStallEndedAttempt = false;
+          // A second-or-later ended attempt with no task or commit movement
+          // belongs to the established completion-miss stall branch below,
+          // rather than generic failed-attempt retry accounting.
+          let activeStallEndedNoTaskProgress = false;
           const buildWatcher: BuildProgressWatcher | null =
             step.name === 'build' && resolveBuildProgressConfig(this.config).enabled
               ? new BuildProgressWatcher({
@@ -10395,6 +10416,17 @@ export class Conductor {
                   step: step.name,
                   featureSlug: state.feature_desc,
                   config: this.config,
+                  endAttempt: () => {
+                    if (
+                      buildAttemptSettled ||
+                      buildAttemptController === undefined ||
+                      buildAttemptController.signal.aborted
+                    ) {
+                      return;
+                    }
+                    activeStallEndedAttempt = true;
+                    buildAttemptController.abort();
+                  },
                 })
               : null;
           buildWatcher?.start();
@@ -10466,6 +10498,7 @@ export class Conductor {
             !(step.name === 'finish' && this.finishPublication);
           let result: StepRunResult;
           if (protectedArtifactIssue) {
+            buildAttemptSettled = true;
             buildWatcher?.stop();
             closeoutTail?.stop();
             const dispatchIssue = protectedArtifactIssue;
@@ -10629,6 +10662,7 @@ export class Conductor {
                                 : undefined,
                               serialExecutionContext,
                               settleBuildPendingRepair,
+                              buildAttemptController?.signal,
                             )
                           : await (async (): Promise<StepRunResult> => {
                             // PRD widening preparation stays outside the
@@ -10651,6 +10685,9 @@ export class Conductor {
                                 modelOverride: esc.model,
                                 effortOverride: esc.effort,
                                 executionContext: serialExecutionContext,
+                                ...(buildAttemptController === undefined
+                                  ? {}
+                                  : { abortSignal: buildAttemptController.signal }),
                                 // D1 scope: only a SHIP-tail verdict gate hands its
                                 // identity to the lifecycle, so that gate's
                                 // `attempt.id` and its sidecar stamp are one value.
@@ -10667,6 +10704,7 @@ export class Conductor {
                             }
                           })());
           } finally {
+            buildAttemptSettled = true;
             buildWatcher?.stop();
             closeoutTail?.stop();
             // Task 4 (#788): the phase-active marker is written for any
@@ -10692,6 +10730,55 @@ export class Conductor {
           // Settlement owns its HALT marker and loop-halt event. Preserve the
           // pre-existing terminal routing without retry or failure accounting.
           if (result.pendingRepairSettlementHalt) return;
+
+          // An end_attempt policy is an ordinary failed provider attempt: it
+          // spends the existing retry budget, but records its distinct cause
+          // before generic failure handling. The controller is attempt-local,
+          // so a retry always receives a fresh, non-aborted signal/watcher.
+          // A settled attempt (or a second watcher callback) cannot retroactively
+          // turn a completed result into an active-stall outcome.
+          if (
+            step.name === 'build' &&
+            activeStallEndedAttempt &&
+            !result.success
+          ) {
+            const [resolvedTasksAfter, headShaAttemptEnd] = await Promise.all([
+              countResolvedTasks(this.projectRoot),
+              currentCommitSha(this.projectRoot),
+            ]);
+            const headMovedThisAttempt =
+              headShaAttemptEnd !== null &&
+              headShaAttemptStart !== null &&
+              headShaAttemptEnd !== headShaAttemptStart;
+            // Preserve the established pinned-attempt breaker before adding
+            // the intra-attempt signal: on retry two or later, no resolved
+            // work and no HEAD movement is no_task_progress regardless of
+            // how the attempt ended.
+            const reason =
+              attempt >= 2 &&
+              resolvedTasksAfter <= resolvedTasksBefore &&
+              !headMovedThisAttempt
+                ? 'no_task_progress'
+                : 'active_stall';
+            activeStallEndedNoTaskProgress = reason === 'no_task_progress';
+            lastBuildStallReason = reason === 'no_task_progress'
+              ? `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))`
+              : `build stalled: active without movement for ` +
+                `${resolveBuildProgressConfig(this.config).active_stall_minutes} minutes`;
+            // The no-task-progress branch emits this event when it performs
+            // the existing remediation/HALT routing below. Defer to that
+            // authoritative emission so the ended attempt remains one stall
+            // episode rather than producing a duplicate event.
+            if (!activeStallEndedNoTaskProgress) {
+              await emitTracked({
+                type: 'build_stall',
+                step: step.name,
+                reason,
+                resolvedBefore: resolvedTasksBefore,
+                resolvedAfter: resolvedTasksAfter,
+              });
+            }
+          }
 
           // Rebase setup exhaustion is a pre-invocation environmental refusal.
           // Its native handler has already written the HALT and recorded the
@@ -11150,7 +11237,7 @@ export class Conductor {
             result = { ...result, success: true };
           }
 
-          if (!result.success) {
+          if (!result.success && !activeStallEndedNoTaskProgress) {
             // D3: a verdict dispatch that returns a non-success outcome still
             // needs its post-settle write observation before this serial loop
             // retries, exhausts, or honors a step-authored HALT. Keep the

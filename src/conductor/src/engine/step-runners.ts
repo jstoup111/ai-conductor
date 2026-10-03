@@ -1520,6 +1520,7 @@ export class DefaultStepRunner implements StepRunner {
             escalate: opts?.escalate ?? true,
             modelOverride: opts?.modelOverride ?? this.modelOverride,
             effortOverride: opts?.effortOverride ?? this.effortOverride,
+            ...(opts?.abortSignal === undefined ? {} : { abortSignal: opts.abortSignal }),
             taskAttribution: this.taskAttribution,
             providerAvailability: this.providerExecutionContext?.providerAvailability,
             withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,

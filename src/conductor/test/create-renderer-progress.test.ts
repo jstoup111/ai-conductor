@@ -58,6 +58,7 @@ describe('createRenderer — build progress/no-progress/stall', () => {
       total: 10,
       currentTaskId: 'T-4',
       currentTaskName: 'Wire up the widget',
+      activity: 'quiet',
     });
 
     const output = stream.output();
@@ -73,6 +74,7 @@ describe('createRenderer — build progress/no-progress/stall', () => {
       step: 'build',
       resolved: 1,
       total: 5,
+      activity: 'quiet',
     });
 
     const output = stream.output();
@@ -87,6 +89,7 @@ describe('createRenderer — build progress/no-progress/stall', () => {
       resolved: 0,
       total: 10,
       currentTaskId: 'T-1',
+      activity: 'quiet',
     });
 
     const output = stream.output();
@@ -101,6 +104,7 @@ describe('createRenderer — build progress/no-progress/stall', () => {
       resolved: 9,
       total: 10,
       currentTaskId: 'T-10',
+      activity: 'quiet',
     });
 
     const output = stream.output();
@@ -113,6 +117,7 @@ describe('createRenderer — build progress/no-progress/stall', () => {
       step: 'build',
       resolved: 10,
       total: 10,
+      activity: 'quiet',
     });
 
     const output = stream.output();
@@ -126,6 +131,7 @@ describe('createRenderer — build progress/no-progress/stall', () => {
       step: 'build',
       resolved: 6,
       total: 10,
+      activity: 'quiet',
     });
 
     const output = stream.output();
@@ -140,6 +146,7 @@ describe('createRenderer — build progress/no-progress/stall', () => {
       resolved: 2,
       total: 8,
       currentTaskId: 'T-2',
+      activity: 'quiet',
     });
 
     const output = stream.output();
@@ -156,6 +163,7 @@ describe('createRenderer — build progress/no-progress/stall', () => {
       resolved: 0,
       total: 8,
       currentTaskId: 'T-1',
+      activity: 'quiet',
     });
 
     const output = stream.output();
@@ -178,7 +186,7 @@ describe('createRenderer — build progress/no-progress/stall', () => {
   });
 
   it('produces distinct output for progress, no-progress, and stall', async () => {
-    await renderer({ type: 'build_progress', step: 'build', resolved: 1, total: 5 });
+    await renderer({ type: 'build_progress', step: 'build', resolved: 1, total: 5, activity: 'quiet' });
     const progressOutput = stream.output();
 
     const stream2 = new CaptureStream();
@@ -195,6 +203,7 @@ describe('createRenderer — build progress/no-progress/stall', () => {
       quietMinutes: 10,
       resolved: 1,
       total: 5,
+      activity: 'quiet',
     });
     const noProgressOutput = stream2.output();
 

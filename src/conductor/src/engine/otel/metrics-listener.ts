@@ -87,6 +87,7 @@ export class MetricsListener {
     build_stall: (listener, event) => listener.recorder.onStall((event as Extract<OtelEvent, { type: 'build_stall' }>).reason),
     build_progress: () => {},
     build_no_progress: () => {},
+    build_active_stall: () => {},
     // Rebase provenance is trace-only: subscribing preserves the shared OTel
     // event contract without minting metric dimensions or series.
     rebase_noop: () => {},

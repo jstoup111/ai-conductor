@@ -64,6 +64,7 @@ describe('EventPersister: build progress/stall events', () => {
       currentTaskId: 'T5',
       tickReason: 'heartbeat',
       headMoved: false,
+      activity: 'quiet',
     };
 
     await emitter.emit(event);
@@ -98,6 +99,7 @@ describe('EventPersister: build progress/stall events', () => {
       resolved: 3,
       total: 10,
       currentTaskId: 'T5',
+      activity: 'quiet',
     } as ConductorEvent);
 
     persister.stop();
@@ -158,8 +160,8 @@ describe('EventPersister: build progress/stall events', () => {
     const goodPersister = new EventPersister(goodPath, goodEmitter);
     goodPersister.start();
 
-    await emitter.emit({ type: 'build_progress', step: 'build', resolved: 1, total: 2 } as ConductorEvent).catch(() => {});
-    await goodEmitter.emit({ type: 'build_progress', step: 'build', resolved: 1, total: 2 } as ConductorEvent);
+    await emitter.emit({ type: 'build_progress', step: 'build', resolved: 1, total: 2, activity: 'quiet' } as ConductorEvent).catch(() => {});
+    await goodEmitter.emit({ type: 'build_progress', step: 'build', resolved: 1, total: 2, activity: 'quiet' } as ConductorEvent);
 
     persister.stop();
     goodPersister.stop();

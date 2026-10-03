@@ -382,6 +382,9 @@ export class OtelVisualizer implements VisualizerPlugin {
       case 'build_no_progress':
         this.spanManager.onBuildNoProgress(event);
         break;
+      case 'build_active_stall':
+        this.spanManager.onBuildActiveStall(event);
+        break;
       case 'build_stall':
         this.spanManager.onBuildStall(event);
         break;
