@@ -976,11 +976,25 @@ export async function dispatchEngineer(
       const launchOne = opts.launchInteractive ?? ((idea?: string) => {
         const prompt = `${host!.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
         return launchInteractiveSession({ provider: host!.id, openingPrompt: prompt, cwd: launchingDirectory }, {
+          // `launchInteractiveSession` owns the process boundary, but `compose`
+          // owns the retry loop and its actionable diagnostics.  Suppress the
+          // lower-level ENOENT report so an unavailable host reaches the catch
+          // below, which ends the loop instead of treating it as a normal exit.
+          report: () => {},
           isInteractiveTerminal: () => true,
           spawn: opts.spawnHost === undefined ? undefined : async (binary, argv, launchOptions) => ({
-            exitCode: await opts.spawnHost!(binary, argv, launchOptions.cwd),
+            // Resolve the executable once for this compose invocation. A
+            // follow-on idea must not switch hosts if a launch callback changes
+            // the process environment between sessions.
+            exitCode: await opts.spawnHost!(executable ?? binary, argv, launchOptions.cwd),
           }),
-        }).then((outcome) => outcome.kind === 'exited' ? outcome.exitCode : 1);
+        }).then((outcome) => {
+          if (outcome.kind === 'exited') return outcome.exitCode;
+          throw Object.assign(
+            new Error(`spawn ${executable ?? host!.defaultExecutable} ENOENT`),
+            { code: 'ENOENT' },
+          );
+        });
       });
 
       // Intake pre-poll: prime the durable inbox before launching so the spawned
