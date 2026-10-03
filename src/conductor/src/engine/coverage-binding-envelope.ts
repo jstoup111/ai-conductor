@@ -17,7 +17,7 @@ export interface CoverageBindingAmendmentDigestClaim {
 export interface CoverageBindingConflictTask {
   readonly id: string;
   readonly title: string;
-  readonly doneWhen: readonly (readonly string[])[];
+  readonly doneWhen: readonly string[] | readonly (readonly string[])[];
 }
 
 export interface CoverageBindingConflictDigestClaim {
@@ -520,7 +520,7 @@ export function conflictClaimDigest(claim: CoverageBindingConflictDigestClaim): 
   const taskTable = JSON.stringify(claim.taskTable.map((task) => ({
     id: normalized(task.id),
     title: normalized(task.title),
-    doneWhen: task.doneWhen.map((checks) => checks.map(normalized)),
+    doneWhen: task.doneWhen.map((check) => typeof check === 'string' ? normalized(check) : check.map(normalized)),
   })));
   const canonical = JSON.stringify({
     text: normalized(claim.text),

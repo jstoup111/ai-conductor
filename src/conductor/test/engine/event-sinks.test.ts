@@ -212,6 +212,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'plan_growth',
   'kickback_budget_adjustment_authorized',
   'coverage_binding_amendment_judged',
+  'coverage_binding_conflict_judged',
   'coverage_binding_judged',
   'rebase_regrade_judged',
   'coverage_binding_disabled',
