@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-03T07:36:52.177Z
 Slug: harness-skills-and-context-files-reach-pi-sessions
 Class: needs-human
 Halting step: prd_audit
