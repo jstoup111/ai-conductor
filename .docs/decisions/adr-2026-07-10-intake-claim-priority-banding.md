@@ -60,6 +60,12 @@ Constraints in force:
 - A claim invocation momentarily holds every pending envelope (the all-blocked walk already
   did this). A concurrent claim during that window sees an empty inbox and reports
   `empty` — pre-existing behavior, operator-frequency, accepted.
+
+  > **Amended 2026-10-02 by #2733:** "momentarily" does not hold — the walk holds every pending
+  > envelope for the whole sequential label/dependency read, and a claimer killed in that window
+  > strands the batch as `.claimed`. Per `adr-011-async-intake-queue-and-github-source` decision 6,
+  > the walk now runs under an intake claim lease that reconciles such strands first; a concurrent
+  > claim waits for the lease (bounded) instead of seeing an empty inbox.
 - Claim latency grows by one sequential REST call per pending entry (~22 today, ~5s worst
   case) — accepted by the operator; a batched GraphQL reader was explicitly declined.
 - Within-band order remains `receivedAt` FIFO — deterministic and stable across claims.
