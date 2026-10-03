@@ -183,6 +183,39 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
     expect(noProgressLine).not.toBe(progressLine);
   });
 
+  it('renders active stalls with the step, feature slug, elapsed minutes, and chosen action', () => {
+    const [line] = lines({
+      type: 'build_active_stall',
+      step: 'build',
+      minutes: 45,
+      resolved: 20,
+      total: 21,
+      action: 'warn',
+      featureSlug: 'active-build-without-commit',
+    });
+
+    expect(line).toContain('build');
+    expect(line).toContain('active-build-without-commit');
+    expect(line).toContain('45m');
+    expect(line).toContain('warn');
+  });
+
+  it('renders legacy build_no_progress payloads without activity byte-identically', () => {
+    const legacy = JSON.parse(JSON.stringify({
+      type: 'build_no_progress',
+      step: 'build',
+      quietMinutes: 15,
+      resolved: 20,
+      total: 21,
+      currentTaskId: '21',
+      featureSlug: 'legacy-no-activity',
+    })) as ConductorEvent;
+
+    expect(lines(legacy)).toEqual([
+      '· ⚠ build quiet 15m (21/21) · legacy-no-activity',
+    ]);
+  });
+
   it('renders build_no_progress with a 1-based parenthetical count when a current task is set (Story 1.4)', () => {
     const [line] = lines({
       type: 'build_no_progress',

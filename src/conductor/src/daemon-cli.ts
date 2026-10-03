@@ -3491,6 +3491,14 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     }
+    case 'build_active_stall': {
+      const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
+      const position = displayBuildPosition(event.resolved, event.total, false);
+      log(
+        `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} active without movement for ${event.minutes}m (${position}/${event.total}) · action ${event.action}`)}${slug}`,
+      );
+      break;
+    }
     case 'pipeline_closeout':
       log(`${dot} ${chalk.green('✓')} closeout ${event.obligation} (${event.endedAt - event.startedAt}ms)`);
       break;

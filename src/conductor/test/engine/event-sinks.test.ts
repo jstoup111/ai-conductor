@@ -447,7 +447,7 @@ describe('event sink subscriptions', () => {
     const events = new ConductorEventEmitter();
     const listener = new MetricsListener({
       onStall: (reason: string) => reasons.push(reason),
-    } as MetricsRecorder);
+    } as unknown as MetricsRecorder);
 
     listener.start(events);
     try {
@@ -468,7 +468,7 @@ describe('event sink subscriptions', () => {
           resolvedBefore: 2,
           resolvedAfter: 2,
         },
-        sinks: { render: true, persist: true, audit: false, otel: true, otelTrace: false },
+        sinks: { render: true, persist: true, audit: false, otel: true },
         persisted: true,
         rendered: true,
         otel: true,
@@ -661,7 +661,6 @@ describe('event sink subscriptions', () => {
       'memory_setup',
       'feature_usage_total',
       'feature_cost_snapshot',
-      'build_active_stall',
     ] satisfies Array<ConductorEvent['type']>;
     const traced = [
       'step_started',
@@ -675,6 +674,7 @@ describe('event sink subscriptions', () => {
       'build_stall',
       'build_progress',
       'build_no_progress',
+      'build_active_stall',
       'pipeline_closeout',
       'group_member_step',
       'gate_verdict',

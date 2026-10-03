@@ -12,7 +12,7 @@ const DEDICATED_RENDERER_EVENT_TYPES = new Set<ConductorEvent['type']>([
   'credentials_park_progress', 'provider_fallback', 'session_policy', 'when_skip',
   'parallel_started', 'parallel_completed', 'parallel_failure', 'tier_skip', 'config_skip',
   'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached',
-  'build_progress', 'unattributed_progress', 'build_no_progress', 'pipeline_closeout',
+  'build_progress', 'unattributed_progress', 'build_no_progress', 'build_active_stall', 'pipeline_closeout',
   'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
   'renderer_error', 'pipeline_tail_diagnostic',
 ]);
@@ -301,6 +301,22 @@ describe('TerminalRenderer', () => {
     });
 
     expect(stream.output()).toContain('closeout evaluator (40ms)');
+  });
+
+  it('renders active build stalls with their elapsed time and selected action', async () => {
+    await renderer.handle({
+      type: 'build_active_stall',
+      step: 'build',
+      minutes: 45,
+      resolved: 20,
+      total: 21,
+      action: 'end_attempt',
+      featureSlug: 'active-build-without-commit',
+    });
+
+    expect(stream.output()).toContain('build');
+    expect(stream.output()).toContain('45m');
+    expect(stream.output()).toContain('end_attempt');
   });
 
   describe('artifact dashboard lines', () => {
