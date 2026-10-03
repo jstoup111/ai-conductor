@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:21
+// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:12, task:21
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { execFile as execFileCb } from 'child_process';
@@ -16000,6 +16000,39 @@ describe('build-step stall circuit breaker', () => {
       priorReason: identicalReason,
       inputsUnchanged: true,
     })).toEqual({ decision: 'route', signal: 'identical-repeat' });
+  });
+
+  // Covers: task:12
+  it('names every pending task in the no-task-progress stall question and exhaustion HALT', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    const titles = ['Prepare alpha', 'Prepare beta', 'Prepare gamma'];
+    await writeTaskStatus(0, titles.length, titles);
+
+    const runner: StepRunner = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 3,
+    });
+
+    await conductor.run();
+
+    const expected = ['build stalled: no task progress', ...titles.flatMap((title, index) => [
+      String(index + 1),
+      title,
+    ])];
+    const [question, halt] = await Promise.all([
+      readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf8'),
+      readFile(join(dir, '.pipeline/HALT'), 'utf8'),
+    ]);
+    expect([question, halt].every((content) => expected.every((value) => content.includes(value)))).toBe(true);
   });
 
   it('triggers build_stall on the first retry when .pipeline/halt-user-input-required is present', async () => {
