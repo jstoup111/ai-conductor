@@ -1293,4 +1293,68 @@ The plan text changed after implementation.
     });
   });
 
+  describe('presentation-only plan edits do not reopen completed tasks', () => {
+    it.each([
+      ['whitespace', (plan: string) => plan.replace('First completed task', '  First   completed task  ')],
+      ['line wrapping', (plan: string) => plan.replace('Keep the implementation boundary stable.', 'Keep the implementation\nboundary stable.')],
+      ['blank line', (plan: string) => plan.replace('Keep the implementation boundary stable.', 'Keep the implementation\n\nboundary stable.')],
+      ['trailing risks section', (plan: string) => `${plan}\n## Risks\nThis plan-level note changes after the final task.\n`],
+    ] as const)('does not reopen completed tasks after a %s edit', async (_kind, edit) => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const baselinePlan = `# Plan
+
+### Task 1: First completed task
+Keep the implementation boundary stable.
+
+### Task 2: Second completed task
+Keep the other boundary stable.
+`;
+
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'task-seed@example.test'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Task Seed Test'], { cwd: dir });
+      await fsPromises.writeFile(planPath, baselinePlan);
+      await fsPromises.writeFile(join(dir, 'completed.txt'), 'completed\n');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'initial plan'], { cwd: dir });
+      await fsPromises.writeFile(join(dir, 'completed.txt'), 'completed tasks\n');
+      await execa('git', ['add', 'completed.txt'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'complete tasks\n\nTask: 1\nTask: 2'], { cwd: dir });
+
+      await fsPromises.writeFile(planPath, edit(baselinePlan));
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [
+          { id: '1', name: 'First completed task', status: 'completed' },
+          { id: '2', name: 'Second completed task', status: 'completed' },
+        ],
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: planPath,
+        taskDigests: { version: 1, byPlan: { '.docs/plans/test.md': Object.fromEntries(planTaskDigests(baselinePlan)) } },
+      }));
+
+      await seedTaskStatus(dir, planPath);
+
+      const state = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/engine-state.json'), 'utf8'));
+      expect(state.repairObligations).toBeUndefined();
+      expect(JSON.parse(await fsPromises.readFile(statusPath, 'utf8')).tasks).toEqual([
+        expect.objectContaining({ id: '1', status: 'completed' }),
+        expect.objectContaining({ id: '2', status: 'completed' }),
+      ]);
+
+      // Prove the build predicate remains closed through the independent
+      // Task:-trailer authority rather than the retained terminal rows.
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [
+          { id: '1', status: 'pending' },
+          { id: '2', status: 'pending' },
+        ],
+      }));
+      expect(await checkStepCompletion(dir, 'build', { projectRoot: dir, planPath })).toEqual({ done: true });
+    });
+  });
+
 });
