@@ -33,7 +33,13 @@ function effectiveDecision(
   decisions: readonly AcceptedWideningDecision[],
 ): AcceptedWideningDecision | undefined {
   const byId = new Map(decisions.map((decision) => [decision.id, decision]));
-  const candidates = decisions.filter((decision) => decision.originalCaseId === caseId);
+  // A case id is not sufficient authority across criterion domains. In
+  // particular, an S1.1 acceptance may never settle a no-owner OVER_SCOPE
+  // observation merely because malformed or historical state links it to the
+  // same case. Only an original no-owner decision participates here.
+  const candidates = decisions.filter((decision) =>
+    decision.originalCaseId === caseId && isPrdAuditNoOwnerOrdinal(decision.criterion),
+  );
   return candidates.filter((decision) =>
     !candidates.some((other) => other.supersedes?.id === decision.id && other.supersedes.revision === decision.revision),
   ).sort((left, right) => right.revision - left.revision)[0] ??
