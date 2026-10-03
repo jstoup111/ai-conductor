@@ -105,14 +105,17 @@ describe('git guard provisioning primitives', () => {
   });
 
   it.each([
-    ['reference-transaction', REFERENCE_TRANSACTION_HOOK],
-    ['pre-push', PRE_PUSH_HOOK],
-  ])('repairs a deleted %s hook before dispatch', async (name, content) => {
+    ['reference-transaction', REFERENCE_TRANSACTION_HOOK, 'deleted'],
+    ['reference-transaction', REFERENCE_TRANSACTION_HOOK, 'edited'],
+    ['pre-push', PRE_PUSH_HOOK, 'deleted'],
+    ['pre-push', PRE_PUSH_HOOK, 'edited'],
+  ] as const)('repairs a %s %s hook before dispatch', async (name, content, damage) => {
     const root = await mkdtemp(join(tmpdir(), 'git-guard-ref-hook-repair-'));
     roots.push(root);
     await initTestRepo(root); await prepareWorktree(root);
     const hook = join(root, '.pipeline', 'git-hooks', name);
-    await unlink(hook);
+    if (damage === 'deleted') await unlink(hook);
+    else await writeFile(hook, '#!/bin/sh\nexit 0\n');
 
     await expect(ensureGitGuardForDispatch(root)).resolves.toBe(join(root, '.pipeline', 'bin'));
     const info = await lstat(hook);
