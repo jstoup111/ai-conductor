@@ -31,6 +31,12 @@ export interface IntakeQueue {
   remove(e: Envelope): Promise<void>;
 }
 
+/** File-backed queue capabilities that are not part of the IntakeQueue port. */
+export interface FileIntakeQueue extends IntakeQueue {
+  /** List all claimed (in-flight) Envelopes currently in the inbox. */
+  listClaimed(): Promise<Envelope[]>;
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /**
@@ -76,7 +82,7 @@ function toClaimed(filename: string): string {
  * Filenames sort lexicographically oldest-first because ISO-8601 strings
  * sort correctly after `:` → `_` substitution.
  */
-export function createFileQueue(dir: string): IntakeQueue {
+export function createFileQueue(dir: string): FileIntakeQueue {
   return {
     // ── enqueue ─────────────────────────────────────────────────────────────
 
@@ -172,6 +178,27 @@ export function createFileQueue(dir: string): IntakeQueue {
           content = await readFile(join(dir, filename), 'utf8');
         } catch {
           // File disappeared between readdir and readFile (concurrent claim/ack).
+          continue;
+        }
+        envelopes.push(JSON.parse(content) as Envelope);
+      }
+      return envelopes;
+    },
+
+    // ── listClaimed ──────────────────────────────────────────────────────────
+
+    async listClaimed(): Promise<Envelope[]> {
+      await mkdir(dir, { recursive: true });
+      const entries = await readdir(dir);
+      const claimedFiles = entries.filter((f) => f.endsWith('.claimed')).sort();
+
+      const envelopes: Envelope[] = [];
+      for (const filename of claimedFiles) {
+        let content: string;
+        try {
+          content = await readFile(join(dir, filename), 'utf8');
+        } catch {
+          // File disappeared between readdir and readFile (concurrent ack/release).
           continue;
         }
         envelopes.push(JSON.parse(content) as Envelope);
