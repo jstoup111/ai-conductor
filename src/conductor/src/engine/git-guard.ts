@@ -34,12 +34,8 @@ export async function writeGitGuard(worktreePath: string): Promise<string> {
   try {
     await mkdir(join(pipeline(worktreePath), 'bin'), { recursive: true });
     await mkdir(dataDir, { recursive: true });
-  } catch (error) {
-    throw new Error(`unable to provision git guard ${target}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  const realGit = await resolveRealGit();
-  const commonDir = (await execa(realGit, ['-C', worktreePath, 'rev-parse', '--path-format=absolute', '--git-common-dir'])).stdout.trim();
-  try {
+    const realGit = await resolveRealGit();
+    const commonDir = (await execa(realGit, ['-C', worktreePath, 'rev-parse', '--path-format=absolute', '--git-common-dir'])).stdout.trim();
     await writeRegularFile(target, GIT_GUARD_SCRIPT, 0o755);
     await writeRegularFile(join(dataDir, 'real-git'), realGit + '\n');
     await writeRegularFile(join(dataDir, 'common-dir'), commonDir + '\n');
@@ -99,7 +95,11 @@ export async function ensureGitGuardForDispatch(cwd: string | undefined): Promis
       (info.mode & 0o777) === 0o755;
   } catch { /* repair */ }
   if (!valid) await writeGitGuard(cwd);
-  const [info, regular] = await Promise.all([stat(target), isRegularFile(target)]);
-  if (!regular || (info.mode & 0o777) !== 0o755) throw new Error(`git guard repair failed: ${target}`);
+  try {
+    const [info, regular] = await Promise.all([stat(target), isRegularFile(target)]);
+    if (!regular || (info.mode & 0o777) !== 0o755) throw new Error('guard is not a regular executable file');
+  } catch (error) {
+    throw new Error(`git guard repair failed: ${target}: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return join(pipeline(cwd), 'bin');
 }

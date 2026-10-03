@@ -62,6 +62,35 @@ describe('git guard provisioning primitives', () => {
     }
   });
 
+  it('names the guard path when real git cannot be resolved during provisioning', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'git-guard-no-real-git-'));
+    roots.push(root);
+    const pathBefore = process.env.PATH;
+    process.env.PATH = join(root, 'empty-bin');
+    await mkdir(process.env.PATH, { recursive: true });
+    try {
+      await expect(writeGitGuard(root)).rejects.toThrow(gitGuardPath(root));
+    } finally {
+      process.env.PATH = pathBefore;
+    }
+  });
+
+  it('names the guard path when the common-directory probe fails during provisioning', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'git-guard-common-dir-failure-'));
+    roots.push(root);
+    const fakeBin = join(root, 'fake-bin');
+    const pathBefore = process.env.PATH;
+    await mkdir(fakeBin, { recursive: true });
+    await writeFile(join(fakeBin, 'git'), '#!/bin/sh\nexit 1\n');
+    await chmod(join(fakeBin, 'git'), 0o755);
+    process.env.PATH = fakeBin;
+    try {
+      await expect(writeGitGuard(root)).rejects.toThrow(gitGuardPath(root));
+    } finally {
+      process.env.PATH = pathBefore;
+    }
+  });
+
   it('repairs a wholly deleted pipeline when worktree config still names its hooks', async () => {
     const root = await mkdtemp(join(tmpdir(), 'git-guard-pipeline-repair-'));
     roots.push(root);
