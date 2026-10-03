@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: kickback-budget
+Resolved at: 2026-10-03T16:01:23.766Z
 Slug: prd-audit-receives-bounded-inputs-and-returns-vali
 Class: needs-human
 Halting step: unknown
