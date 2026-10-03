@@ -191,7 +191,7 @@ export async function enumerateRegisteredProjectHalts(
   }
   if (selected.length === 0) {
     out('no registered projects');
-    return { code: 0, halts: [] };
+    return { code: 0, halts: [], terminal: true };
   }
 
   const enumerate = deps.enumerateProjectHalts ?? enumerateProjectHalts;

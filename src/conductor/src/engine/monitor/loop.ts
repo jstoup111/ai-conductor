@@ -53,6 +53,8 @@ function waitForMonitorPass(untilStop: Promise<void>): Promise<void> {
 
 interface HaltIssueReconciliationState {
   networkFailureReported: boolean;
+  nonZeroExitReported: boolean;
+  inFlight: boolean;
 }
 
 function reportHaltIssueReconciliationFailure(deps: GuidedMonitorLoopDeps, message: string): void {
@@ -73,7 +75,8 @@ function startHaltIssueReconciliation(
   state: HaltIssueReconciliationState,
 ): void {
   const reconcile = deps.reconcileHaltIssues;
-  if (reconcile === undefined) return;
+  if (reconcile === undefined || state.inFlight) return;
+  state.inFlight = true;
 
   const reportFailure = (error: unknown): void => {
     if (isNetworkFailure(error)) {
@@ -87,13 +90,20 @@ function startHaltIssueReconciliation(
   try {
     void reconcile().then(
       (exitCode) => {
-        if (exitCode !== 0) {
+        if (exitCode === 0) {
+          state.networkFailureReported = false;
+          state.nonZeroExitReported = false;
+        } else if (!state.nonZeroExitReported) {
+          state.nonZeroExitReported = true;
           reportHaltIssueReconciliationFailure(deps, `Halt-issue reconciliation exited with code ${exitCode}.`);
         }
       },
       reportFailure,
-    );
+    ).finally(() => {
+      state.inFlight = false;
+    });
   } catch (error) {
+    state.inFlight = false;
     reportFailure(error);
   }
 }
@@ -223,7 +233,11 @@ export async function runGuidedMonitorQueue(
   deps: GuidedMonitorLoopDeps,
 ): Promise<GuidedMonitorLoopResult> {
   const offered = new Set<string>();
-  const reconciliationState: HaltIssueReconciliationState = { networkFailureReported: false };
+  const reconciliationState: HaltIssueReconciliationState = {
+    networkFailureReported: false,
+    nonZeroExitReported: false,
+    inFlight: false,
+  };
   const untilStop = deps.untilStop;
   let stopped = false;
   void untilStop?.then(() => {

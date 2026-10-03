@@ -41,7 +41,7 @@ export async function deriveQueueMembership(
   deps: QueueMembershipDeps = {},
 ): Promise<RegisteredHaltInventoryResult> {
   const enumerate = deps.enumerateRegisteredProjectHalts ?? enumerateRegisteredProjectHalts;
-  const { code, halts } = await enumerate({ projectName: options.projectName });
+  const { code, halts, terminal } = await enumerate({ projectName: options.projectName });
   const seenFeaturesByProject = new Map<string, Set<string>>();
   const queue = halts.filter((halt) => {
     const seenFeatures = seenFeaturesByProject.get(halt.project) ?? new Set<string>();
@@ -51,5 +51,5 @@ export async function deriveQueueMembership(
     return true;
   });
 
-  return { code, halts: queue };
+  return terminal === true ? { code, halts: queue, terminal } : { code, halts: queue };
 }

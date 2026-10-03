@@ -14,7 +14,7 @@ export interface InteractiveLaunchRequest {
 
 export interface InteractiveLaunchOptions {
   readonly cwd: string;
-  readonly stdio: 'inherit' | ['pipe', 'inherit', 'inherit'];
+  readonly stdio: 'inherit';
 }
 
 export interface InteractiveLaunchResult {
@@ -36,55 +36,38 @@ interface InteractiveInvocation {
   readonly executable: string;
   readonly args: string[];
   readonly stdio: InteractiveLaunchOptions['stdio'];
-  readonly stdin?: string;
 }
 
 export interface LaunchInteractiveSessionOptions {
   readonly spawn?: InteractiveLaunchProcess;
   readonly report?: (message: string) => void;
   readonly isInteractiveTerminal?: () => boolean;
-  /** The guided monitor alone needs an attached Codex TUI for operator approvals. */
-  readonly mode?: 'guided-monitor';
 }
 
 const interactiveInvocations: Record<
   string,
-  (prompt: string, mode?: LaunchInteractiveSessionOptions['mode']) => InteractiveInvocation
+  (prompt: string) => InteractiveInvocation
 > = {
   [CLAUDE_PROVIDER]: (prompt: string) => ({
     executable: resolveProviderExecutable(CLAUDE_PROVIDER),
     args: ['--permission-mode', 'default', prompt],
     stdio: 'inherit',
   }),
-  [CODEX_PROVIDER]: (prompt: string, mode?: LaunchInteractiveSessionOptions['mode']) => (
-    mode === 'guided-monitor'
-      ? {
-          executable: resolveProviderExecutable(CODEX_PROVIDER),
-          args: [prompt],
-          stdio: 'inherit',
-        }
-      : {
-          executable: resolveProviderExecutable(CODEX_PROVIDER),
-          args: ['exec'],
-          stdio: ['pipe', 'inherit', 'inherit'],
-          stdin: prompt,
-        }
-  ),
+  [CODEX_PROVIDER]: (prompt: string) => ({
+    executable: resolveProviderExecutable(CODEX_PROVIDER),
+    args: [prompt],
+    stdio: 'inherit',
+  }),
 } as const;
 
 const defaultSpawn = (
   executable: string,
   args: string[],
   options: InteractiveLaunchOptions,
-  stdin?: string,
 ) => new Promise<InteractiveLaunchResult>((resolve, reject) => {
   const child = spawn(executable, args, options);
   child.once('error', reject);
   child.once('exit', (code) => resolve({ exitCode: code ?? 0 }));
-  if (stdin !== undefined) {
-    child.stdin?.write(stdin);
-    child.stdin?.end();
-  }
 });
 
 /**
@@ -114,13 +97,8 @@ export async function launchInteractiveSession(
   }
 
   try {
-    const launch = invocation(request.openingPrompt, options.mode);
-    const spawnProcess = options.spawn ?? ((executable, args, spawnOptions) => defaultSpawn(
-      executable,
-      args,
-      spawnOptions,
-      launch.stdin,
-    ));
+    const launch = invocation(request.openingPrompt);
+    const spawnProcess = options.spawn ?? defaultSpawn;
     const result = await spawnProcess(
       launch.executable,
       launch.args,

@@ -54,31 +54,20 @@ describe('provider-agnostic interactive launch', () => {
     expect(spawnedOptions).not.toHaveProperty('resume');
   });
 
-  it('launches the default Codex adapter as bounded exec with its opening prompt on stdin', async () => {
-    const stdin = { end: vi.fn(), write: vi.fn() };
-    const child = Object.assign(new EventEmitter(), { stdin });
+  it('launches Codex as an attached TUI with its opening prompt positioned in argv', async () => {
+    const child = new EventEmitter();
     spawnProcess.mockReturnValue(child);
 
     const launch = launchInteractiveSession(request('codex'), { isInteractiveTerminal });
 
     try {
-      expect({
-        executable: spawnProcess.mock.calls[0]?.[0],
-        args: spawnProcess.mock.calls[0]?.[1],
-        options: spawnProcess.mock.calls[0]?.[2],
-        promptWrites: [...stdin.write.mock.calls, ...stdin.end.mock.calls],
-      }).toEqual({
-        executable: 'codex',
-        args: ['exec'],
-        options: {
-          cwd: '/workspace/harness/.worktrees/repair-halt',
-          stdio: ['pipe', 'inherit', 'inherit'],
-        },
-        promptWrites: expect.arrayContaining([[openingPrompt]]),
+      expect(spawnProcess).toHaveBeenCalledWith('codex', [openingPrompt], {
+        cwd: '/workspace/harness/.worktrees/repair-halt',
+        stdio: 'inherit',
       });
+      expect(spawnProcess.mock.calls[0]?.[1]).not.toContain('exec');
     } finally {
       child.emit('exit', 0);
-      child.emit('close', 0);
       await launch;
     }
   });
@@ -130,18 +119,17 @@ describe('provider-agnostic interactive launch', () => {
   });
 
   it('reports ENOENT from the mocked default process adapter without treating it as an exit', async () => {
-    const child = Object.assign(new EventEmitter(), {
-      stdin: { end: vi.fn(), write: vi.fn() },
-    });
+    const child = new EventEmitter();
     const report = vi.fn();
     spawnProcess.mockReturnValue(child);
 
     const launch = launchInteractiveSession(request('codex'), { report, isInteractiveTerminal });
 
-    expect(spawnProcess).toHaveBeenCalledWith('codex', ['exec'], {
+    expect(spawnProcess).toHaveBeenCalledWith('codex', [openingPrompt], {
       cwd: '/workspace/harness/.worktrees/repair-halt',
-      stdio: ['pipe', 'inherit', 'inherit'],
+      stdio: 'inherit',
     });
+    expect(spawnProcess.mock.calls[0]?.[1]).not.toContain('exec');
     child.emit('error', Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }));
 
     await expect(launch).resolves.toEqual({ kind: 'unavailable', provider: 'codex' });

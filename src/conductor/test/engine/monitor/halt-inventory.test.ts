@@ -371,7 +371,7 @@ describe('Task 3 — registered-project halt inventory', () => {
     });
 
     expect({ result, out }).toEqual({
-      result: { code: 0, halts: [] },
+      result: { code: 0, halts: [], terminal: true },
       out: ['no registered projects'],
     });
   });

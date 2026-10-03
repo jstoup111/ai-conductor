@@ -1,6 +1,8 @@
-// Covers: task:20
+// Covers: task:3, task:6, task:20
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -110,6 +112,55 @@ describe('Task 20 — monitor pre-boot command', () => {
       passes: 1,
       output: [],
     });
+  });
+
+  it.each([
+    ['an absent registry', 'absent', undefined, 0],
+    ['an unknown project', 'unknown', 'missing', 1],
+    ['a malformed registry', 'malformed', undefined, 1],
+  ] as const)('ends the real loop after deriveQueueMembership sees %s', async (
+    _description,
+    condition,
+    projectName,
+    expectedCode,
+  ) => {
+    const registryRoot = await mkdtemp(join(tmpdir(), 'monitor-cli-registry-'));
+    const registryPath = join(registryRoot, 'registry.json');
+    const previousRegistry = process.env.AI_CONDUCTOR_REGISTRY;
+    const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => {});
+    process.env.AI_CONDUCTOR_REGISTRY = registryPath;
+
+    try {
+      if (condition === 'unknown') {
+        await writeFile(registryPath, JSON.stringify([{
+          schemaVersion: 1,
+          name: 'registered',
+          path: registryRoot,
+          status: 'registered',
+          registeredAt: '2026-10-03T00:00:00.000Z',
+        }]));
+      } else if (condition === 'malformed') {
+        await writeFile(registryPath, '{ malformed');
+      }
+
+      const code = await dispatchMonitorCommand(
+        projectName === undefined ? { kind: 'run' } : { kind: 'run', projectName },
+        '/projects/operator',
+        {
+          resolveProvider: async () => ({ provider: 'codex' }),
+          reconcileHaltIssues: async () => 0,
+          createInterrupt: () => ({ untilStop: new Promise<void>(() => {}), dispose: vi.fn() }),
+          startEventSpine: (() => ({ events: { emit: async () => {} }, stop: vi.fn() })) as never,
+        },
+      );
+
+      expect(code).toBe(expectedCode);
+    } finally {
+      consoleLog.mockRestore();
+      if (previousRegistry === undefined) delete process.env.AI_CONDUCTOR_REGISTRY;
+      else process.env.AI_CONDUCTOR_REGISTRY = previousRegistry;
+      await rm(registryRoot, { recursive: true, force: true });
+    }
   });
 
   it('reports an unknown configured provider before scanning an empty queue', async () => {

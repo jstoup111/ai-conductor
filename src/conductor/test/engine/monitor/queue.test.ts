@@ -103,6 +103,14 @@ describe('Task 6 — derived monitor queue membership', () => {
     expect(queue).toEqual({ code: 1, halts: [readable] });
   });
 
+  it('forwards a terminal inventory result so the composition root can end the monitor', async () => {
+    const enumerateRegisteredProjectHalts = vi.fn(async () => ({ code: 1, halts: [], terminal: true }));
+
+    const queue = await deriveQueueMembership({}, { enumerateRegisteredProjectHalts });
+
+    expect(queue).toEqual({ code: 1, halts: [], terminal: true });
+  });
+
   it('creates independent membership for each monitor without a persisted queue artifact', async () => {
     const current = halt('/projects/alpha', 'shared-halt');
     const enumerateRegisteredProjectHalts = vi.fn(async () => ({ code: 0, halts: [current] }));

@@ -650,7 +650,7 @@ describe('Task 19 — halt-issue reconciliation', () => {
     });
   });
 
-  it('offers queue work before a slow reconciliation completes', async () => {
+  it('suppresses overlapping slow reconciliations while queue work remains available', async () => {
     const queued = halt('slow-reconciliation');
     const slowReconciliation = deferred<number>();
     let membership: readonly ProjectHalt[] = [queued];
@@ -675,7 +675,28 @@ describe('Task 19 — halt-issue reconciliation', () => {
     }).toEqual({
       result: { active: true },
       offered: ['slow-reconciliation'],
-      reconciliationCalls: [[], []],
+      reconciliationCalls: [[]],
     });
+  });
+
+  it('reports a repeated non-zero reconciliation exit once until a successful sweep resets it', async () => {
+    let membership: readonly ProjectHalt[] = [halt('first'), halt('second'), halt('third')];
+    const report = vi.fn();
+    const exitCodes = [1, 1, 0, 1];
+
+    const result = await runGuidedMonitorQueue({
+      deriveMembership: async () => membership,
+      launch: async (item) => {
+        membership = membership.filter((halt) => halt.slug !== item.slug);
+      },
+      offer: vi.fn(),
+      report,
+      reconcileHaltIssues: async () => exitCodes.shift()!,
+    });
+
+    await vi.waitFor(() => expect(report.mock.calls.filter(([message]) =>
+      message === 'Halt-issue reconciliation exited with code 1.',
+    )).toHaveLength(2));
+    expect(result).toEqual({ active: true });
   });
 });
