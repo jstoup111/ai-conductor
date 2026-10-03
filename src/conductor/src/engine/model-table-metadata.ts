@@ -161,6 +161,7 @@ export type AuxiliaryModelTableRow = AuxiliaryModelTableRowBase & (
 
 const RESOLVED_RUBRIC_POLICY = 'inherits resolved rubric policy' as const;
 const RESOLVED_COVERAGE_BINDING_POLICY = 'inherits resolved coverage-binding policy' as const;
+const RESOLVED_REBASE_POLICY = 'inherits resolved rebase policy' as const;
 const PI_NOT_APPLICABLE = 'n/a' as const;
 
 function providerCellsForReview(
@@ -196,6 +197,12 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
       RESOLVED_COVERAGE_BINDING_POLICY,
     ),
     why: 'Fresh per-claim judgement of whether cited Done when checks assert the criterion; the engine scopes inputs, validates the closed verdict, and owns the gate outcome.',
+  },
+  {
+    name: 'rebase-regrade',
+    executionPath: 'engine-managed auxiliary judge',
+    providerCells: providerCellsForReview(RESOLVED_REBASE_POLICY, RESOLVED_REBASE_POLICY),
+    why: 'Judges whether a rebase resolution that changed the feature diff warrants regrading prd_audit or architecture_review_as_built; the engine scopes the delta, validates the closed verdict, and fails closed.',
   },
 ];
 
