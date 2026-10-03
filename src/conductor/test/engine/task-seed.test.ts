@@ -2,8 +2,65 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-// Covers: task:5
+import { execa } from 'execa';
+import { planTaskDigests } from '../../src/engine/plan-task-parse.js';
+// Covers: task:3, task:5
 import { seedTaskStatus } from '../../src/engine/task-seed.js';
+
+const reopenObservation = vi.hoisted(() => ({
+  active: false,
+  events: [] as string[],
+  statusPath: '',
+  statusAtDigestWrite: '' as string | undefined,
+  restageCalls: 0,
+}));
+
+vi.mock('../../src/engine/repair-obligations.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/repair-obligations.js')>();
+  return {
+    ...actual,
+    createRepairObligationStore: (...args: Parameters<typeof actual.createRepairObligationStore>) => {
+      const store = actual.createRepairObligationStore(...args);
+      if (!reopenObservation.active) return store;
+      return {
+        ...store,
+        admitOrReplay: async (...admission: Parameters<typeof store.admitOrReplay>) => {
+          reopenObservation.events.push('admitOrReplay');
+          return store.admitOrReplay(...admission);
+        },
+        markSettled: async (...input: Parameters<typeof store.markSettled>) => {
+          reopenObservation.events.push('markSettled');
+          return store.markSettled(...input);
+        },
+      };
+    },
+  };
+});
+
+vi.mock('../../src/engine/repair-restage.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/repair-restage.js')>();
+  return {
+    ...actual,
+    admitAndRestageRepair: async (...args: Parameters<typeof actual.admitAndRestageRepair>) => {
+      reopenObservation.restageCalls += 1;
+      return actual.admitAndRestageRepair(...args);
+    },
+  };
+});
+
+vi.mock('../../src/engine/task-digests.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/task-digests.js')>();
+  return {
+    ...actual,
+    recordTaskDigests: async (...args: Parameters<typeof actual.recordTaskDigests>) => {
+      reopenObservation.events.push('recordTaskDigests');
+      if (reopenObservation.statusPath) {
+        reopenObservation.statusAtDigestWrite = await fsPromises.readFile(reopenObservation.statusPath, 'utf8');
+      }
+      return actual.recordTaskDigests(...args);
+    },
+  };
+});
 
 describe('task-seed', () => {
   let dir: string;
@@ -991,6 +1048,73 @@ Content
 
       // Seed should succeed regardless of stamp file state
       await expect(seedTaskStatus(dir, planPath)).resolves.not.toThrow();
+    });
+  });
+
+  describe('Task 3: rewritten plan tasks reopen through repair obligations', () => {
+    it('admits and settles before recording the new digest, then restages the completed row without repair-restage', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const originalPlan = `# Plan
+
+## Task 1: Rewritten task
+The original implementation plan text.
+`;
+      const rewrittenPlan = `# Plan
+
+## Task 1: Rewritten task
+The plan text changed after implementation.
+`;
+      await execa('git', ['init'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'task-seed@example.test'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Task Seed Test'], { cwd: dir });
+      await fsPromises.writeFile(planPath, originalPlan);
+      await execa('git', ['add', '.docs/plans/test.md'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'initial plan'], { cwd: dir });
+      const baselineHead = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+      await fsPromises.writeFile(planPath, rewrittenPlan);
+      const originalDigest = planTaskDigests(originalPlan).get('1')!;
+      const rewrittenDigest = planTaskDigests(rewrittenPlan).get('1')!;
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [{ id: '1', name: 'Rewritten task', status: 'completed', commit: 'before-rewrite' }],
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: planPath,
+        taskDigests: { version: 1, byPlan: { '.docs/plans/test.md': { '1': originalDigest } } },
+      }));
+
+      reopenObservation.active = true;
+      reopenObservation.events = [];
+      reopenObservation.statusPath = statusPath;
+      reopenObservation.statusAtDigestWrite = undefined;
+      reopenObservation.restageCalls = 0;
+      try {
+        await seedTaskStatus(dir, planPath);
+      } finally {
+        reopenObservation.active = false;
+      }
+
+      expect(reopenObservation.events).toEqual(['admitOrReplay', 'markSettled', 'recordTaskDigests']);
+      expect(reopenObservation.restageCalls).toBe(0);
+      expect(JSON.parse(reopenObservation.statusAtDigestWrite ?? '{}').tasks).toEqual([
+        expect.objectContaining({ id: '1', status: 'completed' }),
+      ]);
+      const engineState = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/engine-state.json'), 'utf8'));
+      const repairSection = engineState.repairObligations;
+      const obligationId = repairSection.currentByPlan['.docs/plans/test.md']['1'];
+      expect(repairSection.records[obligationId]).toEqual(expect.objectContaining({
+        id: obligationId,
+        planIdentity: '.docs/plans/test.md',
+        taskIds: ['1'],
+        source: expect.objectContaining({ authority: 'plan_amendment', findingId: rewrittenDigest }),
+        baseline: expect.objectContaining({ head: baselineHead }),
+        settlement: 'settled',
+        tasks: { '1': { status: 'open' } },
+      }));
+      const status = JSON.parse(await fsPromises.readFile(statusPath, 'utf8'));
+      expect(status.tasks).toEqual([expect.objectContaining({ id: '1', status: 'pending' })]);
     });
   });
 
