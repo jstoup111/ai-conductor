@@ -78,9 +78,14 @@ case "$command" in
     for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --ours || "$a" == --theirs || "$a" == --merge ]] && safe_side=true; [[ "$a" == --staged || "$a" == -S ]] && staged=true; [[ "$a" == --worktree || "$a" == -W ]] && worktree=true; done
     [[ "$safe_side" == false && ( "$staged" == false || "$worktree" == true ) ]] && { destructive=true; reason='restore discards working-tree changes'; alternative='commit a WIP first or use a temporary worktree'; } ;;
   branch)
-    force=false; names=()
-    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == -D || "$a" == --force ]] && force=true; [[ "$a" != -* ]] && names+=("$a"); done
-    if [[ "$force" == true && \${#names[@]} -gt 0 ]]; then
+    force=false; force_delete=false; delete=false; names=()
+    for a in "\${args[@]:$((i+1))}"; do
+      [[ "$a" == -D ]] && force_delete=true
+      [[ "$a" == --force ]] && force=true
+      [[ "$a" == -d || "$a" == --delete ]] && delete=true
+      [[ "$a" != -* ]] && names+=("$a")
+    done
+    if [[ "$force_delete" == true || ( "$force" == true && "$delete" == true ) ]] && (( \${#names[@]} > 0 )); then
       for name in "\${names[@]}"; do
         reachable=false
         while IFS= read -r ref; do

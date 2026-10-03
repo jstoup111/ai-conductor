@@ -202,6 +202,17 @@ describe('GIT_GUARD_SCRIPT in a scratch repository', () => {
     expect(invoke(['branch', '-d', 'ordinary']).status).toBe(0);
   });
 
+  it('passes a non-deleting branch --force update to real Git', async () => {
+    await writeFile(join(repository, 'tracked'), 'new tip\n');
+    git(['commit', '-am', 'new tip']);
+    git(['branch', 'X', 'HEAD~1']);
+
+    const result = invoke(['branch', '--force', 'X', 'HEAD']);
+
+    expect(result.status).toBe(0);
+    expect(git(['rev-parse', 'X'])).toBe(git(['rev-parse', 'HEAD']));
+  });
+
   it('refuses path discard forms but allows conflict-side selection, and does not guard a foreign repository', async () => {
     await writeFile(join(repository, 'tracked'), 'edited\n');
     for (const args of [['checkout', '--', 'tracked'], ['restore', 'tracked'], ['restore', '--worktree', 'tracked']] as const) {
