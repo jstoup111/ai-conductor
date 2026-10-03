@@ -222,8 +222,7 @@ describe('daemon OTel spool wiring', () => {
     const mainRoot = await temporaryDirectory();
     const events = new ConductorEventEmitter();
     const persistence = startDaemonEventPersistence(mainRoot, events);
-    let dropped = false;
-    events.on('otel_spool_drop', () => { dropped = true; });
+    const dropped = events.waitFor('otel_spool_drop');
     const store = new SpoolStore(join(mainRoot, '.daemon', 'otel-spool'));
     await store.write('traces', Buffer.from('drop'));
     const drainer = new SpoolDrainer(store, {
@@ -231,9 +230,7 @@ describe('daemon OTel spool wiring', () => {
       fetch: async () => new Response(undefined, { status: 400 }),
     });
     const draining = drainer.drainUntilStopped();
-    for (let turn = 0; turn < 1_000 && !dropped; turn += 1) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
+    await dropped;
     await drainer.stop();
     await draining;
     await events.emit({ type: 'otel_spool_backlog', signal: 'metrics', files: 1, bytes: 1, oldestAgeMs: 0, lastFailureClass: 'server' });
