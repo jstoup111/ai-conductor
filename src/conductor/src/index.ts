@@ -114,7 +114,11 @@ import { runProjectPrelude } from './engine/project-prelude.js';
 import { discoverPlugins } from './engine/plugin-loader.js';
 import { registerCliBuiltins } from './engine/cli-builtins.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
-import { EventPersister, startOperatorEventSpine } from './engine/event-persister.js';
+import {
+  EventPersister,
+  startOperatorEventSpine,
+  startSessionEventTail,
+} from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { wireInteractiveOtelMetrics, wireOtelVisualizer } from './engine/otel/wire.js';
 import type { OtelVisualizerStartContext } from './engine/otel/wire.js';
@@ -1671,16 +1675,22 @@ async function dispatchCliCommand(): Promise<void> {
   const eventsLogPath = join(pipelineDir, 'events.jsonl');
   const persister = new EventPersister(eventsLogPath, events);
   persister.start();
-  const subscriber = await bootDispatchingCliProviders({
+  // Foreground/project-prelude provider sessions have no daemon feature
+  // scope. Own their same-schema producer tail alongside this persister so
+  // every exit drains records before subscribers detach.
+  const sessionTail = startSessionEventTail(projectRoot, events);
+  let subscriber: Awaited<ReturnType<typeof bootDispatchingCliProviders>>;
+  try {
+    subscriber = await bootDispatchingCliProviders({
     command: 'inline',
     registry,
     events,
     config,
     rendererOpts,
-  });
-  if (!subscriber) {
-    throw new Error('Provider discovery was not enabled for the inline command');
-  }
+    });
+    if (!subscriber) {
+      throw new Error('Provider discovery was not enabled for the inline command');
+    }
 
   // Compose one provider-routing context from the complete frozen registry.
   // The ordered config survives intact; its first entry is only the
@@ -1893,11 +1903,13 @@ async function dispatchCliCommand(): Promise<void> {
     onComplexityAssessment: (r) => promptHost.complexityAssessment(r),
   });
 
-  await conductor.run();
-
-  persister.stop();
-  await stopVisualizers(visualizerList);
-  await subscriber.stop();
+    await conductor.run();
+  } finally {
+    await sessionTail.drain();
+    persister.stop();
+    await stopVisualizers(visualizerList);
+    await subscriber?.stop();
+  }
 }
 
 async function main(): Promise<void> {
