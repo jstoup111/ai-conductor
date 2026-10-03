@@ -96,13 +96,20 @@ Outcomes:
 | `{"empty":true}` | Nothing pending | Use the launch argument or the operator's chat idea |
 | `{"allBlocked":true,"entries":[…]}` | Everything queued is blocked by an open dependency | Resolve or reprioritise the blockers |
 
-`claim` exits 0 in all three cases. It first reaps `claimed` entries stranded longer than the
-`stale_claim_window_hours` window, returns them to pending, and can re-serve a reaped entry in the
-same call. The default window is 24 hours; set `stale_claim_window_hours` in
+`claim` exits 0 in all three cases. It holds the inbox lease for the whole walk, so a concurrent
+`claim` waits (up to 5 minutes) instead of racing. It first returns inbox envelopes left claimed by
+an interrupted claim — ledger entry still pending — to the inbox with their original priority, and
+reports `released <n> stranded intake claim(s)` on stderr. It then reaps `claimed` entries stranded
+longer than the `stale_claim_window_hours` window, returns them to pending, and can re-serve a
+reaped entry in the same call. The default window is 24 hours; set `stale_claim_window_hours` in
 [project configuration](../reference/configuration.md#stale_claim_window_hours) to change it. It then
 acks the selected queue entry, advances the intake ledger to `claimed`, and persists a claim record
 so a later `worktree --source-ref` can recover the issue's Desired-outcome bullets without you
 re-typing them.
+
+`claim` exits 1 and claims nothing when the lease wait times out (`Intake claim in progress`), the
+intake ledger is corrupt, or stranded-claim recovery cannot read or release an envelope. Fix the
+reported fault, then run `claim` again.
 
 Ideas that came from a launch argument or from chat have **no** `sourceRef` — omit `--source-ref`
 for those.
