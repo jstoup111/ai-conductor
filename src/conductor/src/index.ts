@@ -1880,7 +1880,7 @@ async function main(): Promise<void> {
     environment: process.env,
     dispatch: async () => {
       await dispatchCliCommand();
-      return process.exitCode ?? 0;
+      return typeof process.exitCode === 'number' ? process.exitCode : 0;
     },
   });
   process.exitCode = outcome.exitCode;
