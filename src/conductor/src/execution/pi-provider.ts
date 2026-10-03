@@ -307,7 +307,7 @@ export class PiProvider implements LLMProvider {
       }
     }
 
-    const args = ['-p', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath];
+    const args = ['-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath];
     const projectSkillsPath = join(cwd, '.agents', 'skills');
     if (await isDirectory(projectSkillsPath, this.environment)) {
       args.push('--skill', projectSkillsPath);

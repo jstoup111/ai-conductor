@@ -181,7 +181,7 @@ describe('PiProvider', () => {
     expect(spawn).toHaveBeenCalledWith(
       '/resolved/pi',
       [
-        '-p', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath,
+        '-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath,
         '--provider', 'anthropic',
         '--model', 'claude-opus-4-5',
         '--thinking', 'xhigh',
@@ -210,12 +210,14 @@ describe('PiProvider', () => {
     await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:pipeline\nBuild it.' })).resolves.toMatchObject({ success: true });
 
     expect(spawn).toHaveBeenCalledOnce();
+    expect(spawn.mock.calls[0]?.[1]).toContain('-na');
   });
 
   it('does not resolve a skill when the prompt does not begin with a Pi skill command', async () => {
     await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({ success: true });
 
     expect(spawn).toHaveBeenCalledOnce();
+    expect(spawn.mock.calls[0]?.[1]).toContain('-na');
     expect(stat.mock.calls.flat().filter((path) => String(path).endsWith('/pipeline/SKILL.md'))).toEqual([]);
   });
 
@@ -286,9 +288,9 @@ describe('PiProvider', () => {
   });
 
   it.each([
-    ['a project skills directory', ['/workspace/project/.agents/skills'], ['-p', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath, '--skill', '/workspace/project/.agents/skills']],
-    ['no project skills path', [], ['-p', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath]],
-    ['a project skills file', [], ['-p', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath]],
+    ['a project skills directory', ['/workspace/project/.agents/skills'], ['-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath, '--skill', '/workspace/project/.agents/skills']],
+    ['no project skills path', [], ['-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath]],
+    ['a project skills file', [], ['-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath]],
   ])('loads %s only when it is a directory and never trusts it', async (_source, directories, expectedArgs) => {
     const files = _source === 'a project skills file'
       ? [harnessPath, '/workspace/project/.agents/skills']
@@ -304,6 +306,7 @@ describe('PiProvider', () => {
       '--model', 'claude-opus-4-5',
       '--thinking', 'xhigh',
     ], expect.anything());
+    expect(spawn.mock.calls[0]?.[1]).toContain('-na');
     expect(spawn.mock.calls[0]?.[1]).not.toContain('--approve');
     expect(spawn.mock.calls[0]?.[1]).not.toContain('-a');
   });
@@ -314,13 +317,13 @@ describe('PiProvider', () => {
 
     expect(spawn.mock.calls.map(([, args]) => args)).toEqual([
       [
-        '-p', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath,
+        '-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath,
         '--provider', 'anthropic',
         '--model', 'claude-opus-4-5',
         '--thinking', 'xhigh',
       ],
       [
-        '-p', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath,
+        '-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath,
         '--provider', 'anthropic',
         '--model', 'claude-opus-4-5',
         '--thinking', 'xhigh',

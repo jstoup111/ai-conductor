@@ -41,7 +41,6 @@ import { scopedRunFailure } from '../../src/engine/build-review-test-quality-pre
 import type { BuildReviewScopedLauncher } from '../../src/engine/build-review-scoped-run.js';
 import { renderBuildReviewUnresolvedSkillRemedy } from '../../src/engine/build-review-domain.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
-import { BUILT_IN_PROVIDERS } from '../../src/execution/provider-catalog.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -235,6 +234,115 @@ describe('DefaultStepRunner', () => {
       expect(settle.mock.calls.map(([memberId]) => memberId).sort()).toEqual(
         ['portable', 'portableTwo'],
       );
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses Pi by the review-policy catalog owner in an unmutated custom-policy lap before dispatching Claude', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-policy-catalog-'));
+    const baselinePath = join(projectDir, 'baseline');
+    const headPath = join(projectDir, 'head');
+    await Promise.all([mkdir(baselinePath), mkdir(headPath)]);
+    const attempts: ProviderAttemptEvent[] = [];
+    const piInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }),
+      exitCode: 0,
+      finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] },
+    }));
+    const lifecycleCapability = { synchronousSpawnPermit: true } as const;
+    const nativeSchemaCapability = { nativeOutputSchema: true } as const;
+    const runtime = (key: 'pi' | 'claude', invoke: LLMProvider['invoke']) => ({
+      key,
+      provider: { lifecycleCapability, nativeSchemaCapability, invoke },
+      lifecycleCapability,
+      nativeSchemaCapability,
+      policy: CLAUDE_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+    });
+    const source = {
+      identity: {
+        snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
+        mergeBase: 'a'.repeat(40), headSha: 'b'.repeat(40),
+      },
+      baselinePath,
+      headPath,
+    };
+    const config = resolveBuildReviewConfig({
+      llm_provider: 'claude',
+      build_review: {
+        enabled: true,
+        rubrics: { testQuality: { enabled: false } },
+        custom_rubrics: {
+          portable: {
+            enabled: true, skill: 'portable-policy', question: 'Check the frozen input.',
+            llm_provider: ['pi', 'claude'], max_retries: 1,
+          },
+        },
+      },
+    } as HarnessConfig, CLAUDE_POLICY);
+    const runner = new DefaultStepRunner(createMockProvider(), 'custom-policy-catalog', projectDir, {
+      providerRuntimes: new ProviderRuntimeSet([
+        runtime('pi', piInvoke),
+        runtime('claude', claudeInvoke),
+      ]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['pi', 'claude'],
+      providerAttempt: (step, attempt) => { attempts.push({ type: 'provider_attempt', step, ...attempt }); },
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project',
+        canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
+        declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+      buildReviewEffectiveResolver: async () => ({
+        ok: true,
+        feature: { version: 'v1', repository: projectDir, feature: 'custom-policy-catalog' },
+        effective: {
+          rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+          skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+          uncoveredScopeIncompleteRubrics: [],
+        },
+      }) as never,
+    });
+    const inputs = {
+      sourceSnapshot: {
+        digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main',
+        mergeBase: 'a'.repeat(40), headSha: 'b'.repeat(40), diff: '', planBody: '', repairContext: [],
+        removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [],
+      },
+      sourceMaterialization: {
+        source,
+        contextFor: (memberId: string) => ({ memberId, source }),
+        settle: async () => {},
+        finish: async () => {},
+      },
+    } as never;
+
+    try {
+      await (runner as unknown as {
+        runRubricBuildReview(value: unknown, resolved: typeof config, tier: ConductState['complexity_tier'], context: undefined, capabilities: unknown): Promise<unknown>;
+      }).runRubricBuildReview(inputs, config, 'S', undefined, {
+        claude: { provider: 'claude', platform: process.platform, status: 'available' },
+      });
+
+      expect(piInvoke).not.toHaveBeenCalled();
+      expect(claudeInvoke).toHaveBeenCalledOnce();
+      expect(attempts).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          provider: 'pi', outcome: 'unavailable', invoked: false,
+          skipReason: 'setup-unavailable', reason: expect.stringContaining('#2852'),
+        }),
+        expect.objectContaining({ provider: 'claude', invoked: true }),
+      ]));
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
@@ -6245,7 +6353,7 @@ describe('build_review rubric dispatch', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
-  it('skips Pi for its unavailable review-policy catalog and dispatches the Claude fallback', async () => {
+  it('skips Pi for its unavailable native schema and dispatches the Claude fallback', async () => {
     const piInvoke = vi.fn();
     const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,
@@ -6300,39 +6408,18 @@ describe('build_review rubric dispatch', () => {
       engineStamp: 'engine-stamp',
       skillDigests: { testQuality: { kind: 'resolved' as const, digest: `sha256-v1:${'b'.repeat(64)}` } },
     };
-    const piDescriptor = BUILT_IN_PROVIDERS.find((provider) => provider.id === 'pi')!;
-    const capabilities = piDescriptor.capabilities;
-    try {
-      // The catalog currently withholds native schema from Pi, which filters it
-      // before this review-policy seam. Give this fixture only that prerequisite
-      // so the test observes the later review-policy refusal.
-      Object.defineProperty(piDescriptor, 'capabilities', {
-        configurable: true,
-        value: { ...capabilities, nativeSchema: true },
-      });
+    await (runner as unknown as {
+      dispatchBuildReviewRubric: (
+        branch: unknown, projection: unknown, tier: undefined, context: undefined,
+        inputs: unknown, engineIdentity: unknown,
+      ) => Promise<unknown>;
+    }).dispatchBuildReviewRubric(piThenClaudeBranch, projection, undefined, undefined, inputs, engineIdentity);
 
-      await (runner as unknown as {
-        dispatchBuildReviewRubric: (
-          branch: unknown, projection: unknown, tier: undefined, context: undefined,
-          inputs: unknown, engineIdentity: unknown,
-        ) => Promise<unknown>;
-      }).dispatchBuildReviewRubric(piThenClaudeBranch, projection, undefined, undefined, inputs, engineIdentity);
-
-      expect(piInvoke).not.toHaveBeenCalled();
-      expect(claudeInvoke).toHaveBeenCalledOnce();
-      expect(attempts).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          provider: 'pi',
-          outcome: 'unavailable',
-          invoked: false,
-          skipReason: 'setup-unavailable',
-          reason: expect.stringContaining('#2852'),
-        }),
-        expect.objectContaining({ provider: 'claude', invoked: true }),
-      ]));
-    } finally {
-      Object.defineProperty(piDescriptor, 'capabilities', { configurable: true, value: capabilities });
-    }
+    expect(piInvoke).not.toHaveBeenCalled();
+    expect(claudeInvoke).toHaveBeenCalledOnce();
+    expect(attempts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: 'claude', invoked: true }),
+    ]));
   });
 
 });
