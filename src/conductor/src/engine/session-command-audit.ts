@@ -24,6 +24,26 @@ export interface SessionCommandInstruction {
   readonly reason?: string;
 }
 
+/**
+ * Check only the explicitly declared instruction regions rendered into a
+ * marked provider dispatch.  Unmarked prose remains an operator-facing hint;
+ * it is not silently promoted into a daemon-session instruction.
+ */
+export function auditManagedSessionInstructionSource(input: SessionCommandSource): SessionCommandInstruction[] {
+  const contexts = parseSessionCommandContexts(input.source, input.family);
+  return auditSessionCommandSource(input).flatMap((instruction) => {
+    const declared = contexts.ranges.some((range) =>
+      range.startLine <= instruction.line && instruction.line <= range.endLine
+      && !(range.context === 'managed' && range.startLine === 1),
+    );
+    if (!declared) return [];
+    if (instruction.context !== 'managed') {
+      return [{ ...instruction, reason: 'managed dispatch cannot execute an operator-only instruction' }];
+    }
+    return instruction.reason ? [instruction] : [];
+  });
+}
+
 const COMMAND = /\b(?:ai-conductor|conduct-ts)\s+([a-z][a-z0-9-]*)\b/g;
 const COMMAND_PREFIX = /\b(?:ai-conductor|conduct-ts)\b/;
 const MAX_CONSTANT_EVALUATION_DEPTH = 32;
@@ -69,6 +89,19 @@ export function discoverSessionCommandSources(repositoryRoot: string): SessionCo
     sources.push({ file: normalized(relative(repositoryRoot, file)), source: readFileSync(file, 'utf8'), family: 'skill' });
   }
   return sources.sort((left, right) => left.file.localeCompare(right.file));
+}
+
+/** Sources whose instruction text is rendered into a managed dispatch. */
+export function discoverShippedSessionCommandSources(repositoryRoot: string): SessionCommandSource[] {
+  const shipped = new Set([
+    'engine/conductor.ts',
+    'engine/step-runners.ts',
+    'skills/bootstrap/SKILL.md',
+    'skills/conduct/SKILL.md',
+    'skills/finish/SKILL.md',
+    'skills/pr/SKILL.md',
+  ]);
+  return discoverSessionCommandSources(repositoryRoot).filter((source) => shipped.has(source.file));
 }
 
 function sourceLocation(source: string, offset: number): { line: number; column: number } {

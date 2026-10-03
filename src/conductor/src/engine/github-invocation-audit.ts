@@ -26,6 +26,10 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { GITHUB_OPERATION_REGISTRY, type GithubOperationName } from './github-operations.js';
+import {
+  auditSessionCommandSource,
+  discoverShippedSessionCommandSources,
+} from './session-command-audit.js';
 
 export interface GithubInvocationAuditFinding {
   readonly file: string;
@@ -829,6 +833,21 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
         findings.push({ file: site.file, line: site.line, column: 1, message: 'unclassified executable GitHub invocation site' });
       }
     }
+  }
+  // This is intentionally part of the established boundary audit command:
+  // session instructions can ask a provider to cross the same ownership
+  // boundary even though they are prose rather than a child-process call.
+  const sessionRepositoryRoot = existsSync(join(conductorRoot, 'src', 'engine'))
+    ? conductorRoot
+    : join(conductorRoot, '..', '..');
+  for (const instruction of discoverShippedSessionCommandSources(sessionRepositoryRoot).flatMap(auditSessionCommandSource)) {
+    if (!instruction.reason) continue;
+    findings.push({
+      file: instruction.file,
+      line: instruction.line,
+      column: instruction.column,
+      message: `${instruction.reason} (session instruction: ${instruction.subcommand})`,
+    });
   }
   const repositoryRoots = [join(conductorRoot, '..', '..'), conductorRoot];
   const scanned = new Set<string>();
