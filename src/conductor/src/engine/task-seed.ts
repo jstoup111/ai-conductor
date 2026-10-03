@@ -14,6 +14,14 @@ import { createRepairObligationStore, repairPlanIdentity } from './repair-obliga
 import { readTaskDigests, recordTaskDigests } from './task-digests.js';
 import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import { resolveTaskIds } from './task-progress.js';
+/** A seed failure that occurred while reopening a task whose plan text changed. */
+export class TaskReopenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TaskReopenError';
+  }
+}
+
 export interface TaskStatusRecord {
   id: string;
   name?: string;
@@ -271,14 +279,14 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
             },
           );
           if (!admission.ok) {
-            throw new Error(`Unable to admit plan amendment repair for task ${taskId}: ${admission.message}`);
+            throw new TaskReopenError(`Unable to admit plan amendment repair for task ${taskId}: ${admission.message}`);
           }
           const settled = await repairStore.markSettled({
             planPath: resolvedPlanPath,
             obligationId: admission.obligation.id,
           });
           if (!settled.ok) {
-            throw new Error(`Unable to settle plan amendment repair for task ${taskId}: ${settled.message}`);
+            throw new TaskReopenError(`Unable to settle plan amendment repair for task ${taskId}: ${settled.message}`);
           }
         }
       }
