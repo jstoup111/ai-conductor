@@ -475,6 +475,11 @@ story criteria under `.docs/stories/` — superseded `.docs/intake/` capture is 
 the gap is recorded in the verdict and the shipped record and ships when those criteria are satisfied,
 and halts only when a sealed story criterion is unmet.
 
+Under the default `conditional` [review mode](../reference/models.md#review-modes), a non-`auto` run prompts the
+operator to review the step's unapproved artifacts whenever the typed verdict in
+`.pipeline/architecture-review-as-built.json` is not `APPROVED`, or is missing or unreadable (fail-closed). A clean
+`APPROVED` verdict auto-approves. This step ignores the `review-required-<step>` marker.
+
 A `BLOCKED` report must contain exactly one `## Blocking Findings` table with `Finding`, `Class`,
 `Governing clause`, and `Summary` columns. `Class` is either `REMEDIABLE` or `DESIGN`. Every
 `REMEDIABLE` row names an approved ADR decision (`<ADR filename stem> decision <number>`, where the word
