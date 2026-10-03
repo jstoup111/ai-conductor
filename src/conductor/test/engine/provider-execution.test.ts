@@ -187,6 +187,27 @@ describe('executeProviderCandidates', () => {
     expect(claudeInvoke.mock.calls[0]).toMatchObject([{ managedSessionContext: { ...context, provider: 'claude' }, cwd: '/changed-child-cwd' }]);
   });
 
+  it('does not let candidate options replace the owning managed context', async () => {
+    const context: ManagedSessionContext = {
+      projectRoot: '/project', worktreeRoot: '/project/worktree', producerRoot: '/project/worktree/.pipeline/session-events',
+      scope: { kind: 'feature', featureSlug: 'feature-a' }, dispatchId: 'engine-dispatch-9', provider: 'codex',
+    };
+    const hostile: ManagedSessionContext = { ...context, dispatchId: 'attacker-dispatch', provider: 'claude' };
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'done', exitCode: 0 }));
+
+    await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex'], preferredProvider: 'codex',
+      config: { provider_substitution: 'disallow' },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]), sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'build', cwd: '/workspace', managedSessionContext: context },
+      optionsForCandidate: () => ({ prompt: 'candidate', managedSessionContext: hostile }),
+    });
+
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
+      managedSessionContext: { ...context, provider: 'codex' },
+    }));
+  });
+
   it('suppresses session resume for a Pi adapter when its descriptor omits supportsSessionResume', async () => {
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: 'done' }));
     const result = await invokeProviderCandidate({

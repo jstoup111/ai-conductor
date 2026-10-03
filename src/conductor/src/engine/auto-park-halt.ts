@@ -24,7 +24,7 @@ export function deferredAutoParkHaltPresentation(
       resumeProcedure:
         `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
         `  2. rm .pipeline/HALT\n` +
-        `  3. ai-conductor daemon park ${slug}\n` +
+        `  3. Park the feature with the daemon park command for ${slug}.\n` +
         `  4. Re-queue the feature (restart the daemon if it was excluded this run).\n`,
     };
   }
@@ -34,7 +34,7 @@ export function deferredAutoParkHaltPresentation(
     resumeProcedure:
       `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
       `  2. rm .pipeline/HALT\n` +
-      `  3. ai-conductor daemon unpark ${slug}\n` +
+      `  3. Unpark the feature with the daemon unpark command for ${slug}.\n` +
       `  4. Re-queue the feature (restart the daemon if it was excluded this run).\n`,
   };
 }

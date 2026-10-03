@@ -1585,6 +1585,9 @@ export class DefaultStepRunner implements StepRunner {
         systemPrompt,
         model: effectiveModel,
         effort: resolved.effort,
+        ...(this.providerExecutionContext?.managedSessionContext
+          ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
+          : {}),
         ...(streamConsumer ? { streamConsumer } : {}),
       });
       await this.emitScalarProviderAttempt(
@@ -1939,6 +1942,7 @@ export class DefaultStepRunner implements StepRunner {
       ...(result.observedIntervals
         ? { observedIntervals: result.observedIntervals }
         : {}),
+      managedGhObservationCoverage: result.managedGhObservationCoverage,
       ...(result.providerSetupExhaustion
         ? { providerSetupExhaustion: result.providerSetupExhaustion }
         : {}),

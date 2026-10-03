@@ -885,6 +885,8 @@ export type ConductorEvent =
       /** Provider that produced the successful result. */
       actualProvider?: string;
       observedIntervals?: readonly ObservedInterval[];
+      /** Bounded completeness of managed gh observation for this step outcome. */
+      managedGhObservationCoverage?: import('../execution/managed-session-preparation.js').ManagedGhObservationCoverage;
       /** Build-only tree witnesses; absent on legacy and non-build events. */
       treeBefore?: string | null;
       treeAfter?: string | null;

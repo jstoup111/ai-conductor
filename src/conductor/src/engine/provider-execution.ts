@@ -315,6 +315,7 @@ export interface ExecuteProviderCandidatesInput {
     readonly provider: string;
     readonly context: ManagedSessionContext;
     readonly readOnlyReview: boolean;
+    readonly executable?: string;
   }) => Promise<unknown>;
   warn?: (
     message: string,
@@ -905,6 +906,11 @@ export async function executeProviderCandidates({
           // candidate-local override must not detach a running subprocess from
           // that authority.
           ...(abortSignal !== undefined ? { abortSignal } : {}),
+          // Attribution belongs to the owning dispatch. A candidate may
+          // re-render its prompt, but cannot replace or clear that context.
+          ...(options.managedSessionContext !== undefined
+            ? { managedSessionContext: options.managedSessionContext }
+            : {}),
         }
       : abortSignal !== undefined
         ? { ...options, abortSignal, ...(descriptorTrust === undefined ? {} : { trustProjectFiles: descriptorTrust }) }
@@ -1018,6 +1024,7 @@ export async function executeProviderCandidates({
               provider: providerKey,
               context: ownedCandidateOptions.managedSessionContext,
               readOnlyReview: true,
+              ...(selfHost?.executable ? { executable: selfHost.executable } : {}),
             });
           } else if (ownedCandidateOptions.readOnlyReview && ownedCandidateOptions.managedSessionContext) {
             throw new ProviderSetupUnavailableError({

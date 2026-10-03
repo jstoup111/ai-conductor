@@ -1524,17 +1524,20 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const stop = (): Promise<void> => {
       if (stopPromise) return stopPromise;
       stopPromise = (async () => {
+        // OTel shutdown can itself report a renderer error. Stop it while the
+        // feature persister remains subscribed, then drain producers before
+        // detaching feature renderers.
         try {
-          // OTel shutdown can itself report a renderer error. Stop it while the
-          // feature persister remains subscribed, then drain producers before
-          // detaching feature renderers.
           await visualizer?.stop();
           await persistence.drain();
-          await daemonOtel?.flush();
         } finally {
-          if (visualizer) activeDispatchVisualizers.delete(visualizer);
-          for (const type of renderableEvents) featureEvents.off(type, renderEvent);
-          persistence.stop();
+          try {
+            await daemonOtel?.flush();
+          } finally {
+            if (visualizer) activeDispatchVisualizers.delete(visualizer);
+            for (const type of renderableEvents) featureEvents.off(type, renderEvent);
+            persistence.stop();
+          }
         }
       })();
       return stopPromise;
@@ -2769,10 +2772,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                   try {
                     // Create a fresh step runner for this rebase resolution attempt
                     const sessionId = uuidv4();
+                    const dispatchId = createSessionEventIdentity();
                     const providerExecution = await createSlugScopedProviderExecution(
                       entry.slug,
                       ctx.projectRoot,
-                      sessionId,
+                      dispatchId,
                     );
                     const selectedRuntime = providerExecution.runtimes.get(
                       providerExecution.configuredProviders[0],
@@ -2863,10 +2867,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 // DefaultStepRunner pattern used for rebase resolution above.
                   resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: typeof entry }) => {
                     const sessionId = uuidv4();
+                    const dispatchId = createSessionEventIdentity();
                     const providerExecution = await createSlugScopedProviderExecution(
                       ctx.entry.slug,
                       ctx.worktreePath,
-                      sessionId,
+                      dispatchId,
                     );
                     const selectedRuntime = providerExecution.runtimes.get(
                       providerExecution.configuredProviders[0],

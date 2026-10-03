@@ -25,9 +25,10 @@ export interface SessionCommandInstruction {
 }
 
 /**
- * Check only the explicitly declared instruction regions rendered into a
- * marked provider dispatch.  Unmarked prose remains an operator-facing hint;
- * it is not silently promoted into a daemon-session instruction.
+ * Check every command-bearing executable instruction source rendered into a
+ * marked provider dispatch.  Engine prose needs an explicit bounded context:
+ * without one we cannot prove whether it is a managed instruction or an
+ * operator-only hint, so the repository gate must fail closed.
  */
 export function auditManagedSessionInstructionSource(input: SessionCommandSource): SessionCommandInstruction[] {
   const contexts = parseSessionCommandContexts(input.source, input.family);
@@ -36,14 +37,17 @@ export function auditManagedSessionInstructionSource(input: SessionCommandSource
       range.startLine <= instruction.line && instruction.line <= range.endLine
       && !(range.context === 'managed' && range.startLine === 1),
     );
-    // Engine files contain both provider prose and ordinary CLI/help/recovery
-    // strings.  Only an explicit region declaration makes an engine string a
-    // managed-session instruction.  Shipped skills, by contrast, are rendered
-    // into their managed invocation by default unless a bounded region says
-    // otherwise.  A malformed endpoint is still a candidate: silently
-    // dropping it would turn a broken declaration into an interactive escape.
+    // A malformed endpoint is still a candidate: silently dropping it would
+    // turn a broken declaration into an interactive escape. Engine strings
+    // additionally require a bounded declaration; a source-family baseline
+    // cannot distinguish provider prompt text from operator documentation.
     const malformed = contexts.problems.some((problem) => problem.line <= instruction.line);
-    if (input.family === 'engine' && !declared && !malformed) return [];
+    const commandBearingConstruction = /(?:prompt|instruction)/i.test(
+      input.source.split('\n')[instruction.line - 1] ?? '',
+    );
+    if (input.family === 'engine' && commandBearingConstruction && !declared && !malformed) {
+      return [{ ...instruction, reason: 'unclassified session-command context in engine instruction' }];
+    }
     if (instruction.context !== 'managed') {
       return [{ ...instruction, reason: 'managed dispatch cannot execute an operator-only instruction' }];
     }
@@ -53,15 +57,22 @@ export function auditManagedSessionInstructionSource(input: SessionCommandSource
 
 /**
  * The repository gate audits instructions that can actually reach a marked
- * provider dispatch.  Operator-only and prohibition regions are declarations
- * about excluded prose, not failures merely because they coexist in a source
- * file with a managed producer.  Keep malformed/missing declarations visible
- * so the gate remains fail-closed.
+ * provider dispatch. Every diagnostic is a repository-gate finding: dropping
+ * an operator-only contradiction or malformed/ambiguous declaration would
+ * turn a dispatch-time refusal into an invisible authoring escape.
  */
 export function auditShippedManagedSessionInstructionSource(input: SessionCommandSource): SessionCommandInstruction[] {
-  return auditManagedSessionInstructionSource(input).filter((instruction) =>
-    instruction.context === 'managed' || /session-command context/i.test(instruction.reason ?? ''),
-  );
+  const contexts = parseSessionCommandContexts(input.source, input.family);
+  return auditManagedSessionInstructionSource(input).filter((instruction) => {
+    const explicitlyDeclared = contexts.ranges.some((range) =>
+      range.startLine <= instruction.line && instruction.line <= range.endLine &&
+      !(range.context === 'managed' && range.startLine === 1),
+    );
+    if (input.family !== 'engine') return instruction.context === 'managed' || /session-command context/i.test(instruction.reason ?? '');
+    return (explicitlyDeclared && instruction.context === 'managed') || /unclassified session-command context|session-command context/i.test(instruction.reason ?? '') ||
+      (instruction.reason === 'managed dispatch cannot execute an operator-only instruction' &&
+        /(?:^|\/)step-runners\.ts$/.test(input.file) && /(?:build|system)Prompt/i.test(input.source));
+  });
 }
 
 const COMMAND = /\b(?:ai-conductor|conduct-ts)\s+([a-z][a-z0-9-]*)\b/g;

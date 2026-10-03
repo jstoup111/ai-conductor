@@ -84,6 +84,7 @@ import type {
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
+import type { ManagedGhObservationCoverage } from '../execution/managed-session-preparation.js';
 import type { ConductState, ConductorEvent, ExecutionContext, FinishPublicationEvent } from '../types/index.js';
 import type {
   StepName,
@@ -1222,6 +1223,8 @@ export interface StepRunResult {
   publicationDisposition?: unknown;
   /** Engine-observed provider subprocess intervals, forwarded without reinterpretation. */
   observedIntervals?: readonly ObservedInterval[];
+  /** Bounded completeness of managed gh observation for this step outcome. */
+  managedGhObservationCoverage?: ManagedGhObservationCoverage;
   /** Engine-native aggregate-suite result retained for Task 17 failure routing. */
   fullSuiteVerification?: FullSuiteVerifierResult;
   /**
@@ -14498,6 +14501,9 @@ export class Conductor {
             }),
             ...(stepResult?.observedIntervals
               ? { observedIntervals: stepResult.observedIntervals }
+              : {}),
+            ...(stepResult?.managedGhObservationCoverage
+              ? { managedGhObservationCoverage: stepResult.managedGhObservationCoverage }
               : {}),
             executionContext: serialExecutionContext,
           });

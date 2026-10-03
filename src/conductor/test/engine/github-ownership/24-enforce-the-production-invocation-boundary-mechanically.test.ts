@@ -327,6 +327,21 @@ describe('GitHub invocation audit', () => {
     ]);
   });
 
+  it('fails the shipped boundary for an unclassified engine command instruction', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'github-invocation-audit-'));
+    directories.push(root);
+    await mkdir(join(root, 'src', 'engine'), { recursive: true });
+    await writeFile(
+      join(root, 'src', 'engine', 'new-prompt.ts'),
+      "export const prompt = 'Run ai-conductor daemon park feature-a';\n",
+    );
+
+    expect(auditShippedGithubInvocationBoundary(root)).toContainEqual(expect.objectContaining({
+      file: 'engine/new-prompt.ts',
+      message: expect.stringContaining('unclassified session-command context'),
+    }));
+  });
+
   it('enumerates runtime scripts and retains their scripts-relative audit label', async () => {
     const root = await mkdtemp(join(tmpdir(), 'github-invocation-audit-'));
     directories.push(root);

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { CLAUDE_PROVIDER, CODEX_PROVIDER, PI_PROVIDER, providerDescriptor, resolveProviderExecutable } from '../execution/provider-catalog.js';
 import { materializePiHarnessExtension } from '../execution/pi-harness-extension.js';
@@ -35,6 +36,8 @@ export interface ProbeManagedObservationDestinationOptions {
   readonly provider: string;
   readonly producerRoot: string;
   readonly protectedPaths: readonly string[];
+  /** The prepared candidate executable, when self-host selection changed it. */
+  readonly executable?: string;
   readonly runProcess: ReadOnlyReviewCapabilityProcess;
 }
 
@@ -203,10 +206,13 @@ export async function probeManagedObservationDestination(
   }
   let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
   try {
-    result = await options.runProcess(resolveProviderExecutable(CODEX_PROVIDER), [
+    // Do not turn unprovisioned pipeline directories into false policy
+    // failures; only existing protected surfaces can demonstrate refusal.
+    const protectedPaths = options.protectedPaths.filter(existsSync);
+    result = await options.runProcess(options.executable ?? resolveProviderExecutable(CODEX_PROVIDER), [
       'sandbox', '-P', ':read-only', '-P', `${options.producerRoot}:read-write`, '--',
       '/bin/bash', '-c', OBSERVATION_DESTINATION_PROBE, 'managed-observation-policy',
-      options.producerRoot, ...options.protectedPaths,
+      options.producerRoot, ...protectedPaths,
     ]);
   } catch {
     return { producerWrite: 'unproven', protectedWrites: 'unproven' };

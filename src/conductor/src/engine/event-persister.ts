@@ -435,9 +435,19 @@ export function startFeatureEventPersistence(
           // flight; the second is the bounded final pass after that read has
           // settled, so a producer record completed at the boundary is not
           // detached with the feature listeners.
-          await tail.drain();
-          persister.stop();
+          try {
+            await tail.drain();
+          } catch {
+            // Final delivery is best-effort. A source/sink outage must not
+            // replace the feature result or prevent consumer shutdown; the
+            // retained producer records are retried by the next drain owner.
+          } finally {
+            persister.stop();
+          }
         })();
+        // Do not retain a rejected promise: a subsequent closeout owner must
+        // be able to attempt delivery again after a transient failure.
+        drainPromise.catch(() => { drainPromise = undefined; });
       }
       return drainPromise;
     },

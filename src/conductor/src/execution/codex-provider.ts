@@ -1028,6 +1028,12 @@ export class CodexProvider implements LLMProvider {
           '--config', 'approval_policy="never"',
           '--config', 'shell_environment_policy.ignore_default_excludes=false',
         );
+        // The read-only admission probe proves this exact narrow exception.
+        // It is the only writable path available to a managed reviewer, where
+        // it appends session observations; the worktree remains read-only.
+        if (options.managedSessionContext?.producerRoot) {
+          args.push('--add-dir', options.managedSessionContext.producerRoot);
+        }
       } else {
         args.push(
           '--config', 'sandbox_mode="workspace-write"',

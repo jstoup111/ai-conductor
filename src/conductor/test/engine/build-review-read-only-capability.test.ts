@@ -258,7 +258,7 @@ describe('probeManagedObservationDestination', () => {
     expect(runProcess).toHaveBeenCalledWith('codex', [
       'sandbox', '-P', ':read-only', '-P', `${producerRoot}:read-write`, '--',
       '/bin/bash', '-c', expect.any(String), 'managed-observation-policy',
-      producerRoot, ...protectedPaths,
+      producerRoot,
     ]);
   });
 
