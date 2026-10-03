@@ -328,3 +328,84 @@ Every row is diff-local: fixtures supply their own plan text, commits, and engin
 - [x] All negative path criteria covered by at least one task
 - [x] Every task has a `Done when:` block of falsifiable checks
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-prd-audit-t3-predicate: src/conductor/test/engine/artifacts.test.ts — add the #2014 git fixture through checkStepCompletion('build'): two completed tasks with pre-boundary Task: 1 / Task: 2 trailered commits, then rewrite both task texts and seed; assert done:false naming tasks 1 and 2, both rows pending, one settled plan_amendment obligation each with baseline head equal to HEAD, and that the pre-boundary trailers alone never resolve them (S1.1, S1.10); commit with a Task: trailer for this id
+**Gate:** prd-audit
+**Rationale:** prd-audit grades S1.1 FIXABLE against plan Task 3: production code reads correct but the required test proof is absent (audit names the missing fixture); last lap's existing-task re-stage of Task 3 cycled — it re-closed on 'reported' evidence with no test committed — so this lap appends an explicit file-scoped test task that only a post-boundary trailered commit can resolve. Adds tests only; removes no code, test or assertion.
+**Criterion:** S1.1
+**Parent task:** 3
+**Done when:**
+- S1.1 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-t3-predicate is complete.
+
+### Task rem-prd-audit-rem-prd-audit-t7-close-paths: src/conductor/test/engine/task-progress.test.ts and task-cli.test.ts — add plan_amendment-authority fixtures (existing fixtures use build_review only): a post-boundary Task: trailer resolves the reopened task via resolveTaskIds (S1.2); runTaskDone with passing current Done-when evidence closes it with current-done-when (S1.3); a task with no Done-when returns legacy and stays unresolved until a post-boundary trailered commit, a pre-boundary trailer never resolving it (S1.11)
+**Gate:** prd-audit
+**Rationale:** prd-audit grades S1.2 FIXABLE against plan Task 7: production code reads correct but the required test proof is absent (audit names the missing fixture); last lap's existing-task re-stage of Task 7 cycled — it re-closed on 'reported' evidence with no test committed — so this lap appends an explicit file-scoped test task that only a post-boundary trailered commit can resolve. Adds tests only; removes no code, test or assertion.
+**Criterion:** S1.2
+**Parent task:** 7
+**Done when:**
+- S1.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-t7-close-paths is complete.
+
+### Task rem-prd-audit-rem-prd-audit-t4-idempotence: src/conductor/test/engine/task-seed.test.ts and repair-obligations.test.ts — add: triple seed plus store re-creation leaves exactly one open plan_amendment obligation with an unchanged baseline (S1.5); kickback-ledger bytes identical and no pendingRepair after a reopen, while a coexisting coverage_binding reopen still bumps its gate count by one (S1.4); a second rewrite closes the first record with superseded-by-plan-amendment and one fresh trailer or completeTaskDoneWhen resolves the task, plus the A→B→A text case (S1.6); a prd_audit and a plan_amendment obligation on one task both stay open until each is satisfied (S1.13)
+**Gate:** prd-audit
+**Rationale:** prd-audit grades S1.4 FIXABLE against plan Task 4: production code reads correct but the required test proof is absent (audit names the missing fixture); last lap's existing-task re-stage of Task 4 cycled — it re-closed on 'reported' evidence with no test committed — so this lap appends an explicit file-scoped test task that only a post-boundary trailered commit can resolve. Adds tests only; removes no code, test or assertion.
+**Criterion:** S1.4
+**Parent task:** 4
+**Done when:**
+- S1.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-t4-idempotence is complete.
+
+### Task rem-prd-audit-rem-prd-audit-t8-restart-prompt: src/conductor/test/engine/conductor.test.ts — add a restart test: a settled open plan_amendment obligation plus a coexisting gate obligation on the same plan survive a new Conductor instance, and the first BUILD prompt carries every 'Task N (title) plan text changed since it was implemented; reopen it in BUILD.' line restored by conductor.ts:7351-7384 (S1.7); add the no-restart case where the pre-dispatch seed admits a reopen in a running process and that first BUILD prompt also carries the reason, fixing conductor.ts pendingRetryHints population if the test fails
+**Gate:** prd-audit
+**Rationale:** prd-audit grades S1.7 FIXABLE against plan Task 8: production code reads correct but the required test proof is absent (audit names the missing fixture); last lap's existing-task re-stage of Task 8 cycled — it re-closed on 'reported' evidence with no test committed — so this lap appends an explicit file-scoped test task that only a post-boundary trailered commit can resolve. Adds tests only; removes no code, test or assertion.
+**Criterion:** S1.7
+**Parent task:** 8
+**Done when:**
+- S1.7 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-t8-restart-prompt is complete.
+
+### Task rem-prd-audit-rem-prd-audit-t5-no-reopen: src/conductor/test/engine/task-seed.test.ts — add seed-level tests (Task 5's reported evidence names tests that do not exist): a whitespace/line-wrap-only edit to a completed task (S1.8) and an edit only to a trailing ## Risks section after the last task (S1.9) each admit no obligation, keep the row completed, and checkStepCompletion('build') still resolves it from its existing trailer
+**Gate:** prd-audit
+**Rationale:** prd-audit grades S1.8 FIXABLE against plan Task 5: production code reads correct but the required test proof is absent (audit names the missing fixture); last lap's existing-task re-stage of Task 5 cycled — it re-closed on 'reported' evidence with no test committed — so this lap appends an explicit file-scoped test task that only a post-boundary trailered commit can resolve. Adds tests only; removes no code, test or assertion.
+**Criterion:** S1.8
+**Parent task:** 5
+**Done when:**
+- S1.8 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-t5-no-reopen is complete.
+
+### Task rem-prd-audit-rem-prd-audit-t6-fail-closed: src/conductor/test/engine/build-seed-failure-reason.test.ts (or artifacts.test.ts) — drive the real seedTaskStatus, not a mock: inject an engine-state write failure during reopen admission and, separately, a malformed present repairObligations section; with a Task: trailer present, assert checkStepCompletion('build') returns done:false with a 'task reopen failed:' reason, the recorded digest is unchanged, and the next seed retries the reopen (S1.12)
+**Gate:** prd-audit
+**Rationale:** prd-audit grades S1.12 FIXABLE against plan Task 6: production code reads correct but the required test proof is absent (audit names the missing fixture); last lap's existing-task re-stage of Task 6 cycled — it re-closed on 'reported' evidence with no test committed — so this lap appends an explicit file-scoped test task that only a post-boundary trailered commit can resolve. Adds tests only; removes no code, test or assertion.
+**Criterion:** S1.12
+**Parent task:** 6
+**Done when:**
+- S1.12 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-t6-fail-closed is complete.
+
+### Task rem-prd-audit-rem-prd-audit-t9-rebase: src/conductor/test/engine/rebase-translate.test.ts — add a plan_amendment-authority fixture: an open plan_amendment obligation's baseline head is translated to its rebased successor commit, and the no-successor case behaves as the existing build_review fixtures require (S1.14)
+**Gate:** prd-audit
+**Rationale:** prd-audit grades S1.14 FIXABLE against plan Task 9: production code reads correct but the required test proof is absent (audit names the missing fixture); last lap's existing-task re-stage of Task 9 cycled — it re-closed on 'reported' evidence with no test committed — so this lap appends an explicit file-scoped test task that only a post-boundary trailered commit can resolve. Adds tests only; removes no code, test or assertion.
+**Criterion:** S1.14
+**Parent task:** 9
+**Done when:**
+- S1.14 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-t9-rebase is complete.
+
+### Task rem-prd-audit-rem-prd-audit-t13-clean-finish: src/conductor/test/engine/artifacts.test.ts (or task-seed.test.ts) — add a fully resolved fixture with matching recorded digests: seeding admits no obligation and checkStepCompletion('build') returns done:true with no build_stall (S3.1); repeat after a plain rewind-to-build re-seed and assert no task is reopened or restaged (S3.2)
+**Gate:** prd-audit
+**Rationale:** prd-audit grades S3.1 FIXABLE against plan Task 13: production code reads correct but the required test proof is absent (audit names the missing fixture); last lap's existing-task re-stage of Task 13 cycled — it re-closed on 'reported' evidence with no test committed — so this lap appends an explicit file-scoped test task that only a post-boundary trailered commit can resolve. Adds tests only; removes no code, test or assertion.
+**Criterion:** S3.1
+**Parent task:** 13
+**Done when:**
+- S3.1 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-t13-clean-finish is complete.
+
+### Task rem-prd-audit-rem-prd-audit-t14-baseline: src/conductor/test/engine/task-seed.test.ts — add seed tests: an absent taskDigests section (S3.3), a digest lacking the v1: prefix (S3.4) and a recreated worktree with lost engine-state but restored trailers (S3.5) each record a fresh baseline without admitting any obligation; also pin that a taskDigests section whose version field is not 1 fails closed with the neutral seed reason (task-seed.ts:251)
+**Gate:** prd-audit
+**Rationale:** prd-audit grades S3.3 FIXABLE against plan Task 14: production code reads correct but the required test proof is absent (audit names the missing fixture); last lap's existing-task re-stage of Task 14 cycled — it re-closed on 'reported' evidence with no test committed — so this lap appends an explicit file-scoped test task that only a post-boundary trailered commit can resolve. Adds tests only; removes no code, test or assertion.
+**Criterion:** S3.3
+**Parent task:** 14
+**Done when:**
+- S3.3 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-t14-baseline is complete.
