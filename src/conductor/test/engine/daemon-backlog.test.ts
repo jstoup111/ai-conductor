@@ -1989,7 +1989,7 @@ describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
       treeSource: gitTreeSource(dir, baseBranch, { blobRunner: runner, gitRunner: recordingGitRunner }),
     });
 
-    expect([smallCorpusCalls, invocations.length]).toEqual([1, 1]);
+    expect([smallCorpusCalls, invocations.length]).toEqual([2, 2]);
     expect(gitInvocations.filter(([command]) => command === 'show')).toEqual([]);
   });
 
@@ -2009,7 +2009,7 @@ describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
       treeSource: gitTreeSource(dir, baseBranch, { blobRunner: runner, gitRunner: recordingGitRunner }),
     });
 
-    expect([result.items.length, invocations.length]).toEqual([3, 1]);
+    expect([result.items.length, invocations.length]).toEqual([3, 2]);
     expect(gitInvocations.filter(([command]) => command === 'show')).toEqual([]);
   });
 

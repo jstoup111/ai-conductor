@@ -86,9 +86,56 @@ describe('engine/git-blob-batch', () => {
       }).toEqual({
         smallSize: 4,
         largeSize: 400,
-        smallInvocationCount: 1,
-        largeInvocationCount: 1,
+        smallInvocationCount: 2,
+        largeInvocationCount: 2,
       });
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
+  });
+
+  it('splits a request whose blob output exceeds the batch cap and still returns every blob', async () => {
+    const files = new Map(
+      Array.from({ length: 12 }, (_, index) => [`docs/${index}.md`, Buffer.alloc(1000, 97 + index)]),
+    );
+    const { dir, revision } = await createRepository(files);
+    const runnerMock = vi.fn<GitBlobBatchRunner>(async (file, args, options) => ({
+      stdout: Buffer.from((await execa(file, args, options)).stdout),
+    }));
+
+    try {
+      const contents = await readGitBlobs(dir, revision, [...files.keys()], {
+        runner: runnerMock,
+        maxBatchBytes: 4000,
+      });
+      const batchReads = runnerMock.mock.calls.filter(([, args]) => args.includes('--batch'));
+
+      expect({
+        contents: Object.fromEntries(contents),
+        overCap: batchReads.some(([, , options]) => options.maxBuffer > 4000),
+        splitReads: batchReads.length > 1,
+      }).toEqual({
+        contents: Object.fromEntries(files),
+        overCap: false,
+        splitReads: true,
+      });
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
+  });
+
+  it('reads a single blob larger than the batch cap instead of failing the whole request', async () => {
+    const large = Buffer.alloc(10_000, 120);
+    const files = new Map<string, Uint8Array>([
+      ['small.md', Buffer.from('small\n')],
+      ['large.md', large],
+    ]);
+    const { dir, revision } = await createRepository(files);
+
+    try {
+      const contents = await readGitBlobs(dir, revision, [...files.keys()], { maxBatchBytes: 1000 });
+
+      expect(Object.fromEntries(contents)).toEqual(Object.fromEntries(files));
     } finally {
       await rm(dir, { force: true, recursive: true });
     }
