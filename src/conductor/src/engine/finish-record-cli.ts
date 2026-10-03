@@ -188,6 +188,7 @@ export async function dispatchFinishRecord(
       return 1;
     }
     if (remoteOutput.trim().length > 0) {
+      // ai-conductor:session-command-context=operator-only
       console.error(
         'finish-record: refusing to record choice "keep" — a git remote is configured and this run is in ' +
           'unattended (auto/daemon) mode. Per Daemon Operations Safety rule 4 ("a manual PR is NOT a harness ' +
@@ -196,6 +197,7 @@ export async function dispatchFinishRecord(
           '`--choice pr --pr-url <url>`. If PR creation itself fails, HALT for human review — do not fall ' +
           'back to keep.',
       );
+      // /ai-conductor:session-command-context
       return 1;
     }
   }

@@ -48,11 +48,13 @@ export async function dispatchTestSuiteCommand(
   };
 
   if (command.kind === 'guide') {
+    // ai-conductor:session-command-context=operator-only
     await print(
       'Usage: ai-conductor test-suite\n' +
         'Remove extra arguments and rerun. If verification blocks, return to /tdd or /pipeline before SHIP.',
       true,
     );
+    // /ai-conductor:session-command-context
     return 1;
   }
 
@@ -72,6 +74,7 @@ export async function dispatchTestSuiteCommand(
     await verifier.recordPreservation(inspection);
   }
   if (result.status === 'FAILED') {
+    // ai-conductor:session-command-context=operator-only
     const freshness = result.freshness === undefined
       ? ''
       : ` freshness=${result.freshness.reason}`;
@@ -87,6 +90,7 @@ export async function dispatchTestSuiteCommand(
         'Return to /tdd or /pipeline, fix the failure, then rerun ai-conductor test-suite.',
       true,
     );
+    // /ai-conductor:session-command-context
     return 1;
   }
 

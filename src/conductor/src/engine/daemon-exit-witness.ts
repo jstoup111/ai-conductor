@@ -23,7 +23,9 @@ export interface DaemonExitWitnessCommand {
   status: number;
 }
 
+// ai-conductor:session-command-context=operator-only
 const USAGE = 'Usage: ai-conductor daemon exit-witness --pid <pid> --status <status>';
+// /ai-conductor:session-command-context
 
 function signalForStatus(status: number): string | null {
   for (const [name, number] of Object.entries(constants.signals)) {

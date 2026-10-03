@@ -582,6 +582,7 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
     },
 
     async attach(repo: string, opts: { readOnly?: boolean; into?: string } = {}): Promise<void> {
+      // ai-conductor:session-command-context=operator-only
       await requireTmux(run);
       const name = sessionNameForRepo(repo);
       if (!(await hasSession(name, run))) {
@@ -590,6 +591,7 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
         );
       }
       await attachSession(name, opts, run);
+      // /ai-conductor:session-command-context
     },
 
     async logs(repo: string): Promise<string> {

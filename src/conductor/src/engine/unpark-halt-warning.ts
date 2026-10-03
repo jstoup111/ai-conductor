@@ -59,7 +59,9 @@ function recoveryLine({
   }
 
   if (haltClass === KICKBACK_CAP_HALT_CLASS) {
+    // ai-conductor:session-command-context=operator-only
     return `To resume: ai-conductor kickback-budget inspect --feature ${slug}, then raise or reset the budget; the daemon clears the HALT.`;
+    // /ai-conductor:session-command-context
   }
 
   // Keep these constants coupled to their special resolve-first classes.

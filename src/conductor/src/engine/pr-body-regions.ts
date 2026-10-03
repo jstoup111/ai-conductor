@@ -22,7 +22,9 @@ const MARKER = /(^|\r?\n)(<!-- ai-conductor:step ([^\r\n]+) -->|<!-- \/ai-conduc
 const CLOSING_MARKER = '<!-- /ai-conductor:step -->';
 
 function markersFor(key: string): { readonly start: string; readonly end: string } {
+  // ai-conductor:session-command-context=operator-only
   return { start: `<!-- ai-conductor:step ${key} -->`, end: CLOSING_MARKER };
+  // /ai-conductor:session-command-context
 }
 
 /** Restores one captured region without interpreting any of its captured bytes. */

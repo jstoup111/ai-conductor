@@ -887,12 +887,14 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
           const raw = /\bgh\s+(?:repo\s+create|pr\s+(?:create|edit|ready|comment|close|merge)|issue\s+(?:create|edit|close|comment)|api\b)|\bgit\s+push\b|\bgit\s+push\s+.*--delete\b/.exec(block.text);
           if (!raw) continue;
           const line = source.slice(0, block.offset + raw.index).split('\n').length;
+          // ai-conductor:session-command-context=operator-only
           findings.push({
             file: relativeFile,
             line,
             column: 1,
             message: 'raw GitHub or remote-Git write in executable publication block; use ai-conductor github-operation',
           });
+          // /ai-conductor:session-command-context
         }
       }
     }

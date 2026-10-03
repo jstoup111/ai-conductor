@@ -101,6 +101,14 @@ describe('session command instruction discovery', () => {
     ]);
   });
 
+  it('does not classify the .ai-conductor configuration directory as a command', () => {
+    expect(auditSessionCommandSource({
+      file: 'engine/config.ts',
+      family: 'engine',
+      source: "const location = '~/.ai-conductor/config.yml';",
+    })).toEqual([]);
+  });
+
   it('fails closed when a managed command construction cannot be resolved', () => {
     const source = [
       "const retrySubcommand = process.env.RETRY_SUBCOMMAND;",

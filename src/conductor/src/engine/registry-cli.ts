@@ -269,6 +269,7 @@ function renderVerificationBlock(selection: TestSuiteVerificationSelection): str
     .map(([category, bound]) => `      ${category}: ${bound}`)
     .join('\n');
 
+  // ai-conductor:session-command-context=operator-only
   return [
     '# Test-suite verification answer recorded by ai-conductor config init.',
     'test_suite:',
@@ -281,6 +282,7 @@ function renderVerificationBlock(selection: TestSuiteVerificationSelection): str
   ]
     .filter(Boolean)
     .join('\n');
+  // /ai-conductor:session-command-context
 }
 
 async function writeProjectConfig(
