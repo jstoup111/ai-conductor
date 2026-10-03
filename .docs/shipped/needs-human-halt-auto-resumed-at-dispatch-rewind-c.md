@@ -4,6 +4,12 @@ spec_hash: 52b25137cebdbbf9f1a7fd48c828166ae15f3c7a970d135751ce11c5a9d46e8f
 pr: https://github.com/jstoup111/ai-conductor/pull/2951
 shipped: 2026-10-03
 engine_version: 20261003T201457Z-42a8ad9bcd91
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: S1.4
+    summary: "halt-clear-cli.ts:105-110 renames HALT to .pipeline/HALT.cleared for over-scope (plan said unlink); halt-clear-cli.test.ts:87-96 parameterizes all four classes and asserts the HALT.cleared body"
+    accepted: true
 ---
 
 ## Cost
