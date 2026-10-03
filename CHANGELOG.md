@@ -30,6 +30,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - You can configure provider-specific models, fallback ladders, and escalation orders for Pi-backed steps. ([implementation PR #2880](https://github.com/jstoup111/ai-conductor/pull/2880)).
 - Intake filers receive evidence-path overlap suggestions and can explicitly link or decline related work. ([implementation PR #2872](https://github.com/jstoup111/ai-conductor/pull/2872)).
 - Pi users can run harness skills with shared instructions and catalog discovery. ([implementation PR #2863](https://github.com/jstoup111/ai-conductor/pull/2863)).
+- test_suite gains a `changed` verification mode that runs changed-only tests on BUILD laps and requires one full-suite PASS before publication. ([implementation PR #2933](https://github.com/jstoup111/ai-conductor/pull/2933)).
 
 ### Changed
 
