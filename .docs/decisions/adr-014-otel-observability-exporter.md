@@ -19,6 +19,11 @@ tooling. PRD `2026-06-28-otel-observability.md` (Phase 1, FR-1…FR-10) adds an 
 exporter: one trace per run, a span per SDLC step, and metrics (duration/retries/tokens), shipped
 over OTLP to a collector **or** to a local file for offline ingestion.
 
+> **Amended 2026-09-30 by #2011:** One feature now spans bounded, independently
+> exported traces with standard links, logical-step groups, and execution slices.
+> The operator approved D21–D26 below, including the consolidated #2009 scope.
+> They supersede the one-trace-per-run and direct step-parenting model.
+
 This is an **observability/tracing cross-cutting decision** (ADR-required category). Two structural
 questions must be settled before implementation:
 
@@ -84,6 +89,11 @@ Relevant existing facts (evidence):
    > the daemon path `conductor.run.id` is resolved read-only/injected — the visualizer never
    > writes `.pipeline/conduct-session-id` (adr-2026-07-27-cold-start-within-step-retries
    > Decision 7 keeps the step runner its only writer).
+
+> **Amended 2026-09-30 by #2011:** D22 supersedes the read-only daemon-bootstrap
+> and sole-step-runner-writer clauses above. Enabled OTel startup and StepRunner
+> delegate to the shared atomic create-if-absent feature-identity helper; persisted
+> identity is never overwritten by dispatch/provider session IDs.
 4. **Off the hot path.** The bus handler does O(1) non-blocking work and hands off to an OTel
    `BatchSpanProcessor` + `PeriodicExportingMetricReader`. The handler returns immediately so
    `emit()`'s await does not stall the bus (satisfies FR-8). Export I/O happens asynchronously in
@@ -590,6 +600,255 @@ Relevant existing facts (evidence):
 >     metric Resource or any metric data-point label, whose `feature` label Decisions 10 and 14 keep
 >     for bounded series. Events persisted to the spine are unaffected by every toggle: the toggles
 >     govern export only.
+> **Amended 2026-09-30 by #2011:** The operator approved the following D21–D26
+> lifecycle and correlation extension. Earlier decisions remain in force except
+> where these explicit amendments change trace structure or identity ownership.
+
+### D21 — Bounded traces are the feature-history representation
+
+One feature instance exports a sequence of independent traces connected by standard OTel
+links. Each root is still named conductor.run for continuity with existing inspection,
+but represents one bounded segment. Set conductor.trace.role=segment on it. Every trace
+uses a fresh SDK-generated trace ID from explicit ROOT_CONTEXT, not a deterministic ID
+reused for the feature and not an ambient parent from another feature.
+
+On normal lifecycle operation, rotate after 3,600,000 ms (one hour) OR after 1,024 completed
+execution slices/outcome records, whichever occurs first. These are internal constants,
+injectable for tests, not new user configuration. Count completion-driven records toward
+the count threshold; closing carry-over slices during rotation must not recursively trigger
+another rotation. Closing outstanding children can make a segment contain the threshold
+plus the number of active executions and logical-step groups at the boundary. This is an
+explicit bound relative to active engine concurrency, not an arbitrary cap on supported work.
+
+Every span is inside a segment: its root, step groups, execution slices, and late-outcome
+records. No feature-lifetime parent remains open across days. Ended spans keep the existing
+SDK batching/export path. Rotation schedules a bounded forceFlush outside event handling;
+it does not await network delivery before running the next engine event or new segment.
+An exporter failure cannot fail the feature.
+
+Each segment starts with at most one predecessor-root link. Each continuing execution slice
+also links to its immediately preceding slice. Links are attached at span creation.
+Feature, dispatch, logical-step, and execution identity provide query correlation without
+a growing ancestry list.
+
+Preserve the existing trace Resource identity, including conductor.run.id as the feature
+run identity, and add dispatch/segment/execution identifiers only to spans and spine records.
+Do not put them on metric resources or data points. Root/group names stay bounded; do not
+embed UUIDs or segment numbers into operation names or invent a service per step.
+
+### D22 — Resolve stable identity before the first trace; preserve provider isolation
+
+Make one shared create-if-absent identity helper own .pipeline/conduct-session-id. Invoke it
+at enabled OTel startup before resource creation, and have the step runner and the legacy
+resource fallback delegate their existing persistence behavior to that same helper.
+Use atomic exclusive creation; on a creation race read the winning value. Never overwrite
+an existing nonempty identity, and never write a provider invocation/session ID as a later
+rotation or restart side effect.
+
+The helper is bootstrap machinery outside event handlers. The daemon continues to create
+fresh dispatch/provider session IDs as today. It does NOT replace those identifiers with
+the persisted feature ID. Step-runner failure handling remains its existing contract;
+telemetry bootstrap catches identity failures and degrades independently.
+
+Represent resolution as stable or unavailable. An empty, unreadable, or invalid existing
+identity is not repaired by overwriting it. Telemetry may export an isolated transient
+dispatch identity and a bounded diagnostic, but must not recover links under an uncertain
+feature identity. Existing nonempty legacy identities remain valid opaque values, not
+newly restricted to UUID syntax. Bound candidate record fields before accepting them.
+
+For link recovery require equality of the persisted feature run ID AND canonical main
+repository identity, feature label, branch, and worktree scope. Resolve the canonical main
+root via the existing main-root resolver before startup, not a repeated Git command from
+a span handler. A missing scope component makes recovery unavailable. New worktrees with
+fresh run IDs never link merely because names match. Copied history with a different
+project/branch/worktree or generation is refused. Deliberately copying every identity and
+its ledger is indistinguishable from restoring the same feature and is outside fresh-instance
+detection; normal feature creation must start with a fresh pipeline identity.
+
+Each OTel lifecycle start has a fresh conductor.dispatch.id independent of provider attempt
+IDs. Segment indices begin at zero within that dispatch. Preserve the feature identity
+over rotation and ordinary restart; do not relabel old history after a branch/worktree move.
+Such mismatches create an explicit continuity gap.
+
+### D23 — Correlation recovery uses the event spine, not a context sidecar
+
+Add typed ConductorEvent variants with a versioned, bounded payload:
+
+- trace_segment_opened: scope, dispatch ID, segment index, trace ID, root span ID,
+  trace flags, startedAt; an optional predecessor context; and a discriminated continuity
+  result (first, linked, or unavailable with a reason).
+- trace_segment_ended: the same segment identity, endedAt, and a closed reason union:
+  rotated-time, rotated-count, clock-gap, complete, halted, or terminated.
+- trace_segment_rotate: scope/dispatch/expected-segment identity, cutoff, and trigger
+  time/count/clock-gap. This is the timer/count boundary request, not an engine step event.
+
+The exact TypeScript type names may follow local conventions; these event names and their
+semantic distinctions are the contract. No arbitrary metadata maps or secret/credential
+fields are accepted. Use standard span-context validation for nonzero 32-hex trace IDs,
+nonzero 16-hex span IDs, and valid trace flags; optional tracestate, if carried, uses the
+SDK parser rather than a second custom parser.
+
+Declare opened/ended as persist=true, render=false, audit=false, otel=false. They must
+never re-enter the projection or metric recorder. Declare rotate as persist=true,
+render=false, audit=false, otel=true; the trace projection handles it explicitly and the
+exhaustive metrics handler table explicitly ignores it. All subscription sets continue
+to derive from EVENT_SINKS. Existing feature_dispatch_* metric semantics are untouched.
+
+The visualizer factory injects canonical event-publication callbacks, following its current
+renderer_error bridge. The projection itself performs only bounded in-memory SDK/state
+work. Queue publication out of ordinary engine-event handlers so it never does ledger
+reads or waits for durability/network there. The owning lifecycle serializes opened/ended
+publication and uses emitOrThrow with a catch at its own failure-isolation boundary.
+This distinguishes persistence rejection from export acceptance. A failed publication
+warns once and permits telemetry/execution to continue; it never claims the context is
+durable. No new handler needs to recursively publish a rotation request while handling one.
+
+A newly opened segment creates its root context and queues the opened record before any
+child context can be advertised as recoverable. Initial bootstrap and graceful stop drain
+their pending publications before detaching the existing persister, subject to bounded
+shutdown. An abrupt crash between SDK creation and persistence can lose that link; this
+is reported as missing continuity on the next start, never fabricated recovery.
+
+At startup take a size snapshot of the feature's existing events.jsonl and read that
+bounded snapshot outside the bus. Reuse the shared parseEvents line-decoding path, with
+a typed parser for the new records; do not introduce a competing event-log format.
+Use incremental chunks and a bounded line buffer (256 KiB); oversized/invalid relevant
+history produces unavailable continuity rather than unbounded allocation. Keep only the
+latest matching segment candidate and its observed terminal record, not all historical
+spans. Allow at most five seconds for recovery; timeout, I/O failure, truncated relevant
+tail, or invalid/mismatched context degrades to an unlinked segment with a reason and
+bounded warning. A timeout must cancel further reads and close its file handle.
+
+A valid opened record can be a predecessor even if no ended record was persisted. Mark its
+end state unknown; do not infer a clean stop or backend retention. No history means first
+segment. A history failure means unavailable, never first. Do not re-export old spans or
+silently change their timestamps. In-process rotation uses the already-known predecessor
+context and does not reread the ledger.
+
+### D24 — Groups collect executions; retries and slices do not change engine identity
+
+Within each segment emit one logical-step grouping span per subject produced by the existing
+execution-identity resolver. Lifecycle steps and configured parent/member subjects retain
+that resolver's distinction and escaping; two configured members with the same name under
+different parents remain separate groups.
+
+Use conductor.trace.role=step-group on groups, execution-slice on work slices, and
+execution-outcome on a late classification record. All have stable conductor.step; only
+execution-bearing spans carry conductor.execution.id and conductor.execution.slice.
+Groups are real bounded parent spans and stay open until the segment closes so repeated
+executions collect under the same group. Their duration is an envelope, not active work.
+
+For explicit executionContext, retain its execution ID for the whole logical execution.
+For legacy context-free events, synthesize a per-start execution ID scoped to this dispatch,
+while preserving current legacy pairing and ambiguous-attribution refusal. A later re-run
+gets another ID. A policy retry stays in its original execution and retains cumulative
+retry count and observed retry events. Rotation changes the slice index, not execution ID.
+
+Separate logical execution state from the current span handle. Rotation ends each active
+slice with conductor.slice.end_reason=continued and status UNSET; it never emits a fake
+step_completed, sets execution-terminal=true, or invokes onStepClose/onRunClose as though
+engine work ended. Preserve provider/fallback facts, retry state, actual original start,
+and settlement state in the logical execution record. Open a new slice under the same
+subject's group in the new segment, linked to the previous slice.
+
+The first real terminal closes the current running slice with the existing execution
+status semantics and conductor.execution.terminal=true. Exactly one span per execution
+carries that terminal marker and terminal usage facts. Nonterminal slices may carry
+cumulative retry context, clearly documented as non-additive; usage totals are never copied
+onto every slice. Engine metric counters and rollups still use the original lifecycle and
+provider-attempt events, not span counts or segmentation events.
+
+Early member settlement needs its own state: at group_member_step phase=result, freeze
+the actual work end and end the active work slice with awaiting-outcome. Do not continue
+work slices while the member is waiting for join/classification. At a later real terminal,
+create a zero-duration execution-outcome span at the observed classification time, under
+that segment's step group and linked to the last work slice. It carries terminal outcome,
+retry/usage facts, and the measured original work interval as attributes; its zero duration
+does not claim zero work. Do not mutate an already-exported span or backdate a multi-day
+span. The same rule handles delayed classification across multiple rotations.
+
+Retain only the pending logical state required for active or awaiting-outcome executions;
+delete it at the authoritative terminal and preserve late-terminal suppression. Group
+bookkeeping is dropped when the segment closes. Completed history stays in the exporter
+and ledger, not an unbounded in-memory span list.
+
+### D25 — Truthful clocks, terminal boundaries, and failure isolation
+
+Use the existing epoch-anchored monotonic-clock pattern for interval arithmetic with an
+injected wall-clock observation for discontinuity detection. A live segment has a fixed
+deadline; no event extends it. The lifecycle owns one unref'd deadline timer, cancels it
+on rotation/stop, and ignores callbacks for an already-closed expected segment.
+
+Check the deadline before projecting each event as well as in the timer. Serialize
+rotation and terminal mutation; a same-instant event either closes the current execution
+before rotation or completes its continuation afterward, never both. Reset the timer
+without creating a second SDK provider or changing exporter lifetime.
+
+On ordinary timely rotation, end current slices/groups/root at the boundary and open
+continuations at that boundary. When the process resumes after a long scheduling gap,
+do not synthesize every missed hour and do not shift timestamps forward to evade a backend
+age rule. End the old segment at its established projection cutoff, mark clock-gap and the
+unobserved interval, then start one new segment at the actual resumed observation time.
+This cutoff is a telemetry slice boundary, not a fabricated engine completion. Preserve
+actual engine duration evidence separately. Negative elapsed intervals are never emitted;
+clock rollback produces an explicit diagnostic/discontinuity rather than invented ordering.
+
+A blocked event loop, suspended machine, collector outage, or network outage prevents a
+hard real-time delivery guarantee. Old data still goes through the existing transport or
+spool with original timestamps; rejection/retention remain backend decisions. The design
+bounds span observation windows during a responsive process, not ingestion latency.
+
+Only the final dispatch-ending segment carries conductor.run.outcome under its existing
+complete/halted/terminated taxonomy; earlier rotated roots have a segment boundary reason
+and no fake run outcome. On halt, close remaining work truthfully as interrupted/incomplete;
+never leave children open after a parent was exported. Graceful stop is idempotent, closes
+remaining segment state once, drains publication, cancels timers, detaches handlers, and
+uses the existing bounded provider shutdown. Completion/late-halt races preserve the first
+authoritative terminal. SIGKILL/host loss cannot guarantee open-slice delivery.
+
+A segment is opened lazily for actual trace-bearing activity, retaining existing no-work
+behavior. After a previously active but currently idle segment closes, remain idle until
+the next trace-bearing event; no stream of empty hourly traces is emitted. Pending
+classification counts as logical bookkeeping, not running work, and does not require an
+open span while idle.
+
+### D26 — Integration, compatibility, and bounded promises
+
+The shared OTel wiring owns enabling, recovery preparation, and lifecycle cleanup for both
+index.ts interactive startup and daemon-cli.ts beginFeatureRun. Startup preparation may
+be async at those composition roots; keep third-party VisualizerPlugin.start synchronous
+and its existing contract unchanged. OTel-private prepared context/dependencies carry the
+new metadata; do not require other visualizer plugins to implement trace segmentation.
+
+Keep existing trace Resource keys and supported OTLP/file transports. The trace structure
+changes for every enabled OTel caller, including direct factory callers through a safe
+isolated fallback when no recoverable scope is supplied. Disabled OTel must not create
+trace identity, segment timers, correlation reads/writes, or exporter activity.
+
+The separate spool feature remains the delivery owner: use the current exporter abstraction,
+do not add another queue, retry loop, age filter, or filesystem spool. Its approved
+D15–D17 govern composition when present; this feature does not depend on its implementation
+to establish correct trace structure.
+
+No new CLI or configuration key is required. README plus the OTel configuration/artifact
+references must explain role/identity fields, continued versus terminal slices, one-hour
+rotation, step grouping, the late-outcome record, query/filter guidance, and backend
+indexing/retention requirements. Existing per-dispatch inspection is a dispatch-ID query
+over one or more linked segments, not a promise that each dispatch always has one trace.
+
+Portability means standards-based OTLP spans, parents, links, timestamps, and attributes
+with no mandatory vendor-specific component. Datadog is a required documented compatibility
+target. Exact grouping layout, cross-trace navigation affordances, and retention vary by
+viewer. No finite tracing retention can guarantee arbitrary future access to a feature's
+entire history. Do not claim live Datadog acceptance from local exporter tests.
+
+Verification must prove the normal 72-hour feature with several restarts, a dispatch and
+execution longer than one hour, overlapping executions, delayed member classification,
+feature isolation, missing/corrupt history, duplicate/late boundaries, stopped timers,
+and exporter failure. Use controlled clocks, actual entry-point wiring, the real SDK/
+serializers where relevant, and fake third-party transport. Default tests must never call
+Datadog or Tempo. An explicitly named opt-in smoke may confirm the operator's real collector
+mapping/indexing behavior; record it separately from local protocol proof.
 
 ## Consequences
 

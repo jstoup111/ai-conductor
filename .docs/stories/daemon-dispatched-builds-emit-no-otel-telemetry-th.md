@@ -12,7 +12,7 @@ As an operator running builds through the daemon, I want each dispatched feature
 ### Acceptance Criteria
 
 #### Happy Path
-- Given OTel is enabled in resolved config, when the daemon dispatches a feature and its run emits step lifecycle events on the feature-scoped bus, then the OTLP exporter receives a run trace with per-step child spans and step duration/token metrics for that dispatch
+- Given OTel is enabled in resolved config, when the daemon dispatches a feature and its run emits step lifecycle events on the feature-scoped bus, then the OTLP exporter receives bounded linked traces with logical-step groups and execution slices plus unchanged step duration/token metrics for that dispatch
 - Given OTel is enabled, when both the interactive entry point and the daemon entry point wire telemetry, then both do so through the same shared wiring helper rather than duplicated inline blocks
 
 #### Negative Paths
@@ -20,7 +20,7 @@ As an operator running builds through the daemon, I want each dispatched feature
 - Given the shared helper is wired only into one entry point in a hypothetical regression, when the parity test in Story 5 runs, then it fails naming the unwired path
 
 ### Done When
-- [ ] A daemon-dispatched feature run against a local OTLP collector produces a conductor.run trace with per-step child spans and conductor_step_* metrics
+- [ ] A daemon-dispatched feature run against a local OTLP collector produces bounded conductor.run segments with logical-step groups, execution slices, dispatch identity and conductor_step_* metrics
 - [ ] index.ts main() and daemon-cli.ts beginFeatureRun both call the one exported shared wiring helper (verified by test, not inspection)
 
 ## Story 2: Exported telemetry is attributable to feature, project, and durable run id
@@ -34,12 +34,12 @@ As a telemetry consumer, I want every span and data point to carry feature, proj
 - Given a feature worktree whose .pipeline/conduct-session-id exists from a prior dispatch, when a later daemon process re-dispatches the feature, then the exported conductor.run.id equals the durable file's id, stitching both dispatches
 
 #### Negative Paths
-- Given a fresh worktree where .pipeline/conduct-session-id does not exist yet at wiring time, when the daemon path resolves the run id, then it uses the caller-injected dispatch session id and does not write .pipeline/conduct-session-id (the step runner remains that file's only writer)
+- Given a fresh worktree where .pipeline/conduct-session-id does not exist yet at wiring time, when the daemon path resolves the run id, then enabled OTel bootstrap resolves and atomically persists the feature identity through the shared create-if-absent helper before constructing trace resources; the step runner reuses that identity while provider session IDs remain independent
 - Given the worktree's .pipeline directory is unreadable, when the daemon path resolves the run id, then resolution degrades to the injected id without throwing and the dispatch proceeds
 
 ### Done When
 - [ ] A test asserts daemon-path resource attributes carry feature slug, project, and a run id equal to the pre-existing conduct-session-id content when present
-- [ ] A test asserts the daemon-path wiring performs no write to .pipeline/conduct-session-id when the file is absent
+- [ ] A test asserts enabled daemon startup and later step startup share one atomically created conduct-session-id, preserve a racing creator's winning value, and never overwrite an existing identity
 
 ## Story 3: Telemetry flushes when a dispatch ends, including HALT and error
 

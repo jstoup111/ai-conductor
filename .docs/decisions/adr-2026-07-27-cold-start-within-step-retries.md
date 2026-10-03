@@ -93,6 +93,10 @@ adapter, and no dispatch path can request one.**
 
 ### 1. Claude declares no resume, and its resume argv is deleted
 
+> **Amended 2026-09-30 by #2011:** Add a citable alias for this existing decision;
+> its behavior and approval are unchanged.
+> **D1 — Claude declares no resume, and its resume argv is deleted.**
+
 `ClaudeProvider.supportsSessionResume` becomes `false`. The `--resume` branch is removed from
 `buildArgs` (`claude-provider.ts:649-653`), leaving `--session-id «id»` unconditionally.
 
@@ -101,6 +105,10 @@ runtime check a future call site could bypass. After this change neither adapter
 a resume invocation.
 
 ### 2. Session identity is minted per invocation
+
+> **Amended 2026-09-30 by #2011:** Add a citable alias for this existing decision;
+> its behavior and approval are unchanged.
+> **D2 — Session identity is minted per invocation.**
 
 `ProviderSessionScope.prepare()` mints a fresh id on every call and returns `resume: false`.
 This is the companion #1069 deliberately left out of scope, and without it Decision 1 trades
@@ -111,12 +119,20 @@ of the id within a step scope changes.
 
 ### 3. The two ungated dispatch paths are closed at their own source
 
+> **Amended 2026-09-30 by #2011:** Add a citable alias for this existing decision;
+> its behavior and approval are unchanged.
+> **D3 — The two ungated dispatch paths are closed at their own source.**
+
 `group-core.ts:464-469` and `step-runners.ts:529-530` compute `resume` without consulting the
 capability, because they never reach `provider-execution.ts`. Each is changed to dispatch
 `resume: false` with a freshly minted id. A fix confined to the capability gate would leave
 both live.
 
 ### 4. `supportsSessionResume` is retained, with no `true` case
+
+> **Amended 2026-09-30 by #2011:** Add a citable alias for this existing decision;
+> its behavior and approval are unchanged.
+> **D4 — `supportsSessionResume` is retained, with no `true` case.**
 
 Both adapters now declare `false`. The flag is **kept**, not deleted:
 
@@ -135,6 +151,10 @@ Decision 6 are green, never before.
 
 ### 5. Interactive recovery cold-starts with explicit context
 
+> **Amended 2026-09-30 by #2011:** Add a citable alias for this existing decision;
+> its behavior and approval are unchanged.
+> **D5 — Interactive recovery cold-starts with explicit context.**
+
 `runInteractive` receives the failure context as an explicit input and renders it into its
 prompt. The stall-breaker and the recovery-menu "interactive fix" must open on a session that
 states what just failed and why. `retryHint` (`conductor.ts:4076`) already carries exactly this
@@ -142,6 +162,10 @@ content. Cold-starting `runInteractive` without threading it is rejected as an o
 regression.
 
 ### 6. The stale/in-use recovery path survives with a narrower meaning
+
+> **Amended 2026-09-30 by #2011:** Add a citable alias for this existing decision;
+> its behavior and approval are unchanged.
+> **D6 — The stale/in-use recovery path survives with a narrower meaning.**
 
 `SESSION_IN_USE_RE`, `STALE_SESSION_RE`, `CODEX_SESSION_EXPIRED_RE`, the `sessionExpired`
 signal, and the non-budget-consuming `session_reset` recovery all remain. Their meaning narrows
@@ -155,11 +179,22 @@ per-invocation log spam.
 
 ### 7. Telemetry correlation is unaffected
 
+> **Amended 2026-09-30 by #2011:** Add a citable alias for this existing decision;
+> its behavior and approval are unchanged.
+> **D7 — Telemetry correlation is unaffected.**
+
 `conductor.run.id` resolves from `.pipeline/conduct-session-id` (`otel/resource.ts:46-55`),
 written only from the step runner's own `this.sessionId` (`step-runners.ts:659, 926, 1137`) and
 never by `ProviderSessionScope`. Per-invocation provider identity does not churn the run id.
 Any implementation that begins writing per-invocation provider identifiers to that file is out
 of contract.
+
+> **Amended 2026-09-30 by #2011:** The create-if-absent persistence is centralized
+> in a shared feature-identity helper also called during enabled OTel bootstrap
+> (ADR-014 D22). It never writes per-invocation provider IDs on retries, rotation,
+> or restart, never overwrites a persisted feature identity, and never changes
+> fresh provider session generation. Telemetry uses that resolved feature identity
+> instead of guessing from a newly allocated dispatch ID.
 
 ## Consequences
 

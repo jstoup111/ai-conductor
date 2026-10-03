@@ -17,15 +17,15 @@ As an operator, I want each executed step or configured member to have its own t
 ### Acceptance Criteria
 
 #### Happy Path
-- Given equivalent successful work runs serially, as a built-in group member, or as a configured group member, when its execution completes, then each execution contributes exactly one duration observation in milliseconds and one attributable step span under its run trace, with equivalent outcome and timing semantics.
+- Given equivalent successful work runs serially, as a built-in group member, or as a configured group member, when its execution completes, then each execution contributes exactly one duration observation in milliseconds and one attributable logical execution represented by bounded linked work slices and, when classification is delayed, a terminal outcome record, with equivalent outcome and timing semantics.
 - Given a group with unequal member durations and a concurrency cap below its member count, when its members complete, then each member's duration excludes time queued before admission, slower siblings' work, and deferred group-join work; a delayed final classification retains that member's observed finish boundary.
 
 #### Negative Paths
-- Given group membership degrades to one eligible member, when that member executes through the serial path, then its timing and span are recorded once, with no duplicate group/member observation.
+- Given group membership degrades to one eligible member, when that member executes through the serial path, then its duration and terminal result are recorded once, with any nonterminal slices retaining the same execution identity and no duplicate group/member observation.
 - Given a member is skipped or cancelled before admission, when the remaining group executes, then that member creates no execution span or duration observation, including no zero-duration substitute.
 
 ### Done When
-- [ ] Real dispatch-path fixtures export one duration sample and one span per executed member in all three modes, with existing serial/built-in step labels preserved.
+- [ ] Real dispatch-path fixtures export one duration sample and one terminal-bearing span per executed member, with any nonterminal work slices attributed to the same execution in all three modes, with existing serial/built-in step labels preserved.
 - [ ] A deterministic cap-limited, staggered-completion fixture distinguishes each member's elapsed work from queue, sibling, and join time; width-one and non-dispatched cases assert their exact observation counts.
 
 Coverage disposition: orchestration integration for path equivalence and admission ordering; lower-layer lifecycle/clock tests for timing permutations. Fake step/provider boundaries and in-memory exporters only.
@@ -61,7 +61,7 @@ As an operator, I want retries accounted consistently in serial and parallel exe
 ### Acceptance Criteria
 
 #### Happy Path
-- Given an execution fails once and succeeds on its next policy attempt, when it settles in any of the three scheduling modes, then it has one logical execution span and duration covering its retry lifetime, one policy retry, and the actual invoked provider attempts counted exactly once.
+- Given an execution fails once and succeeds on its next policy attempt, when it settles in any of the three scheduling modes, then it has one logical execution identity and measured duration covering its retry lifetime across any linked work slices, one policy retry, and the actual invoked provider attempts counted exactly once.
 - Given a retry changes the resolved model or effort, when retry and terminal telemetry are exported, then observations carry their own resolved attempt metadata and the final execution's terminal attribution, without resetting the execution start time.
 
 #### Negative Paths
