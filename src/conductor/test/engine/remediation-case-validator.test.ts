@@ -5,6 +5,7 @@ import {
   validateRemediationCaseGraph,
   type RemediationCaseJudgement,
 } from '../../src/engine/remediation-case-validator.js';
+import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
 import * as buildReviewAdjudication from '../../src/engine/build-review-adjudication.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import {
@@ -88,6 +89,46 @@ const VALID_REFUTE_JUDGEMENT = {
 const CASE_V2_ADMISSION = {
   existingCaseIds: ['existing-case-1'],
   admittedTaskIds: ['30'],
+} as const;
+
+const DISTINCT_SOURCE_ID = 'testQuality:resolved-anchor';
+const RESOLVED_ACTION_CASE: RemediationCaseRecord = {
+  id: 'case-resolved-action',
+  domain: 'build_review',
+  disposition: 'act',
+  priority: 'high',
+  rationale: 'The original concern needed a focused repair.',
+  confidence: 'high',
+  resolution: 'resolved',
+  sources: [{ sourceId: DISTINCT_SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-02T12:00:00.000Z' }],
+  effect: { id: 'effect-resolved-action', kind: 'action', status: 'applied', workOrderId: 'work-order-resolved-action' },
+};
+
+const DISTINCT_JUDGEMENT = {
+  mode: 'case-v2',
+  domain: 'build_review',
+  sourceOutcomes: [{ sourceId: DISTINCT_SOURCE_ID, outcome: 'acted', caseRef: 'case-new' }],
+  cases: [{
+    caseRef: 'case-new',
+    distinctFrom: [RESOLVED_ACTION_CASE.id],
+    disposition: 'act', priority: 'high',
+    rationale: 'This is a different concern despite its resolved source anchor.', confidence: 'high',
+    effect: { kind: 'action', route: 'build', tasks: [{
+      title: 'test/resolved-anchor.test.ts — cover the distinct concern',
+      admittedTaskIds: ['30'],
+      admissionRationale: 'Task 30 admits this focused repair.',
+    }] },
+  }],
+  consistency: {
+    verdict: 'consistent', sourceIds: [DISTINCT_SOURCE_ID], caseRefs: ['case-new'],
+    rationale: 'The new case covers the sole current source.',
+  },
+} as const satisfies RemediationCaseJudgement;
+
+const DISTINCT_REFERENCES = {
+  existingCaseIds: [RESOLVED_ACTION_CASE.id],
+  admittedTaskIds: ['30'],
+  priorCases: [RESOLVED_ACTION_CASE],
 } as const;
 
 function authorizedActionCaseRefs(
@@ -337,6 +378,78 @@ describe('remediation case graph validator', () => {
   });
 
   describe('case-v2 graph and effect admission', () => {
+    describe('distinct-from declarations', () => {
+      it('admits the exact resolved action set without comparing its rationale', () => {
+        expect(validateRemediationCaseGraph(
+          [DISTINCT_SOURCE_ID],
+          DISTINCT_JUDGEMENT,
+          DISTINCT_REFERENCES,
+        )).toMatchObject({ ok: true });
+      });
+
+      it.each([
+        ['unknown case', { ...DISTINCT_REFERENCES, priorCases: [], existingCaseIds: [] }, 'unknown-distinct-case'],
+        ['open case', {
+          ...DISTINCT_REFERENCES,
+          priorCases: [{ ...RESOLVED_ACTION_CASE, resolution: 'open' as const }],
+        }, 'invalid-distinct-case'],
+        ['non-action case', {
+          ...DISTINCT_REFERENCES,
+          priorCases: [{ ...RESOLVED_ACTION_CASE, disposition: 'reject' as const, effect: { kind: 'none' as const } }],
+        }, 'invalid-distinct-case'],
+        ['merged source link', {
+          ...DISTINCT_REFERENCES,
+          priorCases: [{ ...RESOLVED_ACTION_CASE, sources: [{ ...RESOLVED_ACTION_CASE.sources[0], outcome: 'merged' as const }] }],
+        }, 'invalid-distinct-case'],
+      ] as const)('rejects a declaration naming an invalid distinct %s', (_name, references, reason) => {
+        expect(validateRemediationCaseGraph(
+          [DISTINCT_SOURCE_ID], DISTINCT_JUDGEMENT, references,
+        )).toEqual({ ok: false, reason });
+      });
+
+      it('rejects an omitted resolved action case from the exact declaration', () => {
+        const second = { ...RESOLVED_ACTION_CASE, id: 'case-second-resolved-action' };
+        expect(validateRemediationCaseGraph(
+          [DISTINCT_SOURCE_ID], DISTINCT_JUDGEMENT,
+          { ...DISTINCT_REFERENCES, existingCaseIds: [RESOLVED_ACTION_CASE.id, second.id], priorCases: [RESOLVED_ACTION_CASE, second] },
+        )).toEqual({ ok: false, reason: 'incomplete-distinct-declaration' });
+      });
+
+      it('rejects a declaration when no resolved case owns one of its sources', () => {
+        const unrelated = {
+          ...RESOLVED_ACTION_CASE,
+          sources: [{ ...RESOLVED_ACTION_CASE.sources[0], sourceId: 'testQuality:other-source' }],
+        };
+        expect(validateRemediationCaseGraph(
+          [DISTINCT_SOURCE_ID], DISTINCT_JUDGEMENT,
+          { ...DISTINCT_REFERENCES, priorCases: [unrelated] },
+        )).toEqual({ ok: false, reason: 'unnecessary-distinct-declaration' });
+      });
+
+      it.each([
+        ['valid', DISTINCT_REFERENCES],
+        ['unknown', { ...DISTINCT_REFERENCES, priorCases: [], existingCaseIds: [] }],
+        ['invalid', { ...DISTINCT_REFERENCES, priorCases: [{ ...RESOLVED_ACTION_CASE, resolution: 'open' as const }] }],
+        ['incomplete', (() => {
+          const second = { ...RESOLVED_ACTION_CASE, id: 'case-second-resolved-action' };
+          return { ...DISTINCT_REFERENCES, existingCaseIds: [RESOLVED_ACTION_CASE.id, second.id], priorCases: [RESOLVED_ACTION_CASE, second] };
+        })()],
+        ['unnecessary', { ...DISTINCT_REFERENCES, priorCases: [] }],
+      ] as const)('keeps refute-without-binding ahead of a %s distinct declaration failure', (_name, references) => {
+        const refute = {
+          ...DISTINCT_JUDGEMENT,
+          sourceOutcomes: [{ sourceId: DISTINCT_SOURCE_ID, outcome: 'refuted', caseRef: 'case-new' }],
+          cases: [{
+            ...DISTINCT_JUDGEMENT.cases[0], disposition: 'refute', effect: { kind: 'none' },
+            refutation: VALID_REFUTATION,
+          }],
+        } as RemediationCaseJudgement;
+        expect(validateRemediationCaseGraph(
+          [DISTINCT_SOURCE_ID], refute, references,
+        )).toEqual({ ok: false, reason: 'refute-without-binding' });
+      });
+    });
+
     it('accepts complete canonical merge and active-task admission evidence without judging the rationale text', () => {
       const result = validateRemediationCaseGraph(CURRENT_SOURCE_IDS, VALID_CASE_V2_JUDGEMENT, CASE_V2_ADMISSION);
 
