@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-03T15:52:05.045Z
 Slug: report-absent-overlap-scan-candidate-paths-instead
 Class: needs-human
 Halting step: unknown
