@@ -3706,6 +3706,11 @@ describe('FullSuiteVerifier', () => {
       executions: 0,
       claim: replacementClaim,
     });
+
+    // This fixture intentionally leaves the replacement claimant holding the
+    // lock. Remove that completed fixture state before the shared scratch-root
+    // cleanup so it cannot race a recursive parent removal in a busy suite.
+    await rm(lockPath, { recursive: true, force: true });
   });
 
   it('takes a vanished orphaned recovery claim only once during stale-lock recovery', async () => {

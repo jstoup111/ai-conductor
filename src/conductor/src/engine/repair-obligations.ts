@@ -193,6 +193,23 @@ export function createRepairObligationStore(
           settlement: 'unsettled',
           tasks: Object.fromEntries(taskIds.map((taskId) => [taskId, { status: 'open' as const }])),
         };
+        // A rewritten plan task supersedes only an earlier rewrite of that
+        // same task.  Review/gate obligations deliberately remain open: the
+        // resolver folds every open record, rather than treating this index as
+        // the sole source of authority.
+        if (admission.source.authority === 'plan_amendment') {
+          for (const prior of Object.values(section.records)) {
+            if (prior.planIdentity !== planIdentity || prior.source.authority !== 'plan_amendment') continue;
+            for (const taskId of taskIds) {
+              if (prior.tasks[taskId]?.status === 'open') {
+                prior.tasks[taskId] = {
+                  status: 'resolved',
+                  evidence: { kind: 'superseded-by-plan-amendment', value: admission.id },
+                };
+              }
+            }
+          }
+        }
         section.records[obligation.id] = obligation;
         if (admissionKey !== undefined) {
           section.admissionsByPlan[planIdentity] = {

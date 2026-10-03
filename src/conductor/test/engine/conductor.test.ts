@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:21
+// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:12, task:21
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { execFile as execFileCb } from 'child_process';
@@ -15872,12 +15872,16 @@ describe('build-step stall circuit breaker', () => {
   // every gate evaluation — so these tests' notion of "progress" must be
   // evidence-backed completions, or the stall breaker would (correctly) fire
   // on all of them.
-  async function writeTaskStatus(completed: number, total: number): Promise<void> {
+  async function writeTaskStatus(
+    completed: number,
+    total: number,
+    titles: readonly string[] = [],
+  ): Promise<void> {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
     const planLines: string[] = ['# Plan', ''];
     for (let i = 1; i <= total; i++) {
-      planLines.push(`### Task ${i}: Step ${i}`, '');
+      planLines.push(`### Task ${i}: ${titles[i - 1] ?? `Step ${i}`}`, '');
     }
     await writeFile(join(dir, '.docs/plans/2026-04-18-plan.md'), planLines.join('\n'));
     const tasks: Array<{ id: number; status: string }> = [];
@@ -15936,8 +15940,99 @@ describe('build-step stall circuit breaker', () => {
     expect(stallEvents[0].after).toBe(2);
     expect(runner.runInteractive).toHaveBeenCalledWith('build', {
       reason:
-        'Previous attempt did not satisfy the completion check: 3/5 tasks pending/not completed: 3, 4, 5. Finish the work now.',
+        'Previous attempt did not satisfy the completion check: 3/5 tasks pending/not completed: 3, 4, 5 — 3 "Step 3"; 4 "Step 4"; 5 "Step 5". Finish the work now.',
     });
+  });
+
+  // Covers: task:11
+  it('passes all pending ids and titles through the next BUILD retry hint and step_retry event', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    const titles = [
+      'Prepare alpha',
+      'Prepare beta',
+      'Prepare gamma',
+      'Prepare delta',
+      'Prepare epsilon',
+      'Prepare zeta',
+    ];
+    await writeTaskStatus(0, titles.length, titles);
+
+    const buildHints: string[] = [];
+    const retryReasons: string[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
+        if (step === 'build' && options?.retryReason) buildHints.push(options.retryReason);
+        return { success: true };
+      }),
+    };
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry' && event.step === 'build') retryReasons.push(event.reason);
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 2,
+      onRecovery: vi.fn().mockResolvedValue('quit' as const),
+    });
+
+    await conductor.run();
+
+    expect(buildHints).not.toHaveLength(0);
+    expect(retryReasons).not.toHaveLength(0);
+    for (const value of [...buildHints, ...retryReasons]) {
+      for (let i = 0; i < titles.length; i++) {
+        expect(value).toContain(String(i + 1));
+        expect(value).toContain(titles[i]);
+      }
+    }
+
+    const identicalReason = retryReasons[0];
+    expect(artifactModule.classifyRetryDecision({
+      // BUILD itself retains its dedicated progress accounting; this guards
+      // the shared retry classifier's unchanged-reason comparison.
+      step: 'build_review',
+      completion: { done: false, reason: identicalReason },
+      attempt: 2,
+      priorReason: identicalReason,
+      inputsUnchanged: true,
+    })).toEqual({ decision: 'route', signal: 'identical-repeat' });
+  });
+
+  // Covers: task:12
+  it('names every pending task in the no-task-progress stall question and exhaustion HALT', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    const titles = ['Prepare alpha', 'Prepare beta', 'Prepare gamma'];
+    await writeTaskStatus(0, titles.length, titles);
+
+    const runner: StepRunner = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 3,
+    });
+
+    await conductor.run();
+
+    const expected = ['build stalled: no task progress', ...titles.flatMap((title, index) => [
+      String(index + 1),
+      title,
+    ])];
+    const [question, halt] = await Promise.all([
+      readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf8'),
+      readFile(join(dir, '.pipeline/HALT'), 'utf8'),
+    ]);
+    expect([question, halt].every((content) => expected.every((value) => content.includes(value)))).toBe(true);
   });
 
   it('triggers build_stall on the first retry when .pipeline/halt-user-input-required is present', async () => {
@@ -16536,7 +16631,7 @@ describe('build-step stall circuit breaker', () => {
     // onRecovery should NOT have fired.
     expect(runner.runInteractive).toHaveBeenCalledWith('build', {
       reason:
-        'Previous attempt did not satisfy the completion check: 3/5 tasks pending/not completed: 3, 4, 5. Finish the work now.',
+        'Previous attempt did not satisfy the completion check: 3/5 tasks pending/not completed: 3, 4, 5 — 3 "Step 3"; 4 "Step 4"; 5 "Step 5". Finish the work now.',
     });
     expect(onRecovery).not.toHaveBeenCalledWith('build', expect.anything(), expect.anything());
   });
@@ -18474,7 +18569,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       // The interactive stall handoff still fires — unchanged by the fix.
       expect(runner.runInteractive).toHaveBeenCalledWith('build', {
         reason:
-          'Previous attempt did not satisfy the completion check: 1/1 tasks pending/not completed: 1. Finish the work now.',
+          'Previous attempt did not satisfy the completion check: 1/1 tasks pending/not completed: 1 — 1 "Step 1". Finish the work now.',
       });
       // The daemon+auto-only /remediate dispatch never fires in interactive.
       expect(dispatched).not.toContain('remediate');

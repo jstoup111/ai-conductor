@@ -2802,6 +2802,58 @@ describe('engine/artifacts', () => {
         expect(result.reason).toMatch(/pending|not completed/i);
       });
 
+      it('names every unresolved task id before pairing each with its plan title', async () => {
+        await writePlan([
+          '### Task 1: First task', '### Task 2: Second task', '### Task 3: Third task',
+          '### Task 4: Fourth task', '### Task 5: Fifth task', '### Task 6: Sixth task',
+        ].join('\n\n'));
+        await writeTasks(Array.from({ length: 6 }, (_, index) => ({
+          id: String(index + 1), name: `Row ${index + 1}`, status: 'pending',
+        })));
+
+        const result = await checkStepCompletion(dir, 'build', {
+          projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md'),
+        });
+
+        expect(result.reason).toBe(
+          '6/6 tasks pending/not completed: 1, 2, 3, 4, 5, 6 — 1 "First task"; 2 "Second task"; 3 "Third task"; 4 "Fourth task"; 5 "Fifth task"; 6 "Sixth task"',
+        );
+        for (const id of ['1', '2', '3', '4', '5', '6']) {
+          expect(result.reason.indexOf(id)).toBeLessThan(result.reason.indexOf('"First task"'));
+        }
+      });
+
+      it('keeps unresolved plan tasks in the reason when only an appended remediation task is resolved', async () => {
+        await writePlan([
+          '### Task 1: First task', '### Task 2: Second task', '### Task 3: Third task',
+          '### Task 4: Fourth task', '### Task 5: Fifth task', '### Task 6: Sixth task',
+          '### Task rem-1: Repair task',
+        ].join('\n\n'));
+        await writeTasks([
+          ...Array.from({ length: 6 }, (_, index) => ({
+            id: String(index + 1), name: `Row ${index + 1}`, status: 'pending',
+          })),
+          { id: 'rem-1', name: 'Repair task', status: 'completed' },
+        ]);
+
+        const result = await checkStepCompletion(dir, 'build', {
+          projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md'),
+        });
+
+        expect(result.reason).toContain('1 "First task"; 2 "Second task"; 3 "Third task"; 4 "Fourth task"; 5 "Fifth task"; 6 "Sixth task"');
+      });
+
+      it('uses the task-status row name when a pending task heading has no title', async () => {
+        await writePlan('### Task 1\n');
+        await writeTasks([{ id: '1', name: 'Status row title', status: 'pending' }]);
+
+        const result = await checkStepCompletion(dir, 'build', {
+          projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md'),
+        });
+
+        expect(result.reason).toContain('1 "Status row title"');
+      });
+
       // Task 10 (#773): the build predicate demotes the per-task
       // evidence-ledger gate (deriveCompletion/createTaskEvidence/
       // evidenceStamps) to telemetry. It still trusts task-status.json row
@@ -3293,7 +3345,7 @@ describe('engine/artifacts', () => {
           expect(result.reason).not.toMatch(/\b3\b,/);
         });
 
-        it('truncates with "(+N more)" when all 5 ids are unresolved', async () => {
+        it('names every unresolved id and title when all 5 ids are unresolved', async () => {
           await initRepo();
           await writePlan(
             '### Task 1: First task\n**Story:** 1\n\n' +
@@ -3318,8 +3370,9 @@ describe('engine/artifacts', () => {
 
           expect(result.done).toBe(false);
           expect(result.reason).toMatch(/^5\/5 tasks/);
-          expect(result.reason).toContain('1, 2, 3');
-          expect(result.reason).toContain('(+2 more)');
+          expect(result.reason).toContain('1, 2, 3, 4, 5');
+          expect(result.reason).toContain('1 "First task"; 2 "Second task"; 3 "Third task"; 4 "Fourth task"; 5 "Fifth task"');
+          expect(result.reason).not.toContain('more)');
         });
 
         // Documented semantics (verified from task-progress.ts's

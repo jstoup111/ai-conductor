@@ -209,7 +209,7 @@ Close #2014 in 14 tasks: a change to a plan task's own text reopens that task th
 
 **Done when:**
 - For an incomplete BUILD with six pending tasks, the retry hint passed to the next BUILD dispatch and the emitted `step_retry` event reason each contain all six ids and titles.
-- With titles long enough that the line reaches its existing length bound, `formatRetryReason` on that reason returns exactly one line within that bound, the line contains all six task ids, and every id's index in the line is less than the index of the first title text.
+- With titles long enough that the line reaches its existing length bound, `formatRetryReason` on that reason returns exactly one line within that bound, the line contains all six task ids, and every id's index in the line is less than the index of the first title text; and a daemon retry test asserts the daemon's logged retry line for that incomplete BUILD equals that `formatRetryReason` output, so it names every pending task id before any title text.
 - Two consecutive incomplete BUILD attempts with the same pending tasks and titles are classified as an identical repeat by `classifyRetryDecision`, as before this change.
 
 ### Task 12: Name every pending task in the stall question and HALT
