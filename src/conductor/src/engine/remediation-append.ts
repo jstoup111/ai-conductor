@@ -215,10 +215,13 @@ export function appendRemediationTasks(
     }
   }
 
+  // Several findings can bind to one shared task; each id is one task, and a
+  // pending repair rejects duplicate task ids.
+  const uniqueIds = [...new Set(ids)];
   if (blocks.length === 0) {
-    return { planText, ids };
+    return { planText, ids: uniqueIds };
   }
 
   const separator = planText.endsWith('\n') ? '\n' : '\n\n';
-  return { planText: planText + separator + blocks.join('\n'), ids };
+  return { planText: planText + separator + blocks.join('\n'), ids: uniqueIds };
 }
