@@ -998,10 +998,10 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
     costUsd: 3.5,
     costComplete: true,
     byDimension: [
-      { step: 'build', model: 'm1', source: 'provider' as const, costUsd: 1.5 },
+      { step: 'build', model: 'm1', provider: 'claude', source: 'provider' as const, costUsd: 1.5 },
       { step: 'build_review', model: 'm2', source: 'rate-card' as const, costUsd: 2 },
     ],
-    tokensByDimension: [{ step: 'build', model: 'm1', tokens: { input: 150, output: 15 } }],
+    tokensByDimension: [{ step: 'build', model: 'm1', provider: 'claude', tokens: { input: 150, output: 15 } }],
   };
 
   async function makeRecorder() {
@@ -1018,15 +1018,15 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
       recorder.onFeatureCostSnapshot(snapshot);
       await provider.forceFlush();
       expect(findMetric(exporter, 'conductor.feature.step.cost')?.dataPoints).toEqual([
-        expect.objectContaining({ value: 1.5, attributes: { step: 'build', model: 'm1', source: 'provider', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
+        expect.objectContaining({ value: 1.5, attributes: { step: 'build', model: 'm1', provider: 'claude', source: 'provider', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
         expect.objectContaining({ value: 2, attributes: { step: 'build_review', model: 'm2', source: 'rate-card', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
       ]);
       expect(findMetric(exporter, 'conductor.feature.cost')?.dataPoints).toEqual([
         expect.objectContaining({ value: 3.5, attributes: { cost_complete: true, project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
       ]);
       expect(findMetric(exporter, 'conductor.feature.step.tokens')?.dataPoints).toEqual([
-        expect.objectContaining({ value: 150, attributes: { step: 'build', model: 'm1', kind: 'input', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
-        expect.objectContaining({ value: 15, attributes: { step: 'build', model: 'm1', kind: 'output', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
+        expect.objectContaining({ value: 150, attributes: { step: 'build', model: 'm1', provider: 'claude', kind: 'input', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
+        expect.objectContaining({ value: 15, attributes: { step: 'build', model: 'm1', provider: 'claude', kind: 'output', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
       ]);
     } finally { await provider.shutdown(); }
   });

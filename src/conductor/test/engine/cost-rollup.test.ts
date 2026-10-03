@@ -113,7 +113,7 @@ describe('engine/cost-rollup', () => {
 
     expect(snapshot).toMatchObject({ costUsd: 1, costComplete: false });
     expect(snapshot.byDimension).toEqual([
-      { step: 'build', model: 'm1', source: 'provider', costUsd: 1 },
+      { step: 'build', model: 'm1', provider: 'claude', source: 'provider', costUsd: 1 },
     ]);
   });
 
@@ -192,9 +192,9 @@ describe('engine/cost-rollup', () => {
     const rollup = await computeCostRollup(dir);
 
     expect(rollup.byDimension).toEqual([
-      { step: 'build', model: 'm1', source: 'provider', costUsd: 1.5 },
-      { step: 'build_review', model: 'm2', source: 'rate-card', costUsd: 2 },
-      { step: 'build', source: 'provider', costUsd: 0.25 },
+      { step: 'build', model: 'm1', provider: 'claude', source: 'provider', costUsd: 1.5 },
+      { step: 'build_review', model: 'm2', provider: 'codex', source: 'rate-card', costUsd: 2 },
+      { step: 'build', provider: 'claude', source: 'provider', costUsd: 0.25 },
     ]);
     expect((rollup.byDimension ?? []).reduce((sum, bucket) => sum + bucket.costUsd, 0))
       .toBe(rollup.costUsd);
@@ -223,12 +223,13 @@ describe('engine/cost-rollup', () => {
     const rollup = await computeCostRollup(dir);
 
     expect(rollup.byDimension).toEqual([
-      { step: 'build', model: 'm1', costUsd: 1 },
+      { step: 'build', model: 'm1', provider: 'claude', costUsd: 1 },
     ]);
     expect(rollup.costUnmetered).toEqual({ count: 2 });
     expect(rollup.tokensByDimension).toEqual([
-      { step: 'build', model: 'm1', tokens: { input: 140, output: 14, cacheRead: 11, cacheCreation: 2 } },
-      { step: 'build_review', model: 'm2', tokens: { input: 7, output: 2 } },
+      { step: 'build', model: 'm1', provider: 'claude', tokens: { input: 100, output: 10, cacheRead: 8, cacheCreation: 2 } },
+      { step: 'build', model: 'm1', provider: 'codex', tokens: { input: 40, output: 4, cacheRead: 3 } },
+      { step: 'build_review', model: 'm2', provider: 'codex', tokens: { input: 7, output: 2 } },
     ]);
   });
 
@@ -250,8 +251,8 @@ describe('engine/cost-rollup', () => {
     const rollup = await computeCostRollup(dir);
 
     expect(rollup.tokensByDimension).toEqual([
-      { step: 'build', model: 'm1', tokens: { input: 40, output: 4 } },
-      { step: 'unknown_model', tokens: { input: 10 } },
+      { step: 'build', model: 'm1', provider: 'codex', tokens: { input: 40, output: 4 } },
+      { step: 'unknown_model', provider: 'codex', tokens: { input: 10 } },
     ]);
     expect(rollup.tokensByDimension).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ step: 'no_usage' }),
@@ -497,11 +498,13 @@ describe('engine/cost-rollup', () => {
       },
       costUsd: expect.closeTo(0.08, 5),
       byDimension: [
-        { step: 'plan', costUsd: expect.closeTo(0.07, 5) },
+        { step: 'plan', provider: 'codex', costUsd: expect.closeTo(0.02, 5) },
+        { step: 'plan', provider: 'claude', costUsd: expect.closeTo(0.05, 5) },
         { step: 'legacy', costUsd: expect.closeTo(0.01, 5) },
       ],
       tokensByDimension: [
-        { step: 'plan', tokens: { input: 140, output: 30, cacheRead: 14, cacheCreation: 3 } },
+        { step: 'plan', provider: 'codex', tokens: { input: 40, output: 10, cacheRead: 4, cacheCreation: 1 } },
+        { step: 'plan', provider: 'claude', tokens: { input: 100, output: 20, cacheRead: 10, cacheCreation: 2 } },
         { step: 'legacy', tokens: { input: 7, output: 3, cacheRead: 0, cacheCreation: 0 } },
       ],
       dispatches: 3,
