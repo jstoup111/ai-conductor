@@ -72,6 +72,18 @@ Providers that cannot honor the synchronous spawn-permit contract cannot run und
 recovery. They fail closed before invocation with the selected provider, missing capability, and
 recovery action named, following the harness unsupported-capability contract.
 
+> **Amended 2026-10-02 by #2102:** decision 4 bars output *silence*, meaning absent or stale
+> activity, from termination authority. It does not bar a bounded, opt-in end of a build attempt
+> whose provider is demonstrably active yet has moved neither HEAD nor the task count. Fresh
+> activity there is a precondition that *narrows* the end, never a cause of it.
+> 8. **Active-stall ending is a distinct, dispatcher-owned authority.** A build attempt may be
+> ended only under adr-2026-07-10-intra-step-build-progress-events decisions 8 and 9: the project
+> opts in with `active_stall_action: end_attempt`, the attempt's own step heartbeat is fresh, and
+> no HEAD or task movement has been observed for `active_stall_minutes`. Absent, stale, malformed
+> or foreign-dispatch heartbeats still never kill, replace or halt a running provider. This
+> authority is not lifecycle recovery: it consumes no lifecycle replacement (decision 6) and is
+> not preparation timeout (decision 5).
+
 ## Consequences
 
 ### Positive
