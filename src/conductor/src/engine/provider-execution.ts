@@ -1159,7 +1159,9 @@ export async function executeProviderCandidates({
         // Reporting the telemetry failure is itself best effort.
       }
     }
-    if (!candidateUnavailable) {
+    // An abort observed after an invocation settles ends this logical attempt;
+    // a fallback candidate must not begin work under cancelled authority.
+    if (abortSignal?.aborted || !candidateUnavailable) {
       const resultForReturn = safeResult.success
         ? (() => {
             const { executionDisposition: _executionDisposition, ...successfulResult } = safeResult;
