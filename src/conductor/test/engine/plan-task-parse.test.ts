@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   parsePlanTaskBodies,
+  planTaskDigests,
   parsePlanTaskPaths,
   parsePlanTaskDoneWhen,
   parsePlanTaskStoryIds,
@@ -96,6 +97,83 @@ This prose quotes ### Task 2: but is not a heading.
         ['1', 'This prose quotes ### Task 2: but is not a heading.\n'],
       ]));
       expect(result.get('2')).toBeUndefined();
+    });
+  });
+
+  describe('planTaskDigests', () => {
+    it('digests normalized task titles and bodies without including trailing sections', () => {
+      const baseline = `# Plan
+
+### Task 1: First task
+Use the stable parser.
+
+### Task 2, 3: Shared task
+Keep   these words together.
+
+## Risks
+This section is not task text.
+`;
+      const whitespaceOnly = `# Plan
+
+### Task 1:   First task
+Use   the
+stable parser.
+
+### Task 2, 3: Shared task
+Keep these words together.
+
+## Risks
+This wording changed but remains excluded.
+`;
+      const titleChanged = `# Plan
+
+### Task 1: Renamed task
+Use the stable parser.
+
+### Task 2, 3: Shared task
+Keep   these words together.
+
+## Risks
+This section is not task text.
+`;
+      const bodyChanged = `# Plan
+
+### Task 1: First task
+Use the stable parser.
+
+### Task 2, 3: Shared task
+Keep these words apart.
+
+## Risks
+This section is not task text.
+`;
+
+      const baselineDigests = planTaskDigests(baseline);
+      const whitespaceDigests = planTaskDigests(whitespaceOnly);
+      const titleChangedDigests = planTaskDigests(titleChanged);
+      const bodyChangedDigests = planTaskDigests(bodyChanged);
+
+      expect({
+        idsMatchPlanPaths: [...baselineDigests.keys()].sort().join(',') === [...parsePlanTaskPaths(baseline).keys()].sort().join(','),
+        usesVersionedSha256: [...baselineDigests.values()].every((digest) => /^v1:sha256:[0-9a-f]{64}$/.test(digest)),
+        whitespaceIsStable: baselineDigests.get('1') === whitespaceDigests.get('1') &&
+          baselineDigests.get('2') === whitespaceDigests.get('2') &&
+          baselineDigests.get('3') === whitespaceDigests.get('3'),
+        titleChangeIsIsolated: baselineDigests.get('1') !== titleChangedDigests.get('1') &&
+          baselineDigests.get('2') === titleChangedDigests.get('2') &&
+          baselineDigests.get('3') === titleChangedDigests.get('3'),
+        bodyChangeIsIsolated: baselineDigests.get('1') === bodyChangedDigests.get('1') &&
+          baselineDigests.get('2') !== bodyChangedDigests.get('2') &&
+          baselineDigests.get('3') !== bodyChangedDigests.get('3'),
+        multiIdHeadingSharesDigest: baselineDigests.get('2') === baselineDigests.get('3'),
+      }).toEqual({
+        idsMatchPlanPaths: true,
+        usesVersionedSha256: true,
+        whitespaceIsStable: true,
+        titleChangeIsIsolated: true,
+        bodyChangeIsIsolated: true,
+        multiIdHeadingSharesDigest: true,
+      });
     });
   });
 
