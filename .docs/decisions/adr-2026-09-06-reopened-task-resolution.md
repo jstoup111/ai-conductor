@@ -54,6 +54,12 @@ The operator selected shared semantics for explicitly reopened tasks, confirmed 
 > key), never to another gate's allowance. For decision 8, its governing review is the feature's next `build_review` lap;
 > `coverage_binding` does not re-review repaired code.
 
+> **Amended 2026-10-02 by #2014:** a change to a plan task's own text becomes an admitted repair
+> source, so `Task:` trailers that predate the change no longer resolve the rewritten task. Decisions
+> 1-10 are unchanged.
+>
+> 11. Task seeding computes a digest of each plan task's whitespace-normalized heading and body, ending at the next heading of the same or higher level. It persists those digests per plan identity as an additive versioned section of engine-state.json, written through the D3 serialized update seam. When a recorded digest differs from the current one, seeding admits an obligation with source authority `plan_amendment`, the new digest as finding id, and a HEAD boundary taken at detection, keyed so a replay for the same task and digest is idempotent. It does this through the store directly, never through the restage helper, which itself re-seeds. Admission persists before the new digest is recorded and before the open-obligation restage reads the store. The obligation is marked settled at admission and charges no lap to any gate, because it comes from an operator plan change, not a review finding. A plan with no recorded digests records a baseline and reopens nothing. Admitting a newer `plan_amendment` obligation for a task resolves that task's older open `plan_amendment` obligation as superseded. Gate-admitted obligations are never superseded this way. A reopened task closes through decision 4 exactly like any other obligation. For decision 8, a `plan_amendment` obligation has no governing review of its own: it ends when its task resolves, and the feature's ordinary downstream gates judge the reworked task.
+
 ## Architectural Alignment
 
 This is a durable state-transition decision, so an ADR is warranted even at Medium tier. No existing ADR covers a current repair obligation spanning resolver, reconstruction, task close, and restart. The July 23 trailer-union ADR continues to own the shared resolution/authority split; its bounded freshness exception and the July 13 no-op guard qualification are amended beside their original clauses in this same DECIDE change.
