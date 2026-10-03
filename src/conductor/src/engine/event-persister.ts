@@ -349,11 +349,14 @@ function cloneForwardedEvent(event: ConductorEvent): ConductorEvent {
 export async function withFeatureEventPersistence<T>(input: {
   worktreePath: string;
   globalEvents: ConductorEventEmitter;
+  /** Canonical feature attribution, when the worktree basename is not the slug. */
+  featureSlug?: string;
   run: (featureEvents: ConductorEventEmitter) => Promise<T>;
 }): Promise<T> {
   const scope = startFeatureEventPersistence(
     input.worktreePath,
     input.globalEvents,
+    input.featureSlug,
   );
   try {
     return await input.run(scope.events);

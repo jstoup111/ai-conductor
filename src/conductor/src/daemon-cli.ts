@@ -1496,7 +1496,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         provider,
       });
     } catch (error) {
-      persistence.stop();
+      // Context preparation is an early feature exit too. A provider may
+      // already have settled an observation while preparation was failing, so
+      // preserve the feature persistence lifetime through its final drain
+      // rather than detaching the tail synchronously.
+      await persistence.drain();
       throw error;
     }
     const pipelineDir = join(worktree.path, '.pipeline');

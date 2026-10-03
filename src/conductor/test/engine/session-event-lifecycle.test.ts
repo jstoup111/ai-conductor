@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   startFeatureEventPersistence,
   startSessionEventTail,
+  withFeatureEventPersistence,
 } from '../../src/engine/event-persister.js';
 import {
   prepareDaemonFeatureManagedSessionContext,
@@ -136,16 +137,18 @@ describe('feature session-event lifecycle', () => {
     const producerRoot = join(root, '.pipeline', 'session-events', 'dispatch-1');
     await mkdir(producerRoot, { recursive: true });
 
-    const rendered: string[] = [];
     const globalEvents = new ConductorEventEmitter();
-    const scope = startFeatureEventPersistence(root, globalEvents, 'feature-a');
+    const rendered: string[] = [];
     // The daemon renders from its feature-scoped bus; forwarded copies on the
     // daemon-wide bus are deliberately suppressed to avoid duplicate lines.
-    scope.events.on('session_command_refused', (event) => {
-      if (event.type === 'session_command_refused') rendered.push(event.eventId);
-    });
-    await expect((async () => {
-      try {
+    await expect(withFeatureEventPersistence({
+      worktreePath: root,
+      globalEvents,
+      featureSlug: 'feature-a',
+      run: async (featureEvents) => {
+        featureEvents.on('session_command_refused', (event) => {
+          if (event.type === 'session_command_refused') rendered.push(event.eventId);
+        });
         // This write models a managed provider that settles an observation
         // immediately before its failure/cancellation reaches its owner.
         await writeFile(join(producerRoot, 'provider.jsonl'), `${JSON.stringify({
@@ -158,10 +161,8 @@ describe('feature session-event lifecycle', () => {
           subcommand: 'finish-record',
         })}\n`);
         throw new Error('provider cancelled');
-      } finally {
-        await scope.drain();
-      }
-    })()).rejects.toThrow('provider cancelled');
+      },
+    })).rejects.toThrow('provider cancelled');
 
     await expect(readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
       .resolves.toContain('event-3');
