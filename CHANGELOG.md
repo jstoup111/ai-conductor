@@ -33,6 +33,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - test_suite gains a `changed` verification mode that runs changed-only tests on BUILD laps and requires one full-suite PASS before publication. ([implementation PR #2933](https://github.com/jstoup111/ai-conductor/pull/2933)).
 - Operators can trace runs to their commits, pull requests, and intake issues. ([implementation PR #2937](https://github.com/jstoup111/ai-conductor/pull/2937)).
 - Agent sessions now refuse destructive Git commands in prepared worktrees. ([implementation PR #2773](https://github.com/jstoup111/ai-conductor/pull/2773)).
+- Telemetry exporters retain buffered OTLP data across transient delivery outages. ([implementation PR #2868](https://github.com/jstoup111/ai-conductor/pull/2868)).
 
 ### Changed
 
