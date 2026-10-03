@@ -1,9 +1,11 @@
+// Covers: task:1
 import { chmod, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execa } from 'execa';
 import { afterEach, describe, expect, it } from 'vitest';
 import { checkInventory, interpreterSourceInventory } from '../../scripts/check-interpreter-source.mts';
+import * as gitHookAssets from '../../src/engine/git-hook-assets.js';
 
 describe('interpreter-source inventory', () => {
   const roots: string[] = [];
@@ -47,6 +49,12 @@ describe('interpreter-source inventory', () => {
       'hooks/pre-commit-tdd-gate.sh',
       'skills/intake/scripts/intake-file',
     ]);
+  });
+
+  it('scans the real reference-transaction and pre-push generated hook exports without shell-expanded runtime data', async () => {
+    expect(gitHookAssets.REFERENCE_TRANSACTION_HOOK).toMatch(/^#!\/bin\/bash\n/);
+    expect(gitHookAssets.PRE_PUSH_HOOK).toMatch(/^#!\/bin\/bash\n/);
+    await expect(checkInventory(await root())).resolves.toEqual([]);
   });
 
   it('reports an unsafe bundled skill helper', async () => {

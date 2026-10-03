@@ -187,6 +187,26 @@ export const PRE_COMMIT_HOOK = [
 ].join('\n');
 
 /**
+ * reference-transaction hook.
+ *
+ * Provisioned now so every prepared worktree has the complete hook surface;
+ * subsequent tasks add its preventive ref-deletion policy.
+ */
+export const REFERENCE_TRANSACTION_HOOK = `#!/bin/bash
+exit 0
+`;
+
+/**
+ * pre-push hook.
+ *
+ * Provisioned now so every prepared worktree has the complete hook surface;
+ * subsequent tasks add its preventive remote-update policy.
+ */
+export const PRE_PUSH_HOOK = `#!/bin/bash
+exit 0
+`;
+
+/**
  * prepare-commit-msg hook
  * Stamps Task: <id> via git interpret-trailers only when the commit message
  * has no explicit Task: trailer. An explicit trailer is task-local telemetry

@@ -45,7 +45,13 @@ import { execa } from 'execa';
 import { access, readFile, writeFile, mkdir, chmod, constants, rename, rm, stat, lstat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { basename, join } from 'node:path';
-import { PRE_COMMIT_HOOK, PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
+import {
+  PRE_COMMIT_HOOK,
+  PREPARE_COMMIT_MSG_HOOK,
+  COMMIT_MSG_HOOK,
+  REFERENCE_TRANSACTION_HOOK,
+  PRE_PUSH_HOOK,
+} from './git-hook-assets.js';
 import { writeGitGuard } from './git-guard.js';
 import {
   PRE_DISPATCH_HOOK,
@@ -658,6 +664,15 @@ async function writeGitHooks(
   const commitMsgPath = join(hooksDir, 'commit-msg');
   await writeFile(commitMsgPath, COMMIT_MSG_HOOK, 'utf-8');
   await chmod(commitMsgPath, 0o755);
+
+  const referenceTransactionPath = join(hooksDir, 'reference-transaction');
+  await writeFile(referenceTransactionPath, REFERENCE_TRANSACTION_HOOK, 'utf-8');
+  await chmod(referenceTransactionPath, 0o755);
+
+  const prePushPath = join(hooksDir, 'pre-push');
+  await writeFile(prePushPath, PRE_PUSH_HOOK, 'utf-8');
+  await chmod(prePushPath, 0o755);
+
   await writeGitGuard(worktreePath);
 
   log?.('git hooks: written to .pipeline/git-hooks/');

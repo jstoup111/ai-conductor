@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect, vi } from 'vitest';
 
 const filesystemWriteOrder = vi.hoisted(() => ({
@@ -1643,6 +1644,30 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(out.reason).toMatch(/bin\/setup failed/);
       expect(order).toEqual(['createWorktree', 'prepareWorktree']); // runConductor never reached
       expect(rec.teardownKeep).toBe(true); // worktree kept for inspection
+    });
+
+    it('a preventive-hook installation rejection errors the feature without a build or provider dispatch', async () => {
+      const order: string[] = [];
+      const rec: { teardownKeep?: boolean } = {};
+      const run = makeRunFeature({
+        ...depsWithOrder(order, {}, rec),
+        prepareWorktree: async () => {
+          order.push('prepareWorktree');
+          throw new Error('preventive git hook installation failed: EACCES: permission denied');
+        },
+        provider: {
+          invoke: async () => {
+            order.push('provider');
+            return { success: true, output: '', exitCode: 0 };
+          },
+        },
+      });
+
+      const out = await run(ITEM);
+
+      expect(out).toMatchObject({ status: 'error', reason: expect.stringMatching(/preventive git hook installation failed/) });
+      expect(order).toEqual(['createWorktree', 'prepareWorktree']);
+      expect(rec.teardownKeep).toBe(true);
     });
 
     // #446 conflict resolution (Task 16): supersedes the prior pin that a
