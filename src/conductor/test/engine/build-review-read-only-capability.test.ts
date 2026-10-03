@@ -245,7 +245,7 @@ describe('probeManagedObservationDestination', () => {
     join(tempRoot, '.codex'),
   ];
 
-  it('proves the native Codex read-only policy only with its one producer-root exception', async () => {
+  it('proves the selected Codex executable with the exact producer-root policy it launches', async () => {
     const runProcess = vi.fn(async () => ({
       exitCode: 0,
       stdout: 'producer-write-allowed\nprotected-writes-refused\n',
@@ -253,9 +253,9 @@ describe('probeManagedObservationDestination', () => {
     }));
 
     await expect(probeManagedObservationDestination({
-      provider: 'codex', producerRoot, protectedPaths, runProcess,
+      provider: 'codex', producerRoot, protectedPaths, executable: '/isolated/codex', runProcess,
     })).resolves.toEqual({ producerWrite: 'allowed', protectedWrites: 'refused' });
-    expect(runProcess).toHaveBeenCalledWith('codex', [
+    expect(runProcess).toHaveBeenCalledWith('/isolated/codex', [
       'sandbox', '-P', ':read-only', '-P', `${producerRoot}:read-write`, '--',
       '/bin/bash', '-c', expect.any(String), 'managed-observation-policy',
       producerRoot,

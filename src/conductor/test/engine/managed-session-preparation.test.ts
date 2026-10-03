@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { prepareManagedSessionObservationDestination } from '../../src/execution/managed-session-preparation.js';
+import {
+  createManagedSessionObservationPreparer,
+  prepareManagedSessionObservationDestination,
+} from '../../src/execution/managed-session-preparation.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
@@ -41,6 +44,20 @@ describe('managed observation destination preparation', () => {
         join(managed.worktreeRoot, '.pipeline', 'unrelated'),
         join(managed.projectRoot, '.codex'),
       ],
+    }));
+  });
+
+  it('forwards the selected executable through the shared daemon-session preparer', async () => {
+    const managed = await context();
+    const probe = vi.fn(async () => ({ producerWrite: 'allowed' as const, protectedWrites: 'refused' as const }));
+    const prepare = createManagedSessionObservationPreparer(probe);
+
+    await expect(prepare({
+      provider: 'codex', context: managed, readOnlyReview: true, executable: '/self-host/codex',
+    })).resolves.toEqual({ producerRoot: managed.producerRoot });
+
+    expect(probe).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'codex', producerRoot: managed.producerRoot, executable: '/self-host/codex',
     }));
   });
 

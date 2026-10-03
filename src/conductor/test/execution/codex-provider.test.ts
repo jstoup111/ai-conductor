@@ -1514,13 +1514,22 @@ describe('CodexProvider', () => {
     expect(result.tokenUsage).toEqual({ input: 8, cacheRead: 4, output: 7, numTurns: 1 });
   });
 
-  it('uses the read-only sandbox and unchanged child environment for an unattended review', async () => {
+  it('uses the read-only sandbox and the sole managed producer-root exception for an unattended review', async () => {
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('Reviewed.'), exitCode: 0 } as any);
+    const producerRoot = '/workspace/project/.pipeline/session-events/dispatch-1';
 
     await provider.invoke({
       ...baseOptions,
       interactive: false,
       readOnlyReview: true,
+      managedSessionContext: {
+        projectRoot: '/workspace/project',
+        worktreeRoot: '/workspace/project',
+        producerRoot,
+        dispatchId: 'dispatch-1',
+        provider: 'codex',
+        scope: { kind: 'feature', featureSlug: 'feature-a' },
+      },
     } as InvokeOptions & { readOnlyReview: true });
     await provider.invoke({ ...baseOptions, interactive: false });
 
@@ -1535,13 +1544,19 @@ describe('CodexProvider', () => {
       'approval_policy="never"',
       'shell_environment_policy.ignore_default_excludes=false',
     ]));
+    expect(reviewArgs).toEqual(expect.arrayContaining(['--add-dir', producerRoot]));
     expect(reviewConfigValues).not.toEqual(expect.arrayContaining([
       'sandbox_mode="workspace-write"',
       'sandbox_workspace_write.network_access=true',
       'approval_policy="on-request"',
       'approvals_reviewer="auto_review"',
     ]));
-    expect(reviewOptions.env).toEqual(ordinaryOptions.env);
+    expect(reviewOptions.env).toEqual(expect.objectContaining({
+      ...ordinaryOptions.env,
+      CONDUCT_MANAGED_PRODUCER_ROOT: producerRoot,
+      CONDUCT_MANAGED_DISPATCH: 'dispatch-1',
+      CONDUCT_MANAGED_FEATURE: 'feature-a',
+    }));
     expect(ordinaryArgs).toEqual(expect.arrayContaining([
       'sandbox_mode="workspace-write"',
       'sandbox_workspace_write.network_access=true',
