@@ -12163,6 +12163,7 @@ export class Conductor {
                           effectiveQuestion,
                           outcome.detail,
                           this.events,
+                          outcome.haltClass,
                         ).catch(() => {
                           /* best-effort marker */
                         });
