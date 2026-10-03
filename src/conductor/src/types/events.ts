@@ -316,6 +316,9 @@ export type ProviderStreamProgressEvent = ProviderStreamObservation & {
   ts: string;
 };
 
+/** Activity classification for an intra-step build-progress observation. */
+export type BuildActivity = 'quiet' | 'active-committing' | 'active-not-committing';
+
 export type ConductorEvent =
   | BotCoAuthorSkippedEvent
   | {
@@ -1171,7 +1174,7 @@ export type ConductorEvent =
   | {
       type: 'build_stall';
       step: StepName;
-      reason: 'no_task_progress' | 'halt_marker';
+      reason: 'no_task_progress' | 'halt_marker' | 'active_stall';
       resolvedBefore: number;
       resolvedAfter: number;
     }
@@ -1198,6 +1201,8 @@ export type ConductorEvent =
       headMoved?: boolean;
       /** Epoch ms of the last observed commit, if tracked. */
       lastCommitAt?: number;
+      /** Activity classification at the time of this tick. */
+      activity: BuildActivity;
     }
   | {
       /**
@@ -1217,6 +1222,23 @@ export type ConductorEvent =
       lastCommitAt?: number;
       /** Epoch ms of the latest provider activity in this build dispatch, if observed. */
       lastActivityAt?: number;
+      /** Activity classification at the time of this tick. */
+      activity: BuildActivity;
+      featureSlug?: string;
+    }
+  | {
+      /** Active build output has continued without a corresponding movement. */
+      type: 'build_active_stall';
+      step: StepName;
+      /** Minutes elapsed since the last observed movement. */
+      minutes: number;
+      resolved: number;
+      total: number;
+      /** Epoch ms of the last observed commit, if tracked. */
+      lastCommitAt?: number;
+      /** Epoch ms of the latest provider activity, if observed. */
+      lastActivityAt?: number;
+      action: 'warn' | 'end_attempt';
       featureSlug?: string;
     }
   | {
