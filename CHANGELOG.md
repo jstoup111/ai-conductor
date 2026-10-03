@@ -84,6 +84,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - SHIP as-built and PRD audits now report every violating site of a decision in one pass instead of one per remediation lap. ([implementation PR #2932](https://github.com/jstoup111/ai-conductor/pull/2932)).
 - Rebases without replay proof no longer halt with a refused state transition. ([implementation PR #2936](https://github.com/jstoup111/ai-conductor/pull/2936)).
 - The conductor test suite moves real-tmux and whole-daemon tests to a separate CI-gated e2e tier, splits its largest file, and stops the tmpdir leak guard from blaming concurrent runs. ([implementation PR #2935](https://github.com/jstoup111/ai-conductor/pull/2935)).
+- Remediation no longer halts a feature when several findings share one repair task. ([implementation PR #2950](https://github.com/jstoup111/ai-conductor/pull/2950)).
 
 ## Migration
 
