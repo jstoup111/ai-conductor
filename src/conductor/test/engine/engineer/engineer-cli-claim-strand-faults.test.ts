@@ -1,7 +1,7 @@
 // Covers: task:6
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -65,13 +65,48 @@ describe('engineer claim stranded-envelope recovery faults', () => {
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     const item = envelope('01');
     await strand(queue, ledger, item);
+    const claimedPath = join(engineerDir, 'inbox', '2026-10-02T00_00_01.000Z__01.claimed');
+    await writeFile(claimedPath, JSON.stringify({ ...item, recoveryMarker: 'from-strand' }));
     await queue.enqueue(item);
 
-    const { out, opts } = capture();
+    const released: string[] = [];
+    const retainingQueue: FileIntakeQueue = {
+      ...queue,
+      release: async (entry) => {
+        released.push(entry.sourceRef);
+        return queue.release(entry);
+      },
+      // Preserve the final claimed file so the test can distinguish a released
+      // strand from the original pending copy after the first walk.
+      ack: async () => {},
+    };
+    const { out, err, opts } = capture(retainingQueue);
     const code = await dispatchEngineer({ kind: 'claim' }, opts);
+    const names = await readdir(join(engineerDir, 'inbox'));
+    const retained = JSON.parse(await readFile(claimedPath, 'utf8')) as { recoveryMarker?: string };
+    const second = capture(retainingQueue);
+    const secondCode = await dispatchEngineer({ kind: 'claim' }, second.opts);
 
-    expect({ code, sourceRef: JSON.parse(out[0]).sourceRef, pending: await queue.list() }).toEqual({
-      code: 0, sourceRef: item.sourceRef, pending: [],
+    expect({
+      code,
+      sourceRef: JSON.parse(out[0]).sourceRef,
+      pending: await queue.list(),
+      released,
+      reportedRelease: err.join('\n').includes('released 1 stranded intake claim(s)'),
+      names,
+      recoveryMarker: retained.recoveryMarker,
+      secondCode,
+      secondSourceRef: JSON.parse(second.out[0]).sourceRef,
+    }).toEqual({
+      code: 0,
+      sourceRef: item.sourceRef,
+      pending: [],
+      released: [item.sourceRef],
+      reportedRelease: true,
+      names: ['2026-10-02T00_00_01.000Z__01.claimed'],
+      recoveryMarker: 'from-strand',
+      secondCode: 0,
+      secondSourceRef: undefined,
     });
   });
 

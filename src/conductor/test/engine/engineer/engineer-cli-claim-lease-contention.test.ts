@@ -1,7 +1,7 @@
 // Covers: task:5
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -118,14 +118,21 @@ describe('engineer claim intake lease contention', () => {
     if (!held) throw new Error('fixture did not provide claim A');
     await queue.ack(held);
     await ledger.transition(held.source, held.sourceRef, 'claimed');
+    const stranded = envelope('503', '2026-10-03T00:02:00.000Z');
+    await queue.enqueue(stranded);
+    await ledger.record({ source: stranded.source, sourceRef: stranded.sourceRef });
+    await rename(
+      join(engineerDir, 'inbox', '2026-10-03T00_02_00.000Z__503.json'),
+      join(engineerDir, 'inbox', '2026-10-03T00_02_00.000Z__503.claimed'),
+    );
     const beforeInbox = await inboxNames();
     const beforeLedger = await readFile(join(engineerDir, 'ledger.json'), 'utf8');
     const contender = claimOptions({ waitMs: 500 });
     let settled = false;
     const claimB = dispatchEngineer({ kind: 'claim' }, contender.opts).finally(() => { settled = true; });
 
-    // B has only been allowed to reach lease acquisition; it cannot touch claim state.
-    await Promise.resolve();
+    // Hold across several 10 ms lease polls: B must still be waiting at the lease.
+    await new Promise<void>((resolve) => { setTimeout(resolve, 50); });
     expect(settled).toBe(false);
     expect(await inboxNames()).toEqual(beforeInbox);
     expect(await readFile(join(engineerDir, 'ledger.json',), 'utf8')).toBe(beforeLedger);
@@ -134,7 +141,7 @@ describe('engineer claim intake lease contention', () => {
     await holder.handle.release();
     expect(await claimB).toBe(0);
     expect(JSON.parse(contender.out[0])).toMatchObject({ kind: 'claim', sourceRef: second.sourceRef });
-    expect(contender.err.filter((line) => line.includes('stranded intake claim'))).toEqual([]);
+    expect(contender.err).toContain('released 1 stranded intake claim(s)');
     await assertLeaseAbsent();
   });
 
