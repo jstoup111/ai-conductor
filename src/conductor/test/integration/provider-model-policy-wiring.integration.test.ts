@@ -201,8 +201,8 @@ it('composes one ordered provider context across the interactive run after regis
     runtimeSetConstructionCount: 1,
     sessionStoreConstructionCount: 1,
     runnerProvider: 'compatibilityRuntime.provider',
-    runnerContext: 'providerExecution',
-    conductorContext: 'providerExecution',
+    runnerContext: 'providerExecution: preludeProviderExecution',
+    conductorContext: 'providerExecution: preludeProviderExecution',
     preludeContext: 'providerExecution: preludeProviderExecution',
     startupOrder: true,
   });

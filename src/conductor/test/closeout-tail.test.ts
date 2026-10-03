@@ -103,7 +103,11 @@ describe('CloseoutEventTail', () => {
     const events = new ConductorEventEmitter();
     const received: unknown[] = [];
     events.on('session_command_refused', (event) => { received.push(event); });
-    const tail = new CloseoutEventTail({ projectRoot, events });
+    const tail = new CloseoutEventTail({
+      projectRoot,
+      featureSlug: 'feature-a',
+      events,
+    });
 
     await tail.poll();
     expect(received).toEqual([]);

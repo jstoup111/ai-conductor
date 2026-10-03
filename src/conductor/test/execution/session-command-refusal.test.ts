@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -33,6 +33,7 @@ describe('daemon-session CLI refusal telemetry', () => {
   it('refuses through the production entry before daemon dispatch and projects its provisioned occurrence', async () => {
     const root = await mkdtemp(join(tmpdir(), 'session-command-refusal-'));
     const producerRoot = join(root, '.pipeline', 'session-events', 'dispatch-1');
+    await mkdir(producerRoot, { recursive: true });
     const globalEvents = new ConductorEventEmitter();
     const daemonLog = vi.fn();
     const persistence = startFeatureEventPersistence(root, globalEvents, 'feature-a');
