@@ -110,7 +110,7 @@ As an operator, I want to select Pi for a run or step so that the work is done b
 #### Happy Path
 - Given pi is installed and selected for a step, when the step dispatches, then Pi is spawned with print mode, no session, and JSON mode, with the prompt on stdin.
 - Given Pi emits a JSONL stream ending in a terminal assistant message whose stop reason is not an error and exits 0, when the adapter parses it, then the invoke result carries that message as output and the step reaches its normal verdict.
-- Given Pi reports cumulative usage in the stream, when the invoke result is built, then the usage is attached and the cost is recorded as cost-unmetered.
+- Given Pi reports per-message usage on its assistant `message_end` events, when the invoke result is built, then the summed usage is attached and its cost resolves from Pi's reported cost, then the committed rate card, else stays cost-unmetered (catalog ADR D19-D20).
 - Given a step retries after a failure, when Pi is invoked again, then the retry also runs with no session and never resumes a prior one.
 
 #### Negative Paths
