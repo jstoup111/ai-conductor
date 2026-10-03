@@ -381,7 +381,6 @@ describe('remediation case store', () => {
   it.each([
     ['foreign feature', JSON.stringify({ ...CASE_STATE, feature: { ...FEATURE, feature: 'other-feature' } }), 'foreign-feature'],
     ['malformed JSON', '{not-json', 'malformed-json'],
-    ['unknown future envelope', JSON.stringify({ ...CASE_STATE, version: 'v3' }), 'unknown-version'],
     ['malformed persisted state', JSON.stringify({
       ...CASE_STATE,
       cases: [{ ...CASE_STATE.cases[0], effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' } }],
@@ -396,6 +395,17 @@ describe('remediation case store', () => {
     await expect(store.read()).resolves.toEqual({ ok: false, reason });
     await expect(store
       .mutate(async () => ({ value: null, nextState: CASE_STATE }))).resolves.toEqual({ ok: false, reason });
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(original);
+  });
+
+  it('fails closed on an unknown envelope version without rewriting recovery history', async () => {
+    const projectRoot = await createProjectRoot();
+    const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
+    const original = JSON.stringify({ ...CASE_STATE, version: 'v3' });
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(statePath, original, 'utf8');
+
+    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({ ok: false, reason: 'unknown-version' });
     await expect(readFile(statePath, 'utf8')).resolves.toBe(original);
   });
 
