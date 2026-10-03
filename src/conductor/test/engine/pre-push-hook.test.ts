@@ -65,6 +65,17 @@ describe('pre-push hook', () => {
     expect((await f.git(f.bare, 'rev-parse', 'main')).stdout).toBe(remoteTip);
   });
 
+  it('leaves a plain stale push to git\'s non-fast-forward rejection', async () => {
+    const f = await fixture(); await staleRewrite(f);
+    expect((await f.git(f.worktree, 'fetch', 'origin')).exitCode).toBe(0);
+    const result = await f.git(f.worktree, 'push', 'origin', 'HEAD:main');
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('non-fast-forward');
+    expect(result.stderr).not.toContain('has not fetched');
+    expect((await f.git(f.bare, 'rev-parse', 'main')).stdout).toBe((await f.git(f.clone, 'rev-parse', 'main')).stdout);
+  });
+
   it('allows a force update when the tracking ref proves the remote value and permits new and delete refs', async () => {
     const f = await fixture(); await commit(f, f.worktree, 'rewrite.txt');
     expect((await f.git(f.worktree, 'push', '--force-with-lease', 'origin', 'HEAD:main')).exitCode).toBe(0);
