@@ -136,6 +136,12 @@ Option A.
    process, whose `PATH` never contains the guard. Engine CLIs that an agent launches inherit the
    guard, and none of them issues a refused form today; their lease push is allowed. No escape
    variable is added.
+
+   > **Amended 2026-10-03 by #2693 (operator decision):** "unaffected by construction" now holds
+   > only for `PATH`. The git-side backstop (D11) runs from the feature worktree's
+   > `core.hooksPath`, so engine git whose working directory is a feature worktree or a resolve
+   > worktree runs its hooks too. The engine stays unaffected because none of its git issues a form
+   > the hooks refuse, as D14 establishes. Still no escape variable is added.
 8. **The operator hook stays as early feedback, with its false positive fixed.**
    `hooks/claude/block-destructive-git.sh` is not removed. Its scanner drops heredoc bodies as well
    as quoted spans before matching, so text that merely describes a destructive command is not
@@ -165,6 +171,84 @@ Option A.
     > guard smoke, and the control-inventory coverage cover Claude and Codex only. The Pi adapter
     > cells, a Pi live guard smoke, and Pi's inventory entry are delivered by #2895. Pi dispatches
     > are added to the recorded limits in `docs/reference/settings-and-hooks.md`.
+
+    > **Amended 2026-10-03 by #2693 (operator decision):** for two ref-moving classes, deleting a
+    > local branch whose commits would become unreachable and a push that overwrites remote history
+    > the worktree has not fetched, the absolute-path `git`, `PATH`-shadowing, shell-alias, Pi,
+    > review-dispatch and non-canonical-spelling limits are backstopped by the git-side hooks of
+    > D11 to D15. Those limits still apply to every other refused form.
+
+> **Amended 2026-10-03 by #2693 (operator decision): git-side backstop for ref-moving destructive
+> git.** Option B, rejected above as the primary control, is adopted as a backstop behind Option A.
+> It vetoes two ref-moving classes in git itself, so it holds when a `git` is reached without the
+> guard. Local non-fast-forward branch moves (amend, rebase, `reset`, `branch -f`) stay allowed.
+> Forced clean and path discards fire no ref transaction and stay with the guard alone. Remote
+> branch deletion stays with the explicit-approval gate of the GitHub operation CLI.
+>
+> 11. **Two engine hooks join the worktree hook channel.** `reference-transaction` and `pre-push`
+>     are static bash assets in `git-hook-assets.ts`. `writeGitHooks` writes them into
+>     `«worktree»/.pipeline/git-hooks/` beside the commit-time hooks, mode 0755, through the same
+>     fail-closed provisioning (adr-2026-08-07-provider-neutral-commit-gate-for-protected-artifacts
+>     D3; the fail-open provisioning of adr-2026-07-10-inline-work-attribution-enforcement does not
+>     apply). They are pure shell with no runtime data expanded into interpreter source, so the
+>     interpreter-source inventory checks them like every other hook asset. Each hook decides first;
+>     when it allows, it chains to `$GIT_COMMON_DIR/hooks/«name»` when that file is present and
+>     executable and returns its status, as adr-2026-07-09-deterministic-evidence-attribution-enforcement
+>     D2 requires. A hook refusal is never overridden by a chained hook.
+> 12. **`reference-transaction` refuses deleting a branch whose commits would become unreachable.**
+>     It acts only at the `prepared` stage, and only on lines whose ref is under `refs/heads/` and
+>     whose new value is all zeros. Every other stage and line passes with no git call, so commits,
+>     rebases and ordinary ref updates pay one process start. For a deletion it resolves the ref's
+>     current value itself, because `git branch -D` passes an all-zero old value. It allows the
+>     deletion when either holds:
+>     - a loose-ref prune: the loose ref file exists and `packed-refs` holds the same ref at the
+>       same value, which is how `git pack-refs` and `git gc` remove the loose copy; or
+>     - the tip is reachable from another `refs/heads/` or `refs/remotes/` ref, the rule D5's
+>       2026-09-23 amendment uses.
+>
+>     Otherwise it exits non-zero, git aborts the whole transaction and every ref is unchanged.
+>     Renaming a branch whose tip no other ref holds is refused, because git deletes the old name
+>     before the new one is visible. The refusal names that case and the safe alternative: create
+>     the new branch, then delete the old one with `git branch -d`.
+> 13. **`pre-push` refuses overwriting remote history the worktree has not seen.** For each
+>     update on stdin it allows a deletion (out of scope above), a new ref, a fast-forward (the
+>     remote's current value is an ancestor of the pushed value), and an update whose remote
+>     current value equals the local remote-tracking ref for that branch under the remote's default
+>     fetch mapping. It refuses any other update. That last rule is a lease-equivalent check:
+>     `pre-push` cannot see the `--force-with-lease` flag, but it receives the remote's advertised
+>     value per ref, and a successful bare lease always has the tracking ref equal to it. Git
+>     withholds updates it has already rejected locally (a plain non-fast-forward push, a failed
+>     lease) from `pre-push`, so the hook judges only updates git would send. It reads stdin and
+>     local refs only and never contacts the remote, so a child-only push credential is
+>     unaffected (adr-2026-09-11-github-operation-ownership D9). A lease with an explicit expected
+>     value that differs from the tracking ref is refused; the safe alternative is to fetch, then
+>     push with a bare `--force-with-lease`.
+> 14. **The engine passes with no bypass variable.** Verified on main @ `fd6f539ca`:
+>     - the engine's branch deletions (`WorktreeManager.cleanup`, park reconciliation) run in the
+>       root checkout, which does not read a feature worktree's `core.hooksPath`; reclaim,
+>       park and teardown of squash-merged branches must keep running there;
+>     - its local ref moves inside a feature or resolve worktree (setup-triage quarantine
+>       `branch -f`, the post-finish `update-ref HEAD`, `checkout -B`, rebase) are updates, not
+>       deletions;
+>     - its pushes are plain or bare `--force-with-lease`.
+>
+>     `CONDUCT_ENGINE_COMMIT` stays a commit-only escape and the new hooks do not read it. An
+>     operator deleting a squash-merged branch from a halted worktree runs that deletion from the
+>     root checkout. Before every guarded dispatch, the D3 re-verification also confirms both hook
+>     files' content and mode and rewrites them if they differ, failing the dispatch with a message
+>     naming the hook path if they still cannot be confirmed. Refusals are stderr-only, as for the
+>     guard; refusal telemetry stays out of scope.
+> 15. **Coverage is proven by real-git tests and documented limits.** Tests run real `git` in
+>     temporary repositories and linked worktrees provisioned by `prepareWorktree`, push to a local
+>     bare remote, call `git` by absolute path so the guard is not on the path, and set `HOME` to an
+>     empty directory so no operator configuration is present. They prove each refusal leaves the
+>     ref unchanged and names the operation and its safe alternative. They prove these pass: lease
+>     pushes, fast-forward and new-ref pushes, deletion of a branch reachable from another ref,
+>     `git pack-refs --all` and `git gc`, and the engine's own ref operations listed in D14. Because
+>     the hooks fire inside git, one provider-independent proof covers every provider and run mode.
+>     Recorded limits added to the control inventory in `docs/reference/settings-and-hooks.md`:
+>     `git -c core.hooksPath=…`, `git push --no-verify`, and git run from the root checkout or a worktree
+>     the engine did not prepare.
 
 ## Consequences
 
