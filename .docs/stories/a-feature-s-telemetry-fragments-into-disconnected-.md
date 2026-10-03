@@ -5,7 +5,7 @@
 Source: jstoup111/ai-conductor#2011, including consolidated #2009.
 Operator approved the complete acceptance package in chat on 2026-09-30.
 
-Requirement authority: approved track scope and ADR-014 D18–D23, with the approved
+Requirement authority: approved track scope and ADR-014 D21–D26, with the approved
 shared lifecycle D5 and cold-start D7 amendments. Technical / Large; no PRD.
 Scope: exported telemetry across compatible tools, including Datadog; three-day features,
 restarts, long executions, repeated steps, truthful timing, and existing metrics parity.
@@ -14,7 +14,7 @@ The scenarios below are proposed acceptance behavior, not claims of shipped supp
 
 ## Story 1: Stable feature identity without joining unrelated work
 
-**Requirement:** #2011 feature continuity and isolation; D19.
+**Requirement:** #2011 feature continuity and isolation; D22.
 
 As an operator, I want a feature recognized before its first step so that dispatches join
 the right history without changing provider sessions.
@@ -35,7 +35,7 @@ the right history without changing provider sessions.
 
 ## Story 2: Recover connected history over three days
 
-**Requirement:** #2011 cross-dispatch inspection; D18–D20, D23.
+**Requirement:** #2011 cross-dispatch inspection; D21–D23, D26.
 
 As an operator, I want to follow earlier dispatches after restart so that a three-day feature
 remains inspectable without a three-day open trace.
@@ -56,7 +56,7 @@ remains inspectable without a three-day open trace.
 
 ## Story 3: Bound trace size and duration without finishing engine work
 
-**Requirement:** Approved long-running-feature outcome; D18, D21–D22.
+**Requirement:** Approved long-running-feature outcome; D21, D24–D25.
 
 As an operator, I want ongoing work exported in bounded portions so that even one long
 dispatch does not hold all its spans until completion.
@@ -77,7 +77,7 @@ dispatch does not hold all its spans until completion.
 
 ## Story 4: Group repeated steps while preserving each execution
 
-**Requirement:** Consolidated #2009 grouping and overlap; D21.
+**Requirement:** Consolidated #2009 grouping and overlap; D24.
 
 As an operator, I want repeated executions under a stable step group so that I can compare
 attempts while still seeing concurrency and individual results.
@@ -98,7 +98,7 @@ attempts while still seeing concurrency and individual results.
 
 ## Story 5: Count outcomes and usage once across slices
 
-**Requirement:** #2009 individual execution detail; D18, D21; shared lifecycle D2–D6.
+**Requirement:** #2009 individual execution detail; D21, D24; shared lifecycle D2–D6.
 
 As an operator, I want one execution's retries and costs preserved across rotation so that
 tracing improvements do not inflate operational totals.
@@ -119,7 +119,7 @@ tracing improvements do not inflate operational totals.
 
 ## Story 6: Separate early work settlement from late classification
 
-**Requirement:** Truthful member timing; D21 and shared lifecycle D3/D5.
+**Requirement:** Truthful member timing; D24 and shared lifecycle D3/D5.
 
 As an operator, I want a member's measured work to stop when it settles so that waiting for
 a group decision never appears as additional work.
@@ -140,7 +140,7 @@ a group decision never appears as additional work.
 
 ## Story 7: Preserve truthful timing through scheduling and clock gaps
 
-**Requirement:** Multi-day trace safety and truthful timestamps; D22.
+**Requirement:** Multi-day trace safety and truthful timestamps; D25.
 
 As an operator, I want unobserved time identified honestly so that a suspended process does
 not look like continuously observed work.
@@ -161,7 +161,7 @@ not look like continuously observed work.
 
 ## Story 8: Persist correlation without creating another telemetry channel
 
-**Requirement:** Restart continuity and event-spine integrity; D20.
+**Requirement:** Restart continuity and event-spine integrity; D23.
 
 As an operator, I want recoverable trace relationships in the normal event history so that
 restarts can explain continuity without a separate state file.
@@ -182,7 +182,7 @@ restarts can explain continuity without a separate state file.
 
 ## Story 9: End a dispatch once and clean up every active child
 
-**Requirement:** Existing terminal semantics across bounded segments; D22.
+**Requirement:** Existing terminal semantics across bounded segments; D25.
 
 As an operator, I want a dispatch's final outcome distinguished from segment rotation so
 that a halted feature is never displayed as successfully completed.
@@ -203,7 +203,7 @@ that a halted feature is never displayed as successfully completed.
 
 ## Story 10: Deliver the same portable behavior through every enabled entry point
 
-**Requirement:** Cross-tool and Datadog scope; D23.
+**Requirement:** Cross-tool and Datadog scope; D26.
 
 As an operator, I want the emitted relationships available through existing transports so
 that selecting a tracing tool does not select a different correctness model.
@@ -278,11 +278,11 @@ re-runs, features and segments so a legitimate new execution cannot be discarded
 
 ## Verify-claims disposition
 
-Verified, 100%: the operator approved D18–D23 and the companion architecture amendments.
+Verified, 100%: the operator approved D21–D26 and the companion architecture amendments.
 Verified source observations and protocol references are recorded in the architecture review.
 The scenarios assert approved target behavior; implementation correctness is unproven.
 No assumptions about backend retention, indexing, sampling, or live ingestion are required.
 Copying every identity and the full ledger is indistinguishable from restoring the same
-feature, as explicitly accepted in D19. Bounded traces do not guarantee real-time ingestion
+feature, as explicitly accepted in D22. Bounded traces do not guarantee real-time ingestion
 during suspension/outage or delivery of an unexported slice after process death.
 Verdict: CLEAR. Operator accepted these stories on 2026-09-30.

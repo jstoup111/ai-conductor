@@ -47,7 +47,7 @@ trace-root-span-records-no-run-outcome-a-halted-ru Story 4, and shared member te
 original PRD `.docs/specs/2026-06-28-otel-observability.md`.
 **Type:** contradiction
 **Severity:** blocking before resolution; resolved
-**Basis/confidence:** verified conflicting text, 100%; resolution matches operator-approved D18/D21/D22.
+**Basis/confidence:** verified conflicting text, 100%; resolution matches operator-approved D21/D24/D25.
 
 The historical OTel story required: "Decoded trace from a fixture run shows exactly one root span with no parent."
 The historical terminal story required: "Test (regression pin) asserts step spans export at `step_completed` before any terminal event, the root span exports only after the terminal event, and `conductor.run.outcome` appears on no span until then".
@@ -82,7 +82,7 @@ scope, rejected alternative, or compromise is introduced.
 Early recovery cannot depend on identity first being written by a later step. Options:
 (1) apply the approved shared atomic helper to these remaining legacy assertions,
 (2) postpone tracing until a step writes identity, or (3) create a separate identity file.
-Option 1 is the already-approved D19 decision. Options 2/3 lose early telemetry or introduce
+Option 1 is the already-approved D22 decision. Options 2/3 lose early telemetry or introduce
 an unnecessary second identity authority.
 
 Applied: enabled daemon startup and StepRunner share create-if-absent persistence;
@@ -104,7 +104,7 @@ The earlier diagram prose described a retry as a distinct execution. Shared life
 keeps policy retries inside the execution and gives only a later re-run a new identity.
 Options were (1) preserve D2 and distinguish retry/execution/slice, (2) redefine engine
 execution identity, or (3) collapse all executions into a step aggregate. The operator
-approved option 1 in D21 and the acceptance package. The diagram now has its additive
+approved option 1 in D24 and the acceptance package. The diagram now has its additive
 correction; story text preserves one execution across retries and rotations while
 keeping re-runs and overlapping subjects distinct. Grouping changes no scheduling policy.
 
@@ -132,7 +132,7 @@ prerequisite, extra lifecycle owner, second ledger writer, or required infinite 
 ## Re-check and limits
 
 Re-read the affected assertions after replacement and compared the ten stories with
-D18–D23 and retained lifecycle/metric constraints. The three conflict classes above are
+D21–D26 and retained lifecycle/metric constraints. The three conflict classes above are
 resolved under already-recorded operator choices; there is no accepted degrading conflict
 and no new/superseding ADR. Historical artifact corrections stay in DECIDE and must not
 become BUILD tasks.

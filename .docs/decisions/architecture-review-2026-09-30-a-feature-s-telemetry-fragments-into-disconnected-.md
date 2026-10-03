@@ -8,7 +8,7 @@
 **Operator architecture approval:** Pending. No ADR amendment is authoritative yet.
 
 > **Amended 2026-09-30 by #2011:** The operator approved the complete amendment
-> package in chat. Its exact D18–D23 text is now in
+> package in chat. Its exact D21–D26 text is now in
 > [ADR-014](adr-014-otel-observability-exporter.md#d18--bounded-traces-are-the-feature-history-representation),
 > with companion amendments in shared lifecycle D5 and cold-start D7. Condition 1
 > is satisfied; subsequent references to pending approval describe the earlier review.
@@ -43,7 +43,7 @@ The complete reviewable amendment text is held in the worktree's
 .pipeline/architecture-amendments-2011.md until operator approval.
 
 > **Amended 2026-09-30 by #2011:** The authoritative complete text is now ADR-014
-> D18–D23. The ignored review package is no longer a dependency of this specification. Its decisions are:
+> D21–D26. The ignored review package is no longer a dependency of this specification. Its decisions are:
 
 1. Rotate after one hour or 1,024 completed execution slices/outcome records. Close active
    slices without ending logical execution; link the next segment and its continuations.
@@ -82,7 +82,7 @@ asynchronous event projection, resource identity, and failure isolation. The new
 lifecycle is an extension of those responsibilities, not a new persistence technology or
 deployment boundary. The same-schema event ledger remains the durable correlation source.
 
-Amend ADR-014 additively (proposed D18–D23), plus the shared lifecycle ADR D5 parent-placement
+Amend ADR-014 additively (proposed D21–D26), plus the shared lifecycle ADR D5 parent-placement
 sentence and cold-start ADR D7 writer-ownership sentence. Preserve all original text and
 place corrections beside it. Apply the amendments in DECIDE after approval, never as BUILD
 tasks. No other accepted feature's behavior is absorbed.
@@ -188,7 +188,7 @@ ADRs, preventing an unapproved change from appearing under an existing APPROVED 
 
 1. Operator approves the concrete amendment package before stories; then apply it beside
    the affected assertions in all three governing ADRs on this spec branch.
-2. Stories and plan cover every D18–D23 behavior and negative boundary, especially early
+2. Stories and plan cover every D21–D26 behavior and negative boundary, especially early
    identity, 72-hour restart history, long executions, late classification, metrics parity,
    and typed-event persistence. Each boundary has one behavior-owning integration task.
 3. Default checks use local fakes and controlled clocks, with actual SDK serialization and

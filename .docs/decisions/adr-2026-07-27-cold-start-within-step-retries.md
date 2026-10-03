@@ -191,7 +191,7 @@ of contract.
 
 > **Amended 2026-09-30 by #2011:** The create-if-absent persistence is centralized
 > in a shared feature-identity helper also called during enabled OTel bootstrap
-> (ADR-014 D19). It never writes per-invocation provider IDs on retries, rotation,
+> (ADR-014 D22). It never writes per-invocation provider IDs on retries, rotation,
 > or restart, never overwrites a persisted feature identity, and never changes
 > fresh provider session generation. Telemetry uses that resolved feature identity
 > instead of guessing from a newly allocated dispatch ID.

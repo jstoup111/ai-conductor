@@ -21,7 +21,7 @@ over OTLP to a collector **or** to a local file for offline ingestion.
 
 > **Amended 2026-09-30 by #2011:** One feature now spans bounded, independently
 > exported traces with standard links, logical-step groups, and execution slices.
-> The operator approved D18–D23 below, including the consolidated #2009 scope.
+> The operator approved D21–D26 below, including the consolidated #2009 scope.
 > They supersede the one-trace-per-run and direct step-parenting model.
 
 This is an **observability/tracing cross-cutting decision** (ADR-required category). Two structural
@@ -90,7 +90,7 @@ Relevant existing facts (evidence):
    > writes `.pipeline/conduct-session-id` (adr-2026-07-27-cold-start-within-step-retries
    > Decision 7 keeps the step runner its only writer).
 
-> **Amended 2026-09-30 by #2011:** D19 supersedes the read-only daemon-bootstrap
+> **Amended 2026-09-30 by #2011:** D22 supersedes the read-only daemon-bootstrap
 > and sole-step-runner-writer clauses above. Enabled OTel startup and StepRunner
 > delegate to the shared atomic create-if-absent feature-identity helper; persisted
 > identity is never overwritten by dispatch/provider session IDs.

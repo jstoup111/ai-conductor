@@ -7,7 +7,7 @@
 **Stories:** .docs/stories/a-feature-s-telemetry-fragments-into-disconnected-.md
 **Conflict check:** Clean; operator approved 2026-09-30
 **Operator plan approval:** Approved in chat on 2026-09-30
-**Design:** ADR-014 D18–D23, with approved shared lifecycle D5 and cold-start D7 amendments
+**Design:** ADR-014 D21–D26, with approved shared lifecycle D5 and cold-start D7 amendments
 
 ## Summary
 
@@ -44,7 +44,7 @@ new service. The proposed helper paths below may be kept small and internal.
 
 ## Prerequisites and execution rules
 
-- Accepted stories, clean conflict report, and approved D18–D23 are the authority. Their
+- Accepted stories, clean conflict report, and approved D21–D26 are the authority. Their
   required historical-artifact corrections are already in DECIDE; no task edits a sealed
   artifact from another feature.
 - Existing dependencies suffice. SDK serializer tests use the installed supported versions;
@@ -104,7 +104,7 @@ new service. The proposed helper paths below may be kept small and internal.
 **Steps:**
 1. Write the focused failing behavioral fixture described by the Done-when checks using the listed test seam; inject clocks and failing adapters where the scenario requires them.
 2. Establish scoped RED before changing implementation.
-3. Add versioned bounded trace_segment_opened, trace_segment_ended and trace_segment_rotate variants from D20, with closed continuity/reason unions and standard context fields. Derive subscriptions from EVENT_SINKS; opened/ended persist only; rotate persists and reaches trace handling, with a deliberate metrics no-op. Add a typed handler slot for rotation, completed by task 11. Exercise the real emitter and EventPersister against a temporary ledger; no new writer or channel.
+3. Add versioned bounded trace_segment_opened, trace_segment_ended and trace_segment_rotate variants from D23, with closed continuity/reason unions and standard context fields. Derive subscriptions from EVENT_SINKS; opened/ended persist only; rotate persists and reaches trace handling, with a deliberate metrics no-op. Add a typed handler slot for rotation, completed by task 11. Exercise the real emitter and EventPersister against a temporary ledger; no new writer or channel.
 4. Run scoped GREEN for the changed behavior and its named regression cases, then commit this task.
 
 **Done when:**
@@ -592,12 +592,12 @@ the cited task checks collectively implement the complete applicable obligation.
 | adr-014-otel-observability-exporter#D15 | no-change | none | Delivery spooling is owned by the approved durable-otel-export-queue feature, not implemented by this change. Keep SpanExporter composition, original timestamps, process-owned drainer lifetime and existing diagnostic ownership; no new queue, age filter or lease is introduced. |
 | adr-014-otel-observability-exporter#D16 | no-change | none | Delivery spooling is owned by the approved durable-otel-export-queue feature, not implemented by this change. Keep SpanExporter composition, original timestamps, process-owned drainer lifetime and existing diagnostic ownership; no new queue, age filter or lease is introduced. |
 | adr-014-otel-observability-exporter#D17 | no-change | none | Delivery spooling is owned by the approved durable-otel-export-queue feature, not implemented by this change. Keep SpanExporter composition, original timestamps, process-owned drainer lifetime and existing diagnostic ownership; no new queue, age filter or lease is introduced. |
-| adr-014-otel-observability-exporter#D18 | task | task-8, task-9, task-11, task-12 | Repeated SpanManager rotation under many active subjects creates fresh parentless trace IDs with one immediate predecessor-root link and one preceding-slice link per continuation; operation names remain bounded across rotations and contain no dispatch UUID or segment index. |
-| adr-014-otel-observability-exporter#D19 | task | task-1, task-2, task-5, task-21, task-22, task-23 | feature-identity.test.ts races two creators in one temporary pipeline directory and asserts one persisted winner returned to both; resource.test.ts and the StepRunner persistence seam reuse that same winner without replacing an existing nonempty opaque identity or its file bytes. |
-| adr-014-otel-observability-exporter#D20 | task | task-3, task-4, task-5, task-19, task-20 | An emitter/EventPersister integration capture round-trips opened, ended and rotate in events.jsonl with version, scope, dispatch/index/context and exact boundary reasons; rotation is not a step/feature terminal, and unrelated legacy event decoding is unchanged. |
-| adr-014-otel-observability-exporter#D21 | task | task-6, task-7, task-9, task-10, task-13, task-14, task-15 | SpanManager SDK-capture tests assert repeated executions within a segment have distinct execution IDs, individual start/end times and outcomes beneath one step-group parent that is itself parented under the current segment root; a later segment retains the same logical-step identity. |
-| adr-014-otel-observability-exporter#D22 | task | task-11, task-12, task-16, task-17, task-18, task-20 | OtelVisualizer controlled-clock tests show the one-hour deadline is fixed despite intervening events, and both timer-driven and event-driven expiry close old slices/groups/root at that boundary and open linked continuations at the same instant with nonnegative durations. |
-| adr-014-otel-observability-exporter#D23 | task | task-21, task-22, task-23, task-24 | wire.ts preparation fixtures start enabled telemetry before any step and assert its resource and later StepRunner startup use the same atomically persisted feature identity, including a racing creator; only a fully resolved same-scope context enables recovery. |
+| adr-014-otel-observability-exporter#D21 | task | task-8, task-9, task-11, task-12 | Repeated SpanManager rotation under many active subjects creates fresh parentless trace IDs with one immediate predecessor-root link and one preceding-slice link per continuation; operation names remain bounded across rotations and contain no dispatch UUID or segment index. |
+| adr-014-otel-observability-exporter#D22 | task | task-1, task-2, task-5, task-21, task-22, task-23 | feature-identity.test.ts races two creators in one temporary pipeline directory and asserts one persisted winner returned to both; resource.test.ts and the StepRunner persistence seam reuse that same winner without replacing an existing nonempty opaque identity or its file bytes. |
+| adr-014-otel-observability-exporter#D23 | task | task-3, task-4, task-5, task-19, task-20 | An emitter/EventPersister integration capture round-trips opened, ended and rotate in events.jsonl with version, scope, dispatch/index/context and exact boundary reasons; rotation is not a step/feature terminal, and unrelated legacy event decoding is unchanged. |
+| adr-014-otel-observability-exporter#D24 | task | task-6, task-7, task-9, task-10, task-13, task-14, task-15 | SpanManager SDK-capture tests assert repeated executions within a segment have distinct execution IDs, individual start/end times and outcomes beneath one step-group parent that is itself parented under the current segment root; a later segment retains the same logical-step identity. |
+| adr-014-otel-observability-exporter#D25 | task | task-11, task-12, task-16, task-17, task-18, task-20 | OtelVisualizer controlled-clock tests show the one-hour deadline is fixed despite intervening events, and both timer-driven and event-driven expiry close old slices/groups/root at that boundary and open linked continuations at the same instant with nonnegative durations. |
+| adr-014-otel-observability-exporter#D26 | task | task-21, task-22, task-23, task-24 | wire.ts preparation fixtures start enabled telemetry before any step and assert its resource and later StepRunner startup use the same atomically persisted feature identity, including a racing creator; only a fully resolved same-scope context enables recovery. |
 | adr-2026-07-27-cold-start-within-step-retries#D1 | no-change | none | Provider resume capability, fresh invocation IDs, cold-start retry/recovery and session-policy behavior remain owned by provider-session/provider-execution and step-runners. This feature changes only durable telemetry identity ownership, never provider dispatch policy. |
 | adr-2026-07-27-cold-start-within-step-retries#D2 | no-change | none | Provider resume capability, fresh invocation IDs, cold-start retry/recovery and session-policy behavior remain owned by provider-session/provider-execution and step-runners. This feature changes only durable telemetry identity ownership, never provider dispatch policy. |
 | adr-2026-07-27-cold-start-within-step-retries#D3 | no-change | none | Provider resume capability, fresh invocation IDs, cold-start retry/recovery and session-policy behavior remain owned by provider-session/provider-execution and step-runners. This feature changes only durable telemetry identity ownership, never provider dispatch policy. |

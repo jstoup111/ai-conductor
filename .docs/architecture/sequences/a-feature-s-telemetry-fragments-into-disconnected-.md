@@ -78,7 +78,7 @@ parent. A real new execution after a halt is not mislabeled as a continuation sl
 
 ## 4. Early member settlement and delayed classification
 
-> **Amended 2026-09-30 by #2011:** Tasks 13–15 implement approved D21's separate
+> **Amended 2026-09-30 by #2011:** Tasks 13–15 implement approved D24's separate
 > work and outcome boundaries. In sequence 1, starting the telemetry lifecycle
 > prepares context only: the segment opens lazily on trace-bearing activity, and
 > its opened record is queued outside the engine-event handler before a child is

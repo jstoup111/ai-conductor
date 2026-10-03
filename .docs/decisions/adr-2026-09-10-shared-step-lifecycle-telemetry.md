@@ -59,10 +59,10 @@ Group start/end events do not establish individual execution boundaries or membe
 5. **All current consumers share the identity interpretation.** Carry optional context through EventPersister, daemon forwarding, timing-rollup, MetricsListener, SpanManager/visualizer, and relevant event-rendering/dispatch-metering consumers. Retain lifecycle step labels for existing serial and built-in steps. Configured members use a stable, unambiguous parent/member label on the existing step dimension; execution/attempt IDs remain event/trace context, never metric labels or metric Resource fields. Span parenting stays under the existing run trace, with parent/member attributes for configured branches. Historical ledgers and context-free events retain compatibility; adding member intervals must not inflate feature elapsed totals because interval union remains the aggregation rule.
 
 > **Amended 2026-09-30 by #2011:** Execution work remains under a conductor.run
-> root through a logical-step group inside a bounded segment (ADR-014 D18–D23).
+> root through a logical-step group inside a bounded segment (ADR-014 D21–D26).
 > Linked execution slices across traces retain shared execution identity, observed
 > active intervals, provider attempts, metrics, and gate ownership. D2 policy retries
-> retain their execution identity. D21 ends early-settled work immediately and emits
+> retain their execution identity. D24 ends early-settled work immediately and emits
 > a separate linked late-outcome record so classification waits neither inflate work
 > time nor require rewriting an ended span.
 

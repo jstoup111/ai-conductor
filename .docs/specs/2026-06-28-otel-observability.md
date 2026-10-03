@@ -88,7 +88,7 @@ are separable units of work; each may ship in its own PR.
   `feature_complete` (or process end) it closes the run span. All step spans for that run are
   children of the run span (one trace per run).
 
-> **Amended 2026-09-30 by #2011:** FR-2 now follows approved ADR-014 D18–D23:
+> **Amended 2026-09-30 by #2011:** FR-2 now follows approved ADR-014 D21–D26:
 > each segment has a fresh root with a predecessor link; step groups parent the
 > execution slices within it. Only the dispatch-ending segment carries run outcome.
 - **FR-3:** Each `step_started` opens a **step span** whose name is the step name; the
@@ -201,7 +201,7 @@ are separable units of work; each may ship in its own PR.
 
 > **Amended 2026-09-30 by #2011:** The decoded-output criterion now checks bounded
 > linked segment roots, logical-step groups, and execution slices/outcomes under
-> ADR-014 D18–D23. Late outcome spans intentionally have zero duration. There is
+> ADR-014 D21–D26. Late outcome spans intentionally have zero duration. There is
 > one terminal-bearing span per authoritatively ended execution, not one total span.
 > Metrics and supported transport behavior remain unchanged.
 - With `otel.exporter: otlp` pointed at a local collector (or in-memory test collector), the

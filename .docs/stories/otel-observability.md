@@ -46,7 +46,7 @@ off by default, so that observability can never alter or destabilize a conductor
 
 ## Story 2: Connected bounded traces for a feature
 
-**Requirement:** FR-2; ADR-014 D18–D23.
+**Requirement:** FR-2; ADR-014 D21–D26.
 
 As a harness operator, I want bounded trace segments connected by standard links and stable
 feature identity so that long features remain inspectable across dispatches.
@@ -70,7 +70,7 @@ feature identity so that long features remain inspectable across dispatches.
 
 ## Story 3: Per-execution work slices with accurate timing and status
 
-**Requirement:** FR-3; ADR-014 D21–D22.
+**Requirement:** FR-3; ADR-014 D24–D25.
 
 As a harness operator, I want each execution's measured work interval and outcome retained
 across bounded slices so that segmentation does not distort duration or completion.

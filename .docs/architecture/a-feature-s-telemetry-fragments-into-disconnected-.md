@@ -143,7 +143,7 @@ processor. event-persister.ts owns feature-scoped event history and daemon forwa
 The daemon injects its resolved feature run identity into the visualizer; StepRunner
 owns persistence of conduct-session-id.
 
-> **Amended 2026-09-30 by #2011:** Approved ADR-014 D19 centralizes persistence
+> **Amended 2026-09-30 by #2011:** Approved ADR-014 D22 centralizes persistence
 > in the shared create-if-absent helper, also called before enabled OTel startup.
 
 The component responsibilities above are complete at diagram level. Architecture review
@@ -153,7 +153,7 @@ clock discontinuities, and the compatible amendment to ADR-014's projection cont
 These are not delegated as unspecified BUILD tasks.
 
 > **Amended 2026-09-30 by #2011:** Architecture approval is complete. ADR-014
-> D18–D23 now specify the duration/count bounds, publication/recovery ordering,
+> D21–D26 now specify the duration/count bounds, publication/recovery ordering,
 > identity ownership, clock gaps, and late classification behavior.
 
 External constraints:

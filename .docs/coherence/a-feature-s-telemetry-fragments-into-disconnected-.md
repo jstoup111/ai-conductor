@@ -14,7 +14,7 @@ three changed ADRs (37 citable decisions), and all 40 acceptance criteria. The
 technical track has no PRD/FR layer. #2009 step grouping is consolidated into #2011.
 
 The exact staged outcome quotes below retain the intake wording. The operator
-explicitly approved the narrower representation in ADR-014 D18/D23: connected
+explicitly approved the narrower representation in ADR-014 D21/D26: connected
 history means standard links plus stable feature identity across bounded traces.
 Per-dispatch inspection means filtering by dispatch identity across its segments.
 Neither outcome 1 nor outcome 4 promises a universal single-waterfall viewer or
@@ -79,7 +79,7 @@ individual outcomes and dispatch filtering under the approved interpretation abo
 
 | Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |
 |---|---|---|---|---|
-| adr | adr-014-otel-observability-exporter | story-1, story-2, story-3, story-4, story-5, story-6, story-7, story-8, story-9, story-10 | covered | D1–D23 reviewed against the plan Architecture Obligation Coverage and complete cited checks; retained metrics and separate spool obligations keep their owners. |
+| adr | adr-014-otel-observability-exporter | story-1, story-2, story-3, story-4, story-5, story-6, story-7, story-8, story-9, story-10 | covered | D1–D26 reviewed against the plan Architecture Obligation Coverage and complete cited checks; retained metrics and separate spool obligations keep their owners. |
 | adr | adr-2026-07-27-cold-start-within-step-retries | story-1, story-4, story-10 | covered | D1–D6 provider policy is unchanged; amended D7 is implemented by the shared atomic identity helper and enabled startup, with failure and provider-session preservation checks. |
 | adr | adr-2026-09-10-shared-step-lifecycle-telemetry | story-4, story-5, story-6, story-9, story-10 | covered | D1–D7 preserve engine execution authority, member timing, retry identity, once-only terminal facts and metrics; amended D5 permits the bounded trace hierarchy. |
 
@@ -138,7 +138,7 @@ that its behavioral tests have already run.
 ## Semantic review and evidence
 
 Coverage and consistency: inferred, 95% confidence from the accepted criteria,
-approved D18–D23 and companion amendments, and all 24 complete Done-when blocks.
+approved D21–D26 and companion amendments, and all 24 complete Done-when blocks.
 Every task was compared with every criterion, prioritizing negative/no-op and
 preserved-behavior constraints. No unresolved contradiction or oscillation was found.
 
@@ -167,7 +167,7 @@ roots, and task 24 actual supported serializers/direct-factory behavior. The
 and fake transport; it neither presumes a backend UI nor executes a whole build.
 
 Architecture obligations: all 37 mappings were reviewed individually. ADR-014
-D1/D3–D8 and D18–D23 are supported by the collectively cited task checks. D2 is
+D1/D3–D8 and D21–D26 are supported by the collectively cited task checks. D2 is
 verified directly in engine/plugin-loader.ts registerBuiltins, which registers
 the otel visualizer through PluginRegistry. D9–D14 retain the existing independent
 metric ownership, dimensions and configuration; this feature does not change
@@ -179,13 +179,13 @@ Cold-start D1–D6 require no provider-policy change; D7 alone changes durable
 feature-identity ownership without changing fresh invocation generation. Shared
 lifecycle D1 and D7 keep the existing engine/emission owners; D2–D6 constrain the
 changed projection and are supported by retry, settlement, terminal and metrics
-checks. D23 documentation remains a mandatory same-change HARNESS/finish obligation
+checks. D26 documentation remains a mandatory same-change HARNESS/finish obligation
 (README and affected OTel guides, including Datadog guidance); the plan skill
 excludes ordinary documentation from implementation tasks. This review does not
 waive that obligation or invent a documentation task.
 
 No new unconfirmed load-bearing assumption is needed. Exact-copy restoration of
-all identity and history remains the accepted D19 detection limit. Responsive
+all identity and history remains the accepted D22 detection limit. Responsive
 observation bounds do not guarantee ingestion during suspension/outage, backend
 retention, or delivery of an unexported slice after abrupt loss.
 
