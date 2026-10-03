@@ -9,8 +9,11 @@ import {
   resolveOriginRef,
 } from './autoheal.js';
 import { createTaskEvidence } from './task-evidence.js';
-import { parsePlanTaskPaths } from './plan-task-parse.js';
+import { planTaskDigests, parsePlanTaskPaths } from './plan-task-parse.js';
 import { createRepairObligationStore, repairPlanIdentity } from './repair-obligations.js';
+import { readTaskDigests, recordTaskDigests } from './task-digests.js';
+import { currentCommitSha, currentTreeHash } from './project-prelude.js';
+import { resolveTaskIds } from './task-progress.js';
 export interface TaskStatusRecord {
   id: string;
   name?: string;
@@ -225,6 +228,59 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
 
     const planTasks = parsePlanTasks(planText);
     const planTaskPaths = parsePlanTaskPaths(planText);
+    const currentDigests = Object.fromEntries(planTaskDigests(planText));
+    const recordedDigests = await readTaskDigests(projectRoot, resolvedPlanPath);
+    if (recordedDigests.kind === 'incompatible') {
+      throw new Error(`Unable to seed task status from task digests: ${recordedDigests.message}`);
+    }
+
+    if (recordedDigests.kind === 'present') {
+      const changedTaskIds = Object.entries(currentDigests)
+        .filter(([taskId, digest]) => recordedDigests.digests[taskId] !== undefined && recordedDigests.digests[taskId] !== digest)
+        .map(([taskId]) => taskId);
+      if (changedTaskIds.length > 0) {
+        const [head, tree, resolvedTaskIds] = await Promise.all([
+          currentCommitSha(projectRoot),
+          currentTreeHash(projectRoot),
+          resolveTaskIds(projectRoot, Array.from(planTasks.keys())),
+        ]);
+        const repairStore = createRepairObligationStore(projectRoot, engineStatePath);
+        for (const taskId of changedTaskIds) {
+          const canonicalId = canonicalTaskId(taskId);
+          const digest = currentDigests[taskId];
+          const admission = await repairStore.admitOrReplay(
+            `plan_amendment:${canonicalId}:${digest}`,
+            {
+              id: `plan_amendment:${canonicalId}:${digest}`,
+              planPath: resolvedPlanPath,
+              taskIds: [taskId],
+              source: {
+                findingId: digest,
+                authority: 'plan_amendment',
+                instruction: `Task ${taskId} plan text changed since it was implemented; reopen it in BUILD.`,
+              },
+              baseline: {
+                head: head ?? '',
+                tree: tree ?? '',
+                resolvedTaskIds: Array.from(resolvedTaskIds),
+              },
+            },
+          );
+          if (!admission.ok) {
+            throw new Error(`Unable to admit plan amendment repair for task ${taskId}: ${admission.message}`);
+          }
+          const settled = await repairStore.markSettled({
+            planPath: resolvedPlanPath,
+            obligationId: admission.obligation.id,
+          });
+          if (!settled.ok) {
+            throw new Error(`Unable to settle plan amendment repair for task ${taskId}: ${settled.message}`);
+          }
+        }
+      }
+    }
+    await recordTaskDigests(projectRoot, resolvedPlanPath, currentDigests);
+
     const repairs = await createRepairObligationStore(projectRoot, engineStatePath).read();
     if (!repairs.ok) {
       throw new Error(`Unable to seed task status from repair state (${repairs.kind}): ${repairs.message}`);
@@ -342,11 +398,9 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
         // build predicate no longer cross-checks task-status.json rows
         // against the evidence ledger (the derivation engine +
         // createTaskEvidence's evidenceStamps; the derivation engine itself
-        // was deleted in Task 11) — that anti-forgery check is retired, since
-        // build_review's completeness rubric now independently judges the
-        // real diff on every pass. A row already marked completed/skipped
-        // stays that way across re-seeds regardless of whether an evidence
-        // stamp exists for it.
+        // was deleted in Task 11). A row already marked completed/skipped
+        // stays that way across re-seeds unless a current repair obligation
+        // explicitly reopens it.
         if (existing.status === 'completed' || existing.status === 'skipped') {
           continue;
         }
@@ -367,9 +421,8 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
         // (CLAUDE.md "Daemon Operations Safety" rule 3, #497). This is a
         // RESTORE, not a grant: `resolveTaskIds` already treats the same
         // trailer as resolving the task for build-step routing
-        // (adr-2026-07-23, #859), and `build_review`'s completeness rubric
-        // still re-judges the real diff, so no unearned work can pass a gate
-        // through this row.
+        // (adr-2026-07-23, #859), while current repair obligations take
+        // precedence over that historic trailer evidence.
         const provenSha = provenCompletions.get(canonicalId);
         const newTask: TaskStatusRecord = provenSha
           ? {
