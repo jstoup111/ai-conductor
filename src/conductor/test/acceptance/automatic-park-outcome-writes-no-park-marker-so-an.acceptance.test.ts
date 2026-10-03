@@ -246,7 +246,7 @@ describe('automatic park termination — real runner to durable daemon consumers
     expect(halt).toContain('tmp/setup-debug.log');
     expect(halt).toContain('Resume procedure:');
     expect(halt).toContain('2. rm .pipeline/HALT');
-    expect(halt).toContain(`3. Unpark the feature with the daemon unpark command for ${SLUG}.`);
+    expect(halt).toContain(`3. ai-conductor daemon unpark ${SLUG}`);
     expect(await readFile(haltClassPath(), 'utf8')).toBe('needs-human');
 
     expect(await discoverSlugs()).not.toContain(SLUG);
@@ -291,7 +291,7 @@ describe('automatic park termination — real runner to durable daemon consumers
     const halt = await readFile(haltPath(), 'utf8');
     expect(halt).toMatch(/^feature errored — automatic park failed/i);
     expect(halt).toContain('permission denied');
-    expect(halt).toContain(`Park the feature with the daemon park command for ${SLUG}.`);
+    expect(halt).toContain(`ai-conductor daemon park ${SLUG}`);
     expect(record.logs).toEqual([
       '[daemon-runner] triage outcome: park, erroring feature — setup still broken',
     ]);
@@ -337,7 +337,7 @@ describe('automatic park termination — real runner to durable daemon consumers
     expect(halt).not.toContain('parked for human inspection');
     expect(halt).toContain('2. rm .pipeline/HALT');
     expect(halt).toContain('3. Re-queue the feature (restart the daemon if it was excluded this run).');
-    expect(halt).not.toContain(`Unpark the feature with the daemon unpark command for ${SLUG}.`);
+    expect(halt).not.toContain(`ai-conductor daemon unpark ${SLUG}`);
     expect(await discoverSlugs()).toContain(SLUG);
     expect(record.escalations).toHaveLength(mode === 'false-ship' ? 1 : 0);
   });

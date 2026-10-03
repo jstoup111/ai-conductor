@@ -18,13 +18,14 @@ export function deferredAutoParkHaltPresentation(
   slug: string,
   state: DeferredAutoParkHaltState,
 ): DeferredAutoParkHaltPresentation {
+  // ai-conductor:session-command-context=operator-only
   if (state === 'write-failed') {
     return {
       heading: 'feature errored — automatic park failed',
       resumeProcedure:
         `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
         `  2. rm .pipeline/HALT\n` +
-        `  3. Park the feature with the daemon park command for ${slug}.\n` +
+        `  3. ai-conductor daemon park ${slug}\n` +
         `  4. Re-queue the feature (restart the daemon if it was excluded this run).\n`,
     };
   }
@@ -34,9 +35,10 @@ export function deferredAutoParkHaltPresentation(
     resumeProcedure:
       `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
       `  2. rm .pipeline/HALT\n` +
-      `  3. Unpark the feature with the daemon unpark command for ${slug}.\n` +
+      `  3. ai-conductor daemon unpark ${slug}\n` +
       `  4. Re-queue the feature (restart the daemon if it was excluded this run).\n`,
   };
+  // /ai-conductor:session-command-context
 }
 
 function errorMessage(error: unknown): string {

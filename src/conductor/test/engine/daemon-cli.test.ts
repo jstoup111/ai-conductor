@@ -119,8 +119,8 @@ describe('daemon termination guidance', () => {
       const halt = await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf8');
       expect(halt).toMatch(/^feature errored — automatic park failed/);
       expect(halt).toContain('EACCES: permission denied writing auto-park marker');
-      expect(halt).toContain(`Park the feature with the daemon park command for ${slug}.`);
-      expect(halt).not.toContain(`Unpark the feature with the daemon unpark command for ${slug}.`);
+      expect(halt).toContain(`ai-conductor daemon park ${slug}`);
+      expect(halt).not.toContain(`ai-conductor daemon unpark ${slug}`);
       expect(consoleLogSpy.mock.calls.flat().join('\n')).toContain(
         `[daemon-runner] auto-park write failed for ${slug}: EACCES: permission denied writing auto-park marker`,
       );
@@ -323,7 +323,7 @@ describe('daemon termination guidance', () => {
       ]);
 
       expect(failedHalt).toContain('feature errored — will re-dispatch on the next scan');
-      expect(parkedHalt).toContain(`Unpark the feature with the daemon unpark command for ${slug}.`);
+      expect(parkedHalt).toContain(`ai-conductor daemon unpark ${slug}`);
       expect(`${failedHalt}\n${parkedHalt}`).not.toContain('conduct-ts daemon');
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
