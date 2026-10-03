@@ -1592,6 +1592,8 @@ export interface ComplexityAssessment extends ProviderAttributionMetadata {
 }
 
 export interface StepRunOptions {
+  /** Per-dispatch cancellation authority for the provider invocation. */
+  abortSignal?: AbortSignal;
   /** Configured skill path for a concurrent-group branch dispatch. */
   branchSkill?: string;
   /** Daemon-start capability observations for custom build-review candidates. */
