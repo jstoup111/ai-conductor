@@ -306,7 +306,7 @@ Every row is diff-local: fixtures supply their own plan text, commits, and engin
 
 ## Architecture Obligation Coverage
 
-`adr-2026-09-06-reopened-task-resolution` is amended by this spec (D11). Every citable decision D1-D11 is dispositioned; task evidence quotes are exact Done-when fragments.
+`adr-2026-09-06-reopened-task-resolution` is amended by this spec (D11). Every citable decision D1-D12 is dispositioned; task evidence quotes are exact Done-when fragments.
 
 | Decision | Disposition | Task(s) | Evidence |
 |---|---|---|---|
@@ -321,6 +321,7 @@ Every row is diff-local: fixtures supply their own plan text, commits, and engin
 | adr-2026-09-06-reopened-task-resolution#D9 | task | task-4 | the kickback ledger file is byte-identical before and after a `plan_amendment` reopen |
 | adr-2026-09-06-reopened-task-resolution#D10 | task | task-4 | `gates.coverage_binding` laps still increase by one |
 | adr-2026-09-06-reopened-task-resolution#D11 | task | task-3 | engine state holds one open repair obligation per rewritten task with source authority `plan_amendment` |
+| adr-2026-09-06-reopened-task-resolution#D12 | no-change | none | D12's per-row trailer restore ships in main via #2673; the new digest recording runs after reconstruction, so the per-row restore ordering is unchanged and task-14's recreated-worktree test pins the interaction. |
 
 ## Verification
 
