@@ -91,6 +91,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Rebases without replay proof no longer halt with a refused state transition. ([implementation PR #2936](https://github.com/jstoup111/ai-conductor/pull/2936)).
 - The conductor test suite moves real-tmux and whole-daemon tests to a separate CI-gated e2e tier, splits its largest file, and stops the tmpdir leak guard from blaming concurrent runs. ([implementation PR #2935](https://github.com/jstoup111/ai-conductor/pull/2935)).
 - Remediation no longer halts a feature when several findings share one repair task. ([implementation PR #2950](https://github.com/jstoup111/ai-conductor/pull/2950)).
+- The daemon again finds merged specs once the committed `.docs` corpus grows past 32 MiB. Batched blob reads are now split to stay under the buffer cap. ([implementation PR #2961](https://github.com/jstoup111/ai-conductor/pull/2961)).
 
 ## Migration
 
