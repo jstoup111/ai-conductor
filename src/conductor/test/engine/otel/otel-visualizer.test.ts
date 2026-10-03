@@ -161,19 +161,16 @@ describe('OtelVisualizer', () => {
     });
   });
 
-  it('gates commit and PR span attributes without filtering provenance events', async () => {
-    const eventsPath = join(pipelineDir, 'events.jsonl');
-    const persister = new EventPersister(eventsPath, emitter);
+  it('omits only VCS span attributes when commit provenance is disabled', async () => {
     const visualizer = new OtelVisualizer(
       resolveOtelConfig({
         otel: {
           exporter: 'otlp', endpoint: 'http://localhost:4318',
-          provenance: { commit: false, pr: false, issue: false, feature: false },
+          provenance: { commit: false, pr: true, issue: true, feature: true },
         },
       }, pipelineDir),
       { spanExporter, metricExporter },
     );
-    persister.start();
     visualizer.start(emitter, {
       runId: 'run-1', feature: 'feature', project: 'project', sourceRef: 'owner/repo#2000',
     });
@@ -182,16 +179,51 @@ describe('OtelVisualizer', () => {
     await emitter.emit({ type: 'rebase_noop', baseSha: 'B' });
     await emitter.emit({ type: 'feature_complete', headSha: 'H', baseSha: 'B', prUrl: 'https://example.test/pr/1', prDisposition: 'opened' });
     await visualizer.stop();
-    persister.stop();
 
     const run = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')!;
     const rebase = spanExporter.getFinishedSpans().find((span) => span.name === 'rebase')!;
     expect(run.attributes).not.toHaveProperty('vcs.head.sha');
     expect(run.attributes).not.toHaveProperty('vcs.base.sha');
+    expect(run.resource.attributes['conductor.source.ref']).toBe('owner/repo#2000');
+    expect(rebase.attributes).not.toHaveProperty('vcs.base.sha');
+    expect(run.attributes).toMatchObject({
+      'conductor.pr.url': 'https://example.test/pr/1', 'conductor.pr.disposition': 'opened',
+    });
+  });
+
+  it('omits only PR span attributes when PR provenance is disabled', async () => {
+    const visualizer = new OtelVisualizer(
+      resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', provenance: { pr: false } } }, pipelineDir),
+      { spanExporter, metricExporter },
+    );
+    visualizer.start(emitter, { runId: 'run-1', feature: 'feature', project: 'project' });
+    await emitter.emit({ type: 'step_started', step: 'rebase', index: 0 });
+    await emitter.emit({ type: 'rebase_noop', baseSha: 'B' });
+    await emitter.emit({ type: 'feature_complete', headSha: 'H', prUrl: 'https://example.test/pr/1', prDisposition: 'opened' });
+    await visualizer.stop();
+
+    const run = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')!;
+    expect(run.attributes).toMatchObject({ 'vcs.head.sha': 'H', 'vcs.base.sha': 'B' });
     expect(run.attributes).not.toHaveProperty('conductor.pr.url');
     expect(run.attributes).not.toHaveProperty('conductor.pr.disposition');
-    expect(run.resource.attributes).not.toHaveProperty('conductor.source.ref');
-    expect(rebase.attributes).not.toHaveProperty('vcs.base.sha');
+  });
+
+  it('persists provenance events when every export toggle is disabled', async () => {
+    const eventsPath = join(pipelineDir, 'events.jsonl');
+    const persister = new EventPersister(eventsPath, emitter);
+    const visualizer = new OtelVisualizer(
+      resolveOtelConfig({
+        otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', provenance: { commit: false, pr: false, issue: false, feature: false } },
+      }, pipelineDir),
+      { spanExporter, metricExporter },
+    );
+    persister.start();
+    visualizer.start(emitter, { runId: 'run-1', feature: 'feature', project: 'project' });
+    await emitter.emit({ type: 'step_started', step: 'rebase', index: 0 });
+    await emitter.emit({ type: 'feature_complete', headSha: 'H', baseSha: 'B', prUrl: 'https://example.test/pr/1', prDisposition: 'opened' });
+    await visualizer.stop();
+    persister.stop();
+
     expect(JSON.parse((await readFile(eventsPath, 'utf8')).trim().split('\n').at(-1)!)).toMatchObject({
       type: 'feature_complete', headSha: 'H', baseSha: 'B', prUrl: 'https://example.test/pr/1', prDisposition: 'opened',
     });
