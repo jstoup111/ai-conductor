@@ -17,7 +17,7 @@ import {
   readStaleHaltTitle,
 } from './halt-pr-rehabilitation.js';
 import { readRegionCaptures } from './pr-body-region-store.js';
-import { seedTaskStatus } from './task-seed.js';
+import { seedTaskStatus, TaskReopenError } from './task-seed.js';
 import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
 import {
@@ -2660,7 +2660,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         );
         return {
           done: false,
-          reason: `task reopen failed: ${err instanceof Error ? err.message : 'unknown error'}`,
+          reason: `${err instanceof TaskReopenError ? 'task reopen failed' : 'failed to seed task-status from plan'}: ${err instanceof Error ? err.message : 'unknown error'}`,
         };
       }
 
