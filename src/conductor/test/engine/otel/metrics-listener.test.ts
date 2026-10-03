@@ -94,8 +94,14 @@ describe('MetricsListener dispatch dimensions', () => {
     const disabled = createProjection(false);
 
     try {
+      await enabled.emitter.emit({ type: 'rebase_noop', baseSha: 'B' });
+      await enabled.emitter.emit({ type: 'rebase_changed', baseSha: 'B', changedPaths: [] });
+      await enabled.emitter.emit({ type: 'rebase_mergeable_skip', baseSha: 'B' });
       await enabled.emitter.emit({ type: 'step_started', step: 'build', index: 0 });
       await enabled.emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+      await disabled.emitter.emit({ type: 'rebase_noop', baseSha: 'B' });
+      await disabled.emitter.emit({ type: 'rebase_changed', baseSha: 'B', changedPaths: [] });
+      await disabled.emitter.emit({ type: 'rebase_mergeable_skip', baseSha: 'B' });
       await disabled.emitter.emit({ type: 'step_started', step: 'build', index: 0 });
       await disabled.emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
       await Promise.all([enabled.provider.forceFlush(), disabled.provider.forceFlush()]);

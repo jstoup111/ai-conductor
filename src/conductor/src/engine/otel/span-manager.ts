@@ -29,6 +29,7 @@ import {
   Context,
 } from '@opentelemetry/api';
 import type { ConductorEvent } from '../../types/events.js';
+import type { ResolvedOtelProvenance } from './otel-config.js';
 import type { DispatchMeteringObservation } from '../dispatch-metering.js';
 import { resolveExecutionIdentity, type ExecutionScope } from '../execution-identity.js';
 import { OUT_OF_BAND_STEPS } from '../steps.js';
@@ -61,6 +62,8 @@ export class SpanManager {
   private runCtx: Context = ROOT_CONTEXT;
   private runStarted = false;
   private runOutcome: RunOutcome | null = null;
+  /** Latest resolved base survives until a terminal event closes the root span. */
+  private latestBaseSha: string | undefined;
   private readonly openSteps: Map<string, StepState> = new Map();
 
   constructor(
@@ -73,6 +76,7 @@ export class SpanManager {
     },
     /** Shared event-time clock; defaults to wall time in production. */
     private readonly now: () => number = () => Date.now(),
+    private readonly provenance: Pick<ResolvedOtelProvenance, 'commit' | 'pr'> = { commit: true, pr: true },
   ) {}
 
   // ── Run span ───────────────────────────────────────────────────────────────
@@ -95,6 +99,33 @@ export class SpanManager {
     this.runSpan.end();
     this.runSpan = null;
     this.callbacks?.onRunClose?.(outcome);
+  }
+
+  private recordRebaseBase(baseSha: string | null | undefined): void {
+    if (!this.provenance.commit || typeof baseSha !== 'string' || baseSha.length === 0) return;
+    this.latestBaseSha = baseSha;
+    this.stateFor('rebase')?.span.setAttribute('vcs.base.sha', baseSha);
+  }
+
+  private stampTerminalProvenance(event: Extract<ConductorEvent, { type: 'feature_complete' | 'loop_halt' }>): void {
+    if (!this.runSpan) return;
+    if (this.provenance.commit) {
+      if (typeof event.headSha === 'string' && event.headSha.length > 0) {
+        this.runSpan.setAttribute('vcs.head.sha', event.headSha);
+      }
+      const baseSha = typeof event.baseSha === 'string' && event.baseSha.length > 0
+        ? event.baseSha
+        : this.latestBaseSha;
+      if (baseSha !== undefined) this.runSpan.setAttribute('vcs.base.sha', baseSha);
+    }
+    if (this.provenance.pr) {
+      if (typeof event.prUrl === 'string' && event.prUrl.length > 0) {
+        this.runSpan.setAttribute('conductor.pr.url', event.prUrl);
+      }
+      if (event.prDisposition !== undefined) {
+        this.runSpan.setAttribute('conductor.pr.disposition', event.prDisposition);
+      }
+    }
   }
 
   // ── Step-span open/close ───────────────────────────────────────────────────
@@ -516,7 +547,7 @@ export class SpanManager {
 
   // ── Run completion ─────────────────────────────────────────────────────────
 
-  onFeatureComplete(_event: Extract<ConductorEvent, { type: 'feature_complete' }>): void {
+  onFeatureComplete(event: Extract<ConductorEvent, { type: 'feature_complete' }>): void {
     // Close any still-open step spans (OK — run completed normally).
     for (const [step, state] of this.openSteps) {
       state.span.setAttribute('conductor.step.status', 'done');
@@ -528,6 +559,7 @@ export class SpanManager {
     }
     this.openSteps.clear();
 
+    this.stampTerminalProvenance(event);
     this.closeRunSpan('complete');
   }
 
@@ -550,7 +582,20 @@ export class SpanManager {
       this.runSpan.setAttribute('conductor.run.halt.class', event.haltClass);
     }
 
+    this.stampTerminalProvenance(event);
     this.closeRunSpan('halted');
+  }
+
+  onRebaseNoop(event: Extract<ConductorEvent, { type: 'rebase_noop' }>): void {
+    this.recordRebaseBase(event.baseSha);
+  }
+
+  onRebaseChanged(event: Extract<ConductorEvent, { type: 'rebase_changed' }>): void {
+    this.recordRebaseBase(event.baseSha);
+  }
+
+  onRebaseMergeableSkip(event: Extract<ConductorEvent, { type: 'rebase_mergeable_skip' }>): void {
+    this.recordRebaseBase(event.baseSha);
   }
 
   // ── Flush / force-close (FR-9) ─────────────────────────────────────────────
@@ -575,6 +620,9 @@ export class SpanManager {
 
     // The run itself ends cleanly; its default terminal outcome is terminated.
     // closeRunSpan preserves a prior complete or halted outcome.
+    if (this.runSpan && this.provenance.pr) {
+      this.runSpan.setAttribute('conductor.pr.disposition', 'unrecorded');
+    }
     this.closeRunSpan('terminated');
   }
 

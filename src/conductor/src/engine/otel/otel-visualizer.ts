@@ -362,6 +362,15 @@ export class OtelVisualizer implements VisualizerPlugin {
       case 'loop_halt':
         this.spanManager.onLoopHalt(event);
         break;
+      case 'rebase_noop':
+        this.spanManager.onRebaseNoop(event);
+        break;
+      case 'rebase_changed':
+        this.spanManager.onRebaseChanged(event);
+        break;
+      case 'rebase_mergeable_skip':
+        this.spanManager.onRebaseMergeableSkip(event);
+        break;
       case 'build_progress':
         this.spanManager.onBuildProgress(event);
         break;
@@ -415,6 +424,7 @@ export class OtelVisualizer implements VisualizerPlugin {
         runId: context.runId ?? 'unknown-run',
       },
       this.now,
+      this.provenance,
     );
   }
 }
