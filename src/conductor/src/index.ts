@@ -784,23 +784,37 @@ export async function dispatchNonDispatchingCliCommand(
   return undefined;
 }
 
+/**
+ * The process-entry guard is deliberately a tiny injected collaboration: the
+ * refused path cannot reach command parsing or a handler, while tests can
+ * replace that boundary before presenting a blocked argv.
+ */
+export async function dispatchCliEntry(input: {
+  readonly argv: readonly string[];
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly dispatch: () => Promise<number>;
+  readonly emitRefusal?: typeof emitDaemonSessionRefusal;
+  readonly diagnostic?: (message: string) => void;
+}): Promise<{ readonly exitCode: number; readonly refused: boolean }> {
+  const environment = input.environment ?? process.env;
+  const diagnostic = input.diagnostic ?? ((message: string) => console.error(`Error: ${message}`));
+  // Keep the production-process call explicit: the structural boundary test
+  // guards this ordering, while injected argv remains available to the entry
+  // collaboration fixture.
+  const verdict = input.argv === process.argv
+    ? guardDaemonSessionInvocation(process.argv)
+    : guardDaemonSessionInvocation(input.argv, environment);
+  if (!verdict.allowed) {
+    await (input.emitRefusal ?? emitDaemonSessionRefusal)(verdict, { environment, diagnostic });
+    diagnostic(verdict.message);
+    return { exitCode: 1, refused: true };
+  }
+  return { exitCode: await input.dispatch(), refused: false };
+}
+
 // --- Main ---
 
-async function main(): Promise<void> {
-  // Boundary enforcement, before any subcommand parsing: an ai-conductor
-  // invocation from inside an engine-dispatched provider session (daemon
-  // builds, reviews, self-host candidates — marked CONDUCT_DAEMON_SESSION=1)
-  // is refused, except for the session-sanctioned worker subcommands the
-  // harness's own skills/hooks mandate. See execution/daemon-session.ts.
-  const daemonSessionVerdict = guardDaemonSessionInvocation(process.argv);
-  if (!daemonSessionVerdict.allowed) {
-    await emitDaemonSessionRefusal(daemonSessionVerdict, {
-      diagnostic: (message) => console.error(`Error: ${message}`),
-    });
-    console.error(`Error: ${daemonSessionVerdict.message}`);
-    process.exitCode = 1;
-    return;
-  }
+async function dispatchCliCommand(): Promise<void> {
 
   const nonDispatchingExitCode = await dispatchNonDispatchingCliCommand(
     process.argv,
@@ -1884,6 +1898,18 @@ async function main(): Promise<void> {
   persister.stop();
   await stopVisualizers(visualizerList);
   await subscriber.stop();
+}
+
+async function main(): Promise<void> {
+  const outcome = await dispatchCliEntry({
+    argv: process.argv,
+    environment: process.env,
+    dispatch: async () => {
+      await dispatchCliCommand();
+      return process.exitCode ?? 0;
+    },
+  });
+  process.exitCode = outcome.exitCode;
 }
 
 // Only run the CLI when executed directly (e.g. `node dist/index.js` via
