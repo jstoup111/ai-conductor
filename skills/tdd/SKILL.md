@@ -37,7 +37,8 @@ in RED/GREEN dispatches. Repair and verify the affected tests through
 
 ### SHIP verdict artifacts are read-only
 
-During BUILD, `.pipeline/prd-audit.md`, `.pipeline/architecture-review-as-built.md`,
+During BUILD, `.pipeline/prd-audit.json` is the typed PRD verdict authority (ADR D2.2), and
+`.pipeline/prd-audit.md` is its derived human report. `.pipeline/architecture-review-as-built.md`,
 `.pipeline/architecture-review-as-built.json`, `.pipeline/prd-audit-code-stamp.json`, and
 `.pipeline/architecture-review-as-built-code-stamp.json` are read-only SHIP validator evidence.
 Never write, delete, rename, or recreate them. Reading `.pipeline/remediation.json` and the cited

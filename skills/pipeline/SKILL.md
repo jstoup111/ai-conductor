@@ -259,7 +259,8 @@ when an approved-plan check is unsatisfiable. The CLI still supports operator re
 resetting a task after a crash), but the evidence and plan-gap forms are the normal per-task flow.
 You report the subagent's result (PASS/FAIL) to inform the conductor's logging and audit trail.
 
-**SHIP validator verdict artifacts are read-only during BUILD.** `.pipeline/prd-audit.md`,
+**SHIP validator verdict artifacts are read-only during BUILD.** `.pipeline/prd-audit.json` is the
+typed PRD verdict authority (ADR D2.2), and `.pipeline/prd-audit.md` is its derived human report.
 `.pipeline/architecture-review-as-built.md`, `.pipeline/architecture-review-as-built.json`,
 `.pipeline/prd-audit-code-stamp.json`, and
 `.pipeline/architecture-review-as-built-code-stamp.json` are owned by their SHIP validators and

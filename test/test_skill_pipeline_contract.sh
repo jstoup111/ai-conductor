@@ -125,6 +125,7 @@ ship_verdict_artifacts_read_only_contract_holds() {
   local tdd_skill="$2"
   local artifact pipeline_text tdd_text
   local artifacts=(
+    '.pipeline/prd-audit.json'
     '.pipeline/prd-audit.md'
     '.pipeline/architecture-review-as-built.md'
     '.pipeline/architecture-review-as-built.json'
