@@ -294,14 +294,6 @@ function isFeatureScopedReview(surface: GateSurfaceKind): boolean {
     surface === 'feature-coverage-inputs';
 }
 
-/** Reviews whose surface includes the feature's code: an unproved replay
- * may have altered that code, so they reopen.  Document-only surfaces are
- * judged against observed document deltas alone. */
-function isFeatureCodeScopedReview(surface: GateSurfaceKind): boolean {
-  return isFeatureScopedReview(surface) &&
-    surface !== 'feature-prd-inputs' && surface !== 'feature-coverage-inputs';
-}
-
 /**
  * Classify a completed replay while retaining the two inputs the policy must
  * not conflate.  Exact unchanged replay proof can preserve a feature-scoped
@@ -349,11 +341,11 @@ export function classifyReplayGateInvalidation(
     // retained. If reconstruction is unavailable, a resolution could have
     // changed any feature-scoped review input outside the observed upstream
     // delta. Re-open those reviews rather than leaving an unbound PASS for a
-    // later completion/finish reader to reject.  Document-input-only gates
-    // are exempt: a conflict resolution rewrites code, and their document
-    // inputs are observed directly in the delta.
+    // later completion/finish reader to reject.  This includes the
+    // document-input-only gates: an unproved replay has no expected tree, so
+    // the transition cannot bind preservation authority for any of them.
     const unprovedFeatureScopedReplay = replay.kind === 'unproved' &&
-      isFeatureCodeScopedReview(surface);
+      isFeatureScopedReview(surface);
     const decision = !unprovedFeatureScopedReplay &&
       (preserveUnchangedFeatureContribution || projection.matchedPaths.length === 0)
       ? 'preserve'
