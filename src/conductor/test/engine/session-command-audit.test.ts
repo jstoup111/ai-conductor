@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   auditSessionCommandSource,
   discoverSessionCommandSources,
+  discoverShippedSessionCommandSources,
 } from '../../src/engine/session-command-audit.js';
 
 const directories: string[] = [];
@@ -19,6 +20,16 @@ async function fixtureRoot(): Promise<string> {
 }
 
 describe('session command instruction discovery', () => {
+  it('limits the production audit to declared prompt-producing engine sources', async () => {
+    const root = await fixtureRoot();
+    await writeFile(join(root, 'src', 'engine', 'conductor.ts'), "export const prompt = 'Run ai-conductor scoped-run test/example.test.ts';\n");
+    await writeFile(join(root, 'src', 'engine', 'config.ts'), "export const cliUsage = 'ai-conductor config init';\n");
+
+    expect(discoverShippedSessionCommandSources(root).map((source) => source.file)).toEqual([
+      'engine/conductor.ts',
+    ]);
+  });
+
   it('discovers new engine and shipped-skill instructions without an occurrence inventory', async () => {
     const root = await fixtureRoot();
     await writeFile(join(root, 'src', 'engine', 'new-prompt.ts'), "export const prompt = 'Run ai-conductor daemon status';\n");
