@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import {
   epochAnchoredMonotonicClock,
@@ -93,6 +93,9 @@ export class EventPersister {
   private readonly settledSteps = new Map<string, number>();
   private readonly openGroups = new Map<string, number>();
   private readonly executionScope: ExecutionScope;
+  /** Indexed once at persistence ownership start; producer ledgers are never rollup input. */
+  private readonly persistedObservationIds = new Set<string>();
+  private observationIndexBuilt = false;
   private dirEnsured = false;
 
   constructor(
@@ -114,6 +117,7 @@ export class EventPersister {
    * Subscribe to all ConductorEvent types.
    */
   start(): void {
+    this.buildObservationIndex();
     for (const type of persistedEventTypes()) {
       this.emitter.on(type, this.handler);
     }
@@ -130,6 +134,9 @@ export class EventPersister {
 
   private persist(event: ConductorEvent): void {
     try {
+      this.buildObservationIndex();
+      const observationId = observationEventId(event);
+      if (observationId !== undefined && this.persistedObservationIds.has(observationId)) return;
       if (!this.dirEnsured) {
         mkdirSync(dirname(this.filePath), { recursive: true });
         this.dirEnsured = true;
@@ -198,6 +205,7 @@ export class EventPersister {
         ts: new Date().toISOString(),
       });
       appendFileSync(this.filePath, record + '\n', 'utf-8');
+      if (observationId !== undefined) this.persistedObservationIds.add(observationId);
       if (event.type === 'step_started' && intervalKey !== undefined) {
         this.openSteps.set(intervalKey, this.clock.nowMs());
       } else if (event.type === 'parallel_started' && intervalKey !== undefined) {
@@ -223,6 +231,29 @@ export class EventPersister {
     }
   }
 
+  /** Recover durable observation ids once; never rescan during tail polling. */
+  private buildObservationIndex(): void {
+    if (this.observationIndexBuilt) return;
+    this.observationIndexBuilt = true;
+    // Preserve the existing delayed write-error boundary for an invalid target
+    // such as a directory: subscribing succeeds and the emitter owns that
+    // failure when an event is actually projected.
+    if (!existsSync(this.filePath) || !statSync(this.filePath).isFile()) return;
+    try {
+      for (const line of readFileSync(this.filePath, 'utf8').split('\n')) {
+        if (!line) continue;
+        try {
+          const id = observationEventId(JSON.parse(line) as ConductorEvent);
+          if (id !== undefined) this.persistedObservationIds.add(id);
+        } catch {
+          // Malformed historical rows cannot acknowledge producer progress.
+        }
+      }
+    } catch (error) {
+      throw new EventPersistError(this.filePath, error);
+    }
+  }
+
   private intervalKey(legacyStep: string, executionContext: unknown): string | undefined {
     return resolveExecutionIdentity({
       scope: this.executionScope,
@@ -230,6 +261,23 @@ export class EventPersister {
       executionContext,
     })?.correlationKey;
   }
+}
+
+const OBSERVATION_EVENT_TYPES = new Set<ConductorEvent['type']>([
+  'session_command_refused',
+  'github_bypass_attempt',
+  'github_bypass_result',
+  'github_possible_bypass',
+  'session_event_delivery_diagnostic',
+]);
+
+/** Only producer observations are replay-deduplicated; ordinary events still append. */
+function observationEventId(event: ConductorEvent): string | undefined {
+  return OBSERVATION_EVENT_TYPES.has(event.type)
+    && 'eventId' in event
+    && typeof event.eventId === 'string'
+    ? event.eventId
+    : undefined;
 }
 
 /**
