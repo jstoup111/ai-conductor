@@ -573,7 +573,7 @@ describe('build-step stall circuit breaker', () => {
     expect(stallEvents[0].after).toBe(2);
     expect(runner.runInteractive).toHaveBeenCalledWith('build', {
       reason:
-        'Previous attempt did not satisfy the completion check: 3/5 tasks pending/not completed: 3, 4, 5. Finish the work now.',
+        'Previous attempt did not satisfy the completion check: 3/5 tasks pending/not completed: 3, 4, 5 — 3 "Step 3"; 4 "Step 4"; 5 "Step 5". Finish the work now.',
     });
   });
 
@@ -1264,7 +1264,7 @@ describe('build-step stall circuit breaker', () => {
     // onRecovery should NOT have fired.
     expect(runner.runInteractive).toHaveBeenCalledWith('build', {
       reason:
-        'Previous attempt did not satisfy the completion check: 3/5 tasks pending/not completed: 3, 4, 5. Finish the work now.',
+        'Previous attempt did not satisfy the completion check: 3/5 tasks pending/not completed: 3, 4, 5 — 3 "Step 3"; 4 "Step 4"; 5 "Step 5". Finish the work now.',
     });
     expect(onRecovery).not.toHaveBeenCalledWith('build', expect.anything(), expect.anything());
   });
@@ -3202,7 +3202,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       // The interactive stall handoff still fires — unchanged by the fix.
       expect(runner.runInteractive).toHaveBeenCalledWith('build', {
         reason:
-          'Previous attempt did not satisfy the completion check: 1/1 tasks pending/not completed: 1. Finish the work now.',
+          'Previous attempt did not satisfy the completion check: 1/1 tasks pending/not completed: 1 — 1 "Step 1". Finish the work now.',
       });
       // The daemon+auto-only /remediate dispatch never fires in interactive.
       expect(dispatched).not.toContain('remediate');
