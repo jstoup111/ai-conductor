@@ -1,12 +1,16 @@
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { scrubTmuxEnvironment } from '../execution/child-environment.js';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 
 import { execa } from 'execa';
 import { createVitest } from 'vitest/node';
+
+const require = createRequire(import.meta.url);
+const vitestEntryPoint = join(dirname(require.resolve('vitest/package.json')), 'vitest.mjs');
 
 import {
   SMOKE_CAPABILITIES,
@@ -153,8 +157,8 @@ async function runVitestWithReport(file: string, config: string): Promise<SmokeV
   delete childEnvironment.AI_CONDUCTOR_TEST_TMP_ROOT;
   try {
     const result = await execa(
-      'vitest',
-      ['run', '--config', config, '--reporter=json', '--outputFile', reportPath, file],
+      process.execPath,
+      [vitestEntryPoint, 'run', '--config', config, '--reporter=json', '--outputFile', reportPath, file],
       { all: true, reject: false, env: childEnvironment, extendEnv: false },
     );
     const report = await readFile(reportPath, 'utf8').catch(() => '');
