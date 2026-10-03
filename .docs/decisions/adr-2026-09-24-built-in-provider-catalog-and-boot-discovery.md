@@ -305,6 +305,65 @@ D8. Order and scope of the startup check. Validation of configured provider name
 > excludes the provider from the `rate-card refresh` model list. Pi's built-in policy ships no model
 > ids (D13), so that list is unchanged. D20's adapter-level rate-card fallback does not depend on
 > the flag.
+>
+> **Amended 2026-10-03 by #1887 (operator decision, James Stoup, composer DECIDE):** D6 and the
+> #1886 and #1889 amendments state that Pi declares no `selfHost`. Pi now declares it. Every other
+> statement in D1–D22 is unchanged; in particular Pi still declares no `reviewPolicyCatalog`,
+> `writeFence`, `readiness` or `interactiveLaunch`, `osSandbox` stays `false`, and OS write
+> containment remains #2851's. These decisions apply
+> adr-2026-07-26-concurrent-task-telemetry-and-symmetric-self-host-isolation §3 ("only the selected
+> native credential artifact"; fail closed when it cannot be exposed without unrelated state) to a
+> third provider; they do not amend that ADR. D5's statement that the Pi adapter "implements only
+> `invoke`" is narrowed: `invoke` remains its only dispatch member, and it also implements the
+> optional self-host seams `prepareSelfHostAuth` and `resolveSelfHostExecutable` (D25), as the codex
+> adapter does. Pi facts were verified locally on 2026-10-03 against pi 1.0.0 (`pi --help`,
+> `pi auth --help`, `dist/core/auth-storage.js`, and a live `~/.pi/agent/`). Four decisions are
+> added.
+>
+> **D23.** Pi declares `selfHost`, and `PROVIDER_CAPABILITY_OWNERS` drops its `selfHost: '#1887'`
+> entry. A Pi self-host candidate runs in a throwaway `PI_CODING_AGENT_DIR` provisioned by the
+> existing provider-home lifecycle (adr-2026-08-09-worktree-local-provider-scratch), so scratch
+> leasing, teardown, and the interrupted-run sweep apply to Pi unchanged.
+>
+> **D24.** Every `selfHost` descriptor declares its self-host shape in the catalog, and
+> `conductor.ts`, `provider-home.ts` and `live-boundary.ts` read it instead of comparing provider
+> ids, home-variable names, or env prefixes. The shape names: the isolation kind (`provider-home`
+> for Codex and Pi; the Claude config sandbox for Claude); the selected auth path, relative to the
+> provider home, that the live fingerprint excludes (`auth.json` for Codex and Pi,
+> `.credentials.json` for Claude); whether the Claude daemon build-token and operator Claude
+> credential preflights apply (Claude only); and the extra child-environment variables to scrub.
+> The child environment of a `provider-home` isolated home (codex and pi) removes every catalog
+> provider-home variable, plus each declared extra (`CLAUDE_CODE_OAUTH_TOKEN`;
+> `PI_CODING_AGENT_SESSION_DIR`), before setting its own home. The Claude config sandbox's child
+> environment is unchanged.
+> The provider-state volatile lists are keyed by `SelfHostProviderId` in an exhaustive table, so a
+> provider that declares `selfHost` without a volatile list fails to compile.
+>
+> **D25.** Pi's self-host credential is resolved by Pi, one provider at a time. Before dispatch the
+> Pi adapter runs `pi auth print-api-key --provider <p>` against the operator's live Pi home, where
+> `<p>` is the provider segment of the candidate's `provider/model` id (D13 guarantees every Pi
+> dispatch has one). It writes the printed key into the throwaway home as a one-entry `auth.json`
+> of the form `{ "<p>": { "type": "api_key", "key": "<key>" } }`, mode `0600`. The key is never
+> placed in argv, the environment of any other process, logs, events, or HALT text, and the file is
+> removed with the home. The resolver is not an `invoke`, so D18's `-na` rule does not apply to it.
+> It runs with its working directory set to the throwaway home, so no project-local `.pi/` file is
+> reachable, and with the daemon's tmux-scrubbed environment. A non-zero exit, empty output, or an unknown provider fails provisioning
+> before model work as a provider-setup refusal naming the provider, with redacted diagnostics.
+> Providers registered by Pi extensions or packages are therefore refused: the throwaway home loads
+> no operator extensions. The whole live `auth.json` is never copied or symlinked. A copy hands the
+> build every other provider's credential. A link shares one file under two locks, because Pi's
+> AuthStorage writes in place under `proper-lockfile` with `realpath: false`.
+>
+> **D26.** Pi's provider-state volatile list is `sessions` and `models-store.json`, plus the
+> selected auth path `auth.json` from D24. `sessions` holds the operator's interactive Pi
+> transcripts (dispatches run `--no-session`). `models-store.json` is Pi's model-catalog cache.
+> Everything else under the live Pi home stays fingerprinted, including `settings.json`,
+> `trust.json`, `extensions/`, `skills/`, `npm/` and `bin/`. Proven containment relaxes only the
+> live-checkout surface (`verifyLiveBoundary`); provider-state drift halts either way. So an
+> operator edit to fingerprinted Pi config during a dispatch, contained or not, halts it at the next
+> dispatch boundary, exactly as an edit to Claude's `settings.json` or Codex's `config.toml` does
+> today. Widen the list only with observed-churn evidence.
+
 ## Consequences
 
 - Adding a fourth provider is one descriptor plus one adapter. The structural test fails if a new id literal appears elsewhere.

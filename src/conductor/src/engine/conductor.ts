@@ -2116,7 +2116,7 @@ export async function seedBuildTaskTelemetry(
     return;
   }
   try {
-    await seedTaskStatus(projectRoot, planPath);
+    await seedTaskStatus(projectRoot, planPath, undefined, { dispatchBoundary: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[task-telemetry] unable to seed task-status.json: ${message}`);
@@ -12174,14 +12174,14 @@ export class Conductor {
                   // and swallowed, matching appendHaltClearedRecord: a record
                   // failure must never throw into the stall path.
                   try {
-                    await supersedeHaltRecord(this.projectRoot, basename(this.projectRoot), 'operator');
+                    await supersedeHaltRecord(this.projectRoot, basename(this.projectRoot), 'stall-remediation');
                   } catch {
                     /* best-effort halt-record supersession */
                   }
                   await emitTracked({
                     type: 'halt_cleared',
                     step: step.name,
-                    cause: 'operator',
+                    cause: 'stall-remediation',
                   });
 
                   // Task 4-8: Daemon mode remediation dispatch for build stall
@@ -12320,6 +12320,7 @@ export class Conductor {
                           effectiveQuestion,
                           outcome.detail,
                           this.events,
+                          outcome.haltClass,
                         ).catch(() => {
                           /* best-effort marker */
                         });
@@ -13346,7 +13347,7 @@ export class Conductor {
 
                 if (outcome.kind === 'halt') {
                   const reason = stallQuestion + '\n\n' + outcome.detail;
-                  await writeStallHalt(this.projectRoot, stallQuestion, outcome.detail, this.events);
+                  await writeStallHalt(this.projectRoot, stallQuestion, outcome.detail, this.events, outcome.haltClass);
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);

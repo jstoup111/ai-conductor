@@ -231,6 +231,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'worktree_reclaim_reclaimed',
   'worktree_reclaim_retained',
   'worktree_reclaim_failed',
+  'halt_clear_authorized',
 ] satisfies Array<ConductorEvent['type']>;
 
 const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
@@ -252,6 +253,7 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
   'step_refused',
   'step_status_write_refused',
   'halt_cleared',
+  'halt_clear_authorized',
   'operator_rewind',
   'kickback_budget_adjustment_authorized',
   'build_review_policy_resolved',

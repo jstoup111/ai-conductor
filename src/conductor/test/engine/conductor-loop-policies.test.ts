@@ -715,7 +715,7 @@ describe('build-step stall circuit breaker', () => {
     expect(markerStillThere).toBe(false);
   });
 
-  it('emits halt_cleared when the inline halt marker is cleared, and the audit writer records it', async () => {
+  it('attributes an inline build-stall marker clear to stall remediation in the audit trail', async () => {
     await seedAllArtifactsExceptTaskStatus();
     await writeTaskStatus(3, 10);
     await writeFile(join(dir, '.pipeline/halt-user-input-required'), 'scope mismatch');
@@ -748,7 +748,7 @@ describe('build-step stall circuit breaker', () => {
 
     expect(haltClearedEvents).toHaveLength(1);
     expect(haltClearedEvents[0].step).toBe('build');
-    expect(haltClearedEvents[0].cause).toBe('operator');
+    expect(haltClearedEvents[0].cause).toBe('stall-remediation');
 
     const eventsPath = join(dir, '.pipeline/audit-trail/events.jsonl');
     const contents = await readFile(eventsPath, 'utf8');
@@ -759,7 +759,7 @@ describe('build-step stall circuit breaker', () => {
 
     const haltClearedRecord = records.find((r) => r.event === 'halt_cleared');
     expect(haltClearedRecord).toBeDefined();
-    expect(haltClearedRecord?.cause).toBe('operator');
+    expect(haltClearedRecord?.cause).toBe('stall-remediation');
     expect(haltClearedRecord?.origin).toBe('build');
   });
 
@@ -799,7 +799,7 @@ describe('build-step stall circuit breaker', () => {
 
     const record = await readFile(recordPath, 'utf8');
     expect(record).toContain('Status: resolved');
-    expect(record).toContain('Resolution cause: operator');
+    expect(record).toContain('Resolution cause: stall-remediation');
     expect(record).not.toContain('Status: halted');
   });
 
@@ -855,7 +855,7 @@ describe('build-step stall circuit breaker', () => {
     // Verify halt_cleared event
     expect(haltClearedEvents).toHaveLength(1);
     expect(haltClearedEvents[0].step).toBe('build');
-    expect(haltClearedEvents[0].cause).toBe('operator');
+    expect(haltClearedEvents[0].cause).toBe('stall-remediation');
 
     // Verify the halt marker content was captured to evidence file
     let capturedContent: string | null = null;
@@ -3657,4 +3657,3 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
     },
   );
 });
-

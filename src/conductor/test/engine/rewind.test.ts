@@ -189,6 +189,57 @@ describe('rewindState', () => {
     log.mockRestore();
   });
 
+  it('rewinds from build_review to the earlier build step', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rewind-earlier-step-'));
+    const state: ConductState = { ...completeState, last_step: 'build_review' };
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(join(root, '.pipeline/conduct-state.json'), JSON.stringify(state));
+      await writeFile(join(root, '.pipeline/HALT'), 'operator action required\n');
+      await writeFile(join(root, '.pipeline/HALT.class'), 'needs-human\n');
+
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, root, {
+        emit: async () => {},
+      })).resolves.toBe(0);
+
+      expect(JSON.parse(await readFile(join(root, '.pipeline/conduct-state.json'), 'utf-8'))).toMatchObject({
+        build: 'stale',
+        build_review: 'stale',
+        last_step: 'acceptance_specs',
+      });
+      await expect(readFile(join(root, '.pipeline/HALT'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline/HALT.class'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      log.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses the current build step without changing halted state bytes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rewind-current-step-'));
+    const statePath = join(root, '.pipeline/conduct-state.json');
+    const haltPath = join(root, '.pipeline/HALT');
+    const haltClassPath = join(root, '.pipeline/HALT.class');
+    const state: ConductState = { ...completeState, last_step: 'build' };
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`);
+      await writeFile(haltPath, 'operator action required\n');
+      await writeFile(haltClassPath, 'needs-human\n');
+      const before = await Promise.all([statePath, haltPath, haltClassPath].map((path) => readFile(path, 'utf-8')));
+
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, root)).resolves.toBe(1);
+
+      expect(error).toHaveBeenCalledWith('rewind: Rewind target "build" must be earlier than current step "build"');
+      await expect(Promise.all([statePath, haltPath, haltClassPath].map((path) => readFile(path, 'utf-8')))).resolves.toEqual(before);
+    } finally {
+      error.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('restores state through the mutation port when derived-record cleanup fails, leaving retry valid', async () => {
     const state: ConductState = { ...completeState };
     const original = { ...state };

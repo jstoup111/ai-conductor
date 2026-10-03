@@ -402,16 +402,21 @@ from the plan, from git, or from constants in the source:
 | `engine-state.json` | Plan-stem match, then a single plan on disk | `task-seed.ts` |
 | `task-evidence.json` | Empty state; counters reset | `task-evidence.ts` |
 
-When `task-status.json` is **missing, empty, or unparseable**, the re-seed treats it as a
-reconstruction and restores every plan task carrying a `Task: <id>` trailer on a commit on the
-branch as `status: "completed"`, stamped with that `commit` and `restored_from: "task-trailer"`.
-Tasks with no such trailer stay `pending`. This grants no new authority — `resolveTaskIds` already
+When any plan task has **no row** in `task-status.json` — the file is missing, empty, or
+unparseable, or an interrupted write left it partial — the re-seed restores each missing task that
+carries a `Task: <id>` trailer on a commit on the branch as `status: "completed"`, stamped with that
+`commit` and `restored_from: "task-trailer"`. Missing tasks with no such trailer are written
+`pending`. This grants no new authority — `resolveTaskIds` already
 resolves those exact task ids from the same trailers for build-step routing
 (adr-2026-07-23-trailer-union-build-step-routing), and the per-task `Done when:` evidence check at task
 close and `prd_audit`'s criterion-level grading still re-judge the real work — it only stops a row-only
-reader from redoing finished, committed work. An
-**existing** file with rows is never trailer-backfilled, so a row deliberately reverted to `pending`
-stays that way.
+reader from redoing finished, committed work. An **existing** row is never trailer-backfilled, so a
+row deliberately reverted to `pending` stays that way.
+
+Immediately before each BUILD dispatch, the re-seed also reclaims stale `in_progress` rows left by an
+interrupted run such as daemon death. A row whose task has no branch `Task:` trailer resets to
+`pending`, so BUILD picks it up again; a row with one keeps its status. Every other re-seed leaves
+`in_progress` rows untouched.
 
 Both reconstructions are **filesystem-authoritative**: after repairing, the engine re-reads the path
 and halts if the repair itself could not land. A repair outcome is never evidence on its own.

@@ -663,7 +663,7 @@ describe('engine/daemon-park-cli', () => {
       }
       if (expectedClass === 'over-scope') {
         expect(joined).toContain(`record each decision in ${haltPath}`);
-        expect(joined).toContain(`mv ${haltPath} ${clearedPath}; rm -f ${haltClassPath}`);
+        expect(joined).toContain(`ai-conductor halt clear --feature ${slug} --rationale "<why>"`);
       }
       if (expectedClass === 'kickback-cap') {
         expect(joined).toContain('ai-conductor kickback-budget');
@@ -781,7 +781,7 @@ describe('engine/daemon-park-cli', () => {
       const warning = `'${slug}' still has a live HALT (class: ${haltClass}) — it will not resume until the HALT is cleared.`;
       const recovery = haltClass === 'mechanical'
         ? `To resume: rm ${haltPath} ${haltClassPath}`
-        : `To resume: record each decision in ${haltPath}, then mv ${haltPath} ${clearedPath}; rm -f ${haltClassPath}`;
+        : `To resume: record each decision in ${haltPath}, then ai-conductor halt clear --feature ${slug} --rationale "<why>" (do not rm the HALT — that discards the decisions)`;
       expect({ code, out }).toEqual({
         code: 0,
         out: [`'${slug}' was not operator-parked — nothing to do.`, warning, recovery],
@@ -792,7 +792,7 @@ describe('engine/daemon-park-cli', () => {
       await expect(readFile(clearedPath)).resolves.toEqual(before.cleared);
       await expect(readFile(evidencePath)).resolves.toEqual(before.evidence);
       if (haltClass === 'over-scope') {
-        expect(out.join('\n')).toContain(`rm -f ${haltClassPath}`);
+        expect(out.join('\n')).toContain(`ai-conductor halt clear --feature ${slug}`);
         expect(out.join('\n')).not.toContain(`rm ${haltPath}`);
       }
     });

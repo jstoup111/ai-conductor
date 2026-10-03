@@ -64,7 +64,7 @@ describe('engine/unpark-halt-warning', () => {
       haltClass: 'over-scope',
       expected: (worktreePath: string) => [
         "'halted-feature' still has a live HALT (class: over-scope) — it will not resume until the HALT is cleared.",
-        `To resume: record each decision in ${worktreePath}/.pipeline/HALT, then mv ${worktreePath}/.pipeline/HALT ${worktreePath}/.pipeline/HALT.cleared; rm -f ${worktreePath}/.pipeline/HALT.class`,
+        `To resume: record each decision in ${worktreePath}/.pipeline/HALT, then ai-conductor halt clear --feature halted-feature --rationale "<why>" (do not rm the HALT — that discards the decisions)`,
       ],
     },
     {

@@ -583,6 +583,7 @@ export async function writeStallHalt(
   question: string | null,
   detail: string,
   events?: ConductorEventEmitter,
+  haltClass: Parameters<typeof writeHaltMarker>[2] | 'kickback-cap' = 'needs-human',
 ): Promise<HaltMarkerWriteResult> {
   const effectiveQuestion =
     question === null || (typeof question === 'string' && question.trim() === '')
@@ -591,5 +592,10 @@ export async function writeStallHalt(
 
   const haltContent = [effectiveQuestion, detail].filter(Boolean).join('\n\n');
 
-  return writeHaltMarker(projectRoot, haltContent + '\n', 'needs-human', events);
+  return writeHaltMarker(
+    projectRoot,
+    haltContent + '\n',
+    haltClass as Parameters<typeof writeHaltMarker>[2],
+    events,
+  );
 }

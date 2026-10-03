@@ -16,8 +16,8 @@ export const AS_BUILT_PROJECTION_VERSION = 1;
 
 /** Explicit UTF-8 byte limits for the engine-rendered as-built input projection. */
 export const AS_BUILT_PROJECTION_LIMITS = {
-  perFileHunksBytes: 256 * 1024,
-  totalDiffBytes: 512 * 1024,
+  perFileHunksBytes: 64 * 1024,
+  totalDiffBytes: 128 * 1024,
   planTasksBytes: 256 * 1024,
   storyCriteriaBytes: 256 * 1024,
   governingAdrDecisionsBytes: 256 * 1024,
