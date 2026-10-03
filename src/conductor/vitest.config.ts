@@ -33,6 +33,11 @@ export default defineConfig({
     // vitest 4 removed the per-pool options block; `maxWorkers` is the same
     // cap. The branch arrived here with 3 — the count that gets OOM-killed —
     // because it predates that finding.
+    // Re-measured 2026-10-03 (/usr/bin/time -v, one file per run): peak worker
+    // RSS 3.0 GiB (engine/conductor, before and after its four-way split),
+    // 1.2 GiB (integration/rebase-loop), 1.0 GiB (engine/artifacts), with
+    // ~17 GiB available on the 28 GiB host while the daemon and operator
+    // sessions run. A third worker is not provably safe, so 2 stays.
     maxWorkers: 2,
     testTimeout: 20000,
     hookTimeout: 30000,
