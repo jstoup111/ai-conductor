@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { execa } from 'execa';
-import { access, mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +9,9 @@ import {
   guardDaemonSessionInvocation,
 } from '../../src/execution/daemon-session.js';
 import type { SessionEventProducerContext } from '../../src/execution/session-event-producer.js';
+import { dispatchCliEntry } from '../../src/index.js';
+import { startFeatureEventPersistence } from '../../src/engine/event-persister.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const argv = ['node', 'ai-conductor', 'daemon', 'park', 'feature-a'];
 const context: SessionEventProducerContext = {
@@ -28,31 +30,65 @@ function refusal() {
 }
 
 describe('daemon-session CLI refusal telemetry', () => {
-  it('refuses through the production entry before daemon dispatch and writes its provisioned occurrence', async () => {
+  it('refuses through the production entry before daemon dispatch and projects its provisioned occurrence', async () => {
     const root = await mkdtemp(join(tmpdir(), 'session-command-refusal-'));
-    const producerRoot = join(root, '.worktrees', 'feature-a', '.pipeline', 'session-events', 'dispatch-1');
+    const producerRoot = join(root, '.pipeline', 'session-events', 'dispatch-1');
+    const globalEvents = new ConductorEventEmitter();
+    const daemonLog = vi.fn();
+    const persistence = startFeatureEventPersistence(root, globalEvents, 'feature-a');
+    persistence.events.on('session_command_refused', daemonLog);
+    const handler = vi.fn(async () => 0);
     try {
-      await mkdir(producerRoot, { recursive: true });
-      const result = await execa(process.execPath, [
-        '--import', 'tsx', join(process.cwd(), 'src', 'index.ts'), 'daemon', 'park', 'feature-a',
-      ], {
-        cwd: root,
-        reject: false,
-        env: {
+      const outcome = await dispatchCliEntry({
+        argv,
+        environment: {
           [DAEMON_SESSION_MARKER]: '1',
-          CONDUCT_DAEMON_SESSION_UNSAFE_ALLOW: '',
-          CONDUCT_MANAGED_SESSION_CONTEXT: JSON.stringify({ ...context, projectRoot: root, worktreeRoot: join(root, '.worktrees', 'feature-a'), producerRoot }),
+          CONDUCT_MANAGED_SESSION_CONTEXT: JSON.stringify({ ...context, projectRoot: root, worktreeRoot: root, producerRoot }),
         },
+        dispatch: handler,
+        diagnostic: vi.fn(),
       });
 
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('blocked subcommand: daemon');
-      const [producerFile] = await readdir(producerRoot);
-      expect(await readFile(join(producerRoot, producerFile!), 'utf8')).toContain('"subcommand":"daemon"');
-      await expect(access(join(root, '.daemon'))).rejects.toThrow();
+      await persistence.drain();
+      expect(outcome).toEqual({ exitCode: 1, refused: true });
+      expect(handler).not.toHaveBeenCalled();
+      expect(await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).toContain('"subcommand":"daemon"');
+      expect(daemonLog).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'session_command_refused', subcommand: 'daemon',
+        scope: { kind: 'feature', featureSlug: 'feature-a' }, dispatchId: 'dispatch-1',
+      }));
     } finally {
+      persistence.stop();
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it.each(['finish-record', 'test-suite', 'build-review'] as const)(
+    'keeps %s refused before its handler in every managed lifecycle context',
+    async (subcommand) => {
+      const handler = vi.fn(async () => 0);
+      await expect(dispatchCliEntry({
+        argv: ['node', 'ai-conductor', subcommand],
+        environment: { [DAEMON_SESSION_MARKER]: '1' },
+        dispatch: handler,
+        diagnostic: vi.fn(),
+      })).resolves.toEqual({ exitCode: 1, refused: true });
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
+
+  it('dispatches allowed worker commands without emitting a refusal', async () => {
+    const handler = vi.fn(async () => 17);
+    const emitRefusal = vi.fn();
+    await expect(dispatchCliEntry({
+      argv: ['node', 'ai-conductor', 'scoped-run', 'test/file.test.ts'],
+      environment: { [DAEMON_SESSION_MARKER]: '1' },
+      dispatch: handler,
+      emitRefusal,
+      diagnostic: vi.fn(),
+    })).resolves.toEqual({ exitCode: 17, refused: false });
+    expect(handler).toHaveBeenCalledOnce();
+    expect(emitRefusal).not.toHaveBeenCalled();
   });
 
   it('appends the guarded refusal with provisioned feature attribution before dispatch', async () => {
