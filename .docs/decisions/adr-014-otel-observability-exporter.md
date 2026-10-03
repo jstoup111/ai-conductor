@@ -551,6 +551,16 @@ Relevant existing facts (evidence):
 >     lacks, and nothing reads it but the drainer. Known limit: a backend that accepts a payload and
 >     silently discards stale points (suspected, not verified, for Datadog metric intake) is
 >     invisible to the drop count.
+>
+> **Amended 2026-10-02 by #2870 (operator decision):** Decision 16's lease, drainer and shutdown
+> contract is delivered for the sequential paths #2870's tests name: one holder acquiring,
+> heartbeating, releasing and being reclaimed after death or heartbeat expiry, with SIGTERM and
+> SIGHUP releasing the lease. Hardening against concurrent interleavings is delivered by #2907.
+> That covers lease publication, heartbeat and release racing a contender, an orphaned successor
+> file blocking reclaim, a reclaimed holder's drainer stopping, eviction racing a drainer read,
+> failed-publication temp files counted against `max_bytes`, and SIGHUP flushing dispatch trace
+> providers. Delivery is already at-least-once, so a transient second drainer duplicates sends
+> rather than losing data. Until #2907 ships, these interleavings are a recorded limit.
 
 > **Amended 2026-10-02 by #2000 (run provenance on traces):** an exported trace names the feature,
 > branch, and run, but not the commit it built, the base it was built against, the pull request it

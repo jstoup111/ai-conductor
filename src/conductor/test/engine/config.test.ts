@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:2.1, task:4, task:5, task:9, task:3, pi-per-step-model-selection-via-wrapped-providers:task:5
+// Covers: task:1, task:2, task:2.1, task:4, task:5, task:9, task:3, pi-per-step-model-selection-via-wrapped-providers:task:5, task:1
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -25,6 +25,7 @@ import {
 } from '../../src/engine/resolved-config.js';
 import * as resolvedConfig from '../../src/engine/resolved-config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
+import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import {
   BUILD_REVIEW_ACCEPTED_RISK_END,
   BUILD_REVIEW_ACCEPTED_RISK_HEADING,
@@ -301,6 +302,42 @@ steps:
       expect(result).toMatchObject({ ok: true });
       if (!result.ok) return;
       expect(result.warnings).not.toContain('Unknown key in otel: "attributes"');
+    });
+
+    it('accepts known spool keys while warning once for an unknown nested key', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'otel:\n  exporter: otlp\n  endpoint: http://localhost:4318\n  spool:\n    max_bytes: 1048576\n    flush: true\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: true,
+        warnings: [expect.stringMatching(/otel\.spool.*flush/i)],
+      });
+      if (!result.ok) return;
+      expect(result.warnings).toHaveLength(1);
+      expect(resolveOtelConfig(result.config, join(tmpDir, '.pipeline'))).toMatchObject({
+        enabled: true,
+        spool: { enabled: true, maxBytes: 1_048_576 },
+      });
+    });
+
+    it('preserves an invalid spool max_bytes through loading so OTel disables with its named error', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'otel:\n  exporter: otlp\n  endpoint: http://localhost:4318\n  spool:\n    max_bytes: big\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) return;
+      expect(resolveOtelConfig(result.config, join(tmpDir, '.pipeline'))).toMatchObject({
+        enabled: false,
+        error: expect.stringContaining('otel.spool.max_bytes'),
+      });
     });
 
     it('rejects config when version too low', async () => {

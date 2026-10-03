@@ -85,6 +85,11 @@ describe('daemon-lock boundary: confine lock primitive (FR-20, C3)', () => {
       // Engine repair state uses the same unique temporary-file publication
       // pattern; it does not participate in daemon process ownership.
       'engine/engine-state-store.ts',
+      // OTel spool files use exclusive creation only to publish immutable
+      // batches and elect their independent drainer lease. Neither path
+      // participates in daemon process ownership or references daemon.pid.
+      'engine/otel/spool-lease.ts',
+      'engine/otel/spool-store.ts',
     ];
 
     for (const file of allTs) {

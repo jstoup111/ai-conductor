@@ -128,6 +128,7 @@ and sequence diagrams:
 
 **Done when:**
 - `spool-store.test.ts` asserts `SpoolStore.write` produces a `.pb` file under `<dir>/<signal>/` whose bytes equal the written body and that a throwing rename leaves no file under a final `.pb` name.
+- `spool-store.test.ts` asserts `SpoolStore.write` fsyncs the temp file before renaming it, so after a simulated process death following the rename and before any send the complete batch file is present under its final `.pb` name and no partially written file is visible under that name.
 - `spool-store.test.ts` asserts two same-millisecond writes from two `SpoolStore` instances produce two distinct files with both payloads intact and neither overwritten.
 - `spool-store.test.ts` asserts `list` returns files oldest-first and skips `.tmp` files, and `delete` removes exactly the named file.
 
@@ -286,7 +287,7 @@ and sequence diagrams:
 - `spool-drainer.test.ts` asserts three spooled trace files are POSTed to `/v1/traces` oldest-first after the server starts and each file is deleted after its 2xx.
 - `spool-drainer.test.ts` asserts every drained request for both signals carries `Content-Type: application/x-protobuf` and the headers resolved by the drainer at send time, so a header value changed between spooling and draining is the value sent.
 - `spool-drainer.test.ts` asserts a batch with days-old timestamps is POSTed, not skipped, and its fate follows only the response.
-- `spool-drainer.test.ts` asserts a file accepted but not deleted before a simulated crash is sent exactly once more by the next drainer.
+- `spool-drainer.test.ts` asserts a file accepted but not deleted before a simulated crash is sent exactly once more by the next drainer, and the duplicate is tolerated: the resend's 2xx deletes the file and the drainer continues to the next file without error.
 
 **Files:**
 - src/conductor/src/engine/otel/spool-drainer.ts — new drainer
@@ -527,7 +528,7 @@ Task 9 ───────┴─▶ Task 15 (also needs 5, 10) ─┬─▶ Ta
 | --- | --- | --- | --- |
 | adr-014-otel-observability-exporter#D1 | no-change | none | The spool sits below the SDK exporters; the exporter stays a listener on the existing event bus and no emission site changes |
 | adr-014-otel-observability-exporter#D2 | no-change | none | Packaging as the `visualizer:otel` plugin is untouched; the spool is selected by the existing `otel:` config gate |
-| adr-014-otel-observability-exporter#D3 | existing | none | The shared visualizer wiring seam in `wire.ts` and `otel-visualizer.ts` already serves both entry points; the spool is threaded through it |
+| adr-014-otel-observability-exporter#D3 | existing | none | The shared visualizer wiring seam in `wire.ts` and `otel-visualizer.ts` already serves both entry points; the spool is threaded through it. The 2026-08-26 #1516 amendment (registry selection, `start(emitter, context)` seam, per-plugin error isolation, loader validation) is already shipped and unchanged by this feature |
 | adr-014-otel-observability-exporter#D4 | no-change | none | The spool write runs inside the SDK exporter that the batch processor and periodic reader already call asynchronously; no bus handler gains I/O, awaiting, or run-scaled iteration |
 | adr-014-otel-observability-exporter#D5 | task | task-6, task-14 | three consecutive failing writes emit exactly one `renderer_error` warning and no call throws |
 | adr-014-otel-observability-exporter#D6 | task | task-1, task-2 | returns `enabled: true` with `spool.enabled` true and `spool.maxBytes` 536870912 |
@@ -538,10 +539,13 @@ Task 9 ───────┴─▶ Task 15 (also needs 5, 10) ─┬─▶ Ta
 | adr-014-otel-observability-exporter#D11 | no-change | none | Dispatch dimensions still travel on existing dispatch events; the two new spool events carry spool health, not dispatch dimensions |
 | adr-014-otel-observability-exporter#D12 | no-change | none | `otel.attributes` validation and semantics are unchanged |
 | adr-014-otel-observability-exporter#D13 | no-change | none | Static attributes still ride every Resource and data point; the spool stores the serialized request unchanged |
-| adr-014-otel-observability-exporter#D14 | no-change | none | The complexity tier label contract is unchanged |
+| adr-014-otel-observability-exporter#D14 | no-change | none | The complexity tier label contract is unchanged, including the 2026-09-15 #2528 amendment's optional `tier` on `feature_complete` and `loop_halt`, its outcome-metric ownership and deduplication, its regression coverage, and its re-tier documentation, all already shipped and untouched by this feature |
 | adr-014-otel-observability-exporter#D15 | task | task-3, task-5, task-15 | the `traces` spool file exists at the moment `SpoolingSpanExporter` invokes its SUCCESS callback |
 | adr-014-otel-observability-exporter#D16 | task | task-9, task-10, task-11, task-12, task-18 | twenty concurrent `acquire()` calls against one stale lease yield exactly one holder |
 | adr-014-otel-observability-exporter#D17 | task | task-8, task-13, task-14, task-19 | a healthy-to-network transition emits exactly one `renderer_error` naming the signal and class network |
+| adr-014-otel-observability-exporter#D18 | no-change | none | Run provenance on `feature_complete` and the root span belongs to the #2000 provenance feature; the spool stores serialized requests unchanged and emits no provenance |
+| adr-014-otel-observability-exporter#D19 | no-change | none | Provenance placement on the trace resource and root span is owned by the #2000 feature; the spool does not alter resource or span attributes |
+| adr-014-otel-observability-exporter#D20 | no-change | none | The `otel.provenance` toggles are owned by the #2000 feature; this feature adds only the `otel.spool` block and does not read or change provenance config |
 
 ## Coverage Check
 
@@ -607,3 +611,19 @@ Task 9 ───────┴─▶ Task 15 (also needs 5, 10) ─┬─▶ Ta
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-adr-d5-1: src/conductor/src/engine/otel/wire.ts:256-260 (wireDaemonOtel stop) and wire.ts:126-129 (stopInteractiveSpoolIfUnused) — wrap drainer.stop() and lease.release() so a rejection emits one renderer_error ('[otel] spool lease or drainer failed: <detail>', rendererName 'otel', same text as reportSpoolRuntimeFailure at wire.ts:348) and stop() resolves instead of rejecting; extract one shared helper used by both sites and reportSpoolRuntimeFailure so the warning text cannot drift; keep the existing release-on-stop behaviour asserted by Task 16/17 tests
+**Gate:** as-built
+**Rationale:** Verified (95%): the daemon metrics stop() at src/conductor/src/engine/otel/wire.ts:259 and the interactive stopInteractiveSpoolIfUnused at wire.ts:128 both await drainer.stop() and lease.release() unguarded. SpoolLease.release (spool-lease.ts:123) can rethrow non-ENOENT fs errors. Normal daemon shutdown at daemon-cli.ts:2830 awaits daemonOtel.stop() with no catch, so an unwritable spool fails shutdown, which violates ADR-014 D5 failure isolation. The SIGHUP path (daemon-cli.ts:526-534) already catches and is not changed. The architecture is unchanged; the fix sits inside Task 16's wire.ts scope and reuses the existing renderer_error path (reportSpoolRuntimeFailure, wire.ts:348). Sweep: wire.ts:354 already catches, and no other unguarded release sites were found. Existing Task 9/16/17 release assertions are kept.
+**Governing clause:** adr-014-otel-observability-exporter decision 5
+**Done when:**
+- adr-014-otel-observability-exporter decision 5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-d5-1 is complete.
+
+### Task rem-as-built-rem-adr-d5-2: src/conductor/test/engine/otel/spool-daemon-wiring.test.ts — add tests where the SpoolLease filesystem's unlink/rename rejects with EACCES: wireDaemonOtel().stop() resolves (does not throw), exactly one renderer_error with rendererName 'otel' naming the lease failure is emitted on rootEvents, and the same holds for the interactive wiring stop (wireInteractiveOtelMetrics/wireOtelVisualizer); keep all existing Task 16/17 assertions unchanged
+**Gate:** as-built
+**Rationale:** Verified (95%): the daemon metrics stop() at src/conductor/src/engine/otel/wire.ts:259 and the interactive stopInteractiveSpoolIfUnused at wire.ts:128 both await drainer.stop() and lease.release() unguarded. SpoolLease.release (spool-lease.ts:123) can rethrow non-ENOENT fs errors. Normal daemon shutdown at daemon-cli.ts:2830 awaits daemonOtel.stop() with no catch, so an unwritable spool fails shutdown, which violates ADR-014 D5 failure isolation. The SIGHUP path (daemon-cli.ts:526-534) already catches and is not changed. The architecture is unchanged; the fix sits inside Task 16's wire.ts scope and reuses the existing renderer_error path (reportSpoolRuntimeFailure, wire.ts:348). Sweep: wire.ts:354 already catches, and no other unguarded release sites were found. Existing Task 9/16/17 release assertions are kept.
+**Governing clause:** adr-014-otel-observability-exporter decision 5
+**Done when:**
+- adr-014-otel-observability-exporter decision 5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-d5-2 is complete.

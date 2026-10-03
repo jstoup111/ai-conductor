@@ -265,6 +265,14 @@ export interface OtelProvenanceConfig {
   feature?: boolean;
 }
 
+/** Durable OTLP/HTTP export spool settings. */
+export interface OtelSpoolConfig {
+  /** Whether durable spooling is enabled. Defaults to true for OTLP/HTTP. */
+  enabled?: boolean;
+  /** Maximum durable spool size in bytes. Defaults to 512 MiB. */
+  max_bytes?: number;
+}
+
 /**
  * OpenTelemetry exporter configuration. When present in HarnessConfig, the
  * OTel visualizer plugin is constructed and attached to the event bus.
@@ -289,6 +297,8 @@ export interface OtelConfig {
   attributes?: Record<string, string>;
   /** Trace provenance fields to export. All fields default to true. */
   provenance?: OtelProvenanceConfig;
+  /** Durable OTLP/HTTP export spool settings. */
+  spool?: OtelSpoolConfig;
 }
 
 /**

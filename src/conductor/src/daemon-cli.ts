@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { runSighupPersistence } from './engine/sighup-persistence.js';
 import { v4 as uuidv4 } from 'uuid';
 import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -457,6 +458,89 @@ export type RestartRequester = (opts: {
   targetIdentity: string | null;
 }) => Promise<{ fired: boolean }>;
 
+/** The process boundary owned by daemon signal wiring. */
+export interface DaemonProcessAdapter {
+  readonly pid: number;
+  on(signal: NodeJS.Signals, listener: () => void): void;
+  off(signal: NodeJS.Signals, listener: () => void): void;
+  kill(pid: number, signal: NodeJS.Signals): void;
+}
+
+const productionDaemonProcessAdapter: DaemonProcessAdapter = {
+  get pid() {
+    return process.pid;
+  },
+  on: (signal, listener) => {
+    process.on(signal, listener);
+  },
+  off: (signal, listener) => {
+    process.off(signal, listener);
+  },
+  kill: (pid, signal) => {
+    process.kill(pid, signal);
+  },
+};
+
+/** Matches the bounded OTel export lifecycle window. */
+export const DAEMON_OTEL_SIGHUP_STOP_TIMEOUT_MS = 5_000;
+
+export type AwaitDaemonOtelStop = (
+  operation: Promise<void>,
+  timeoutMs: number,
+) => Promise<void | 'timed-out'>;
+
+async function awaitDaemonOtelStop(
+  operation: Promise<void>,
+  timeoutMs: number,
+): Promise<void | 'timed-out'> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<'timed-out'>((resolve) => {
+        timer = setTimeout(() => resolve('timed-out'), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Flush daemon-owned OTel state before handing SIGHUP back to its default
+ * disposition. The listener removes itself first, so the re-raised signal
+ * cannot recurse through this handler.
+ */
+export function installDaemonOtelSighupHandler(options: {
+  daemonOtel: { stop: () => Promise<void> } | null;
+  activeDispatchVisualizers?: ReadonlySet<{ stop: () => Promise<void> }>;
+  processAdapter?: DaemonProcessAdapter;
+  awaitStop?: AwaitDaemonOtelStop;
+}): () => void {
+  const processAdapter = options.processAdapter ?? productionDaemonProcessAdapter;
+  const awaitStop = options.awaitStop ?? awaitDaemonOtelStop;
+  let handling = false;
+  const handler = async (): Promise<void> => {
+    if (handling) return;
+    handling = true;
+    try {
+      await awaitStop(Promise.resolve().then(async () => {
+        await runSighupPersistence();
+        await Promise.allSettled([...options.activeDispatchVisualizers ?? []].map((visualizer) => visualizer.stop()));
+        await options.daemonOtel?.stop();
+      }), DAEMON_OTEL_SIGHUP_STOP_TIMEOUT_MS);
+    } catch {
+      // SIGHUP must retain its normal respawn/termination behavior even when
+      // the exporter itself fails while releasing the durable spool lease.
+    } finally {
+      processAdapter.off('SIGHUP', handler);
+      processAdapter.kill(processAdapter.pid, 'SIGHUP');
+    }
+  };
+  processAdapter.on('SIGHUP', handler);
+  return () => processAdapter.off('SIGHUP', handler);
+}
+
 export interface DaemonModeOptions {
   projectRoot: string;
   /** Parallel workers (>= 1). */
@@ -523,6 +607,10 @@ export interface DaemonModeOptions {
    * Tests inject a fake to verify the exit call is made.
    */
   exitProcess?: (code: number) => void;
+  /** Injectable process seam for daemon SIGHUP OTel shutdown. */
+  processAdapter?: DaemonProcessAdapter;
+  /** Injectable bounded wait seam; production uses the OTel export timeout. */
+  awaitDaemonOtelStop?: AwaitDaemonOtelStop;
   /** Injectable executor boundary for daemon composition tests. */
   runFeature?: (item: BacklogItem) => Promise<FeatureOutcome>;
   /**
@@ -1160,6 +1248,19 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     harnessVersion: await resolveHarnessVersion(__dirname),
     rootEvents: events,
   });
+  // The daemon owns SIGHUP, while each dispatch owns its tracer provider.
+  // Keep the providers discoverable until their feature teardown completes so
+  // the daemon can flush all pending spans before it re-raises SIGHUP.
+  const activeDispatchVisualizers = new Set<{ stop: () => Promise<void> }>();
+  // SIGHUP is the daemon respawn boundary. Flush active dispatch and
+  // daemon-owned OTel providers here; scheduler draining remains exclusively
+  // the SIGTERM path.
+  const removeDaemonOtelSighupHandler = installDaemonOtelSighupHandler({
+    daemonOtel,
+    activeDispatchVisualizers,
+    ...(opts.processAdapter ? { processAdapter: opts.processAdapter } : {}),
+    ...(opts.awaitDaemonOtelStop ? { awaitStop: opts.awaitDaemonOtelStop } : {}),
+  });
   const rateLimitEpisode = createRateLimitEpisode();
   const providerAvailability = createProviderAvailability({ now: () => Date.now() });
   // Replay only daemon-origin records. Feature-forwarded events are deliberately
@@ -1311,7 +1412,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const pipelineDir = join(worktree.path, '.pipeline');
     const persistedSessionId = await readFile(join(pipelineDir, 'conduct-session-id'), 'utf8')
       .catch(() => undefined);
-    const visualizer = wireOtelVisualizer(config ?? {}, {
+    const visualizerContext = {
       pipelineDir,
       runId: persistedSessionId?.trim() || sessionId,
       feature: item.slug,
@@ -1321,7 +1422,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       metrics: false,
       harnessVersion: await resolveHarnessVersion(__dirname),
       ...(item.sourceRef ? { sourceRef: item.sourceRef } : {}),
-    }, featureEvents);
+    };
+    const visualizer = daemonOtel?.spoolRuntime
+      ? wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents, daemonOtel.spoolRuntime)
+      : wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents);
+    if (visualizer) activeDispatchVisualizers.add(visualizer);
     const featureLog = featureLogFor(item.slug);
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
     const renderableEvents = renderedEventTypes();
@@ -1330,10 +1435,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const stop = (): Promise<void> => {
       if (stopPromise) return stopPromise;
       stopPromise = (async () => {
-        await visualizer?.stop();
-        await daemonOtel?.flush();
-        for (const type of renderableEvents) featureEvents.off(type, renderEvent);
-        persistence.stop();
+        try {
+          await visualizer?.stop();
+          await daemonOtel?.flush();
+        } finally {
+          if (visualizer) activeDispatchVisualizers.delete(visualizer);
+          for (const type of renderableEvents) featureEvents.off(type, renderEvent);
+          persistence.stop();
+        }
       })();
       return stopPromise;
     };
@@ -2720,6 +2829,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
 
   await subscriber.stop();
   await daemonOtel?.stop();
+  removeDaemonOtelSighupHandler();
   daemonMemorySampler.stop();
   daemonEventPersistence.stop();
   // A finite daemon invocation (including test/CLI bounded runs) has no

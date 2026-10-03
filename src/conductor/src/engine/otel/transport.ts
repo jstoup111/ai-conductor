@@ -9,10 +9,18 @@ import type { SpanExporter, ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import type { AggregationTemporality, InstrumentType, PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import { JsonTraceSerializer, JsonMetricsSerializer } from '@opentelemetry/otlp-transformer';
 import type { ResolvedOtelConfig } from './otel-config.js';
+import type { ConductorEventEmitter } from '../../ui/events.js';
+import { SpoolStore } from './spool-store.js';
+import { SpoolingMetricExporter, SpoolingSpanExporter } from './spooling-exporter.js';
 
 export interface Exporters {
   spanExporter: SpanExporter;
   metricExporter: PushMetricExporter;
+}
+
+export interface ExporterBuildOptions {
+  spoolStore?: SpoolStore;
+  events?: ConductorEventEmitter;
 }
 
 /**
@@ -55,6 +63,7 @@ export function buildHttpExporterOptions(
  */
 export function buildExporters(
   config: Extract<ResolvedOtelConfig, { enabled: true }>,
+  options: ExporterBuildOptions = {},
 ): Exporters {
   if (config.exporter === 'otlp') {
     const url = config.endpoint;
@@ -65,10 +74,16 @@ export function buildExporters(
       };
     }
     // Default: HTTP/protobuf (port 4318)
-    return {
+    const direct = {
       spanExporter: new OTLPHttpTraceExporter(buildHttpExporterOptions(config, 'traces')),
       metricExporter: new OTLPHttpMetricExporter({ ...buildHttpExporterOptions(config, 'metrics'), temporalityPreference: METRIC_TEMPORALITY }),
     };
+    return options.spoolStore && config.spool?.enabled
+      ? {
+        spanExporter: new SpoolingSpanExporter(options.spoolStore, direct.spanExporter, options.events),
+        metricExporter: new SpoolingMetricExporter(options.spoolStore, direct.metricExporter, options.events),
+      }
+      : direct;
   }
 
   // exporter === 'file'
