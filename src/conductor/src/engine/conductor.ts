@@ -15359,6 +15359,17 @@ export class Conductor {
       for (const gate of transition.invalidated) {
         if (state[gate] !== 'skipped') state[gate] = 'pending';
       }
+      // applyRebaseTransition owns the durable state batch. Keep this
+      // conductor's optimistic-concurrency baseline aligned before the
+      // base-provenance write below; otherwise that write re-submits the
+      // pre-transition gate values and is refused as a phantom concurrent
+      // update.
+      this.recordPersistedFields(transition.invalidated.map((gate) => ({
+        field: gate,
+        expected: undefined,
+        intent: 'apply rebase transition',
+        next: 'pending' as const,
+      })));
       // Events describe the durable operation, not the pre-application
       // classification.  The transition is the only authority that knows
       // which effects actually became the completed rebase operation.
