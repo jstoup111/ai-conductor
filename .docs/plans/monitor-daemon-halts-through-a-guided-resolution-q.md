@@ -38,10 +38,10 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 4. Verify GREEN. Commit: "monitor: enumerate halted features with their halt class"
 
 **Done when:**
-- The enumerator returns one entry per halted worktree carrying slug, reason, and halt class, as asserted by the two-halt fixture test.
-- A halt whose class sidecar is missing yields the existing `unclassified` disposition rather than an invented label or an empty string.
-- A halt whose marker body is empty yields a reason reported as unstated and the entry is still returned.
-- A halt marker whose worktree directory is absent yields no entry and throws nothing.
+- The enumerator returns one entry per halted worktree carrying slug, reason, and halt class, as asserted by the two-halt fixture test. The first enumeration after startup returns both halts that existed before startup, so the first pass queues and offers them before any wait for a new halt; every entry also carries its project, and a feature whose halt was resolved before startup yields no entry.
+- A halt whose class sidecar is missing yields the existing `unclassified` disposition rather than an invented label or an empty string. The displayed classification for such an entry reads as undetermined and the entry is still returned and offered.
+- A halt whose marker body is empty yields a reason reported as unstated and the entry is still returned. A reason spanning several lines is reported as its first line in readable single-line form rather than as raw multiline text.
+- A halt marker whose worktree directory is absent yields no entry and throws nothing. A project with no worktrees at all yields no entries and no error; and a halt marker that cannot be read yields an entry reporting the read failure against that item while every other entry is still returned.
 - Enumeration performs no write: a fixture checksum of the project tree is unchanged after a pass.
 
 **Files likely touched:**
@@ -66,6 +66,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 - Unparking a still-halted feature causes it to be included on the next enumeration.
 - A halt marker co-present with the completion marker produces no queue entry.
 - A park-marker read error results in the feature being withheld, never included, proving the check confirms absence to proceed.
+- A park marker added while that feature's guided session is open excludes the feature from the enumeration taken after the session ends.
 
 **Files likely touched:**
 - `src/conductor/src/engine/monitor/halt-inventory.ts`
@@ -86,9 +87,9 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 **Done when:**
 - A three-project fixture produces one merged list containing halts from every selected project, each entry labelled with its project.
 - Naming a single project restricts enumeration to that project's halts only.
-- A project whose path is absent, or whose directory is unreadable, is reported and does not prevent the remaining projects from enumerating.
+- A project whose path is absent, or whose directory is unreadable, is reported and does not prevent the remaining projects from enumerating. An absent project path is reported as unreadable by name while halts from the remaining projects are still queued.
 - An unknown project name exits non-zero with the name reported and nothing enumerated.
-- An absent registry reports that no projects are registered and exits zero; a malformed registry exits non-zero.
+- An absent registry reports that no projects are registered and exits zero; a malformed registry exits non-zero. The malformed registry is reported as unreadable rather than silently monitoring nothing.
 
 **Files likely touched:**
 - `src/conductor/src/engine/monitor/halt-inventory.ts`
@@ -111,6 +112,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 - A deferral written from inside a feature worktree resolves to the main checkout's daemon state directory, as asserted by a worktree-rooted write test.
 - The record is written by atomic temp-then-rename, leaving no partial file visible under a simulated crash between write and rename.
 - Every deferral path and helper lives in the one deferral module; a static check asserts no other module spells the path.
+- A deferral key recorded for a halt that was then resolved compares unequal to the key of a new halt for the same feature, so the new halt is offered despite the earlier deferral.
 
 **Files likely touched:**
 - `src/conductor/src/engine/monitor/deferrals.ts`
@@ -154,11 +156,11 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 4. Verify GREEN. Commit: "monitor: derive queue membership fresh on every pass"
 
 **Done when:**
-- A halt created after startup appears in a subsequent pass's queue with no restart.
-- A halt created and cleared between passes never reaches the operator.
-- A duplicate enumeration of one feature collapses to exactly one queue entry.
-- While a session is open for an item, no second entry for that item is produced by any subsequent pass.
-- No module persists queue membership: a static check asserts the queue type is constructed per pass and never read from disk.
+- A halt created after startup appears in a subsequent pass's queue with no restart. A halt marker written while a pass is midway through enumerating is picked up by that pass or the next one, each pass's queue is internally consistent, and no duplicate entry for it arises across the two passes.
+- A halt created and cleared between passes never reaches the operator. A halt resolved during its guided session is absent from the queue on the next recomputation, and a halt marker removed while its session is open leaves the feature absent from the queue recomputed when the session ends and never reported as unresolved; a halt cleared and then re-written for the same feature before the next pass is offered on that pass as current halted work.
+- A duplicate enumeration of one feature collapses to exactly one queue entry. A halt marker co-present with the reclaimable completion marker is not offered as halted.
+- While a session is open for an item, no second entry for that item is produced by any subsequent pass. While a queue of three halts is worked, exactly one item is open, and so exactly one guided session exists, at any moment.
+- No module persists queue membership: a static check asserts the queue type is constructed per pass and never read from disk. Two monitors over the same project each derive membership independently and each offer the halt, neither writing state the other reads, so the redundant offer is a duplicate prompt and never a data fault.
 
 **Files likely touched:**
 - `src/conductor/src/engine/monitor/queue.ts`
@@ -181,9 +183,9 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 **Done when:**
 - A fixture of mixed-priority unseen halts orders highest band first.
 - A fixture pairing a deferred critical halt with an unseen low-priority halt offers the unseen one first, proving deferral partitions ahead of priority.
-- Deferred halts of differing bands order by descending band among themselves once unseen work is exhausted.
-- Ordering identical queue contents twice yields byte-identical sequences for both equal-band and no-priority fixtures, and removing one item from an equal-band group leaves the remaining items' relative order unchanged.
-- Priority is resolved through the existing resolver, and a reference repeated within one pass causes exactly one lookup, as asserted against a counting stub.
+- Deferred halts of differing bands order by descending band among themselves once unseen work is exhausted. Skipped items are offered after all unseen work regardless of their band, and among themselves are ordered by descending band.
+- Ordering identical queue contents twice yields byte-identical sequences for both equal-band and no-priority fixtures, and removing one item from an equal-band group leaves the remaining items' relative order unchanged. Recomputing after an unrelated feature halts keeps the previously-ordered equal-band items in their prior relative order and places the new item by its own band.
+- Priority is resolved through the existing resolver, and a reference repeated within one pass causes exactly one lookup, as asserted against a counting stub. A lookup failure for one reference while others succeed leaves every halt queued and reports the failure once rather than per item; a halt whose linked issue does not exist stays queued with its band reported as unresolved and the pass does not fail; a halt with no linked reference is placed by the existing band ranking for unlinked work and still offered; and the ordered queue reports each item's attributed band and the ordering basis applied, reporting the basis as the fallback when every item's priority is unresolved.
 
 **Files likely touched:**
 - `src/conductor/src/engine/monitor/ordering.ts`
@@ -202,7 +204,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 4. Verify GREEN. Commit: "monitor: degrade ordering on priority outage without dropping work"
 
 **Done when:**
-- A forced priority outage yields a queue containing every halted feature, ordered by the stable fallback, never an empty queue.
+- A forced priority outage yields a queue containing every halted feature, ordered by the stable fallback, never an empty queue. A priority lookup that never answers does not block the pass, which completes with the queue built from the fallback.
 - The degradation notice is emitted once per outage, not once per item and not once per pass.
 - Recovery from the outage restores band ordering on a subsequent pass with no restart.
 - A halt whose linked issue does not exist is still queued with its band reported as unresolved.
@@ -225,9 +227,9 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 4. Verify GREEN. Commit: "monitor: add the provider-agnostic interactive launch seam"
 
 **Done when:**
-- Both supported providers are exercised through the launch seam via a mocked process boundary, with the production adapter proven to reach the mock before any real spawn.
-- The seam resolves with the child's exit code and rejects on spawn error so the caller can report and continue.
-- A missing provider binary reports the failure and resolves without throwing.
+- Both supported providers are exercised through the launch seam via a mocked process boundary, with the production adapter proven to reach the mock before any real spawn. Configuring the non-default provider spawns that provider, not the default, as asserted against the mocked boundary; and invoking the seam for the queue-head item opens the session with no operator step to start it.
+- The seam resolves with the child's exit code and rejects on spawn error so the caller can report and continue. The caller-supplied halt project, feature, stated reason, and classification reach the child as explicit opening input rather than a blank prompt, as asserted against the mocked boundary's received arguments.
+- A missing provider binary reports the failure and resolves without throwing. For a missing binary, the failure is reported against that item, the seam writes no deferral and no resolution, so the item stays queued, and the calling monitor stays active; a provider that fails to start likewise leaves no deferral written and the item not marked resolved.
 - An unregistered configured provider name is reported and no process is spawned.
 - The seam supplies no stream consumer and constructs no resume invocation, as asserted against the mocked boundary's received arguments.
 
@@ -293,6 +295,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 - Each recognized classification presents its corresponding recovery procedure, as asserted by one case per member of the existing disposition union.
 - An unrecognized or absent classification presents the halt with its classification stated as undetermined and never removes it from the queue.
 - Classification handling is exhaustive with no catch-all default, pinned by a test that fails to compile or fails at runtime if a union member is unhandled.
+- Presenting the halt and gathering its evidence performs no write: a fixture checksum of the halted feature's worktree and halt marker is unchanged afterward.
 
 **Files likely touched:**
 - `src/conductor/src/engine/monitor/session.ts`
@@ -311,10 +314,11 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 4. Verify GREEN. Commit: "monitor: guided sessions retain conductor authority inside the feature worktree"
 
 **Done when:**
-- A session launched through the seam is not stamped with the daemon-session marker, as asserted on the child environment handed to the mocked boundary.
+- A session launched through the seam is not stamped with the daemon-session marker, as asserted on the child environment handed to the mocked boundary. A conductor recovery subcommand invoked from that child environment passes the entry guard and is permitted rather than refused.
 - A test asserts the session-sanctioned subcommand set is unchanged and an engine-dispatched session is still refused for state-changing verbs.
-- The guided session's resolved working directory is the halted feature's worktree, as asserted against the mocked boundary.
+- The guided session's resolved working directory is the halted feature's worktree, as asserted against the mocked boundary. Provider configuration and permission writes made by the session therefore land inside the feature worktree, and a fingerprint of the main checkout is unchanged after the session.
 - No configuration key is introduced that relaxes the daemon-session entry guard.
+- The per-action approval contract is intact, as asserted against the opening input's invocation of the existing triage procedure: each state-changing recovery action is presented with its blast radius and waits for approval before acting, a further state-changing action requests approval again, read-only evidence gathering requests no approval, and a declined action is not performed and the halt marker remains byte-identical.
 
 **Files likely touched:**
 - `src/conductor/src/engine/monitor/session.ts`
@@ -333,8 +337,8 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 4. Verify GREEN. Commit: "monitor: return to the queue on every session outcome"
 
 **Done when:**
-- Sessions ending with zero status, non-zero status, and by signal all return the operator to the queue.
-- A three-item queue is worked to completion without the monitor being restarted.
+- Sessions ending with zero status, non-zero status, and by signal all return the operator to the queue. After a non-zero exit the monitor offers the next item.
+- A three-item queue is worked to completion without the monitor being restarted. When the last item's session ends and no halts remain, the monitor reports an empty queue and stays active.
 - Membership is recomputed after each session ends, so a halt resolved inside the session is absent from the next offer.
 - A session that changed nothing leaves its halt in the recomputed queue.
 
@@ -357,7 +361,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 **Done when:**
 - Skipping ends the current session and advances to the next item.
 - A skipped item's halt marker is byte-identical before and after the skip, and the item is never marked resolved.
-- A skipped item is not re-offered ahead of unseen work, and is offered again once unseen work is exhausted.
+- A skipped item is not re-offered ahead of unseen work, and is offered again once unseen work is exhausted. A skipped item stays behind unseen work regardless of the skipped item's priority band, and when every item has been skipped a later pass offers them again ordered among themselves by descending priority band.
 - A skip survives a monitor restart and the item is still not re-offered ahead of unseen work.
 
 **Files likely touched:**
@@ -399,7 +403,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 
 **Done when:**
 - Starting with no halted features reports an empty queue, stays alive, and creates zero sessions across several passes.
-- An interrupt during an open guided session exits without writing a deferral or a resolution for that item.
+- An interrupt during an open guided session exits without writing a deferral or a resolution for that item. After the interrupt the monitor reports that it stopped, and when it is started again with that feature still halted the item is offered again.
 - A feature that halts after an empty pass is reported on the next pass without a restart.
 - The stop condition is injectable, so the loop is tested without sending a real signal.
 
@@ -445,7 +449,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 
 **Done when:**
 - A monitoring cycle invokes the existing reconciliation with its behavior unchanged, as asserted against an injected reconciliation stub.
-- A non-zero exit, a network failure, and a thrown error each leave the monitor active and the queue offered.
+- A non-zero exit, a network failure, and a thrown error each leave the monitor active and the queue offered. A non-zero exit or thrown error is reported, and a network failure is reported exactly once while the queue is unaffected.
 - Queue work is not blocked on reconciliation completion, as asserted by a slow-reconciliation fixture.
 
 **Files likely touched:**
@@ -468,7 +472,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 **Done when:**
 - The detector recognizes the verb with all-projects and single-project selectors, and returns help rather than null for a malformed-but-recognized invocation.
 - The verb is registered before the daemon block, as asserted by a dispatch-order test that fails if a bare token reaches the daemon launcher.
-- A test asserts the monitor verb is not in the session-sanctioned subcommand set and is refused under the daemon-session marker.
+- A test asserts the monitor verb is not in the session-sanctioned subcommand set and is refused under the daemon-session marker. A refused invocation builds no queue, as asserted by an enumeration stub that records zero calls.
 - The legacy CLI shim is unmodified, as asserted by a diff check over that path.
 
 **Files likely touched:**
