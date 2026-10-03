@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   PRD_AUDIT_REPORT_PATH,
   PRD_AUDIT_VERDICT_PATH,
+  PrdAuditVerdictPersistenceError,
   persistPrdAuditVerdict,
   readPrdAuditVerdict,
 } from '../../src/engine/prd-audit-verdict-store.js';
@@ -98,29 +99,49 @@ describe('PRD audit typed verdict store', () => {
   it('surfaces write and rendering failures without treating an old report as authority', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'prd-audit-store-failure-'));
     dirs.push(dir);
+    await persistPrdAuditVerdict(dir, validEvidence, { attemptId: 'prior-attempt', codeStamp: 'prior-head' });
+    const priorVerdict = await readFile(join(dir, PRD_AUDIT_VERDICT_PATH), 'utf8');
     await expect(persistPrdAuditVerdict(dir, validEvidence, { attemptId: 'write-fails', codeStamp: null }, {
       write: async () => { throw new Error('authority write failed'); },
-    })).rejects.toThrow('authority write failed');
-    expect(await readPrdAuditVerdict(dir)).toEqual({ kind: 'absent' });
+    })).rejects.toMatchObject({
+      name: 'PrdAuditVerdictPersistenceError', stage: 'authority', message: 'authority write failed',
+    } satisfies Partial<PrdAuditVerdictPersistenceError>);
+    // A rejected current write has no success result; the untouched prior
+    // evidence is not silently relabeled with the current attempt identity.
+    expect(await readFile(join(dir, PRD_AUDIT_VERDICT_PATH), 'utf8')).toBe(priorVerdict);
 
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline', 'decisions.json'), 'durable operator decision\n');
     await expect(persistPrdAuditVerdict(dir, validEvidence, { attemptId: 'render-fails', codeStamp: null }, {
       render: () => { throw new Error('report rendering failed'); },
-    })).rejects.toThrow('report rendering failed');
+    })).rejects.toMatchObject({
+      name: 'PrdAuditVerdictPersistenceError', stage: 'report', message: 'report rendering failed',
+    } satisfies Partial<PrdAuditVerdictPersistenceError>);
     expect(await readPrdAuditVerdict(dir)).toMatchObject({ kind: 'present', value: { attemptId: 'render-fails' } });
     expect(await readFile(join(dir, '.pipeline', 'decisions.json'), 'utf8')).toBe('durable operator decision\n');
   });
 
-  it('returns a named invalid-evidence fault rather than plausible report findings', async () => {
+  it.each([
+    ['unreadable typed evidence', async (path: string) => mkdir(path)],
+    ['corrupt typed evidence', async (path: string) => writeFile(path, '{not json')],
+    ['unsupported typed evidence', async (path: string) => writeFile(path, JSON.stringify({
+      ...validEvidence,
+      attemptId: 'old',
+      codeStamp: null,
+      judgment: { ...validEvidence.judgment, version: 'v99' },
+    }))],
+  ])('returns a named invalid-evidence fault for %s rather than plausible report findings', async (_label, writeVerdict) => {
     const dir = await mkdtemp(join(tmpdir(), 'prd-audit-store-invalid-'));
     dirs.push(dir);
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, PRD_AUDIT_REPORT_PATH), '# PRD audit\n\nStatus: complete\n- Salpha.1: PASS\n');
-    await writeFile(join(dir, PRD_AUDIT_VERDICT_PATH), JSON.stringify({ attemptId: 'old', codeStamp: null, judgment: { version: 'v99' } }));
-    await expect(readPrdAuditVerdict(dir)).resolves.toMatchObject({
+    await writeVerdict(join(dir, PRD_AUDIT_VERDICT_PATH));
+
+    const result = await readPrdAuditVerdict(dir);
+    expect(result).toMatchObject({
       kind: 'unreadable', reason: expect.stringContaining('invalid evidence'),
     });
+    expect(result).not.toHaveProperty('value');
   });
 
   it.each([

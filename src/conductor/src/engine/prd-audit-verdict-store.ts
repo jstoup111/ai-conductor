@@ -183,14 +183,30 @@ export async function persistPrdAuditVerdict(
 /** The sole authority reader for PRD-audit verdict consumers. */
 export async function readPrdAuditVerdict(worktree: string): Promise<ReadPrdAuditVerdictResult> {
   const path = join(worktree, PRD_AUDIT_VERDICT_PATH);
-  let raw: unknown;
+  let contents: string;
   try {
-    raw = JSON.parse(await readFile(path, 'utf8'));
+    contents = await readFile(path, 'utf8');
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return code === 'ENOENT'
       ? { kind: 'absent' }
-      : { kind: 'unreadable', reason: `${PRD_AUDIT_VERDICT_PATH} is unreadable: ${error instanceof Error ? error.message : String(error)}` };
+      : { kind: 'unreadable', reason: `${PRD_AUDIT_VERDICT_PATH} has invalid evidence: unreadable typed evidence: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(contents);
+  } catch (error) {
+    return {
+      kind: 'unreadable',
+      reason: `${PRD_AUDIT_VERDICT_PATH} has invalid evidence: corrupt typed evidence: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (isRecord(raw) && isRecord(raw.judgment) && typeof raw.judgment.version === 'string' &&
+    raw.judgment.version !== PRD_AUDIT_JUDGMENT_CONTRACT_VERSION) {
+    return {
+      kind: 'unreadable',
+      reason: `${PRD_AUDIT_VERDICT_PATH} has invalid evidence: unsupported typed evidence version ${raw.judgment.version}`,
+    };
   }
   if (!isRecord(raw) || !exactKeys(raw, ['attemptId', 'codeStamp', 'complete', 'judgment', 'diagnostics', 'recordedDispositions']) ||
     !nonEmptyText(raw.attemptId) || (raw.codeStamp !== null && !nonEmptyText(raw.codeStamp)) || typeof raw.complete !== 'boolean' ||
