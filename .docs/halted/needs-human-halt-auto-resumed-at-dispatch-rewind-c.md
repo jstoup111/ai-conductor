@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-03T18:16:57.050Z
 Slug: needs-human-halt-auto-resumed-at-dispatch-rewind-c
 Class: needs-human
 Halting step: prd_audit
