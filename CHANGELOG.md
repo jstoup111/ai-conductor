@@ -72,6 +72,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Intake authors retain complete wrapped desired-outcome bullets. ([implementation PR #2882](https://github.com/jstoup111/ai-conductor/pull/2882)).
 - Build reviews now ignore Covers marker text embedded in test string literals. ([implementation PR #2881](https://github.com/jstoup111/ai-conductor/pull/2881)).
 - `/prd`, `/architecture-review`, and `/assess` now state that their templates resolve against the harness root, so authors find `design-doc`, `api-response-contract`, `adr`, and `technical-assessment` templates instead of hitting a missing path. ([implementation PR #2905](https://github.com/jstoup111/ai-conductor/pull/2905)).
+- Skill templates now resolve relative to each skill's own directory, and self-host provider homes copy them as real files, so `/prd`, `/architecture-review`, `/assess`, and `/bootstrap` find their templates however the skill is installed. ([implementation PR #2906](https://github.com/jstoup111/ai-conductor/pull/2906)).
 
 ## [1.5.0] - 2026-09-27
 
