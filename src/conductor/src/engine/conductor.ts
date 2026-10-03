@@ -6157,12 +6157,19 @@ export class Conductor {
       Object.prototype.hasOwnProperty.call(OUT_OF_BAND_STEPS, candidate)
         ? (candidate as StepName)
         : undefined;
+    const headSha = await resolveHeadSha(this.git);
+    const finishChoice = await readFile(join(this.projectRoot, FINISH_CHOICE_MARKER), 'utf-8')
+      .then((choice) => choice.trim() as FinishChoice)
+      .catch(() => undefined);
     await this.events.emit({
       type: 'loop_halt',
       ...(step ? { step } : {}),
       reason,
-      prUrl,
+      ...(prUrl === undefined ? {} : { prUrl }),
       ...(this.haltState.complexity_tier === undefined ? {} : { tier: this.haltState.complexity_tier }),
+      ...(headSha === undefined ? {} : { headSha }),
+      ...(this.haltState.rebase_base_sha === undefined ? {} : { baseSha: this.haltState.rebase_base_sha }),
+      prDisposition: resolvePrDisposition({ prUrl, finishChoice }),
     });
   }
 
