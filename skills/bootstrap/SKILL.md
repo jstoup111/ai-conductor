@@ -63,6 +63,16 @@ a single set of Docker services. See Step 1c for the `.env` boundary pattern tha
 
 ### 1b.1. Initialize Project Config
 
+### Managed refresh exception (engine-dispatched only)
+
+When the engine dispatches bootstrap as a managed refresh, it has already validated that the
+project configuration is initialized. Skip the configuration interview and operator identity
+sections entirely. Do not run `ai-conductor config read`, `ai-conductor config init`,
+`ai-conductor config set`, or registration commands; preserve the established configuration
+byte-for-byte and continue with the artifact refresh. The engine's managed-refresh instruction,
+not a model inference from the project files, is the authority for this exception. An unmarked
+operator-run bootstrap follows the ordinary initialization procedure below.
+
 For every bootstrap mode, confirm the project is a git repository before continuing:
 `git rev-parse --is-inside-work-tree`. If it is not, initialize it with `git init -b main`
 as described in Step 1b. Then invoke the deterministic, idempotent project-config writer. In

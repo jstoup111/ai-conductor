@@ -19,6 +19,18 @@ function questionFor(section: string, key: string): string {
 }
 
 describe('bootstrap project-configuration interview', () => {
+  it('keeps engine-dispatched refreshes out of the operator configuration flow', async () => {
+    const skill = await readFile(skillPath, 'utf8');
+    const managed = skill.slice(skill.indexOf('### Managed refresh exception'), skill.indexOf('For every bootstrap mode'));
+
+    expect(managed).toContain('engine dispatches bootstrap as a managed refresh');
+    expect(managed).toContain('Skip the configuration interview and operator identity');
+    for (const command of ['ai-conductor config read', 'ai-conductor config init', 'ai-conductor config set']) {
+      expect(managed).toContain(command);
+    }
+    expect(managed).toContain('An unmarked\noperator-run bootstrap follows the ordinary initialization procedure');
+  });
+
   it('asks every decidable project setting with guidance and its writer flag', async () => {
     const section = await configSection();
     for (const [key, flag] of [
