@@ -429,18 +429,27 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
   const planGapRequirements = new Set(judgment.criterionJudgments
     .filter((entry) => entry.grade === 'PLAN_GAP')
     .flatMap((entry) => entry.requirementAssociations.map((association) => `${association.path}\u0000${association.requirementId}`)));
+  const requirementsById = new Map<string, string[]>();
+  for (const requirement of requirements) {
+    const [, requirementId] = requirement.split('\u0000');
+    const matchingRequirements = requirementsById.get(requirementId.toUpperCase()) ?? [];
+    matchingRequirements.push(requirement);
+    requirementsById.set(requirementId.toUpperCase(), matchingRequirements);
+  }
   const storyCoveredRequirements = new Set(context.criteria.flatMap((criterion) =>
-    (criterion.requirementIds ?? []).map((requirementId) => requirementId.toUpperCase())));
+    (criterion.requirementIds ?? []).flatMap((requirementId) => {
+      const matchingRequirements = requirementsById.get(requirementId.toUpperCase()) ?? [];
+      return matchingRequirements.length === 1 ? matchingRequirements : [];
+    })));
   const hasProjectedCoverage = context.criteria.some((criterion) => criterion.requirementIds !== undefined);
   const associatedRequirements = new Set(judgment.criterionJudgments.flatMap((entry) =>
     entry.requirementAssociations.map((association) => `${association.path}\u0000${association.requirementId}`),
   ));
   for (const requirement of requirements) {
-    const [, requirementId] = requirement.split('\u0000');
     // Compatibility callers that predate the projection have no story map;
     // the managed runner always supplies one and never takes this fallback.
     const coveredByStory = hasProjectedCoverage
-      ? storyCoveredRequirements.has(requirementId.toUpperCase())
+      ? storyCoveredRequirements.has(requirement)
       : associatedRequirements.has(requirement);
     if (!coveredByStory && !planGapRequirements.has(requirement)) {
       const [path, requirementId] = requirement.split('\u0000');
