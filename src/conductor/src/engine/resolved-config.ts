@@ -86,7 +86,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   test_suite: 'auto', // deterministic native verifier; no generative review
   manual_test: 'auto',
   prd_audit: 'conditional',          // marker written only when an FR is non-ALIGNED
-  architecture_review_as_built: 'conditional', // marker written only on drift/BLOCKED
+  architecture_review_as_built: 'conditional', // prompt derived from the typed verdict for non-clean results
   rebase: 'auto',
   finish: 'auto',
   remediate: 'auto',       // conductor routes deterministically from remediation.json
