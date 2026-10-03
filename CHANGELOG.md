@@ -39,6 +39,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - OTel metrics now carry the released harness version as the `service.version` Resource attribute, so metric dashboards can group by release. ([implementation PR #2798](https://github.com/jstoup111/ai-conductor/pull/2798)).
 - Project-owned pull request body sections remain intact through SHIP and FINISH. ([implementation PR #2777](https://github.com/jstoup111/ai-conductor/pull/2777)).
 - Operators can safely resume only the matching live kickback halt and inspect its authorization state. ([implementation PR #2873](https://github.com/jstoup111/ai-conductor/pull/2873)).
+- Feature step cost and token gauges now carry a `provider` label, so spend can be grouped by provider. ([implementation PR #2915](https://github.com/jstoup111/ai-conductor/pull/2915)).
 
 ### Fixed
 
