@@ -66,13 +66,16 @@ a single set of Docker services. See Step 1c for the `.env` boundary pattern tha
 ### Managed refresh exception (engine-dispatched only)
 
 When the engine dispatches bootstrap as a managed refresh, it has already validated that the
+<!-- ai-conductor:session-command-context=prohibition -->
 project configuration is initialized. Skip the configuration interview and operator identity
 sections entirely. Do not run `ai-conductor config read`, `ai-conductor config init`,
 `ai-conductor config set`, or registration commands; preserve the established configuration
 byte-for-byte and continue with the artifact refresh. The engine's managed-refresh instruction,
 not a model inference from the project files, is the authority for this exception. An unmarked
 operator-run bootstrap follows the ordinary initialization procedure below.
+<!-- /ai-conductor:session-command-context -->
 
+<!-- ai-conductor:session-command-context=operator-only -->
 For every bootstrap mode, confirm the project is a git repository before continuing:
 `git rev-parse --is-inside-work-tree`. If it is not, initialize it with `git init -b main`
 as described in Step 1b. Then invoke the deterministic, idempotent project-config writer. In
@@ -132,6 +135,7 @@ If identity remains unresolved (no value, no `gh` login, or the operator decline
 identity unresolved`: `engineer land`, spec handoff, and daemon builds will refuse until it is set.
 Mark bootstrap setup incomplete rather than successful. In auto mode, skip this section entirely:
 ask no identity question and make no `config set` call.
+<!-- /ai-conductor:session-command-context -->
 
 ### 1c. Generate Infrastructure Boundary Files
 
@@ -352,12 +356,14 @@ background jobs, key architecture-shaping libraries.
 
 ### 5. Set Up Project Directories
 
+<!-- ai-conductor:session-command-context=operator-only -->
 **`.memory/` is set up by the harness, not by this skill.** `ai-conductor memory setup <dir>`
 runs before any bootstrap sub-step. This creates a canonical
 per-project store at `~/.ai-conductor/memory/<key>/harness/` and makes `.memory/` a symlink to
 it (adr-2026-06-29-shared-memory-store-placement-and-durability). If `.memory/` already exists as a real directory (legacy), it is migrated via
 copy-verify-swap before the symlink is created (adr-2026-06-29-safe-reversible-memory-migration). **Do NOT create or mkdir `.memory/`
 yourself** — it will already be a symlink when this skill runs.
+<!-- /ai-conductor:session-command-context -->
 
 Create if missing (idempotent): `.pipeline/` (audit-trail/), `.worktrees/`, `.docs/` (specs/,
 complexity/, stories/, conflicts/, architecture/, decisions/, plans/, intake/). These
@@ -543,7 +549,9 @@ a real failure and must be surfaced.
 ## Verification
 
 - [ ] Bootstrap mode correctly determined
+<!-- ai-conductor:session-command-context=operator-only -->
 - [ ] Project config initialized via `ai-conductor config init` after git exists
+<!-- /ai-conductor:session-command-context -->
 - [ ] Project type detected from file indicators
 - [ ] Tech-context loaded if matching stack found
 - [ ] Existing code analyzed with inventory presented (if existing project)
