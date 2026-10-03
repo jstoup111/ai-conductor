@@ -2553,7 +2553,11 @@ function staleVerdictRunIdentityResult(
 
 async function writePrdAuditCodeStamp(dir: string, ctx: CompletionContext): Promise<void> {
   const stored = await readPrdAuditVerdict(dir);
-  if (stored.kind !== 'present') return;
+  // The runner stamps the original judgment at dispatch.  A completion check
+  // may fill the historical missing-stamp case, but it must never turn a
+  // preserved resume/replay into a different judge identity by advancing that
+  // stamp to the current HEAD.
+  if (stored.kind !== 'present' || stored.value.codeStamp !== null) return;
   const codeStamp = await stampCode(ctx);
   await persistPrdAuditVerdict(dir, {
     complete: stored.value.complete,
