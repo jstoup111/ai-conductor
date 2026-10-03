@@ -17,6 +17,7 @@ import type { ConductorEventEmitter } from "../../../src/ui/events.js";
 const execFile = promisify(execFileCallback);
 const temporaryDirectories: string[] = [];
 const servers: Server[] = [];
+const DEFAULT_PROVENANCE = { commit: true, pr: true, issue: true, feature: true };
 
 async function endpoint(server: Server): Promise<string> {
   servers.push(server);
@@ -165,6 +166,7 @@ describe("resolveSpoolDir", () => {
       exporter: "otlp" as const,
       endpoint: "http://localhost:4318",
       spool: { enabled: false, maxBytes: 1024 },
+      provenance: DEFAULT_PROVENANCE,
     };
 
     await warnDisabledSpoolBacklog(config, root, events);
@@ -194,6 +196,7 @@ describe("resolveSpoolDir", () => {
       exporter: "otlp" as const,
       endpoint: await endpoint(collector),
       spool: { enabled: false, maxBytes: 1024 },
+      provenance: DEFAULT_PROVENANCE,
     };
     const provider = new BasicTracerProvider();
     const span = provider.getTracer("spool-wiring-test").startSpan("direct-disabled-spool");
@@ -215,8 +218,12 @@ describe("resolveSpoolDir", () => {
     const provider = new BasicTracerProvider();
     const span = provider.getTracer("spool-wiring-test").startSpan("file-is-unspooled");
     span.end();
-    const directConfig = { enabled: true as const, exporter: "file" as const, file: directPath };
-    const wiredConfig = { enabled: true as const, exporter: "file" as const, file: wiredPath };
+    const directConfig = {
+      enabled: true as const, exporter: "file" as const, file: directPath, provenance: DEFAULT_PROVENANCE,
+    };
+    const wiredConfig = {
+      enabled: true as const, exporter: "file" as const, file: wiredPath, provenance: DEFAULT_PROVENANCE,
+    };
 
     await exportSpan(buildExporters(directConfig).spanExporter, span as unknown as ReadableSpan);
     await exportSpan(buildExporters(wiredConfig).spanExporter, span as unknown as ReadableSpan);
