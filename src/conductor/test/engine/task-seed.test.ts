@@ -1116,6 +1116,58 @@ The plan text changed after implementation.
       const status = JSON.parse(await fsPromises.readFile(statusPath, 'utf8'));
       expect(status.tasks).toEqual([expect.objectContaining({ id: '1', status: 'pending' })]);
     });
+
+    it('admits independent plan-amendment obligations for identical rewritten tasks in separate plans', async () => {
+      reopenObservation.statusPath = '';
+      const firstPath = join(dir, '.docs/plans/first.md');
+      const secondPath = join(dir, '.docs/plans/second.md');
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const statePath = join(dir, '.pipeline/engine-state.json');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const original = '# Plan\n\n## Task 1: Shared task\nOriginal text.\n';
+      const rewritten = '# Plan\n\n## Task 1: Shared task\nRewritten text.\n';
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'task-seed@example.test'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Task Seed Test'], { cwd: dir });
+      await fsPromises.writeFile(firstPath, original);
+      await fsPromises.writeFile(secondPath, original);
+      await execa('git', ['add', '.docs/plans'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'initial plans'], { cwd: dir });
+      const originalDigest = planTaskDigests(original).get('1')!;
+      await fsPromises.writeFile(firstPath, rewritten);
+      await fsPromises.writeFile(secondPath, rewritten);
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [{ id: '1', name: 'Shared task', status: 'completed', commit: 'before-rewrite' }],
+      }));
+      await fsPromises.writeFile(statePath, JSON.stringify({
+        activePlanPath: firstPath,
+        taskDigests: { version: 1, byPlan: {
+          '.docs/plans/first.md': { '1': originalDigest },
+          '.docs/plans/second.md': { '1': originalDigest },
+        } },
+      }));
+
+      await seedTaskStatus(dir, firstPath);
+      const afterFirst = JSON.parse(await fsPromises.readFile(statePath, 'utf8'));
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [{ id: '1', name: 'Shared task', status: 'completed', commit: 'before-rewrite' }],
+      }));
+      await fsPromises.writeFile(statePath, JSON.stringify({ ...afterFirst, activePlanPath: secondPath }));
+      await seedTaskStatus(dir, secondPath);
+
+      const state = JSON.parse(await fsPromises.readFile(statePath, 'utf8'));
+      const repairs = state.repairObligations;
+      const firstId = repairs.currentByPlan['.docs/plans/first.md']['1'];
+      const secondId = repairs.currentByPlan['.docs/plans/second.md']['1'];
+      expect(firstId).not.toBe(secondId);
+      expect(repairs.records[firstId]).toMatchObject({
+        planIdentity: '.docs/plans/first.md', settlement: 'settled', tasks: { '1': { status: 'open' } },
+      });
+      expect(repairs.records[secondId]).toMatchObject({
+        planIdentity: '.docs/plans/second.md', settlement: 'settled', tasks: { '1': { status: 'open' } },
+      });
+    });
   });
 
 });
