@@ -99,7 +99,7 @@ escalations. The floor is 3, not 2, because the model-bump rung lives at attempt
 | --- | --- |
 | `auto` | The step's output is accepted without an operator review pass |
 | `manual` | The operator reviews before the run proceeds |
-| `conditional` | Auto-approved **unless** the skill wrote `.pipeline/review-required-<step>` (`src/conductor/src/types/config.ts:14-21`) |
+| `conditional` | Auto-approved **unless** the skill wrote `.pipeline/review-required-<step>` (`src/conductor/src/types/config.ts:14-22`), except `architecture_review_as_built`, whose conditional review is derived from its typed verdict |
 
 `test_suite` reads `auto` because it produces deterministic evidence with no generative verdict to review. See
 [artifacts](artifacts.md).

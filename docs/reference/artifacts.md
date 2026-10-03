@@ -510,7 +510,7 @@ Existence is the signal. Alphabetized.
 | `halt-user-input-required` | `pipeline` skill on a user-requested exit | The build predicate returns not-done while it exists |
 | `phase-active` | `phase-marker.ts::writePhaseMarker` | Line-oriented on purpose so bash hooks can read it without a parser: `step: <name>`, `phase: <BUILD\|SHIP>`, `written: <ISO-8601>`, then zero or more `allow: <prefix>` lines. Removed idempotently on step exit |
 | `rate-limit-hit` | `rate-limit-wait.sh` | Line 1 epoch, line 2 wait seconds parsed from the Claude `StopFailure` payload; consumed by the legacy bash CLI's rate-limit retry path |
-| `review-required-<step>` | review skills | Existence means "found issues". Observed for `prd_audit`, `architecture_review`, `conflict_check`, and `architecture-as-built` |
+| `review-required-<step>` | review skills | Existence means "found issues". Observed for `prd_audit`, `architecture_review`, and `conflict_check`; `architecture_review_as_built` instead uses its typed verdict |
 | `tdd-phase` | nothing in the engine or any skill | Opt-in trigger for both TDD gates. Dormant by default |
 | `version-approval` | operator | Records the approved VERSION bump for the self-host approval gate |
 

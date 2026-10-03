@@ -154,6 +154,16 @@ export async function readAsBuiltVerdict(worktree: string): Promise<ReadAsBuiltV
   return { kind: 'present', value: { attemptId: raw.attemptId, codeStamp: raw.codeStamp, verdict: checked.verdict, policy: raw.policy, recordedFindings: raw.recordedFindings } };
 }
 
+/** Non-clean typed verdicts require operator review; unreadable authority fails closed. */
+export function asBuiltVerdictRequiresReview(verdict: AsBuiltVerdict): boolean {
+  return verdict.verdict !== 'APPROVED';
+}
+
+export async function asBuiltReviewRequired(worktree: string): Promise<boolean> {
+  const stored = await readAsBuiltVerdict(worktree);
+  return stored.kind !== 'present' || asBuiltVerdictRequiresReview(stored.value.verdict);
+}
+
 export function asBuiltOutcome(verdict: AsBuiltVerdict):
   | 'approved' | 'plan-gap-delivered' | 'plan-gap-undelivered' | 'blocked-remediable' | 'blocked-design' {
   switch (verdict.verdict) {

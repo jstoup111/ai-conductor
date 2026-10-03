@@ -1,5 +1,5 @@
 /**
- * Covers: S4.5, S4.17, S6.6, S6.7, S6.11, task:15, task:16, task:17, task:18
+ * Covers: S1.1, S1.2, S1.3, S2.1, S2.2, S4.5, S4.17, S6.6, S6.7, S6.11, task:15, task:16, task:17, task:18
  *
  * Production-path acceptance for typed as-built verdict routing gaps named by
  * prd_audit. The real Conductor serial walk and validation-group join run;
@@ -303,8 +303,8 @@ describe('S4.17: rejected-result exhaustion names the last rejected field', () =
   });
 });
 
-describe('S6.6: the as-built step writes no review-required marker in non-auto mode', () => {
-  it('never prompts or leaves a marker for a non-clean verdict and completes the step', async () => {
+describe('S1/S2: typed as-built verdicts drive conditional review', () => {
+  it('prompts once for a drift-notes verdict without writing a marker in non-auto mode', async () => {
     const { root, statePath } = await seedFixture();
     await seedSerial(root, statePath);
     const reviewed: StepName[] = [];
@@ -335,8 +335,108 @@ describe('S6.6: the as-built step writes no review-required marker in non-auto m
       },
     }).run();
 
-    expect(reviewed).not.toContain('architecture_review_as_built');
+    expect(reviewed).toEqual(['architecture_review_as_built']);
     expect(existsSync(join(root, '.pipeline', 'review-required-architecture_review_as_built'))).toBe(false);
+    const stateResult = await readState(statePath);
+    expect(stateResult.ok ? stateResult.value.architecture_review_as_built : undefined).toBe('done');
+  });
+
+  it('prompts once for a delivered PLAN_GAP verdict in non-auto mode', async () => {
+    const { root, statePath } = await seedFixture();
+    await seedSerial(root, statePath);
+    const reviewed: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName, _state, options?: StepRunOptions): Promise<StepRunResult> => {
+        if (step === 'architecture_review_as_built') {
+          await persist(root, {
+            version: 'v1',
+            verdict: 'PLAN_GAP',
+            reachability: [],
+            driftNotes: [],
+            outcomeDelivered: true,
+            affectedOutcome: 'Operators can resume a parked feature without data loss.',
+          }, options?.runId);
+        }
+        return { success: true };
+      }),
+      resetSession: async () => {},
+    };
+    await conductorFor(root, statePath, runner, {
+      mode: 'default',
+      daemon: false,
+      fromStep: 'architecture_review_as_built',
+      onReviewArtifacts: async (step) => {
+        reviewed.push(step);
+        return 'approved';
+      },
+    }).run();
+
+    expect(reviewed).toEqual(['architecture_review_as_built']);
+  });
+
+  it('does not prompt for a clean APPROVED verdict in non-auto mode', async () => {
+    const { root, statePath } = await seedFixture();
+    await seedSerial(root, statePath);
+    const reviewed: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName, _state, options?: StepRunOptions): Promise<StepRunResult> => {
+        if (step === 'architecture_review_as_built') {
+          await persist(root, {
+            version: 'v1',
+            verdict: 'APPROVED',
+            reachability: [],
+            driftNotes: [],
+          }, options?.runId);
+        }
+        return { success: true };
+      }),
+      resetSession: async () => {},
+    };
+    await conductorFor(root, statePath, runner, {
+      mode: 'default',
+      daemon: false,
+      fromStep: 'architecture_review_as_built',
+      onReviewArtifacts: async (step) => {
+        reviewed.push(step);
+        return 'approved';
+      },
+    }).run();
+
+    expect(reviewed).toEqual([]);
+    const stateResult = await readState(statePath);
+    expect(stateResult.ok ? stateResult.value.architecture_review_as_built : undefined).toBe('done');
+  });
+
+  it('does not prompt for a drift-notes verdict in auto mode', async () => {
+    const { root, statePath } = await seedFixture();
+    await seedSerial(root, statePath);
+    const reviewed: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName, _state, options?: StepRunOptions): Promise<StepRunResult> => {
+        if (step === 'architecture_review_as_built') {
+          await persist(root, {
+            version: 'v1',
+            verdict: 'APPROVED WITH DRIFT NOTES',
+            reachability: [],
+            driftNotes: [{
+              note: 'staleStampGate is not exercised by a live caller.',
+              unexercised: { primitive: 'staleStampGate', signature: 'gate.refuse(stamp)' },
+            }],
+          }, options?.runId);
+        }
+        return { success: true };
+      }),
+      resetSession: async () => {},
+    };
+    await conductorFor(root, statePath, runner, {
+      fromStep: 'architecture_review_as_built',
+      onReviewArtifacts: async (step) => {
+        reviewed.push(step);
+        return 'approved';
+      },
+    }).run();
+
+    expect(reviewed).toEqual([]);
     const stateResult = await readState(statePath);
     expect(stateResult.ok ? stateResult.value.architecture_review_as_built : undefined).toBe('done');
   });
