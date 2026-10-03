@@ -165,6 +165,7 @@ selected host's native invocation only to activate that reference:
 
 - **Claude:** invoke `skill-name` as `/skill-name`.
 - **Codex:** invoke `skill-name` as `$skill-name`.
+- **Pi:** invoke `skill-name` as `/skill:skill-name`.
 
 Native wording may differ, but it cannot weaken, bypass, or replace the required shared outcome,
 artifact, or lifecycle gate. Do not weaken or bypass the shared artifact or gate. The shared

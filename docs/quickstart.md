@@ -62,7 +62,7 @@ it therefore excludes work still in flight on `main`.
 ```
 
 On a TTY with no `--providers` flag, the installer prompts for four things: the built-in host
-(Claude / Codex / both), the update channel, a markdown viewer, and a mermaid renderer. Pass the
+(Claude, Codex, Pi, or a comma-separated combination), the update channel, a markdown viewer, and a mermaid renderer. Pass the
 selection up front to skip the first prompt:
 
 ```bash
