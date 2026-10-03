@@ -74,6 +74,7 @@ import { tmpdir } from 'node:os';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -89,23 +90,15 @@ const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   adrCompliance: { enabled: false, reason: 'test fixture' },
   diagramDrift: { enabled: false, reason: 'test fixture' },
 };
-const PRD_PASS = [
-  '# PRD Audit',
-  '',
-  '**PRD:** present',
-  '',
-  '## Verdict Table',
-  '',
-  '| Criterion | Grade | Plan task | PRD | Evidence |',
-  '|---|---|---|---|---|',
-  '| S1.1 | PASS | | FR-1 | evidence.ts:1 |',
-  '',
-].join('\n');
 const FEATURE_PRD = '# PRD: Build auth token check and classify\n\n## Functional Requirements\n\n- **FR-1 — Group auth recovery.** Authentication failures park and resume.\n';
 
 // Verbatim observed rejected-credential output
 // (adr-2026-07-22-auth-failure-classification-observed-401-patterns).
 const OBSERVED_401 = 'Failed to authenticate. API Error: 401 Invalid bearer token';
+
+async function writePrdAuditPass(dir: string, runId?: string): Promise<void> {
+  await persistPrdAuditVerdict(dir, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'evidence.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId: runId ?? 'fixture-run', codeStamp: null });
+}
 
 describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join path parks on authFailure (#484)', () => {
   async function seedToValidators(
@@ -210,7 +203,7 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
             return { success: true };
           }
           if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+            await writePrdAuditPass(dir, runOptions?.runId);
             return { success: true };
           }
           if (step === 'architecture_review_as_built') {
@@ -301,7 +294,7 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
             return { success: true, output: 'test suite expects a 401 response from /widgets' };
           }
           if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+            await writePrdAuditPass(dir);
             return { success: true };
           }
           return { success: true };

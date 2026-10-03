@@ -10,6 +10,7 @@ import { AuditTrailWriter } from './audit-trail.js';
 import { HALT_CLASS_MARKER, HALT_MARKER, writeHaltMarker } from './halt-marker.js';
 import { GATES_DIR } from './gate-verdicts.js';
 import { AS_BUILT_REPORT_PATH, AS_BUILT_VERDICT_PATH } from './as-built-verdict-store.js';
+import { PRD_AUDIT_REPORT_PATH, PRD_AUDIT_VERDICT_PATH } from './prd-audit-verdict-store.js';
 import { join } from 'node:path';
 import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
 
@@ -158,6 +159,12 @@ async function clearDerivedRecords(
           ? [
               { original: join(root, AS_BUILT_VERDICT_PATH), staged: join(root, `${AS_BUILT_VERDICT_PATH}.rewind-clearing`) },
               { original: join(root, AS_BUILT_REPORT_PATH), staged: join(root, `${AS_BUILT_REPORT_PATH}.rewind-clearing`) },
+            ]
+          : []),
+        ...(step === 'prd_audit'
+          ? [
+              { original: join(root, PRD_AUDIT_VERDICT_PATH), staged: join(root, `${PRD_AUDIT_VERDICT_PATH}.rewind-clearing`) },
+              { original: join(root, PRD_AUDIT_REPORT_PATH), staged: join(root, `${PRD_AUDIT_REPORT_PATH}.rewind-clearing`) },
             ]
           : []),
       ];

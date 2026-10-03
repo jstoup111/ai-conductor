@@ -684,11 +684,6 @@ async function runGroupBranchInner(
       member.name as StepName,
       deps.sessionStartedAt,
       deps.config,
-      {
-        featureDesc: state.feature_desc,
-        featureIdentities: [],
-        changedPaths: new Set(),
-      },
     );
   }
 
@@ -801,9 +796,14 @@ async function runGroupBranchInner(
     // Projection and capability faults are deterministic engine preconditions,
     // not provider failures. Surface them to the group join without consuming
     // its ordinary retry budget so auto/daemon matches the serial path.
-    if (member.name === 'architecture_review_as_built' && result.asBuiltFault) {
+    const deterministicFault = member.name === 'architecture_review_as_built'
+      ? result.asBuiltFault
+      : member.name === 'prd_audit'
+        ? result.prdAuditFault
+        : undefined;
+    if (deterministicFault) {
       return makeMechanicalFaultOutcome(
-        result.asBuiltFault.reason,
+        deterministicFault.reason,
         result.authentication,
         accumulatedObservedIntervals(),
       );

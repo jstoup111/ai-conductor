@@ -1,5 +1,9 @@
 # Implementation Plan: Daemon E2E fixture feature
 
+## Technical Approach
+
+The fixture agent records Task 1 evidence by touching the declared fixture file in a real commit.
+
 ## Tasks
 
 ### T0 — Setup

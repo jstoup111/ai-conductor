@@ -1,4 +1,5 @@
 import type { PersistedAsBuiltVerdict } from './as-built-verdict-store.js';
+import type { PersistedPrdAuditVerdict } from './prd-audit-verdict-store.js';
 
 export interface ShipmentAssociationInput {
   planStems: readonly string[];
@@ -32,6 +33,8 @@ export type RecordedShipmentFinding =
     grade: 'PLAN_GAP';
     criterion: string;
     summary: string;
+    rationale?: string;
+    authority?: string;
   }
   | {
     gate: 'prd_audit';
@@ -44,6 +47,8 @@ export type RecordedShipmentFinding =
     decision?: 'accept' | 'refuse';
     /** The rationale the operator wrote beside that decision. */
     rationale?: string;
+    /** Attribution is preserved from the engine-recorded disposition. */
+    authority?: string;
   }
   | {
     gate: 'architecture_review_as_built';
@@ -66,7 +71,8 @@ export type RecordedShipmentFinding =
  * absent or malformed finding stays absent rather than being inferred.
  */
 export function recordedShipmentFindings(input: {
-  prdAudit?: string;
+  /** The engine-owned typed PRD audit verdict; Markdown is not authority. */
+  prdAudit?: PersistedPrdAuditVerdict;
   /** The engine-owned verdict envelope; rendered Markdown is deliberately not accepted. */
   asBuilt?: PersistedAsBuiltVerdict;
 }): RecordedShipmentFinding[] {
@@ -102,6 +108,9 @@ export function appendRecordedShipmentFindings(
     ...('rationale' in finding && finding.rationale
       ? [`    rationale: ${yamlScalar(finding.rationale)}`]
       : []),
+    ...('authority' in finding && finding.authority
+      ? [`    authority: ${yamlScalar(finding.authority)}`]
+      : []),
   ].join('\n')).join('\n');
   return `${record.slice(0, frontmatterEnd)}\nfindings:\n${rendered}${record.slice(frontmatterEnd)}`;
 }
@@ -130,43 +139,34 @@ function uniqueNonEmpty(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
-function recordedPrdAuditFindings(report: string | undefined): RecordedShipmentFinding[] {
-  const block = report?.match(/^## Recorded Findings\s*\n+```json\s*\n([\s\S]*?)\n```\s*$/im)?.[1];
-  if (!block) return [];
-  try {
-    const parsed: unknown = JSON.parse(block);
-    const findings = parsed !== null && typeof parsed === 'object' && Array.isArray((parsed as { findings?: unknown }).findings)
-      ? (parsed as { findings: unknown[] }).findings
-      : [];
-    return findings.flatMap<RecordedShipmentFinding>((finding) => {
-      if (!isObject(finding) || finding.gate !== 'prd_audit') return [];
-      const criterion = nonEmptyString(finding.criterion);
-      const summary = nonEmptyString(finding.summary);
-      if (!criterion || !summary) return [];
-      if (finding.grade === 'PLAN_GAP') {
-        return [{ gate: 'prd_audit', grade: 'PLAN_GAP', criterion, summary }];
-      }
-      if (finding.grade !== 'OVER_SCOPE' || typeof finding.accepted !== 'boolean') return [];
-      // D8: a recorded decision and its rationale ride into the shipped record
-      // with the finding. Dropping them left the record saying a criterion was
-      // accepted with no trace of who decided what, or that it was refused at all.
-      const decision = finding.decision === 'accept' || finding.decision === 'refuse'
-        ? finding.decision
-        : undefined;
-      const rationale = nonEmptyString(finding.rationale);
-      return [{
-        gate: 'prd_audit',
-        grade: 'OVER_SCOPE',
-        criterion,
-        summary,
-        accepted: finding.accepted,
-        ...(decision ? { decision } : {}),
-        ...(decision && rationale ? { rationale } : {}),
-      }];
-    });
-  } catch {
-    return [];
-  }
+function recordedPrdAuditFindings(value: PersistedPrdAuditVerdict | undefined): RecordedShipmentFinding[] {
+  if (!value || !value.complete) return [];
+  const recorded = new Map<string, PersistedPrdAuditVerdict['recordedDispositions'][number]>(
+    value.recordedDispositions.map((entry) =>
+      [`${entry.criterionId.toUpperCase()}\u0000${entry.grade}`, entry] as const),
+  );
+  const project = (criterion: string, grade: 'PLAN_GAP' | 'OVER_SCOPE', summary: string): RecordedShipmentFinding[] => {
+    const disposition = recorded.get(`${criterion.toUpperCase()}\u0000${grade}`);
+    if (!disposition) return [];
+    if (grade === 'PLAN_GAP') {
+      return [{ gate: 'prd_audit', grade, criterion, summary, rationale: disposition.rationale, authority: disposition.authority }];
+    }
+    return [{
+      gate: 'prd_audit', grade, criterion, summary, accepted: disposition.decision === 'accept',
+      ...(disposition.decision === 'accept' || disposition.decision === 'refuse'
+        ? { decision: disposition.decision, rationale: disposition.rationale }
+        : {}),
+      authority: disposition.authority,
+    }];
+  };
+  return [
+    ...value.judgment.criterionJudgments.flatMap((finding) =>
+      finding.grade === 'PLAN_GAP' || finding.grade === 'OVER_SCOPE'
+        ? project(finding.criterionId, finding.grade, finding.rationale)
+        : []),
+    ...value.judgment.noOwnerObservations.flatMap((finding) =>
+      project(finding.presentationOrdinal, finding.grade, finding.rationale)),
+  ];
 }
 
 function recordedAsBuiltFindings(value: PersistedAsBuiltVerdict | undefined): RecordedShipmentFinding[] {
@@ -194,14 +194,6 @@ function recordedAsBuiltFindings(value: PersistedAsBuiltVerdict | undefined): Re
       }]
     : [];
   return [...remediation, ...planGap];
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object';
-}
-
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function yamlScalar(value: string): string {

@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { checkStepCompletion, sweepStaleReviewArtifacts } from '../../src/engine/artifacts.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { PRD_AUDIT_VERDICT_PATH, persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -45,16 +46,28 @@ async function preservedReaderFixture(): Promise<{ dir: string; head: string }> 
   const expectedTree = await git(dir, 'rev-parse', `${head}^{tree}`);
   const replay = { preRebaseHead: original, mergeBase: original, target: original, completedHead: head, expectedTree };
   await mkdir(join(dir, '.pipeline'), { recursive: true });
-  const report = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n| FR-1 | ALIGNED | n/a | src/shared.ts:1 | — |\n';
-  await writeFile(join(dir, '.pipeline/prd-audit.md'), report);
-  await writeFile(join(dir, '.pipeline/prd-audit-code-stamp.json'), JSON.stringify({ codeStamp: original, runId: 'before-rebase' }));
+  await persistPrdAuditVerdict(dir, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
+        evidence: 'src/shared.ts:1', rationale: 'The fixture supplies a complete typed audit judgment.',
+        requirementAssociations: [], evidenceTaskIds: [],
+      }],
+      noOwnerObservations: [],
+    },
+    diagnostics: [],
+    recordedDispositions: [],
+  }, { attemptId: 'before-rebase', codeStamp: original });
+  const verdict = await readFile(join(dir, PRD_AUDIT_VERDICT_PATH), 'utf8');
   await writeVerdict(dir, 'prd_audit', {
     satisfied: true,
     checkedAt: 1,
     preservation: {
       gate: 'prd_audit',
       original: {
-        artifactDigest: `sha256:${createHash('sha256').update(report).digest('hex')}`,
+        artifactDigest: `sha256:${createHash('sha256').update(verdict).digest('hex')}`,
         attemptId: 'before-rebase',
         runId: 'before-rebase',
         codeStamp: original,
@@ -76,14 +89,17 @@ async function preservedReaderFixture(): Promise<{ dir: string; head: string }> 
 
 describe('integration/rebase-preserved-readers (Task 8)', () => {
   it('retains a valid preserved review across completion and stale-artifact sweep', async () => {
-    const { dir } = await preservedReaderFixture();
+    const { dir, head } = await preservedReaderFixture();
     const reportPath = join(dir, '.pipeline/prd-audit.md');
     const old = new Date(2000, 0, 1);
     await utimes(reportPath, old, old);
 
-    await expect(checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: Date.now() })).resolves.toMatchObject({ done: true });
+    await expect(checkStepCompletion(dir, 'prd_audit', {
+      sessionStartedAt: Date.now(),
+      getHeadSha: async () => head,
+    })).resolves.toMatchObject({ done: true });
     await expect(sweepStaleReviewArtifacts(dir, 'prd_audit', Date.now(), undefined, undefined, 'restarted-run')).resolves.toEqual([]);
-    await expect(readFile(reportPath, 'utf8')).resolves.toContain('ALIGNED');
+    await expect(readFile(reportPath, 'utf8')).resolves.toContain('PASS');
   });
 
   it('refuses finish and a restarted conductor while the durable transition is applying', async () => {

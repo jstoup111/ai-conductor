@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, copyFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 
 const fixturePlanPath = fileURLToPath(new URL('../fixtures/daemon-e2e/plan.md', import.meta.url));
 const fixtureStoriesPath = fileURLToPath(new URL('../fixtures/daemon-e2e/stories.md', import.meta.url));
@@ -24,15 +25,24 @@ describe('daemon E2E fixture stories', () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await copyFile(fixturePlanPath, join(dir, `.docs/plans/${slug}.md`));
     await copyFile(fixtureStoriesPath, join(dir, `.docs/stories/${slug}.md`));
-    await writeFile(
-      join(dir, '.pipeline/prd-audit.md'),
-      '**PRD:** none\n\n'
-        + '## Verdict Table\n\n'
-        + '| Criterion | Grade | Plan task | Evidence |\n'
-        + '| --- | --- | --- | --- |\n'
-        + '| S1.1 | PASS | 1 | test/fixtures/daemon-e2e/touched.txt |\n',
-      'utf-8',
-    );
+    await persistPrdAuditVerdict(dir, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '1', ordinal: 1 },
+          criterionId: 'S1.1',
+          grade: 'PASS',
+          evidence: 'test/fixtures/daemon-e2e/touched.txt',
+          rationale: 'The fixture task covers its declared criterion.',
+          requirementAssociations: [],
+          evidenceTaskIds: ['1'],
+        }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'fixture-run', codeStamp: null });
 
     const result = await checkStepCompletion(dir, 'prd_audit', {
       planPath: join(dir, `.docs/plans/${slug}.md`),

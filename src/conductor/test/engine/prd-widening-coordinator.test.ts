@@ -10,7 +10,7 @@ import type { RemediationCaseStoreMutation, RemediationCaseStoreState } from '..
 import type { RemediationCasePrdWideningRecord } from '../../src/engine/remediation-case-store.js';
 
 const context = {
-  version: 'v1' as const,
+  version: 'v2' as const,
   digest: '',
   currentSources: [{ id: 'prd-audit:NC.1', criterion: 'NC.1', grade: 'OVER_SCOPE' as const, evidence: 'A new public behavior.', prdIds: [] }],
   cases: [],
@@ -122,7 +122,7 @@ describe('PRD widening coordinator', () => {
     };
     const rebuildContext = (): PrdWideningContext => {
       const cases = state.version === 'v2' ? state.prdWideningCases : [];
-      const snapshot = { version: 'v1' as const, currentSources, cases, decisions };
+      const snapshot = { version: 'v2' as const, currentSources, cases, decisions };
       return { ...snapshot, digest: createHash('sha256').update(JSON.stringify(snapshot)).digest('hex') };
     };
     let judgeCalls = 0;
@@ -237,7 +237,7 @@ describe('PRD widening coordinator', () => {
     };
     const rebuildContext = (): PrdWideningContext => {
       const cases = state.version === 'v2' ? state.prdWideningCases : [];
-      const snapshot = { version: 'v1' as const, currentSources: [source], cases, decisions: [decision] };
+      const snapshot = { version: 'v2' as const, currentSources: [source], cases, decisions: [decision] };
       return { ...snapshot, digest: createHash('sha256').update(JSON.stringify(snapshot)).digest('hex') };
     };
     let judgeCalls = 0;
@@ -318,7 +318,7 @@ describe('PRD widening coordinator', () => {
     };
     const rebuildContext = (): PrdWideningContext => {
       const cases = state.version === 'v2' ? state.prdWideningCases : [];
-      const snapshot = { version: 'v1' as const, currentSources: [source], cases, decisions: [] };
+      const snapshot = { version: 'v2' as const, currentSources: [source], cases, decisions: [] };
       return { ...snapshot, digest: createHash('sha256').update(JSON.stringify(snapshot)).digest('hex') };
     };
     let judgeCalls = 0;
@@ -450,7 +450,7 @@ describe('PRD widening coordinator', () => {
     };
     const rebuildContext = (): PrdWideningContext => {
       const cases = state.version === 'v2' ? state.prdWideningCases : [];
-      const snapshot = { version: 'v1' as const, currentSources: context.currentSources, cases, decisions };
+      const snapshot = { version: 'v2' as const, currentSources: context.currentSources, cases, decisions };
       return { ...snapshot, digest: createHash('sha256').update(JSON.stringify(snapshot)).digest('hex') };
     };
     const decisionRead = (revision: number) => ({

@@ -26,6 +26,7 @@ import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact
 import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 let projectRoot: string;
@@ -58,6 +59,28 @@ async function writeBlockedAsBuiltFixture(taskId: string, runId?: string): Promi
     codeStamp: null,
     policy: AS_BUILT_FIXTURE_POLICY,
   });
+}
+
+async function writeFixablePrdAuditFixture(runId?: string): Promise<void> {
+  await persistPrdAuditVerdict(projectRoot, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: '1', ordinal: 1 },
+        criterionId: 'S1.1',
+        grade: 'FIXABLE',
+        evidence: 'Missing implementation',
+        rationale: 'Fixture supplies typed audit evidence.',
+        requirementAssociations: [],
+        evidenceTaskIds: [],
+        ownerTaskId: '1',
+      }],
+      noOwnerObservations: [],
+    },
+    diagnostics: [],
+    recordedDispositions: [],
+  }, { attemptId: runId ?? 'fixture-run', codeStamp: null });
 }
 
 async function git(...args: string[]): Promise<string> {
@@ -568,7 +591,7 @@ describe('a mixed prd_audit/as-built existing-task lap keeps every gate armed fo
 
     let remediateCalls = 0;
     const runner: StepRunner = {
-      run: vi.fn(async (step: StepName) => {
+      run: vi.fn(async (step: StepName, _state, options) => {
         if (step === 'prd_audit') {
           await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), [
             '# PRD Audit', '', '**PRD:** none', '', '## Verdict Table',
@@ -576,6 +599,7 @@ describe('a mixed prd_audit/as-built existing-task lap keeps every gate armed fo
             '|---|---|---|---|---|',
             '| S1.1 | FIXABLE | 1 | FR-1 | Missing implementation |',
           ].join('\n'));
+          await writeFixablePrdAuditFixture(options?.runId);
         } else if (step === 'architecture_review_as_built') {
           await writeBlockedAsBuiltFixture('2');
         } else if (step === 'remediate') {
@@ -585,7 +609,7 @@ describe('a mixed prd_audit/as-built existing-task lap keeps every gate armed fo
             JSON.stringify({
               dispositions: [
                 {
-                  id: 'FR-1',
+                  id: 'S1.1',
                   disposition: 'existing-task',
                   category: null,
                   rationale: 'Task 1 already owns this repair.',

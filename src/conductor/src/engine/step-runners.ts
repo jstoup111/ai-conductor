@@ -265,6 +265,13 @@ import {
   renderAsBuiltProjection,
 } from './as-built-projection.js';
 import { persistAsBuiltVerdict } from './as-built-verdict-store.js';
+import {
+  PRD_AUDIT_JUDGMENT_SCHEMA,
+  renderPrdAuditJudgmentShape,
+  validatePrdAuditJudgment,
+} from './prd-audit-contract.js';
+import { buildPrdAuditProjection } from './prd-audit-projection.js';
+import { persistPrdAuditVerdict, PrdAuditVerdictPersistenceError } from './prd-audit-verdict-store.js';
 
 /** A closed coverage-binding payload that cannot be treated as a verdict. */
 export class CoverageBindingPayloadError extends Error {
@@ -760,7 +767,7 @@ function establishedBuildReviewTools(_provider: ProviderWith<'readOnlyReview'>):
   return ['git'];
 }
 
-type ProviderAwareSkillOneShotStep = 'complexity' | 'remediate' | 'rebase' | 'architecture_review_as_built';
+type ProviderAwareSkillOneShotStep = 'complexity' | 'remediate' | 'rebase' | 'prd_audit' | 'architecture_review_as_built';
 type ProviderAwareFreeFormOneShotStep =
   | 'worktree'
   | 'build'
@@ -1185,6 +1192,107 @@ export class DefaultStepRunner implements StepRunner {
       state.complexity_tier,
       opts?.prdWideningReviewContext,
     );
+
+    // PRD audit is a provider-native, schema-constrained judgment. The bounded
+    // projection, validation and persistence are engine-owned so neither
+    // adapter nor report prose can create gate authority.
+    if (step === 'prd_audit' && this.providerRuntimes) {
+      const schemaCandidates = this.configuredProviders.filter(
+        (provider) => this.providerRuntimes!.nativeSchemaCapabilityFor(provider)?.nativeOutputSchema === true,
+      );
+      if (schemaCandidates.length === 0) {
+        return {
+          success: false,
+          prdAuditFault: {
+            kind: 'capability',
+            reason: `prd_audit cannot enforce its native output schema: candidate set [${this.configuredProviders.join(', ')}] has no provider declaring nativeSchemaCapability.nativeOutputSchema. Recovery action: select or update a candidate that declares nativeSchemaCapability.nativeOutputSchema.`,
+          },
+        };
+      }
+      const projection = await buildPrdAuditProjection(this.projectDir, this.featureDesc || undefined);
+      if (!projection.ok) {
+        const { dimension, detail, actual, limit } = projection.fault;
+        const bounds = actual === undefined || limit === undefined ? '' : ` (actual ${actual}, limit ${limit})`;
+        return {
+          success: false,
+          output: `prd-audit input projection fault: ${dimension}${bounds}${detail ? `: ${detail}` : ''}`,
+          prdAuditFault: { kind: 'input', reason: `prd-audit input projection fault: ${dimension}${bounds}${detail ? `: ${detail}` : ''}` },
+        };
+      }
+      try {
+        const result = await this.executeProviderAwareSkillOneShot(step, {
+          prompt: `PRD-AUDIT EVIDENCE (engine-owned, versioned):\n${JSON.stringify(projection.projection)}\n\nTerminal judgment shape (engine-owned): ${renderPrdAuditJudgmentShape(PRD_AUDIT_JUDGMENT_SCHEMA)}`,
+          systemPrompt,
+          cwd: this.projectDir,
+          dangerouslySkipPermissions: true,
+          interactive: false,
+          nativeSchema: PRD_AUDIT_JUDGMENT_SCHEMA,
+        }, state.complexity_tier, opts);
+        if (result) {
+          this.callCount++;
+          const providerExhausted = result.providerSetupExhaustion !== undefined ||
+            (result.attempts.length > 0 && result.attempts.every((attempt) => attempt.outcome === 'unavailable'));
+          if (!result.success && result.nativeSchemaUnsupported) {
+            const provider = result.actualProvider ?? result.preferredProvider ?? this.configuredProviders[0] ?? 'selected provider';
+            return { ...this.toStepRunResult(step, result), success: false, prdAuditFault: {
+              kind: 'capability',
+              reason: `prd_audit cannot enforce its native output schema with selected provider [${provider}]: missing nativeSchemaCapability.nativeOutputSchema. Recovery action: select or update ${provider} to declare nativeSchemaCapability.nativeOutputSchema.`,
+            } };
+          }
+          if (!result.success && (result.authFailure || result.rateLimited || result.commandUnresolved || result.modelUnavailable || providerExhausted)) {
+            return this.toStepRunResult(step, result);
+          }
+          // A provider failure is authoritative even if an adapter happened to
+          // leave a structured-looking value behind.  Never validate/persist a
+          // partial terminal result over the provider's own failure reason.
+          if (!result.success) return this.toStepRunResult(step, result);
+          if (result.structuredResultFailure !== undefined || result.finalStructuredResult === undefined) {
+            return { ...this.toStepRunResult(step, result), success: false, output: 'structured-result-missing' };
+          }
+          const requirements = 'sources' in projection.projection.prd ? projection.projection.prd.sources : [];
+          const validated = validatePrdAuditJudgment(result.finalStructuredResult, {
+            criteria: projection.projection.criteria,
+            requirements,
+            tasks: projection.projection.tasks,
+          });
+          const head = await this.gitRunner(['rev-parse', 'HEAD']);
+          const codeStamp = head.exitCode === 0 && head.stdout.trim().length > 0 ? head.stdout.trim() : null;
+          if (!validated.ok) {
+            if (validated.judgment) {
+              try {
+                await persistPrdAuditVerdict(this.projectDir, {
+                  complete: false, judgment: validated.judgment, diagnostics: validated.diagnostics, recordedDispositions: [],
+                }, { attemptId: opts?.runId ?? this.runId, codeStamp });
+              } catch (error) {
+                const reason = error instanceof Error ? error.message : String(error);
+                const stage = error instanceof PrdAuditVerdictPersistenceError && error.stage === 'report'
+                  ? `report output ${'.pipeline/prd-audit.md'}`
+                  : 'authority persistence';
+                return { ...this.toStepRunResult(step, result), success: false, output: `prd-audit ${stage} failed: ${reason}` };
+              }
+            }
+            return { ...this.toStepRunResult(step, result), success: false, output: `structured-result-rejected: ${validated.diagnostics.join('; ')}` };
+          }
+          try {
+            await persistPrdAuditVerdict(this.projectDir, {
+              complete: true, judgment: validated.judgment, diagnostics: [], recordedDispositions: [],
+            }, { attemptId: opts?.runId ?? this.runId, codeStamp });
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            const stage = error instanceof PrdAuditVerdictPersistenceError && error.stage === 'report'
+              ? `report output ${'.pipeline/prd-audit.md'}`
+              : 'authority persistence';
+            return { ...this.toStepRunResult(step, result), success: false, output: `prd-audit ${stage} failed: ${reason}` };
+          }
+          return this.toStepRunResult(step, result);
+        }
+      } catch (error) {
+        this.callCount++;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.log(`Session for ${step} exited with error: ${errorMessage}`);
+        return { success: false, output: `Session for ${step} exited with error: ${errorMessage}` };
+      }
+    }
 
     // As-built architecture review is a provider-native, schema-constrained
     // judgement. It always takes the fresh one-shot branch: the engine owns

@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import { checkGateCompletion } from '../../src/engine/gate-verdicts.js';
 import { verdictFreshnessFloor } from '../../src/engine/artifacts.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 const AS_BUILT_POLICY: AsBuiltPolicy = {
@@ -41,7 +42,7 @@ describe('engine/artifacts — stories predicate', () => {
   it('passes a single-story file with happy + negative paths', async () => {
     await story(
       'features/foo/ST-001-foo.md',
-      `# Story: Foo\n**Status:** Accepted\n\n## Acceptance Criteria\n\n### Happy Path\n- Given x, when y, then z\n\n### Negative Paths\n- Given a, when b, then error\n`,
+      `# Story: Foo\n**Status:** Accepted\n\n## Story 1: Foo\n\n### Happy Path\n- Given x, when y, then z\n\n### Negative Paths\n- Given a, when b, then error\n`,
     );
     const r = await checkGateCompletion(dir, 'stories');
     expect(r.done).toBe(true);
@@ -408,10 +409,22 @@ describe('engine/artifacts — prd_audit predicate (per-attempt verdict freshnes
   });
 
   async function report(content: string) {
-    const full = join(dir, '.pipeline/prd-audit.md');
-    await mkdir(dirname(full), { recursive: true });
-    await writeFile(full, content);
-    return full;
+    void content;
+    await persistPrdAuditVerdict(dir, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
+          evidence: 'fixture evidence', rationale: 'fixture rationale',
+          requirementAssociations: [], evidenceTaskIds: [],
+        }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'fixture-run', codeStamp: null });
+    return join(dir, '.pipeline/prd-audit.json');
   }
 
   const aligned = '# PRD Audit\n\n| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n';
@@ -459,6 +472,23 @@ describe('engine/artifacts — verdict-freshness floor regression/fallback', () 
   }
 
   const prdAligned = '# PRD Audit\n\n| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n';
+  async function prdPass() {
+    await persistPrdAuditVerdict(dir, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
+          evidence: 'fixture evidence', rationale: 'fixture rationale',
+          requirementAssociations: [], evidenceTaskIds: [],
+        }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'fixture-run', codeStamp: null });
+    return join(dir, '.pipeline/prd-audit.json');
+  }
   async function buildReviewPass() {
     return write(
       '.pipeline/build-review.json',
@@ -467,7 +497,8 @@ describe('engine/artifacts — verdict-freshness floor regression/fallback', () 
   }
 
   it('(a) no attemptStartedAt: prd_audit behaves exactly as before against sessionStartedAt only', async () => {
-    const full = await write('.pipeline/prd-audit.md', prdAligned);
+    void prdAligned;
+    const full = await prdPass();
     const S = Date.now() - 60_000;
     const r = await checkGateCompletion(dir, 'prd_audit', { sessionStartedAt: S });
     expect(r.done).toBe(true);
@@ -495,7 +526,8 @@ describe('engine/artifacts — verdict-freshness floor regression/fallback', () 
   });
 
   it('(b) both attemptStartedAt and sessionStartedAt undefined: fail-open on presence for mtime predicates', async () => {
-    await write('.pipeline/prd-audit.md', prdAligned);
+    void prdAligned;
+    await prdPass();
     await buildReviewPass();
 
     const rPrd = await checkGateCompletion(dir, 'prd_audit', {});

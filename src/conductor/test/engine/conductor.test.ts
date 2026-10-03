@@ -92,6 +92,7 @@ import {
   PRD_AUDIT_CODE_STAMP,
   type RemediationGap,
 } from '../../src/engine/artifacts.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import * as artifactModule from '../../src/engine/artifacts.js';
 import {
   creditKickbackGateLaps,
@@ -206,6 +207,67 @@ async function writeAsBuiltFixture(
     codeStamp: null,
     policy: AS_BUILT_FIXTURE_POLICY,
   });
+}
+
+/**
+ * Conductor fixtures write the engine-owned PRD verdict.  Its Markdown report
+ * is deliberately derived by the store, so fixture prose cannot become gate
+ * authority while testing unrelated orchestration behavior.
+ */
+async function writePrdAuditFixture(
+  projectRoot: string,
+  runId: string | undefined,
+  grade: 'PASS' | 'PLAN_GAP' = 'PASS',
+): Promise<void> {
+  await persistPrdAuditVerdict(projectRoot, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade,
+        evidence: 'The fixture supplies a complete typed audit judgment.',
+        rationale: 'The orchestration fixture requires a clean current verdict.',
+        requirementAssociations: [], evidenceTaskIds: [],
+      }],
+      noOwnerObservations: [],
+    },
+    diagnostics: [],
+    recordedDispositions: [],
+  }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: null });
+}
+
+/**
+ * Remediation fixtures must supply the current typed authority. The derived
+ * Markdown report deliberately is not an input to remediation routing.
+ */
+async function writePrdAuditFixableFixture(
+  projectRoot: string,
+  runId: string | undefined,
+  findings: readonly { criterionId: string; ownerTaskId: string }[] = [{ criterionId: 'S1.1', ownerTaskId: '1' }],
+): Promise<void> {
+  await persistPrdAuditVerdict(projectRoot, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: findings.map(({ criterionId, ownerTaskId }) => {
+        const match = /^S(.+)\.(\d+)$/.exec(criterionId);
+        if (!match) throw new Error(`Invalid fixture criterion: ${criterionId}`);
+        return {
+          criterion: { storyId: match[1], ordinal: Number(match[2]) },
+          criterionId,
+          grade: 'FIXABLE' as const,
+          evidence: `Fixture reports ${criterionId} as repairable.`,
+          rationale: 'Fixture remediation requires the active owning task.',
+          requirementAssociations: [],
+          evidenceTaskIds: [ownerTaskId],
+          ownerTaskId,
+        };
+      }),
+      noOwnerObservations: [],
+    },
+    diagnostics: [],
+    recordedDispositions: [],
+  }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: null });
 }
 
 function asBuiltApprovedFixture() {
@@ -998,12 +1060,7 @@ describe('engine/conductor', () => {
       await writeFile(planPath, authoredPlan);
       await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Existing work\n\n### Happy Path\n- Given work, when repaired, then it passes.\n');
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }));
-      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
-        '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
-        '| Criterion | Grade | Plan task | PRD: | Evidence |',
-        '|---|---|---|---|---|',
-        '| S1.1 | FIXABLE | 1 | FR-1 | x |',
-      ].join('\n'));
+      await writePrdAuditFixableFixture(dir, undefined);
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
@@ -1011,7 +1068,7 @@ describe('engine/conductor', () => {
             if (step === 'remediate') {
               await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
                 dispositions: [{
-                  id: 'FR-1', disposition: 'existing-task', category: null,
+                  id: 'S1.1', disposition: 'existing-task', category: null,
                   rationale: 'Task 1 already owns this repair.',
                   tasks: [{ id: '1', title: 'Existing work' }],
                 }],
@@ -1048,12 +1105,7 @@ describe('engine/conductor', () => {
       const planPath = join(dir, '.docs', 'plans', 'existing-task-bindings.md');
       await writeFile(planPath, '### Task 1: PRD work\n\n### Task 2: As-built work\n');
       await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Existing work\n\n### Happy Path\n- Given work, when repaired, then it passes.\n');
-      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
-        '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
-        '| Criterion | Grade | Plan task | PRD: | Evidence |',
-        '|---|---|---|---|---|',
-        '| S1.1 | FIXABLE | 1 | FR-1 | x |',
-      ].join('\n'));
+      await writePrdAuditFixableFixture(dir, undefined);
       await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('ARCH-1', '2', 'Repair task two'));
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: '1', status: 'completed' }, { id: '2', status: 'completed' }],
@@ -1070,7 +1122,7 @@ describe('engine/conductor', () => {
             if (step === 'remediate') {
               await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
                 dispositions: [
-                  { id: 'FR-1', disposition: 'existing-task', category: null, rationale: 'Task 1 owns this repair.', tasks: [{ id: '1', title: 'PRD work' }] },
+                  { id: 'S1.1', disposition: 'existing-task', category: null, rationale: 'Task 1 owns this repair.', tasks: [{ id: '1', title: 'PRD work' }] },
                   { id: 'ARCH-1', disposition: 'existing-task', category: null, rationale: 'Task 2 owns this repair.', tasks: [{ id: '2', title: 'As-built work' }] },
                 ],
               }));
@@ -1185,11 +1237,7 @@ describe('engine/conductor', () => {
       const authoredPlan = Array.from({ length: 4 }, (_, i) => `### Task ${i + 1}: Authored ${i + 1}`).join('\n');
       await writeFile(planPath, authoredPlan);
       await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Repair\n\n### Happy Path\n- Given repair work, when it is completed, then it passes.\n');
-      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
-        '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
-        '| Criterion | Grade | Plan task | PRD: | Evidence |',
-        '|---|---|---|---|---|', '| S1.1 | FIXABLE | 1 | FR-1 | x |',
-      ].join('\n'));
+      await writePrdAuditFixableFixture(dir, undefined);
       await writeKickbackLedger(dir, { version: 1, gates: {}, growth: { authored: 4, added: 0, byGate: {} } });
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -1198,7 +1246,7 @@ describe('engine/conductor', () => {
         config: { prd_audit: { max_remediation_laps: 2 } } as never,
         stepRunner: { run: async (step) => {
           if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: [{
-            id: 'FR-1', disposition: 'build', category: null, rationale: 'Append the repair.',
+            id: 'S1.1', disposition: 'build', category: null, rationale: 'Append the repair.',
             tasks: [{ id: 'rem-fr-1', title: 'Appended repair' }],
           }] }));
           return { success: true };
@@ -1233,14 +1281,11 @@ describe('engine/conductor', () => {
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: '2', status: 'completed' }, { id: '3', status: 'completed' }],
       }));
-      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
-        '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
-        '| Criterion | Grade | Plan task | PRD: | Evidence |',
-        '|---|---|---|---|---|',
-        '| S1.1 | FIXABLE | 1 | FR-1 | x |',
-        '| S1.2 | FIXABLE | 2 | FR-2 | x |',
-        '| S1.3 | FIXABLE | 3 | FR-3 | x |',
-      ].join('\n'));
+      await writePrdAuditFixableFixture(dir, undefined, [
+        { criterionId: 'S1.1', ownerTaskId: '1' },
+        { criterionId: 'S1.2', ownerTaskId: '2' },
+        { criterionId: 'S1.3', ownerTaskId: '3' },
+      ]);
       // Four authored tasks permit one appended remediation task. Start with
       // the allowance available so the bound existing tasks can be observed
       // re-staged before the second, exhausted mixed round checks its wording.
@@ -1304,7 +1349,7 @@ describe('engine/conductor', () => {
       await writeFile(planPath, Array.from({ length: 8 }, (_, i) => `### Task ${i + 1}: Authored ${i + 1}`).join('\n'));
       await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Repair\n\n### Happy Path\n- Given repair work, when it is completed, then it passes.\n');
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '2', status: 'completed' }] }));
-      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), '# PRD Audit\n\n**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | PRD: | Evidence |\n|---|---|---|---|---|\n| S1.1 | FIXABLE | 1 | FR-1 | x |\n');
+      await writePrdAuditFixableFixture(dir, undefined);
       await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('ARCH-1', '2', 'Existing repair'));
       await writeKickbackLedger(dir, { version: 1, gates: {}, growth: { authored: 8, added: 0, byGate: {} } });
       const conductor = new Conductor({
@@ -1312,7 +1357,7 @@ describe('engine/conductor', () => {
         config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
         stepRunner: { run: async (step) => {
           if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: [
-            { id: 'FR-1', disposition: 'build', category: null, rationale: 'Append.', tasks: [{ id: 'rem-fr-1', title: 'Appended repair' }] },
+            { id: 'S1.1', disposition: 'build', category: null, rationale: 'Append.', tasks: [{ id: 'rem-s1-1', title: 'Appended repair' }] },
             { id: 'ARCH-1', disposition: 'existing-task', category: null, rationale: 'Already owned.', tasks: [{ id: '2', title: 'Authored 2' }] },
           ] }));
           return { success: true };
@@ -1588,7 +1633,7 @@ describe('engine/conductor', () => {
       await writeState(statePath, state);
       const dispatched: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step) => {
+        run: vi.fn(async (step, _state) => {
           dispatched.push(step);
           return { success: false, output: 'expected test boundary' };
         }),
@@ -4520,6 +4565,8 @@ describe('engine/conductor', () => {
         const dispatchStartedAt = Date.now();
         if (step === 'architecture_review_as_built') {
           await writeAsBuiltFixture(dir, runId, asBuiltApprovedFixture());
+        } else if (step === 'prd_audit') {
+          await writePrdAuditFixture(dir, runId);
         } else {
           await writeFile(join(dir, reportPath), 'fresh verdict report\n');
           await stampGateRunIdentity(dir, step, runId);
@@ -4545,11 +4592,10 @@ describe('engine/conductor', () => {
 
     it('rejects a prior-lap prd report before its stale findings can be routed', async () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      const report = join(dir, '.pipeline/prd-audit.md');
-      await writeFile(report, '| FR-17 | FIXABLE | stale finding must not route |\n');
+      const report = join(dir, '.pipeline/prd-audit.json');
+      await writePrdAuditFixture(dir, 'prior-run');
       const dispatchStartedAt = Date.now();
       await utimes(report, new Date(dispatchStartedAt - 60_000), new Date(dispatchStartedAt - 60_000));
-      await stampGateRunIdentity(dir, 'prd_audit', 'current-run');
       const conductor = new Conductor({
         projectRoot: dir,
         stateFilePath: statePath,
@@ -4565,10 +4611,11 @@ describe('engine/conductor', () => {
             startedAt: number,
           ) => Promise<{ done: boolean; routeClass?: string; reason?: string }>;
         }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt),
-      ).resolves.toEqual({
+      ).resolves.toMatchObject({
         done: false,
         routeClass: 'absent',
-        reason: expect.stringContaining('.pipeline/prd-audit.md'),
+        retrySignal: 'stale-run-identity',
+        reason: expect.stringContaining('.pipeline/prd-audit.json'),
       });
 
       const result = await (conductor as unknown as {
@@ -4578,14 +4625,12 @@ describe('engine/conductor', () => {
           startedAt: number,
         ) => Promise<{ reason?: string }>;
       }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt);
-      expect(result.reason).toContain('expected run id current-run');
-      expect(result.reason).toContain('found run id current-run');
-      expect(result.reason).toContain('found mtime');
-      expect(result.reason).not.toContain('FR-17');
+      expect(result.reason).toContain('prior-run');
+      expect(result.reason).toContain('current-run');
     });
 
     // Covers: task:7
-    it('rejects a partial prd-audit write by naming the missing run-id marker only', async () => {
+    it('rejects a partial prd-audit write by naming the missing typed authority', async () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       const report = join(dir, '.pipeline/prd-audit.md');
       await writeFile(report, '| FR-17 | FIXABLE | stale finding must not route |\n');
@@ -4607,9 +4652,7 @@ describe('engine/conductor', () => {
       }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt);
 
       expect(result).toMatchObject({ done: false, routeClass: 'absent' });
-      expect(result.reason).toContain(PRD_AUDIT_CODE_STAMP);
-      expect(result.reason).not.toContain('.pipeline/prd-audit.md is missing');
-      expect(result.reason).not.toContain('FR-17');
+      expect(result.reason).toContain('.pipeline/prd-audit.json');
     });
 
     it('fails closed and warns without throwing when a verdict sidecar is corrupt', async () => {
@@ -4638,8 +4681,7 @@ describe('engine/conductor', () => {
         }).verdictDispatchHandshake('prd_audit', 'current-run', dispatchStartedAt),
       ).resolves.toMatchObject({ done: false, routeClass: 'absent' });
 
-      expect(logs).toContainEqual(expect.stringContaining(PRD_AUDIT_CODE_STAMP));
-      expect(logs.join('\n')).not.toContain('FR-17');
+      expect(logs).toEqual([]);
     });
 
     it.each(['', '{', '[]', 'null', '{"runId":0}', '{"runId":""}'])(
@@ -4838,6 +4880,7 @@ describe('engine/conductor', () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       const report = join(dir, '.pipeline/prd-audit.md');
       await writeFile(report, '| FR-17 | FIXABLE | stale finding must not be surfaced |\n');
+      await writePrdAuditFixture(dir, 'prior-run');
       const staleAt = Date.now() - 60_000;
       await utimes(report, new Date(staleAt), new Date(staleAt));
 
@@ -4857,10 +4900,8 @@ describe('engine/conductor', () => {
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
       expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).toBe('needs-human');
       expect(halt).toContain('prd_audit');
-      expect(halt).toContain('.pipeline/prd-audit.md');
-      expect(halt).toContain('expected run id');
-      expect(halt).toContain('found run id');
-      expect(halt).toContain('found mtime');
+      expect(halt).toContain('.pipeline/prd-audit.json');
+      expect(halt).toContain('prior-run');
       expect(halt).not.toContain('FR-17');
       expect(halt).not.toContain('stale finding must not be surfaced');
     });
@@ -4883,6 +4924,7 @@ describe('engine/conductor', () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       const report = join(dir, '.pipeline/prd-audit.md');
       await writeFile(report, '| FR-17 | FIXABLE | prior-lap finding |\n');
+      await writePrdAuditFixture(dir, 'prior-run');
       await writeFile(join(dir, PRD_AUDIT_CODE_STAMP), JSON.stringify({ runId: 'prior-run' }));
 
       const eventsPath = join(dir, '.pipeline/events.jsonl');
@@ -4925,7 +4967,7 @@ describe('engine/conductor', () => {
       expect(persisted).toContainEqual(expect.objectContaining({
         type: 'verdict_freshness',
         step: 'prd_audit',
-        artifact: report,
+        artifact: join(dir, '.pipeline/prd-audit.json'),
         floorSource: 'run-identity',
         outcome: 'stale_invalidated',
         fresh: false,
@@ -4967,19 +5009,11 @@ describe('engine/conductor', () => {
       await unlink(join(dir, '.pipeline/HALT.class'));
 
       const runner: StepRunner = {
-        run: vi.fn(async (step) => {
+        run: vi.fn(async (step, _state, options) => {
           expect(step).toBe('prd_audit');
           await expect(readFile(report, 'utf8')).resolves.toContain('prior-lap finding');
           await expect(readFile(sidecar, 'utf8')).resolves.toContain('prior-lap');
-          await writeFile(
-            report,
-            [
-              '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
-              '| Criterion | Grade | Plan task | PRD: | Evidence |',
-              '|---|---|---|---|---|',
-              '| S1.1 | PASS | — | FR-1 | evidence.ts:1 |',
-            ].join('\n'),
-          );
+          await writePrdAuditFixture(dir, options?.runId);
           return { success: true };
         }),
       };
@@ -5033,19 +5067,11 @@ describe('engine/conductor', () => {
       await unlink(join(dir, '.pipeline/HALT.class'));
 
       const runner: StepRunner = {
-        run: vi.fn(async (step) => {
+        run: vi.fn(async (step, _state, options) => {
           expect(step).toBe('prd_audit');
           await expect(readFile(report, 'utf8')).resolves.toContain('prior-lap finding');
           await expect(readFile(sidecar, 'utf8')).resolves.toContain('prior-lap');
-          await writeFile(
-            report,
-            [
-              '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
-              '| Criterion | Grade | Plan task | PRD: | Evidence |',
-              '|---|---|---|---|---|',
-              '| S1.1 | PLAN_GAP | — | FR-1 | evidence.ts:1 |',
-            ].join('\n'),
-          );
+          await writePrdAuditFixture(dir, options?.runId, 'PLAN_GAP');
           return { success: true };
         }),
       };
@@ -5429,16 +5455,8 @@ describe('engine/conductor', () => {
   });
 
   describe('daemon prd-audit gap-aware halting', () => {
-    function renderAuditReport(auditBody: string): string {
-      if (auditBody.includes('**PRD:**')) return `# PRD Audit\n\n${auditBody}`;
-      const fr = auditBody.match(/FR-\d+/)?.[0] ?? 'FR-1';
-      const grade = 'FIXABLE';
-      return [
-        '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
-        '| Criterion | Grade | Plan task | PRD: | Evidence |',
-        '|---|---|---|---|---|',
-        `| S1.1 | ${grade} | 1 | ${fr} | x |`,
-      ].join('\n');
+    async function writeRemediableAudit(runId: string | undefined): Promise<void> {
+      await writePrdAuditFixableFixture(dir, runId);
     }
 
     // Seed every step before prd_audit as done so the loop can start at the
@@ -5480,8 +5498,8 @@ describe('engine/conductor', () => {
     }
 
     // Runner that re-satisfies build + manual_test on re-run and writes the
-    // given prd-audit table body every time prd_audit runs.
-    function shipRunner(auditBody: string): { runner: StepRunner; calls: StepName[] } {
+    // current typed FIXABLE PRD-audit authority every time prd_audit runs.
+    function shipRunner(_auditBody: string): { runner: StepRunner; calls: StepName[] } {
       const calls: StepName[] = [];
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName, currentState: ConductState, options?: StepRunOptions) => {
@@ -5508,10 +5526,7 @@ describe('engine/conductor', () => {
           } else if (step === 'prd_audit') {
             await mkdir(join(dir, '.pipeline'), { recursive: true });
             await new Promise((resolve) => setTimeout(resolve, 5));
-            await writeFile(
-              join(dir, '.pipeline/prd-audit.md'),
-              renderAuditReport(auditBody),
-            );
+            await writeRemediableAudit(options?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
@@ -5522,9 +5537,9 @@ describe('engine/conductor', () => {
     }
 
     // Like shipRunner, but also writes .pipeline/remediation.json when the
-    // `remediate` step runs, so the conductor's /remediate routing engages.
+    // `remediate` step runs, so the conductor's typed remediation routing engages.
     function remediateRunner(
-      auditBody: string,
+      _auditBody: string,
       plan: unknown,
     ): { runner: StepRunner; calls: StepName[] } {
       const calls: StepName[] = [];
@@ -5539,10 +5554,7 @@ describe('engine/conductor', () => {
                 JSON.stringify({ tasks: [1, 2, 3, 4].map((id) => ({ id: String(id), status: 'completed' })) }),
               );
             } else {
-              await writeFile(
-                join(dir, '.pipeline/prd-audit.md'),
-                renderAuditReport(auditBody),
-              );
+              await writeRemediableAudit(options?.runId);
             }
           } else if (step === 'manual_test') {
             await writeFile(
@@ -5561,11 +5573,11 @@ describe('engine/conductor', () => {
       return { runner, calls };
     }
 
-    it('exhausts prd-audit impl-gap self-healing and classifies the terminal halt as needs-human', async () => {
+    it('uses the bounded BUILD fallback when a typed FIXABLE judgment has no remediation plan', async () => {
       await seedToPrdAudit();
-      // Perpetual impl-gap: every audit reports the same un-closed impl-gap.
-      // Disable the independent D2 no-op escalation so this fixture reaches
-      // the terminal writer only after exhausting both bounded self-heals.
+      // The fixture emits the current typed FIXABLE authority but no
+      // remediation.json. Markdown is derived-only, so it cannot manufacture
+      // the former automatic self-heal route.
       const { runner, calls } = shipRunner('| FR-2 | MISSING | impl-gap | x | no |\n');
       const kickbacks: Array<{ from: string; to: string }> = [];
       events.on('kickback', (e) => {
@@ -5607,7 +5619,7 @@ describe('engine/conductor', () => {
         prdAuditKickbacks: 1,
         buildCalls: 1,
         halted: true,
-        halt: expect.stringMatching(/prd-audit impl-gap unresolved/),
+        halt: expect.stringMatching(/prd-audit impl-gap unresolved after 1 build attempt\(s\) \(cap 1\): S1\.1 \(impl-gap\)/),
         haltClass: 'needs-human',
       });
     });
@@ -5627,7 +5639,7 @@ describe('engine/conductor', () => {
         {
         dispositions: [
           {
-            id: 'FR-2',
+            id: 'S1.1',
             disposition: 'build',
             category: null,
             rationale: 'read path wrong at x.ts:10',
@@ -5660,7 +5672,7 @@ describe('engine/conductor', () => {
         .mock.calls.filter((c) => c[0] === 'build')
         .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
       expect(
-        buildReasons.some((r) => r.includes('FR-2') && r.includes('fix x.ts:10 read path')),
+        buildReasons.some((r) => r.includes('S1.1') && r.includes('fix x.ts:10 read path')),
       ).toBe(true);
     });
 
@@ -5799,7 +5811,7 @@ describe('engine/conductor', () => {
       const { runner } = remediateRunner('| FR-2 | MISSING | impl-gap | x | no |\n', {
         dispositions: [
           {
-            id: 'FR-2',
+            id: 'S1.1',
             disposition: 'acceptance_specs',
             category: null,
             rationale: 'missing spec for FR-2',
@@ -9436,8 +9448,6 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
-    const PRD_AUDIT_PASS =
-      '**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | PRD: | Evidence |\n|---|---|---|---|---|\n| S1.1 | PASS | — | FR-1 | evidence.ts:1 |\n';
 
     beforeEach(async () => {
       await mkdir(join(dir, '.docs/specs'), { recursive: true });
@@ -9461,7 +9471,7 @@ describe('engine/conductor', () => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, options?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
@@ -9516,7 +9526,7 @@ describe('engine/conductor', () => {
             };
           }
           if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, options?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
@@ -9558,7 +9568,7 @@ describe('engine/conductor', () => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, options?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
@@ -9806,7 +9816,7 @@ describe('engine/conductor', () => {
             await new Promise((r) => setTimeout(r, 30));
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, options?.runId);
             const mid = await readState(statePath);
             sawPrematureWrite = mid.ok ? (mid.value as Record<string, unknown>)['validation__prd_audit'] : 'unreadable';
           } else if (step === 'architecture_review_as_built') {
@@ -9858,8 +9868,6 @@ describe('engine/conductor', () => {
       finish: 'done',
     } as ConductState;
 
-    const PRD_AUDIT_PASS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
 
     it('abort mid-group with one member done persists that member as done; a resumed run re-dispatches only the unfinished members', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
@@ -9890,7 +9898,7 @@ describe('engine/conductor', () => {
         run: vi.fn(async (step: StepName, _state: ConductState, _options?: StepRunOptions) => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, _options?.runId);
             prdAuditDone = true;
             return { success: true };
           }
@@ -9997,8 +10005,6 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
-    const PRD_AUDIT_PASS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
 
     it('halts serial and validation-group as-built precondition faults mechanically without retries', async () => {
       const fakeProvider: LLMProvider = {
@@ -10093,7 +10099,7 @@ describe('engine/conductor', () => {
             // Crashes: never produces a completion marker, never succeeds.
             return { success: false, output: 'agent process crashed' };
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, options?.runId);
             return { success: true };
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
@@ -10222,8 +10228,6 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
-    const PRD_AUDIT_PASS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
 
     // manual_test always FAILs (perpetual bug); build re-satisfies its own
     // gate but never actually fixes anything — every sibling PASSes cleanly.
@@ -10245,7 +10249,7 @@ describe('engine/conductor', () => {
           } else if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, options?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
@@ -10374,10 +10378,6 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
-    const PRD_AUDIT_GAPS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
-      '| FR-1 | GAP | missing | evidence.ts:1 | no |\n' +
-      '| FR-2 | GAP | missing | evidence.ts:2 | no |\n';
     function mixedFailingRunner(): {
       runner: StepRunner;
       remediateCalls: Array<{ retryReason?: string }>;
@@ -10395,7 +10395,10 @@ describe('engine/conductor', () => {
           } else if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
+            await writePrdAuditFixableFixture(dir, opts?.runId, [
+              { criterionId: 'S1.1', ownerTaskId: '1' },
+              { criterionId: 'S1.2', ownerTaskId: '1' },
+            ]);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
@@ -10405,14 +10408,14 @@ describe('engine/conductor', () => {
               JSON.stringify({
                 dispositions: [
                   {
-                    id: 'FR-1',
+                    id: 'S1.1',
                     disposition: 'build',
                     category: null,
                     rationale: 'Implement FR-1',
                     tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
                   },
                   {
-                    id: 'FR-2',
+                    id: 'S1.2',
                     disposition: 'build',
                     category: null,
                     rationale: 'Implement FR-2',
@@ -10494,14 +10497,7 @@ describe('engine/conductor', () => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), [
-              '**PRD:** none',
-              '',
-              '## Verdict Table',
-              '| Criterion | Grade | Plan task | PRD: | Evidence |',
-              '| --- | --- | --- | --- | --- |',
-              '| S1.1 | PASS | — | FR-1 | evidence.ts:1 |',
-            ].join('\n'));
+            await writePrdAuditFixture(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             asBuiltCalls++;
             await writeAsBuiltFixture(dir, opts?.runId, {
@@ -10577,8 +10573,6 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
-    const PRD_AUDIT_PASS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
     // manual_test FAILs deterministically AND architecture_review_as_built
     // is BLOCKED (its own gate unsatisfied) in the SAME join round — the
     // merged-work-order shape this task covers. The remediate plan routes
@@ -10603,7 +10597,7 @@ describe('engine/conductor', () => {
           } else if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
@@ -10710,9 +10704,6 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
-    const PRD_AUDIT_GAPS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
-      '| FR-1 | GAP | missing | evidence.ts:1 | no |\n';
     it('a halt disposition halts the group even when other gaps in the SAME plan are routable fixes', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -10734,7 +10725,7 @@ describe('engine/conductor', () => {
           } else if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
+            await writePrdAuditFixableFixture(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
@@ -10744,7 +10735,7 @@ describe('engine/conductor', () => {
               JSON.stringify({
                 dispositions: [
                   {
-                    id: 'FR-1',
+                    id: 'S1.1',
                     disposition: 'build',
                     category: null,
                     rationale: 'Implement FR-1',
@@ -10820,7 +10811,7 @@ describe('engine/conductor', () => {
             // code was never actually fixed (build's mock does not touch
             // it), so re-verifying prd_audit each round is the ONLY thing
             // standing between this test and a false "gate satisfied".
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
+            await writePrdAuditFixableFixture(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
@@ -10833,7 +10824,7 @@ describe('engine/conductor', () => {
               JSON.stringify({
                 dispositions: [
                   {
-                    id: 'FR-1',
+                    id: 'S1.1',
                     disposition: 'build',
                     category: null,
                     rationale: 'Implement FR-1',
@@ -10931,6 +10922,8 @@ describe('engine/conductor', () => {
             );
           } else if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            await writePrdAuditFixableFixture(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             // APPROVED: a BLOCKED as-built verdict is terminal for the run and
             // would mask the property. The non-MT gap that dispatches
@@ -11077,8 +11070,6 @@ describe('engine/conductor', () => {
       finish: 'done',
     } as ConductState;
 
-    const PRD_AUDIT_PASS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
     it('manual_test crashes fast while prd_audit and architecture_review_as_built are still in flight — both siblings run to completion (their markers land on disk) before the group halts, not cancelled mid-flight', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
 
@@ -11091,7 +11082,7 @@ describe('engine/conductor', () => {
           } else if (step === 'prd_audit') {
             // Slow sibling — must be allowed to run to completion.
             await new Promise((r) => setTimeout(r, 50));
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, options?.runId);
             return { success: true };
           } else if (step === 'architecture_review_as_built') {
             // Slower sibling — must also be allowed to run to completion.
@@ -11129,7 +11120,7 @@ describe('engine/conductor', () => {
       // in-flight branches on the fast failure, these setTimeout-guarded
       // writes would not have happened yet.
       const prdAuditMarker = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
-      expect(prdAuditMarker).toBe(PRD_AUDIT_PASS);
+      expect(prdAuditMarker).toMatch(/Status: complete[\s\S]*S1\.1: PASS/);
       const asBuiltMarker = await readFile(
         join(dir, '.pipeline/architecture-review-as-built.md'),
         'utf-8',
@@ -15399,11 +15390,21 @@ describe('engine/conductor', () => {
               '# Results\n\n| Story | Result |\n|---|---|\n| story-a | PASS |\n',
             );
           } else if (step === 'prd_audit') {
-            await _mkdir(join(dir, '.pipeline'), { recursive: true });
-            await _wf(
-              join(dir, '.pipeline/prd-audit.md'),
-              '**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | PRD: | Evidence |\n|---|---|---|---|---|\n| S1.1 | PASS | — | FR-1 | foo.ts:1 |\n',
-            );
+            await persistPrdAuditVerdict(dir, {
+              complete: true,
+              judgment: {
+                version: 'v1',
+                criterionJudgments: [{
+                  criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
+                  evidence: 'The fixture supplies a complete typed audit judgment.',
+                  rationale: 'The artifact walk only needs a valid current verdict.',
+                  requirementAssociations: [], evidenceTaskIds: [],
+                }],
+                noOwnerObservations: [],
+              },
+              diagnostics: [],
+              recordedDispositions: [],
+            }, { attemptId: options?.runId ?? 'fixture-prd-audit', codeStamp: null });
           } else if (step === 'architecture_review_as_built') {
             await _mkdir(join(dir, '.docs/decisions'), { recursive: true });
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());

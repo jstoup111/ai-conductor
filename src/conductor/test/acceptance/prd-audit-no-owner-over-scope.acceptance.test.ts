@@ -1,8 +1,8 @@
 /**
  * Covers: S4.1, S5.1
  *
- * Drives the no-owner finding through the real parser, scope router, operator
- * decision block, durable decision store, and next-lap router. The temporary
+ * Drives the no-owner finding through typed evidence, the scope router,
+ * durable decision store, and next-lap router. The temporary
  * filesystem is the persistence boundary; no third-party service is used.
  */
 
@@ -20,90 +20,19 @@ vi.mock('../../src/engine/build-review-effective.js', async (importOriginal) => 
   })),
 }));
 
-import { Conductor, routePrdAuditOverScope, type StepRunner } from '../../src/engine/conductor.js';
+import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import {
   AcceptedWideningDecisionStore,
-  parseClearedOverScopeDecisions,
-  readOverScopeDecisions,
-  recordOverScopeDecisions,
-  renderOverScopeDecisionBlock,
 } from '../../src/engine/accepted-widenings.js';
 import { persistPrdWideningOffers } from '../../src/engine/prd-widening-offers.js';
 import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 
 const SUMMARY = 'unplanned npm test change';
-
-// The Verdict Table's `Plan task` cell is resolved against the ids this text
-// declares; the route is handed it so a legitimate citation is not rejected.
 const ACTIVE_PLAN = '### Task 1: Planned behavior\n\n**Files:** src/example.ts\n';
-
-function noOwnerReport(): string {
-  return [
-    '**PRD:** none',
-    '',
-    '## Verdict Table',
-    '| Criterion | Grade | Plan task | Evidence | Intent relation |',
-    '| --- | --- | --- | --- | --- |',
-    '| S1.1 | PASS | 1 | Planned behavior is present. | within |',
-    '',
-    '## Findings without an owning criterion',
-    '| Finding | Grade | Plan task | Evidence | Intent relation |',
-    '| --- | --- | --- | --- | --- |',
-    `| NC.1 | OVER_SCOPE | | ${SUMMARY} | outside-visible |`,
-  ].join('\n');
-}
-
-describe('PRD-audit no-owner OVER_SCOPE decision lifecycle', () => {
-  let root: string | undefined;
-
-  afterEach(async () => {
-    if (root) await rm(root, { recursive: true, force: true });
-    root = undefined;
-  });
-
-  it('blocks, records an accepted NC decision, and applies it on the identical next lap', async () => {
-    root = await mkdtemp(join(tmpdir(), 'prd-audit-no-owner-'));
-    const report = noOwnerReport();
-
-    const firstLap = routePrdAuditOverScope(report, [], ACTIVE_PLAN);
-    expect(firstLap).toMatchObject({
-      kind: 'halt',
-      haltClass: 'over-scope',
-      undecided: [{ criterion: 'NC.1', summary: SUMMARY, relation: 'outside-visible' }],
-    });
-    if (firstLap.kind !== 'halt') return;
-
-    const clearedBody = renderOverScopeDecisionBlock(firstLap.undecided)
-      .replace('"pending"', '"accept"')
-      .replace('"decision": "accept"', '"decision": "accept", "rationale": "Approved."');
-    const cleared = parseClearedOverScopeDecisions(clearedBody, new Set(['NC.1']));
-    expect(cleared).toMatchObject({
-      kind: 'parsed',
-      defects: [],
-      decisions: [{ criterion: 'NC.1', summary: SUMMARY, decision: 'accept' }],
-    });
-    if (cleared.kind !== 'parsed') return;
-
-    await expect(recordOverScopeDecisions(
-      root,
-      cleared.decisions.map((decision) => ({ ...decision, operator: 'acceptance-test' })),
-    )).resolves.toMatchObject({
-      recorded: [{ criterion: 'NC.1', summary: SUMMARY, decision: 'accept' }],
-    });
-
-    const persisted = await readOverScopeDecisions(root);
-    expect(persisted.decisions).toEqual([
-      expect.objectContaining({ criterion: 'NC.1', summary: SUMMARY, decision: 'accept' }),
-    ]);
-    expect(routePrdAuditOverScope(report, persisted.decisions, ACTIVE_PLAN)).toMatchObject({
-      kind: 'record',
-      findings: [{ criterion: 'NC.1', summary: SUMMARY, accepted: true }],
-    });
-  });
-});
 
 describe('an accepted scope decision closes only its own blocker (S5.3)', () => {
   let root: string | undefined;
@@ -146,6 +75,28 @@ describe('an accepted scope decision closes only its own blocker (S5.3)', () => 
       JSON.stringify({ activePlanPath: '.docs/plans/feature.md' }),
     );
     await writeFile(join(root, '.pipeline', 'prd-audit.md'), mixedReport(withFixable));
+    await persistPrdAuditVerdict(root, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '1', ordinal: 1 },
+          criterionId: 'S1.1',
+          grade: withFixable ? 'FIXABLE' : 'PASS',
+          evidence: withFixable ? 'Planned behavior is missing.' : 'Planned behavior is present.',
+          rationale: 'Fixture judgment.',
+          requirementAssociations: [],
+          evidenceTaskIds: ['1'],
+          ...(withFixable ? { ownerTaskId: '1' } : {}),
+        }],
+        noOwnerObservations: [{
+          presentationOrdinal: 'NC.1', grade: 'OVER_SCOPE', evidence: SUMMARY,
+          rationale: 'Fixture scope observation.', intentRelation: 'outside-visible',
+        }],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'fixture-run', codeStamp: null });
     const caseFeature = { version: 'v1' as const, repository: '/fixture/repository', feature: 'prd-audit-no-owner-over-scope' };
     const decisionFeature = { version: 1 as const, repository: '/fixture/repository', feature: 'prd-audit-no-owner-over-scope' };
     const currentSourceId = prdWideningSourceId({
