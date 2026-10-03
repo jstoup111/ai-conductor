@@ -283,7 +283,15 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
         }
       }
     }
-    await recordTaskDigests(projectRoot, resolvedPlanPath, currentDigests);
+    // Existing v1 digests keep Task 3's ordering: admission is durable before
+    // the replacement digest, and both happen before the row is re-staged.
+    // A missing/legacy baseline differs: reconstruct trailer-backed rows
+    // first, then write the initial baseline below.
+    const hasUsableRecordedBaseline = recordedDigests.kind === 'present' &&
+      Object.values(recordedDigests.digests).every((digest) => digest.startsWith('v1:'));
+    if (hasUsableRecordedBaseline) {
+      await recordTaskDigests(projectRoot, resolvedPlanPath, currentDigests);
+    }
 
     const repairs = await createRepairObligationStore(projectRoot, engineStatePath).read();
     if (!repairs.ok) {
@@ -502,6 +510,10 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
         `task-status.json did not persist: expected ${tasks.length} row(s) at ` +
           `${statusPath}, re-read ${Array.isArray(reread.tasks) ? reread.tasks.length : 'a non-array'}`,
       );
+    }
+
+    if (!hasUsableRecordedBaseline) {
+      await recordTaskDigests(projectRoot, resolvedPlanPath, currentDigests);
     }
 
     // Write task evidence
