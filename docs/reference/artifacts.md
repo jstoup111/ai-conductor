@@ -541,7 +541,7 @@ To clear a halt safely, use the procedure in
 
 ## `.daemon/`
 
-Daemon-scoped state at the main checkout root. Gitignored. Fifteen paths.
+Daemon-scoped state at the main checkout root. Gitignored. Sixteen paths.
 
 | Path | Contents | Notes |
 | --- | --- | --- |
@@ -557,6 +557,7 @@ Daemon-scoped state at the main checkout root. Gitignored. Fifteen paths.
 | `last-base-sha` | Fast-forward tracking | — |
 | `mergeable-watch.jsonl` | Append-only mergeable sweep ledger | — |
 | `migrations/halt-classification-v1` | `complete\n` once written | One-time watermark. The daemon stamps any pre-existing HALT still missing `.pipeline/HALT.class` as `legacy` before touching worktrees, then writes this file so the sweep never repeats. A lock loser never runs it |
+| `otel-spool/` | `traces/` and `metrics/` OTLP/HTTP protobuf batches (`<epoch-ms>-<pid>-<hex>-<items>.pb`), plus `lease.json` (`{ pid, uuid, heartbeatAt }`) | Durable [OTel spool](configuration.md#otel-spool). Directories are mode `0700`. Each batch is fsynced, then renamed, so a final `.pb` is always complete; `.tmp` files are ignored. The lease heartbeats every 10 s; a successor reclaims it after 60 s without a heartbeat or when its pid is dead. Bounded by `otel.spool.max_bytes` |
 | `parked/<slug>` | Per-slug operator park | Resolved against the **main** repo root via `git rev-parse --git-common-dir`, so a worktree and its main checkout share one park namespace |
 | `processed/<slug>` | `{"status":"shipped","prUrl":…}` | Legacy plain-text `shipped` still parses |
 | `warned/<slug>` | Per-slug warn-once record | — |

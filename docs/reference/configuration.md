@@ -862,8 +862,8 @@ GitHub block are errors. `tracker.site` must use `https:`.
 
 ## otel
 
-OpenTelemetry export. Allow-listed at the top level but **not validated by `validateConfig`** — all
-handling lives in `resolveOtelConfig` (`src/conductor/src/engine/otel/otel-config.ts:26-70`), which never
+OpenTelemetry export. `validateConfig` only warns about unknown keys in `otel` and `otel.spool`; all
+value handling lives in `resolveOtelConfig` (`src/conductor/src/engine/otel/otel-config.ts`), which never
 throws. When enabled, it exports interactive runs and each daemon-dispatched feature independently;
 the trace Resource identifies the feature, project, durable dispatch run id, branch, executing
 engine version, and released harness version. The release is exported as the standard
@@ -995,6 +995,9 @@ each sample already represents the whole feature total at that moment.
 | `otel.worker_name` | string | No | any non-blank name | OS hostname |
 | `otel.attributes` | mapping | No | At most 16 namespaced keys with non-empty literal string values; keys beginning `service.`, `conductor.`, or `host.` are reserved | absent; no custom attributes |
 | `otel.provenance` | mapping | No | only boolean `commit`, `pr`, `issue`, and `feature` keys | every key `true` |
+| `otel.spool` | mapping | No; applies only to `exporter: otlp` | only `enabled` and `max_bytes` keys | see [otel spool](#otel-spool) |
+| `otel.spool.enabled` | boolean | No | `true`, `false`; `true` is refused with `protocol: grpc` | `true` for HTTP/protobuf; `false` for gRPC |
+| `otel.spool.max_bytes` | integer | No | positive integer number of bytes | `536870912` (512 MiB) |
 
 The failure mode is silent-disable-with-an-error-string, not a halt. An unknown exporter yields
 `{ enabled: false, error: "Unknown otel exporter '<x>'. Valid options: otlp, file." }`; `otlp` without an
@@ -1038,9 +1041,9 @@ and, when the reference contains a string `env` field, its environment-variable 
 the environment variable's value.
 
 Other credential sources are excluded from this slice. Headers are carried only by the HTTP/protobuf
-OTLP exporters: this configuration does not provide gRPC credential or metadata carriage. It also
-does not classify an unauthorized export response as an authentication-specific outcome; existing
-export-failure handling remains in effect.
+OTLP exporters: this configuration does not provide gRPC credential or metadata carriage. With the
+[spool](#otel-spool) active, the drainer re-reads each referenced variable on every delivery attempt;
+credentials are never written to the spool.
 
 `otel.project_name` is trimmed before use. An absent, blank, or whitespace-only value falls back to
 the basename of the absolute project root for metric data-point identity; it does not affect
@@ -1065,6 +1068,50 @@ otel:
     deployment.environment.name: staging
     team.name: platform
 ```
+
+### otel spool
+
+With `exporter: otlp` and HTTP/protobuf, every trace and metric batch is first written to a durable
+spool at `<main-root>/.daemon/otel-spool/` (see [artifacts](artifacts.md#daemon)), then delivered by
+a background drainer. Telemetry produced while the collector is down, unreachable, or rejecting
+credentials is delivered after it recovers, including across daemon restarts. Interactive runs and
+every daemon dispatch in one checkout share the spool; one process at a time holds its lease and
+drains it.
+
+```yaml
+otel:
+  exporter: otlp
+  endpoint: https://collector.example.test
+  spool:
+    max_bytes: 1073741824   # 1 GiB; omit for 512 MiB
+```
+
+| Collector response | Batch outcome |
+| --- | --- |
+| 2xx with no rejected items | Deleted |
+| 2xx with partial-success rejected items, `400`, `413` | Dropped; one `otel_spool_drop` event with `reason: rejected` |
+| `401`/`403` (auth), `404` (endpoint), `408`/`429` (throttled), `5xx` or any other status (server), connection failure (network) | Kept; retried after `Retry-After` when supplied, otherwise with jittered exponential backoff from 1 s to 60 s |
+
+- **Cap.** A write that would exceed `max_bytes` evicts the oldest batches first and emits
+  `otel_spool_drop` with `reason: evicted`. A single batch larger than the cap is not spooled and is
+reported the same way.
+- **Health.** The first failure of each class per signal emits one `otel` `renderer_error`
+  (`OTLP <signal> delivery failed: <class>`); recovery emits `OTLP <signal> delivery recovered`.
+  While a backlog exists, `otel_spool_backlog` (`files`, `bytes`, `oldestAgeMs`, `lastFailureClass`)
+  is persisted every 30 s. Both spool events are persisted to `events.jsonl` only; they are neither
+  rendered nor exported to OTel.
+- **gRPC.** The spool supports HTTP/protobuf only. `protocol: grpc` without `spool.enabled` exports
+  unspooled with one warning; an explicit `spool.enabled: true` disables telemetry with an error
+  naming `protocol: http/protobuf` as the remedy.
+- **Disabled.** `spool.enabled: false` exports directly and reports a non-empty existing spool once,
+  leaving it untouched.
+- **No main checkout.** When git cannot resolve the main checkout, export falls back to direct
+  delivery with one warning.
+- **SIGHUP.** The daemon flushes active dispatch and daemon OTel providers into the spool and
+  releases the lease, bounded by 5 s, then re-raises SIGHUP.
+
+A `max_bytes` that is not a positive integer disables telemetry with
+`otel.spool.max_bytes must be a positive integer number of bytes.`
 
 ## build_progress
 
