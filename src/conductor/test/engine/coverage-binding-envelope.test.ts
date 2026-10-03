@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   claimDigest,
   amendmentClaimDigest,
+  conflictClaimDigest,
   COVERAGE_BINDING_COMPLETION_STATUSES,
   COVERAGE_BINDING_ENVELOPE_STATUSES,
   coverageBindingEnvelopePath,
@@ -38,6 +39,70 @@ function memoryFilesystem(files: Record<string, string> = {}): CoverageBindingEn
 }
 
 describe('coverage binding envelope', () => {
+  it('round-trips closed conflict entries and preserves legacy envelopes', () => {
+    const envelope = {
+      version: 1,
+      slug: 'feature',
+      runId: 'run-1',
+      status: 'done',
+      entries: [
+        ...(['consistent', 'not-applicable', 'unjudged'] as const).map((verdict) => ({
+          kind: 'conflict' as const,
+          digest: `sha256:${verdict}`,
+          claimKind: 'criterion' as const,
+          claimId: `stories#${verdict}`,
+          verdict,
+        })),
+        {
+          kind: 'conflict' as const,
+          digest: 'sha256:conflicts',
+          claimKind: 'adr-decision' as const,
+          claimId: 'adr-boundary#D22',
+          verdict: 'conflicts' as const,
+          taskIds: ['8'],
+          conflict: 'Task 8 requires an endpoint assertion the decision forbids.',
+        },
+      ],
+    } as const;
+
+    expect([
+      parseCoverageBindingEnvelope(envelope),
+      parseCoverageBindingEnvelope({ version: 1, slug: 'legacy', runId: 'legacy-run', status: 'done', entries: [] }),
+      parseCoverageBindingEnvelope({
+        ...envelope,
+        entries: [{ ...envelope.entries[0], conflict: 'Unexpected field.' }],
+      }),
+    ]).toEqual([
+      envelope,
+      { version: 1, slug: 'legacy', runId: 'legacy-run', status: 'done', entries: [] },
+      null,
+    ]);
+    expect(COVERAGE_BINDING_COMPLETION_STATUSES).toEqual(['disabled', 'done']);
+  });
+
+  it('hashes conflict identity from claim text and the canonical full task table', () => {
+    const claim = {
+      text: 'A sealed criterion permits credential-only assertions.',
+      taskTable: [
+        { id: '3', title: 'Add credential checks', doneWhen: [['The credential assertion is present.']] },
+        { id: '8', title: 'Add endpoint checks', doneWhen: [['The endpoint assertion is present.']] },
+      ],
+    };
+    const unchanged = conflictClaimDigest(claim);
+
+    expect([
+      unchanged,
+      conflictClaimDigest(claim),
+      conflictClaimDigest({ ...claim, taskTable: [{ ...claim.taskTable[0], title: 'Rename credential checks' }, claim.taskTable[1]] }),
+      conflictClaimDigest({ ...claim, taskTable: [claim.taskTable[0], { ...claim.taskTable[1], doneWhen: [['A changed endpoint check is present.']] }] }),
+    ]).toEqual([
+      unchanged,
+      unchanged,
+      expect.not.stringMatching(new RegExp(`^${unchanged.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)),
+      expect.not.stringMatching(new RegExp(`^${unchanged.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)),
+    ]);
+  });
+
   it('hashes amendment identity from its path, exact text, and plan obligations', () => {
     const unchanged = amendmentClaimDigest({
       artifactPath: '.docs/decisions/adr-feature.md',

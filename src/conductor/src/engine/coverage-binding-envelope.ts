@@ -12,6 +12,18 @@ export interface CoverageBindingAmendmentDigestClaim {
   readonly doneWhen: readonly (readonly string[])[];
 }
 
+/** A complete plan task table row as presented to a conflict judge. */
+export interface CoverageBindingConflictTask {
+  readonly id: string;
+  readonly title: string;
+  readonly doneWhen: readonly (readonly string[])[];
+}
+
+export interface CoverageBindingConflictDigestClaim {
+  readonly text: string;
+  readonly taskTable: readonly CoverageBindingConflictTask[];
+}
+
 export type CoverageBindingJudgeVerdict = 'asserts' | 'does-not-assert';
 
 export interface CoverageBindingJudgePayload {
@@ -21,6 +33,7 @@ export interface CoverageBindingJudgePayload {
 
 export type CoverageBindingEntryVerdict = CoverageBindingJudgeVerdict | 'not-applicable';
 export type CoverageBindingAmendmentVerdict = 'carried' | 'not-carried' | 'no-plan-obligation' | 'unjudged';
+export type CoverageBindingConflictVerdict = 'consistent' | 'conflicts' | 'not-applicable' | 'unjudged';
 export const COVERAGE_BINDING_ENVELOPE_STATUSES = ['disabled', 'done', 'failed', 'invalidated', 'partial', 'refused'] as const;
 export type CoverageBindingEnvelopeStatus = (typeof COVERAGE_BINDING_ENVELOPE_STATUSES)[number];
 export interface CoverageBindingAdrLayerDisposition {
@@ -71,6 +84,25 @@ export interface CoverageBindingAmendmentEnvelopeEntry {
   readonly verdict: CoverageBindingAmendmentVerdict;
   readonly missingObligation?: string;
 }
+
+interface CoverageBindingConflictEnvelopeEntryBase {
+  readonly kind: 'conflict';
+  readonly digest: string;
+  readonly claimKind: 'criterion' | 'adr-decision';
+  readonly claimId: string;
+}
+
+export type CoverageBindingConflictEnvelopeEntry =
+  | (CoverageBindingConflictEnvelopeEntryBase & {
+    readonly verdict: 'conflicts';
+    readonly taskIds: readonly string[];
+    readonly conflict: string;
+  })
+  | (CoverageBindingConflictEnvelopeEntryBase & {
+    readonly verdict: Exclude<CoverageBindingConflictVerdict, 'conflicts'>;
+    readonly taskIds?: never;
+    readonly conflict?: never;
+  });
 
 export type CoverageBindingAmendmentJudgeVerdict =
   | { readonly verdict: 'carried'; readonly taskIds: readonly string[]; readonly contradictsCompleted?: readonly string[] }
@@ -158,6 +190,27 @@ function parsePredecessor(value: unknown): CoverageBindingInvalidationPredecesso
 function parseEntry(value: unknown): CoverageBindingEnvelopeEntry | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
+  if (candidate.kind === 'conflict') {
+    const hasConflictDetails = candidate.taskIds !== undefined || candidate.conflict !== undefined;
+    if (!text(candidate.digest) || !text(candidate.claimId) ||
+      !(['criterion', 'adr-decision'] as const).includes(candidate.claimKind as 'criterion' | 'adr-decision') ||
+      !(['consistent', 'conflicts', 'not-applicable', 'unjudged'] as const).includes(candidate.verdict as CoverageBindingConflictVerdict)) {
+      return null;
+    }
+    if (candidate.verdict === 'conflicts') {
+      if (!exactKeys(candidate, ['kind', 'digest', 'claimKind', 'claimId', 'verdict', 'taskIds', 'conflict']) ||
+        !stringList(candidate.taskIds) || candidate.taskIds.length === 0 || !text(candidate.conflict)) return null;
+      return {
+        kind: 'conflict', digest: candidate.digest, claimKind: candidate.claimKind as 'criterion' | 'adr-decision',
+        claimId: candidate.claimId, verdict: 'conflicts', taskIds: candidate.taskIds, conflict: candidate.conflict,
+      } as unknown as CoverageBindingEnvelopeEntry;
+    }
+    if (hasConflictDetails || !exactKeys(candidate, ['kind', 'digest', 'claimKind', 'claimId', 'verdict'])) return null;
+    return {
+      kind: 'conflict', digest: candidate.digest, claimKind: candidate.claimKind as 'criterion' | 'adr-decision',
+      claimId: candidate.claimId, verdict: candidate.verdict as Exclude<CoverageBindingConflictVerdict, 'conflicts'>,
+    } as unknown as CoverageBindingEnvelopeEntry;
+  }
   if (candidate.kind === 'amendment') {
     const hasMissingObligation = candidate.missingObligation !== undefined;
     if (!exactKeys(candidate, ['kind', 'digest', 'artifactPath', 'amendment', 'taskIds', 'doneWhen', 'verdict', ...(hasMissingObligation ? ['missingObligation'] : [])]) ||
@@ -385,6 +438,20 @@ export function amendmentClaimDigest(claim: CoverageBindingAmendmentDigestClaim)
     artifactPath: claim.artifactPath,
     amendment: claim.amendment,
     doneWhen: claim.doneWhen.map((checks) => checks.map(normalized)),
+  });
+  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
+}
+
+/** Identity includes the claim text and every task the conflict judge sees. */
+export function conflictClaimDigest(claim: CoverageBindingConflictDigestClaim): string {
+  const taskTable = JSON.stringify(claim.taskTable.map((task) => ({
+    id: normalized(task.id),
+    title: normalized(task.title),
+    doneWhen: task.doneWhen.map((checks) => checks.map(normalized)),
+  })));
+  const canonical = JSON.stringify({
+    text: normalized(claim.text),
+    taskTableDigest: `sha256:${createHash('sha256').update(taskTable).digest('hex')}`,
   });
   return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
 }
