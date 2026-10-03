@@ -249,6 +249,14 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     const currentDigests = Object.fromEntries(planTaskDigests(planText));
     const recordedDigests = await readTaskDigests(projectRoot, resolvedPlanPath);
     if (recordedDigests.kind === 'incompatible') {
+      // Repair obligations are the durable authority that excludes historic
+      // Task trailers after a plan amendment.  If that section is malformed,
+      // a rewritten task cannot safely be reopened; preserve the specific
+      // failure class so BUILD refuses completion rather than treating this
+      // as an unrelated seed problem.
+      if (recordedDigests.message.includes('repairObligations')) {
+        throw new TaskReopenError(`Unable to read repair obligations while reopening plan tasks: ${recordedDigests.message}`);
+      }
       throw new Error(`Unable to seed task status from task digests: ${recordedDigests.message}`);
     }
     if (recordedDigests.kind === 'present') {
