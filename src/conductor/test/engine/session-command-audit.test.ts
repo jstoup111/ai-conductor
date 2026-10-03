@@ -20,14 +20,14 @@ async function fixtureRoot(): Promise<string> {
 }
 
 describe('session command instruction discovery', () => {
-  it('fails a newly introduced production prompt source without manual registration', async () => {
+  it('finds a newly introduced production prompt source without registering it and excludes CLI usage text', async () => {
     const root = await fixtureRoot();
     await writeFile(join(root, 'src', 'engine', 'conductor.ts'), "export const prompt = 'Run ai-conductor scoped-run test/example.test.ts';\n");
     await writeFile(join(root, 'src', 'engine', 'config.ts'), "export const cliUsage = 'ai-conductor config init';\n");
 
-    expect(discoverShippedSessionCommandSources(root).flatMap(auditSessionCommandSource)).toContainEqual(
-      expect.objectContaining({ file: 'engine/config.ts', subcommand: 'config', reason: expect.stringMatching(/blocked/i) }),
-    );
+    expect(discoverShippedSessionCommandSources(root).flatMap(auditSessionCommandSource)).toEqual([
+      expect.objectContaining({ file: 'engine/conductor.ts', subcommand: 'scoped-run', context: 'managed' }),
+    ]);
   });
 
   it('discovers new engine and shipped-skill instructions without an occurrence inventory', async () => {

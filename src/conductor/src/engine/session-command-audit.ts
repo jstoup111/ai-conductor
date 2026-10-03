@@ -91,15 +91,26 @@ export function discoverSessionCommandSources(repositoryRoot: string): SessionCo
   return sources.sort((left, right) => left.file.localeCompare(right.file));
 }
 
+function namedPrompt(node: ts.Node): boolean {
+  return (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && /prompt/i.test(node.name.text))
+    || ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) && node.name !== undefined && ts.isIdentifier(node.name) && /prompt/i.test(node.name.text))
+    || (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name) && /prompt/i.test(node.name.text));
+}
+
+function belongsToPromptProducer(node: ts.Node): boolean {
+  for (let current: ts.Node | undefined = node; current !== undefined && !ts.isSourceFile(current); current = current.parent) {
+    if (namedPrompt(current)) return true;
+  }
+  return false;
+}
+
 /**
  * Engine prompt producers and shipped skills are the executable instruction
- * surfaces.  This is a source-family boundary, not an occurrence inventory:
- * every command in a listed source is still discovered from its AST/text.
+ * surfaces. Engine instructions are selected by their prompt-producing AST
+ * context rather than a file or command occurrence inventory, so CLI/help
+ * text remains outside the provider-instruction boundary.
  */
 export function discoverShippedSessionCommandSources(repositoryRoot: string): SessionCommandSource[] {
-  // Kept as the production-named entry point for the established boundary
-  // audit.  Do not turn this into an occurrence registry: every executable
-  // engine prompt and shipped skill must be discovered as it is introduced.
   return discoverSessionCommandSources(repositoryRoot);
 }
 
@@ -200,6 +211,7 @@ function commandLocations(input: SessionCommandSource): Array<{ line: number; co
   collect(parsed);
   const visit = (node: ts.Node): void => {
     if (stringConstructionRoot(node)) {
+      if (!belongsToPromptProducer(node)) return;
       const result = constantString(node, parsed, constants);
       const text = resolvedText(result);
       const matched = addResolved(result);
