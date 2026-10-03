@@ -684,7 +684,7 @@ type RebaseOutcomeKind =
   | {
       kind: 'noop';
       /** The resolved base tip, or null when Git could not resolve it. */
-      baseSha: string | null;
+      baseSha?: string | null;
       /** Complete rebase delta when the base advanced without touching code/test paths. */
       allChangedPaths?: string[];
       replay?: ReplayIdentity;
@@ -694,7 +694,7 @@ type RebaseOutcomeKind =
       /** The ref the skip decision was taken against, e.g. `origin/main`. */
       baseRef: string;
       /** That ref's resolved sha, or null when it could not be read. */
-      baseSha: string | null;
+      baseSha?: string | null;
       /** Whether that ref came from origin or from a local branch. */
       baseKind: 'remote' | 'local';
     }
@@ -702,7 +702,7 @@ type RebaseOutcomeKind =
       kind: 'changed';
       changedCodePaths: string[];
       /** The resolved base tip, or null when Git could not resolve it. */
-      baseSha: string | null;
+      baseSha?: string | null;
       /** Complete pre-filter rebase delta; absent when the delta is uncomputable. */
       allChangedPaths?: string[];
       featureSurface?: string[];

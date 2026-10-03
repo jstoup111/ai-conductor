@@ -35,7 +35,7 @@ const METRIC_TEMPORALITY = AggregationTemporalityPreference.LOWMEMORY;
 
 /** Build the HTTP/protobuf exporter options for one OTLP signal. */
 export function buildHttpExporterOptions(
-  config: Extract<ResolvedOtelConfig, { enabled: true; exporter: 'otlp' }>,
+  config: Omit<Extract<ResolvedOtelConfig, { enabled: true; exporter: 'otlp' }>, 'provenance'>,
   signal: 'traces' | 'metrics',
 ): { url: string; headers?: Record<string, string> } {
   return {

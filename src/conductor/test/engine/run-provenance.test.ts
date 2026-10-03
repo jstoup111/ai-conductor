@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { resolveHeadSha, resolvePrDisposition } from '../../src/engine/run-provenance.js';
-import type { GitRunner } from '../../src/engine/rebase.js';
+type GitRunner = Parameters<typeof resolveHeadSha>[0];
 
 describe('engine/run-provenance', () => {
   describe('resolvePrDisposition', () => {

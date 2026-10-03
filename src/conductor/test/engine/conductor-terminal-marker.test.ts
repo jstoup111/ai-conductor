@@ -147,7 +147,7 @@ describe('conductor/terminal-marker-guarantee', () => {
 
     let completed: Record<string, unknown> | undefined;
     events.on('feature_complete', (event) => {
-      completed = event;
+      completed = { ...event };
     });
 
     const conductor = new Conductor({
@@ -179,7 +179,7 @@ describe('conductor/terminal-marker-guarantee', () => {
 
     let completed: Record<string, unknown> | undefined;
     events.on('feature_complete', (event) => {
-      completed = event;
+      completed = { ...event };
     });
     const conductor = new Conductor({
       stateFilePath: statePath,
@@ -203,7 +203,7 @@ describe('conductor/terminal-marker-guarantee', () => {
 
     let completed: Record<string, unknown> | undefined;
     events.on('feature_complete', (event) => {
-      completed = event;
+      completed = { ...event };
     });
     const conductor = new Conductor({
       stateFilePath: statePath,
@@ -229,7 +229,7 @@ describe('conductor/terminal-marker-guarantee', () => {
 
     let completed: Record<string, unknown> | undefined;
     events.on('feature_complete', (event) => {
-      completed = event;
+      completed = { ...event };
     });
     const conductor = new Conductor({
       stateFilePath: statePath,
@@ -253,7 +253,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     };
     let halted: Record<string, unknown> | undefined;
     events.on('loop_halt', (event) => {
-      halted = event;
+      halted = { ...event };
     });
     const conductor = new Conductor({
       stateFilePath: statePath,
@@ -281,7 +281,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     const state: ConductState = { pr_url: 'https://github.com/acme/project/pull/42' };
     let halted: Record<string, unknown> | undefined;
     events.on('loop_halt', (event) => {
-      halted = event;
+      halted = { ...event };
     });
     const conductor = new Conductor({
       stateFilePath: statePath,
@@ -304,7 +304,7 @@ describe('conductor/terminal-marker-guarantee', () => {
   it('records unrecorded and omits prUrl on a loop halt with no PR or keep choice', async () => {
     let halted: Record<string, unknown> | undefined;
     events.on('loop_halt', (event) => {
-      halted = event;
+      halted = { ...event };
     });
     const conductor = new Conductor({
       stateFilePath: statePath,
@@ -323,7 +323,7 @@ describe('conductor/terminal-marker-guarantee', () => {
   it('omits baseSha on a loop halt when no rebase base was recorded', async () => {
     let halted: Record<string, unknown> | undefined;
     events.on('loop_halt', (event) => {
-      halted = event;
+      halted = { ...event };
     });
     const conductor = new Conductor({
       stateFilePath: statePath,
