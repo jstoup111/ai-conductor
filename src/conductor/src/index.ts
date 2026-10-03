@@ -29,7 +29,6 @@ import { createInterface } from 'node:readline/promises';
 import { execa } from 'execa';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-import { v4 as uuidv4 } from 'uuid';
 import { Conductor, createProvenanceGuardedFinishPresentationRepair } from './engine/conductor.js';
 import { createProductionAcceptanceRedExec } from './engine/acceptance-red-runner.js';
 import {
@@ -42,6 +41,8 @@ import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
+import { prepareManagedSessionContext } from './execution/managed-session-context.js';
+import { createSessionEventIdentity } from './execution/session-event-identity.js';
 import {
   normalizeProviderSelection,
   validateProviderInstallation,
@@ -1625,9 +1626,9 @@ async function main(): Promise<void> {
   const sessionIdPath = join(pipelineDir, 'conduct-session-id');
   try {
     const persisted = await readFile(sessionIdPath, 'utf-8');
-    sessionId = persisted.trim() || uuidv4();
+    sessionId = persisted.trim() || createSessionEventIdentity();
   } catch {
-    sessionId = uuidv4();
+    sessionId = createSessionEventIdentity();
   }
 
   // Set up terminal UI with live dashboard (needed before registry initialization)
@@ -1691,6 +1692,25 @@ async function main(): Promise<void> {
   const compatibilityRuntime = providerExecution.runtimes.get(
     providerExecution.configuredProviders[0],
   );
+  const preludeProvider = providerExecution.configuredProviders[0];
+  if (!preludeProvider) throw new Error('Project prelude requires a configured provider');
+  const preludeProducerRoot = join(pipelineDir, 'session-events', sessionId);
+  await mkdir(preludeProducerRoot, { recursive: true });
+  const preparedPreludeContext = await prepareManagedSessionContext({
+    projectRoot,
+    worktreeRoot: projectRoot,
+    producerRoot: preludeProducerRoot,
+    scope: { kind: 'project' },
+    dispatchId: sessionId,
+    provider: preludeProvider,
+  });
+  if (!preparedPreludeContext.ok) {
+    throw new Error(`Project prelude managed-session context refused: ${preparedPreludeContext.code}`);
+  }
+  const preludeProviderExecution: ProviderExecutionContext = {
+    ...providerExecution,
+    managedSessionContext: preparedPreludeContext.context,
+  };
 
   // Select UI subscriber based on config (default: 'terminal')
   const renderer = registry.get<UIRenderer>('ui_renderer', config?.ui_renderer ?? 'terminal');
@@ -1765,7 +1785,7 @@ async function main(): Promise<void> {
     {
       harnessVersion,
       onAssessStalePrompt: interactivePrompt,
-      providerExecution,
+      providerExecution: preludeProviderExecution,
     },
   );
   if (prelude.bootstrapExecuted) {
