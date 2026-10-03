@@ -1126,6 +1126,87 @@ describe('coordinateBuildReviewAdjudication', () => {
     })]);
   });
 
+  it('halts a blocked reject row that reuses a resolved action source before persisting its consistency stop', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The prior repair was applied.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-r', kind: 'action', status: 'applied', workOrderId: 'order-r' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'rejected', caseRef: 'rejected-case' }],
+      cases: [{
+        caseRef: 'rejected-case', disposition: 'reject', priority: 'low', confidence: 'high',
+        rationale: 'The proposed repair should not proceed.', effect: { kind: 'none' },
+      }],
+      consistency: {
+        verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['rejected-case'],
+        rationale: 'The rejected proposal leaves an unresolved consistency conflict.',
+      },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-r' });
+    expect(events.filter((event) => event.type === 'remediation_semantic_repeat_halt')).toEqual([
+      expect.objectContaining({ caseId: 'case-r', reason: 'regressed' }),
+    ]);
+    const persisted = await store.read();
+    expect(persisted).toMatchObject({ ok: true });
+    if (!persisted.ok) throw new Error(`case store read failed: ${persisted.reason}`);
+    expect(persisted.state.cases.map((record) => record.id)).toEqual(['case-r']);
+  });
+
+  it('halts a blocked defer row that reuses a resolved action source before persisting its consistency stop', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The prior repair was applied.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-r', kind: 'action', status: 'applied', workOrderId: 'order-r' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'deferred', caseRef: 'deferred-case' }],
+      cases: [{
+        caseRef: 'deferred-case', disposition: 'defer', priority: 'low', confidence: 'high',
+        rationale: 'The proposed repair belongs outside this feature.',
+        effect: { kind: 'deferral', title: 'Track the build-review finding', body: 'The changed test is insensitive.', exclusionRationale: 'It belongs outside this feature.' },
+      }],
+      consistency: {
+        verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['deferred-case'],
+        rationale: 'The deferred proposal leaves an unresolved consistency conflict.',
+      },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-r' });
+    expect(events.filter((event) => event.type === 'remediation_semantic_repeat_halt')).toEqual([
+      expect.objectContaining({ caseId: 'case-r', reason: 'regressed' }),
+    ]);
+    const persisted = await store.read();
+    expect(persisted).toMatchObject({ ok: true });
+    if (!persisted.ok) throw new Error(`case store read failed: ${persisted.reason}`);
+    expect(persisted.state.cases.map((record) => record.id)).toEqual(['case-r']);
+  });
+
   it('classifies persisted duplicate unresolved owners as malformed history', async () => {
     const root = await projectRoot();
     await mkdir(join(root, '.pipeline'), { recursive: true });

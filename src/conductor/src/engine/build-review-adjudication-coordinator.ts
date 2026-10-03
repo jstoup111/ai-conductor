@@ -635,17 +635,26 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const ordinaryCases = admitted.filter((proposed) => proposed.case.disposition !== 'escalate'
     && !blockedConsistency?.sourceIds.some((sourceId) => proposed.sources.some((source) => source.sourceId === sourceId)));
   const escalationCases = admitted.filter((proposed) => proposed.case.disposition === 'escalate');
-  // An unbound escalation has no effect, but it can still reuse a resolved
-  // action source. Send only that recurrence question through reconciliation;
-  // a non-recurring stop remains owned by the dedicated writer below.
-  const recurrenceOnlyEscalationCases = escalationCases.filter((proposed) =>
-    proposed.case.existingCaseId === undefined && !proposed.case.distinctFrom?.length);
+  // Unbound escalations and blocked ordinary rows have no durable case
+  // transition here, but either can reuse a resolved action source. Keep the
+  // recurrence graph and the halt filter derived from this one list so a
+  // blocked row cannot bypass D6.3 on its way to the consistency-stop writer.
+  const isUnboundRecurrenceCandidate = (proposed: typeof admitted[number]) =>
+    proposed.case.existingCaseId === undefined && !proposed.case.distinctFrom?.length;
+  const blockedOrdinaryRecurrenceCases = admitted.filter((proposed) =>
+    proposed.case.disposition !== 'escalate' &&
+    isUnboundRecurrenceCandidate(proposed) &&
+    (blockedConsistency?.sourceIds.some((sourceId) => proposed.sources.some((source) => source.sourceId === sourceId)) ?? false));
+  const recurrenceOnlyCases = [
+    ...escalationCases.filter(isUnboundRecurrenceCandidate),
+    ...blockedOrdinaryRecurrenceCases,
+  ];
   const recordedAt = new Date().toISOString();
   const generateId = input.generateId ?? randomUUID;
   const reconciled = await reconcileRemediationCases(store, {
-    graph: { ...graph.graph, cases: [...ordinaryCases, ...recurrenceOnlyEscalationCases] }, recordedAt, generateId,
+    graph: { ...graph.graph, cases: [...ordinaryCases, ...recurrenceOnlyCases] }, recordedAt, generateId,
     attemptedCaseIds,
-    recurrenceOnlyCaseRefs: new Set(recurrenceOnlyEscalationCases.map((proposed) => proposed.case.caseRef)),
+    recurrenceOnlyCaseRefs: new Set(recurrenceOnlyCases.map((proposed) => proposed.case.caseRef)),
     // A mechanically complete lap saw every finding this join could report, so a
     // prior open non-action case absent from it is decided by that absence — the
     // same evidence the exit paths settle on. Leaving it open let stale history
@@ -687,14 +696,14 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     });
   }
 
-  // A recurrence-only escalation is deliberately not a general case
-  // transition. Once reconciliation identifies its resolved action owner,
-  // halt before the decision-stop writer can create a new open stop.
+  // A recurrence-only row is deliberately not a general case transition.
+  // Once reconciliation identifies its resolved action owner, halt before the
+  // decision-stop writer can create a new open stop.
   const recurringEscalationCases: RemediationCaseRecord[] = [];
   const emittedRecurringEscalationIds = new Set<string>();
   const reconciledCasesBeforeStops = new Map(reconciled.state.cases.map((record) => [record.id, record]));
   for (const [caseRef, recurringCaseIds] of reconciled.recurringCaseIdsByRef ?? []) {
-    if (!recurrenceOnlyEscalationCases.some((proposed) => proposed.case.caseRef === caseRef)) continue;
+    if (!recurrenceOnlyCases.some((proposed) => proposed.case.caseRef === caseRef)) continue;
     for (const caseId of recurringCaseIds) {
       if (emittedRecurringEscalationIds.has(caseId)) continue;
       emittedRecurringEscalationIds.add(caseId);
