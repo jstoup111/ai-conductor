@@ -62,17 +62,23 @@ export function auditManagedSessionInstructionSource(input: SessionCommandSource
  * turn a dispatch-time refusal into an invisible authoring escape.
  */
 export function auditShippedManagedSessionInstructionSource(input: SessionCommandSource): SessionCommandInstruction[] {
-  const contexts = parseSessionCommandContexts(input.source, input.family);
-  return auditManagedSessionInstructionSource(input).filter((instruction) => {
-    const explicitlyDeclared = contexts.ranges.some((range) =>
-      range.startLine <= instruction.line && instruction.line <= range.endLine &&
-      !(range.context === 'managed' && range.startLine === 1),
-    );
-    if (input.family !== 'engine') return instruction.context === 'managed' || /session-command context/i.test(instruction.reason ?? '');
-    return (explicitlyDeclared && instruction.context === 'managed') || /unclassified session-command context|session-command context/i.test(instruction.reason ?? '') ||
-      (instruction.reason === 'managed dispatch cannot execute an operator-only instruction' &&
-        /(?:^|\/)step-runners\.ts$/.test(input.file) && /(?:build|system)Prompt/i.test(input.source));
-  });
+  // This is the production variant, not a second classifier.  Context
+  // diagnostics and the operator-only contradiction are actionable at the
+  // repository boundary.  Ordinary command-policy findings in implementation
+  // strings remain owned by their runtime guard, rather than making every
+  // internal command construction a prose-dispatch finding.
+  return auditManagedSessionInstructionSource(input).filter((instruction) =>
+    /session-command context/i.test(instruction.reason ?? '')
+    || (
+      instruction.reason === 'managed dispatch cannot execute an operator-only instruction'
+      // A skill's operator-only region is documentation by design.  The
+      // shipped executable prompt/prelude is the one place this contradiction
+      // proves a managed dispatch would actually receive that instruction.
+      && input.family === 'engine'
+      && /(?:^|\/)step-runners\.ts$/.test(input.file)
+      && /(?:build|system)Prompt/i.test(input.source)
+    ),
+  );
 }
 
 const COMMAND = /\b(?:ai-conductor|conduct-ts)\s+([a-z][a-z0-9-]*)\b/g;

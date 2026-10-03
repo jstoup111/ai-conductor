@@ -1865,6 +1865,13 @@ export class DefaultStepRunner implements StepRunner {
       const result = await supervisor.supervise((lease) =>
         run({
           ...baseOptions,
+          // Auxiliary provider paths (custom review, regrade, and coverage
+          // binding) share this supervisor.  Stamp the daemon-owned context
+          // here so none of those direct executor call sites can omit either
+          // attribution or managed-observation preparation.
+          ...(this.providerExecutionContext?.managedSessionContext
+            ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
+            : {}),
           onActivity: pulse,
           providerStreamObserverForCandidate: (provider) => {
             const throttle = createProviderStreamThrottle<ProviderStreamObservation>(
@@ -2043,6 +2050,11 @@ export class DefaultStepRunner implements StepRunner {
       ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
       ...(result.observedIntervals
         ? { observedIntervals: result.observedIntervals }
+        : {}),
+      // Coverage is deliberately carried even when its completeness is
+      // unknown; absence of observed events is not evidence of no bypass.
+      ...(result.managedGhObservationCoverage
+        ? { managedGhObservationCoverage: result.managedGhObservationCoverage }
         : {}),
       ...(result.resolvedModel ? { model: result.resolvedModel } : {}),
       ...(result.resolvedEffort !== undefined ? { effort: result.resolvedEffort } : {}),
