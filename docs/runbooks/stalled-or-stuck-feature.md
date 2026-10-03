@@ -117,7 +117,7 @@ can be handled with `ai-conductor daemon reclaim-worktree <slug>` when reclaim i
 ### 2. Classify the stall
 
 ```bash
-grep -E 'build_stall|build_no_progress|zero_work_product|rate_limit|credentials_park' \
+grep -E 'build_stall|build_no_progress|build_active_stall|zero_work_product|rate_limit|credentials_park' \
   .worktrees/<slug>/.pipeline/events.jsonl | tail -20
 ```
 
@@ -172,6 +172,25 @@ a clean worktree. That is not an always-pass: `build_review` re-grades the diff 
 can still FAIL the routed build, kicking it back to `build` under the same
 `MAX_KICKBACKS_PER_GATE` bound as any other `build_review` kickback. A build with zero commit
 movement across every attempt never routes.
+
+#### `active_stall`
+
+**Symptom:** the daemon log shows `<step> active without movement for <N>m (<resolved>/<total>) ·
+action <warn|end_attempt>`, and `events.jsonl` has a `build_active_stall` event. With
+`end_attempt`, a `build_stall` event with reason `active_stall` follows.
+
+**Diagnosis:** the provider is still writing heartbeats, but no task resolved and HEAD did not
+move for `build_progress.active_stall_minutes`. `warn` only reports it. `end_attempt` ended the
+attempt; that spends one ordinary retry, and a pinned retry from attempt 2 onward becomes
+[`no_task_progress`](#no_task_progress).
+
+**Recovery:** inspect the attempt's transcript for a loop or an unreachable task. To end such
+attempts automatically, set `build_progress.active_stall_action: end_attempt`; to tolerate long
+non-committing work, raise `active_stall_minutes`. See
+[`build_progress`](../reference/configuration.md#build_progress).
+
+**Verification:** later `build_progress` events show `activity: active-committing`, and the log
+stops repeating the active-stall warning.
 
 #### Build halted with uncommitted paths
 

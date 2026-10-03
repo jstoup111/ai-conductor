@@ -732,7 +732,7 @@ no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` fo
 `protected_artifact_rebaseline_refused`, `auto_heal`, `remediation_sealed_artifact_redirect`,
 `remediation_disposition_rejected`,
 `verdict_freshness`, `build_review_repair_context`, `mode_skip`, `build_stall`, `build_progress`,
-`build_no_progress`, `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`,
+`build_no_progress`, `build_active_stall`, `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`,
 `parallel_failure`, `gate_verdict`, `test_suite_verification`, `build_member_evidence_reused`,
 `build_member_evidence_recomputed`, `kickback`, `loop_halt`, `over_scope_decision`,
 `halt_marker_write_failed`, `halt_record_written`, `halt_record_write_failed`, `halt_record_push_failed`,
@@ -847,6 +847,13 @@ kickback tables but not halt tables.
 `build_progress` events carry an additional `tickReason` (`task-delta` | `head-moved` |
 `heartbeat`) and an explicit `headMoved` boolean, letting a reader distinguish "HEAD did not
 move" from the older heartbeat ticks that hard-coded an absent `commitCount`.
+
+`build_progress` and `build_no_progress` events carry an `activity` classification: `quiet`,
+`active-committing`, or `active-not-committing`. `build_active_stall` records an active build that
+reached `build_progress.active_stall_minutes` without task or HEAD movement: `minutes`,
+`resolved`, `total`, optional `lastCommitAt`/`lastActivityAt`, and the configured `action`
+(`warn` | `end_attempt`). A `build_stall` event with reason `active_stall` records an attempt the
+`end_attempt` policy ended. See [`build_progress`](configuration.md#build_progress).
 
 The `pipeline_closeout` event type is declared on `ConductorEvent` but is never written here —
 `EVENT_SINKS.pipeline_closeout` sets `persist: false`, so it stays a single-writer event confined
