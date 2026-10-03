@@ -1493,6 +1493,9 @@ export class DefaultStepRunner implements StepRunner {
         ? this.mode === 'auto'
         : true,
       ...(streaming ? { interactive } : {}),
+      ...(this.providerExecutionContext?.managedSessionContext
+        ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
+        : {}),
     });
     const safety = this.candidateSafetyFor(step);
     try {
@@ -1595,6 +1598,9 @@ export class DefaultStepRunner implements StepRunner {
 
     const safety = this.candidateSafetyFor(request.step);
     const invocationOptions = this.withFeatureDiagnosticLog(request.options);
+    if (this.providerExecutionContext?.managedSessionContext) {
+      invocationOptions.managedSessionContext = this.providerExecutionContext.managedSessionContext;
+    }
     const result = await this.dispatchProviderWithLifecycleSupervision(
       request.step,
       invocationOptions,

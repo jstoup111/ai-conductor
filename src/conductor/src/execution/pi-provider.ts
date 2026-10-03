@@ -5,6 +5,9 @@ import { deriveProviderExitFacts, formatProviderExitFacts } from './provider-dia
 import { validateSpawnPermit } from './spawn-permit.js';
 import { providerDescriptor } from './provider-catalog.js';
 import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
+import { withDaemonSessionMarker } from './daemon-session.js';
+import { composeManagedSessionEnvironment } from './managed-session-context.js';
+import { scrubTmuxEnvironment } from './tmux-environment.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -209,6 +212,7 @@ export class PiProvider implements LLMProvider {
     }
     if (options.effort) args.push('--thinking', options.effort);
 
+    const environment = scrubTmuxEnvironment(withDaemonSessionMarker({}));
     const subprocess = this.subprocessFactory(this.executable, args, {
       reject: false,
       input: options.prompt,
@@ -216,6 +220,9 @@ export class PiProvider implements LLMProvider {
       stdout: 'pipe',
       stderr: 'pipe',
       cwd: options.cwd,
+      env: options.managedSessionContext
+        ? composeManagedSessionEnvironment(options.managedSessionContext, environment)
+        : environment,
     });
     let aborted = false;
     const abort = () => {

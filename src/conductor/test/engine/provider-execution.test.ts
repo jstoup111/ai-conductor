@@ -37,6 +37,7 @@ import {
   type ProviderAttemptMetadata,
 } from '../../src/engine/provider-execution.js';
 import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
+import type { ManagedSessionContext } from '../../src/execution/managed-session-context.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -139,6 +140,29 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('keeps the engine-owned managed context across an unavailable candidate fallback', async () => {
+    const context: ManagedSessionContext = {
+      projectRoot: '/project', worktreeRoot: '/project/worktree', producerRoot: '/project/worktree/.pipeline/session-events',
+      scope: { kind: 'feature', featureSlug: 'feature-a' }, dispatchId: 'engine-dispatch-8', provider: 'claude',
+    };
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false, output: 'unavailable', exitCode: 127,
+      providerUnavailable: true, providerUnavailableScope: 'run', providerUnavailableReason: 'unavailable',
+    }));
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'done', exitCode: 0 }));
+
+    await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'], preferredProvider: 'codex',
+      config: { provider_substitution: 'allow' },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'build', cwd: '/changed-child-cwd', managedSessionContext: context },
+    });
+
+    expect(codexInvoke.mock.calls[0]).toMatchObject([{ managedSessionContext: context, cwd: '/changed-child-cwd' }]);
+    expect(claudeInvoke.mock.calls[0]).toMatchObject([{ managedSessionContext: context, cwd: '/changed-child-cwd' }]);
+  });
+
   it('suppresses session resume for a Pi adapter when its descriptor omits supportsSessionResume', async () => {
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: 'done' }));
     const result = await invokeProviderCandidate({

@@ -207,6 +207,9 @@ async function invokePreludeSkill(
       cwd: projectRoot,
       dangerouslySkipPermissions: true,
       systemPrompt,
+      ...(execution.managedSessionContext
+        ? { managedSessionContext: execution.managedSessionContext }
+        : {}),
     },
   });
   return {
