@@ -54,17 +54,17 @@ tasks and route back to BUILD so that the feature converges without an operator.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a blocked-remediable outcome within allowance, when the conductor handles the gate, then each finding is admitted as a remediation gap, and each finding whose disposition appends is appended to the plan through the existing remediation-append primitive with a task id prefixed for the as-built gate source, each task carrying its governing clause and a Done when block (an existing-task-dispositioned finding is admitted without an append and charges no plan growth, per adr-2026-08-25 decision 9)
+- Given a current effective blocked-remediable outcome within allowance, when the conductor handles the gate, then each finding is admitted as a remediation gap, and each finding whose disposition appends is appended to the plan through the existing remediation-append primitive with a task id prefixed for the as-built gate source, each task carrying its governing clause and a Done when block (an existing-task-dispositioned finding is admitted without an append and charges no plan growth, per adr-2026-08-25 decision 9)
 - Given tasks were appended, when routing completes, then execution navigates back to BUILD, the as-built gate is restaged stale, and after the rebuild the gate re-runs against a fresh report
-- Given the re-run report is APPROVED, when the gate re-evaluates, then the SHIP tail proceeds and no halt is written
+- Given the re-run review and validated history establish an effective APPROVED result, when the gate re-evaluates, then the SHIP tail proceeds and no halt is written
 
 #### Negative Paths
 - Given the remediation kill switch is off, when a blocked-remediable outcome is handled, then no tasks are appended and the feature halts needs-human exactly as before this feature (a test proves the revert)
-- Given a blocked-remediable outcome in a validation group, when the group commits, then exactly one consolidated remediation dispatch occurs (per-gate budgets intact) and sibling refusal stamping is unchanged
+- Given a current effective blocked-remediable outcome in a validation group, when the group commits, then exactly one consolidated remediation dispatch occurs (per-gate budgets intact) and sibling refusal stamping is unchanged
 - Given a REMEDIABLE finding whose structural reference cannot be resolved against the approved artifacts on disk or the active plan, when the structured result is validated, then it is rejected naming that reference field, the attempt is scored `absent` and reruns, no task is appended, and admission's own resolution check remains a defensive invariant that halts needs-human naming the unresolvable reference
 
 ### Done When
-- [ ] Both halt-writer sites (serial SHIP walk and validation-group join) branch on the widened outcome; blocked-remediable reaches the remediation path in both, proven by tests at each site
+- [ ] Both halt-writer sites (serial SHIP walk and validation-group join) branch on the widened current effective outcome; blocked-remediable reaches the remediation path in both, proven by tests at each site
 - [ ] Appended tasks render with the gate source, governing clause line, parent linkage, and Done when block; the plan amendment is committed the same way prd-audit appends are
 - [ ] The config kill switch exists, is validated, defaults to enabled, and its off state restores halt-always behavior in a test
 
@@ -79,7 +79,7 @@ instead of looping.
 - Given no prior as-built remediation lap, when tasks within the growth allowance are appended and build dispatches on them, then at that dispatch the ledger records one lap under the as-built gate key and the growth record's byGate breakdown gains the as-built key
 
 #### Negative Paths
-- Given one as-built lap already recorded, when the gate returns an all-REMEDIABLE BLOCKED outcome again, then its tasks are appended as pending, the feature halts with class kickback-cap at the build transition, no lap or growth is charged, and the halt body listing every finding with its class and clause
+- Given one as-built lap already recorded, when the gate returns an effective all-REMEDIABLE BLOCKED outcome again, then its tasks are appended as pending, the feature halts with class kickback-cap at the build transition, no lap or growth is charged, and the halt body listing every finding with its class and clause
 - Given the requested task count exceeds the remaining shared growth allowance, when admission runs, then the tasks are appended as pending and the feature halts with class kickback-cap at the build transition naming the allowance and the findings, with no lap or growth charged
 - Given a remediation lap whose rebuild produced no tree movement or net resolved-task progress and whose effective review still fails unchanged, when the no-op escalation check runs for the as-built gate, then the lap escalates to a halt instead of re-dispatching; a passing effective review ends the cycle even without tree movement
 - Given an as-built lap is recorded, when the ledger is inspected, then build_review's cumulative counter and prd_audit's lap counter are unchanged (isolation test)
@@ -97,14 +97,14 @@ classification recorded so that only genuine design questions cost a round trip.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a BLOCKED report with at least one DESIGN row, when the conductor handles the gate, then the feature halts with class needs-human and the halt body records every finding with its id, class, and governing clause or open question
+- Given a current effective BLOCKED result with at least one unresolved DESIGN row, when the conductor handles the gate, then the feature halts with class needs-human and the halt body records every finding with its id, class, and governing clause or open question
 
 #### Negative Paths
-- Given a report with both REMEDIABLE and DESIGN rows, when the gate is handled, then no tasks are appended for the REMEDIABLE rows (the human sees the whole report) and the halt lists all rows
+- Given a current effective result with unresolved REMEDIABLE and DESIGN rows, when the gate is handled, then no tasks are appended for the REMEDIABLE rows (the human sees the whole report) and the halt lists all rows
 - Given a design halt is cleared by the operator after resolution, when the daemon re-dispatches, then the gate re-runs freshly rather than resuming a discarded remediation route
 
 ### Done When
-- [ ] Tests at both halt-writer sites prove a single DESIGN row forces the needs-human halt with the full per-finding listing and appends nothing
+- [ ] Tests at both halt-writer sites prove a single unresolved DESIGN row in the current effective result forces the needs-human halt with the full per-finding listing and appends nothing
 - [ ] The committed halt record carries the per-finding listing through the existing writeHaltMarker seam with no new halt class
 
 ## Story 6: The operator can see afterward what was remediated and why

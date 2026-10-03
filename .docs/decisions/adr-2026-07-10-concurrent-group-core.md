@@ -68,6 +68,8 @@ executor, and re-point both consumers at it:
 5. **Per-branch retry ladder.** Branch retries reuse the step's resolved `max_retries`,
    completion checks, and per-step stale sweep (`STALE_SWEEP_STEPS`) — semantics
    equivalent to the serial loop, scoped per branch.
+   > **Amended 2026-09-30 by #2440:** For prd_audit and architecture_review_as_built, branch retry validation establishes a valid current raw review artifact, not final history-dependent satisfaction. The single-writer join performs gate-local reconciliation/publication before computing final objective satisfaction, under adr-2026-09-30-gate-local-review-finding-continuity D7/D9. A history receipt not yet published by that join is not a malformed provider result and does not consume a branch retry. Provider/schema failures retain their existing branch handling; other members, allowances, and single-writer ownership are unchanged.
+
 6. **Single-writer state.** Branches return outcomes; only the core writes
    `conduct-state.json` (synthetic `«group»__«branch»` keys retained from ADR 004) at
    join, eliminating concurrent state-file writes.

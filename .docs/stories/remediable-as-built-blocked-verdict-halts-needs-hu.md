@@ -24,7 +24,7 @@ As the operator reading a halt, I want a remediable BLOCKED verdict whose remedi
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a daemon-mode validation-group round whose as-built verdict is BLOCKED with every finding REMEDIABLE and no manual_test FAIL, when the remediation planner leaves no `.pipeline/remediation.json` behind, then the feature halts needs-human with a reason stating the as-built findings were REMEDIABLE, that remediation did not route because the planner wrote no remediation plan, and listing each blocking finding with its class and governing clause.
+- Given a daemon-mode validation-group round whose current effective as-built result is BLOCKED with every finding REMEDIABLE and no manual_test FAIL, when the remediation planner leaves no `.pipeline/remediation.json` behind, then the feature halts needs-human with a reason stating the as-built findings were REMEDIABLE, that remediation did not route because the planner wrote no remediation plan, and listing each blocking finding with its class and governing clause.
 - Given the same round, when the planner's `.pipeline/remediation.json` is unparseable JSON or its `dispositions` is not an array, then the halt reason names that malformation as the cause and still lists each blocking finding.
 
 #### Negative Paths
@@ -43,16 +43,16 @@ As the operator reading a needs-human halt, I want the as-built gate's BLOCKED r
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a typed as-built verdict of BLOCKED with at least one finding of class DESIGN, when the `architecture_review_as_built` completion gate evaluates it, then the gate's reason states the verdict needs a human decision and names each DESIGN finding id with its governing clause.
-- Given a typed as-built verdict of BLOCKED with every finding REMEDIABLE, when the gate evaluates it, then the gate's reason states every blocking finding is REMEDIABLE and that the verdict is a repair, and does not describe it as a decision.
+- Given a current effective as-built result of BLOCKED with at least one finding of class DESIGN, when the `architecture_review_as_built` completion gate evaluates it, then the gate's reason states the verdict needs a human decision and names each DESIGN finding id with its governing clause.
+- Given a current effective as-built result of BLOCKED with every finding REMEDIABLE, when the gate evaluates it, then the gate's reason states every blocking finding is REMEDIABLE and that the verdict is a repair, and does not describe it as a decision.
 
 #### Negative Paths
-- Given a typed BLOCKED verdict mixing one DESIGN and two REMEDIABLE findings, when the gate evaluates it, then the reason names only the DESIGN finding as the decision and does not list the REMEDIABLE ids as decisions.
+- Given a current effective BLOCKED result mixing one DESIGN and two REMEDIABLE findings, when the gate evaluates it, then the reason names only the DESIGN finding as the decision and does not list the REMEDIABLE ids as decisions.
 - Given a BLOCKED structured result whose findings fail validation, when the step settles, then it is rejected with a diagnostic naming the defective finding field, no typed verdict is persisted, the attempt is scored absent and reruns, and neither the decision nor the repair wording appears in any reason.
 
 ### Done When
 - [ ] The `architecture_review_as_built` gate returns two distinct reason strings for `blocked-design` and `blocked-remediable`, the design reason naming each DESIGN finding id and clause.
-- [ ] Unit tests cover all-DESIGN, all-REMEDIABLE, and mixed typed verdicts and rejected structured results, and assert the exact reason wording for each.
+- [ ] Unit tests cover all-DESIGN, all-REMEDIABLE, and mixed effective results derived from raw typed verdicts and validated history and rejected structured results, and assert the exact reason wording for each.
 - [ ] The existing gate test that pins the collapsed reason string is updated to the new wording rather than deleted.
 
 ## Story 3: The validation-group as-built halt lists every finding whatever its class
@@ -62,11 +62,11 @@ As the operator reading a validation-group halt on an as-built verdict, I want t
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a validation-group round whose as-built verdict is BLOCKED with every finding REMEDIABLE and remediation is disabled by `architecture_review_as_built.remediation.enabled: false`, when the group halts, then the halt reason lists each finding id, class, and governing clause and states remediation is disabled.
-- Given a non-daemon run whose as-built verdict is BLOCKED with every finding REMEDIABLE, when the group halts, then the halt reason lists each finding and states remediation runs only in daemon mode.
+- Given a validation-group round whose current effective as-built result is BLOCKED with every finding REMEDIABLE and remediation is disabled by `architecture_review_as_built.remediation.enabled: false`, when the group halts, then the halt reason lists each finding id, class, and governing clause and states remediation is disabled.
+- Given a non-daemon run whose current effective as-built result is BLOCKED with every finding REMEDIABLE, when the group halts, then the halt reason lists each finding and states remediation runs only in daemon mode.
 
 #### Negative Paths
-- Given a validation-group round whose as-built verdict is BLOCKED with a DESIGN finding, when the group halts, then the `Blocking findings:` listing block appears exactly once in the halt text, not duplicated by the gate reason and the group site both rendering it.
+- Given a validation-group round whose current effective as-built result is BLOCKED with a DESIGN finding, when the group halts, then the `Blocking findings:` listing block appears exactly once in the halt text, not duplicated by the gate reason and the group site both rendering it.
 - Given a validation-group round whose as-built structured result is still missing or rejected when the step's retry budget is exhausted, when the group settles, then the as-built branch is a no-verdict branch handled by the existing step-failure handling and recorded `failed`, and its halt reason names the as-built step and the rejected field with no finding listing and no remediation wording.
 
 ### Done When

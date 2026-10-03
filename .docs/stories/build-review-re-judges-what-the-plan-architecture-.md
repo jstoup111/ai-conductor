@@ -163,8 +163,8 @@ As an operator, I want each finding in a report graded on its own as PASS, FIXAB
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a FIXABLE finding that names plan task 4 and criterion S2.1, when the report is read, then it is accepted and sent down the fix path
-- Given a PLAN_GAP finding that names criterion S5.2, when the report is read, then it is accepted and handled by the plan-gap rules
+- Given an effective unresolved FIXABLE finding that names plan task 4 and criterion S2.1, when the report is read, then it is accepted and sent down the fix path
+- Given an effective unresolved PLAN_GAP finding that names criterion S5.2, when the report is read, then it is accepted and handled by the plan-gap rules
 
 #### Negative Paths
 - Given a FIXABLE finding that names no plan task, when the report is read, then the report is rejected as malformed, the finding is named, and nothing is added to the plan
@@ -210,9 +210,9 @@ As an operator, I want prd_audit's fix-up work capped by settings I control so t
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a 20-task plan and three FIXABLE findings on the first lap, when prd_audit fails, then three tasks are added, each naming its criterion and parent task and carrying a Done when: block that restates the criterion, and BUILD runs once more
-- Given default settings and a 12-task plan with four FIXABLE findings, when prd_audit fails, then the cap is three (25% of 12) and the run stops for a human listing all four
-- Given settings raising the cap to 8 tasks and 50%, when a 20-task plan gets six FIXABLE findings, then six tasks are added
+- Given a 20-task plan and three effective unresolved FIXABLE findings on the first lap, when prd_audit fails, then three tasks are added, each naming its criterion and parent task and carrying a Done when: block that restates the criterion, and BUILD runs once more
+- Given default settings and a 12-task plan with four effective unresolved FIXABLE findings, when prd_audit fails, then the cap is three (25% of 12) and the run stops for a human listing all four
+- Given settings raising the cap to 8 tasks and 50%, when a 20-task plan gets six effective unresolved FIXABLE findings, then six tasks are added
 
 #### Negative Paths
 - Given a feature that already used its one fix lap, when prd_audit fails again, then its fix tasks are appended as pending and the run stops for a human as "kickback cap" at the build dispatch, lists every finding, and builds and charges nothing
@@ -234,11 +234,11 @@ As an operator, I want a plan gap on a main-path criterion to stop for me, and a
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a PLAN_GAP on a negative-path criterion, when prd_audit finishes, then the gap is noted in the verdict and the shipped record and the feature continues
+- Given an effective unresolved PLAN_GAP on a negative-path criterion, when prd_audit finishes, then the gap is noted in the verdict and the shipped record and the feature continues
 - Given a setting that says stop on any plan gap, when a negative-path PLAN_GAP occurs, then the run stops
 
 #### Negative Paths
-- Given a PLAN_GAP on a happy-path criterion, when prd_audit finishes, then the run stops for a human as "plan gap", naming the criterion, and nothing is added to the plan
+- Given an effective unresolved PLAN_GAP on a happy-path criterion, when prd_audit finishes, then the run stops for a human as "plan gap", naming the criterion, and nothing is added to the plan
 - Given a PLAN_GAP whose criterion cannot be told apart as happy-path or negative-path, when it is routed, then it is treated as happy-path and stops the run
 
 ### Done When
@@ -275,17 +275,17 @@ As an operator, I want the as-built review to report when the design itself fall
 ### Acceptance Criteria
 
 #### Happy Path
-- Given code that faithfully implements the approved design while all acceptance criteria pass, when the review reports PLAN_GAP, then the gap is noted in the verdict and shipped record and the feature moves on to retro
-- Given a PLAN_GAP where a stated outcome is not delivered, when the typed verdict is read, then the run stops for a human as "plan gap"
-- Given a BLOCKED typed verdict whose findings are all REMEDIABLE, when the gate settles, then it takes the bounded remediation route to BUILD within the gate's remediation lap cap
+- Given code that faithfully implements the approved design while all acceptance criteria and required current history checks pass, when the review reports PLAN_GAP, then the gap is noted in the verdict and shipped record and the feature moves on to retro
+- Given a current effective PLAN_GAP where a stated outcome remains undelivered, when the effective result is read, then the run stops for a human as "plan gap"
+- Given a current effective BLOCKED result whose unresolved findings are all REMEDIABLE, when the gate settles, then it takes the bounded remediation route to BUILD within the gate's remediation lap cap
 
 #### Negative Paths
-- Given a BLOCKED typed verdict containing a DESIGN finding, when the gate settles, then the run stops for a human
-- Given any as-built verdict other than an all-REMEDIABLE BLOCKED verdict within the lap cap, when the SHIP steps route, then no "go back to build" is issued from this step
+- Given a current effective BLOCKED result containing an unresolved DESIGN finding, when the gate settles, then the run stops for a human
+- Given any current effective as-built result other than an all-REMEDIABLE BLOCKED result within the lap cap, when the SHIP steps route, then no "go back to build" is issued from this step
 - Given no typed verdict, or a structured result that fails validation, when the gate is evaluated, then the gate stays unsatisfied
 
 ### Done When
-- [ ] The typed verdict accepts PLAN_GAP plus a flag for whether the outcome was delivered; the only as-built → build route in the engine is the bounded remediation route for an all-REMEDIABLE BLOCKED verdict
+- [ ] The typed verdict accepts PLAN_GAP plus a flag for whether the outcome was delivered; the only as-built → build route in the engine is the bounded remediation route for an effective all-REMEDIABLE BLOCKED result
 - [ ] An end-to-end test shows a PLAN_GAP with passing criteria ships with the gap recorded
 
 ## Story 14: I can see how much a plan has grown

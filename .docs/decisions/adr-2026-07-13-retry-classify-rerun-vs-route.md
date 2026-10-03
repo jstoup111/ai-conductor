@@ -60,6 +60,8 @@ The three verdict predicates set it on the `done:false` path:
 `named-route` means "the check names a route (a remediation disposition / kickback target exists) and
 the input is settled"; `absent` means "no verdict yet — a re-run can produce one".
 
+> **Amended 2026-09-30 by #2440:** For PRD/as-built final routing, D1 consumes the current effective classification under adr-2026-09-30-gate-local-review-finding-continuity D6/D9. Raw-output absence/invalidity retains the existing bounded reviewer retry; a missing required history receipt at the branch/join boundary is not raw-output absence. Join-owned reconciliation and its named recovery outcomes settle before final routing, and a resolved repeated source creates no repair gap. Required-history loss, corruption, or uncertainty cannot be laundered into a pass or retried for another semantic opinion. The classifier remains deterministic and never invokes a provider; other gates and existing retry/budget policy are unchanged.
+
 ### D2 — The classifier (pure, deterministic)
 
 `classifyRetryDecision({ step, completion, attempt, priorReason, inputsUnchanged }) →

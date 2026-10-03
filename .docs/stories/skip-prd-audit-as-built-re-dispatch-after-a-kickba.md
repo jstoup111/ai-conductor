@@ -9,8 +9,8 @@ As the daemon operator, I want a kickback that leaves a judged gate's code stamp
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `prd_audit` is `stale` after a kickback to `build`, its code-stamp sidecar exists, no path in its gate surface changed since the stamp, and the validated `.pipeline/prd-audit.json` evidence is complete and clean under current decision authority, when the step loop reaches `prd_audit`, then its status is persisted as `done` and no provider session is dispatched for it.
-- Given `architecture_review_as_built` is `stale` with a valid sidecar, an unchanged surface, and a report whose verdict still reads `APPROVED`, when the step loop reaches it, then its status is persisted as `done` and no provider session is dispatched for it.
+- Given `prd_audit` is `stale` after a kickback to `build`, its code-stamp sidecar exists, no path in its gate surface changed since the stamp, and the validated `.pipeline/prd-audit.json` evidence is complete under current decision authority and, with current validated required history, effectively clean, when the step loop reaches `prd_audit`, then its status is persisted as `done` and no provider session is dispatched for it.
+- Given `architecture_review_as_built` is `stale` with a valid sidecar, an unchanged surface, and a current typed verdict plus validated required history whose effective result is satisfied, when the step loop reaches it, then its status is persisted as `done` and no provider session is dispatched for it.
 - Given `build_review` is `stale` with a `codeStamp` in its aggregate, an unchanged surface, and a clean aggregate, when the step loop reaches it, then its status is persisted as `done` and no provider session is dispatched for it.
 - Given `manual_test` is `stale` with a clean-pass fail-evidence marker carrying a `codeStamp` and an unchanged surface, when the step loop reaches it, then its status is persisted as `done` and no provider session is dispatched for it.
 - Given a stale gate is preserved this way, when the loop continues, then the preserved report on disk is the same bytes it was before the step loop reached the gate (the sweep did not delete it).
@@ -18,13 +18,13 @@ As the daemon operator, I want a kickback that leaves a judged gate's code stamp
 #### Negative Paths
 - Given `prd_audit` is `stale` and the kickback repair committed a change to a path inside `prd_audit`'s gate surface, when the step loop reaches `prd_audit`, then a provider session is dispatched exactly as before this change.
 - Given a stale gate's sidecar is missing, when the step loop reaches the gate, then a provider session is dispatched.
-- Given a stale gate's sidecar exists and its surface is unchanged but the authoritative verdict no longer reads clean (typed evidence for PRD/as-built, with current decision checks), when the step loop reaches the gate, then a provider session is dispatched.
+- Given a stale gate's sidecar exists and its surface is unchanged but its effective result (typed evidence for PRD/as-built with current decision checks, plus validated required history) no longer reads clean, when the step loop reaches the gate, then it is not preserved as done; a new review dispatches when evidence needs refreshing, while a named required-history recovery condition stops before dispatch.
 - Given `gate_code_validity.enabled: false`, when the step loop reaches any stale judged gate, then a provider session is dispatched regardless of stamp state.
 - Given the pre-dispatch completion check throws (unreadable sidecar, git failure), when the step loop reaches the stale gate, then the error is swallowed and a provider session is dispatched (fail closed, matching the existing `done` branch).
 
 ### Done When
-- [ ] A step-loop unit test per gate (`manual_test`, `prd_audit`, `architecture_review_as_built`, `build_review`) shows a `stale` entry with a preserving completion predicate ends `done` with zero dispatch calls.
-- [ ] A step-loop unit test shows a `stale` gate whose completion predicate returns `done: false` dispatches, and one whose predicate throws dispatches.
+- [ ] A step-loop unit test per gate (`manual_test`, `prd_audit`, `architecture_review_as_built`, `build_review`) shows a `stale` entry with a preserving completion predicate (including valid current required history for PRD/as-built) ends `done` with zero dispatch calls.
+- [ ] A step-loop unit test shows an ordinary `stale` gate whose completion predicate returns `done: false` or throws dispatches, while a PRD/as-built required-history recovery condition prevents preservation and stops before dispatch with its named cause.
 - [ ] An acceptance test drives a real worktree through kickback→`build` (no commit)→`prd_audit` and asserts `state.prd_audit === 'done'` with no dispatch, then repeats with an in-surface commit and asserts a dispatch.
 - [ ] An acceptance test with `gate_code_validity.enabled: false` asserts the stale gate dispatches.
 

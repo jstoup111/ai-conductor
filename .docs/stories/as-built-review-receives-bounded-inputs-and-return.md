@@ -12,10 +12,9 @@ Blocking Findings table, the governing-clause grammar, and the Recorded Findings
 These stories move both sides of the step onto engine-owned contracts:
 - the engine renders a bounded, versioned input projection;
 - the step dispatches on the #2429 native structured-output seam;
-- the engine validates, stamps, and persists the typed verdict as the sole authority and renders
+- the engine validates, stamps, and persists the typed verdict as the raw reviewer authority and renders
   the report from it;
-- every consumer reads the typed verdict, with verdict, routing, operator-authority, and delivery
-  semantics unchanged;
+- every final consumer uses the raw typed verdict plus current validated gate-local history through one effective reader, preserving unresolved-finding routing, operator authority, and actual-delivery requirements;
 - the as-built skill section carries judgement guidance only.
 
 Governing decisions: adr-2026-09-07 D6.2/D7.1, adr-2026-08-25-as-built-remediable-findings-bounded-build-route
@@ -45,14 +44,14 @@ and the diff.
 - Given a feature whose plan has no Architecture Obligation Coverage table and whose diff touches no ADR, in a repository that has APPROVED ADRs, when the projection is built, then the governing-ADR section is empty and states that no ADR is pre-selected, the projection is produced, and the resolved check policy still shows `adrCompliance` on as it does today.
 - Given a project with no architecture diagrams, when the projection is built, then the diagram section is empty, the check policy shows `diagramDrift` off with its existing reason, and no fault is raised.
 - Given a kickback ledger file that exists but cannot be parsed, when the projection is built, then the build fails with a mechanical fault naming the pending-findings dimension and the ledger path, and no projection with an empty prior-findings section is produced.
-- Given a kickback ledger that does not exist, when the projection is built, then the prior-findings section is empty and the projection is produced.
+- Given no kickback ledger and valid complete gate history or verified fresh enrollment, when the projection is built, then pending findings are empty and complete retained gate history is still supplied; absent required enrolled history stops projection rather than becoming empty history.
 
 ### Done When
 - [ ] A unit test over a fixture worktree asserts the projection block's version stamp and each section's contents for the fully populated case.
 - [ ] A unit test asserts the governing-ADR set equals the plan-cited set joined with the diff-touched set, filtered to APPROVED, with decision ids matching `parseAdrDecisions`.
 - [ ] A unit test asserts an over-cap file appears only as an omission entry carrying its path and content digest.
 - [ ] A unit test asserts byte-identical projections for unchanged inputs.
-- [ ] A unit test asserts an unreadable kickback ledger produces the named pending-findings fault and an absent ledger produces an empty section.
+- [ ] A unit test asserts an unreadable kickback ledger produces the named pending-findings fault and an absent ledger produces an empty pending-findings section only after required history validates, while retained complete gate history remains supplied.
 
 ## Story 2: Missing or over-limit required inputs are explicit deterministic faults
 
@@ -121,7 +120,7 @@ malformed answer is a mechanical fault with a precise diagnostic and never a ver
 - Given a structured result with verdict `APPROVED WITH DRIFT NOTES` whose drift notes include an `UNEXERCISED` primitive with its observation signature, when it is validated, then it is accepted and the drift note keeps the primitive and the signature.
 - Given a structured result with verdict `PLAN_GAP`, `outcomeDelivered` true, and a recorded affected outcome, when it is validated, then it is accepted as a delivered plan gap.
 - Given a structured result with verdict `BLOCKED` and one `REMEDIABLE` finding whose reference is `{kind: "adr-decision", stem, decision}` naming an APPROVED ADR and a decision id `parseAdrDecisions` reports for it, when it is validated, then it is accepted and the finding carries the resolved reference.
-- Given an APPROVED ADR whose decision 5 carries a sub-decision written `D5.2`, when the projection lists that ADR's decisions and the reviewer cites it, then the reference's `decision` field is the whole number 5, the schema admits only whole numbers for that field, and the finding enters the bounded remediation route against decision 5.
+- Given an APPROVED ADR whose decision 5 carries a sub-decision written `D5.2`, when the projection lists that ADR's decisions and the reviewer cites it, then the reference's `decision` field is the whole number 5, the schema admits only whole numbers for that field, and the finding enters the bounded remediation route against decision 5 only if it remains unresolved in the current effective result.
 - Given a `BLOCKED` result whose `REMEDIABLE` finding references `{kind: "plan-task", taskId}` naming a task present in the active plan, when it is validated, then the reference resolves through the shared plan-task resolver and the result is accepted.
 - Given a `BLOCKED` result with one `DESIGN` finding carrying no reference, when it is validated, then it is accepted as a design-blocked verdict.
 
@@ -145,7 +144,7 @@ malformed answer is a mechanical fault with a precise diagnostic and never a ver
 
 ## Story 5: The engine persists the stamped typed verdict and renders the report from it
 
-As an operator, I want the validated verdict stored as the single authority, stamped with the
+As an operator, I want the validated verdict stored as the raw reviewer authority, stamped with the
 dispatch that produced it, and rendered into a human-readable report that cannot disagree with
 it, so that freshness and content both come from engine-owned state.
 
@@ -162,7 +161,7 @@ it, so that freshness and content both come from engine-owned state.
 - Given a worktree holding only a reviewer-written `.pipeline/architecture-review-as-built.md` with a clean APPROVED verdict line and no typed verdict, when the completion check runs, then the gate is scored `absent` and the step reruns rather than passing.
 - Given a typed verdict stamped with a previous attempt's identity whose code stamp cannot vouch for it because the gate's surface changed since that stamp, and whose file mtime is newer than the current dispatch start, when the completion check runs, then it is scored `absent` with a reason naming both identities.
 - Given the gate-code-validity kill switch is turned off, when the as-built completion check runs against an engine-written typed verdict from a previous attempt, then run-identity checking still applies to the as-built step, the verdict is scored `absent`, and no mtime comparison decides freshness.
-- Given a rendered report that has been edited by hand to say `APPROVED` while the typed verdict says `BLOCKED`, when any consumer evaluates the gate, then the consumer acts on `BLOCKED`.
+- Given a rendered report that has been edited by hand to say `APPROVED` while the typed verdict says `BLOCKED`, when any consumer evaluates the gate, then the edit has no effect: the consumer uses the raw typed verdict and validated current reconciliation through the effective reader.
 - Given a dispatch whose structured result is rejected, when the step settles, then no typed verdict is persisted for that attempt, no report is rendered for it, and the handshake records the rejection outcome.
 - Given the typed verdict file exists but cannot be parsed, when any consumer reads it, then the read reports it as unreadable and the gate is not satisfied, rather than treating the verdict as approved or empty.
 
@@ -174,64 +173,64 @@ it, so that freshness and content both come from engine-owned state.
 - [ ] A test asserts that with the gate-code-validity kill switch off, a prior-attempt as-built typed verdict still scores `absent`.
 - [ ] A test asserts an unparseable typed verdict leaves the gate unsatisfied with an unreadable reason.
 
-## Story 6: Gate and routing consumers act on the typed verdict with unchanged semantics
+## Story 6: Gate and routing consumers act on the current effective result
 
 As an operator, I want the SHIP tail to pass, halt, and remediate exactly as it does today, with
-the decision taken from the typed verdict rather than from scraped Markdown.
+the decision taken from the raw typed verdict plus current validated reconciliation through the effective reader.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a typed `APPROVED` or `APPROVED WITH DRIFT NOTES` verdict, when the completion predicate runs, then the gate is satisfied and the as-built code stamp is written.
-- Given a typed `PLAN_GAP` verdict with `outcomeDelivered` true, when the completion predicate runs, then the gate is satisfied.
-- Given a typed `BLOCKED` verdict whose findings are all `REMEDIABLE` and no `manual_test` FAIL in the same validation round, when the gate settles, then `planRemediation` receives each finding with its typed governing reference, admits it under gate key `architecture_review_as_built`, and navigates back to BUILD within the gate's remediation lap cap.
-- Given a typed `BLOCKED` verdict with a `REMEDIABLE` finding whose remedy the planner dispositions as `existing-task`, when the kickback runs, then the bound task ids are re-staged to pending and no plan-growth allowance is charged.
-- Given a validation round with a typed `BLOCKED` remediable as-built verdict and a `manual_test` FAIL, when the join settles, then the as-built findings ride the single consolidated work order and the as-built-only route does not run.
-- Given a clean typed verdict in a non-auto run, when the step completes, then no review-required marker is written for the as-built step and the step completes as it does today.
+- Given a typed `APPROVED` or `APPROVED WITH DRIFT NOTES` verdict and current validated history whose effective result is satisfied, when the completion predicate runs, then the gate is satisfied and the as-built code stamp is written.
+- Given a current effective `PLAN_GAP` result with current delivery evidence and no required-history fault, when the completion predicate runs, then the gate is satisfied.
+- Given a current effective `BLOCKED` result whose unresolved findings are all `REMEDIABLE` and no `manual_test` FAIL in the same validation round, when the gate settles, then `planRemediation` receives each finding with its typed governing reference, admits it under gate key `architecture_review_as_built`, and navigates back to BUILD within the gate's remediation lap cap.
+- Given a current effective `BLOCKED` result with an unresolved `REMEDIABLE` finding whose remedy the planner dispositions as `existing-task`, when the kickback runs, then the bound task ids are re-staged to pending and no plan-growth allowance is charged.
+- Given a validation round with a current effective `BLOCKED` remediable as-built result and a `manual_test` FAIL, when the join settles, then the as-built findings ride the single consolidated work order and the as-built-only route does not run.
+- Given a current effective clean result with valid required history in a non-auto run, when the step completes, then no review-required marker is written for the as-built step and the step completes as it does today.
 
 #### Negative Paths
-- Given a typed `PLAN_GAP` verdict with `outcomeDelivered` false, when the gate settles, then the loop halts with class `plan-gap` naming the affected outcome.
-- Given a typed `BLOCKED` verdict containing a `DESIGN` finding, when the gate settles, then the loop halts `needs-human` and the halt body lists every finding with its class and governing reference.
-- Given a typed `BLOCKED` remediable verdict on a feature that has already used its as-built remediation lap, when the gate settles, then the repair is appended as pending and the loop halts with class `kickback-cap` at the build transition listing every finding.
-- Given the as-built remediation kill switch is disabled in config, when a typed `BLOCKED` remediable verdict settles, then the loop halts `needs-human` exactly as it does today with the switch off.
+- Given a current effective `PLAN_GAP` result whose affected outcome remains undelivered, when the gate settles, then the loop halts with class `plan-gap` naming the affected outcome.
+- Given a current effective `BLOCKED` result containing an unresolved `DESIGN` finding, when the gate settles, then the loop halts `needs-human` and the halt body lists every finding with its class and governing reference.
+- Given a current effective `BLOCKED` remediable result on a feature that has already used its as-built remediation lap, when the gate settles, then the repair is appended as pending and the loop halts with class `kickback-cap` at the build transition listing every finding.
+- Given the as-built remediation kill switch is disabled in config, when a current effective `BLOCKED` remediable result settles, then the loop halts `needs-human` exactly as it does today with the switch off.
 - Given a validation round in which the as-built branch ends in a mechanical fault, when the join settles, then the group treats it as a no-verdict branch, no synthetic remediation gap is created for it, and the existing step-failure handling applies.
-- Given the planner returns remediation findings that do not match the typed `REMEDIABLE` findings exactly, when admission runs, then the loop halts `needs-human` naming the mismatch, as it does today.
+- Given the planner returns remediation findings that do not match the effective unresolved typed `REMEDIABLE` findings exactly, when admission runs, then the loop halts `needs-human` naming the mismatch, as it does today.
 
 ### Done When
-- [ ] Tests through the production serial path and the production validation-group path with fake providers assert each happy and negative outcome above from a typed verdict fixture.
+- [ ] Tests through the production serial path and the production validation-group path with fake providers assert each happy and negative outcome above from raw typed verdict and current history fixtures; missing, corrupt, stale, or uncertain required history prevents satisfaction even with a raw clean verdict.
 - [ ] The existing as-built remediation acceptance tests pass in their asserted outcomes, re-pointed from Markdown fixtures to typed verdict fixtures, with the lap-cap halt asserted at the build transition after the repair is appended.
 - [ ] A test asserts no review-required marker is written for the as-built step on a non-clean verdict in non-auto mode.
 
 ## Story 7: Durable and replay consumers read the typed verdict
 
 As an operator, I want the shipped record, the recorded-findings projection, rebase
-preservation, restart, rewind, and the pre-finish fence to all read the same typed verdict, so
+preservation, restart, rewind, and the pre-finish fence to all use the same raw typed verdict and current validated history through the effective reader, so
 that the record of what shipped and why is identical wherever it is read.
 
 ### Acceptance Criteria
 
 #### Happy Path
 - Given a typed `PLAN_GAP` verdict with `outcomeDelivered` true, when the shipped record is assembled at finish, then the record includes the delivered plan-gap finding.
-- Given a typed verdict with pending remediation findings that the rebuilt gate has now passed, when the recorded-findings projection runs, then the findings with their remediation outcomes are written into the typed verdict, the report is re-rendered showing them, and the kickback ledger's pending entries are cleared in the same step.
+- Given a typed verdict with pending remediation findings that the rebuilt gate has now passed and whose attributable finding/attempt/outcome facts have been durably retained, when the recorded-findings projection runs, then the typed verdict and rendered report retain their existing projection and the pending entries are cleared; if required retention fails, the entries remain and the transition stops with the persistence fault.
 - Given the recorded findings in the typed verdict, when the shipped record is assembled, then each finding appears with its class, governing reference, and outcome.
-- Given an approved typed verdict whose code stamp remains reachable after a rebase that did not touch the gate's surface, when the SHIP tail resumes, then the verdict is preserved and the as-built step is not re-dispatched.
-- Given a daemon restart after an approved typed verdict was persisted in the current run, when the feature resumes, then the as-built gate is satisfied from the typed verdict without re-dispatch.
-- Given a finish attempt, when the pre-finish fence recomputes the as-built gate at current HEAD, then it reads the typed verdict through the same reader as the completion predicate.
+- Given an approved typed verdict whose code stamp remains reachable after a rebase that did not touch the gate's surface and whose current history receipt remains eligible under the same effective reader, when the SHIP tail resumes, then the verdict is preserved and the as-built step is not re-dispatched.
+- Given a daemon restart after an approved typed verdict and matching complete history receipt/checkpoint were persisted in the current run, when the feature resumes, then the as-built gate is satisfied from the current effective result without re-dispatch.
+- Given a finish attempt, when the pre-finish fence recomputes the as-built gate at current HEAD, then it reads raw typed verdict and required history through the same effective reader as the completion predicate.
 
 #### Negative Paths
-- Given an operator rewind that demotes the as-built step, when the rewind completes, then both the typed verdict and the rendered report are removed and the next dispatch starts without a prior verdict.
+- Given an operator rewind that demotes the as-built step, when the rewind completes, then both the typed verdict and the rendered report are removed and the next dispatch starts without an eligible prior verdict while retaining durable case history.
 - Given an operator rewind that demotes the as-built step and fails after removing the typed verdict, when the rewind rolls back, then the typed verdict and the rendered report are restored with their original contents.
 - Given a rebase that changes a file in the as-built gate's surface, when the SHIP tail resumes, then the typed verdict is invalidated and the step re-dispatches.
 - Given a stale-artifact sweep for the as-built step, when the sweep removes the verdict, then it removes the typed verdict and the rendered report together and never leaves one without the other.
 - Given a typed verdict whose code stamp has been orphaned by an amend or reset, when the SHIP tail resumes, then the verdict is scored `absent` and the step re-dispatches.
-- Given a finish run in which no typed as-built verdict is present, when the shipped record is assembled, then the record carries no as-built findings and publication proceeds exactly as it does today when the as-built report is absent.
+- Given a finish run in which no typed as-built verdict is present, when the shipped record is assembled, then the record carries no as-built findings and this renderer grants no publication authority; the finish fence blocks publication if an applicable gate or its required history is unsatisfied.
 - Given a typed verdict that records both remediated findings and a delivered plan gap from the same lap, when the shipped record is assembled, then the record carries both kinds and neither displaces the other.
 
 ### Done When
 - [ ] Tests assert the shipped record carries a delivered plan-gap finding and recorded remediation findings read from the typed verdict, both together when a lap produced both, and no as-built findings when no typed verdict is present.
-- [ ] A test asserts the recorded-findings projection updates the typed verdict, re-renders the report, and clears the ledger's pending entries in one step.
+- [ ] A test asserts the recorded-findings projection updates the typed verdict, re-renders the report, and clears the ledger's pending entries only after durable retention succeeds, leaving them intact and reporting a persistence fault when retention fails.
 - [ ] Tests assert preservation across a surface-miss rebase, invalidation on a surface hit, and `absent` on an orphaned stamp.
-- [ ] Tests assert rewind and the stale sweep remove both files together, a failed rewind restores both, and that the pre-finish fence and restart read through the single reader.
+- [ ] Tests assert rewind and the stale sweep remove both files together, a failed rewind restores both, and that durable history survives invalidation while the pre-finish fence and restart read through the single effective reader.
 
 ## Story 8: No engine path treats the reviewer's Markdown as authority
 
