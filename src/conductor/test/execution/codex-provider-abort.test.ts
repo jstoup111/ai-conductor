@@ -1,6 +1,6 @@
 // Covers: task:12
 import { describe, expect, it, vi } from 'vitest';
-import type { Options as ExecaOptions, Result as ExecaResult, ResultPromise } from 'execa';
+import { execa, type Options as ExecaOptions, type Result as ExecaResult, type ResultPromise } from 'execa';
 import { CodexProvider, type CodexDoctorRunner } from '../../src/execution/codex-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
@@ -90,6 +90,35 @@ describe('CodexProvider abort handling', () => {
     }).toEqual({
       result: { success: true, output: '{"type":"turn.completed"}', exitCode: 0 },
       hasCancelSignal: false,
+    });
+  });
+
+  it('uses execa default grace termination when a local child ignores SIGTERM', async () => {
+    const controller = new AbortController();
+    let child: ResultPromise | undefined;
+    const subprocessFactory = (_file: string, _args: readonly string[], options: ExecaOptions): ResultPromise => {
+      child = execa(process.execPath, [
+        '-e',
+        "process.on('SIGTERM', () => {}); setInterval(() => process.stdout.write('ready\\n'), 10);",
+      ], {
+        ...options,
+        forceKillAfterDelay: 50,
+      }) as ResultPromise;
+      return child;
+    };
+    const invocation = provider(subprocessFactory).invoke({
+      ...invokeOptions,
+      cwd: process.cwd(),
+      abortSignal: controller.signal,
+    });
+    await vi.waitFor(() => expect(child).toBeDefined());
+    await new Promise<void>((resolve) => child?.stdout?.once('data', () => resolve()));
+    controller.abort();
+
+    await expect(invocation).resolves.toMatchObject({
+      success: false,
+      output: 'Codex invocation aborted.',
+      exitCode: 1,
     });
   });
 });
