@@ -19,9 +19,10 @@ import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskStoryIds } fro
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { makeGitRunner, originDefaultBranch, resolveBase, type GitRunner } from './rebase.js';
 import { readSealedStoryCriteria, splitStoryBlocks } from './story-criteria.js';
+import type { PrdAuditRequirementAssociation } from './prd-audit-contract.js';
 
 /** Incremented only when the engine-rendered PRD-audit input contract changes. */
-export const PRD_AUDIT_PROJECTION_VERSION = 3;
+export const PRD_AUDIT_PROJECTION_VERSION = 4;
 
 const PRD_AUDIT_DIFF_EXCERPT_PER_FILE_BYTES = 256 * 1024;
 const PRD_AUDIT_DIFF_EXCERPT_TOTAL_BYTES = 512 * 1024;
@@ -91,8 +92,8 @@ export interface PrdAuditProjection {
     readonly storyId: string;
     readonly kind: 'happy' | 'negative';
     readonly text: string;
-    /** Requirement ids explicitly mapped by this story, never reviewer prose. */
-    readonly requirementIds: readonly string[];
+    /** Source-qualified requirements explicitly mapped by this story, never reviewer prose. */
+    readonly requirementAssociations: readonly PrdAuditRequirementAssociation[];
   }[];
   readonly tasks: readonly {
     readonly id: string;
@@ -190,27 +191,68 @@ function planIntent(plan: string): string | undefined {
   return section.split('\n').map((line) => line.trim()).find(Boolean);
 }
 
+interface PrdAuditStoryRequirementReference {
+  readonly path?: string;
+  readonly requirementId: string;
+}
+
+type PrdAuditCriterionWithoutRequirements = Omit<PrdAuditProjection['criteria'][number], 'requirementAssociations'>;
+type PrdAuditRequirementSource = { readonly path: string; readonly requirements: readonly { readonly id: string }[] };
+
 function criteriaFromStories(stories: string): {
-  readonly criteria: PrdAuditProjection['criteria'];
+  readonly criteria: readonly PrdAuditCriterionWithoutRequirements[];
+  readonly requirementReferencesByStory: ReadonlyMap<string, readonly PrdAuditStoryRequirementReference[]>;
   readonly malformed: readonly string[];
 } {
   const sealedCriteria = readSealedStoryCriteria(stories);
-  if (!sealedCriteria.ok) return { criteria: [], malformed: sealedCriteria.diagnostics.map((diagnostic) => diagnostic.detail) };
+  if (!sealedCriteria.ok) return { criteria: [], requirementReferencesByStory: new Map(), malformed: sealedCriteria.diagnostics.map((diagnostic) => diagnostic.detail) };
 
-  const requirementIdsByStory = new Map(splitStoryBlocks(stories)
+  const requirementReferencesByStory = new Map(splitStoryBlocks(stories)
     .filter((block): block is typeof block & { readonly id: string } => block.id !== undefined)
     .map((block) => [
       block.id,
       [...block.text.matchAll(/^\s*\*\*Requirements?\s*:\*\*\s*(.+?)\s*$/gim)]
-        .flatMap((match) => [...match[1].matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((id) => id[0].toUpperCase())),
+        .flatMap((match) => [...match[1].matchAll(/(?:(\.?[\w./-]+\.md)\s*:\s*)?\b(FR-\d+[A-Za-z]?)\b/gi)]
+          .map((reference) => ({ path: reference[1], requirementId: reference[2]!.toUpperCase() }))),
     ]));
   return {
-    criteria: sealedCriteria.criteria.map((criterion) => ({
-      ...criterion,
-      requirementIds: requirementIdsByStory.get(criterion.storyId) ?? [],
-    })),
+    criteria: sealedCriteria.criteria,
+    requirementReferencesByStory,
     malformed: [],
   };
+}
+
+function resolveRequirementAssociations(
+  criteria: readonly PrdAuditCriterionWithoutRequirements[],
+  referencesByStory: ReadonlyMap<string, readonly PrdAuditStoryRequirementReference[]>,
+  sources: readonly PrdAuditRequirementSource[],
+): PrdAuditProjection['criteria'] {
+  const requirementsById = new Map<string, PrdAuditRequirementAssociation[]>();
+  const requirementKeys = new Set<string>();
+  for (const source of sources) {
+    for (const requirement of source.requirements) {
+      const association = { path: source.path, requirementId: requirement.id.toUpperCase() };
+      requirementKeys.add(`${association.path}\u0000${association.requirementId}`);
+      const matches = requirementsById.get(association.requirementId) ?? [];
+      matches.push(association);
+      requirementsById.set(association.requirementId, matches);
+    }
+  }
+  return criteria.map((criterion) => {
+    const associations = (referencesByStory.get(criterion.storyId) ?? []).flatMap((reference) => {
+      if (reference.path !== undefined) {
+        const association = { path: reference.path, requirementId: reference.requirementId };
+        return requirementKeys.has(`${association.path}\u0000${association.requirementId}`) ? [association] : [];
+      }
+      const matches = requirementsById.get(reference.requirementId) ?? [];
+      return matches.length === 1 ? matches : [];
+    });
+    return {
+      ...criterion,
+      requirementAssociations: associations.filter((association, index) =>
+        associations.findIndex((candidate) => candidate.path === association.path && candidate.requirementId === association.requirementId) === index),
+    };
+  });
 }
 
 function prdRequirements(prd: string): { readonly id: string; readonly text: string }[] {
@@ -428,7 +470,6 @@ export async function buildPrdAuditProjection(
       fault: { source: storiesRepoPath, dimension: 'malformed-criteria', detail: parsedCriteria.malformed.join('; ') },
     };
   }
-  const criteria = parsedCriteria.criteria;
   const taskBodies = parsePlanTaskBodies(plan);
   const doneWhen = parsePlanTaskDoneWhen(plan);
   const tasks = [...taskBodies].map(([id, body]) => ({ id, storyIds: parsePlanTaskStoryIds(body), doneWhen: doneWhen.get(id) ?? [] }));
@@ -439,7 +480,7 @@ export async function buildPrdAuditProjection(
   if (tasksWithoutDoneWhen.length > 0) {
     return { ok: false, fault: { dimension: 'plan task completion conditions', detail: `tasks missing Done when checks: ${tasksWithoutDoneWhen.join(', ')}` } };
   }
-  if (criteria.length === 0 || tasks.length === 0) return { ok: false, fault: { dimension: 'obligations', detail: 'active stories or plan contain no audit obligations' } };
+  if (parsedCriteria.criteria.length === 0 || tasks.length === 0) return { ok: false, fault: { dimension: 'obligations', detail: 'active stories or plan contain no audit obligations' } };
 
   const coherencePath = join(projectRoot, '.docs', 'coherence', `${basename(planPath, '.md')}.md`);
   let coherence: PrdAuditProjection['coherence'] = { kind: 'absent' };
@@ -473,6 +514,11 @@ export async function buildPrdAuditProjection(
       return { ok: false, fault: { dimension: 'prd', detail: 'active PRD is unreadable' } };
     }
   }
+  const criteria = resolveRequirementAssociations(
+    parsedCriteria.criteria,
+    parsedCriteria.requirementReferencesByStory,
+    'sources' in prd ? prd.sources : [],
+  );
 
   const [changes, history] = await Promise.all([scopedChanges(projectRoot), wideningHistory(projectRoot, basename(planPath, '.md'))]);
   if (!changes) return { ok: false, fault: { dimension: 'changes', detail: 'scoped git changes are unavailable' } };

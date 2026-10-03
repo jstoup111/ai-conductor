@@ -56,7 +56,13 @@ export interface PrdAuditJudgment {
 
 /** The independently resolved, feature-scoped references a reviewer may cite. */
 export interface PrdAuditJudgmentContext {
-  readonly criteria: readonly { readonly id: string; readonly requirementIds?: readonly string[] }[];
+  readonly criteria: readonly {
+    readonly id: string;
+    /** Canonical source-qualified story coverage from the current projection. */
+    readonly requirementAssociations?: readonly PrdAuditRequirementAssociation[];
+    /** Legacy unqualified story coverage, accepted only when a requirement id is unique. */
+    readonly requirementIds?: readonly string[];
+  }[];
   readonly requirements: readonly (
     | { readonly path: string; readonly requirementId: string }
     | { readonly path: string; readonly id: string }
@@ -436,12 +442,18 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
     matchingRequirements.push(requirement);
     requirementsById.set(requirementId.toUpperCase(), matchingRequirements);
   }
-  const storyCoveredRequirements = new Set(context.criteria.flatMap((criterion) =>
+  const sourceQualifiedStoryCoverage = new Set(context.criteria.flatMap((criterion) =>
+    (criterion.requirementAssociations ?? []).map((association) => `${association.path}\u0000${association.requirementId}`)
+      .filter((association) => requirements.has(association))));
+  const hasSourceQualifiedCoverage = context.criteria.some((criterion) => criterion.requirementAssociations !== undefined);
+  const legacyStoryCoverage = new Set(context.criteria.flatMap((criterion) =>
     (criterion.requirementIds ?? []).flatMap((requirementId) => {
       const matchingRequirements = requirementsById.get(requirementId.toUpperCase()) ?? [];
       return matchingRequirements.length === 1 ? matchingRequirements : [];
     })));
-  const hasProjectedCoverage = context.criteria.some((criterion) => criterion.requirementIds !== undefined);
+  const storyCoveredRequirements = hasSourceQualifiedCoverage ? sourceQualifiedStoryCoverage : legacyStoryCoverage;
+  const hasProjectedCoverage = context.criteria.some((criterion) =>
+    criterion.requirementAssociations !== undefined || criterion.requirementIds !== undefined);
   const associatedRequirements = new Set(judgment.criterionJudgments.flatMap((entry) =>
     entry.requirementAssociations.map((association) => `${association.path}\u0000${association.requirementId}`),
   ));

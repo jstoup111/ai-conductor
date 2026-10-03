@@ -205,6 +205,40 @@ describe('PRD-audit feature projection', () => {
     });
   });
 
+  it('projects an exact story requirement association when applicable PRD sources share its id', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'stories', 'audit-fixture.md'), `# Stories
+
+## Story alpha.1: Preserve obligations
+
+**Requirements:** .docs/specs/audit-fixture.md:FR-1
+
+### Happy Path
+- Given the feature is audited, when its source meets the documented behavior, then the audit can pass.
+
+### Negative Paths
+- Given the feature omits the documented behavior, when its source is audited, then the audit reports the gap.
+
+## Story beta.2: Preserve negative obligations
+
+### Happy Path
+- Given the audit receives documented evidence, when the negative obligation is satisfied, then the audit retains its attribution.
+
+### Negative Paths
+- Given the negative obligation is omitted, when the audit evaluates the feature, then the audit reports the attributable gap.
+`);
+    await writeFile(join(root, '.docs', 'specs', 'audit-fixture.md'), '# PRD\n\n## Functional Requirements\n- FR-1: The primary source obligation.\n');
+    await writeFile(join(root, '.docs', 'specs', '2026-09-30-audit-fixture.md'), '# Supplemental PRD\n\n## Functional Requirements\n- FR-1: The supplemental source obligation.\n');
+
+    const result = await buildPrdAuditProjection(root);
+
+    if (!result.ok) throw new Error(`projection failed: ${result.fault.dimension}`);
+    expect(result.projection.criteria).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'Salpha.1.1', requirementAssociations: [{ path: '.docs/specs/audit-fixture.md', requirementId: 'FR-1' }] }),
+      expect.objectContaining({ id: 'Salpha.1.2', requirementAssociations: [{ path: '.docs/specs/audit-fixture.md', requirementId: 'FR-1' }] }),
+    ]));
+  });
+
   it('independently resolves populated feature obligations, scoped changes, and attributable history', async () => {
     const result = await buildPrdAuditProjection(await fixture());
 
@@ -215,28 +249,28 @@ describe('PRD-audit feature projection', () => {
         storyId: 'alpha.1',
         kind: 'happy',
         text: 'Given the feature is audited, when its source meets the documented behavior, then the audit can pass.',
-        requirementIds: [],
+        requirementAssociations: [],
       },
       {
         id: 'Salpha.1.2',
         storyId: 'alpha.1',
         kind: 'negative',
         text: 'Given the feature omits the documented behavior, when its source is audited, then the audit reports the gap.',
-        requirementIds: [],
+        requirementAssociations: [],
       },
       {
         id: 'Sbeta.2.1',
         storyId: 'beta.2',
         kind: 'happy',
         text: 'Given the audit receives documented evidence, when the negative obligation is satisfied, then the audit retains its attribution.',
-        requirementIds: [],
+        requirementAssociations: [],
       },
       {
         id: 'Sbeta.2.2',
         storyId: 'beta.2',
         kind: 'negative',
         text: 'Given the negative obligation is omitted, when the audit evaluates the feature, then the audit reports the attributable gap.',
-        requirementIds: [],
+        requirementAssociations: [],
       },
     ]);
     expect(result.projection.tasks).toEqual([

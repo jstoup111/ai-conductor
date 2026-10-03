@@ -377,7 +377,7 @@ describe('PRD audit judgment contract', () => {
     });
   });
 
-  it('keeps duplicate requirement ids distinct by source while preserving a source-specific PLAN_GAP', () => {
+  it('keeps exact source mappings distinct while requiring a source-specific PLAN_GAP for the other duplicate', () => {
     const alphaPass = {
       criterion: { storyId: 'alpha', ordinal: 1 },
       grade: 'PASS',
@@ -395,18 +395,28 @@ describe('PRD audit judgment contract', () => {
       requirementAssociations: [{ path: '.docs/specs/b.md', requirementId: 'FR-1' }],
     };
 
-    expect(validatePrdAuditJudgment({
-      version: 'v1', criterionJudgments: [alphaPass, betaPlanGap], noOwnerObservations: [],
-    }, {
-      criteria: [{ id: 'Salpha.1', requirementIds: ['FR-1'] }, { id: 'Sbeta.1', requirementIds: [] }],
+    const context = {
+      criteria: [{ id: 'Salpha.1', requirementAssociations: [{ path: '.docs/specs/a.md', requirementId: 'FR-1' }] }, { id: 'Sbeta.1', requirementAssociations: [] }],
       taskIds: new Set<string>(),
       requirements: [
         { path: '.docs/specs/a.md', id: 'FR-1' },
         { path: '.docs/specs/b.md', id: 'FR-1' },
       ],
-    })).toMatchObject({
-      ok: false,
-      diagnostics: ['requirement .docs/specs/a.md:FR-1 lacks a criterion association or valid PLAN_GAP evidence'],
+    };
+
+    expect({
+      uncovered: validatePrdAuditJudgment({
+        version: 'v1', criterionJudgments: [alphaPass, { ...betaPlanGap, grade: 'PASS', requirementAssociations: [] }], noOwnerObservations: [],
+      }, context),
+      accounted: validatePrdAuditJudgment({
+        version: 'v1', criterionJudgments: [alphaPass, betaPlanGap], noOwnerObservations: [],
+      }, context),
+    }).toMatchObject({
+      uncovered: {
+        ok: false,
+        diagnostics: ['requirement .docs/specs/b.md:FR-1 lacks a criterion association or valid PLAN_GAP evidence'],
+      },
+      accounted: { ok: true },
     });
   });
 

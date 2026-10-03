@@ -114,7 +114,7 @@ function dispatchedProjection(invoke: ReturnType<typeof vi.fn>) {
   return JSON.parse(prompt.slice(start + prefix.length, end)) as {
     version: number;
     plan: { intent: string };
-    criteria: { id: string; kind: string; requirementIds: string[] }[];
+    criteria: { id: string; kind: string; requirementAssociations: { path: string; requirementId: string }[] }[];
     tasks: { id: string; storyIds: string[]; doneWhen: string[] }[];
     prd: { sources: Array<{ path: string; requirements: unknown; intent: unknown }> };
     coherence: unknown;
@@ -141,11 +141,11 @@ describe('PRD audit typed provider dispatch', () => {
     expect(invoke.mock.calls[0]![0].interactive).toBe(false);
     expect(invoke.mock.calls[0]![0].nativeSchema).toBe(PRD_AUDIT_JUDGMENT_SCHEMA);
     expect(dispatchedProjection(invoke)).toMatchObject({
-      version: 3,
+      version: 4,
       plan: { intent: 'Bound the PRD audit.' },
       criteria: [
-        { id: 'S1.1', kind: 'happy', requirementIds: ['FR-1'] },
-        { id: 'S1.2', kind: 'negative', requirementIds: ['FR-1'] },
+        { id: 'S1.1', kind: 'happy', requirementAssociations: [{ path: '.docs/specs/feature.md', requirementId: 'FR-1' }] },
+        { id: 'S1.2', kind: 'negative', requirementAssociations: [{ path: '.docs/specs/feature.md', requirementId: 'FR-1' }] },
       ],
       tasks: [
         { id: '1', storyIds: ['1'], doneWhen: ['the audit dispatches typed evidence'] },
