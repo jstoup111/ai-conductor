@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:3
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -137,6 +137,33 @@ describe('remediation case artifact', () => {
     const result = await read(CASE_V2);
 
     expect(result).toEqual({ ok: true, judgement: CASE_V2 });
+  });
+
+  it('returns a case-v2 unbound distinctFrom declaration', async () => {
+    const judgement = {
+      ...CASE_V2,
+      cases: [(({
+        existingCaseId: _existingCaseId,
+        ...row
+      }) => ({ ...row, distinctFrom: ['remcase-resolved-a'] }))(CASE_V2.cases[0])],
+    };
+
+    await expect(read(judgement)).resolves.toEqual({ ok: true, judgement });
+  });
+
+  it.each([
+    ['both existingCaseId and distinctFrom', { ...CASE_V2.cases[0], distinctFrom: ['remcase-resolved-a'] }],
+    ['an empty distinctFrom list', (({ existingCaseId: _existingCaseId, ...row }) => ({ ...row, distinctFrom: [] }))(CASE_V2.cases[0])],
+    ['duplicate ids in distinctFrom', (({ existingCaseId: _existingCaseId, ...row }) => ({ ...row, distinctFrom: ['remcase-resolved-a', 'remcase-resolved-a'] }))(CASE_V2.cases[0])],
+  ])('rejects a case-v2 row carrying %s', async (_description, row) => {
+    await expect(read({ ...CASE_V2, cases: [row] })).resolves.toEqual({ ok: false, reason: 'invalid-case-keys' });
+  });
+
+  it('rejects a case-v1 row carrying distinctFrom', async () => {
+    await expect(read({
+      ...CASE_V1,
+      cases: [{ ...CASE_V1.cases[0], distinctFrom: ['remcase-resolved-a'] }],
+    })).resolves.toEqual({ ok: false, reason: 'invalid-case-keys' });
   });
 
   it('refuses a case-v2 action that omits the admitted-plan-task provenance', async () => {

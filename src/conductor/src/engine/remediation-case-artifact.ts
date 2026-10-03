@@ -82,6 +82,8 @@ export interface RemediationCaseRefutation {
 export interface RemediationCaseRow {
   readonly caseRef: string;
   readonly existingCaseId?: string;
+  /** A case-v2 unbound row may declare the resolved cases it is distinct from. */
+  readonly distinctFrom?: readonly string[];
   readonly disposition: RemediationCaseDisposition;
   readonly priority: RemediationCasePriority;
   readonly rationale: string;
@@ -151,6 +153,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(value).length === keys.length && Object.keys(value).every((key) => keys.includes(key));
+}
+
+function hasRequiredAndOptionalKeys(
+  value: Record<string, unknown>,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[],
+): boolean {
+  return requiredKeys.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every((key) => requiredKeys.includes(key) || optionalKeys.includes(key));
 }
 
 function isBoundedString(value: unknown, maxLength = MAX_TEXT_LENGTH): value is string {
@@ -269,18 +280,20 @@ function parseCaseRow(value: unknown, mode: RemediationCaseJudgement['mode']): P
   if (value.disposition === 'refute' && value.refutation === undefined) {
     return { ok: false, reason: 'invalid-refutation' };
   }
-  const baseKeys = value.disposition === 'refute'
-    ? value.existingCaseId === undefined
-      ? ['caseRef', 'disposition', 'priority', 'rationale', 'confidence', 'effect', 'refutation']
-      : ['caseRef', 'existingCaseId', 'disposition', 'priority', 'rationale', 'confidence', 'effect', 'refutation']
+  const requiredKeys = value.disposition === 'refute'
+    ? ['caseRef', 'disposition', 'priority', 'rationale', 'confidence', 'effect', 'refutation']
     : value.disposition === 'escalate'
-    ? value.existingCaseId === undefined
       ? ['caseRef', 'disposition', 'priority', 'rationale', 'confidence', 'effect', 'escalation']
-      : ['caseRef', 'existingCaseId', 'disposition', 'priority', 'rationale', 'confidence', 'effect', 'escalation']
-    : value.existingCaseId === undefined
-    ? ['caseRef', 'disposition', 'priority', 'rationale', 'confidence', 'effect']
-    : ['caseRef', 'existingCaseId', 'disposition', 'priority', 'rationale', 'confidence', 'effect'];
-  if (!hasExactKeys(value, baseKeys) || !isBoundedString(value.caseRef, MAX_REFERENCE_LENGTH) || (value.existingCaseId !== undefined && !isBoundedString(value.existingCaseId, MAX_REFERENCE_LENGTH)) || !isBoundedString(value.rationale)) {
+      : ['caseRef', 'disposition', 'priority', 'rationale', 'confidence', 'effect'];
+  const optionalKeys = mode === 'case-v2' ? ['existingCaseId', 'distinctFrom'] : ['existingCaseId'];
+  if (!hasRequiredAndOptionalKeys(value, requiredKeys, optionalKeys) ||
+    !isBoundedString(value.caseRef, MAX_REFERENCE_LENGTH) ||
+    (value.existingCaseId !== undefined && !isBoundedString(value.existingCaseId, MAX_REFERENCE_LENGTH)) ||
+    (value.distinctFrom !== undefined && (!Array.isArray(value.distinctFrom) || value.distinctFrom.length === 0 ||
+      value.distinctFrom.length > MAX_CASE_ROWS || !value.distinctFrom.every((id) => isBoundedString(id, MAX_REFERENCE_LENGTH)) ||
+      new Set(value.distinctFrom).size !== value.distinctFrom.length)) ||
+    value.existingCaseId !== undefined && value.distinctFrom !== undefined ||
+    !isBoundedString(value.rationale)) {
     return { ok: false, reason: 'invalid-case-keys' };
   }
   if (!oneOf(value.priority, ['critical', 'high', 'medium', 'low'] as const)) {
@@ -304,6 +317,7 @@ function parseCaseRow(value: unknown, mode: RemediationCaseJudgement['mode']): P
     value: {
       caseRef: value.caseRef,
       ...(value.existingCaseId === undefined ? {} : { existingCaseId: value.existingCaseId }),
+      ...(value.distinctFrom === undefined ? {} : { distinctFrom: value.distinctFrom }),
       disposition: value.disposition,
       priority: value.priority,
       rationale: value.rationale,
