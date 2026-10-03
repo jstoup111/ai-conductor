@@ -113,6 +113,7 @@ const eventSequences: Partial<Record<ConductorEvent['type'], ConductorEvent[]>> 
   rebase_mergeable_skip: [{ type: 'rebase_mergeable_skip', baseSha: 'base-sha' }],
   build_progress: [{ type: 'build_progress', step: 'build', resolved: 1, total: 2 }],
   build_no_progress: [{ type: 'build_no_progress', step: 'build', quietMinutes: 1, resolved: 1, total: 2 }],
+  build_active_stall: [{ type: 'build_active_stall', step: 'build', minutes: 45, resolved: 1, total: 2, action: 'warn' }],
   build_stall: [{ type: 'build_stall', step: 'build', reason: 'no_task_progress', resolvedBefore: 1, resolvedAfter: 1 }],
   pipeline_closeout: [{ type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 1, endedAt: 2, ts: 2 }],
 };
