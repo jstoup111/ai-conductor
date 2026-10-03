@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   auditSessionCommandSource,
+  auditManagedSessionInstructionSource,
   discoverSessionCommandSources,
   discoverShippedSessionCommandSources,
 } from '../../src/engine/session-command-audit.js';
@@ -22,11 +23,15 @@ async function fixtureRoot(): Promise<string> {
 describe('session command instruction discovery', () => {
   it('finds a newly introduced production prompt source without registering it and excludes CLI usage text', async () => {
     const root = await fixtureRoot();
-    await writeFile(join(root, 'src', 'engine', 'conductor.ts'), "export const prompt = 'Run ai-conductor scoped-run test/example.test.ts';\n");
+    await writeFile(join(root, 'src', 'engine', 'conductor.ts'), [
+      '// ai-conductor:session-command-context=managed',
+      "export const instruction = 'Run ai-conductor daemon status';",
+      '// /ai-conductor:session-command-context',
+    ].join('\n'));
     await writeFile(join(root, 'src', 'engine', 'config.ts'), "export const cliUsage = 'ai-conductor config init';\n");
 
-    expect(discoverShippedSessionCommandSources(root).flatMap(auditSessionCommandSource)).toEqual([
-      expect.objectContaining({ file: 'engine/conductor.ts', subcommand: 'scoped-run', context: 'managed' }),
+    expect(discoverShippedSessionCommandSources(root).flatMap(auditManagedSessionInstructionSource)).toEqual([
+      expect.objectContaining({ file: 'engine/conductor.ts', subcommand: 'daemon', context: 'managed' }),
     ]);
   });
 

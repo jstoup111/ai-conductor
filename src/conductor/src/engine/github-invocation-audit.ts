@@ -24,11 +24,11 @@
  *   test commands, or openers whose program is an opaque parameter stay clean.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import ts from 'typescript';
 import { GITHUB_OPERATION_REGISTRY, type GithubOperationName } from './github-operations.js';
 import {
-  auditManagedSessionInstructionSource,
+  auditShippedManagedSessionInstructionSource,
   discoverShippedSessionCommandSources,
 } from './session-command-audit.js';
 
@@ -854,12 +854,9 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
   // boundary even though they are prose rather than a child-process call.
   // Runtime code lives under src/conductor, but shipped skills live at the
   // repository root. Prefer that root whenever it is present.
-  const repositoryCandidate = join(conductorRoot, '..', '..');
-  const sessionRepositoryRoot = existsSync(join(repositoryCandidate, 'skills'))
-    ? repositoryCandidate
-    : conductorRoot;
+  const sessionRepositoryRoot = repositoryRootForSessionInstructionAudit(conductorRoot);
   const sessionSources = discoverShippedSessionCommandSources(sessionRepositoryRoot);
-  for (const instruction of sessionSources.flatMap(auditManagedSessionInstructionSource)) {
+  for (const instruction of sessionSources.flatMap(auditShippedManagedSessionInstructionSource)) {
     if (!instruction.reason) continue;
     findings.push({
       file: instruction.file,
@@ -901,6 +898,20 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
     }
   }
   return findings;
+}
+
+/** Find the repository-owned skills without assuming a fixed package depth. */
+function repositoryRootForSessionInstructionAudit(conductorRoot: string): string {
+  let candidate = resolve(conductorRoot);
+  // A supplied fixture/runtime root without a package boundary is self-contained.
+  // Do not walk out through the test temp directory into this checkout's skills.
+  if (!existsSync(join(candidate, 'package.json'))) return candidate;
+  for (;;) {
+    if (existsSync(join(candidate, 'skills'))) return candidate;
+    const parent = dirname(candidate);
+    if (parent === candidate) return conductorRoot;
+    candidate = parent;
+  }
 }
 
 /** Boundary-site inventory for diagnostics and fixture assertions. */

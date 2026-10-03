@@ -36,12 +36,32 @@ export function auditManagedSessionInstructionSource(input: SessionCommandSource
       range.startLine <= instruction.line && instruction.line <= range.endLine
       && !(range.context === 'managed' && range.startLine === 1),
     );
-    if (!declared) return [];
+    // Engine files contain both provider prose and ordinary CLI/help/recovery
+    // strings.  Only an explicit region declaration makes an engine string a
+    // managed-session instruction.  Shipped skills, by contrast, are rendered
+    // into their managed invocation by default unless a bounded region says
+    // otherwise.  A malformed endpoint is still a candidate: silently
+    // dropping it would turn a broken declaration into an interactive escape.
+    const malformed = contexts.problems.some((problem) => problem.line <= instruction.line);
+    if (input.family === 'engine' && !declared && !malformed) return [];
     if (instruction.context !== 'managed') {
       return [{ ...instruction, reason: 'managed dispatch cannot execute an operator-only instruction' }];
     }
     return instruction.reason ? [instruction] : [];
   });
+}
+
+/**
+ * The repository gate audits instructions that can actually reach a marked
+ * provider dispatch.  Operator-only and prohibition regions are declarations
+ * about excluded prose, not failures merely because they coexist in a source
+ * file with a managed producer.  Keep malformed/missing declarations visible
+ * so the gate remains fail-closed.
+ */
+export function auditShippedManagedSessionInstructionSource(input: SessionCommandSource): SessionCommandInstruction[] {
+  return auditManagedSessionInstructionSource(input).filter((instruction) =>
+    instruction.context === 'managed' || /session-command context/i.test(instruction.reason ?? ''),
+  );
 }
 
 const COMMAND = /\b(?:ai-conductor|conduct-ts)\s+([a-z][a-z0-9-]*)\b/g;
