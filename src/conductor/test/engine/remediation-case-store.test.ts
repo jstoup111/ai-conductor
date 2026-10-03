@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:4
+// Covers: task:1, task:2, task:3, task:4
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -179,6 +179,33 @@ describe('remediation case store', () => {
       ok: true,
       state: CASE_STATE,
     });
+  });
+
+  it('round-trips an optional distinctFrom declaration only when persisted on a build-review case', async () => {
+    const projectRoot = await createProjectRoot();
+    const writer = new RemediationCaseStore(projectRoot, FEATURE);
+    const declaredState: RemediationCaseStoreState = {
+      ...CASE_STATE,
+      cases: [{ ...CASE_STATE.cases[0], distinctFrom: ['case-resolved'] }],
+    };
+
+    await expect(writer.mutate(async () => ({ value: 'seeded' as const, nextState: declaredState })))
+      .resolves.toEqual({ ok: true, value: 'seeded' });
+    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
+      ok: true,
+      state: declaredState,
+    });
+    const undeclared = await new RemediationCaseStore(projectRoot, FEATURE).read();
+    if (!undeclared.ok) throw new Error('the declared store must remain readable');
+    expect(Object.hasOwn(undeclared.state.cases[0]!, 'distinctFrom')).toBe(true);
+
+    const undeclaredRoot = await createProjectRoot();
+    const undeclaredStore = new RemediationCaseStore(undeclaredRoot, FEATURE);
+    await expect(undeclaredStore.mutate(async () => ({ value: 'seeded' as const, nextState: CASE_STATE })))
+      .resolves.toEqual({ ok: true, value: 'seeded' });
+    const undeclaredRead = await undeclaredStore.read();
+    if (!undeclaredRead.ok) throw new Error('the undeclared store must remain readable');
+    expect(Object.hasOwn(undeclaredRead.state.cases[0]!, 'distinctFrom')).toBe(false);
   });
 
   it('reads a resolved and an open build-review case at one source without altering either case', async () => {

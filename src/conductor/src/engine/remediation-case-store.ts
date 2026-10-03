@@ -59,6 +59,8 @@ export interface RemediationCaseRecord {
   readonly resolution: 'open' | 'resolved';
   readonly sources: readonly RemediationCaseSourceLink[];
   readonly effect: RemediationCaseEffect;
+  /** Resolved build-review cases this case was explicitly declared distinct from. */
+  readonly distinctFrom?: readonly string[];
   /** Present only for a persisted `refute` disposition; parseState enforces the pairing. */
   readonly refutation?: RemediationCaseRefutation;
   /** Present only for a persisted decision-owner stop; it carries no external effect. */
@@ -293,17 +295,25 @@ function parseRefutation(value: unknown): RemediationCaseRefutation | undefined 
     : { claim: value.claim, assertions: assertions as RemediationCaseRefutation['assertions'] };
 }
 
+function parseDistinctFrom(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_CASES ||
+    !value.every((id) => boundedString(id, MAX_REFERENCE_LENGTH)) || new Set(value).size !== value.length) return undefined;
+  return value;
+}
+
 function parseCase(value: unknown):
   | { readonly ok: true; readonly record: RemediationCaseRecord }
   | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state' } {
   if (!isRecord(value)) return { ok: false, reason: 'malformed-state' };
+  const optionalDistinctFrom = Object.hasOwn(value, 'distinctFrom') ? ['distinctFrom'] : [];
   const expectedKeys = value.disposition === 'refute'
-    ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'refutation']
+    ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'refutation', ...optionalDistinctFrom]
     : value.disposition === 'escalate'
       ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect',
         ...(Object.hasOwn(value, 'escalation') ? ['escalation'] : []),
-        ...(Object.hasOwn(value, 'consistencyStop') ? ['consistencyStop'] : [])]
-    : ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect'];
+        ...(Object.hasOwn(value, 'consistencyStop') ? ['consistencyStop'] : []),
+        ...optionalDistinctFrom]
+    : ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', ...optionalDistinctFrom];
   if (!exactKeys(value, expectedKeys)) return { ok: false, reason: 'malformed-state' };
   if (value.domain !== 'build_review') return { ok: false, reason: 'foreign-domain' };
   if (!boundedString(value.id, MAX_REFERENCE_LENGTH) ||
@@ -314,6 +324,7 @@ function parseCase(value: unknown):
     value.sources.length === 0 || value.sources.length > MAX_SOURCES_PER_CASE) return { ok: false, reason: 'malformed-state' };
   const sources = value.sources.map(parseSourceLink);
   const effect = parseEffect(value.effect, value.disposition);
+  const distinctFrom = Object.hasOwn(value, 'distinctFrom') ? parseDistinctFrom(value.distinctFrom) : undefined;
   const refutation = value.disposition === 'refute' ? parseRefutation(value.refutation) : undefined;
   const escalation = value.disposition === 'escalate' && isRecord(value.escalation) &&
     exactKeys(value.escalation, ['owner']) && oneOf(value.escalation.owner, ['product', 'plan', 'architecture'] as const)
@@ -327,6 +338,7 @@ function parseCase(value: unknown):
     ? { sourceIds: value.consistencyStop.sourceIds, rationale: value.consistencyStop.rationale }
     : undefined;
   if (sources.some((source) => source === undefined) || effect === undefined ||
+    Object.hasOwn(value, 'distinctFrom') && distinctFrom === undefined ||
     value.disposition === 'refute' && refutation === undefined ||
     value.disposition === 'escalate' && escalation === undefined && consistencyStop === undefined) return { ok: false, reason: 'malformed-state' };
   return { ok: true, record: {
@@ -339,6 +351,7 @@ function parseCase(value: unknown):
     resolution: value.resolution,
     sources: sources as RemediationCaseSourceLink[],
     effect,
+    ...(distinctFrom === undefined ? {} : { distinctFrom }),
     ...(refutation === undefined ? {} : { refutation }),
     ...(escalation === undefined ? {} : { escalation }),
     ...(consistencyStop === undefined ? {} : { consistencyStop }),
