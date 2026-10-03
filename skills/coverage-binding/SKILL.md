@@ -26,6 +26,18 @@ check.
 Every other outcome in the criterion, including absence and no-op outcomes, still needs a check
 that requires it.
 
+A check asserts every outcome its required observable state entails. A check that pins an exact
+final state asserts the absence of any other change to that state: "the inbox listing equals the
+seeded listing minus the claimed file" asserts "no other inbox file is renamed", and "`ledger.json`
+is byte-identical before and after" asserts "no entry's status, attempts, or timestamps change".
+Judge entailment from the supplied text alone; do not assume implementation behavior.
+
+Judge only the supplied criterion's own clauses. Never require an outcome the criterion does not
+state, and never require a check to restate a criterion word whose observable outcome the check
+already pins. Before returning `does-not-assert`, name in `missingAssertion` the exact criterion
+clause no cited check requires, quoted from the criterion; if you cannot quote one, the verdict is
+`asserts`.
+
 ## Amendment claims
 
 An amendment claim supplies a DECIDE artifact path, its `> **Amended …**` block, and every plan
