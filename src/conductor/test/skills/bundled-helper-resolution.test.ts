@@ -1,21 +1,20 @@
 // Covers: task:1
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
+import { externalFixturePrefix } from '../tmpdir-leak-guard.js';
 
 const sourceHelper = resolve(process.cwd(), '../../skills/intake/scripts/intake-file');
 const temporaryRoots: string[] = [];
 const systemPath = '/usr/bin:/bin';
-const externalTmpdir = process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR ?? tmpdir();
 
 function controlledPath(stubDirectory: string): string {
   return `${stubDirectory}:${systemPath}`;
 }
 
 async function fixture(): Promise<{ root: string; helper: string; capture: string; makeCaller(name: string): Promise<string> }> {
-  const root = await mkdtemp(join(externalTmpdir, 'bundled-intake-helper-'));
+  const root = await mkdtemp(externalFixturePrefix('bundled-intake-helper'));
   temporaryRoots.push(root);
   const harness = join(root, 'harness');
   const helper = join(harness, 'skills', 'intake', 'scripts', 'intake-file');

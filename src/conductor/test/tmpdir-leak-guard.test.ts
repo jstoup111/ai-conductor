@@ -35,6 +35,8 @@ import {
   IGNORED_TMPDIR_PREFIXES,
   RUN_TMP_ROOT_PREFIX,
   vitestOwnTmpdirEntries,
+  externalFixturePrefix,
+  runIdFromRunRoot,
   type TmpdirSnapshot,
 } from './tmpdir-leak-guard.js';
 import { VITEST_TMP_BASE_ENV } from '../scripts/vitest-temp.mjs';
@@ -315,6 +317,40 @@ describe('tmpdir-leak-guard: owner marker', () => {
 });
 
 describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
+  it("ignores a concurrent Vitest process's bare-nanoid project tmpDir", () => {
+    const diff = diffTmpdirEntries(snap([]), snap(['kfFnI0ETRGz-YSBaRNMRF']));
+    expect(diff).toEqual({ stray: [], ignored: ['kfFnI0ETRGz-YSBaRNMRF'] });
+  });
+
+  it('attributes external fixtures by run id: own are strays, a concurrent run\'s are ignored', () => {
+    const diff = diffTmpdirEntries(
+      snap([]),
+      snap(['acx-mine12-intake-overlap-AbCdEf', 'acx-other9-intake-overlap-AbCdEf']),
+      undefined,
+      [],
+      'mine12',
+    );
+    expect(diff).toEqual({
+      stray: ['acx-mine12-intake-overlap-AbCdEf'],
+      ignored: ['acx-other9-intake-overlap-AbCdEf'],
+    });
+  });
+
+  it('still fails a prefixed fixture name that is not nanoid-shaped', () => {
+    const diff = diffTmpdirEntries(snap([]), snap(['intake-file-cli-overlap-3lo9XE']));
+    expect(diff.stray).toEqual(['intake-file-cli-overlap-3lo9XE']);
+  });
+
+  it('builds external fixture prefixes in the real tmpdir from the run root id', () => {
+    const env = {
+      AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR: '/real/tmp',
+      [RUN_TMP_ROOT_ENV]: `/pkg/.vitest-tmp/${RUN_TMP_ROOT_PREFIX}Q1w2E3`,
+    };
+    expect(runIdFromRunRoot(env[RUN_TMP_ROOT_ENV])).toBe('Q1w2E3');
+    expect(externalFixturePrefix('tmux', env)).toBe('/real/tmp/acx-Q1w2E3-tmux-');
+    expect(() => externalFixturePrefix('tmux', {})).toThrow(/run-root environment/);
+  });
+
   it('classifies an entry that appeared outside the run root as stray', () => {
     const diff = diffTmpdirEntries(snap(['existing']), snap(['existing', 'governor-test-XyZ']));
 

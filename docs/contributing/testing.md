@@ -341,6 +341,14 @@ kill-switches:
   to its contents or any other entry. Fix the call site; widening `IGNORED_TMPDIR_PREFIXES` is
   only for a genuine false positive from a new concurrent tool.
 
+  The real temporary directory is shared with every concurrent suite on the host (other worktrees,
+  daemon builds), so two shapes are attributed rather than blamed on this run. A bare 21-character
+  nanoid is another Vitest process's project directory — one started without the package scripts'
+  redirect — and is ignored. A fixture that must live in the real temporary directory (outside the
+  run root's `GIT_CEILING_DIRECTORIES`, or a short tmux socket path) takes its `mkdtemp` prefix from
+  `externalFixturePrefix(label)` in `test/tmpdir-leak-guard.ts`: the `acx-<run id>-` name lets each
+  run fail on its own leftovers and ignore another run's in-flight fixtures.
+
 The parked-marker leak guard (#1251) runs last of all, after the tmpdir check, so any more specific
 guard failure still throws first. It resolves the real repository's `.daemon/parked` directory (via
 `git rev-parse --git-common-dir`, so it finds the main checkout's ledger from any worktree), snapshots

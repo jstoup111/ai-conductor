@@ -283,6 +283,48 @@ export function vitestOwnTmpdirEntries(
   });
 }
 
+/**
+ * Vitest's own project temp directory: `join(tmpdir(), nanoid())`, a bare
+ * 21-character nanoid. A Vitest process started without the package scripts'
+ * redirect (for example a bare `node_modules/.bin/vitest run` in another
+ * worktree) allocates it in the REAL tmpdir before any config loads. This run
+ * exempts only its own (`vitestOwnTmpdirEntries`); a concurrent run's is not
+ * this suite's leak, and no test names a fixture this way.
+ */
+export const VITEST_PROJECT_TMPDIR_PATTERN = /^[A-Za-z0-9_-]{21}$/;
+
+/**
+ * Prefix for fixtures that deliberately live in the REAL tmpdir (outside the
+ * run root's GIT_CEILING_DIRECTORIES, or under a short tmux socket path).
+ * The run id that follows lets each run's guard attribute these entries:
+ * its own still-present ones are leaks, another concurrent run's are not.
+ */
+export const EXTERNAL_FIXTURE_PREFIX = 'acx-';
+
+/** The id embedded in external fixture names: the run root's random suffix. */
+export function runIdFromRunRoot(runRoot: string): string {
+  const name = basename(runRoot);
+  return name.startsWith(RUN_TMP_ROOT_PREFIX) ? name.slice(RUN_TMP_ROOT_PREFIX.length) : name;
+}
+
+/**
+ * `mkdtemp` prefix for a fixture that must live in the REAL tmpdir.
+ *
+ * Must be called inside a test worker, where the run root is published in
+ * `AI_CONDUCTOR_TEST_TMP_ROOT`.
+ */
+export function externalFixturePrefix(
+  label: string,
+  env: NodeJS.ProcessEnv = process.env
+): string {
+  const realTmpdir = env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR;
+  const runRoot = env[RUN_TMP_ROOT_ENV];
+  if (!realTmpdir || !runRoot) {
+    throw new Error('externalFixturePrefix requires the vitest run-root environment');
+  }
+  return join(realTmpdir, `${EXTERNAL_FIXTURE_PREFIX}${runIdFromRunRoot(runRoot)}-${label}-`);
+}
+
 /** Snapshot of a directory's top-level entry names at a moment in time. */
 export interface TmpdirSnapshot {
   exists: boolean;
@@ -552,13 +594,17 @@ export async function snapshotTmpdirEntries(dir: string): Promise<TmpdirSnapshot
  * @param before Snapshot taken during global setup
  * @param after Snapshot taken during global teardown
  * @param ignoredPrefixes Prefixes exempt from the leak verdict
+ * @param exemptEntries Exact entries owned by this run (its Vitest project tmpDir)
+ * @param ownRunId This run's id; external fixtures carrying it are leaks, others are a
+ *   concurrent run's and are ignored
  * @returns The stray/ignored classification of newly appeared entries
  */
 export function diffTmpdirEntries(
   before: TmpdirSnapshot,
   after: TmpdirSnapshot,
   ignoredPrefixes: readonly string[] = IGNORED_TMPDIR_PREFIXES,
-  exemptEntries: readonly string[] = []
+  exemptEntries: readonly string[] = [],
+  ownRunId?: string
 ): TmpdirDiff {
   // A failed BEFORE snapshot has no baseline, so every entry would read as
   // new. Fail open (report nothing) rather than fail the run on a phantom
@@ -575,6 +621,19 @@ export function diffTmpdirEntries(
   for (const entry of after.entries) {
     if (baseline.has(entry)) continue;
     if (exemptEntries.includes(entry)) continue;
+    if (entry.startsWith(EXTERNAL_FIXTURE_PREFIX)) {
+      // Attributable: only this run's own external fixtures can be its leak.
+      if (ownRunId !== undefined && entry.startsWith(`${EXTERNAL_FIXTURE_PREFIX}${ownRunId}-`)) {
+        stray.push(entry);
+      } else {
+        ignored.push(entry);
+      }
+      continue;
+    }
+    if (VITEST_PROJECT_TMPDIR_PATTERN.test(entry)) {
+      ignored.push(entry);
+      continue;
+    }
     if (ignoredPrefixes.some(prefix => entry.startsWith(prefix))) {
       ignored.push(entry);
     } else {

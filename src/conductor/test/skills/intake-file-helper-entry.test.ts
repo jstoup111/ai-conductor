@@ -2,16 +2,15 @@
 // The helper and CLI are real; gh is a local process-boundary stub.
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { externalFixturePrefix } from '../tmpdir-leak-guard.js';
 
 const helper = resolve(process.cwd(), '../../skills/intake/scripts/intake-file');
 const cli = resolve(process.cwd(), 'src/intake-file-cli.ts');
 const tsx = resolve(process.cwd(), 'node_modules/.bin/tsx');
 const tsconfig = resolve(process.cwd(), 'tsconfig.json');
 const roots: string[] = [];
-const externalTmpdir = process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR ?? tmpdir();
 
 interface GhCall {
   readonly cwd: string;
@@ -19,7 +18,7 @@ interface GhCall {
 }
 
 async function makeFixture(): Promise<{ caller: string; capture: string; env: NodeJS.ProcessEnv }> {
-  const root = await mkdtemp(join(externalTmpdir, 'intake-file-helper-entry-'));
+  const root = await mkdtemp(externalFixturePrefix('intake-helper'));
   roots.push(root);
   const caller = join(root, 'consumer');
   const home = join(root, 'home');

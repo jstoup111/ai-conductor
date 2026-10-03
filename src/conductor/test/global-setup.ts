@@ -12,6 +12,7 @@ import {
 import {
   diffTmpdirEntries,
   removeRunTmpRoot,
+  runIdFromRunRoot,
   snapshotTmpdirEntries,
   startRunRootHeartbeat,
   sweepStaleRunTmpRoots,
@@ -479,7 +480,13 @@ export default async function setup(project?: { tmpDir?: string }) {
     // failure is the more specific diagnosis and still throws first.
     const tmpdirAfter = await snapshotTmpdirEntries(originalTmpdir);
     applyTmpdirTeardownDecision(
-      diffTmpdirEntries(tmpdirBefore, tmpdirAfter, undefined, vitestTmpdirEntries),
+      diffTmpdirEntries(
+        tmpdirBefore,
+        tmpdirAfter,
+        undefined,
+        vitestTmpdirEntries,
+        runIdFromRunRoot(runTmpRoot)
+      ),
       originalTmpdir
     );
 

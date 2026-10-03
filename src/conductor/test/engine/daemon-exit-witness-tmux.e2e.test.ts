@@ -1,5 +1,6 @@
 // Covers: task:7, task:9
 import { afterEach, describe, expect, it } from 'vitest';
+import { externalFixturePrefix } from '../tmpdir-leak-guard.js';
 import { spawnSync } from 'node:child_process';
 import { access, chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -55,7 +56,7 @@ async function fixture(): Promise<{ repo: string; run: TmuxRunner; restore: () =
   // TMUX_TMPDIR needs a short path: tmux appends `tmux-<uid>/<socket>` and
   // Unix-domain sockets have a small pathname limit. This explicit fixture
   // root is still removed in afterEach, so it never escapes the leak guard.
-  const socketRoot = await mkdtemp(join(process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR!, 'tmux-exit-witness-'));
+  const socketRoot = await mkdtemp(externalFixturePrefix('tmux'));
   const socket = `exit-witness-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const run = privateTmux(socket, socketRoot, root);
   sockets.push({ root, socketRoot, run });
