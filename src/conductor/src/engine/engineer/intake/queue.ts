@@ -197,9 +197,12 @@ export function createFileQueue(dir: string): FileIntakeQueue {
         let content: string;
         try {
           content = await readFile(join(dir, filename), 'utf8');
-        } catch {
-          // File disappeared between readdir and readFile (concurrent ack/release).
-          continue;
+        } catch (error: unknown) {
+          if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+            // File disappeared between readdir and readFile (concurrent ack/release).
+            continue;
+          }
+          throw error;
         }
         envelopes.push(JSON.parse(content) as Envelope);
       }
