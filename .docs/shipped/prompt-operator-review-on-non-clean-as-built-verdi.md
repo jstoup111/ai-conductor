@@ -4,6 +4,12 @@ spec_hash: e06347feae75e2ea595ffc76b7a338c0e2ab020965fc79ef845b5ad3d3302178
 pr: https://github.com/jstoup111/ai-conductor/pull/2939
 shipped: 2026-10-03
 engine_version: 20261003T154506Z-bedb65cf8e47
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/self-host-verification-entries.test.ts:31 and src/conductor/test/acceptance/full-suite-verification-gate.acceptance.test.ts:264 — unplanned test-assertion alignment to the committed test_suite.verification config"
+    accepted: true
 ---
 
 ## Cost
