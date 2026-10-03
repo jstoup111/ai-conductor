@@ -15,6 +15,8 @@ const DEDICATED_RENDERER_EVENT_TYPES = new Set<ConductorEvent['type']>([
   'build_progress', 'unattributed_progress', 'build_no_progress', 'build_active_stall', 'pipeline_closeout',
   'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
   'renderer_error', 'pipeline_tail_diagnostic',
+  'session_command_refused', 'github_bypass_attempt', 'github_bypass_result',
+  'github_possible_bypass', 'session_event_delivery_diagnostic',
 ]);
 
 class CaptureStream extends Writable {
@@ -235,6 +237,25 @@ describe('TerminalRenderer', () => {
       byteOffset: 42,
     });
     expect(stream.output()).toContain('Pipeline tail malformed-line: .pipeline/pipeline-events.jsonl at byte 42');
+  });
+
+  it('renders bounded managed-session occurrences with feature or project attribution', async () => {
+    await renderer.handle({ type: 'session_command_refused', eventId: 'refusal-1', sourceTime: '2026-10-02T12:00:00.000Z', dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'feature', featureSlug: 'render-feature' }, subcommand: 'finish-record' });
+    await renderer.handle({ type: 'github_bypass_attempt', eventId: 'attempt-1', sourceTime: '2026-10-02T12:00:01.000Z', dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'feature', featureSlug: 'render-feature' }, operation: 'issue-create' });
+    await renderer.handle({ type: 'github_bypass_result', eventId: 'result-1', sourceTime: '2026-10-02T12:00:02.000Z', dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'feature', featureSlug: 'render-feature' }, attemptId: 'attempt-1', outcome: 'cli-succeeded' });
+    await renderer.handle({ type: 'github_possible_bypass', eventId: 'possible-1', sourceTime: '2026-10-02T12:00:03.000Z', dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'project' }, operation: 'graphql' });
+    await renderer.handle({ type: 'session_event_delivery_diagnostic', eventId: 'delivery-1', sourceTime: '2026-10-02T12:00:04.000Z', dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'project' }, code: 'write-failed' });
+
+    const output = stream.output();
+    expect(output).toContain('render-feature');
+    expect(output).toContain('finish-record');
+    expect(output).toContain('issue-create');
+    expect(output).toContain('attempt-1');
+    expect(output).toContain('cli-succeeded');
+    expect(output).toContain('project');
+    expect(output).toContain('possible bypass');
+    expect(output).toContain('write-failed');
+    expect(output).not.toContain('verified remote mutation');
   });
 
   it('implements UIRenderer interface (handle + stop)', () => {

@@ -85,7 +85,7 @@ import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-label
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { forwardedFeatureOf, isForwardedFromFeature, startDaemonEventPersistence, startFeatureEventPersistence } from './engine/event-persister.js';
 import { heapDumpOptionsFromConfig, startDaemonMemorySampler } from './engine/daemon-memory.js';
-import { renderedEventTypes } from './engine/event-sinks.js';
+import { formatSessionOccurrence, renderedEventTypes } from './engine/event-sinks.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
 import { formatGithubCredentialFallback, formatGithubOperationRefusal } from './engine/github-operations.js';
 import { createBotCoAuthorResolver, formatBotCoAuthorSkipped, installDaemonBotCoAuthor } from './engine/bot-co-author.js';
@@ -3110,6 +3110,21 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'github_operation_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatGithubOperationRefusal(event))}`);
+      break;
+    case 'session_command_refused':
+      log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatSessionOccurrence(event))}`);
+      break;
+    case 'github_bypass_attempt':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(formatSessionOccurrence(event))}`);
+      break;
+    case 'github_bypass_result':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(formatSessionOccurrence(event))}`);
+      break;
+    case 'github_possible_bypass':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(formatSessionOccurrence(event))}`);
+      break;
+    case 'session_event_delivery_diagnostic':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(formatSessionOccurrence(event))}`);
       break;
     case 'github_write_credential_fallback':
       log(`${dot} ${chalk.yellow('↻')} ${chalk.yellow(formatGithubCredentialFallback(event))}`);
