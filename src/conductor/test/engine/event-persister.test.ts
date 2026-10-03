@@ -43,6 +43,17 @@ describe('EventPersister', () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
+  it('continues to append ordinary events with no observation id', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    await emitter.emit({ type: 'rate_limit', waitSeconds: 5 });
+    await emitter.emit({ type: 'rate_limit', waitSeconds: 5 });
+    persister.stop();
+
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(2);
+  });
+
   // ─── Task 5: basic write ───────────────────────────────────────────────────
 
   it('writes 3 emitted events as 3 JSONL lines', async () => {

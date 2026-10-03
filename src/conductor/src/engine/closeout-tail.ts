@@ -95,14 +95,17 @@ export class CloseoutEventTail {
     readLedger?: (path: string) => Promise<Buffer>;
     /** Test seam; production reads the validated dispatch-local producer files. */
     sessionReader?: SessionEventReader;
-    /** Test seam for a failing projection; production preserves best-effort bus emission. */
+    /** Test seam for a failing persistence-acknowledged observation projection. */
     emitEvent?: (event: Parameters<ConductorEventEmitter['emit']>[0]) => Promise<void>;
   }) {
     this.projectRoot = projectRoot;
     this.reader = new CloseoutTailReader(projectRoot, readLedger);
     this.sessionReader = sessionReader ?? new SessionEventReader({ projectRoot });
     this.events = events;
-    this.emitEvent = emitEvent ?? ((event) => this.events.emit(event));
+    // Producer offsets advance only after every subscriber, including the
+    // canonical EventPersister, has acknowledged this occurrence. Pipeline
+    // closeout projection below intentionally remains best-effort.
+    this.emitEvent = emitEvent ?? ((event) => this.events.emitOrThrow(event));
   }
 
   poll(): Promise<void> {
