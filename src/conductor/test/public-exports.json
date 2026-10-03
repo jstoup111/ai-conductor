@@ -25,6 +25,7 @@
   "parseArgs",
   "probeInteractiveReadOnlyReviewCapabilities",
   "renderCanonicalFullHelp",
+  "resolveForegroundRunId",
   "resolveCurrentBranch",
   "resolveDaemonProjectRoot",
   "runShipmentReconcileAction",
