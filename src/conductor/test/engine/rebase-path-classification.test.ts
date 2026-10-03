@@ -96,21 +96,16 @@ describe('Task 9–11 rebase path classification', () => {
       replay,
     );
 
-    expect(result.preserved).toEqual([]);
-    expect(result.invalidated).toEqual([
-      'coverage_binding',
-      'build_review',
-      'test_suite',
-      'prd_audit',
-      'architecture_review_as_built',
-    ]);
+    // Document-bound gates are not reopened by feature code changes.
+    expect(result.preserved).toEqual(['coverage_binding', 'prd_audit', 'architecture_review_as_built']);
+    expect(result.invalidated).toEqual(['build_review', 'test_suite']);
     expect(result.candidates.find(({ gate }) => gate === 'build_review')).toMatchObject({
       decision: 'invalidate',
       source: { replay: replay.kind, featureContribution: ['src/shared.ts'] },
     });
   });
 
-  it('fails closed for feature-scoped reviews even when an unproved replay has only foreign runtime delta', () => {
+  it('fails closed for code-scoped reviews but not document-bound gates when an unproved replay has only foreign runtime delta', () => {
     const result = classifyReplayGateInvalidation(
       ['src/foreign.ts'],
       ['src/feature.ts'],
@@ -118,15 +113,8 @@ describe('Task 9–11 rebase path classification', () => {
       unprovedReplay,
     );
 
-    expect(result.invalidated).toEqual([
-      'coverage_binding',
-      'build_review',
-      'test_suite',
-      'manual_test',
-      'prd_audit',
-      'architecture_review_as_built',
-    ]);
-    expect(result.preserved).toEqual([]);
+    expect(result.invalidated).toEqual(['build_review', 'test_suite', 'manual_test']);
+    expect(result.preserved).toEqual(['coverage_binding', 'prd_audit', 'architecture_review_as_built']);
   });
 
   it('retains active-document invalidation for an unchanged replay but ignores unrelated documents and skips manual_test when it did not run', () => {

@@ -35,6 +35,10 @@ export function isRuntimeSourcePath(path: string): boolean {
  *   test paths matter; foreign paths (runtime or test) do not.
  * - 'feature-runtime-or-prd-inputs': the feature's own runtime source paths
  *   OR any declared prd_audit stories/PRD input matters.
+ * - 'feature-prd-inputs': only the feature's declared stories/spec/PRD
+ *   documents matter; runtime paths (feature or foreign) never do.
+ * - 'feature-coverage-inputs': only the feature's declared plan, coherence,
+ *   stories, specs and CITED decision records matter.
  * - 'all-runtime': any runtime source path in the repo matters.
  * - 'any-codetest': any code-or-test path (including test-only changes)
  *   matters.
@@ -47,13 +51,15 @@ export type GateSurfaceKind =
   | 'feature-codetest'
   | 'feature-runtime-or-prd-inputs'
   | 'feature-runtime-or-coverage-inputs'
+  | 'feature-prd-inputs'
+  | 'feature-coverage-inputs'
   | 'all-runtime'
   | 'any-codetest';
 
 export const PRD_AUDIT_DOCUMENT_INPUT_PREFIXES = ['.docs/stories/', '.docs/specs/'] as const;
 
-// Keep this list aligned with `resolveReviewInputs`: a governing ADR is an
-// active input to coverage/review preservation just like the plan and its
+// Keep this list aligned with `resolveReviewInputs`: a decision record the
+// feature cites is an active input to coverage/review preservation just like the plan and its
 // stories.  The classifier is the early gate for that resolver, so omitting
 // a prefix here would turn an ADR-only rebase delta into a false noop.
 export const COVERAGE_DOCUMENT_INPUT_PREFIXES = [...PRD_AUDIT_DOCUMENT_INPUT_PREFIXES, '.docs/plans/', '.docs/coherence/', '.docs/decisions/'] as const;
@@ -63,7 +69,11 @@ export function isReviewDocumentPath(path: string): boolean {
 }
 
 export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
-  coverage_binding: 'feature-runtime-or-coverage-inputs',
+  // Judged gates bound to the feature's own documents reopen only when one of
+  // those documents changes (plan/coherence/stories/specs/cited ADRs).  An
+  // upstream runtime edit overlapping a feature file is build_review's and
+  // test_suite's concern; reopening these on it fired on nearly every rebase.
+  coverage_binding: 'feature-coverage-inputs',
   // Grades THE FEATURE'S OWN diff against its plan (plan-vs-diff
   // completeness), so only the feature's own code or tests can change the
   // grade — a foreign main-side delta leaves that diff, and therefore the
@@ -79,14 +89,11 @@ export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
   // only a test/docs-only delta is safe to preserve (ADR-2026-07-20).
   manual_test: 'all-runtime',
   // Stories are prd_audit's acceptance-criteria authority and PRDs supply
-  // intent context. Both are declared inputs, so their changes invalidate a
-  // prior PASS even though the runtime delta partition deliberately ignores
-  // markdown paths.
-  prd_audit: 'feature-runtime-or-prd-inputs',
-  // The as-built review consumes governing ADRs, plans, coherence and other
-  // declared decision inputs as well as feature runtime.  Keep that input
-  // surface identical to the resolver used to bind replay authority.
-  architecture_review_as_built: 'feature-runtime-or-coverage-inputs',
+  // intent context; only those declared documents reopen it.
+  prd_audit: 'feature-prd-inputs',
+  // The as-built review is bound to the same document inputs as
+  // coverage_binding (plans, coherence, stories, specs, cited ADRs).
+  architecture_review_as_built: 'feature-coverage-inputs',
 };
 
 /**
@@ -217,6 +224,8 @@ export function projectGateSurfaces(
       matchedPaths: [...featureSrc, ...coverageInputs.matchedPaths],
       declaredSurface: [...featureRuntimeSurface, ...coverageInputs.declaredSurface],
     },
+    'feature-prd-inputs': prdInputs,
+    'feature-coverage-inputs': coverageInputs,
     'all-runtime': {
       matchedPaths: [...featureSrc, ...foreignSrc],
       declaredSurface: ['<all runtime source>'],
@@ -237,10 +246,11 @@ export function projectGateSurfaces(
  * lists.
  *
  * Per gate surface kind (see `GATE_SURFACE`):
- * - 'feature-runtime' (architecture_review_as_built): preserved iff
- *   `featureSrc` is empty.
- * - 'feature-runtime-or-prd-inputs' (prd_audit): preserved iff
- *   `featureSrc` and the declared stories/PRD inputs are both empty.
+ * - 'feature-prd-inputs' (prd_audit): preserved iff no declared
+ *   stories/spec/PRD input changed.
+ * - 'feature-coverage-inputs' (coverage_binding,
+ *   architecture_review_as_built): preserved iff no declared plan,
+ *   coherence, stories, spec or cited-ADR input changed.
  * - 'feature-codetest' (build_review): preserved iff `featureSrc` AND the
  *   feature's own test paths are both empty — a foreign-only delta (runtime
  *   or test) cannot change the feature's own diff, so its plan-vs-diff grade
@@ -279,7 +289,17 @@ function isFeatureScopedReview(surface: GateSurfaceKind): boolean {
   return surface === 'feature-runtime' ||
     surface === 'feature-codetest' ||
     surface === 'feature-runtime-or-prd-inputs' ||
-    surface === 'feature-runtime-or-coverage-inputs';
+    surface === 'feature-runtime-or-coverage-inputs' ||
+    surface === 'feature-prd-inputs' ||
+    surface === 'feature-coverage-inputs';
+}
+
+/** Reviews whose surface includes the feature's code: an unproved replay
+ * may have altered that code, so they reopen.  Document-only surfaces are
+ * judged against observed document deltas alone. */
+function isFeatureCodeScopedReview(surface: GateSurfaceKind): boolean {
+  return isFeatureScopedReview(surface) &&
+    surface !== 'feature-prd-inputs' && surface !== 'feature-coverage-inputs';
 }
 
 /**
@@ -329,9 +349,11 @@ export function classifyReplayGateInvalidation(
     // retained. If reconstruction is unavailable, a resolution could have
     // changed any feature-scoped review input outside the observed upstream
     // delta. Re-open those reviews rather than leaving an unbound PASS for a
-    // later completion/finish reader to reject.
+    // later completion/finish reader to reject.  Document-input-only gates
+    // are exempt: a conflict resolution rewrites code, and their document
+    // inputs are observed directly in the delta.
     const unprovedFeatureScopedReplay = replay.kind === 'unproved' &&
-      isFeatureScopedReview(surface);
+      isFeatureCodeScopedReview(surface);
     const decision = !unprovedFeatureScopedReplay &&
       (preserveUnchangedFeatureContribution || projection.matchedPaths.length === 0)
       ? 'preserve'

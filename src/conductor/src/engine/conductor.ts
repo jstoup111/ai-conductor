@@ -1756,6 +1756,11 @@ export interface StepRunner {
     projectRoot: string;
   }): Promise<SpotAuditDispatchResult>;
   /**
+   * Dispatch the post-rebase regrade judgement (ADR-2026-07-20 amendment).
+   * Optional: a runner without it makes a changed replay fail closed.
+   */
+  dispatchRebaseRegradeJudgement?(prompt: string): Promise<{ success: boolean; output?: string }>;
+  /**
    * Dispatch a fix-session to resolve a setup failure. Part of the two-stage
    * setup-failure triage (TS-3). Uses a fresh one-shot session (never resumes
    * the main conductor session) with the output tail in the system prompt.
@@ -15267,6 +15272,12 @@ export class Conductor {
       ranManualTest,
       preVerify,
       git,
+      {
+        ...(this.stepRunner.dispatchRebaseRegradeJudgement
+          ? { judge: (prompt: string) => this.stepRunner.dispatchRebaseRegradeJudgement!(prompt) }
+          : {}),
+        emit: async (event) => { await this.events?.emit(event); },
+      },
     );
 
     // The replay decision has already written the authoritative gate verdicts.

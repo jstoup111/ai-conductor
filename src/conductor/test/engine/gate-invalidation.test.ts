@@ -41,8 +41,10 @@ describe('GATE_SURFACE', () => {
     expect(GATE_SURFACE).not.toHaveProperty('build');
   });
 
-  it('invalidates coverage_binding for feature runtime or plan inputs', () => {
-    expect(GATE_SURFACE.coverage_binding).toBe('feature-runtime-or-coverage-inputs');
+  it('binds coverage_binding, prd_audit and as-built to feature document inputs only', () => {
+    expect(GATE_SURFACE.coverage_binding).toBe('feature-coverage-inputs');
+    expect(GATE_SURFACE.architecture_review_as_built).toBe('feature-coverage-inputs');
+    expect(GATE_SURFACE.prd_audit).toBe('feature-prd-inputs');
   });
 });
 
@@ -119,23 +121,33 @@ describe('classifyGateInvalidation', () => {
     expect(result.invalidated).not.toContain('manual_test');
   });
 
-  it('featureSrc touched invalidates the feature-scoped judged gates and the all-runtime gates', () => {
+  it('featureSrc touched reopens build_review and runtime gates but preserves document-bound gates', () => {
     const D = ['src/feature.ts'];
     const F = ['src/feature.ts'];
 
     const result = classifyGateInvalidation(D, F, true);
 
     expect(result.invalidated.sort()).toEqual(
-      [
-        'build_review',
-        'coverage_binding',
-        'manual_test',
-        'prd_audit',
-        'test_suite',
-        'architecture_review_as_built',
-      ].sort(),
+      ['build_review', 'manual_test', 'test_suite'].sort(),
     );
-    expect(result.preserved).toEqual([]);
+    expect(result.preserved.sort()).toEqual(
+      ['coverage_binding', 'prd_audit', 'architecture_review_as_built'].sort(),
+    );
+  });
+
+  it('an uncited upstream ADR preserves document-bound gates; a cited ADR or feature plan reopens them', () => {
+    const declared = ['.docs/plans/feat.md', '.docs/stories/feat.md', '.docs/decisions/adr-cited.md'];
+    const uncited = classifyGateInvalidation(['.docs/decisions/adr-upstream.md'], [], true, declared);
+    expect(uncited.invalidated).toEqual([]);
+
+    const cited = classifyGateInvalidation(['.docs/decisions/adr-cited.md'], [], true, declared);
+    expect(cited.invalidated.sort()).toEqual(['architecture_review_as_built', 'coverage_binding'].sort());
+
+    const plan = classifyGateInvalidation(['.docs/plans/feat.md'], [], true, declared);
+    expect(plan.invalidated.sort()).toEqual(['architecture_review_as_built', 'coverage_binding'].sort());
+
+    const stories = classifyGateInvalidation(['.docs/stories/feat.md'], [], true, declared);
+    expect(stories.invalidated.sort()).toEqual(['architecture_review_as_built', 'coverage_binding', 'prd_audit'].sort());
   });
 
   it('foreignSrc-only touched (feature surface untouched) preserves the feature-scoped judged gates but invalidates all-runtime gates', () => {
@@ -174,10 +186,12 @@ describe('projectGateSurfaces', () => {
       'all-runtime',
       'any-codetest',
       'feature-codetest',
+      'feature-coverage-inputs',
+      'feature-prd-inputs',
       'feature-runtime',
       'feature-runtime-or-coverage-inputs',
       'feature-runtime-or-prd-inputs',
-    ]);
+    ].sort());
     expect(projection['feature-runtime']).toEqual({
       matchedPaths: ['src/feature.ts'],
       declaredSurface: ['src/feature.ts'],
@@ -193,6 +207,14 @@ describe('projectGateSurfaces', () => {
     expect(projection['feature-runtime-or-coverage-inputs']).toEqual({
       matchedPaths: ['src/feature.ts', '.docs/stories/feature.md', '.docs/specs/feature.md'],
       declaredSurface: ['src/feature.ts', '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/|.docs/decisions/>'],
+    });
+    expect(projection['feature-prd-inputs']).toEqual({
+      matchedPaths: ['.docs/stories/feature.md', '.docs/specs/feature.md'],
+      declaredSurface: ['<.docs/stories/|.docs/specs/>'],
+    });
+    expect(projection['feature-coverage-inputs']).toEqual({
+      matchedPaths: ['.docs/stories/feature.md', '.docs/specs/feature.md'],
+      declaredSurface: ['<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/|.docs/decisions/>'],
     });
     expect(projection['all-runtime']).toEqual({
       matchedPaths: ['src/feature.ts', 'src/foreign.ts'],

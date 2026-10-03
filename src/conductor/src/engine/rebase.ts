@@ -1,6 +1,6 @@
 import { execa } from 'execa';
 import { createHash } from 'node:crypto';
-import { writeFile, readFile, access, mkdir, rename, readdir } from 'node:fs/promises';
+import { writeFile, readFile, access, mkdir, rename } from 'node:fs/promises';
 import { join, isAbsolute, relative, basename, resolve, dirname } from 'node:path';
 import type { CiRepairDiagnosticReason, StepName } from '../types/index.js';
 import {
@@ -46,6 +46,14 @@ import {
 import type { ReplayEvidence } from './gate-verdicts.js';
 import { currentPreservedJudgeIdentity, gateVerdictStillValid, isApplicableOriginalPass } from './gate-code-validity.js';
 import type { RebasePreservedCandidate } from './rebase-transition.js';
+import {
+  REBASE_REGRADE_GATES,
+  computeOwnContributionDelta,
+  judgeRebaseRegrade,
+  type RebaseRegradeGate,
+  type RebaseRegradeJudge,
+} from './rebase-regrade-judgement.js';
+import type { ConductorEvent } from '../types/events.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -1261,17 +1269,30 @@ export async function resolveReviewInputs(projectRoot: string, delta: string[], 
     }
     inputs.push(`.docs/decisions/adr-${identity}.md`);
   }
-  // Decision records are declared architecture authority, not merely a
-  // same-stem feature artifact.  Governing ADRs use date-prefixed names, so
-  // the synthetic adr-<feature> path above cannot see a rebase that changes
-  // one.  Bind the resolver to the actual decision records present in this
-  // feature checkout; a later decision edit then invalidates its owning
-  // architecture review instead of silently preserving an older judgement.
-  const decisions = await readdir(join(projectRoot, '.docs', 'decisions')).catch(() => []);
-  inputs.push(...decisions
-    .filter((entry) => entry.endsWith('.md'))
-    .map((entry) => `.docs/decisions/${entry}`));
+  // Decision records are inputs only when the feature CITES them.  Binding
+  // every ADR in the checkout made each ADR landed on main reopen
+  // coverage_binding / prd_audit / as-built on nearly every rebase, although
+  // none of those gates read an uncited decision.  Scan the feature's own
+  // documents (plan, coherence, stories, specs/PRD) for decision paths or
+  // `adr-<stem>` references; a cited ADR edit still reopens its reviews.
+  const cited = new Set<string>();
+  for (const doc of [...new Set(inputs.map(repoPath))]) {
+    if (doc.startsWith('.docs/decisions/')) continue;
+    const text = await readFile(join(projectRoot, doc), 'utf8').catch(() => '');
+    for (const stem of citedDecisionStems(text)) cited.add(`.docs/decisions/${stem}.md`);
+  }
+  inputs.push(...cited);
   return [...new Set(inputs.map(repoPath))];
+}
+
+/** Decision-record stems (`adr-...`) a feature document references, by
+ * path or by bare stem. */
+export function citedDecisionStems(text: string): string[] {
+  const stems = new Set<string>();
+  for (const match of text.matchAll(/(?<![A-Za-z0-9_-])(adr-[A-Za-z0-9][A-Za-z0-9._-]*)/g)) {
+    stems.add(match[1].replace(/\.md$/, '').replace(/[._-]+$/, ''));
+  }
+  return [...stems];
 }
 
 function reviewDelta(outcome: Extract<RebaseOutcome, { kind: 'changed' }>): string[] {
@@ -2308,6 +2329,12 @@ export async function applyRebaseVerdicts(
     preservationBasis?: 'test_suite_drift_budget';
   }>,
   git?: GitRunner,
+  regrade?: {
+    /** Provider boundary for the post-rebase regrade judgement. */
+    judge?: RebaseRegradeJudge;
+    /** Event-spine sink for the `rebase_regrade_judged` verdict. */
+    emit?: (event: Extract<ConductorEvent, { type: 'rebase_regrade_judged' }>) => Promise<void>;
+  },
 ): Promise<{
   satisfied: boolean;
   kickedBack: StepName[];
@@ -2457,9 +2484,51 @@ export async function applyRebaseVerdicts(
   const replayComparison = git && outcome.replay
     ? await compareReplayTree(git, outcome.replay)
     : undefined;
-  const replayPartition = outcome.featureSurface !== undefined && replayComparison
+  const classifiedReplay = outcome.featureSurface !== undefined && replayComparison
     ? classifyReplayGateInvalidation(delta, outcome.featureSurface, ranManualTest, replayComparison, outcome.documentInputs)
     : undefined;
+  // ADR-2026-07-20 amendment: a replay that CHANGED the feature's own
+  // contribution leaves the document-bound judged gates' inputs intact, so
+  // the path classifier preserves them — but whether the resolved diff now
+  // warrants a new grade is a judgement call.  Machinery scopes the bounded
+  // own-diff delta and validates the closed verdict; an LLM judges.  Missing,
+  // failed, or invalid judgement reopens every candidate (fail-closed).
+  let replayPartition = classifiedReplay;
+  if (classifiedReplay && replayComparison?.kind === 'changed' && git) {
+    const candidates: RebaseRegradeGate[] = [];
+    for (const gate of REBASE_REGRADE_GATES) {
+      if (!classifiedReplay.preserved.includes(gate)) continue;
+      if (isSkipVerdict(await readVerdict(projectRoot, gate))) continue;
+      candidates.push(gate);
+    }
+    if (candidates.length > 0) {
+      const decision = await judgeRebaseRegrade(
+        () => computeOwnContributionDelta(git, replayComparison.identity, candidates),
+        candidates,
+        regrade?.judge,
+      );
+      await regrade?.emit?.({
+        type: 'rebase_regrade_judged',
+        step: 'rebase',
+        outcome: decision.outcome,
+        candidates: [...decision.candidates],
+        reopened: [...decision.reopen],
+        changedFiles: [...decision.changedFiles],
+        completedHead: replayComparison.identity.completedHead,
+        ...(decision.rationale === undefined ? {} : { rationale: decision.rationale }),
+        ...(decision.reason === undefined ? {} : { reason: decision.reason }),
+      });
+      if (decision.reopen.length > 0) {
+        const reopen = new Set<string>(decision.reopen);
+        replayPartition = {
+          preserved: classifiedReplay.preserved.filter((gate) => !reopen.has(gate)),
+          invalidated: [...classifiedReplay.invalidated, ...decision.reopen],
+          candidates: classifiedReplay.candidates.map((candidate) =>
+            reopen.has(candidate.gate) ? { ...candidate, decision: 'invalidate' as const } : candidate),
+        };
+      }
+    }
+  }
   const partition = outcome.featureSurface !== undefined
     ? replayPartition ?? classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
     : undefined;
@@ -2637,10 +2706,11 @@ export async function recordRebaseStepCompletion(
  *
  * For invalidated gates, `matchedPaths` carries only the delta paths that
  * justify invalidating THIS specific gate, per its `GATE_SURFACE` kind:
- *   - 'feature-runtime' (architecture_review_as_built): featureSrc.
- *   - 'feature-runtime-or-prd-inputs' (prd_audit): feature runtime paths
- *     plus active stories/PRD inputs. Coverage additionally includes the
- *     active plan and coherence carrier ('feature-runtime-or-coverage-inputs').
+ *   - 'feature-prd-inputs' (prd_audit): changed declared stories/spec/PRD
+ *     inputs only.
+ *   - 'feature-coverage-inputs' (coverage_binding,
+ *     architecture_review_as_built): changed declared plan, coherence,
+ *     stories, spec and cited-ADR inputs only.
  *   - 'feature-codetest' (build_review): featureSrc ∪ the feature's own test
  *     paths.
  *   - 'all-runtime' (manual_test): featureSrc ∪ foreignSrc.

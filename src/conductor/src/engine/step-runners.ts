@@ -94,6 +94,7 @@ import {
   type CoverageBindingAmendmentClaim,
 } from './coverage-binding-inputs.js';
 import { planCoverageBindingBatches } from './coverage-binding-batches.js';
+import { REBASE_REGRADE_SKILL } from './rebase-regrade-judgement.js';
 import { admitAndRestageRepair } from './repair-restage.js';
 import { resolveTaskIds } from './task-progress.js';
 import { engineContentStamp } from './engine-version-id.js';
@@ -2228,6 +2229,67 @@ export class DefaultStepRunner implements StepRunner {
    * parseable `{resolved:...}` JSON — NEVER returns `{resolved: true}` on
    * garbage output (fail-safe).
    */
+  /**
+   * Post-rebase regrade judgement (ADR-2026-07-20 amendment): one fresh
+   * auxiliary dispatch of the shipped `rebase-regrade` skill under the
+   * resolved `rebase` provider policy. The caller validates the closed result
+   * and fails closed on any failure; this method only reaches the provider.
+   */
+  async dispatchRebaseRegradeJudgement(prompt: string): Promise<{ success: boolean; output?: string }> {
+    const resolved = this.resolvedConfigFor('rebase');
+    const llmProvider = this.config?.steps?.rebase?.llm_provider
+      ?? this.config?.llm_provider
+      ?? DEFAULT_PROVIDER;
+    const auxiliaryProvider = normalizeProviderSelection(llmProvider)[0]!;
+    const auxiliaryRuntime = this.providerRuntimes?.get(auxiliaryProvider);
+    const auxiliaryModelPolicy = auxiliaryRuntime?.policy
+      ?? resolveProviderModelPolicy(auxiliaryProvider, { config: this.config });
+    const auxiliaryNative = resolvePreferredProviderNativeStepConfig({
+      step: 'rebase',
+      phase: phaseForStep('rebase'),
+      preferredProvider: auxiliaryProvider,
+      inheritedProvider: normalizeProviderSelection(this.config?.llm_provider)[0]!,
+      policy: auxiliaryModelPolicy,
+      config: this.config,
+    });
+    const policy: ResolvedBuildReviewRubricPolicy = {
+      enabled: true,
+      max_projection_bytes: DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES,
+      llm_provider: llmProvider,
+      model: auxiliaryNative.model,
+      effort: auxiliaryNative.effort,
+      model_fallback_ladder: selectFallbackLadder(auxiliaryModelPolicy, auxiliaryProvider, this.config ?? {}),
+      max_retries: resolved.max_retries,
+      escalate: resolved.escalate,
+      min_confidence: 0,
+    };
+    if (this.providerRuntimes && this.sessionStore) {
+      const dispatched = await this.dispatchProviderWithLifecycleSupervision(
+        'rebase',
+        { prompt, cwd: this.projectDir, dangerouslySkipPermissions: true },
+        (options) => executeAuxiliaryProviderCandidates({
+          step: 'rebase', memberId: REBASE_REGRADE_SKILL, policy,
+          runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch(`${REBASE_REGRADE_SKILL}:judge`),
+          config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
+          providerAvailability: this.providerExecutionContext?.providerAvailability,
+          withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
+          onAttempt: this.providerAttempt, warn: this.providerWarn,
+          options,
+          optionsForCandidate: (providerKey) => ({ ...options, prompt: `${renderAuxiliarySkillInvocation(REBASE_REGRADE_SKILL, providerKey)}\n\n${prompt}` }),
+        }),
+      );
+      this.callCount++;
+      return { success: dispatched.success, output: dispatched.output };
+    }
+    const dispatched = await this.provider.invoke({
+      prompt: `${renderAuxiliarySkillInvocation(REBASE_REGRADE_SKILL, this.providerKey)}\n\n${prompt}`,
+      sessionId: randomUUID(), resume: false, dangerouslySkipPermissions: true, cwd: this.projectDir,
+      model: policy.model, effort: policy.effort,
+    });
+    this.callCount++;
+    return { success: dispatched.success, output: dispatched.output };
+  }
+
   async resolveRebaseConflict(ctx: ResolutionContext): Promise<ResolutionAttempt> {
     const conflictList =
       ctx.conflicts.length > 0

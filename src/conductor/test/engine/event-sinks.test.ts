@@ -196,6 +196,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'kickback_budget_adjustment_authorized',
   'coverage_binding_amendment_judged',
   'coverage_binding_judged',
+  'rebase_regrade_judged',
   'coverage_binding_disabled',
   'coverage_binding_invalidated',
   'coverage_binding_task_reopened',
