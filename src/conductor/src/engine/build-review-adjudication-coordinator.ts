@@ -725,7 +725,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         ...(ownsBlockedConsistency ? { consistencyStop: blockedConsistency } : {}),
       },
     });
-    if (!persistedStop.ok) return fail(`decision stop ${persistedStop.reason}`);
+    if (!persistedStop.ok) return fail(`decision stop ${persistedStop.reason}`, persistedStop.reason === 'rejected-transition'
+      ? { failureKind: 'rejected-transition', caseIds: persistedStop.caseIds, sourceIds: persistedStop.sourceIds }
+      : persistedStop.reason === 'malformed-state'
+        ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
+        : undefined);
     persistedConsistencyStop ||= ownsBlockedConsistency;
     caseIdsByRef.set(proposed.case.caseRef, persistedStop.caseId);
   }
@@ -741,7 +745,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         effect: { kind: 'none' }, consistencyStop: blockedConsistency,
       },
     });
-    if (!persistedStop.ok) return fail(`blocked consistency stop ${persistedStop.reason}`);
+    if (!persistedStop.ok) return fail(`blocked consistency stop ${persistedStop.reason}`, persistedStop.reason === 'rejected-transition'
+      ? { failureKind: 'rejected-transition', caseIds: persistedStop.caseIds, sourceIds: persistedStop.sourceIds }
+      : persistedStop.reason === 'malformed-state'
+        ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
+        : undefined);
   }
   const durableState = await store.read();
   if (!durableState.ok) return fail(`case store ${durableState.reason}`);
