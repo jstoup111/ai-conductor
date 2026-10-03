@@ -1,3 +1,11 @@
+import { isAbsolute } from 'node:path';
+
+import {
+  SessionEventProducer,
+  type SessionEventProducerContext,
+} from './session-event-producer.js';
+import type { SessionCommandRefusedEvent } from '../types/events.js';
+
 /**
  * Deterministic daemon-session boundary enforcement for the ai-conductor CLI.
  *
@@ -171,4 +179,107 @@ export function guardDaemonSessionInvocation(
   // sets it and there is no config key for it.
   if (env.CONDUCT_DAEMON_SESSION_UNSAFE_ALLOW === '1') return { allowed: true };
   return evaluateDaemonSessionCommandPolicy(argv);
+}
+
+/** The minimal producer boundary used by entry-point refusal reporting. */
+export interface DaemonSessionRefusalWriter {
+  refusal(input: { readonly subcommand: unknown }): SessionCommandRefusedEvent;
+  append(event: SessionCommandRefusedEvent): Promise<unknown>;
+}
+
+export interface DaemonSessionRefusalTelemetryDependencies {
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly createProducer?: (context: SessionEventProducerContext) => DaemonSessionRefusalWriter;
+  readonly diagnostic?: (message: string) => void;
+}
+
+/**
+ * Record a refused command only with the immutable context the engine put in
+ * the child environment. Missing or inconsistent context degrades telemetry;
+ * it never guesses a feature from cwd or another environment value.
+ */
+export async function emitDaemonSessionRefusal(
+  verdict: Exclude<DaemonSessionGuardVerdict, { readonly allowed: true }>,
+  dependencies: DaemonSessionRefusalTelemetryDependencies = {},
+): Promise<'recorded' | 'unavailable' | 'failed'> {
+  const environment = dependencies.environment ?? process.env;
+  const diagnostic = dependencies.diagnostic ?? console.error;
+  const context = managedSessionProducerContext(environment);
+  if (!context) {
+    diagnostic('session refusal telemetry unavailable');
+    return 'unavailable';
+  }
+
+  try {
+    const createProducer: (context: SessionEventProducerContext) => DaemonSessionRefusalWriter = dependencies.createProducer
+      ?? ((value) => new SessionEventProducer(value));
+    const producer = createProducer(context);
+    await producer.append(producer.refusal({ subcommand: verdict.subcommand }));
+    return 'recorded';
+  } catch {
+    diagnostic('session refusal telemetry degraded');
+    return 'failed';
+  }
+}
+
+function managedSessionProducerContext(environment: NodeJS.ProcessEnv): SessionEventProducerContext | undefined {
+  const raw = environment.CONDUCT_MANAGED_SESSION_CONTEXT;
+  if (typeof raw !== 'string') return undefined;
+
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(value)
+    || !isAbsoluteString(value.projectRoot)
+    || !isAbsoluteString(value.worktreeRoot)
+    || !isAbsoluteString(value.producerRoot)
+    || !isIdentity(value.dispatchId)
+    || !isIdentity(value.provider)
+    || !isScope(value.scope)) return undefined;
+
+  const context: SessionEventProducerContext = {
+    projectRoot: value.projectRoot,
+    worktreeRoot: value.worktreeRoot,
+    producerRoot: value.producerRoot,
+    dispatchId: value.dispatchId,
+    provider: value.provider,
+    scope: value.scope,
+  };
+  return environmentMatchesContext(environment, context) ? context : undefined;
+}
+
+function environmentMatchesContext(environment: NodeJS.ProcessEnv, context: SessionEventProducerContext): boolean {
+  if (!matchesIfPresent(environment.CONDUCT_MANAGED_PROJECT, context.projectRoot)
+    || !matchesIfPresent(environment.CONDUCT_MANAGED_WORKTREE, context.worktreeRoot)
+    || !matchesIfPresent(environment.CONDUCT_MANAGED_PRODUCER_ROOT, context.producerRoot)
+    || !matchesIfPresent(environment.CONDUCT_MANAGED_DISPATCH, context.dispatchId)
+    || !matchesIfPresent(environment.CONDUCT_MANAGED_PROVIDER, context.provider)) return false;
+  const feature = environment.CONDUCT_MANAGED_FEATURE;
+  return context.scope.kind === 'feature'
+    ? matchesIfPresent(feature, context.scope.featureSlug)
+    : feature === undefined;
+}
+
+function matchesIfPresent(value: string | undefined, expected: string): boolean {
+  return value === undefined || value === expected;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isAbsoluteString(value: unknown): value is string {
+  return typeof value === 'string' && isAbsolute(value);
+}
+
+function isScope(value: unknown): value is SessionEventProducerContext['scope'] {
+  return isRecord(value) && (value.kind === 'project'
+    || (value.kind === 'feature' && isIdentity(value.featureSlug)));
+}
+
+function isIdentity(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value);
 }
