@@ -448,8 +448,11 @@ describe('structural: smoke test entry point', () => {
           "it.skip('has no executable assertion', () => {});",
         ].join('\n'));
         await writeFile(config, [
+          "import { tmpdir } from 'node:os';",
           `import { defineConfig } from ${JSON.stringify(join(conductorRoot, 'node_modules/vitest/dist/config.js'))};`,
+          `import { ensureRunTmpRootSync } from ${JSON.stringify(join(conductorRoot, 'test/tmpdir-leak-guard.js'))};`,
           '',
+          'ensureRunTmpRootSync(tmpdir());',
           'export default defineConfig({ test: {',
           `  include: [${JSON.stringify(fixtureFile)}],`,
           '  exclude: [],',
@@ -462,6 +465,7 @@ describe('structural: smoke test entry point', () => {
         await runSmokeCli(config, {
           mode: 'advisory',
           environment: { CLAUDE_CODE_OAUTH_TOKEN: 'test-token' },
+          hasCommand: () => true,
           emit: (line) => ledger.push(line),
         });
 
