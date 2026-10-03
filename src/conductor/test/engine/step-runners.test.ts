@@ -1978,7 +1978,7 @@ describe('DefaultStepRunner', () => {
     const sessions = new ProviderSessionStore();
     const runner = new DefaultStepRunner(provider, 'session', projectDir, {
       gitRunner: async (args) => args[0] === 'rev-parse' && args[1] === 'HEAD'
-        ? { exitCode: 0, stdout: 'fixture-head\n', stderr: '' }
+        ? { exitCode: 0, stdout: 'head\n', stderr: '' }
         : { exitCode: 1, stdout: '', stderr: 'unexpected git command' },
       providerExecution: {
         configuredProviders: ['claude'],
