@@ -60,4 +60,34 @@ describe('managed observation destination preparation', () => {
       recoveryAction: expect.stringContaining('observation destination'),
     })]);
   });
+
+  it('prepares the selected policy destination before launching the supported review candidate', async () => {
+    const managed = await context();
+    const order: string[] = [];
+    const invoke = vi.fn(async () => {
+      order.push('invoke');
+      return { success: true, output: 'reviewed', exitCode: 0 };
+    });
+    const prepareManagedSessionObservation = vi.fn(async ({ provider, context: candidateContext, readOnlyReview, executable }) => {
+      order.push('prepare-observation');
+      expect({ provider, candidateContext, readOnlyReview, executable }).toEqual({
+        provider: 'codex', candidateContext: { ...managed, provider: 'codex' }, readOnlyReview: true,
+        executable: '/isolated/codex',
+      });
+      return { producerRoot: managed.producerRoot };
+    });
+
+    const result = await executeProviderCandidates({
+      step: 'build_review', configuredProviders: ['codex'], preferredProvider: 'codex',
+      runtimes: new ProviderRuntimeSet([{ key: 'codex', provider: { invoke }, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) }]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      prepareCandidateSelfHost: async () => ({ executable: '/isolated/codex', env: {}, args: [], teardown: async () => {} }),
+      prepareManagedSessionObservation,
+      options: { prompt: 'review', cwd: managed.worktreeRoot, readOnlyReview: true, managedSessionContext: managed },
+    });
+
+    expect(result).toMatchObject({ success: true, actualProvider: 'codex' });
+    expect(order).toEqual(['prepare-observation', 'invoke']);
+    expect(prepareManagedSessionObservation).toHaveBeenCalledOnce();
+  });
 });
