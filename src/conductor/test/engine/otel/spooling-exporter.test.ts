@@ -1,14 +1,14 @@
 // Covers: task:5, task:6, task:12
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BasicTracerProvider, type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { ExportResultCode } from '@opentelemetry/core';
-import { AggregationTemporality, DataPointType, InstrumentType, type PushMetricExporter, type ResourceMetrics } from '@opentelemetry/sdk-metrics';
+import { AggregationTemporality, DataPointType, InstrumentType, type Histogram, type PushMetricExporter, type ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import { ValueType } from '@opentelemetry/api';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
-import { SpoolStore } from '../../../src/engine/otel/spool-store.js';
+import { SpoolStore, type SpoolFilesystem } from '../../../src/engine/otel/spool-store.js';
 import { buildExporters } from '../../../src/engine/otel/transport.js';
 import { SpoolingMetricExporter, SpoolingSpanExporter } from '../../../src/engine/otel/spooling-exporter.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
@@ -43,6 +43,37 @@ function rejectedStore(error: Error): SpoolStore {
   return {
     write: async () => Promise.reject(error),
   } as unknown as SpoolStore;
+}
+
+function deletingAfterSecondPublishFilesystem(): SpoolFilesystem {
+  let publicationCount = 0;
+  let publishedPath: string | undefined;
+  let deleted = false;
+  return {
+    mkdir,
+    open,
+    readFile,
+    stat,
+    rm,
+    async rename(source, destination): Promise<void> {
+      await rename(source, destination);
+      publicationCount += 1;
+      publishedPath = destination;
+    },
+    async readdir(directory): Promise<string[]> {
+      const names = await readdir(directory);
+      // The first write fills the cap. A drainer that lists after the second
+      // publish reaches a microtask barrier, then deletes that exact batch
+      // before the old post-publication bookkeeping can invoke its callback.
+      const publishedName = publishedPath === undefined ? undefined : publishedPath.slice(publishedPath.lastIndexOf('/') + 1);
+      if (publicationCount === 2 && !deleted && publishedName !== undefined && names.includes(publishedName)) {
+        await Promise.resolve();
+        deleted = true;
+        await rm(join(directory, publishedName), { force: true });
+      }
+      return names;
+    },
+  };
 }
 
 interface ProtoField { wireType: number; value: number | Uint8Array; }
@@ -93,10 +124,6 @@ function requiredEmbedded(fields: Map<number, ProtoField[]>, number: number): Ui
   return value;
 }
 
-function strings(fields: Map<number, ProtoField[]>, number: number): string[] {
-  return embedded(fields, number).map((value) => new TextDecoder().decode(value));
-}
-
 function fixed64(value: number | Uint8Array): bigint {
   if (!(value instanceof Uint8Array) || value.byteLength !== 8) throw new Error('expected fixed64 OTLP field');
   return new DataView(value.buffer, value.byteOffset, value.byteLength).getBigUint64(0, true);
@@ -120,30 +147,63 @@ function attributeValues(fields: Map<number, ProtoField[]>, field = 1): Record<s
   }));
 }
 
+function unixNanos([seconds, nanos]: [number, number]): bigint {
+  return BigInt(seconds) * 1_000_000_000n + BigInt(nanos);
+}
+
+function otlpAggregationTemporality(temporality: AggregationTemporality): number {
+  if (temporality === AggregationTemporality.DELTA) return 1;
+  if (temporality === AggregationTemporality.CUMULATIVE) return 2;
+  return 0;
+}
+
 /** An independent decoder for the OTLP ExportMetricsServiceRequest spool body. */
 function decodeExportMetricsServiceRequest(body: Uint8Array): {
-  resourceAttributes: Record<string, string>;
-  scopeName: string;
-  metrics: Array<Record<string, unknown>>;
+  resource: { attributes: Record<string, string>; schemaUrl: string };
+  scopeMetrics: Array<{ scope: { name: string; version: string }; metrics: Array<Record<string, unknown>> }>;
 } {
   const request = decodeFields(body);
   const resourceMetrics = decodeFields(requiredEmbedded(request, 1));
   const resource = decodeFields(requiredEmbedded(resourceMetrics, 1));
-  const scopeMetrics = decodeFields(requiredEmbedded(resourceMetrics, 2));
-  const scope = decodeFields(requiredEmbedded(scopeMetrics, 1));
-  const metrics = embedded(scopeMetrics, 2).map((metricBody) => {
+  const scopeMetrics = embedded(resourceMetrics, 2).map((scopeMetricsBody) => {
+    const scopeMetrics = decodeFields(scopeMetricsBody);
+    const scope = decodeFields(requiredEmbedded(scopeMetrics, 1));
+    return {
+      scope: {
+        name: new TextDecoder().decode(requiredEmbedded(scope, 1)),
+        version: new TextDecoder().decode(requiredEmbedded(scope, 2)),
+      },
+      metrics: embedded(scopeMetrics, 2).map((metricBody) => {
     const metric = decodeFields(metricBody);
     const name = new TextDecoder().decode(requiredEmbedded(metric, 1));
+    const description = new TextDecoder().decode(requiredEmbedded(metric, 2));
+    const unit = new TextDecoder().decode(requiredEmbedded(metric, 3));
     const sum = embedded(metric, 7)[0];
     if (sum !== undefined) {
-      const points = embedded(decodeFields(sum), 1).map((point) => {
+      const sumFields = decodeFields(sum);
+      const points = embedded(sumFields, 1).map((point) => {
         const fields = decodeFields(point);
-        return { value: signedFixed64(fields.get(6)?.[0].value ?? 0), attributes: attributeValues(fields, 7) };
+        return {
+          startTimeUnixNano: fixed64(fields.get(2)?.[0].value ?? 0),
+          timeUnixNano: fixed64(fields.get(3)?.[0].value ?? 0),
+          attributes: attributeValues(fields, 7),
+          ...(fields.has(6) ? { asInt: signedFixed64(fields.get(6)?.[0].value ?? 0) } : { asDouble: double(fields.get(4)?.[0].value ?? 0) }),
+        };
       });
-      return { name, sum: points };
+      return {
+        name,
+        description,
+        unit,
+        sum: {
+          aggregationTemporality: sumFields.get(2)?.[0].value,
+          isMonotonic: sumFields.get(3)?.[0].value === 1,
+          dataPoints: points,
+        },
+      };
     }
     const histogram = requiredEmbedded(metric, 9);
-    const [point] = embedded(decodeFields(histogram), 1).map(decodeFields);
+    const histogramFields = decodeFields(histogram);
+    const [point] = embedded(histogramFields, 1).map(decodeFields);
     if (point === undefined) throw new Error('histogram point is missing');
     const packedCounts = requiredEmbedded(point, 6);
     const packedBounds = requiredEmbedded(point, 7);
@@ -155,18 +215,79 @@ function decodeExportMetricsServiceRequest(body: Uint8Array): {
     );
     return {
       name,
+      description,
+      unit,
       histogram: {
+        aggregationTemporality: histogramFields.get(2)?.[0].value,
+        dataPoints: [{
+          startTimeUnixNano: fixed64(point.get(2)?.[0].value ?? 0),
+          timeUnixNano: fixed64(point.get(3)?.[0].value ?? 0),
+          attributes: attributeValues(point, 9),
         count: Number(fixed64(point.get(4)?.[0].value ?? 0)),
         sum: double(point.get(5)?.[0].value ?? 0),
+          min: double(point.get(11)?.[0].value ?? 0),
+          max: double(point.get(12)?.[0].value ?? 0),
         counts,
         boundaries,
+        }],
       },
+    };
+      }),
     };
   });
   return {
-    resourceAttributes: attributeValues(resource),
-    scopeName: new TextDecoder().decode(requiredEmbedded(scope, 1)),
-    metrics,
+    resource: {
+      attributes: attributeValues(resource),
+      schemaUrl: new TextDecoder().decode(requiredEmbedded(resourceMetrics, 3)),
+    },
+    scopeMetrics,
+  };
+}
+
+function expectedMetricsRequest(metrics: ResourceMetrics): ReturnType<typeof decodeExportMetricsServiceRequest> {
+  return {
+    resource: { attributes: metrics.resource.attributes as Record<string, string>, schemaUrl: metrics.resource.schemaUrl ?? '' },
+    scopeMetrics: metrics.scopeMetrics.map((scopeMetrics) => ({
+      scope: { name: scopeMetrics.scope.name, version: scopeMetrics.scope.version ?? '' },
+      metrics: scopeMetrics.metrics.map((metric) => {
+        const descriptor = { name: metric.descriptor.name, description: metric.descriptor.description, unit: metric.descriptor.unit };
+        if (metric.dataPointType === DataPointType.SUM) {
+          return {
+            ...descriptor,
+            sum: {
+              aggregationTemporality: otlpAggregationTemporality(metric.aggregationTemporality),
+              isMonotonic: metric.isMonotonic,
+              dataPoints: metric.dataPoints.map((point) => ({
+                startTimeUnixNano: unixNanos(point.startTime),
+                timeUnixNano: unixNanos(point.endTime),
+                attributes: point.attributes,
+                ...(metric.descriptor.valueType === ValueType.INT ? { asInt: point.value } : { asDouble: point.value }),
+              })),
+            },
+          };
+        }
+        return {
+          ...descriptor,
+          histogram: {
+            aggregationTemporality: otlpAggregationTemporality(metric.aggregationTemporality),
+            dataPoints: metric.dataPoints.map((point) => {
+              const value = point.value as Histogram;
+              return {
+              startTimeUnixNano: unixNanos(point.startTime),
+              timeUnixNano: unixNanos(point.endTime),
+              attributes: point.attributes,
+              count: value.count,
+              sum: value.sum,
+              min: value.min,
+              max: value.max,
+              counts: value.buckets.counts,
+              boundaries: value.buckets.boundaries,
+              };
+            }),
+          },
+        };
+      }),
+    })),
   };
 }
 
@@ -194,29 +315,79 @@ describe('spooling exporters', () => {
     expect(result.code).toBe(ExportResultCode.SUCCESS);
   });
 
+  it('keeps capped trace and metrics batches visible through their SDK success callbacks', async () => {
+    const traceDirectory = await temporaryDirectory();
+    const metricDirectory = await temporaryDirectory();
+    const provider = new BasicTracerProvider();
+    const span = provider.getTracer('spooling-exporter-test').startSpan('capped-durable-before-success');
+    span.end();
+    const traceStore = new SpoolStore(traceDirectory, { maxBytes: 1_024, filesystem: deletingAfterSecondPublishFilesystem() });
+    const metricStore = new SpoolStore(metricDirectory, { maxBytes: 1_024, filesystem: deletingAfterSecondPublishFilesystem() });
+    const metricPayload = {
+      resource: { attributes: {} } as ResourceMetrics['resource'],
+      scopeMetrics: [{
+        scope: { name: 'capped-callback' },
+        metrics: [{
+          descriptor: { name: 'capped.metric', description: '', unit: '1', valueType: ValueType.INT },
+          aggregationTemporality: AggregationTemporality.CUMULATIVE,
+          dataPointType: DataPointType.SUM,
+          isMonotonic: true,
+          dataPoints: [{ startTime: [1, 0], endTime: [2, 0], attributes: {}, value: 1 }],
+        }],
+      }],
+    } satisfies ResourceMetrics;
+
+    // Each new batch must evict a full-cap predecessor before publication.
+    // The filesystem fake deletes only if capped bookkeeping runs after that
+    // publication, reproducing the drainer/callback race deterministically.
+    await traceStore.write('traces', Buffer.alloc(1_024));
+    await metricStore.write('metrics', Buffer.alloc(1_024));
+
+    await new Promise<void>((resolve, reject) => new SpoolingSpanExporter(traceStore, directSpanExporter()).export(
+      [span as unknown as ReadableSpan],
+      (result) => { void (async () => {
+        try {
+          expect(result.code).toBe(ExportResultCode.SUCCESS);
+          expect((await readdir(join(traceDirectory, 'traces'))).filter((name) => name.endsWith('.pb'))).toHaveLength(1);
+          resolve();
+        } catch (error) { reject(error); }
+      })(); },
+    ));
+    await new Promise<void>((resolve, reject) => new SpoolingMetricExporter(metricStore, directMetricExporter()).export(
+      metricPayload,
+      (result) => { void (async () => {
+        try {
+          expect(result.code).toBe(ExportResultCode.SUCCESS);
+          expect((await readdir(join(metricDirectory, 'metrics'))).filter((name) => name.endsWith('.pb'))).toHaveLength(1);
+          resolve();
+        } catch (error) { reject(error); }
+      })(); },
+    ));
+  });
+
   it('publishes a decodable OTLP protobuf metrics request with counter and histogram points before SDK success', async () => {
     const store = new SpoolStore(await temporaryDirectory());
     const metrics = {
-      resource: { attributes: { 'service.name': 'spool-test' }, schemaUrl: undefined } as ResourceMetrics['resource'],
+      resource: { attributes: { 'service.name': 'spool-test' }, schemaUrl: 'https://example.test/resource-schema' } as unknown as ResourceMetrics['resource'],
       scopeMetrics: [{
-        scope: { name: 'spooling-exporter-test' },
+        scope: { name: 'spooling-exporter-test', version: '1.2.3' },
         metrics: [
           {
-            descriptor: { name: 'spooled.counter', description: '', unit: '1', valueType: ValueType.INT },
+            descriptor: { name: 'spooled.counter', description: 'counter description', unit: '1', valueType: ValueType.INT },
             aggregationTemporality: AggregationTemporality.CUMULATIVE,
             dataPointType: DataPointType.SUM,
             isMonotonic: true,
             dataPoints: [
-              { startTime: [1, 0], endTime: [2, 0], attributes: {}, value: 7 },
-              { startTime: [1, 0], endTime: [2, 0], attributes: { replica: 'two' }, value: 8 },
+              { startTime: [1, 100], endTime: [2, 200], attributes: {}, value: 7 },
+              { startTime: [3, 300], endTime: [4, 400], attributes: { replica: 'two' }, value: 8 },
             ],
           },
           {
-            descriptor: { name: 'spooled.histogram', description: '', unit: 'ms', valueType: ValueType.DOUBLE },
+            descriptor: { name: 'spooled.histogram', description: 'histogram description', unit: 'ms', valueType: ValueType.DOUBLE },
             aggregationTemporality: AggregationTemporality.CUMULATIVE,
             dataPointType: DataPointType.HISTOGRAM,
             dataPoints: [{
-              startTime: [1, 0], endTime: [2, 0], attributes: {},
+              startTime: [5, 500], endTime: [6, 600], attributes: { replica: 'one' },
               value: { min: 2, max: 8, sum: 10, count: 2, buckets: { boundaries: [5], counts: [1, 1] } },
             }],
           },
@@ -226,35 +397,50 @@ describe('spooling exporters', () => {
     const exporter = new SpoolingMetricExporter(store, directMetricExporter());
 
     let decoded: ReturnType<typeof decodeExportMetricsServiceRequest> | undefined;
-    const result = await new Promise<{ code: number }>((resolve) => {
-      exporter.export(metrics, async (exportResult) => {
-        const [batch] = await store.list('metrics');
-        expect(batch).toBeDefined();
-        expect(batch.items).toBe(3);
-        const spooledBody = await readFile(batch.path);
-        decoded = decodeExportMetricsServiceRequest(spooledBody);
-        resolve(exportResult);
-      });
+    const result = await new Promise<{ code: number }>((resolve, reject) => {
+      exporter.export(metrics, (exportResult) => { void (async () => {
+        try {
+          const [batch] = await store.list('metrics');
+          expect(batch).toBeDefined();
+          expect(batch.items).toBe(3);
+          const spooledBody = await readFile(batch.path);
+          decoded = decodeExportMetricsServiceRequest(spooledBody);
+          resolve(exportResult);
+        } catch (error) { reject(error); }
+      })(); });
     });
 
     expect(result.code).toBe(ExportResultCode.SUCCESS);
-    expect(decoded).toEqual({
-      resourceAttributes: { 'service.name': 'spool-test' },
-      scopeName: 'spooling-exporter-test',
-      metrics: [
-        {
-          name: 'spooled.counter',
-          sum: [
-            { value: 7, attributes: {} },
-            { value: 8, attributes: { replica: 'two' } },
-          ],
-        },
-        {
-          name: 'spooled.histogram',
-          histogram: { count: 2, sum: 10, counts: [1, 1], boundaries: [5] },
-        },
-      ],
-    });
+    expect(decoded).toEqual(expectedMetricsRequest(metrics));
+  });
+
+  it('decodes a floating-point sum value as OTLP as_double', async () => {
+    const store = new SpoolStore(await temporaryDirectory());
+    const metrics = {
+      resource: { attributes: { 'service.name': 'spool-double-test' }, schemaUrl: 'https://example.test/double-resource-schema' } as unknown as ResourceMetrics['resource'],
+      scopeMetrics: [{
+        scope: { name: 'spooling-double-test', version: '2.0.0' },
+        metrics: [{
+          descriptor: { name: 'spooled.double', description: 'double description', unit: 'ms', valueType: ValueType.DOUBLE },
+          aggregationTemporality: AggregationTemporality.DELTA,
+          dataPointType: DataPointType.SUM,
+          isMonotonic: false,
+          dataPoints: [{ startTime: [7, 700], endTime: [8, 800], attributes: { replica: 'double' }, value: 1.5 }],
+        }],
+      }],
+    } satisfies ResourceMetrics;
+    const exporter = new SpoolingMetricExporter(store, directMetricExporter());
+    let decoded: ReturnType<typeof decodeExportMetricsServiceRequest> | undefined;
+
+    await new Promise<void>((resolve, reject) => exporter.export(metrics, () => { void (async () => {
+      try {
+        const [batch] = await store.list('metrics');
+        decoded = decodeExportMetricsServiceRequest(await readFile(batch.path));
+        resolve();
+      } catch (error) { reject(error); }
+    })(); }));
+
+    expect(decoded).toEqual(expectedMetricsRequest(metrics));
   });
 
   it('delegates LOWMEMORY aggregation selectors unchanged to the direct HTTP exporter', async () => {

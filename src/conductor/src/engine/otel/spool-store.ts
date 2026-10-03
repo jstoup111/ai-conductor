@@ -91,12 +91,29 @@ export class SpoolStore {
     const handle = await this.filesystem.open(temporaryPath, 'wx');
     let closed = false;
     let published = false;
+    let evictedBatches = 0;
+    let evictedItems = 0;
 
     try {
       await handle.writeFile(body);
       await handle.sync();
       await handle.close();
       closed = true;
+
+      // Keep the just-fsynced batch private while accounting for it. Once the
+      // rename publishes it, write() must return immediately so an SDK success
+      // callback cannot race a drainer through more store I/O.
+      if (this.maxBytes !== undefined) {
+        await this.removeStaleTemporaryFiles();
+        let totalBytes = await this.totalBytes();
+        for (const oldest of await this.allBatches()) {
+          if (totalBytes + body.byteLength <= this.maxBytes) break;
+          await this.delete(oldest);
+          totalBytes -= oldest.size;
+          evictedBatches += 1;
+          evictedItems += oldest.items;
+        }
+      }
       await this.filesystem.rename(temporaryPath, path);
       published = true;
     } finally {
@@ -106,19 +123,6 @@ export class SpoolStore {
 
     const batch = { name, path, size: body.byteLength, items };
     if (this.maxBytes === undefined) return batch;
-
-    await this.removeStaleTemporaryFiles();
-    let totalBytes = await this.totalBytes();
-    let evictedBatches = 0;
-    let evictedItems = 0;
-    for (const oldest of await this.allBatches()) {
-      if (totalBytes <= this.maxBytes) break;
-      if (oldest.path === path) continue;
-      await this.delete(oldest);
-      totalBytes -= oldest.size;
-      evictedBatches += 1;
-      evictedItems += oldest.items;
-    }
 
     return { ...batch, rejectedOversize: false, rejectedItems: 0, evictedBatches, evictedItems };
   }
