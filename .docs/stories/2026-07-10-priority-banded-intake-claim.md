@@ -134,8 +134,9 @@ envelope is ever lost.
   exits, then every held envelope has been released back to the inbox (finally-block
   guarantee preserved) — a later `claim` sees the full pending set.
 - Given a concurrent second claim starts while the first holds the drained set, when the
-  second runs, then it reports `empty` (pre-existing hold-window behavior, unchanged) and
-  the first claim's release restores all non-selected entries.
+  second runs, then it waits (bounded) for the intake claim lease and never reports `empty`
+  because of the first claim's hold, and the first claim's release restores all
+  non-selected entries before the lease is released.
 - Given closed-issue liveness (#279) marks an entry's verdict non-unblocked, when claim
   runs, then that entry is deferred exactly as today — banding changes candidate ORDER
   only, never verdict handling.
