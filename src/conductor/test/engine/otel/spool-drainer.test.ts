@@ -514,27 +514,12 @@ describe('SpoolDrainer', () => {
   it('keeps and retries a dropped oldest traces batch before newer traces while metrics drain independently', async () => {
     const received: string[] = [];
     let traceAttempts = 0;
-    const server = createServer(async (request, response) => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) chunks.push(Buffer.from(chunk));
-      const body = Buffer.concat(chunks).toString();
-      received.push(`${request.url}:${body}`);
-      if (request.url === '/v1/traces') {
-        traceAttempts += 1;
-        if (traceAttempts === 1) {
-          request.socket.destroy();
-          return;
-        }
-        response.writeHead(traceAttempts === 2 ? 503 : 200).end();
-        return;
-      }
-      response.writeHead(200).end();
-    });
-    const endpoint = await listen(server);
     let now = 1_727_000_000_000;
     const delays: number[] = [];
     let sleepCount = 0;
     let releaseFirstTraceRetry: (() => void) | undefined;
+    let signalFirstTraceRetry!: () => void;
+    const firstTraceRetry = new Promise<void>((resolve) => { signalFirstTraceRetry = resolve; });
     const store = new SpoolStore(await temporaryDirectory(), { now: () => now });
     await store.write('traces', Buffer.from('oldest-trace'));
     now += 1;
@@ -542,14 +527,32 @@ describe('SpoolDrainer', () => {
     await store.write('metrics', Buffer.from('independent-metric'));
 
     const drainer = new SpoolDrainer(store, {
-      endpoint,
+      endpoint: 'http://collector.test',
       headers: () => ({}),
+      fetch: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        const body = Buffer.from(init?.body as ArrayBuffer).toString();
+        received.push(`${path}:${body}`);
+        if (path === '/v1/traces') {
+          traceAttempts += 1;
+          if (traceAttempts === 1) throw new Error('dropped trace connection');
+          return new Response(undefined, { status: traceAttempts === 2 ? 503 : 200 });
+        }
+
+        // The metrics loop is independent, but it must not win the shared
+        // sleep seam before the trace retry has installed its test barrier.
+        await firstTraceRetry;
+        return new Response(undefined, { status: 200 });
+      },
       now: () => now,
       sleep: async (delay: number) => {
         delays.push(delay);
         sleepCount += 1;
         if (sleepCount === 1) {
-          await new Promise<void>((resolve) => { releaseFirstTraceRetry = resolve; });
+          await new Promise<void>((resolve) => {
+            releaseFirstTraceRetry = resolve;
+            signalFirstTraceRetry();
+          });
         }
         now += delay;
       },
