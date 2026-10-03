@@ -27,6 +27,7 @@ const METRIC_LIFECYCLE_TIMEOUT_MS = 250;
 
 interface InteractiveSpoolLifecycle {
   runtime: SpoolRuntime;
+  events: ConductorEventEmitter;
   visualizerOpen: boolean;
   metricsOpen: boolean;
   leaseStart?: Promise<{ acquired: boolean }>;
@@ -107,7 +108,7 @@ function interactiveSpoolLifecycle(
   const existing = interactiveSpoolLifecycles.get(directory);
   if (existing) return existing;
   const lifecycle: InteractiveSpoolLifecycle = {
-    runtime: createSpoolRuntime(directory, resolved, events), visualizerOpen: false, metricsOpen: false,
+    runtime: createSpoolRuntime(directory, resolved, events), events, visualizerOpen: false, metricsOpen: false,
   };
   const priorStop = interactiveSpoolStops.get(directory);
   if (priorStop) lifecycle.leaseStart = priorStop.then(() => lifecycle.runtime.lease.acquire());
@@ -124,8 +125,8 @@ function stopInteractiveSpoolIfUnused(directory: string, lifecycle: InteractiveS
   if (interactiveSpoolLifecycles.get(directory) === lifecycle) interactiveSpoolLifecycles.delete(directory);
   lifecycle.stopped = (async () => {
     await lifecycle.leaseStart?.catch(() => undefined);
-    await lifecycle.runtime.drainer.stop();
-    await lifecycle.runtime.lease.release();
+    await lifecycle.runtime.drainer.stop().catch((error) => reportSpoolFailure(lifecycle.events, error));
+    await lifecycle.runtime.lease.release().catch((error) => reportSpoolFailure(lifecycle.events, error));
   })();
   interactiveSpoolStops.set(directory, lifecycle.stopped);
   void lifecycle.stopped.finally(() => {
@@ -255,8 +256,8 @@ export function wireDaemonOtel(
       await settleMetricLifecycle(() => provider.forceFlush());
       await settleMetricLifecycle(() => provider.shutdown());
       await leaseStart?.catch(() => undefined);
-      await spoolRuntime?.drainer.stop();
-      await spoolRuntime?.lease.release();
+      await spoolRuntime?.drainer.stop().catch((error) => reportSpoolFailure(context.rootEvents, error));
+      await spoolRuntime?.lease.release().catch((error) => reportSpoolFailure(context.rootEvents, error));
     })(),
     ...(spoolRuntime ? { spoolRuntime } : {}),
   };
@@ -346,11 +347,15 @@ export function wireInteractiveOtelMetrics(
   };
 }
 
-async function reportSpoolRuntimeFailure(runtime: SpoolRuntime, events: ConductorEventEmitter, error: unknown): Promise<void> {
+async function reportSpoolFailure(events: ConductorEventEmitter, error: unknown): Promise<void> {
   const detail = error instanceof Error ? error.message : String(error);
   await events.emit({
     type: 'renderer_error', rendererName: 'otel', error: `[otel] spool lease or drainer failed: ${detail}`,
   }).catch(() => undefined);
+}
+
+async function reportSpoolRuntimeFailure(runtime: SpoolRuntime, events: ConductorEventEmitter, error: unknown): Promise<void> {
+  await reportSpoolFailure(events, error);
   await runtime.lease.release().catch(() => undefined);
 }
 
