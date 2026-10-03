@@ -152,7 +152,9 @@ describe('reference-transaction hook', () => {
     const tip = (await fixture.git(fixture.worktree, 'rev-parse', branch)).stdout;
 
     expect((await fixture.git(fixture.worktree, 'pack-refs', '--all')).exitCode).toBe(0);
-    expect((await fixture.git(fixture.worktree, 'gc')).exitCode).toBe(0);
+    const gc = await fixture.git(fixture.worktree, 'gc');
+    expect(gc.exitCode).toBe(0);
+    expect(gc.stderr).not.toContain('failed to run pack-refs');
     expect((await fixture.git(fixture.worktree, 'rev-parse', branch)).stdout).toBe(tip);
     expect((await fixture.git(fixture.worktree, 'branch', '-D', branch)).exitCode).not.toBe(0);
     expect((await fixture.git(fixture.worktree, 'rev-parse', branch)).stdout).toBe(tip);
