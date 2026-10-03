@@ -1,6 +1,6 @@
 import { access, chmod, mkdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { delimiter, isAbsolute, join } from 'node:path';
-import type { ManagedSessionContext } from './managed-session-context.js';
+import { validateManagedSessionProducerPath, type ManagedSessionContext } from './managed-session-context.js';
 import { ProviderSetupUnavailableError } from '../engine/provider-setup-failure.js';
 import { GH_OBSERVER_EXECUTABLE_NAME, renderGhObserverAsset } from './gh-observer-assets.js';
 import { GH_OBSERVER_REAL_EXECUTABLE_ENV } from './gh-observer.js';
@@ -48,7 +48,11 @@ export async function prepareManagedGhObservation(
   if (!realExecutable || !isAbsolute(realExecutable)) {
     throw ghUnavailable(input.context.provider, 'the underlying gh executable could not be resolved before PATH observation setup');
   }
-  const wrapperDirectory = join(input.context.producerRoot, '.gh-observer');
+  const wrapper = await validateManagedSessionProducerPath(input.context, '.gh-observer');
+  if (!wrapper.ok) {
+    throw ghUnavailable(input.context.provider, 'the per-dispatch observation destination is outside its provisioned producer root');
+  }
+  const wrapperDirectory = wrapper.path;
   try {
     await mkdir(wrapperDirectory, { recursive: true });
     await writeFile(

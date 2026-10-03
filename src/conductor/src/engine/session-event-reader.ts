@@ -1,13 +1,14 @@
 import { readdir, readFile } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import type { ConductorEvent, SessionObservationScope } from '../types/events.js';
+import { isSessionEventIdentity, SESSION_EVENT_IDENTITY } from '../execution/session-event-identity.js';
 
 export const SESSION_EVENTS_DIRECTORY = '.pipeline/session-events';
 export const MAX_SESSION_EVENT_RECORD_BYTES = 4_096;
 const MAX_INCREMENTAL_READ_BYTES = 64 * 1_024;
-const IDENTITY = /^[a-z][a-z0-9-]{0,63}$/;
+const IDENTITY = SESSION_EVENT_IDENTITY;
 
 export type SessionEventReadRecord =
   | { kind: 'event'; path: string; byteOffset: number; event: SessionProducerEvent }
@@ -34,13 +35,15 @@ export class SessionEventReader {
   private readonly list: (path: string) => Promise<Dirent[]>;
   private readonly readFile: (path: string) => Promise<Buffer>;
 
-  constructor({ projectRoot, ...dependencies }: { projectRoot: string } & SessionEventReaderDependencies) {
+  constructor({ projectRoot, featureSlug, ...dependencies }: { projectRoot: string; featureSlug?: string } & SessionEventReaderDependencies) {
     this.projectRoot = projectRoot;
+    this.featureSlug = featureSlug;
     this.list = dependencies.list ?? ((path) => readdir(path, { withFileTypes: true }));
     this.readFile = dependencies.read ?? readFile;
   }
 
   private readonly projectRoot: string;
+  private readonly featureSlug: string | undefined;
 
   async read(): Promise<readonly SessionEventReadRecord[]> {
     if (this.pending.length > 0) return this.pending;
@@ -110,7 +113,9 @@ export class SessionEventReader {
       if (lineEnd === -1) {
         const bytes = unread.byteLength - lineStart;
         if (bytes > MAX_SESSION_EVENT_RECORD_BYTES) {
-          records.push(this.diagnostic(path, offset + lineStart, 'record-too-large', undefined));
+          // Consume this bounded prefix: leaving an over-sized unterminated
+          // record at the offset would hide every later producer record.
+          records.push(this.diagnostic(path, offset + lineStart, 'record-too-large', offset + unread.byteLength));
         } else if (settled) {
           records.push(this.diagnostic(path, offset + lineStart, 'incomplete-record'));
         }
@@ -133,7 +138,9 @@ export class SessionEventReader {
   private parse(path: string, byteOffset: number, endOffset: number, line: Buffer): PendingRecord {
     try {
       const value: unknown = JSON.parse(line.toString('utf8'));
-      if (!isSessionProducerEvent(value)) return this.diagnostic(path, byteOffset, 'invalid-attribution', endOffset);
+      if (!isSessionProducerEvent(value) || !this.belongsToContainingProducer(path, value)) {
+        return this.diagnostic(path, byteOffset, 'invalid-attribution', endOffset);
+      }
       return { kind: 'event', path, byteOffset, event: value, endOffset };
     } catch {
       return this.diagnostic(path, byteOffset, 'malformed-json', endOffset);
@@ -142,6 +149,12 @@ export class SessionEventReader {
 
   private diagnostic(path: string, byteOffset: number, code: Extract<SessionEventReadRecord, { kind: 'diagnostic' }>['code'], endOffset?: number): PendingRecord {
     return { kind: 'diagnostic', path, byteOffset, code, endOffset };
+  }
+
+  /** Directory ownership is authoritative; a producer cannot claim another dispatch or feature. */
+  private belongsToContainingProducer(path: string, event: SessionProducerEvent): boolean {
+    if (event.dispatchId !== basename(dirname(path))) return false;
+    return event.scope.kind !== 'feature' || this.featureSlug === undefined || event.scope.featureSlug === this.featureSlug;
   }
 }
 
@@ -168,5 +181,5 @@ function isSafeValue(value: unknown): boolean {
 }
 
 function isIdentity(value: unknown): value is string {
-  return typeof value === 'string' && IDENTITY.test(value);
+  return isSessionEventIdentity(value);
 }

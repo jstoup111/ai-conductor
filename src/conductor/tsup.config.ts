@@ -10,6 +10,7 @@ assertPublishWrapperEnv(process.env);
 export default defineConfig({
   entry: [
     'src/index.ts',
+    'src/execution/gh-observer.ts',
     'src/engine/build-review-test-declarations.ts',
     'src/engine/self-host/release-actions.ts',
   ],

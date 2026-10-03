@@ -1756,6 +1756,10 @@ async function main(): Promise<void> {
       }`,
     );
   }
+  if (prelude.setupRequired) {
+    const detail = prelude.setupRequired.configError.message;
+    throw new Error(`Project bootstrap configuration is required before provider launch: ${detail}`);
+  }
 
   // Auto-update check (port-self-update-flow T5 / Story 7): spawn
   // `bin/update --auto` before the pipeline boots. Advisory only — a missing

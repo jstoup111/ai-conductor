@@ -104,6 +104,9 @@ async function appendObserved(invocation: ObservedGhInvocation, event: Parameter
   try {
     await invocation.producer.append(event);
   } catch {
+    // A transient producer failure is itself an occurrence. Make one bounded
+    // best-effort diagnostic attempt; never let telemetry alter forwarding.
+    try { await invocation.producer.append(invocation.producer.deliveryDiagnostic('write-failed')); } catch { /* diagnostic storage is degraded too */ }
     invocation.diagnostic?.('gh observation telemetry degraded');
   }
 }
