@@ -1,20 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-10-02T10:35:33.005Z
+Status: halted
 Slug: pi-runs-stay-contained-despite-pi-having-no-permis
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-pi-runs-stay-contained-despite-pi-having-no-permis
-Head SHA: 26d2799a8555c4e957da145b8a618828ca372384
-Halted at: 2026-10-02T03:33:38.088Z
+Head SHA: 57c643370cfe7275dc1d69ee6d4ab05cfac3ab81
+Halted at: 2026-10-03T19:27:39.188Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: needs human DECIDE — AB-1 (architectural-clarity: The as-built gate (99% verified) flags PiProvider's readOnlyReview branch and git_read as having no production caller, because the only readOnlyReview:true producers are custom-policy paths that refuse pi on reviewPolicyCatalog. That dormancy is the approved design: ADR D17 says 'Pi serves custom-policy laps only after #1888 turns it on', the track doc defers admission to #1888, and plan Task 10/story S1.7 require the refusal. The gate's resolution ('wire Pi read-only review through an approved production review path') has no approved path to wire, and adding one would contradict D17 and Task 10. A human must decide whether to accept a dormant-until-#1888 primitive for reachability or change the architecture; no code task can close it (confidence 85%).)
+Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — Blocking findings: AB-1 (DESIGN; adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 17): 99% verified: remediation restored two dormant production primitives after the prior lap removed them. `PiProvider.invoke`'s read-only branch at `pi-provider.ts:337,346-356` and the extension's `git_read` branch at `pi-harness-extension.ts:37-70` have no reachable production caller. Every producer of `readOnlyReview: true` is a custom-policy path, but Pi is refused for missing `reviewPolicyCatalog` at `step-runners.ts:3283-3294` or `step-runners.ts:4111-4116` before invocation. Although tasks 3, 4, and 9 introduced these primitives, approved D17 explicitly provides no current production entry point, so resolving the conflict requires a human architectural decision.
+
+Blocking findings:
+AB-1 (DESIGN; adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 17): 99% verified: remediation restored two dormant production primitives after the prior lap removed them. `PiProvider.invoke`'s read-only branch at `pi-provider.ts:337,346-356` and the extension's `git_read` branch at `pi-harness-extension.ts:37-70` have no reachable production caller. Every producer of `readOnlyReview: true` is a custom-policy path, but Pi is refused for missing `reviewPolicyCatalog` at `step-runners.ts:3283-3294` or `step-runners.ts:4111-4116` before invocation. Although tasks 3, 4, and 9 introduced these primitives, approved D17 explicitly provides no current production entry point, so resolving the conflict requires a human architectural decision.
 ```
