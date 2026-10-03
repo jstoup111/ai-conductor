@@ -44,6 +44,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Project-owned pull request body sections remain intact through SHIP and FINISH. ([implementation PR #2777](https://github.com/jstoup111/ai-conductor/pull/2777)).
 - Operators can safely resume only the matching live kickback halt and inspect its authorization state. ([implementation PR #2873](https://github.com/jstoup111/ai-conductor/pull/2873)).
 - Feature step cost and token gauges now carry a `provider` label, so spend can be grouped by provider. ([implementation PR #2915](https://github.com/jstoup111/ai-conductor/pull/2915)).
+- The plan and coherence-check skills now run their task-versus-criteria and task-versus-ADR contradiction check in an independent subagent at every tier, instead of letting the plan's author grade its own plan. ([implementation PR #2955](https://github.com/jstoup111/ai-conductor/pull/2955)).
 
 ### Fixed
 
