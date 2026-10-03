@@ -24,7 +24,7 @@ import {
 } from './artifacts.js';
 import { COVERAGE_BINDING_CODE_STAMP } from './coverage-binding-envelope.js';
 import type { GitRunner } from './rebase.js';
-import { originDefaultBranch, changedPathsBetween, resolveReviewInputs } from './rebase.js';
+import { makeGitRunner, originDefaultBranch, changedPathsBetween, resolveReviewInputs } from './rebase.js';
 import { featureTestPaths, GATE_SURFACE, partitionDelta, projectGateSurfaces } from './gate-invalidation.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { resolveThroughMap } from './rebase-translate.js';
@@ -298,6 +298,7 @@ export function isApplicableOriginalPass(
 /** The identity comparison result for a SHIP-tail verdict sidecar. */
 export type VerdictRunIdentity =
   | { state: 'match'; runId: string }
+  | { state: 'invalidated-code-stamp'; runId: string; reason: 'gate-code-validity-rerun' }
   | {
       state: 'stale-run-identity';
       expectedRunId: string;
@@ -338,6 +339,20 @@ export async function verdictProducedByRun(
   if (gate === 'prd_audit') {
     const stored = await readPrdAuditVerdict(dir);
     if (stored.kind !== 'present') return { state: 'unstamped' };
+    if (stored.value.codeStamp !== null) {
+      const validity = await gateVerdictStillValid(
+        { projectRoot: dir, git: makeGitRunner(dir) },
+        'prd_audit',
+        stored.value.codeStamp,
+      ).catch(() => 'rerun' as const);
+      if (validity !== 'preserve') {
+        return {
+          state: 'invalidated-code-stamp',
+          runId: stored.value.attemptId,
+          reason: 'gate-code-validity-rerun',
+        };
+      }
+    }
     return stored.value.attemptId === expectedRunId
       ? { state: 'match', runId: stored.value.attemptId }
       : { state: 'stale-run-identity', expectedRunId, foundRunId: stored.value.attemptId };

@@ -34,6 +34,7 @@ function routingConductor(projectRoot: string): {
     stateFilePath: join(projectRoot, 'conduct-state.json'),
     stepRunner: { run: vi.fn(async () => ({ success: true })) },
     events: new ConductorEventEmitter(),
+    config: { gate_code_validity: { enabled: false } },
   }) as unknown as {
     routeCurrentPrdAudit(state: { feature_desc: string }): Promise<unknown>;
   };
@@ -49,6 +50,7 @@ async function observeTypedConsumers(projectRoot: string): Promise<{
     completion: await checkStepCompletion(projectRoot, 'prd_audit', {
       attemptRunId: 'current-audit',
       sessionStartedAt: 0,
+      config: { gate_code_validity: { enabled: false } },
     }),
     routing: await routingConductor(projectRoot).routeCurrentPrdAudit({ feature_desc: 'authority-fixture' }),
     publication: recordedShipmentFindings({
@@ -179,6 +181,7 @@ describe('PRD-audit typed authority', () => {
     });
     await expect(checkStepCompletion(projectRoot, 'prd_audit', {
       attemptRunId: 'current-audit', sessionStartedAt: 0,
+      config: { gate_code_validity: { enabled: false } },
     })).resolves.toMatchObject({ done: false, routeClass: 'named-route' });
   });
 });

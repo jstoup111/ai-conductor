@@ -11,7 +11,7 @@ import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { checkStepCompletion, classifyPrdAuditGaps } from '../../src/engine/artifacts.js';
 import { gateVerdictStillValid } from '../../src/engine/gate-code-validity.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
@@ -113,7 +113,7 @@ describe('typed PRD-audit preservation', () => {
     const completion = await checkStepCompletion(
       fixture.root,
       'prd_audit',
-      completionContext(fixture.root, fixture.git),
+      completionContext(fixture.root, fixture.git, 'prior-review-run'),
     );
 
     expect(completion).toMatchObject({ done: true });
@@ -122,7 +122,7 @@ describe('typed PRD-audit preservation', () => {
   });
 
   it.each(['.docs/stories/active.md', '.docs/specs/active.md'])(
-    'rejects a resume reuse when a reviewed PRD input changes (%s)',
+    'invalidates a matching-attempt PASS when a reviewed PRD input changes (%s)',
     async (changedInput) => {
       const fixture = await repository();
       const reviewed = await commit(fixture, {
@@ -138,8 +138,20 @@ describe('typed PRD-audit preservation', () => {
       await expect(checkStepCompletion(
         fixture.root,
         'prd_audit',
-        completionContext(fixture.root, fixture.git),
-      )).resolves.toMatchObject({ done: false, routeClass: 'absent' });
+        completionContext(fixture.root, fixture.git, 'prior-review-run'),
+      )).resolves.toMatchObject({
+        done: false,
+        routeClass: 'absent',
+        verdictFreshness: { outcome: 'stale_invalidated' },
+      });
+      await expect(classifyPrdAuditGaps(
+        fixture.root,
+        undefined,
+        'prior-review-run',
+        { gate_code_validity: { enabled: true } },
+        undefined,
+        fixture.git,
+      )).resolves.toMatchObject({ kind: 'invalid-evidence' });
     },
   );
 
@@ -244,6 +256,41 @@ describe('typed PRD-audit preservation', () => {
       'prd_audit',
       'uncomputable-stamp',
     )).resolves.toBe('rerun');
+  });
+
+  it('invalidates matching-attempt unexplained and uncomputable stamps before a cached PASS can publish', async () => {
+    const fixture = await repository();
+    const reviewed = await commit(fixture, { 'src/feature.ts': 'export const feature = true;\n' }, 'feat: reviewed');
+    await fixture.git(['commit', '--amend', '-q', '-m', 'feat: unexplained rewrite']);
+    await writeTypedPass(fixture.root, reviewed, 'current-review-run');
+
+    await expect(checkStepCompletion(
+      fixture.root,
+      'prd_audit',
+      completionContext(fixture.root, fixture.git, 'current-review-run'),
+    )).resolves.toMatchObject({
+      done: false,
+      routeClass: 'absent',
+      verdictFreshness: { outcome: 'stale_invalidated' },
+    });
+    await expect(classifyPrdAuditGaps(
+      fixture.root, undefined, 'current-review-run',
+      { gate_code_validity: { enabled: true } }, undefined, fixture.git,
+    )).resolves.toMatchObject({ kind: 'invalid-evidence' });
+
+    const uncomputableGit: ReturnType<typeof makeGitRunner> = async () => ({
+      exitCode: 1, stdout: '', stderr: 'git diff unavailable',
+    });
+    await writeTypedPass(fixture.root, 'uncomputable-stamp', 'current-review-run');
+    await expect(checkStepCompletion(
+      fixture.root,
+      'prd_audit',
+      completionContext(fixture.root, uncomputableGit, 'current-review-run'),
+    )).resolves.toMatchObject({ done: false, routeClass: 'absent' });
+    await expect(classifyPrdAuditGaps(
+      fixture.root, undefined, 'current-review-run',
+      { gate_code_validity: { enabled: true } }, undefined, uncomputableGit,
+    )).resolves.toMatchObject({ kind: 'invalid-evidence' });
   });
 
   it('never preserves a typed PASS that currently has a blocking judgment', async () => {

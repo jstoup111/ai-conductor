@@ -29,6 +29,11 @@ const cleanJudgment: PrdAuditJudgment = {
   noOwnerObservations: [],
 };
 
+// These typed-completion fixtures isolate judgment semantics from the
+// code-validity integration, which is exercised with real Git in the
+// preservation fixtures below.
+const validityDisabled = { gate_code_validity: { enabled: false } };
+
 async function fixtureDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'prd-audit-completion-'));
   dirs.push(dir);
@@ -122,7 +127,7 @@ describe('typed PRD-audit completion', () => {
 
     const completion = await checkStepCompletion(dir, 'prd_audit', {
       attemptRunId: 'current-audit',
-      sessionStartedAt: 0,
+      sessionStartedAt: 0, config: validityDisabled,
     });
 
     expect(completion.done).toBe(true);
@@ -141,13 +146,41 @@ describe('typed PRD-audit completion', () => {
     const before = await readFile(path, 'utf8');
 
     await expect(checkStepCompletion(dir, 'prd_audit', {
-      attemptRunId: 'current-audit', sessionStartedAt: 0,
+      attemptRunId: 'current-audit', sessionStartedAt: 0, config: validityDisabled,
     })).resolves.toMatchObject({
       done: false,
       routeClass: 'absent',
       reason: expect.stringContaining('not-current output'),
     });
     await expect(readFile(path, 'utf8')).resolves.toBe(before);
+  });
+
+  it('does not reuse a matching-attempt cached PASS after HEAD moves on a PRD gate surface', async () => {
+    const dir = await fixtureDir();
+    await persistPrdAuditVerdict(dir, {
+      complete: true,
+      judgment: cleanJudgment,
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'current-audit', codeStamp: 'reviewed-head' });
+
+    const movedHeadGit = async (args: readonly string[]) => {
+      if (args[0] === 'merge-base') return { exitCode: 0, stdout: '', stderr: '' };
+      if (args[0] === 'diff') {
+        return { exitCode: 0, stdout: '.docs/specs/current-feature.md\n', stderr: '' };
+      }
+      return { exitCode: 1, stdout: '', stderr: `unexpected git call: ${args.join(' ')}` };
+    };
+    await expect(checkStepCompletion(dir, 'prd_audit', {
+      attemptRunId: 'current-audit',
+      sessionStartedAt: 0,
+      config: { gate_code_validity: { enabled: true } },
+      git: movedHeadGit,
+    })).resolves.toMatchObject({
+      done: false,
+      routeClass: 'absent',
+      verdictFreshness: { outcome: 'stale_invalidated' },
+    });
   });
 
   it('settles an accepted outside-visible finding from the same durable projection used by routing', async () => {
@@ -158,7 +191,7 @@ describe('typed PRD-audit completion', () => {
     await persistVisibleWideningEvidence(dir, 'accept');
 
     await expect(checkStepCompletion(dir, 'prd_audit', {
-      attemptRunId: 'current-audit', sessionStartedAt: 0,
+      attemptRunId: 'current-audit', sessionStartedAt: 0, config: validityDisabled,
     })).resolves.toMatchObject({ done: true });
   });
 
@@ -181,7 +214,7 @@ describe('typed PRD-audit completion', () => {
     if (!appended.ok) throw new Error(`fixture decision did not persist: ${appended.reason}`);
 
     await expect(checkStepCompletion(dir, 'prd_audit', {
-      attemptRunId: 'current-audit', sessionStartedAt: 0,
+      attemptRunId: 'current-audit', sessionStartedAt: 0, config: validityDisabled,
     })).resolves.toMatchObject({
       done: false,
       routeClass: 'named-route',
@@ -200,7 +233,7 @@ describe('typed PRD-audit completion', () => {
     await persistVisibleWideningEvidence(dir, authority);
 
     await expect(checkStepCompletion(dir, 'prd_audit', {
-      attemptRunId: 'current-audit', sessionStartedAt: 0,
+      attemptRunId: 'current-audit', sessionStartedAt: 0, config: validityDisabled,
     })).resolves.toMatchObject({
       done: false,
       routeClass: 'named-route',
@@ -220,7 +253,7 @@ describe('typed PRD-audit completion', () => {
       });
 
       await expect(checkStepCompletion(dir, 'prd_audit', {
-        attemptRunId: 'current-audit', sessionStartedAt: 0,
+        attemptRunId: 'current-audit', sessionStartedAt: 0, config: validityDisabled,
       })).resolves.toMatchObject({ done: true });
     },
   );
@@ -244,7 +277,7 @@ describe('typed PRD-audit completion', () => {
     await persistVisibleWideningEvidence(dir, 'accept');
 
     await expect(checkStepCompletion(dir, 'prd_audit', {
-      attemptRunId: 'current-audit', sessionStartedAt: 0,
+      attemptRunId: 'current-audit', sessionStartedAt: 0, config: validityDisabled,
     })).resolves.toMatchObject({
       done: false,
       routeClass: 'named-route',
@@ -310,6 +343,7 @@ describe('typed PRD-audit completion', () => {
     const completion = await checkStepCompletion(dir, 'prd_audit', {
       attemptRunId: 'current-audit',
       sessionStartedAt: 0,
+      config: validityDisabled,
     });
 
     expect(completion).toMatchObject({

@@ -2558,20 +2558,81 @@ function staleVerdictRunIdentityResult(
 }
 
 /** Shared code-stamp-first then dispatch-identity decision for every PRD reader. */
+export interface PrdAuditVerdictIdentity {
+  /** True only when a non-null stamp was checked and may be preserved. */
+  codeStampStillValid: boolean;
+  /** A checked stamp was not preservable, regardless of attempt identity. */
+  codeStampInvalidated: boolean;
+  /** The code-validity decision that invalidated the stamp, when one was checked. */
+  codeStampValidity?: 'preserve' | 'rerun';
+  /** A non-preservable verdict belongs to another dispatch. */
+  staleRunIdentity: boolean;
+}
+
+/**
+ * The sole current-evidence decision for typed PRD verdict consumers.
+ *
+ * A non-null stamp is evaluated once before attempt identity.  This preserves
+ * a surface miss across attempts, while making every non-preservable stamp
+ * unavailable to completion and routing readers alike.
+ */
+export type ReadCurrentPrdAuditVerdictResult =
+  | { kind: 'absent'; reason: string }
+  | { kind: 'unreadable'; reason: string }
+  | { kind: 'invalidated'; reason: string; identity: PrdAuditVerdictIdentity }
+  | { kind: 'present'; value: PersistedPrdAuditVerdict; identity: PrdAuditVerdictIdentity };
+
 export async function prdAuditVerdictIdentity(
   dir: string,
   verdict: PersistedPrdAuditVerdict,
   input: Pick<CompletionContext, 'attemptRunId' | 'config' | 'git'>,
-): Promise<{ codeStampStillValid: boolean; staleRunIdentity: boolean }> {
+): Promise<PrdAuditVerdictIdentity> {
   let codeStampStillValid = false;
+  let codeStampValidity: 'preserve' | 'rerun' | undefined;
   if (verdict.codeStamp !== null && resolveGateCodeValidityConfig(input.config).enabled) {
     const git = input.git ?? makeGitRunner(dir);
-    codeStampStillValid = await gateVerdictStillValid({ projectRoot: dir, git }, 'prd_audit', verdict.codeStamp) === 'preserve';
+    // A failed validity probe is an uncomputable delta, which ADR D2 scores
+    // fail-closed as rerun.  Keep that decision inside the shared reader so a
+    // caller cannot accidentally recover the stored PASS after a git failure.
+    codeStampValidity = await gateVerdictStillValid({ projectRoot: dir, git }, 'prd_audit', verdict.codeStamp)
+      .catch(() => 'rerun');
+    codeStampStillValid = codeStampValidity === 'preserve';
   }
+  const codeStampInvalidated = codeStampValidity === 'rerun';
   return {
     codeStampStillValid,
-    staleRunIdentity: !codeStampStillValid && input.attemptRunId !== undefined && verdict.attemptId !== input.attemptRunId,
+    codeStampInvalidated,
+    ...(codeStampValidity === undefined ? {} : { codeStampValidity }),
+    staleRunIdentity: codeStampInvalidated && input.attemptRunId !== undefined && verdict.attemptId !== input.attemptRunId,
   };
+}
+
+export async function readCurrentPrdAuditVerdict(
+  dir: string,
+  input: Pick<CompletionContext, 'attemptRunId' | 'config' | 'git'>,
+): Promise<ReadCurrentPrdAuditVerdictResult> {
+  const stored = await readPrdAuditVerdict(dir);
+  if (stored.kind === 'absent') {
+    return { kind: 'absent', reason: `${PRD_AUDIT_VERDICT_PATH} is missing` };
+  }
+  if (stored.kind === 'unreadable') return stored;
+
+  const identity = await prdAuditVerdictIdentity(dir, stored.value, input);
+  if (identity.codeStampInvalidated) {
+    return {
+      kind: 'invalidated',
+      identity,
+      reason: `${PRD_AUDIT_VERDICT_PATH} code stamp is no longer preservable (gate-code-validity returned ${identity.codeStampValidity}); a fresh audit is required`,
+    };
+  }
+  if (identity.staleRunIdentity) {
+    return {
+      kind: 'invalidated',
+      identity,
+      reason: `${PRD_AUDIT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${input.attemptRunId}`,
+    };
+  }
+  return { kind: 'present', value: stored.value, identity };
 }
 
 /** One semantic settlement rule for completion and stale-evidence preservation. */
@@ -3190,16 +3251,12 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // Markdown file is an engine-rendered inspection view and must never be
     // parsed back into a gate result: doing so lets a presentation edit change
     // completion semantics and rejects the renderer's own typed output.
-    const stored = await readPrdAuditVerdict(dir);
-    if (stored.kind === 'absent') {
-      return { done: false, routeClass: 'absent', reason: `${PRD_AUDIT_VERDICT_PATH} is missing` };
-    }
-    if (stored.kind === 'unreadable') {
-      return { done: false, routeClass: 'absent', reason: stored.reason };
+    const current = await readCurrentPrdAuditVerdict(dir, ctx);
+    if (current.kind === 'absent' || current.kind === 'unreadable') {
+      return { done: false, routeClass: 'absent', reason: current.reason };
     }
     const artifact = join(dir, PRD_AUDIT_VERDICT_PATH);
-    const identity = await prdAuditVerdictIdentity(dir, stored.value, ctx);
-    if (identity.staleRunIdentity) {
+    if (current.kind === 'invalidated') {
       return {
         done: false,
         routeClass: 'absent',
@@ -3210,25 +3267,26 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           outcome: 'stale_invalidated',
           fresh: false,
         },
-        reason: `${PRD_AUDIT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${ctx.attemptRunId}`,
+        reason: current.reason,
       };
     }
-    if (stored.value.codeStamp === null) {
+    const { value, identity } = current;
+    if (value.codeStamp === null) {
       return {
         done: false,
         routeClass: 'absent',
         reason: `${PRD_AUDIT_VERDICT_PATH} has no reviewed code stamp — scoring 'not-current output'; a fresh audit is required`,
       };
     }
-    if (!stored.value.complete) {
+    if (!value.complete) {
       return {
         done: false,
         routeClass: 'absent',
         retrySignal: 'structured-result-rejected',
-        reason: `${PRD_AUDIT_VERDICT_PATH} is incomplete: ${stored.value.diagnostics.join('; ')}`,
+        reason: `${PRD_AUDIT_VERDICT_PATH} is incomplete: ${value.diagnostics.join('; ')}`,
       };
     }
-    const blocking = await prdAuditBlockingFindings(dir, stored.value);
+    const blocking = await prdAuditBlockingFindings(dir, value);
     if (blocking.labels.length > 0) {
       return {
         done: false,
@@ -4228,21 +4286,18 @@ export async function classifyPrdAuditGaps(
 ): Promise<PrdGapClassification> {
   void sessionStartedAt;
   void featureDesc;
-  const stored = await readPrdAuditVerdict(dir);
-  if (stored.kind === 'absent') {
+  const current = await readCurrentPrdAuditVerdict(dir, { attemptRunId: expectedRunId, config, git });
+  if (current.kind === 'absent') {
     return { kind: 'invalid-evidence', summary: `missing current typed PRD-audit verdict at ${PRD_AUDIT_VERDICT_PATH}` };
   }
-  if (stored.kind === 'unreadable') {
-    return { kind: 'invalid-evidence', summary: `invalid typed PRD-audit evidence: ${stored.reason}` };
+  if (current.kind === 'unreadable' || current.kind === 'invalidated') {
+    return { kind: 'invalid-evidence', summary: `invalid typed PRD-audit evidence: ${current.reason}` };
   }
-  const identity = await prdAuditVerdictIdentity(dir, stored.value, { attemptRunId: expectedRunId, config, git });
-  if (identity.staleRunIdentity) {
-    return { kind: 'invalid-evidence', summary: `${PRD_AUDIT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not current run ${expectedRunId}` };
+  const { value } = current;
+  if (!value.complete) {
+    return { kind: 'invalid-evidence', summary: `${PRD_AUDIT_VERDICT_PATH} is incomplete: ${value.diagnostics.join('; ')}` };
   }
-  if (!stored.value.complete) {
-    return { kind: 'invalid-evidence', summary: `${PRD_AUDIT_VERDICT_PATH} is incomplete: ${stored.value.diagnostics.join('; ')}` };
-  }
-  const typed = prdAuditTypedRouteReport(stored.value);
+  const typed = prdAuditTypedRouteReport(value);
   const findings = typed.report.findings;
     // An OVER_SCOPE criterion the operator already accepted, or one whose
     // intent relation never made it blocking, is not a gap this routing should

@@ -203,6 +203,32 @@ describe('verdictProducedByRun', () => {
     });
   });
 
+  it('does not report match for a matching PRD attempt whose stamped gate surface changed', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const reviewed = await commit(s, {
+      '.docs/specs/active.md': '# Original PRD\n',
+      'src/feature.ts': 'export const feature = true;\n',
+    }, 'feat: reviewed');
+    await persistPrdAuditVerdict(s.repo, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
+          evidence: 'Current.', rationale: 'Current.', requirementAssociations: [], evidenceTaskIds: [],
+        }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [], recordedDispositions: [],
+    }, { attemptId: 'run-current', codeStamp: reviewed });
+    await commit(s, { '.docs/specs/active.md': '# Changed PRD\n' }, 'docs: change reviewed PRD');
+
+    await expect(verdictProducedByRun(s.repo, 'prd_audit', 'run-current')).resolves.toEqual({
+      state: 'invalidated-code-stamp', runId: 'run-current', reason: 'gate-code-validity-rerun',
+    });
+  });
+
   it('returns typed stale-run-identity for prd_audit when its typed verdict carries another attempt id', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'verdict-run-identity-'));
     scratches.push(dir);

@@ -49,6 +49,7 @@ describe('typed PRD-audit scope routing', () => {
       stateFilePath: join(projectRoot, 'conduct-state.json'),
       stepRunner: { run: vi.fn(async () => ({ success: true })) },
       events: new ConductorEventEmitter(),
+      config: { gate_code_validity: { enabled: false } },
     }) as unknown as { routeCurrentPrdAudit(state: { feature_desc: string }): Promise<ScopeRoute> };
   }
 
@@ -100,8 +101,8 @@ describe('typed PRD-audit scope routing', () => {
       { criterionId: 'S1.2', grade: 'OVER_SCOPE', intentRelation: 'outside-harmless' },
     ] });
 
-    await expect(checkStepCompletion(projectRoot, 'prd_audit', { sessionStartedAt: 0 })).resolves.toMatchObject({ done: true });
-    await expect(classifyPrdAuditGaps(projectRoot, undefined)).resolves.toEqual({ kind: 'clean', summary: 'no blocking FRs' });
+    await expect(checkStepCompletion(projectRoot, 'prd_audit', { sessionStartedAt: 0, config: { gate_code_validity: { enabled: false } } })).resolves.toMatchObject({ done: true });
+    await expect(classifyPrdAuditGaps(projectRoot, undefined, undefined, { gate_code_validity: { enabled: false } })).resolves.toEqual({ kind: 'clean', summary: 'no blocking FRs' });
     await expect(conductor().routeCurrentPrdAudit({ feature_desc: 'typed-scope' })).resolves.toEqual({ kind: 'record' });
 
     await expect(readPrdAuditVerdict(projectRoot)).resolves.toMatchObject({
@@ -121,8 +122,8 @@ describe('typed PRD-audit scope routing', () => {
       { criterionId: 'S1.2', grade: 'OVER_SCOPE', intentRelation: 'within' },
     ] });
 
-    await expect(checkStepCompletion(projectRoot, 'prd_audit', { sessionStartedAt: 0 })).resolves.toMatchObject({ done: false });
-    await expect(classifyPrdAuditGaps(projectRoot, undefined)).resolves.toMatchObject({ kind: 'needs-decide' });
+    await expect(checkStepCompletion(projectRoot, 'prd_audit', { sessionStartedAt: 0, config: { gate_code_validity: { enabled: false } } })).resolves.toMatchObject({ done: false });
+    await expect(classifyPrdAuditGaps(projectRoot, undefined, undefined, { gate_code_validity: { enabled: false } })).resolves.toMatchObject({ kind: 'needs-decide' });
     await expect(conductor().routeCurrentPrdAudit({ feature_desc: 'typed-scope' })).resolves.toMatchObject({
       kind: 'plan-gap-halt', route: { detail: expect.stringContaining('S1.1') },
     });
@@ -132,9 +133,35 @@ describe('typed PRD-audit scope routing', () => {
       diagnostics: ['The typed audit evidence is incomplete.'],
       judgments: [{ criterionId: 'S1.1', grade: 'OVER_SCOPE', intentRelation: 'outside-harmless' }],
     });
-    await expect(checkStepCompletion(projectRoot, 'prd_audit', { sessionStartedAt: 0 })).resolves.toMatchObject({ done: false });
-    await expect(classifyPrdAuditGaps(projectRoot, undefined)).resolves.toMatchObject({ kind: 'invalid-evidence' });
+    await expect(checkStepCompletion(projectRoot, 'prd_audit', { sessionStartedAt: 0, config: { gate_code_validity: { enabled: false } } })).resolves.toMatchObject({ done: false });
+    await expect(classifyPrdAuditGaps(projectRoot, undefined, undefined, { gate_code_validity: { enabled: false } })).resolves.toMatchObject({ kind: 'invalid-evidence' });
     await expect(conductor().routeCurrentPrdAudit({ feature_desc: 'typed-scope' })).resolves.toEqual({ kind: 'none' });
+  });
+
+  it('refuses an invalidated matching-attempt OVER_SCOPE before reconciliation or recording it', async () => {
+    await writeVerdict({ judgments: [{ criterionId: 'S1.1', grade: 'OVER_SCOPE', intentRelation: 'within' }] });
+    const invalidatedReader = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, 'conduct-state.json'),
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events: new ConductorEventEmitter(),
+      config: { gate_code_validity: { enabled: true } },
+      git: async (args) => args[0] === 'merge-base'
+        ? { exitCode: 0, stdout: '', stderr: '' }
+        : { exitCode: 0, stdout: '.docs/stories/typed-scope.md\n', stderr: '' },
+    }) as unknown as {
+      currentRunId?: string;
+      routeCurrentPrdAudit(state: { feature_desc: string }): Promise<ScopeRoute>;
+    };
+    invalidatedReader.currentRunId = 'typed-scope';
+
+    await expect(invalidatedReader.routeCurrentPrdAudit({ feature_desc: 'typed-scope' })).resolves.toMatchObject({
+      kind: 'projection-halt',
+      reason: expect.stringContaining('code stamp is no longer preservable'),
+    });
+    await expect(readPrdAuditVerdict(projectRoot)).resolves.toMatchObject({
+      kind: 'present', value: { recordedDispositions: [] },
+    });
   });
 
   it('keeps outside-visible pending and refused offers on the scope halt before remediation', async () => {
