@@ -50,6 +50,12 @@ export type ReconcileRemediationCasesResult =
       readonly resolvedAbsentCaseIds: readonly string[];
     }
   | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection }
+  | {
+      readonly ok: false;
+      readonly reason: 'second-unresolved-owner';
+      readonly caseIds: readonly string[];
+      readonly sourceIds: readonly string[];
+    }
   | { readonly ok: false; readonly reason: 'store-failure'; readonly storeReason: RemediationCaseStoreFailureReason };
 
 /** Explicit durable bindings, never prose similarity or tree movement, decide reuse. */
@@ -72,7 +78,13 @@ type Reconciliation =
       readonly caseIdsByRef: ReadonlyMap<string, string>;
       readonly resolvedAbsentCaseIds: readonly string[];
     }
-  | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection };
+  | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection }
+  | {
+      readonly ok: false;
+      readonly reason: 'second-unresolved-owner';
+      readonly caseIds: readonly string[];
+      readonly sourceIds: readonly string[];
+    };
 
 function isDurableId(value: string): boolean {
   return value.trim().length > 0 && value.length <= 256;
@@ -144,6 +156,9 @@ function reconcileState(
   }
 
   const referencedExisting = new Set<string>();
+  const graphBoundExistingIds = new Set(
+    input.graph.cases.flatMap(({ case: caseRow }) => caseRow.existingCaseId === undefined ? [] : [caseRow.existingCaseId]),
+  );
   const replacements = new Map<string, RemediationCaseRecord>();
   const additions: RemediationCaseRecord[] = [];
   const caseIdsByRef = new Map<string, string>();
@@ -152,7 +167,12 @@ function reconcileState(
   for (const proposed of input.graph.cases) {
     const { case: caseRow, sources } = proposed;
     if (!caseRow.existingCaseId) {
-      const converged = convergedCaseFor(state, proposed, claimed);
+      // `distinctFrom` is an admitted declaration that this proposal is not
+      // the open case with otherwise matching sources.  It must therefore
+      // reach the owner check and (when unowned) stamp its own durable case.
+      const converged = caseRow.distinctFrom === undefined
+        ? convergedCaseFor(state, proposed, claimed)
+        : undefined;
       if (converged) {
         claimed.add(converged.id);
         caseIdsByRef.set(caseRow.caseRef, converged.id);
@@ -162,6 +182,20 @@ function reconcileState(
       const caseId = takeId(input.generateId, usedIds);
       if (typeof caseId !== 'string' || caseId === 'id-generation-failed' || caseId === 'id-collision') {
         return { ok: false, reason: caseId };
+      }
+      for (const source of sources) {
+        const owner = state.cases.find((record) =>
+          record.resolution === 'open' && !graphBoundExistingIds.has(record.id) &&
+          record.sources.some((link) => link.sourceId === source.sourceId),
+        );
+        if (owner) {
+          return {
+            ok: false,
+            reason: 'second-unresolved-owner',
+            caseIds: [owner.id, caseId],
+            sourceIds: [source.sourceId],
+          };
+        }
       }
       const effectId = caseRow.disposition === 'reject' || caseRow.disposition === 'escalate'
         ? undefined
@@ -183,6 +217,7 @@ function reconcileState(
           recordedAt: input.recordedAt,
         })),
         effect: effectFor(caseRow, effectId),
+        ...(caseRow.distinctFrom === undefined ? {} : { distinctFrom: caseRow.distinctFrom }),
         ...(caseRow.escalation === undefined ? {} : { escalation: caseRow.escalation }),
       });
       continue;
