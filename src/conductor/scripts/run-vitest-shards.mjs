@@ -9,8 +9,8 @@ const testRoot = join(packageRoot, 'test');
 // processing a small number of large fixtures. Bound both file count and
 // source bytes so a growing heavyweight fixture cannot share a worker merely
 // because it fits below the count limit.
-const maxFilesPerBatch = 2;
-// Tests around 120 KiB can retain enough fixture state to make a two-file
+const maxFilesPerBatch = 3;
+// Tests around 120 KiB can retain enough fixture state to make a three-file
 // worker exceed its heap ceiling. Treat that size as a dedicated-process
 // boundary rather than allowing it to share a batch merely below 128 KiB.
 const maxBytesPerBatch = 120 * 1024;
