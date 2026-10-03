@@ -409,3 +409,11 @@ Every row is diff-local: fixtures supply their own plan text, commits, and engin
 **Done when:**
 - S3.3 is satisfied by this task.
 - Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-t14-baseline is complete.
+
+### Task rem-as-built-rem-adr-d3-close-plan-identity: src/conductor/src/engine/repair-obligations.ts:290-324 — in RepairObligationStore.close, return { ok: false, kind: 'stale' } when obligation.planIdentity !== planIdentity, checked right after the missing-obligation check and before the currentByPlan different-authority exception (matching markSettled at :276); add a repair-obligations.test.ts case: plans A and B both reuse task id 1, A has an open obligation, B's current obligation for task 1 has a different authority, and close via B's planPath with A's obligation id is refused and leaves A's task open. Keep the existing same-plan different-authority coexistence (Task 4 / S1.13) and plan_amendment supersession (S1.6) tests green; commit with a Task: trailer for this id
+**Gate:** as-built
+**Rationale:** REMEDIABLE conforming drift under adr-2026-09-06-reopened-task-resolution D3 (95% verified from source): RepairObligationStore.close (repair-obligations.ts:290-324) derives planIdentity but never checks obligation.planIdentity, so the different-authority exception at :306-317 lets a plan-B path close a plan-A obligation that shares a task id. The approved architecture stands, so the fix is a code change admitted by plan Task 4, which owns repair-obligations.ts and the different-authority separation. A new explicit task is emitted rather than an existing-task re-stage, because last lap's existing-task re-stages re-closed on reported evidence without a commit. Sibling sweep: markSettled (:276) and admit's supersession loop (:202) already compare planIdentity, so close is the only site with this shape. The change only adds a guard and keeps Task 4's different-authority coexistence tests (S1.13) and its supersession tests (S1.6) intact.
+**Governing clause:** adr-2026-09-06-reopened-task-resolution decision 3
+**Done when:**
+- adr-2026-09-06-reopened-task-resolution decision 3 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-d3-close-plan-identity is complete.
