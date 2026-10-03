@@ -11914,7 +11914,9 @@ export class Conductor {
                   // #569 Task 5: record a distinct, actionable reason for
                   // the terminal HALT fallback in case this build step
                   // ultimately exhausts retries after this stall.
-                  lastBuildStallReason = `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))`;
+                  lastBuildStallReason =
+                    `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))` +
+                    (completion.reason ? `\nCompletion gate: ${completion.reason}` : '');
                 } else if (
                   attempt >= 2 &&
                   resolvedTasksAfter <= resolvedTasksBefore &&
@@ -12118,7 +12120,7 @@ export class Conductor {
                     const progressPart =
                       `Build stall: no forward progress (resolved ` +
                       `${resolvedTasksBefore} → ${resolvedTasksAfter} tasks).`;
-                    const synthesized = `${progressPart} ${reasonPart}.`;
+                    const synthesized = `${lastBuildStallReason ?? progressPart}\n${reasonPart}.`;
                     effectiveQuestion = await writeStallQuestionEvidence(
                       this.projectRoot,
                       synthesized,
