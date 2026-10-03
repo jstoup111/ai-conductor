@@ -79,9 +79,11 @@ function coverageBindingBatchOutput(
   verdict: 'asserts' | 'does-not-assert' = 'asserts',
 ): string {
   const body = prompt.slice(prompt.lastIndexOf('\n\n{') + 2);
-  const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
+  const { claims, taskTable } = JSON.parse(body) as { claims: Array<{ id: string }>; taskTable?: unknown };
   return JSON.stringify({
-    verdicts: claims.map(({ id }) => verdict === 'asserts'
+    verdicts: claims.map(({ id }) => taskTable !== undefined
+      ? { id, verdict: 'consistent' }
+      : verdict === 'asserts'
       ? { id, verdict }
       : {
           id,
@@ -431,11 +433,11 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     const counts: Record<string, number> = {};
     await conductorWith(coverageRefreshRunner(counts, provider, config), config, undefined, 'coverage_binding').run();
 
-    expect(providerCalls).toBe(1);
+    expect(providerCalls).toBe(2);
     expect(counts.coverage_binding).toBe(1);
     expect(counts.acceptance_specs ?? 0).toBe(0);
     expect(JSON.parse(await readFile(join(dir, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({
-      status: 'done', entries: [{ verdict: 'asserts' }],
+      status: 'done', entries: [{ verdict: 'asserts' }, { kind: 'conflict', verdict: 'consistent' }],
     });
   });
 
@@ -466,7 +468,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     expect(counts.coverage_binding).toBe(1);
     expect(providerCalls).toBe(0);
     expect(JSON.parse(await readFile(join(dir, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({
-      status: 'done', entries: [{ verdict: 'asserts' }],
+      status: 'done', entries: [{ verdict: 'asserts' }, { kind: 'conflict', verdict: 'consistent' }],
     });
   });
 

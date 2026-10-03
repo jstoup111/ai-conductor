@@ -4834,6 +4834,17 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     if (!judgeEnabled) {
+      // Conflict claims are deliberately unjudged when the gate is disabled,
+      // so they cannot take precedence over the established D19 reopen path.
+      for (const deferred of deferredReopens) {
+        const detail = await reopen(deferred.taskIds, deferred.digest, deferred.instruction);
+        if (detail) {
+          const output = `coverage_binding could not reopen contradicted work: ${detail.detail}`;
+          return detail.capExceeded === undefined
+            ? { success: false, output }
+            : { success: false, output, refusal: { kind: 'needs-human', reason: output } };
+        }
+      }
       const entries: CoverageBindingEnvelopeEntry[] = [
         ...criterionClaims.map((claim) => ({
           digest: claimDigest(claim), criterion: claim.criterion, taskIds: claim.taskIds,
@@ -5043,14 +5054,47 @@ export class DefaultStepRunner implements StepRunner {
       const ids = [...issuedIds.keys()];
       const prompt = renderConflictBatchPrompt(batch, batch[0]!.claim.taskTable, ids);
       const memberId = batch[0]!.claimDigest;
-      const dispatched = await this.provider.invoke({ prompt: `${renderAuxiliarySkillInvocation('coverage-binding', this.providerKey)}\n\n${prompt}`, sessionId: randomUUID(), resume: false, dangerouslySkipPermissions: true, cwd: this.projectDir, model: auxiliaryPolicy.model, effort: auxiliaryPolicy.effort });
-      this.callCount++;
-      if (!dispatched.success || typeof dispatched.output !== 'string') {
-        await writeEnvelope('failed', entries);
-        const infrastructureFailure = new CoverageBindingPayloadError(`provider failed for conflict batch ${batchIndex + 1} of ${conflictPlan.batches.length}: ${dispatched.output ?? memberId}`);
-        return { success: false, output: infrastructureFailure.message, infrastructureFailure };
+      let result: { success: boolean; output?: string; providerSetupExhaustion?: ProviderExecutionResult['providerSetupExhaustion'] };
+      if (this.providerRuntimes && this.sessionStore) {
+        const dispatched = await this.dispatchProviderWithLifecycleSupervision(
+          'coverage_binding',
+          { prompt, cwd: this.projectDir, dangerouslySkipPermissions: true },
+          (options) => executeAuxiliaryProviderCandidates({
+            step: 'coverage_binding', memberId, policy: auxiliaryPolicy, executionContext,
+            runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch(`coverage-binding:${memberId}`),
+            config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
+            providerAvailability: this.providerExecutionContext?.providerAvailability,
+            tier: state.complexity_tier,
+            withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
+            onAttempt: this.providerAttempt, warn: this.providerWarn,
+            options,
+            optionsForCandidate: (providerKey) => ({ ...options, prompt: `${renderAuxiliarySkillInvocation('coverage-binding', providerKey)}\n\n${prompt}` }),
+          }),
+          undefined,
+          executionContext,
+        );
+        this.callCount++;
+        result = { success: dispatched.success, output: dispatched.output, providerSetupExhaustion: dispatched.providerSetupExhaustion };
+      } else {
+        const dispatched = await this.provider.invoke({
+          prompt: `${renderAuxiliarySkillInvocation('coverage-binding', this.providerKey)}\n\n${prompt}`,
+          sessionId: randomUUID(), resume: false, dangerouslySkipPermissions: true, cwd: this.projectDir,
+          model: auxiliaryPolicy.model, effort: auxiliaryPolicy.effort,
+        });
+        this.callCount++;
+        result = dispatched;
       }
-      const parsed = parseConflictBatchPayload(dispatched.output, issuedIds, planText);
+      if (!result.success || typeof result.output !== 'string') {
+        await writeEnvelope('failed', entries);
+        const infrastructureFailure = new CoverageBindingPayloadError(`provider failed for conflict batch ${batchIndex + 1} of ${conflictPlan.batches.length}: ${result.output ?? memberId}`);
+        return {
+          success: false,
+          output: infrastructureFailure.message,
+          infrastructureFailure,
+          ...(result.providerSetupExhaustion ? { providerSetupExhaustion: result.providerSetupExhaustion } : {}),
+        };
+      }
+      const parsed = parseConflictBatchPayload(result.output, issuedIds, planText);
       if (!parsed.ok) {
         await writeEnvelope('failed', entries);
         const infrastructureFailure = new CoverageBindingPayloadError(parsed.reason);
