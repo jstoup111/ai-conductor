@@ -200,6 +200,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   rebase_changed: 'not-audited-by-design',
   rebase_gate_reverified: 'not-audited-by-design',
   rebase_gate_preserved: 'not-audited-by-design',
+  rebase_regrade_judged: 'not-audited-by-design',
   rebase_gate_invalidated: 'not-audited-by-design',
   rebase_conflict_halt: 'not-audited-by-design',
   rebase_merge_audit: 'not-audited-by-design',
@@ -724,6 +725,15 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     allChangedPaths: ['a.ts', 'docs/guide.md'],
   },
   rebase_gate_reverified: { type: 'rebase_gate_reverified', step: 'build_review', skippedDispatch: false },
+  rebase_regrade_judged: {
+    type: 'rebase_regrade_judged',
+    step: 'rebase',
+    outcome: 'regrade',
+    candidates: ['prd_audit'],
+    reopened: ['prd_audit'],
+    changedFiles: ['src/a.ts'],
+    completedHead: 'abc123',
+  },
   rebase_gate_preserved: {
     type: 'rebase_gate_preserved',
     gate: 'build_review',

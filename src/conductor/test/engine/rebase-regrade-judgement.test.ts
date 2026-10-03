@@ -75,7 +75,7 @@ describe('engine/rebase — post-rebase regrade judgement', () => {
     });
 
   it('reopens both document-bound gates when the judgement says regrade', async () => {
-    const judge = vi.fn(async () => ({
+    const judge = vi.fn(async (_prompt: string) => ({
       success: true,
       output: '{"regrade": true, "gates": ["prd_audit", "architecture_review_as_built"], "rationale": "resolution dropped a branch"}',
     }));
@@ -124,7 +124,7 @@ describe('engine/rebase — post-rebase regrade judgement', () => {
 
   it('dispatches no judgement when the replay left the feature contribution unchanged', async () => {
     replayKind.value = 'unchanged';
-    const judge = vi.fn(async () => ({ success: true, output: '{}' }));
+    const judge = vi.fn(async (_prompt: string) => ({ success: true, output: '{}' }));
 
     const result = await run(judge);
 
