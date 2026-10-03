@@ -543,6 +543,9 @@ Task 9 ───────┴─▶ Task 15 (also needs 5, 10) ─┬─▶ Ta
 | adr-014-otel-observability-exporter#D15 | task | task-3, task-5, task-15 | the `traces` spool file exists at the moment `SpoolingSpanExporter` invokes its SUCCESS callback |
 | adr-014-otel-observability-exporter#D16 | task | task-9, task-10, task-11, task-12, task-18 | twenty concurrent `acquire()` calls against one stale lease yield exactly one holder |
 | adr-014-otel-observability-exporter#D17 | task | task-8, task-13, task-14, task-19 | a healthy-to-network transition emits exactly one `renderer_error` naming the signal and class network |
+| adr-014-otel-observability-exporter#D18 | no-change | none | Run provenance on `feature_complete` and the root span belongs to the #2000 provenance feature; the spool stores serialized requests unchanged and emits no provenance |
+| adr-014-otel-observability-exporter#D19 | no-change | none | Provenance placement on the trace resource and root span is owned by the #2000 feature; the spool does not alter resource or span attributes |
+| adr-014-otel-observability-exporter#D20 | no-change | none | The `otel.provenance` toggles are owned by the #2000 feature; this feature adds only the `otel.spool` block and does not read or change provenance config |
 
 ## Coverage Check
 
