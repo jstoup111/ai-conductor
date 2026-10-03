@@ -1,7 +1,7 @@
 // Covers: task:4
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
@@ -89,6 +89,74 @@ describe('engineer claim stranded-envelope recovery', () => {
     expect((await queue.list()).map(({ sourceRef }) => sourceRef)).toEqual([later.sourceRef]);
     expect((await queue.listClaimed()).map(({ sourceRef }) => sourceRef)).toEqual([]);
     expect((await ledger.get(SOURCE, stranded.sourceRef))?.status).toBe('claimed');
+  });
+
+  it('recovers a later critical strand before the walk and claims it ahead of an earlier low entry', async () => {
+    const queue = createFileQueue(join(engineerDir, 'inbox'));
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    const low = envelope('705', '2026-10-01T00:00:00.000Z');
+    const critical = envelope('706', '2026-10-01T00:01:00.000Z');
+    await queue.enqueue(low);
+    await queue.enqueue(critical);
+    await queue.claim();
+    await queue.claim();
+    await queue.release(low);
+    await ledger.record({ source: SOURCE, sourceRef: critical.sourceRef });
+
+    const labelReadRefs: string[] = [];
+    const labels: Record<string, string> = {
+      [low.sourceRef]: 'priority: low',
+      [critical.sourceRef]: 'priority: critical',
+    };
+    const { out, opts } = captureOpts();
+    opts.gh = async (args) => {
+      const endpoint = args[1] ?? '';
+      const issueMatch = /^repos\/o\/a\/issues\/(\d+)$/.exec(endpoint);
+      if (args[0] === 'api' && issueMatch) {
+        const sourceRef = `o/a#${issueMatch[1]}`;
+        labelReadRefs.push(sourceRef);
+        return { stdout: JSON.stringify({ labels: [{ name: labels[sourceRef] }] }) };
+      }
+      return { stdout: '[]' };
+    };
+
+    const code = await dispatchEngineer({ kind: 'claim' }, opts);
+    const recoveredRefs = [critical.sourceRef];
+
+    expect(code).toBe(0);
+    expect(recoveredRefs.every((sourceRef) => labelReadRefs.includes(sourceRef))).toBe(true);
+    expect(JSON.parse(out[0])).toMatchObject({ kind: 'claim', sourceRef: critical.sourceRef });
+  });
+
+  it('recovers a dead lease owner and strands before claiming, then releases the lease', async () => {
+    const queue = createFileQueue(join(engineerDir, 'inbox'));
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    const winner = envelope('707', '2026-10-01T00:00:00.000Z');
+    const remaining = envelope('708', '2026-10-01T00:01:00.000Z');
+    await queue.enqueue(winner);
+    await queue.enqueue(remaining);
+    await queue.claim();
+    await queue.claim();
+    await ledger.record({ source: SOURCE, sourceRef: winner.sourceRef });
+    await ledger.record({ source: SOURCE, sourceRef: remaining.sourceRef });
+    await mkdir(join(engineerDir, 'inbox.lease'));
+    await writeFile(join(engineerDir, 'inbox.lease', 'owner.json'), JSON.stringify({
+      version: 1,
+      pid: 999_999_999,
+      token: 'dead-owner',
+      acquiredAt: '2026-10-01T00:00:00.000Z',
+    }));
+
+    const { out, err, opts } = captureOpts();
+    const code = await dispatchEngineer({ kind: 'claim' }, opts);
+
+    expect(code).toBe(0);
+    expect(JSON.parse(out[0])).toMatchObject({ kind: 'claim', sourceRef: winner.sourceRef });
+    await expect(stat(join(engineerDir, 'inbox.lease'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await queue.list()).map(({ sourceRef }) => sourceRef)).toEqual([remaining.sourceRef]);
+    expect((await queue.listClaimed()).map(({ sourceRef }) => sourceRef)).toEqual([]);
+    expect(err.filter((line) => line.includes('stranded intake claim')))
+      .toEqual(['released 2 stranded intake claim(s)']);
   });
 
   it('does not rename an inbox file before the claim walk when no strands need recovery', async () => {
