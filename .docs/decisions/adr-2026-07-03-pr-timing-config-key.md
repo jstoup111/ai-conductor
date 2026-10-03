@@ -68,6 +68,17 @@ existing scan — daemon backlog reads only the merged base-branch tree
 (`daemon-backlog.ts:34-70`), intake dedup keys on `source+sourceRef` (adr-012), owner-gate
 runs only over merged specs. Early publishing cannot confuse another operator's daemon.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option A: one top-level key `pr_timing` in `.ai-conductor/config.yml`, with `finish` the default (current behavior) and `early-draft` the alternative. (above: "Option A. One top-level key")
+> **D2** — Validation is fail-closed: any value other than `finish` / `early-draft` rejects config load. (above: "**Validation is fail-closed**")
+> **D3** — Absent key → `finish` via a total resolver `resolvePrTiming()`; config is read once at daemon startup (per invocation for engineer commands), with no mid-run re-reads. (above: "**Absent key → `finish`**")
+> **D4** — `early-draft` publishes early as a draft PR, refreshes at natural boundaries, and marks ready at the flow's existing terminal publish point; early publishes are advisory and only the terminal publish is load-bearing. (above: "**`early-draft` semantics (both flows):**")
+> **D5** — The draft PR is created lazily on the first push where the branch is ahead of its base, never on an empty branch. (above: "**Lazy PR creation:**")
+> **D6** — All publish operations route through the `pr-labels.ts` seam, where a new `pushBranch` primitive joins; no raw `execFile` publishes. (above: "**All publish operations route through the `pr-labels.ts` seam**")
+> **D7** — Draft PRs are invisible to every existing scan (verified, no code change needed), so early publishing cannot confuse another operator's daemon. (above: "Dedup/intake safety (verified, no code change needed)")
+
 ## Consequences
 
 ### Positive

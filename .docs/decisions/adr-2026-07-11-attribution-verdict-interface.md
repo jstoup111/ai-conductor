@@ -94,6 +94,17 @@ evidenceStamps["7"] = {
 - Split attribution: several tasks' stamps may cite the same SHA; `citedShas` records
   the full set per task.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option A: the verdict union is defined locally, preserving the `verdict` / `no-verdict` / `skipped`-style discriminated-union shape so a later #469/#500 `BranchOutcome` adapter is thin, not a reshape (above: "**Option A.**" and "The three-way discriminator deliberately mirrors")
+> **D2** — Verdict file `.pipeline/attribution-verdict.json` is written by the verifier session and parsed fail-closed by the engine, in the schema shown (above: "### Verdict file: `.pipeline/attribution-verdict.json`")
+> **D3** — `satisfied` requires non-empty `citations` (full 40-char SHAs) and `testEvidence` with `exit: 0`; anything less is coerced to `no-verdict` by the engine parser (above: "`satisfied` REQUIRES non-empty `citations`")
+> **D4** — `unsatisfied` is a positive finding that feeds retry hints, `no-verdict` is abstention that feeds nothing, and tasks missing from `results` are treated as `no-verdict` (above: "`unsatisfied` is a positive finding")
+> **D5** — A stale or mismatched `anchor` invalidates the whole file (above: "A stale or mismatched `anchor`")
+> **D6** — Evidence stamp gains the new form `semantic-verified` with additive optional fields (`citedShas`, `verdictAnchor`, `testEvidence`); existing stamp fields and forms are never mutated (above: "### Evidence stamp: new form `semantic-verified`")
+> **D7** — The manual runbook's `Evidence: satisfied-by` commits remain valid and distinct (`form: 'evidence:satisfied-by'`), so operator repairs and judged repairs are separately auditable (above: "The manual runbook's `Evidence: satisfied-by` commits remain valid")
+
 ## Consequences
 
 ### Positive

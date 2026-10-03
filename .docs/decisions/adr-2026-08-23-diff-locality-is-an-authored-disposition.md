@@ -73,6 +73,14 @@ rather than silently dropped — and keeps the escape auditable instead of impli
 Gap ids for these rejections join the existing waiver vocabulary rather than forming a new one, so
 every new refusal is waivable. A refusal with no waivable id is a design defect under that ADR.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option D: every `criterion` row carries a diff-locality disposition, and at land `runCoherenceGate` requires it to be present and non-negative on every row, rejecting an absent or negative disposition by naming the criterion. (above: "**Option D.** Every `criterion` row carries")
+> **D2** — The engine deliberately does not attempt to determine diff-locality itself; it enforces only that the question was asked and answered for each criterion. (above: "The engine deliberately does **not** attempt")
+> **D3** — A criterion legitimately requiring corpus-wide state is recorded through the existing coherence waiver mechanism (named gap id + written rationale), not made unlandable. (above: "A criterion legitimately requiring corpus-wide state")
+> **D4** — Gap ids for these rejections join the existing waiver vocabulary, so every new refusal is waivable. (above: "Gap ids for these rejections join")
+
 ## Consequences
 
 ### Positive

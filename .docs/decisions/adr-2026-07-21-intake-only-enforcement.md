@@ -48,6 +48,16 @@ Adopt **(B)**. Enforce at capture/file time only; reject the claim-time gate.
   labels directly (infer ▸ default) and **reports** for later operator adjustment;
   it does **not** HALT or require per-issue confirmation.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt (B): enforce intake criteria at capture/file time only and reject the claim-time gate; completeness is stamped at every intake surface so issues are born complete (above: "Adopt **(B)**. Enforce at capture/file time only")
+> **D2** — `claimUnblocked` and its `ClaimOutcome` union remain byte-identical to `main` — no `needs-criteria` variant, no criteria deferral (above: "`claimUnblocked` and its `ClaimOutcome` union remain")
+> **D3** — `poll()` gains no blocking flag and never withholds enqueue (above: "`poll()` gains **no** blocking flag")
+> **D4** — The daemon build/dispatch, pipeline gates, and `ci.yml` add zero criteria checks (above: "The daemon build/dispatch, pipeline gates, and `ci.yml`")
+> **D5** — Where a field is absent/unparsable, apply a deterministic default (`size: M`, `priority: medium`) — never an error (above: "Where a field is absent/unparsable")
+> **D6** — The backlog is made complete by a one-shot backfill that stamps labels directly (infer ▸ default) and reports for later operator adjustment, without HALT or per-issue confirmation (above: "The ~100-issue backlog is made complete")
+
 ## Rationale
 
 - **Directive compliance:** (A) introduces a new `needs-criteria` dispatch stall —

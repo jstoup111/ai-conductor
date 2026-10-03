@@ -75,6 +75,14 @@ Why: it satisfies FR-3 by construction (agent↔MCP is the integration, the harn
 retrieval path), and it reuses two mechanisms the harness already ships (plugin kinds + `claude mcp
 add`) instead of inventing new ones.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt Option A: a new `memory_provider` plugin kind (above: "Adopt **Option A**: a new")
+> **D2** — The default provider is the built-in local-file store, behavior-identical per FR-9, requiring no MCP, service, or credentials (FR-8), with recall being the agent reading the store and judging relevance (above: "**Default provider** = the built-in local-file store")
+> **D3** — Non-default providers integrate as MCP servers the agent queries directly for recall and persist; relevance is the agent's (and the platform's) judgment (above: "**Non-default providers** integrate as")
+> **D4** — The harness's role is strictly resolve-and-expose, and it adds no search, ranking, relevance, or embedding logic for any provider, including the default (above: "**The harness's role is strictly resolve-and-expose:**")
+
 ## Consequences
 
 ### Positive

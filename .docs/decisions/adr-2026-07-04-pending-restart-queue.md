@@ -72,6 +72,17 @@ answer must not require a human (or a foreground CLI process) to sit and poll.
   auto-restart-on-engine-change would be a separate, explicitly gated decision — this
   ADR provides the primitive but does not enable any autonomous trigger.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option A: a restart on a busy daemon writes the durable `.daemon/RESTART-PENDING` marker and the daemon fires its own respawn-in-place at the idle boundary. (above: "**Option A**, with these guardrails")
+> **D2** — Immediate path unchanged: an idle or paused daemon respawns now; the marker is only for the busy case. (above: "**Immediate path unchanged:**")
+> **D3** — Consume-once semantics: the marker is removed by the new process at boot and treated as fulfilled by any daemon start, so a stale marker can never fire twice or dangle. (above: "**Consume-once semantics:**")
+> **D4** — Reporting: the requesting CLI prints the queued state + blocking feature, and `daemon status` shows `restart-pending (waiting on <slug>)` until it fires. (above: "**Reporting:**")
+> **D5** — Pause interplay (FR-11): paused counts as idle — a pending restart on a paused daemon fires immediately and the replacement comes up paused. (above: "**Pause interplay (FR-11):**")
+> **D6** — Bare-run daemons honor the marker by logging and exiting cleanly at the idle boundary, leaving the marker consumed for the next `start`/`ensureRunning`. (above: "**Bare-run daemons (no session hosting):**")
+> **D7** — ADR-005 non-autonomy: the action is operator-initiated; nothing daemon-side ever writes the marker, and this ADR enables no autonomous restart trigger. (above: "**ADR-005 non-autonomy check:**")
+
 ## Negative paths / adversarial review
 
 - **Daemon crashes before firing:** marker survives; next boot consumes it as

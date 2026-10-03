@@ -80,6 +80,16 @@ fault isolation; the §9.3 broker is **deferred unless real contention is observ
 - **Self-edits propose-only:** any harness change the engineer proposes is emitted as a PR through the
   existing validation/no-auto-merge gates — never auto-applied to the working tree.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Read-only governor (Option A) plus structural non-autonomy (Option A), a deliberate departure from followup §9.3 whose broker is deferred unless real contention is observed (above: "Read-only governor (Option A) + structural non-autonomy")
+> **D2** — The engineer MAY start a project's daemon as a detached, fire-and-forget process but never manages one: no control connection/IPC/retained handle, no stop/restart, no supervision, no lifecycle ownership, no daemon-supervision state (above: "Engineer may launch, never manage, a daemon")
+> **D3** — A launched daemon only builds human-merged specs, so spawning creates no autonomous build path and there remains no `engineer → build` path (above: "Human-merge gate unaffected")
+> **D4** — Governor reporting only reads the store (no writes, no throttling); an empty store yields safe zeros and malformed lines are skipped and counted (above: "Read-only governor (FR-9)")
+> **D5** — The engineer module does not import or invoke the pipeline/build or any merge entry point directly, and a structural test asserts this and that any daemon launch is detached (above: "Non-autonomy by construction (FR-10)")
+> **D6** — Any harness change the engineer proposes is emitted as a PR through the existing validation/no-auto-merge gates, never auto-applied to the working tree (above: "Self-edits propose-only")
+
 ## Consequences
 
 ### Positive

@@ -66,6 +66,14 @@ matching the existing injected-`GhRunner` convention rather than introducing a n
 (preserving ADR-013 halt classification), and FR-16 clear-on-success runs at the `done` enrollment
 point in `daemon-runner.ts` (where outcome + `pr_url` are known), both through the same seam.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt Option B for `mergeable`: a per-repo tracked watch registry plus a recurring reconcile sweep that re-derives label truth from GitHub each pass (registry = *which*, GitHub = *state*) (above: "Adopt **Option B** for `mergeable`")
+> **D2** — All `gh` interaction goes through a single best-effort `gh` seam (`pr-labels.ts`) shared by both labels and by FR-16 clear-on-success (above: "behind a **single best-effort `gh` seam")
+> **D3** — `needs-remediation` surfacing hooks into `Conductor.run()` after the HALT + state writes, preserving ADR-013 halt classification (above: "`needs-remediation` surfacing hooks into")
+> **D4** — FR-16 clear-on-success runs at the `done` enrollment point in `daemon-runner.ts`, through the same seam (above: "FR-16 clear-on-success runs at the `done` enrollment point")
+
 ## Consequences
 
 ### Positive

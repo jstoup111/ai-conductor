@@ -149,6 +149,18 @@ Behavioral commitments (operator-confirmed):
 > shapes: the record is a semver lower bound for migration math, the display is a truthful
 > statement of where the checkout sits.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option B: version identity is derived from the checkout on every invocation, and the persisted `currentVersion` has no read-authority anywhere in the update flow (above: "**Option B.** Version identity is derived from the checkout")
+> **D2** — Resolution mechanism: baseline is the highest reachable release tag (`git tag --merged HEAD -l 'v*.*.*' --sort=-v:refname`) and distance is `git rev-list --count «baseline»..HEAD`; `git describe --tags --long` is rejected (above: "**Resolution mechanism (decided here, refining the design artifact).**")
+> **D3** — Identity states: distance 0 is `release` printed `«tag»`, distance N > 0 is `post-release` printed `«tag»+N` (deliberately not a claim to be `«tag»`), and an empty baseline or git failure is `undeterminable` printed `unknown` and not compared (above: "Identity states:")
+> **D4** — Every invocation of the check, including every `bin/update --auto` spawned at conduct-ts startup, prints one line naming the identity and its source (above: "Every invocation of the check — including every `bin/update --auto`")
+> **D5** — Report and offer; never move the checkout without an explicit y/n consent (above: "Report and offer; never move the checkout")
+> **D6** — A post-release checkout whose baseline already equals the latest tag reports "N commits past «tag», no newer release exists" and never returns silently (above: "A post-release checkout whose baseline already equals the latest tag")
+> **D7** — The record continues to be written; per the 2026-08-09 amendment it persists the baseline (`«tag»`) for release and post-release states, never the display identity, and nothing when undeterminable (above: "The record continues to be written so a correct value")
+> **D8** — Channels remain `tagged` and `main` only, amended 2026-09-21 to the set `stable`, `tagged`, and `main` (above: "Channels remain `tagged` and `main` only.")
+
 ## Consequences
 
 ### Positive

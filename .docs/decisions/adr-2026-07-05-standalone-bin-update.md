@@ -30,6 +30,14 @@ Command surface:
 - `bin/update --set-channel <tagged|main>` — flip the channel (replaces
   `conduct --set-channel`).
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Extract the self-update/channel flow to a standalone `bin/update` bash script, pure git + file + config plumbing with no engine dependency (above: "**Extract to a standalone `bin/update` bash script.**")
+> **D2** — `bin/update` forces a check now, replacing `conduct --update` (above: "`bin/update` — force a check now")
+> **D3** — `bin/update --auto` auto-checks honoring `autoCheck`, a silent no-op when disabled or nothing is available, replacing the implicit check on every run (above: "`bin/update --auto` — auto-check honoring")
+> **D4** — `bin/update --set-channel <tagged|main>` flips the channel, replacing `conduct --set-channel` (above: "`bin/update --set-channel <tagged|main>`")
+
 ## Rationale
 
 - **Bootstrap safety (decisive).** The updater must not depend on the artifact it

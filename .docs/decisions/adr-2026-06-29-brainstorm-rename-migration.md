@@ -26,6 +26,14 @@ features or already-merged specs.
 - **Type alias only at the boundary.** `StepName`/`DecideStep` drop `brainstorm`; a `brainstorm →
   explore` mapping exists solely in the state-migration shim, not in the live unions.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — State key migration (on load): a `brainstorm` key without `explore`/`prd` becomes `explore = <brainstorm value>` plus `prd = done` if a `.docs/specs/` doc exists for the feature, else `prd = skipped`, performed in the state loader so every entry point inherits it (above: "State key migration (on load).")
+> **D2** — Daemon: `PRESEEDED_DONE` replaces `brainstorm` with `explore` + `prd`, and `discoverBacklog` treats a missing track marker as `product` so already-merged specs remain buildable and keep `prd-audit` (above: "Daemon.")
+> **D3** — No retroactive reordering: a feature already mid-DECIDE under the old order completes on its existing recorded step states; migration renames keys and never reshuffles completed/in-progress steps (above: "No retroactive reordering.")
+> **D4** — Type alias only at the boundary: `StepName`/`DecideStep` drop `brainstorm`, and a `brainstorm → explore` mapping exists solely in the state-migration shim, not in the live unions (above: "Type alias only at the boundary.")
+
 ## Consequences
 
 - Deterministic, idempotent migration; safe to run on every load.

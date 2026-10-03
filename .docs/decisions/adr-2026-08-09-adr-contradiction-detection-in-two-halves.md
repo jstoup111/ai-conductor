@@ -85,6 +85,14 @@ The second question is precisely the step that silently did not happen in
 `adr-approval-gate-before-build`. Making only the first question better — which is what a
 prose-only fix does — leaves no way to tell a careful pass from a skipped one.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option C: ADR-versus-story contradiction detection is split across both DECIDE gates. (above: "**Option C.**")
+> **D2** — `conflict-check` gains `.docs/decisions/` in its corpus for early, pre-plan detection (corpus breadth as amended 2026-08-09 above). (above: "`conflict-check` gains `.docs/decisions/` in its corpus")
+> **D3** — `coherence-check` plus the validator gain the `adr` row class for late, land-gated enforcement. (above: "`coherence-check` plus the validator gain the `adr` row class")
+> **D4** — "Does this ADR contradict this story?" stays an LLM judgment in `conflict-check`'s pass and `coherence-check`'s §4d; "Was every approved ADR explicitly adjudicated, with a recorded verdict?" is mechanical accounting and becomes the `adr` layer. (above: "Applied here, the principle **splits the problem")
+
 ## Consequences
 
 ### Positive

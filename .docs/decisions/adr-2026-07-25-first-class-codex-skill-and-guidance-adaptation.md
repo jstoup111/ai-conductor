@@ -138,6 +138,15 @@ the provider, capability, and recovery action. #904 does not introduce a general
 registry unless implementation evidence proves a repeated runtime need; the initial enforcement
 boundary is the skill contract plus compatibility and execution tests.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Keep one canonical skill source: `skills/` and `HARNESS.md` remain authoritative, with no plugin package or generated Claude/Codex skill trees, and provider-specific instructions explicitly scoped inside that source. (above: "### 1. Keep one canonical skill source")
+> **D2** — Install the canonical catalog to the documented host discovery surfaces (Claude `~/.claude/skills`, Codex `~/.agents/skills`), with ownership-safe migration that removes or repoints only provably harness-owned links. (above: "### 2. Install to documented host discovery surfaces")
+> **D3** — Bootstrap preserves existing `CLAUDE.md` and `AGENTS.md` content, appends only a missing harness reference, and no provider's guidance tells the other to use unsupported syntax or capabilities. (above: "### 3. Preserve durable host-native repository guidance")
+> **D4** — A pure resolver maps the actual provider candidate plus semantic step/arguments to an explicit skill invocation (Claude `/skill-name`, Codex `$skill-name`), resolved again for every candidate attempt so prompt syntax never crosses the provider boundary. (above: "### 4. Resolve skill invocation for each actual provider candidate")
+> **D5** — When a required capability has no valid Codex path, the skill stops before relying on it and names the provider, capability, and recovery action. (above: "### 5. Fail closed on genuinely unsupported workflow capabilities")
+
 ## Consequences
 
 ### Positive

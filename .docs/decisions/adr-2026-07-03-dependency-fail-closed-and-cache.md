@@ -65,6 +65,14 @@ bricking the common solo case; the dependency gate protects against a *routine* 
 Intake claiming uses the same resolver semantics: an indeterminate entry is deferred in the
 queue, and the all-blocked report shows the indeterminate reason (PRD FR-8/9).
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — When blocker state cannot be determined, the dependency gate fails closed with a visible `indeterminate` reason (above: "A + D: fail closed with a visible `indeterminate` reason")
+> **D2** — The resolver uses per-scan memoization with no persistent cache (above: "per-scan memoization, no persistent cache")
+> **D3** — The owner-gate fail-open precedent is explicitly not followed, and the two gates' opposite postures are documented as deliberate (above: "The owner-gate fail-open precedent is explicitly **not** followed")
+> **D4** — Intake claiming uses the same resolver semantics: an indeterminate entry is deferred in the queue, and the all-blocked report shows the indeterminate reason (above: "Intake claiming uses the same resolver semantics")
+
 ## Consequences
 
 ### Positive

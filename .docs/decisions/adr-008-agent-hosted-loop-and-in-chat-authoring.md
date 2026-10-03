@@ -116,6 +116,17 @@ path-prefix confinement (A).** Supersede ADR-004 and ADR-007.
   `create`) → commit on the branch + non-fatal PR-skip.
 - **No build/merge path (FR-10):** unchanged and still structurally enforced by ADR-005.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt agent-hosted, in-chat, human-gated execution with isolation via canonical-path + path-prefix confinement, superseding ADR-004 and ADR-007. (above: "**Adopt agent-hosted, in-chat, human-gated execution (A)")
+> **D2** — Loop (FR-1/2): the host agent runs the long-lived loop; no Node TTY REPL and no `claude -p` subprocess is spawned for routing, authoring, or retro-narrative, and a test asserts zero authoring subprocesses. (above: "**Loop (FR-1/2):**")
+> **D3** — Routing (FR-3/4/5), retained from ADR-007: the outcome is the discriminated union `confirmed | redirected | create | declined`, switched exhaustively with no catch-all `default`; `declined` carries no project, so zero-writes-on-decline is type-enforced; inference is the host agent's in-chat reasoning over the registry. (above: "**Routing (FR-3/4/5) — RETAINED from ADR-007:**")
+> **D4** — Authoring (FR-6): run the real DECIDE skills in chat, interactively and human-gated with clarity loops, on a `spec/<slug>` branch producing real `Status: Accepted` artifacts — never one-shot, never the stub form, never left at DRAFT, never via a spawned subprocess; the seam is deterministic TypeScript and the reasoning is the agent's. (above: "**Authoring (FR-6) — the fix:**")
+> **D5** — Cross-repo isolation (FR-11): resolve the `ProjectRecord` canonical `path` (missing/stale → error before any write, no cwd fallback); all writes use absolute paths under that root with a path-prefix guard + test; branch `spec/<slug>` off the target's derived default branch, dirty tree not clobbered, existing branch suffixed. (above: "**Cross-repo isolation (FR-11):**")
+> **D6** — PR handoff (FR-7), retained from ADR-007: reuse the existing PR machinery against the target repo and report the URL; no `gh pr merge`, no build; no-remote → commit on the branch + non-fatal PR-skip. (above: "**PR handoff (FR-7) — RETAINED from ADR-007:**")
+> **D7** — No build/merge path (FR-10): unchanged and still structurally enforced by ADR-005. (above: "**No build/merge path (FR-10):**")
+
 ## Consequences
 
 ### Positive

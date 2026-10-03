@@ -31,6 +31,14 @@ step away mid-idea.
 - The default lives in engine configuration (resolved the same way other engine tunables are),
   not hard-coded at the call site.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — The automatic-reap staleness window is configurable, with a default of 24 hours (above: "The automatic-reap staleness window is **configurable**")
+> **D2** — The 24h default is deliberately conservative: the automatic window is tuned to minimize the #243 duplicate-processing risk rather than to minimize stranding latency (above: "24h is deliberately conservative")
+> **D3** — The manual bulk path accepts an explicit tighter age bound, and the manual single-idea path has no age gate at all (above: "The manual bulk path accepts an explicit tighter age bound")
+> **D4** — The default lives in engine configuration, resolved the same way other engine tunables are, not hard-coded at the call site (above: "The default lives in engine configuration")
+
 ## Consequences
 
 - The #243 duplicate-processing window is bounded to the configured value; a live session that

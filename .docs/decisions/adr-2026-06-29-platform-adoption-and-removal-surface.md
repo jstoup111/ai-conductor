@@ -71,6 +71,15 @@ Adopt **Option A**: a **`conduct memory` subcommand group** — `add <provider>`
 Why: it makes adoption "one deliberate, safe, repeatable action" by composing the harness's existing
 idempotent MCP-registration and per-key config-write primitives, and it gives removal an exact inverse.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt Option A: a `conduct memory` subcommand group — `add <provider>`, `remove`, `status` (above: "Adopt **Option A**")
+> **D2** — `add` is idempotent and non-clobbering: each sub-step checks-then-acts, re-running is a clean no-op, and an interrupted `add` re-runs to completion with no partial state (above: "`add` is idempotent and non-clobbering")
+> **D3** — External-platform secrets are stored via the environment/secret mechanism, never committed, and adopting without required credentials yields a clear notice, not a broken half-config (above: "Credentials (FR-6 negative path)")
+> **D4** — Remove unregisters the MCP server and resets `memory_provider` to default, idempotently and leaving other providers/config untouched (above: "Remove is clean and idempotent")
+> **D5** — `local` is the implicit provider and needs no `add` step, no service, and no credentials (above: "Default needs nothing (FR-8)")
+
 ## Consequences
 
 ### Positive

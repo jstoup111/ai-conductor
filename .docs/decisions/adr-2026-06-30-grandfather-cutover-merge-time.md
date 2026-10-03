@@ -45,6 +45,14 @@ stories FR-9 negative path).
 This applies **only to un-owned specs.** A spec with a matching owner stamp builds regardless of
 merge time (stories FR-5 negative path) — the cutover is never consulted for stamped specs.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Derive activation time from git history: the commit timestamp at which the spec's plan file first appeared on the base branch (above: "Derive activation time from **git history")
+> **D2** — On/after the cutover = post (skip); strictly before = grandfathered (build) (above: "Compare to the configured cutover")
+> **D3** — Indeterminate history resolves to post-cutover (skip), logged distinctly (above: "Indeterminate history")
+> **D4** — The cutover applies only to un-owned specs; a spec with a matching owner stamp builds regardless of merge time (above: "This applies **only to un-owned specs.**")
+
 ## Consequences
 
 ### Positive

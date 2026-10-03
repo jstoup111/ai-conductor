@@ -214,6 +214,17 @@ is **retained unchanged**. It remains the backstop that discharges the terminati
 any advance the guard legitimately admits; this decision only ensures it is no longer the mechanism
 that catches a stuck transition first.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt Option A: a publication transition reports `advanced` if and only if the observation dimension it owns changed across the effect; one that completes without moving its own dimension resolves `human_required` immediately, with no retry consumed, no progress tick, and a reason naming the stage that ran and the dimension that did not move (above: "**Adopt Option A.** A publication transition reports `advanced`")
+> **D2** — Per the 2026-08-13 amendment, a `publication_retry` that names transition T resolves `human_required` when the fresh observation would not select T, tested by the existing pure selector `nextFinishPublicationTransition` (above: "**A `publication_retry` that names transition T resolves `human_required`")
+> **D3** — Per the 2026-08-28 amendment, Option C is adopted in a narrowed form: the observer's prose classification gains `revision_required`, derived from the persisted judgment store and routed to `author_pr_prose`, with observation remaining the sole routing authority and `halt` strictly preceding `revision_required` (above: "**Option C is therefore adopted in a narrowed form.**")
+> **D4** — The dimension map is total over `PublicationTransition`, so a later transition cannot silently opt out, and a transition must move its own dimension rather than merely change the snapshot (above: "The dimension map is total over `PublicationTransition`:")
+> **D5** — For `judge_pr_prose` the guard is evaluated against the post-effect observation, where an `accepted` verdict on a PR that still observes as `halt` is reported as a contradiction (above: "`judge_pr_prose` is the one transition whose dimension")
+> **D6** — Deterministic halt-PR detection is adopted as an application of `adr-2026-08-09-one-pr-per-branch-halt-is-a-state`: the observer requests `labels`, classifies halt through `hasHaltSignal`, and a PR in the halt state resolves `human_required` before any judgment is dispatched (above: "**Approach C from the review — deterministic halt-PR detection")
+> **D7** — The bounded progress allowance from `adr-2026-08-06-bounded-progress-allowance-for-finish-publication` is retained unchanged as the termination backstop (above: "The bounded progress allowance from")
+
 ## Consequences
 
 ### Positive

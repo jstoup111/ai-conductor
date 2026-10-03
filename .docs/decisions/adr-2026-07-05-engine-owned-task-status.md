@@ -189,6 +189,24 @@ Carried over from the Opus round:
   dashboard-surfaced, and emits a logged event so the halt-monitor sees it; the park is
   daemon-layer — interactive runs keep the existing stall-REPL/recovery path.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — H1: seed is merge/upsert by id, preserving existing `status`/`in_progress`/rework counts, never a blind overwrite, and is the in-flight migration path (preservation applies only to engine-stamped rows) (above: "H1 — Seed is merge/upsert by id")
+> **D2** — H2: the `Task: <id>` trailer is enforced at both the `/tdd` commit checklist and the `/pipeline` per-task dispatch template; a task that cannot be evidenced after N attempts parks, never loops (above: "H2 — The `Task: <id>` trailer is enforced at BOTH layers")
+> **D3** — H3: remediation tasks carry deterministic gap/FR-derived ids, upserted idempotently into the plan under the H9 grammar rules (above: "H3 — Remediation tasks carry deterministic gap/FR-derived ids")
+> **D4** — H4: the engine is the sole authority on completion with a field-level write partition (agent: advisory `pending`/`in_progress`; engine-only: `completed`/`skipped`), `post-commit-pipeline-sync.sh` is removed/no-oped, and `finish` drops its task-status write (above: "H4 — Single-authority migration:")
+> **D5** — H5: canonical evidence is the `Task: <id>` git trailer in the commit body, with legacy subject heuristics migration-only, no-op evidence commits for commit-less completions, fail-closed on merge-base failure, and the commit range anchored to the current plan (above: "H5 — Evidence contract is trailer-first:")
+> **D6** — H6: completion is recomputed from plan + git evidence (+ engine sidecar) on every gate evaluation, `task-status.json` is a derived cache, and durable engine state lives in an engine-only sidecar the agent never writes (above: "H6 — The gate never trusts file rows:")
+> **D7** — H7: seed+derive runs at build entry, before every completion-gate evaluation, and before the stall-breaker's resolved-count read, with a no-evidence attempt counter persisted in the engine sidecar so the park fires across daemon re-kicks (above: "H7 — Derive cadence + durable park counter:")
+> **D8** — H8: never-demote for evidence-stamped rows and engine plan resolution (agent-written plan refs never load-bearing); its migration-grandfather portion is superseded by `adr-2026-07-10-retire-migration-grandfather` (above: "H8 — Migration grandfather + engine plan resolution:")
+> **D9** — H9: the plan grammar, parser/matcher, and `/plan` + `/remediate` templates agree on one id form, upsert never mutates a `completed` row, and a non-empty deterministic id is a validated requirement of the plan-append (above: "H9 — Remediation id grammar:")
+> **D10** — Adopt Option C: `task-status.json` is engine-owned derived run-state, seeded from the plan, with completion derived from task-ID-stamped git commits; the build agent is never the authority on completion (above: "Adopt **Option C**.")
+> **D11** — A strictly advisory, engine-invoking post-commit hook runs the engine derive and warns when a new commit evidences no task; the per-gate derive (H7) remains the sole authority (above: "Fast-feedback derive on commit (advisory):")
+> **D12** — Empty-is-done is removed: an empty/missing task list is a seed-and-run (or park) state, never a completion, and `buildRetryHint` directs at the plan (above: "Empty-is-done removed:")
+> **D13** — Evidence is commits on the worktree branch since merge-base; 0 commits is genuinely fresh, behavior unchanged (above: "No false-positive on a fresh build:")
+> **D14** — #115 is retained and the park is reconciled with #280; the auto-park marker carries distinct auto provenance, is dashboard-surfaced, emits a logged event, and the park is daemon-layer (above: "#115 retained")
+
 ## Consequences
 
 - The completion gate stops trusting an agent-maintained artifact; the daemon can no longer loop on an

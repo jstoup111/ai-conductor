@@ -72,6 +72,15 @@ non-fatal no-op path. Only ref-agnostic sites migrate to `parseWorkRef`.
 | `pr-labels.ts:85` (URL parser) | keeps its github.com **URL** parse (different input domain); adopts the shared `{repo, number}` return shape only |
 | `intake/ledger.ts:80` | **untouched** — key stays an opaque string (already Jira-safe) |
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — One canonical module `engine/engineer/source-ref.ts` owns both grammars and exports the `WorkRef` discriminated union with `parseWorkRef` and a lossless round-trip `formatWorkRef`. (above: "Create one canonical module `engine/engineer/source-ref.ts`")
+> **D2** — The GitHub grammar is current `parseSourceRef` semantics, byte-for-byte; every GitHub ref contains `#`. (above: "GitHub: current `parseSourceRef` semantics")
+> **D3** — The Jira grammar is `^[A-Z][A-Z0-9]+-\d+$`, disjoint from GitHub so the tag is derivable from the string alone; custom key patterns are out of scope and the grammar constant is the single place to widen. (above: "Jira: `^[A-Z][A-Z0-9]+-\d+$`")
+> **D4** — `parseSourceRef` remains exported from `issue-ref.ts` with its exact current signature and behavior as a compat shim over `parseWorkRef`; only ref-agnostic sites migrate to `parseWorkRef`. (above: "**Migration strategy (compat shim):**")
+> **D5** — Each consumer takes the disposition given in the per-consumer table above. (above: "**Per-consumer disposition:**")
+
 ## Alternatives considered
 
 - **Backend-adapter ref operations (extend ADR-009 port):** purest seam for full

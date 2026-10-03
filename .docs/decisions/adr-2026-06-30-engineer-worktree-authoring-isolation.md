@@ -63,6 +63,19 @@ receives a `checkout`/`switch` from the engineer.
 - **Naming disjoint from the daemon:** the engineer's worktree dir is `engineer`-scoped so a
   concurrent daemon worktree in the same repo never collides (conflict-check Finding 2).
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — The engineer authors and lands each idea inside a dedicated per-idea git worktree of the target repo (ADR-008's Option B); the primary working tree is never used for authoring and never receives a `checkout`/`switch` from the engineer (above: "Adopt ADR-008's Option B for the engineer")
+> **D2** — Before DECIDE, create `git worktree add -b spec/<slug> <engineer-scoped path> <default-branch>` rooted at the target's canonical path, with `<default-branch>` derived, never hardcoded; DECIDE runs with the worktree as cwd (above: "Worktree per idea.")
+> **D3** — Extract a shared helper from `daemon-deps.ts:createWorktree` so the engineer and daemon share one worktree story (above: "Reuse the daemon's worktree helper.")
+> **D4** — `landSpec` drops the checkout-dance and commits the idea's `.docs/` from the worktree, with staging scoped to the idea's artifacts (above: "`land` commits in-place.")
+> **D5** — `openSpecPr` pushes and runs `gh pr create --head spec/<slug>` with cwd = the worktree; the no-remote fallback and side effects are unchanged, and the ledger write occurs on the no-remote branch too (above: "`handoff` operates in the worktree.")
+> **D6** — Retained from ADR-008/ADR-004: canonical-path resolution with no cwd fallback, the path-prefix write guard (rooted at the worktree's `.docs/`), branch-name suffixing, dirty-tree-not-clobbered, sibling repos byte-unchanged (above: "Retained from ADR-008/ADR-004:")
+> **D7** — Remove the worktree on success, keep it on failure, and report a retained worktree's path (above: "Lifecycle: remove on success, keep on failure")
+> **D8** — If a worktree cannot be created, the engineer aborts the idea with zero mutations to the primary tree; it does not seed a commit and does not author in the shared checkout (above: "Strict abort, no fallback")
+> **D9** — The engineer's worktree dir is `engineer`-scoped so a concurrent daemon worktree in the same repo never collides (above: "Naming disjoint from the daemon:")
+
 ## Options Considered
 
 - **A (chosen): per-idea worktree (ADR-008 Option B).** Strongest confinement; removes the

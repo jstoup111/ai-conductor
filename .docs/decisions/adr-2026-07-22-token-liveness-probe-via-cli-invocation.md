@@ -48,6 +48,14 @@ The liveness verifier is a **minimal headless CLI invocation** (option b):
 - The verifier is invoked by the health check only — dispatch does NOT run it
   (dispatch keeps fail-fast read + classified failure per the companion ADRs).
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — The liveness verifier is a minimal headless CLI invocation (option b): `claude -p` with a trivial prompt, the cheapest model tier, `--output-format json`, a tight timeout, the token from the resolved path, and a throwaway `CLAUDE_CONFIG_DIR` (above: "The liveness verifier is a **minimal headless CLI invocation**")
+> **D2** — Verdict mapping is fail-safe and never claims valid without positive signal: valid when the envelope parses with `is_error` false, invalid on `api_error_status` 401/403, and "unverifiable — state unknown" for anything else (above: "Verdict mapping (fail-safe")
+> **D3** — The token value is passed via environment only; no code path prints it (FR-7) (above: "The token value is passed via environment only")
+> **D4** — The verifier is invoked by the health check only; dispatch does NOT run it (above: "The verifier is invoked by the health check only")
+
 ## Why not the raw API probe
 
 - Rests on an unverified load-bearing assumption (raw-API acceptance of setup-tokens);

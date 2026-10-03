@@ -74,6 +74,15 @@ Why: it is the minimal change that makes memory project-scoped and durable while
 path every existing reader/writer already uses, and it reuses the `~/.ai-conductor/memory/` convention
 already in the codebase.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt Option A: the default provider's store is a canonical per-project directory at `~/.ai-conductor/memory/<project-key>/harness/`, and each worktree's `.memory/` is a symlink to it. (above: "Adopt **Option A**")
+> **D2** — The project key is derived from a stable project identity and MUST be branch- and worktree-path-independent, so all worktrees of one project share a key and a different project resolves elsewhere; the exact derivation is fixed in planning. (above: "**Project key:**")
+> **D3** — Layout is file-per-entry, so concurrent writes from two worktrees land as separate files that both persist; the shared `index.md` must be updated as read-modify-write of distinct lines (or per-entry index fragments) to avoid losing one worktree's line. (above: "**Layout = file-per-entry**")
+> **D4** — Worktree removal deletes only the symlink; the canonical store is never touched. (above: "**Worktree removal** deletes only the symlink")
+> **D5** — Bootstrap/`bin/conduct` memory creation ensures the canonical dir + symlink instead of a plain in-tree directory; an existing real `.memory/` is the migration case, not fresh creation. (above: "Bootstrap/`bin/conduct` memory creation is updated")
+
 ## Consequences
 
 ### Positive

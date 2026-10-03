@@ -16,6 +16,13 @@ Strict is the typical "fail loud" choice. Lenient is the typical "graceful degra
 
 `when: ${nonexistent_key} == value` evaluates to `false`. The step is skipped. A `when_skip` event is emitted with `{ step, condition, undefinedKey: 'nonexistent_key' }`. The state file records `step: "skipped"`. Downstream gate checks treat skipped as satisfied (per ADR-004).
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — `when: ${nonexistent_key} == value` evaluates to `false` and the step is skipped (above: "`when: ${nonexistent_key} == value` evaluates to `false`")
+> **D2** — A `when_skip` event is emitted with `{ step, condition, undefinedKey }` and the state file records `step: "skipped"` (above: "A `when_skip` event is emitted")
+> **D3** — Downstream gate checks treat skipped as satisfied, per ADR-004 (above: "Downstream gate checks treat skipped as satisfied")
+
 ## Consequences
 
 - **Pro:** Long-running pipelines are not derailed by a config typo. The skip is recorded and visible to anyone watching the event log or terminal renderer.

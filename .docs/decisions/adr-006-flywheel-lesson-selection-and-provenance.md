@@ -120,6 +120,14 @@ Provenance = Option A (authored-keys intersection), with B deferred.**
   function aligned to 9.1's metric definition (resolves conflict-check FR-9×FR-12). `<2` features →
   "insufficient data"; zero-denominator features → excluded/N-A (no divide-by-zero).
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Pluggable selection boundary: the planner depends only on a narrow `LessonStore` port; the default keyword/recency strategy is one adapter and a future embedding/MCP-backed retriever (semantic Option B) is another behind the same signature, a future adapter rather than a rewrite (above: "Selection strategy = Option A" and "Pluggable selection boundary:")
+> **D2** — Flywheel read (FR-5): via the port, scope candidate signals to the target project first, add cross-project signals by keyword/recency similarity, take a bounded top-N and log the bound, and inject a concise digest into the DECIDE planning context — an explicit "no prior lessons" when none are relevant, and a malformed signal line is skipped (above: "Flywheel read (FR-5):")
+> **D3** — Provenance (FR-12) is Option A: the engineer keeps an authored-keys ledger of the `(project, feature)` pairs it planned and computes the flywheel trend over `store signals ∩ ledger`, with no 9.1 schema change; the 9.1 `source` marker (Option B) is deferred (above: "Provenance = Option A" and "Provenance (FR-12):")
+> **D4** — Shared rate computation: FR-9 (governor) and FR-12 (trend) use one rate-computation function aligned to 9.1's metric definition, with `<2` features as "insufficient data" and zero-denominator features excluded/N-A (above: "Shared rate computation:")
+
 ## Consequences
 
 ### Positive

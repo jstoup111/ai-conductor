@@ -90,6 +90,17 @@ Quote matching is exact on the quoted span after normalizing surrounding whitesp
 cannot be grounded by paraphrase. A task legitimately covering a criterion in different words is
 still accepted: the author quotes those different words.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option D: each `criterion` row carries the id(s) of the owning task and a verbatim quote drawn from that task's own text, narrowed by the 2026-08-31 amendment to that task's `Done when` block (above: "**Option D.** Each `criterion` row carries")
+> **D2** — At land, `runCoherenceGate` extracts the cited task's body and confirms the quote occurs in it verbatim; a row whose quote is absent is rejected, naming both the criterion and the task it was attributed to (above: "At land, `runCoherenceGate` extracts")
+> **D3** — The author judges which task carries a criterion; that stays at authoring (above: "**The author judges**")
+> **D4** — The engine verifies that the text the judgement cited really exists in the artifact cited; that stays mechanical (above: "**The engine verifies**")
+> **D5** — Neither re-judges whether the implementation satisfies the criterion; that remains `prd_audit`'s (above: "**Neither re-judges**")
+> **D6** — The check is deliberately a bound, not a proof: it establishes that the author pointed at real text in the task (above: "The check is deliberately a **bound, not a proof**")
+> **D7** — Quote matching is exact on the quoted span after normalizing surrounding whitespace, so a claim cannot be grounded by paraphrase (above: "Quote matching is exact on the quoted span")
+
 ## Consequences
 
 ### Positive

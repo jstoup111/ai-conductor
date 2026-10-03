@@ -115,6 +115,15 @@ Deferred, each filed with its own evidence: Codex `PreToolUse` early feedback (#
 relocation (#1354); TDD-phase enforcement, dormant because nothing writes `.pipeline/tdd-phase`
 (#1009).
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Preventive protected-artifact enforcement is placed in a git `pre-commit` hook installed into the engine-owned, worktree-scoped `.pipeline/git-hooks/` directory; section 1: the commit is the correct granularity, matching the seal's committed-change violation condition and method-blind (above: "Place preventive protected-artifact enforcement in a git `pre-commit` hook" and "1. The commit is the correct granularity")
+> **D2** — Section 2: the gate is an early guard, not an unbypassable boundary — `--no-verify`, `CONDUCT_ENGINE_COMMIT=1`, and commits outside the prepared worktree escape and land on the terminal seal, which remains the acceptance authority (above: "2. The gate is an early guard, not an unbypassable boundary")
+> **D3** — Section 3: the wiring must fail closed — a `writeGitHooksAndWire` wiring failure must fail the step (above: "3. The wiring must fail closed")
+> **D4** — Section 4: authorization is closed at the plan gate — as amended by #1254, the `**Files:**` line is the disambiguator (a task with no `**Files:**` and a foreign protected path in its body is rejected as ambiguous; a glob over a protected directory is rejected fail-closed), the scan covers `.docs/decisions`, and the remediation redirect inspects `gap.rationale` (above: "4. Authorization is closed at the plan gate")
+> **D5** — Section 5: Codex `PreToolUse` early feedback (#1353), destructive-git relocation (#1354), and TDD-phase enforcement (#1009) are deferred (above: "5. Scope boundaries")
+
 ## Options Considered
 
 ### Option A: Replicate Claude's hooks in Codex configuration
