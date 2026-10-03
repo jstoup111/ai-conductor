@@ -48,7 +48,13 @@ describe('engine ref operations with installed ref hooks', () => {
 
   it('permits a current bare lease and leaves a stale lease to git', async () => {
     const f = await fixture(); const git = makeGitRunner(f.feature);
+    await commit(f, f.feature, 'pre-rewrite.txt');
+    expect((await f.git(f.feature, 'push', 'origin', 'HEAD:main')).exitCode).toBe(0);
+    expect((await f.git(f.feature, 'fetch', 'origin')).exitCode).toBe(0);
+    const remoteTip = (await f.git(f.feature, 'rev-parse', 'origin/main')).stdout;
+    expect((await f.git(f.feature, 'reset', '--hard', 'HEAD~1')).exitCode).toBe(0);
     await commit(f, f.feature, 'rewrite.txt');
+    expect((await f.git(f.feature, 'merge-base', '--is-ancestor', remoteTip, 'HEAD')).exitCode).not.toBe(0);
     expect((await git(['push', 'origin', 'HEAD:refs/heads/main', '--force-with-lease'])).exitCode).toBe(0);
     expect((await f.git(f.bare, 'rev-parse', 'main')).stdout).toBe((await f.git(f.feature, 'rev-parse', 'HEAD')).stdout);
     expect((await f.git(f.feature, 'fetch', 'origin')).exitCode).toBe(0);

@@ -77,10 +77,25 @@ describe('pre-push hook', () => {
   });
 
   it('allows a force update when the tracking ref proves the remote value and permits new and delete refs', async () => {
-    const f = await fixture(); await commit(f, f.worktree, 'rewrite.txt');
+    const f = await fixture();
+    await commit(f, f.worktree, 'lease-pre-rewrite.txt');
+    expect((await f.git(f.worktree, 'push', 'origin', 'HEAD:main')).exitCode).toBe(0);
+    expect((await f.git(f.worktree, 'fetch', 'origin')).exitCode).toBe(0);
+    const leaseRemoteTip = (await f.git(f.worktree, 'rev-parse', 'origin/main')).stdout;
+    expect((await f.git(f.worktree, 'reset', '--hard', 'HEAD~1')).exitCode).toBe(0);
+    await commit(f, f.worktree, 'rewrite.txt');
+    expect((await f.git(f.worktree, 'merge-base', '--is-ancestor', leaseRemoteTip, 'HEAD')).exitCode).not.toBe(0);
     expect((await f.git(f.worktree, 'push', '--force-with-lease', 'origin', 'HEAD:main')).exitCode).toBe(0);
+    expect((await f.git(f.bare, 'rev-parse', 'main')).stdout).toBe((await f.git(f.worktree, 'rev-parse', 'HEAD')).stdout);
+    await commit(f, f.worktree, 'force-pre-rewrite.txt');
+    expect((await f.git(f.worktree, 'push', 'origin', 'HEAD:main')).exitCode).toBe(0);
+    expect((await f.git(f.worktree, 'fetch', 'origin')).exitCode).toBe(0);
+    const forceRemoteTip = (await f.git(f.worktree, 'rev-parse', 'origin/main')).stdout;
+    expect((await f.git(f.worktree, 'reset', '--hard', 'HEAD~1')).exitCode).toBe(0);
     await commit(f, f.worktree, 'second-rewrite.txt');
+    expect((await f.git(f.worktree, 'merge-base', '--is-ancestor', forceRemoteTip, 'HEAD')).exitCode).not.toBe(0);
     expect((await f.git(f.worktree, 'push', '--force', 'origin', 'HEAD:main')).exitCode).toBe(0);
+    expect((await f.git(f.bare, 'rev-parse', 'main')).stdout).toBe((await f.git(f.worktree, 'rev-parse', 'HEAD')).stdout);
     await commit(f, f.worktree, 'fast-forward.txt'); expect((await f.git(f.worktree, 'push', 'origin', 'HEAD:main')).exitCode).toBe(0);
     expect((await f.git(f.worktree, 'push', 'origin', 'HEAD:new-branch')).exitCode).toBe(0);
     expect((await f.git(f.worktree, 'push', 'origin', '--delete', 'new-branch')).exitCode).toBe(0);
