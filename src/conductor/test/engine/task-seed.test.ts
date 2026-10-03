@@ -2,8 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-// Covers: task:5
+import { execa } from 'execa';
+import * as autoheal from '../../src/engine/autoheal.js';
+// Covers: task:1, task:2, task:3, task:4, task:5
 import { seedTaskStatus } from '../../src/engine/task-seed.js';
+
+vi.mock('../../src/engine/autoheal.js', { spy: true });
 
 describe('task-seed', () => {
   let dir: string;
@@ -86,6 +90,335 @@ Content with \`src/file3.ts\`
       expect(status.tasks.find((task: any) => task.id === '1').files).toEqual(['src/one.ts', 'src/two.ts']);
       expect(status.tasks.find((task: any) => task.id === '2').files).toEqual(['src/one.ts', 'src/two.ts']);
       expect(status.tasks.find((task: any) => task.id === '3').files).toBeUndefined();
+    });
+  });
+
+  describe('Task 1: partial task-status recovery from Task trailers', () => {
+    async function git(args: string[]): Promise<string> {
+      const result = await execa('git', args, { cwd: dir });
+      return result.stdout.trim();
+    }
+
+    async function initializeRepository(withOrigin = true): Promise<void> {
+      await git(['init', '-q', '-b', 'main']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test User']);
+      await fsPromises.writeFile(join(dir, 'README.md'), '# fixture\n');
+      await git(['add', 'README.md']);
+      await git(['commit', '-q', '-m', 'initial fixture']);
+      if (withOrigin) await git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    }
+
+    async function commitForTask(id: string): Promise<string> {
+      const path = `task-${id}.txt`;
+      await fsPromises.writeFile(join(dir, path), `task ${id}\n`);
+      await git(['add', path]);
+      await git(['commit', '-q', '-m', `feat: task ${id}`, '-m', `Task: ${id}`]);
+      return git(['rev-parse', 'HEAD']);
+    }
+
+    async function writePlan(includeMissingSibling = false): Promise<string> {
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.writeFile(
+        planPath,
+        '# Plan\n\n## Task 1: Already recorded\n\n## Task 18: Restored work\n' +
+          (includeMissingSibling ? '\n## Task 19: Missing sibling\n' : ''),
+      );
+      return planPath;
+    }
+
+    it('restores only a missing row from its branch-scoped Task trailer', async () => {
+      await initializeRepository();
+      const trailerCommit = await commitForTask('18');
+      const planPath = await writePlan();
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' }] }),
+      );
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks).toEqual([
+        { id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' },
+        {
+          id: '18', name: 'Restored work', status: 'completed', commit: trailerCommit,
+          restored_from: 'task-trailer',
+        },
+      ]);
+    });
+
+    it('writes a missing row as pending when no branch-scoped Task trailer proves it', async () => {
+      await initializeRepository();
+      const planPath = await writePlan();
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' }] }),
+      );
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks.find((task: any) => task.id === '18')).toEqual({
+        id: '18', name: 'Restored work', status: 'pending',
+      });
+    });
+
+    it('avoids scanning trailers when every plan task already has a row', async () => {
+      const planPath = await writePlan();
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [
+          { id: '1', name: 'Already recorded', status: 'pending' },
+          { id: '18', name: 'Restored work', status: 'pending' },
+        ] }),
+      );
+      const trailers = vi.spyOn(autoheal, 'listCommitsWithTrailers');
+      trailers.mockClear();
+
+      await seedTaskStatus(dir, planPath);
+
+      expect(trailers).not.toHaveBeenCalled();
+    });
+
+    it('keeps an existing pending row pending despite a branch-scoped Task trailer', async () => {
+      await initializeRepository();
+      await commitForTask('18');
+      const planPath = await writePlan(true);
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [
+          { id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' },
+          { id: '18', name: 'Restored work', status: 'pending' },
+        ] }),
+      );
+
+      const trailers = vi.spyOn(autoheal, 'listCommitsWithTrailers');
+      trailers.mockClear();
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect({ trailerScans: trailers.mock.calls.length, task18: status.tasks.find((task: any) => task.id === '18') }).toEqual({
+        trailerScans: 1,
+        task18: { id: '18', name: 'Restored work', status: 'pending' },
+      });
+    });
+
+    it('keeps a trailer-restored missing row pending when it has an open repair obligation', async () => {
+      await initializeRepository();
+      await commitForTask('18');
+      const planPath = await writePlan();
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' }] }),
+      );
+      await fsPromises.writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: planPath,
+        repairObligations: {
+          version: 1,
+          records: {
+            repair_18: {
+              id: 'repair_18', planIdentity: '.docs/plans/test.md', taskIds: ['18'],
+              source: { findingId: 'F-18', authority: 'test', instruction: 'repair it' },
+              baseline: { head: 'before', tree: 'before', resolvedTaskIds: [] }, settlement: 'unsettled',
+              tasks: { '18': { status: 'open' } },
+            },
+          },
+          currentByPlan: { '.docs/plans/test.md': { '18': 'repair_18' } },
+        },
+      }));
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks.find((task: any) => task.id === '18')).toEqual({
+        id: '18', name: 'Restored work', status: 'pending', commit: await git(['rev-parse', 'HEAD']),
+        restored_from: 'task-trailer',
+      });
+    });
+
+    it('keeps a missing row pending when its only trailer is on origin at the merge-base', async () => {
+      await initializeRepository();
+      await commitForTask('18');
+      await git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+      const planPath = await writePlan();
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' }] }),
+      );
+
+      const trailers = vi.spyOn(autoheal, 'listCommitsWithTrailers');
+      trailers.mockClear();
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect({ trailerScans: trailers.mock.calls.length, task18: status.tasks.find((task: any) => task.id === '18') }).toEqual({
+        trailerScans: 1,
+        task18: { id: '18', name: 'Restored work', status: 'pending' },
+      });
+    });
+
+    it('keeps a missing row pending without an origin ref even when HEAD carries its trailer', async () => {
+      await initializeRepository(false);
+      await commitForTask('18');
+      const planPath = await writePlan();
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' }] }),
+      );
+
+      const originResolution = vi.spyOn(autoheal, 'resolveOriginRef');
+      originResolution.mockClear();
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect({ originResolutions: originResolution.mock.calls.length, task18: status.tasks.find((task: any) => task.id === '18') }).toEqual({
+        originResolutions: 1,
+        task18: { id: '18', name: 'Restored work', status: 'pending' },
+      });
+    });
+
+    it('resets a trailerless in_progress row to pending at a dispatch boundary', async () => {
+      await initializeRepository();
+      const planPath = await writePlan(true);
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [
+          { id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' },
+          { id: '18', name: 'Restored work', status: 'pending' },
+          { id: '19', name: 'Missing sibling', status: 'in_progress' },
+        ] }),
+      );
+
+      await seedTaskStatus(dir, planPath, undefined, { dispatchBoundary: true });
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks.find((task: any) => task.id === '19')).toEqual({
+        id: '19', name: 'Missing sibling', status: 'pending',
+      });
+    });
+
+    it('keeps an in_progress row with a branch-scoped Task trailer at a dispatch boundary', async () => {
+      await initializeRepository();
+      await commitForTask('19');
+      const planPath = await writePlan(true);
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [
+          { id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' },
+          { id: '18', name: 'Restored work', status: 'pending' },
+          { id: '19', name: 'Missing sibling', status: 'in_progress' },
+        ] }),
+      );
+
+      await seedTaskStatus(dir, planPath, undefined, { dispatchBoundary: true });
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks.find((task: any) => task.id === '19')).toEqual({
+        id: '19', name: 'Missing sibling', status: 'in_progress',
+      });
+    });
+
+    it('keeps a trailerless in_progress row during a default seed', async () => {
+      await initializeRepository();
+      const planPath = await writePlan(true);
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [
+          { id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' },
+          { id: '18', name: 'Restored work', status: 'pending' },
+          { id: '19', name: 'Missing sibling', status: 'in_progress' },
+        ] }),
+      );
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks.find((task: any) => task.id === '19')).toEqual({
+        id: '19', name: 'Missing sibling', status: 'in_progress',
+      });
+    });
+
+    it('passes the dispatch-boundary option only from pre-BUILD task telemetry', async () => {
+      const readEngineSources = async (directory: URL): Promise<string[]> => {
+        const entries = await fsPromises.readdir(directory, { withFileTypes: true });
+        return (await Promise.all(entries.map(async (entry) => {
+          const path = new URL(entry.name + (entry.isDirectory() ? '/' : ''), directory);
+          if (entry.isDirectory()) return readEngineSources(path);
+          return entry.name.endsWith('.ts') ? [await fsPromises.readFile(path, 'utf8')] : [];
+        }))).flat();
+      };
+      const [conductor, artifacts, repairRestage] = await Promise.all([
+        fsPromises.readFile(new URL('../../src/engine/conductor.ts', import.meta.url), 'utf8'),
+        fsPromises.readFile(new URL('../../src/engine/artifacts.ts', import.meta.url), 'utf8'),
+        fsPromises.readFile(new URL('../../src/engine/repair-restage.ts', import.meta.url), 'utf8'),
+      ]);
+      const dispatchOptionCount = (await readEngineSources(new URL('../../src/engine/', import.meta.url)))
+        .flatMap((source) => source.match(/dispatchBoundary:\s*true/g) ?? [])
+        .length;
+
+      expect({
+        dispatchOptionCount,
+        dispatch: conductor.includes('await seedTaskStatus(projectRoot, planPath, undefined, { dispatchBoundary: true });'),
+        remediation: conductor.includes('await seedTaskStatus(this.projectRoot, planPath);'),
+        completion: artifacts.includes('await seedTaskStatus(ctx.projectRoot, ctx.planPath, enginePlanPath);'),
+        repairRestage: repairRestage.includes('await seedTaskStatus(projectRoot, planPath);'),
+      }).toEqual({ dispatchOptionCount: 1, dispatch: true, remediation: true, completion: true, repairRestage: true });
+    });
+
+    it('resets an in_progress row to pending at a dispatch boundary without an origin ref', async () => {
+      await initializeRepository(false);
+      const planPath = await writePlan(true);
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [
+          { id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' },
+          { id: '18', name: 'Restored work', status: 'pending' },
+          { id: '19', name: 'Missing sibling', status: 'in_progress' },
+        ] }),
+      );
+
+      await seedTaskStatus(dir, planPath, undefined, { dispatchBoundary: true });
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks.find((task: any) => task.id === '19')).toEqual({
+        id: '19', name: 'Missing sibling', status: 'pending',
+      });
+    });
+
+    it('preserves a completed row without a Task trailer during default and dispatch seeds', async () => {
+      await initializeRepository();
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.writeFile(planPath, '# Plan\n\n## Task 5: Finished work\n');
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: '5', name: 'Finished work', status: 'completed', commit: 'recorded-sha' }] }),
+      );
+
+      await seedTaskStatus(dir, planPath);
+      await seedTaskStatus(dir, planPath, undefined, { dispatchBoundary: true });
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks).toEqual([
+        { id: '5', name: 'Finished work', status: 'completed', commit: 'recorded-sha' },
+      ]);
     });
   });
 

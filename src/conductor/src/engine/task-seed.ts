@@ -25,6 +25,10 @@ export interface TaskStatusFile {
   [key: string]: unknown;
 }
 
+export interface SeedTaskStatusOptions {
+  dispatchBoundary?: boolean;
+}
+
 interface EngineState {
   activePlanPath?: string;
   [key: string]: unknown;
@@ -159,8 +163,14 @@ async function trailerProvenCompletions(projectRoot: string): Promise<Map<string
  * @param projectRoot - Project root directory
  * @param planPath - Path to the plan file (relative to projectRoot or absolute)
  * @param enginePlanPath - Optional: plan path recorded in engine state (overrides planPath)
+ * @param options - Dispatch-only reseed behavior
  */
-export async function seedTaskStatus(projectRoot: string, planPath: string, enginePlanPath?: string): Promise<void> {
+export async function seedTaskStatus(
+  projectRoot: string,
+  planPath: string,
+  enginePlanPath?: string,
+  options: SeedTaskStatusOptions = {},
+): Promise<void> {
   try {
     // Ensure .pipeline directory exists
     const pipelineDir = join(projectRoot, '.pipeline');
@@ -240,21 +250,12 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
 
     // Load existing task-status.json.
     //
-    // `reconstructing` records that there was NO usable prior file — missing,
-    // empty, or unparseable. `.pipeline/` is gitignored and lives inside the
-    // worktree, so this is exactly the state left behind when a worktree is
-    // removed and recreated from its branch (CLAUDE.md "Daemon Operations
-    // Safety" rule 3, #497) or when the file never got written at all (#1102).
-    // In that state — and ONLY in that state — completions are re-derived from
-    // `Task:` commit trailers below, so already-finished work is not redone.
-    let reconstructing = true;
     let existingStatus: TaskStatusFile = { tasks: [] };
     try {
       const raw = await fsPromises.readFile(statusPath, 'utf-8');
       if (raw && raw.trim()) {
         try {
           existingStatus = JSON.parse(raw);
-          reconstructing = false;
           if (!existingStatus.tasks) {
             existingStatus.tasks = [];
           } else if (!Array.isArray(existingStatus.tasks)) {
@@ -276,18 +277,21 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
       // File doesn't exist — start with empty
       existingStatus = { tasks: [] };
     }
-    // A file that parsed but carries no rows at all is materially the same
-    // wipe as a missing one (the #1102 shape: `.pipeline/` present, every
-    // other artifact present, no usable task rows). Treat it as a
-    // reconstruction so trailer-proven completions are restored.
-    if (!existingStatus.tasks || existingStatus.tasks.length === 0) {
-      reconstructing = true;
-    }
-
-    // Trailer-proven completions are read ONLY when reconstructing, so an
-    // ordinary re-seed keeps its existing (possibly deliberately-reverted)
-    // rows untouched and pays no git cost.
-    const provenCompletions = reconstructing
+    // A missing plan row can only arise after an interrupted write or a
+    // worktree reconstruction. Scan the branch-scoped range only then: a
+    // present row remains authoritative regardless of its status.
+    const existingTaskIds = new Set(
+      (existingStatus.tasks ?? [])
+        .filter((task) => !!task.id)
+        .map((task) => canonicalTaskId(String(task.id))),
+    );
+    const hasMissingPlanTask = Array.from(planTasks.keys()).some(
+      (taskId) => !existingTaskIds.has(canonicalTaskId(taskId)),
+    );
+    const hasInProgressTask = (existingStatus.tasks ?? []).some(
+      (task) => task.status === 'in_progress',
+    );
+    const provenCompletions = hasMissingPlanTask || (options.dispatchBoundary && hasInProgressTask)
       ? await trailerProvenCompletions(projectRoot)
       : new Map<string, string>();
 
@@ -332,9 +336,14 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
         existing.id = taskId;
         if (declaredFiles) existing.files = mergeDeclaredFiles(existing.files, declaredFiles);
 
-        // Preserve in_progress
+        // Only a pre-BUILD dispatch can reclaim a stale in-progress row. A
+        // branch-scoped trailer proves the work committed before daemon death;
+        // otherwise, hand it back to BUILD as pending.
         if (existing.status === 'in_progress') {
-          // Keep as-is
+          if (options.dispatchBoundary && !provenCompletions.has(canonicalId)) {
+            existing.name = planTask.name;
+            existing.status = 'pending';
+          }
           continue;
         }
 
@@ -360,12 +369,10 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
         // task-status.json rows are the sole source of truth (Task 10);
         // re-deriving a row FROM the evidence ledger is backwards.
         //
-        // #1102 exception, and ONLY when `reconstructing` (no usable prior
-        // file): a task carrying a `Task:` trailer on a commit already on this
-        // branch is restored as `completed` rather than reset to `pending`, so
-        // a wiped/recreated worktree does not redo finished, committed work
-        // (CLAUDE.md "Daemon Operations Safety" rule 3, #497). This is a
-        // RESTORE, not a grant: `resolveTaskIds` already treats the same
+        // A task carrying a `Task:` trailer on a commit already on this branch
+        // is restored as `completed` rather than reset to `pending`, so a
+        // wiped/recreated worktree or interrupted write does not redo finished,
+        // committed work. This is a RESTORE, not a grant: `resolveTaskIds` already treats the same
         // trailer as resolving the task for build-step routing
         // (adr-2026-07-23, #859), and `build_review`'s completeness rubric
         // still re-judges the real diff, so no unearned work can pass a gate
