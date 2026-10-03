@@ -162,6 +162,8 @@ describe('OtelVisualizer', () => {
   });
 
   it('gates commit and PR span attributes without filtering provenance events', async () => {
+    const eventsPath = join(pipelineDir, 'events.jsonl');
+    const persister = new EventPersister(eventsPath, emitter);
     const visualizer = new OtelVisualizer(
       resolveOtelConfig({
         otel: {
@@ -171,6 +173,7 @@ describe('OtelVisualizer', () => {
       }, pipelineDir),
       { spanExporter, metricExporter },
     );
+    persister.start();
     visualizer.start(emitter, {
       runId: 'run-1', feature: 'feature', project: 'project', sourceRef: 'owner/repo#2000',
     });
@@ -179,6 +182,7 @@ describe('OtelVisualizer', () => {
     await emitter.emit({ type: 'rebase_noop', baseSha: 'B' });
     await emitter.emit({ type: 'feature_complete', headSha: 'H', baseSha: 'B', prUrl: 'https://example.test/pr/1', prDisposition: 'opened' });
     await visualizer.stop();
+    persister.stop();
 
     const run = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')!;
     const rebase = spanExporter.getFinishedSpans().find((span) => span.name === 'rebase')!;
@@ -188,6 +192,9 @@ describe('OtelVisualizer', () => {
     expect(run.attributes).not.toHaveProperty('conductor.pr.disposition');
     expect(run.resource.attributes).not.toHaveProperty('conductor.source.ref');
     expect(rebase.attributes).not.toHaveProperty('vcs.base.sha');
+    expect(JSON.parse((await readFile(eventsPath, 'utf8')).trim().split('\n').at(-1)!)).toMatchObject({
+      type: 'feature_complete', headSha: 'H', baseSha: 'B', prUrl: 'https://example.test/pr/1', prDisposition: 'opened',
+    });
   });
 
   it('ignores lifecycle-only provider attempts without overwriting an invoked attempt on the step span', async () => {
