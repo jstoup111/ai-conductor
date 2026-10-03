@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
 const HEARTBEAT_EXPIRY_MS = 60_000;
+const activeLeaseUuids = new Set<string>();
 
 interface LeaseFileHandle {
   writeFile(contents: string): Promise<void>;
@@ -43,6 +44,7 @@ interface LeaseRecord {
   pid: number;
   uuid: string;
   heartbeatAt: number;
+  releasing?: true;
 }
 
 const defaultFilesystem: SpoolLeaseFilesystem = { link, mkdir, open, readFile, rename, rm, stat, writeFile };
@@ -71,10 +73,16 @@ function parseLeaseRecord(serialized: string): LeaseRecord | null {
     const value = record as Record<string, unknown>;
     if (!Number.isInteger(value.pid) || (value.pid as number) <= 0 ||
       typeof value.uuid !== 'string' || value.uuid.length === 0 ||
-      typeof value.heartbeatAt !== 'number' || !Number.isFinite(value.heartbeatAt)) {
+      typeof value.heartbeatAt !== 'number' || !Number.isFinite(value.heartbeatAt) ||
+      (value.releasing !== undefined && value.releasing !== true)) {
       return null;
     }
-    return { pid: value.pid as number, uuid: value.uuid, heartbeatAt: value.heartbeatAt };
+    return {
+      pid: value.pid as number,
+      uuid: value.uuid,
+      heartbeatAt: value.heartbeatAt,
+      ...(value.releasing === true ? { releasing: true } : {}),
+    };
   } catch {
     return null;
   }
@@ -117,6 +125,7 @@ export class SpoolLease {
     // Mark ownership ended before awaiting the one serialized refresh.  That
     // refresh checks this flag immediately before its rename.
     this.owned = false;
+    activeLeaseUuids.delete(this.uuid);
     this.stopHeartbeat();
     await this.heartbeatRefresh;
     if (!wasOwned) return;
@@ -130,7 +139,7 @@ export class SpoolLease {
       // ownership check and the removal without ever moving lease.json aside.
       // If a contender already holds the slot, it owns the replacement race
       // and we leave its lease pathname untouched.
-      if (!await this.createSuccessor(this.record())) return;
+      if (!await this.createSuccessor(this.record(true))) return;
       try {
         const current = await this.filesystem.readFile(this.path(), 'utf8');
         if (parseLeaseRecord(current)?.uuid === this.uuid) {
@@ -245,7 +254,10 @@ export class SpoolLease {
       throw error;
     }
     const holder = parseLeaseRecord(serialized);
-    if (await this.isHeld(successor, serialized, holder)) return false;
+    // A successor is a short-lived, exclusive handoff slot. A fresh contender
+    // must not have its successor unlinked before it can rename; a release
+    // marker is different because it deliberately yields its primary lease.
+    if (await this.isSuccessorHeld(successor, holder)) return false;
 
     const moved = `${successor}.${this.uuid}.${randomUUID()}.orphan`;
     try {
@@ -275,8 +287,13 @@ export class SpoolLease {
     }
   }
 
-  private record(): LeaseRecord {
-    return { pid: process.pid, uuid: this.uuid, heartbeatAt: this.now() };
+  private record(releasing = false): LeaseRecord {
+    return {
+      pid: process.pid,
+      uuid: this.uuid,
+      heartbeatAt: this.now(),
+      ...(releasing ? { releasing: true } : {}),
+    };
   }
 
   private isFresh(record: LeaseRecord): boolean {
@@ -285,7 +302,22 @@ export class SpoolLease {
 
   /** A recent malformed record may still be a foreign writer's in-progress wx publication. */
   private async isHeld(path: string, serialized: string, holder = parseLeaseRecord(serialized)): Promise<boolean> {
-    if (holder !== null) return this.isFresh(holder) && this.isProcessAlive(holder.pid);
+    if (holder !== null) {
+      const holderIsThisProcess = holder.pid === process.pid
+        ? activeLeaseUuids.has(holder.uuid)
+        : this.isProcessAlive(holder.pid);
+      return this.isFresh(holder) && holderIsThisProcess;
+    }
+    try {
+      return this.now() - (await this.filesystem.stat(path)).mtimeMs <= HEARTBEAT_EXPIRY_MS;
+    } catch (error) {
+      if (isMissing(error)) return false;
+      throw error;
+    }
+  }
+
+  private async isSuccessorHeld(path: string, holder: LeaseRecord | null): Promise<boolean> {
+    if (holder !== null) return holder.releasing !== true && this.isFresh(holder);
     try {
       return this.now() - (await this.filesystem.stat(path)).mtimeMs <= HEARTBEAT_EXPIRY_MS;
     } catch (error) {
@@ -296,6 +328,7 @@ export class SpoolLease {
 
   private takeOwnership(): void {
     this.owned = true;
+    activeLeaseUuids.add(this.uuid);
     this.heartbeatTimer = this.scheduleInterval(async () => {
       if (this.heartbeatRefresh) return;
       const refresh = this.refreshHeartbeat();
@@ -347,6 +380,7 @@ export class SpoolLease {
   private loseOwnership(): void {
     if (!this.owned) return;
     this.owned = false;
+    activeLeaseUuids.delete(this.uuid);
     this.stopHeartbeat();
     this.onLost();
   }

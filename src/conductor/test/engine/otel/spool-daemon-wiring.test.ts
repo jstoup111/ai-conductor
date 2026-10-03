@@ -30,9 +30,12 @@ async function closedEndpoint(): Promise<string> {
   return `http://127.0.0.1:${address.port}`;
 }
 
-async function listeningEndpoint(onRequest: (path: string) => void): Promise<string> {
+async function listeningEndpoint(onRequest: (path: string) => void): Promise<{ endpoint: string; request: Promise<void> }> {
+  let received!: () => void;
+  const requestReceived = new Promise<void>((resolve) => { received = resolve; });
   const server = createServer((request, response) => {
     onRequest(request.url ?? '');
+    received();
     request.resume();
     response.writeHead(200).end();
   });
@@ -40,7 +43,7 @@ async function listeningEndpoint(onRequest: (path: string) => void): Promise<str
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('expected TCP address');
-  return `http://127.0.0.1:${address.port}`;
+  return { endpoint: `http://127.0.0.1:${address.port}`, request: requestReceived };
 }
 
 async function eventually(predicate: () => boolean): Promise<void> {
@@ -108,11 +111,11 @@ describe('daemon OTel spool wiring', () => {
     await first?.stop();
 
     const received: string[] = [];
-    const endpoint = await listeningEndpoint((path) => received.push(path));
-    const second = wireDaemonOtel({ otel: { ...config.otel, endpoint } }, {
+    const listener = await listeningEndpoint((path) => received.push(path));
+    const second = wireDaemonOtel({ otel: { ...config.otel, endpoint: listener.endpoint } }, {
       mainRoot, project: mainRoot, projectName: 'test', rootEvents: new ConductorEventEmitter(),
     });
-    await eventually(() => received.includes('/v1/metrics'));
+    await listener.request;
     await second?.stop();
 
     expect(received).toContain('/v1/metrics');
@@ -125,7 +128,7 @@ describe('daemon OTel spool wiring', () => {
       mainRoot, project: mainRoot, projectName: 'test', rootEvents,
     });
     const leasePath = join(mainRoot, '.daemon', 'otel-spool', 'lease.json');
-    await eventually(() => false);
+    await daemon?.spoolRuntime?.lease.acquire();
     const visualizer = wireOtelVisualizer({ otel: { exporter: 'otlp', endpoint: 'http://127.0.0.1:1', spool: { enabled: true } } }, {
       pipelineDir: join(mainRoot, '.pipeline'), runId: 'run', feature: 'feature', project: mainRoot,
       branch: 'feature', engineVersion: 'test', harnessVersion: 'test',
@@ -169,11 +172,11 @@ describe('daemon OTel spool wiring', () => {
     await store.write('traces', Buffer.from('reclaim'));
     await writeFile(join(spoolDirectory, 'lease.json'), JSON.stringify({ pid: 999_999, uuid: 'dead', heartbeatAt: 0 }));
     const received: string[] = [];
-    const endpoint = await listeningEndpoint((path) => received.push(path));
-    const daemon = wireDaemonOtel({ otel: { exporter: 'otlp', endpoint, spool: { enabled: true } } }, {
+    const listener = await listeningEndpoint((path) => received.push(path));
+    const daemon = wireDaemonOtel({ otel: { exporter: 'otlp', endpoint: listener.endpoint, spool: { enabled: true } } }, {
       mainRoot, project: mainRoot, projectName: 'test', rootEvents: new ConductorEventEmitter(),
     });
-    await eventually(() => received.includes('/v1/traces'));
+    await listener.request;
     await daemon?.stop();
 
     expect(received).toContain('/v1/traces');
