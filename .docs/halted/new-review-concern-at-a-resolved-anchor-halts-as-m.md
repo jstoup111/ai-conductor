@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: kickback-budget
+Resolved at: 2026-10-03T22:55:22.494Z
 Slug: new-review-concern-at-a-resolved-anchor-halts-as-m
 Class: needs-human
 Halting step: prd_audit
