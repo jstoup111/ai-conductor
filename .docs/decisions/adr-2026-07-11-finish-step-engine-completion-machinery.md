@@ -72,6 +72,15 @@ drift). Warn-only semantics, verify-after-write (adr-2026-07-05 D5), and the
 sourceRef-gated `Closes` injection are unchanged — same function, new call site. A later
 halt re-drafts via `ensureHaltPresentation`/reconciliation, which remain untouched.
 
+> **Amended 2026-09-30 by #1810:** Closing-reference injection now follows
+> `adr-2026-09-30-durable-post-ship-action-cases` D10-D11: the common FINISH coordinator applies
+> and verifies the complete approved GitHub target set before readiness/final completion,
+> including explicit extras without an origin. Skip only an empty usable target set. A failed,
+> refused, or uncertain linkage is incomplete FINISH publication, not successful coverage;
+> preserve created resources and recover through FINISH without a BUILD repair. This narrows
+> only the sourceRef-only and warn-only linkage promises. Existing title/label responsibilities,
+> source-ref compatibility, and unrelated presentation behavior remain in their governing scope.
+
 ### D2 — Deterministic retitle-floor (amends adr-2026-07-03 Decision 1)
 
 When, at repair time, the recorded PR's title still starts with `needs-remediation:`,

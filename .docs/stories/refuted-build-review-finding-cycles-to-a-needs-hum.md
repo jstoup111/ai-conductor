@@ -85,37 +85,38 @@ same refuted claim is neither re-judged nor halted as a regression.
 
 #### Happy Path
 - Given a case resolved by refutation with effect `none`, when a later lap re-raises the exact same source id, then that source is removed from the live source set, the judge is not dispatched for it, and the lap routes PASS when no other source is live
-- Given a case resolved by refutation whose residual deferral is applied, when a later lap re-raises the same source id, then the source is settled the same way
+- Given a case resolved by refutation whose residual local handoff is applied, when a later lap re-raises the same source id, then the source is settled the same way
 
 #### Negative Paths
-- Given a case resolved by refutation whose residual deferral effect is reserved or failed, when a later lap re-raises the same source id, then the source is not settled, the lap does not route PASS, and the unfinished effect is reported as the blocker
+- Given a case resolved by refutation whose required residual local handoff is missing or failed, when a later lap re-raises the same source id, then the source is not settled, the lap does not route PASS, and the unfinished effect is reported as the blocker
 - Given a case resolved by refutation, when a later lap raises a finding whose id has drifted from the refuted source id, then the drifted finding is a live source and is adjudicated normally
 - Given a case resolved by refutation, when a later lap re-raises the same source id, then no regression halt is written for that case
 
 ### Done When
 - [ ] A two-lap coordinator test proves the refuted source is excluded by exact id and that a drifted id is not
-- [ ] A test proves an unfinished residual effect blocks settlement exactly as any other reserved or failed effect
+- [ ] A test proves an unfinished required local residual handoff blocks settlement while later optional publication failure does not
 
-## Story 5: The narrow true remainder files an intake issue
+## Story 5: Retain the narrow true remainder for optional follow-up
 
-As the harness owner, I want the part of a refuted finding that is genuinely true to be recorded as
-a deferral so that it reaches the tracker without re-entering a remediation lap.
+As the harness owner, I want the part of a refuted finding that is genuinely true retained as
+an operator action so that it survives settlement without re-entering a remediation lap.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a `refute` row whose effect is a complete deferral with a title, body, and exclusion rationale, when the refutation is admitted, then one intake issue is filed through the existing tracker seam with the sanitized body and the deferral effect is recorded as applied with the issue reference
-- Given the same lap, when it completes, then no BUILD action task exists for the remainder and no plan task was appended
+- Given a `refute` row whose residual has a complete deferral proposal and exclusion rationale, when the refutation is admitted, then the narrow upheld remainder and applied local handoff are durably recorded together, while the rejected claim remains refuted and no issue is automatically created.
+- Given the same lap with no other blockers, when it completes, then review can PASS with no BUILD action for the remainder, no appended plan task, and no additional kickback charge.
 
 #### Negative Paths
-- Given a `refute` row whose deferral omits the exclusion rationale, when the judgement is validated, then it is rejected with the existing invalid-deferral reason
-- Given a `refute` row with a deferral, when the tracker is unavailable at filing time, then the deferral effect is recorded as failed, the lap does not route PASS, and the failure occurrence is emitted
-- Given a `refute` row with a deferral whose marker already matches an existing issue, when the effect is applied, then the existing issue is reused and no duplicate is filed
-- Given a `refute` row with a deferral whose body contains tracker-directed text, when the issue is filed, then the body passed to the tracker is the sanitized form
+- Given a `refute` row whose residual omits the exclusion rationale, when judgement is validated, then it is rejected with the existing invalid-deferral reason.
+- Given a confirmed local residual handoff and unavailable tracker, when review settles, then the tracker does not prevent otherwise valid PASS; a later explicit filing failure is reported on the action.
+- Given a legacy residual already has an issue or publication marker, when migrated to a local handoff, then its proposal, marker alias and known issue link survive without duplicate publication.
+- Given required local capture fails, when the residual effect is applied, then no applied handoff is claimed and review retains the existing control-evidence failure.
 
 ### Done When
-- [ ] An effect-executor test files the residual through a fake tracker client and asserts sanitize, marker dedup, and the applied issue reference
-- [ ] A test asserts a tracker failure leaves the effect failed and the route blocked
+- [ ] Residual capture retains only the upheld remainder and its evidence with zero automatic tracker calls.
+- [ ] A confirmed local handoff permits otherwise valid settlement offline; a failed required handoff does not.
+- [ ] Legacy residual migration preserves issue/marker recovery context and existing refutation evidence.
 
 ## Story 6: The operator can see a refutation in build-review findings
 
@@ -146,7 +147,7 @@ to name the new vocabulary so that no consumer or provider learns about it by ac
 ### Acceptance Criteria
 
 #### Happy Path
-- Given an admitted refutation, when the lap completes, then exactly one refutation occurrence for that case id is persisted to the events file with the lap id and, when a residual was filed, the residual effect id
+- Given an admitted refutation, when the lap completes, then exactly one refutation occurrence for that case id is persisted to the events file with the lap id and, when a residual was handed off locally, the residual effect id
 - Given the remediate skill text, when the contract test runs, then the case-v1 section enumerates `refute` and `refuted`, the refutation record fields, and the binding, confidence, and evidence rules
 
 #### Negative Paths

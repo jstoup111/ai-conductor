@@ -205,32 +205,31 @@ semantic non-progress stops instead of cycling.
 - [ ] A similar-looking but materially distinct judgement can create a new permitted case, proving
       prior-case dedup does not block legitimate operations.
 
-## Story 8: File each genuine deferral exactly once
+## Story 8: Retain each genuine deferral through a local handoff
 
-**Requirement:** Incorporated D6
+**Requirement:** Incorporated D6 as amended by adr-2026-09-30-durable-post-ship-action-cases D5
 
-As an operator, I want a genuinely out-of-scope finding filed through intake exactly once so that it
-is neither silently lost nor duplicated by retries.
+As an operator, I want a genuinely out-of-scope finding retained for later action so that review
+settlement does not depend on whether I choose to publish an intake issue.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- Given a valid `defer` case, when its effect is reserved, then the engine searches the configured intake repository for the exact hidden effect marker across open and closed issues, reuses a match, or files one sanitized issue through the existing intake adapter and records its reference.
-- Given two distinct deferral cases with different effect ids but similar prose, when effects run, then each receives its own issue; similarity alone does not cause a false deduplication.
+- Given a valid `defer` case, when its required effect is applied, then the source observation and distinct applied local handoff are durably recorded together with the justification and proposed intake content, without a remote issue request.
+- Given two distinct deferral cases with different identities but similar prose, when their local effects run, then both concerns remain independently retained; similarity alone does not merge them.
 
 #### Negative Paths
 
-- Given issue lookup/create fails because of timeout, authentication, permission, rate limit, or response failure, when the effect runs, then its state remains reserved/failed, the gate cannot PASS or route mixed actionable work, and a retry searches by the same marker before creating.
-- Given the process crashes after GitHub creates the issue but before the local reference is recorded, when the effect resumes, then marker lookup records the existing issue and does not create a second one.
+- Given optional issue lookup/create later fails or is never requested, when effective review settlement runs after confirmed local handoff, then that optional publication state blocks neither otherwise valid PASS nor a permitted mixed actionable route.
+- Given the local source/effect mutation cannot persist, when the handoff is attempted, then no applied handoff is claimed and the existing required-control-evidence failure remains blocking.
+- Given an eligible legacy non-blocking deferral has a failed remote effect or an existing issue link, when it resumes, then local handoff migration preserves its identity, proposal, marker aliases, and link without creating an issue or migrating an unfinished BUILD effect.
 
 ### Done When
 
-- [ ] New, open-match, and closed-match tests record exactly one issue reference with the reserved
-      effect marker and the expected intake body sections.
-- [ ] Distinct-key tests create two issues even when title/body text is otherwise equivalent.
-- [ ] Timeout/auth/rate-limit and post-create-crash tests produce no PASS/BUILD route until recovery
-      and never create a duplicate issue.
+- [ ] Fresh and distinct-identity cases retain source/effect evidence with zero tracker calls.
+- [ ] Eligible legacy cases preserve publication recovery context while settling through the local handoff.
+- [ ] Optional publication failure does not block settlement; failure of the required local mutation still does.
 
 ## Story 9: Derive one traceable effective gate outcome
 
@@ -244,7 +243,7 @@ an effective PASS or route never hides what the rubrics reported.
 #### Happy Path
 
 - Given every current raw finding is operator-resolved or finalized as deferred, rejected, or merged, every required effect is applied, and every infrastructure branch is healthy or exactly covered by the operator, when the effective verdict is derived, then it is PASS while the raw FAIL and each source-to-case/effect link remain inspectable.
-- Given at least one new action and all sibling deferral effects are applied, when the effective verdict is derived, then it emits the single BUILD route with a report that includes every source outcome and canonical case.
+- Given at least one new action and all sibling required local handoff effects are applied, when the effective verdict is derived, then it emits the single BUILD route with a report that includes every source outcome and canonical case.
 
 #### Negative Paths
 
@@ -255,8 +254,8 @@ an effective PASS or route never hides what the rubrics reported.
 
 - [ ] PASS and BUILD-route reports reconstruct every raw finding through disposition/case/effect to
       the terminal decision without mutating the raw aggregate.
-- [ ] Mixed action+failed-deferral, missing-effect, invalid-state, and unrenderable-state tests block
-      both PASS and route.
+- [ ] Mixed action plus failed required local handoff, missing required effect, invalid state, and
+      unrenderable state block both PASS and route; optional publication failure does neither.
 - [ ] Infrastructure-failure fixtures remain blocking regardless of autonomous history; mixed-lap
       fixtures still admit one newly actionable BUILD route without treating infrastructure as PASS.
 
@@ -282,9 +281,9 @@ charge/effect or lose an accepted work order.
 ### Done When
 
 - [ ] A fault-injection matrix covers process death after validation, reservation, charge, work-order
-      persistence, navigation, remote issue creation, and finalization.
-- [ ] Every matrix row asserts at-most-once charge/issue creation, at-least-once resumable work, and
-      no PASS from an incomplete effect.
+      persistence, navigation, local handoff, and finalization.
+- [ ] Every matrix row asserts at-most-once charge/local handoff, at-least-once resumable work,
+      and no PASS from an incomplete required effect; optional publication is covered by the action stories.
 - [ ] Atomic-write and concurrent-executor tests leave parsable versioned state with one legal next
       transition.
 

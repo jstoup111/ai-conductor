@@ -62,19 +62,19 @@ non-adherence is caught by bounded retries instead of shipping a stale PR.
 #### Happy Path
 - Given `.pipeline/finish-choice` = `pr` and a recorded `pr_url` whose PR
   title has no `needs-remediation:` prefix, when the finish completion check
-  runs, then the step passes (existing finish-choice/pr_url semantics
-  unchanged).
+  runs, then the title facet passes; final FINISH completion separately requires
+  verified closure coverage and all other publication evidence.
 - Given a recorded PR whose title starts with `needs-remediation:`, when the
   completion check runs, then the step FAILS with a reason that names the
   stale title (so the retry session knows exactly what to fix).
 
 #### Negative Paths
 - Given `gh pr view` exits non-zero (network down, auth expired), when the
-  completion check runs, then the check logs a warning and PASSES (fail-open:
-  a gh outage never blocks a ship).
+  completion check runs, then the legacy title-only facet logs a warning; the separate closure
+  verification remains incomplete if it cannot observe the required references.
 - Given `gh pr view` returns unparseable JSON, when the completion check
-  runs, then the check treats it as a read failure: warn + pass (never
-  throws, never fails the step on malformed output).
+  runs, then the check treats it as a read failure: a warning for this title-only facet, not proof of complete publication;
+  closure projection cannot overwrite the unreadable body or report verified coverage.
 - Given finish-choice is `merge-local`, `keep`, or `discard` (no `pr_url`),
   when the completion check runs, then no `gh` call is made at all and
   existing behavior is unchanged.
@@ -98,17 +98,17 @@ non-adherence is caught by bounded retries instead of shipping a stale PR.
 **Requirement:** ADR Decision 2 (engine owns mechanics)
 
 As the daemon operator, I want the mechanical PR-state fixes to run
-deterministically after finish so that they never depend on session behavior.
+deterministically within common FINISH so that they never depend on session behavior.
 
 ### Acceptance Criteria
 
 #### Happy Path
 - Given a shipped feature whose recorded PR is draft, carries the
-  `needs-remediation` label, and whose backlog item carries a `sourceRef`,
-  when the post-run rehabilitation step executes, then the PR is flipped to
+  `needs-remediation` label, and whose approved target set includes an origin or explicit extras,
+  when common FINISH performs order-gated rehabilitation, then the PR is flipped to
   ready (`gh pr ready`), the `needs-remediation` label is removed via the
   REST helper (`removeLabel` in `pr-labels.ts`), and the body contains
-  `Closes owner/repo#N` exactly once (via `injectIssueRef`).
+  closing references for the complete approved GitHub target set exactly once, verified before final completion.
 - Given the PR state after rehabilitation, when the mergeable-sweep next
   ticks, then FR-12 no longer suppresses the `mergeable` label for this PR
   (the label can be added when the PR is mergeable).
@@ -123,11 +123,11 @@ deterministically after finish so that they never depend on session behavior.
 - Given `gh pr ready` fails (e.g. 403), when the step executes, then the
   failure is logged as a warning, the remaining mechanics (label clear,
   Closes) STILL run, the outcome is `'partial'`, and the finish step's
-  success is unaffected (warn-only — never blocks the ship).
+  other independently verified facets remain intact; incomplete closure linkage cannot be reported as complete.
 - Given the label removal fails via REST, when the step executes, then the
-  warn-only semantics above apply identically (no throw, other mechanics
-  unaffected).
-- Given the backlog item has NO `sourceRef` (hand-authored spec), when the
+  facet-local failure handling applies identically (no throw or rollback of
+  confirmed sibling mechanics); closure completeness is still verified separately.
+- Given the backlog item has NO `sourceRef` and no explicit extras (hand-authored spec), when the
   step executes, then no Closes injection is attempted (existing
   `no-source-ref` gating) while ready-flip and label clear still run.
 - Given the step already ran once (PR ready, label gone, Closes present),
@@ -137,20 +137,15 @@ deterministically after finish so that they never depend on session behavior.
   byte-identical.
 - Given the `pr_url` records a PR that was deleted/closed externally, when
   the step executes, then gh read errors are logged and the outcome is
-  `'gh-unavailable'` — the feature's done/shipped status is unchanged.
+  `'gh-unavailable'` — created resources remain intact, but unverified closure coverage
+  cannot satisfy FINISH completion.
 
 ### Done When
 - [ ] New engine module exports `rehabilitateHaltPr` with injected gh runner,
       returning a discriminated outcome
       (`'not-halt-pr' | 'rehabilitated' | 'partial' | 'gh-unavailable'`).
-- [ ] ~~`daemon-cli.ts` post-run tail invokes it beside (or absorbing)
-      `closeIssueOnImplementationMerge` for items with a recorded `pr_url`.~~
-      **SUPERSEDED (2026-07-11):** the invocation moves into the finish step's
-      completion evaluation, order-gated after the non-presentation conditions pass;
-      the post-run tail call is removed. See
-      `adr-2026-07-11-finish-step-engine-completion-machinery.md` (amends
-      adr-2026-07-03 Decision 2) and
-      `.docs/stories/finish-step-completion-becomes-engine-machinery-re.md`.
+- [ ] The common FINISH coordinator owns order-gated rehabilitation and complete issue linkage;
+      no post-run-only call is relied on for publication completeness.
 - [ ] Unit tests with injected runners cover every negative path above; an
       acceptance test drives halt → remediate → finish and asserts the final
       PR state (ready, unlabeled, Closes exactly once, clean title).

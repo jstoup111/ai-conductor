@@ -228,6 +228,17 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 > stays valid. An older engine reading a store with shared sources fails closed, as
 > adr-2026-09-07-durable-prd-widening-decision-reconciliation D2 already requires for a downgrade.
 
+> **Amended 2026-09-30 by #1810:** D3/D5 and the incorporated predecessor's non-blocking
+> deferral contract use the applied local `post-ship` handoff in
+> [adr-2026-09-30-durable-post-ship-action-cases](adr-2026-09-30-durable-post-ship-action-cases.md)
+> D5. This includes the separately upheld remainder of a refutation. Exact recurrence settles
+> after durable local source/effect capture; optional issue publication and root-inbox mirroring
+> are not required gate effects. Eligible legacy unfiled/failed remote deferrals migrate with
+> identity, marker aliases, and existing links preserved. A missing required local handoff,
+> unfinished BUILD effect, uncovered infrastructure failure, consistency stop, or decision-owner
+> escalation retains its blocking authority. This changes neither semantic identity judgement nor
+> source coverage, operator authority, or BUILD budget rules.
+
 ## Consequences
 
 - A mechanical failure cannot erase or postpone valid sibling content merely because reduced

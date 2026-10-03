@@ -7,6 +7,13 @@ Technical track (no PRD). Requirement tags reference the APPROVED ADR
 `.docs/observation/<plan-stem>.md`; "registry" = `.daemon/observation-watch.jsonl`;
 "surface" = `.daemon/daemon.log` (+ `daemon.log.1`).
 
+The observation-specific stories below apply only to independently selected observation-watch
+operations outside the implementation linkage governed by
+`adr-2026-09-30-durable-post-ship-action-cases`. For that implementation workflow, origin and
+explicit extras close on merge even if an older watched marker is present; no observation marker
+or enrollment is required at land or FINISH. These stories do not authorize adding a watcher to
+#1810 or touching independently enrolled watches during its publication operation.
+
 ## Story: Observation marker parses and validates
 
 **Requirement:** ADR §1
@@ -60,7 +67,7 @@ marker so that no new spec can reach the daemon without declaring its close sema
   the land succeeds.
 
 #### Negative Paths
-- Given a worktree with plan `.docs/plans/foo.md` but no `.docs/observation/foo.md`, when
+- Given an independently selected observed-close land operation with plan `.docs/plans/foo.md` but no `.docs/observation/foo.md`, when
   `engineer land` runs, then land fails naming the missing observation marker and the
   worktree is left intact (keep-on-failure).
 - Given a marker present but malformed (any parse failure from the parser story), when
@@ -82,7 +89,7 @@ close event can move to first observation, while unwatched paths stay byte-ident
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a built feature whose worktree carries a watched marker and a `sourceRef`, when
+- Given an independently selected observed-close operation outside the #1810 implementation-linkage workflow, whose feature carries a watched marker and a `sourceRef`, when
   the post-run issue-link step runs, then the implementation PR body gains `Refs
   owner/repo#N` (no `Closes`) and a v1 registry entry is appended with sourceRef, prUrl,
   slug, signature, surface, windowDays, and enrolledAt.
@@ -93,7 +100,7 @@ close event can move to first observation, while unwatched paths stay byte-ident
   behavior is byte-identical to today (`Closes` injected, no registry write).
 
 #### Negative Paths
-- Given a feature with no `sourceRef` (hand-authored spec), when the post-run step runs,
+- Given an observation-only enrollment with no `sourceRef` and no #1810 closure operation, when the post-run step runs,
   then nothing is injected and nothing is enrolled (existing early return preserved).
 - Given a halted build (no `pr_url`), when the post-run step runs, then nothing is
   injected and nothing is enrolled — a watch entry without a PR must never exist.
@@ -103,7 +110,7 @@ close event can move to first observation, while unwatched paths stay byte-ident
   the issue linkless or block the ship (best-effort contract).
 - Given the registry append fails (e.g. `.daemon` unwritable), when enrollment runs, then
   the failure is logged and the ship outcome is unaffected; the PR still carries `Refs`.
-- Given a watched fix whose PR was born as a halt PR, when halt-PR rehabilitation flips it
+- Given a watched fix outside the #1810 implementation-linkage workflow whose PR was born as a halt PR, when halt-PR rehabilitation flips it
   ready and ensures its issue ref, then it ensures `Refs` (not `Closes`) — resolved from
   the same declaration via a shared keyword-resolution helper (conflict resolution
   2026-07-10: rehabilitation must not silently restore merge-close on the recovery path).
