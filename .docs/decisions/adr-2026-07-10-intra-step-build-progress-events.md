@@ -101,6 +101,35 @@ Render `build_stall`, add resolved/total counts to step-boundary events, stop th
    defaults ON — observability should not require opt-in config; `enabled: false` is
    the escape hatch.
 
+> **Amended 2026-10-02 by #2102:** decision 4's "existing breaker unchanged… only makes the
+> signal visible" still holds for the breaker's rules; the watcher gains one bounded, opt-in action.
+> 8. **Active-stall classification and bounded action.** Every `build_progress` and
+> `build_no_progress` emission carries an `activity` classification from the closed set `quiet`,
+> `active-committing`, `active-not-committing`. A tick that observes a HEAD or task change is
+> `active-committing`. A tick with no change is `active-not-committing` when this dispatch's step
+> heartbeat (the existing `heartbeatBelongsToDispatch` check) is younger than `quiet_minutes`, and
+> `quiet` otherwise. Two keys join the `build_progress` block: `active_stall_minutes` (positive
+> number, default 45, validated against `poll_seconds` like `quiet_minutes`) and
+> `active_stall_action` (`warn` | `end_attempt`, default `warn`). When a tick classified
+> `active-not-committing` observes that `active_stall_minutes` have elapsed since the last observed
+> change (intervening `quiet` ticks neither fire nor reset that clock), the watcher emits one
+> `build_active_stall` event per episode (step, minutes, resolved/total, lastCommitAt,
+> lastActivityAt, action, featureSlug). With `end_attempt` it also invokes the `endAttempt`
+> callback its dispatcher supplied. A `quiet` tick never arms or fires the bound, so output
+> silence keeps no termination authority (adr-2026-07-30-provider-preparation-lifecycle-supervision
+> decision 4 is preserved). An observed change clears the episode and re-arms it. The watcher
+> itself never signals or kills a process.
+> 9. **Dispatcher-owned build-attempt cancellation.** The build dispatch loop creates one
+> `AbortController` per attempt and passes its signal to provider execution. The `endAttempt`
+> callback it hands the watcher aborts that controller at most once. An aborted attempt runs no
+> further provider candidates, records the stall reason as an active stall naming the bound, and
+> then enters the existing attempt-end machinery unchanged: it counts as an attempt, and the
+> commit-movement floor, retry budget, `/remediate` routing and HALT fallback of
+> adr-2026-07-23-commit-movement-liveness-floor and adr-2026-07-12-progress-aware-build-halt apply
+> as written. The Claude and Codex adapters forward the invocation's `abortSignal` to their
+> subprocess as execa's `cancelSignal` (SIGTERM, then SIGKILL after the default grace period). The
+> Pi adapter already honours it.
+
 ## Consequences
 
 ### Positive
