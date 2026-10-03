@@ -602,8 +602,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     settleAbsentAttempted: true,
     failureEvidence: {
       failureKind: 'invalid-judgement',
-      caseIds: [...new Set(judgement.cases.flatMap((row) => row.existingCaseId ? [row.existingCaseId] : []))],
-      sourceIds: [...new Set(judgement.sourceOutcomes.map((source) => source.sourceId))],
+      caseIds: graph.caseIds ?? [...new Set(judgement.cases.flatMap((row) => row.existingCaseId ? [row.existingCaseId] : []))],
+      sourceIds: graph.sourceIds ?? [...new Set(judgement.sourceOutcomes.map((source) => source.sourceId))],
     },
   });
   // The v2 consistency/escalation gate is an effect authority, not advisory

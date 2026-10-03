@@ -216,6 +216,30 @@ describe('remediation case reconciler', () => {
     });
   });
 
+  it.each([
+    ['defer', 'deferred', { kind: 'deferral', exclusionRationale: 'Track this outside the current plan.' }],
+    ['reject', 'rejected', { kind: 'none' }],
+    ['escalate', 'escalate', { kind: 'none' }],
+  ] as const)('treats an undeclared resolved-anchor reuse as a recurrence for an unbound %s row', async (disposition, outcome, effect) => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const resolved = resolvedAnchorCase();
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [resolved] } }));
+    const caseRow = { ...ACTION_CASE, caseRef: `undeclared-${disposition}`, disposition, effect } as RemediationCaseGraph['cases'][number]['case'];
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph(caseRow, [{ sourceId: RESOLVED_SOURCE_ID, outcome, caseRef: caseRow.caseRef }]),
+      recordedAt: '2026-10-02T13:00:00.000Z',
+      generateId: () => { throw new Error('a recurrence must not allocate a new case'); },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      recurringCaseIdsByRef: new Map([[caseRow.caseRef, ['case-resolved-anchor']]]),
+      state: { cases: [resolved] },
+    });
+  });
+
   it('rejects a new case that would give a resolved-anchor source a second unresolved owner', async () => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);
