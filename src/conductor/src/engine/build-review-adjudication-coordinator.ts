@@ -747,6 +747,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // judgement converging on an already-stamped case.
   const caseIdsByRef = new Map(reconciled.caseIdsByRef);
   const supersededDecisionStopCaseIds: string[] = [];
+  const supersededDecisionStopEffects: Array<{
+    caseId: string; effectId: string; effectKind: 'action' | 'deferral'; reason: string;
+  }> = [];
   let persistedConsistencyStop = false;
   for (const proposed of escalationCases) {
     const caseId = proposed.case.existingCaseId ?? generateId();
@@ -769,6 +772,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         : undefined);
     persistedConsistencyStop ||= ownsBlockedConsistency;
     supersededDecisionStopCaseIds.push(...persistedStop.supersededCaseIds);
+    supersededDecisionStopEffects.push(...persistedStop.supersededEffects);
     caseIdsByRef.set(proposed.case.caseRef, persistedStop.caseId);
   }
   if (blockedConsistency && !persistedConsistencyStop) {
@@ -789,6 +793,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
         : undefined);
     supersededDecisionStopCaseIds.push(...persistedStop.supersededCaseIds);
+    supersededDecisionStopEffects.push(...persistedStop.supersededEffects);
   }
   const durableState = await store.read();
   if (!durableState.ok) return fail(`case store ${durableState.reason}`);
@@ -814,6 +819,12 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       await input.emit?.({
         type: 'remediation_effect_reserved', domain: 'build_review', lapId: input.aggregate.lapId,
         caseId, effectId: record.effect.id, effectKind: record.effect.kind,
+      });
+    }
+    for (const effect of supersededDecisionStopEffects.filter((effect) => effect.caseId === caseId)) {
+      await input.emit?.({
+        type: 'remediation_effect_failed', domain: 'build_review', lapId: input.aggregate.lapId,
+        caseId: effect.caseId, effectId: effect.effectId, effectKind: effect.effectKind, reason: effect.reason,
       });
     }
   }

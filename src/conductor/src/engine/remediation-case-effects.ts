@@ -50,6 +50,17 @@ export type PersistBuildReviewDecisionStopResult =
     readonly caseId: string;
     /** Existing open owners atomically resolved by this decision stop. */
     readonly supersededCaseIds: readonly string[];
+    /**
+     * Reserved effects flipped to failed while superseding their owners.
+     * Completed, previously failed, and replayed effects have no new failure
+     * occurrence and are intentionally absent.
+     */
+    readonly supersededEffects: readonly Readonly<{
+      caseId: string;
+      effectId: string;
+      effectKind: 'action' | 'deferral';
+      reason: string;
+    }>[];
   }
   | { readonly ok: false; readonly reason: 'invalid-decision-stop' | 'conflicting-case-id' | `case store ${string}` }
   | { readonly ok: false; readonly reason: 'rejected-transition'; readonly caseIds: readonly string[]; readonly sourceIds: readonly string[] }
@@ -95,7 +106,7 @@ export async function persistBuildReviewDecisionStop(input: {
     if (existing) {
       return {
         value: sameDecisionStop(existing, input.record)
-          ? { ok: true as const, status: 'already-persisted' as const, caseId: existing.id, supersededCaseIds: [] }
+          ? { ok: true as const, status: 'already-persisted' as const, caseId: existing.id, supersededCaseIds: [], supersededEffects: [] }
           : { ok: false as const, reason: 'conflicting-case-id' as const },
       };
     }
@@ -103,8 +114,17 @@ export async function persistBuildReviewDecisionStop(input: {
     const superseded = state.cases.filter((record) => record.id !== input.record.id && record.domain === 'build_review' &&
       isOpenRemediationCase(record) && record.sources.some((source) => stopSourceIds.has(source.sourceId)));
     const supersededCaseIds = superseded.map((record) => record.id);
+    const supersededEffects = superseded.flatMap((record) => {
+      if (record.effect.kind === 'none' || record.effect.status !== 'reserved') return [];
+      return [{
+        caseId: record.id,
+        effectId: record.effect.id,
+        effectKind: record.effect.kind,
+        reason: `superseded by decision stop ${input.record.id}`,
+      }];
+    });
     return {
-      value: { ok: true as const, status: 'persisted' as const, caseId: input.record.id, supersededCaseIds },
+      value: { ok: true as const, status: 'persisted' as const, caseId: input.record.id, supersededCaseIds, supersededEffects },
       nextState: {
         ...state,
         cases: [

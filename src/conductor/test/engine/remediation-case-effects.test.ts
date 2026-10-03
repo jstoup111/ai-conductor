@@ -106,9 +106,13 @@ describe('remediation case effects', () => {
     await expect(persistBuildReviewDecisionStop({ store, record: stop })).resolves.toEqual({
       ok: true, status: 'persisted', caseId: 'decision-stop',
       supersededCaseIds: ['action-reserved', 'deferral-reserved', 'action-applied', 'deferral-failed'],
+      supersededEffects: [
+        { caseId: 'action-reserved', effectId: 'reserved-action', effectKind: 'action', reason: 'superseded by decision stop decision-stop' },
+        { caseId: 'deferral-reserved', effectId: 'reserved-deferral', effectKind: 'deferral', reason: 'superseded by decision stop decision-stop' },
+      ],
     });
     await expect(persistBuildReviewDecisionStop({ store, record: stop })).resolves.toEqual({
-      ok: true, status: 'already-persisted', caseId: 'decision-stop', supersededCaseIds: [],
+      ok: true, status: 'already-persisted', caseId: 'decision-stop', supersededCaseIds: [], supersededEffects: [],
     });
 
     const read = await store.read();

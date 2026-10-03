@@ -1116,6 +1116,12 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events.filter((event) => event.type === 'remediation_case_reconciled' && event.caseId === 'case-current-owner' && event.resolution === 'resolved')).toEqual([
       expect.objectContaining({ type: 'remediation_case_reconciled', caseId: 'case-current-owner', resolution: 'resolved' }),
     ]);
+    expect(events.filter((event) => event.type === 'remediation_effect_failed' && event.caseId === 'case-current-owner')).toEqual([
+      expect.objectContaining({
+        type: 'remediation_effect_failed', caseId: 'case-current-owner', effectId: 'effect-current-owner', effectKind: 'action',
+        reason: 'superseded by decision stop case-escalation-stop',
+      }),
+    ]);
     expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
   });
 
@@ -1162,7 +1168,89 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events.filter((event) => event.type === 'remediation_case_reconciled' && event.caseId === 'case-current-owner' && event.resolution === 'resolved')).toEqual([
       expect.objectContaining({ type: 'remediation_case_reconciled', caseId: 'case-current-owner', resolution: 'resolved' }),
     ]);
+    expect(events.filter((event) => event.type === 'remediation_effect_failed' && event.caseId === 'case-current-owner')).toEqual([
+      expect.objectContaining({
+        type: 'remediation_effect_failed', caseId: 'case-current-owner', effectId: 'effect-current-owner', effectKind: 'action',
+        reason: 'superseded by decision stop consistency-stop-lap-1',
+      }),
+    ]);
     expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
+  });
+
+  it('emits one failed deferral effect after reconciliation when an explicit escalation stop supersedes it', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-current-deferral', domain: 'build_review', disposition: 'defer', priority: 'low', confidence: 'high',
+        rationale: 'The current owner remains unresolved.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'deferred', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-current-deferral', kind: 'deferral', status: 'reserved' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'unbound-stop' }],
+      cases: [{
+        caseRef: 'unbound-stop', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'An owner decision is required.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['unbound-stop'], rationale: 'The stop is consistent.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), generateId: () => 'case-escalation-stop',
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'halt' });
+    expect(events.filter((event) => event.type === 'remediation_effect_failed' && event.caseId === 'case-current-deferral')).toEqual([
+      expect.objectContaining({
+        type: 'remediation_effect_failed', caseId: 'case-current-deferral', effectId: 'effect-current-deferral', effectKind: 'deferral',
+        reason: 'superseded by decision stop case-escalation-stop',
+      }),
+    ]);
+    expect(events.findIndex((event) => event.type === 'remediation_case_reconciled' && event.caseId === 'case-current-deferral')).toBeLessThan(
+      events.findIndex((event) => event.type === 'remediation_effect_failed' && event.caseId === 'case-current-deferral'),
+    );
+  });
+
+  it('emits one failed deferral effect after reconciliation when a blocked consistency stop supersedes it', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-current-deferral', domain: 'build_review', disposition: 'defer', priority: 'low', confidence: 'high',
+        rationale: 'The existing owner remains unresolved.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'deferred', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-current-deferral', kind: 'deferral', status: 'reserved' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'rejected', caseRef: 'rejected-case' }],
+      cases: [{ caseRef: 'rejected-case', disposition: 'reject', priority: 'low', confidence: 'high', rationale: 'Do not proceed.', effect: { kind: 'none' } }],
+      consistency: { verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['rejected-case'], rationale: 'An owner decision is required.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'halt' });
+    expect(events.filter((event) => event.type === 'remediation_effect_failed' && event.caseId === 'case-current-deferral')).toEqual([
+      expect.objectContaining({
+        type: 'remediation_effect_failed', caseId: 'case-current-deferral', effectId: 'effect-current-deferral', effectKind: 'deferral',
+        reason: 'superseded by decision stop consistency-stop-lap-1',
+      }),
+    ]);
+    expect(events.findIndex((event) => event.type === 'remediation_case_reconciled' && event.caseId === 'case-current-deferral')).toBeLessThan(
+      events.findIndex((event) => event.type === 'remediation_effect_failed' && event.caseId === 'case-current-deferral'),
+    );
   });
 
   it('makes a blocked non-action judgement persist only its durable consistency stop', async () => {
