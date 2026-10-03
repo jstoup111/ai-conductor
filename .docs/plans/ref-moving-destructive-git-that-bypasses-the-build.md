@@ -348,3 +348,11 @@ Task 1 ─┬─▶ Task 2 ─▶ Task 3 ─▶ Task 4 ─▶ Task 5 ─▶ Task
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-adr-001: docs/reference/settings-and-hooks.md:192-237 — add `reference-transaction` and `pre-push` rows to the git hook table (trigger, refusal rule per ADR D12/D13, chaining per D11, blocks: yes exit 1); :280-290 'What the guard does NOT cover' — add the git-side backstop limits: an overridden core.hooksPath, `git push --no-verify`, git run from the root checkout (no worktree-scoped core.hooksPath), and worktrees not prepared by the engine
+**Gate:** as-built
+**Rationale:** REMEDIABLE D15 drift with architecture unchanged, in two halves: the test half (ref-hooks-engine-unaffected.test.ts:15-27 missing D14's quarantine move, moving recovery ref, successful/stale lease, root-versus-feature deletion) is admitted by Task 10 and re-staged under S5.1-S5.5; the documentation half (docs/reference/settings-and-hooks.md:192-237 lists only three hooks, :280-290 omits the git-side limits) is admitted by no plan task — the plan's Technical Approach routed it to a documentation-maintenance step that has not run on this feature — so it needs one appended conforming-documentation task. Found-and-excluded: the stale 'Provisioned now … subsequent tasks add' doc comments at git-hook-assets.ts:192-193 and :243-244 (cosmetic audit note, no admitting task).
+**Governing clause:** adr-2026-09-23-engine-git-guard-on-agent-path decision 15
+**Done when:**
+- adr-2026-09-23-engine-git-guard-on-agent-path decision 15 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-001 is complete.
