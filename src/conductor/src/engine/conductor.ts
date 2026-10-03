@@ -10390,6 +10390,37 @@ export class Conductor {
               this.projectRoot,
               state.feature_desc ?? this.featureDesc ?? '',
             );
+            // `seedBuildTaskTelemetry` can admit a plan-amendment repair on
+            // this very first BUILD attempt. The startup recovery above has
+            // already run, so fold that newly durable instruction into the
+            // prompt now rather than making the agent wait for a restart.
+            if (attempt === 1) {
+              try {
+                const repairs = createRepairObligationStore(
+                  this.projectRoot,
+                  join(this.projectRoot, '.pipeline', 'engine-state.json'),
+                );
+                const restored = await repairs.read();
+                const planBinding = await resolveRepairPlanBinding(this.projectRoot);
+                if (restored.ok && planBinding.kind === 'bound') {
+                  for (const obligation of Object.values(restored.value.records).sort((a, b) => a.id.localeCompare(b.id))) {
+                    const hasOpenTask = Object.values(obligation.tasks).some((task) => task.status === 'open');
+                    if (
+                      obligation.planIdentity !== planBinding.identity ||
+                      obligation.source.authority !== 'plan_amendment' ||
+                      obligation.settlement !== 'settled' ||
+                      !hasOpenTask
+                    ) continue;
+                    const hint = `Resume admitted repair ${obligation.id}: ${obligation.source.findingId}. ` +
+                      obligation.source.instruction;
+                    if (!retryHint?.includes(hint)) retryHint = [retryHint, hint].filter(Boolean).join('\n');
+                  }
+                }
+              } catch {
+                // Task seeding and the build predicate own malformed repair
+                // state. Prompt enrichment must not weaken their refusal.
+              }
+            }
           }
 
           // Build-step-only watcher (Task 9, adr-2026-07-10-intra-step-build-progress-events):
