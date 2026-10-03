@@ -683,6 +683,8 @@ export interface RebaseQuarantine {
 type RebaseOutcomeKind =
   | {
       kind: 'noop';
+      /** The resolved base tip, or null when Git could not resolve it. */
+      baseSha: string | null;
       /** Complete rebase delta when the base advanced without touching code/test paths. */
       allChangedPaths?: string[];
       replay?: ReplayIdentity;
@@ -699,6 +701,8 @@ type RebaseOutcomeKind =
   | {
       kind: 'changed';
       changedCodePaths: string[];
+      /** The resolved base tip, or null when Git could not resolve it. */
+      baseSha: string | null;
       /** Complete pre-filter rebase delta; absent when the delta is uncomputable. */
       allChangedPaths?: string[];
       featureSurface?: string[];
@@ -1336,7 +1340,7 @@ export async function performRebase(
   // than HALTing on a missing remote/repo.
   const inRepo = await git(['rev-parse', '--is-inside-work-tree']);
   if (inRepo.exitCode !== 0 || inRepo.stdout.trim() !== 'true') {
-    return { kind: 'noop' };
+    return { kind: 'noop', baseSha: null };
   }
 
   // FR-9 (negative path): a rebase already in progress — the operator cleared
@@ -1360,7 +1364,7 @@ export async function performRebase(
 
   // FR-4: already current → no-op, no re-verification.
   if (await isBranchCurrent(git, base.ref)) {
-    return { kind: 'noop' };
+    return { kind: 'noop', baseSha: await resolveBaseSha(git, base.ref) };
   }
 
   // Normal finish needs merge readiness, while recovery callers need the base
@@ -1385,6 +1389,11 @@ export async function performRebase(
   }
   // A reported conflict (and an indeterminate assessment) deliberately falls
   // through to the established seal, rebase, and bounded resolver path below.
+
+  // The mergeable-skip branch above owns its legacy base lookup and event
+  // payload unchanged. Every remaining successful path carries this one
+  // resolved base tip through its noop/changed outcome.
+  const baseSha = await resolveBaseSha(git, base.ref);
 
   // A real rebase is about to move HEAD. Verify the durable DECIDE-artifact
   // authority first so a stale or tampered seal fails before history changes.
@@ -1454,16 +1463,18 @@ export async function performRebase(
   const rebaseArgs = replayStart.rebaseArgs;
   const rebase = replayStart.result;
   if (rebase.exitCode === 0) {
-    const outcome = await classifyClean(git, preTree, mergeBase, projectRoot);
+    const outcome = await classifyClean(git, preTree, mergeBase, projectRoot, baseSha);
     // Every clean rebase that reaches here rewrites commit shas (the parent
     // changed), regardless of whether classifyClean's code-path heuristic
     // calls it `changed` or `noop` — a docs/config-only rebase still orphans
     // any evidence citation pinned to the pre-rebase shas. Translate
     // unconditionally on any real rebase, not gated on that heuristic.
     await translateCompletedRebase(replayStart.flatten);
-    return attachReplayIdentity(replayStart.flatten
-      ? { ...outcome, flatten: replayStart.flatten, expectedSubjects: replayStart.expectedSubjects }
-      : outcome);
+    return attachReplayIdentity({
+      ...(replayStart.flatten
+        ? { ...outcome, flatten: replayStart.flatten, expectedSubjects: replayStart.expectedSubjects }
+        : outcome),
+    });
   }
 
   // Non-zero → conflicts (or another error). Inspect unmerged paths.
@@ -1482,7 +1493,7 @@ export async function performRebase(
           quarantine = { paths: confirmed, directory };
           const retry = await git(rebaseArgs);
           if (retry.exitCode === 0) {
-            const outcome = await classifyClean(git, preTree, mergeBase, projectRoot);
+            const outcome = await classifyClean(git, preTree, mergeBase, projectRoot, baseSha);
             await translateCompletedRebase(replayStart.flatten);
             return attachReplayIdentity({
               ...outcome,
@@ -1542,12 +1553,19 @@ export async function performRebase(
   });
 }
 
+/** Resolve a base ref to a stable provenance value without changing rebase control flow. */
+async function resolveBaseSha(git: GitRunner, baseRef: string): Promise<string | null> {
+  const result = await git(['rev-parse', baseRef]);
+  return result.exitCode === 0 && result.stdout.trim() ? result.stdout.trim() : null;
+}
+
 /** Classify a clean rebase by whether it touched any code/test path. */
 async function classifyClean(
   git: GitRunner,
   preTree: string,
   mergeBase?: string,
   projectRoot?: string,
+  baseSha: string | null = null,
 ): Promise<RebaseOutcome> {
   // D: the rebase delta (preTree..HEAD). If this diff itself throws (a git
   // process crash, not just a non-zero exit — `changedPathsBetween` already
@@ -1569,7 +1587,7 @@ async function classifyClean(
   const codePaths = filterCodeOrTestPaths(changed);
   const documentInputs = projectRoot ? await resolveReviewInputs(projectRoot, changed) : [];
   if (!dUncomputable && codePaths.length === 0 && !changed.some((path) => documentInputs.includes(path))) {
-    return { kind: 'noop', allChangedPaths: changed };
+    return { kind: 'noop', baseSha, allChangedPaths: changed };
   }
   // F: the feature's own claimed surface — files the feature's commits
   // touched, before the rebase (mergeBase..preTree). Threaded onto the
@@ -1592,6 +1610,7 @@ async function classifyClean(
   }
   return {
     kind: 'changed',
+    baseSha,
     changedCodePaths: codePaths,
     ...(dUncomputable ? {} : { allChangedPaths: changed }),
     featureSurface: !dUncomputable && codePaths.length === 0 ? [] : featureSurface,
@@ -2117,9 +2136,13 @@ async function resolveRebaseConflictsInner(
     // preTree is the seed's `preRebaseHead`, captured by the driver before the
     // initial rebase moved HEAD — never mutable ORIG_HEAD, which the resolver
     // may have clobbered.
+    const resolvedBase = await git(['rev-parse', onto]);
+    const baseSha = resolvedBase.exitCode === 0 && resolvedBase.stdout.trim()
+      ? resolvedBase.stdout.trim()
+      : null;
     const resolvedOutcome: RebaseOutcome = replaySeed
-      ? await classifyClean(git, replaySeed.preRebaseHead, preAdvanceBase, projectRoot)
-      : await classifyResolvedWithoutSeed(git, onto, preAdvanceBase, projectRoot);
+      ? await classifyClean(git, replaySeed.preRebaseHead, preAdvanceBase, projectRoot, baseSha)
+      : await classifyResolvedWithoutSeed(git, onto, preAdvanceBase, projectRoot, baseSha);
     // Resolver completion rewrites the same feature commits as the clean
     // `performRebase` path. The seed was captured before the initial rebase
     // moved HEAD; never reconstruct its original head from mutable ORIG_HEAD.
@@ -2133,9 +2156,11 @@ async function resolveRebaseConflictsInner(
         await opts.translateAfterRebase(git, projectRoot, onto, replaySeed.preRebaseHead, head);
       }
     }
-    return attachResolvedReplay(conflictOutcome.flatten
-      ? { ...resolvedOutcome, flatten: conflictOutcome.flatten }
-      : resolvedOutcome);
+    return attachResolvedReplay({
+      ...(conflictOutcome.flatten
+        ? { ...resolvedOutcome, flatten: conflictOutcome.flatten }
+        : resolvedOutcome),
+    });
   }
 
   // All cap attempts consumed without the rebase completing.
@@ -2159,12 +2184,13 @@ async function classifyResolvedWithoutSeed(
   onto: string,
   preAdvanceBase: string | undefined,
   projectRoot: string,
+  baseSha: string | null,
 ): Promise<RebaseOutcome> {
   let changedCodePaths: string[];
   try {
     const replayed = await git(['diff', '--name-only', onto, 'HEAD']);
     if (replayed.exitCode !== 0) {
-      return { kind: 'changed', changedCodePaths: [] };
+      return { kind: 'changed', baseSha, changedCodePaths: [] };
     }
     changedCodePaths = filterCodeOrTestPaths(
       replayed.stdout
@@ -2173,7 +2199,7 @@ async function classifyResolvedWithoutSeed(
         .filter((line) => line.length > 0),
     );
   } catch {
-    return { kind: 'changed', changedCodePaths: [] };
+    return { kind: 'changed', baseSha, changedCodePaths: [] };
   }
 
   let allChangedPaths: string[] | undefined;
@@ -2193,8 +2219,8 @@ async function classifyResolvedWithoutSeed(
   const documentInputs = await resolveReviewInputs(projectRoot, allChangedPaths ?? []);
   const documentsChanged = allChangedPaths?.some((path) => documentInputs.includes(path)) ?? false;
   return changedCodePaths.length > 0 || documentsChanged
-    ? { documentInputs, ...(changedCodePaths.length === 0 ? { featureSurface: [] } : {}), kind: 'changed', changedCodePaths, ...(allChangedPaths === undefined ? {} : { allChangedPaths }) }
-    : { kind: 'noop', ...(allChangedPaths === undefined ? {} : { allChangedPaths }) };
+    ? { documentInputs, ...(changedCodePaths.length === 0 ? { featureSurface: [] } : {}), kind: 'changed', baseSha, changedCodePaths, ...(allChangedPaths === undefined ? {} : { allChangedPaths }) }
+    : { kind: 'noop', baseSha, ...(allChangedPaths === undefined ? {} : { allChangedPaths }) };
 }
 
 /**
@@ -2897,11 +2923,12 @@ export async function emitRebaseEvent(
       case 'noop':
         await events.emit(
           outcome.allChangedPaths === undefined
-            ? { type: 'rebase_noop' }
+            ? { type: 'rebase_noop', baseSha: outcome.baseSha ?? null }
             : {
                 type: 'rebase_changed',
                 changedPaths: [],
                 allChangedPaths: outcome.allChangedPaths,
+                baseSha: outcome.baseSha ?? null,
               },
         );
         break;
@@ -2917,6 +2944,7 @@ export async function emitRebaseEvent(
         await events.emit({
           type: 'rebase_changed',
           changedPaths: outcome.changedCodePaths,
+          baseSha: outcome.baseSha ?? null,
           ...(outcome.allChangedPaths === undefined
             ? {}
             : { allChangedPaths: outcome.allChangedPaths }),

@@ -15163,10 +15163,14 @@ export class Conductor {
     // satisfied and the loop topology is unchanged — only the daemon auto-rebases
     // (humans rebase manually in interactive mode).
     if (!this.daemon) {
-      const outcome: RebaseOutcome = { kind: 'noop' };
+      const outcome: RebaseOutcome = { kind: 'noop', baseSha: null };
       this.lastRebaseOutcome = outcome;
       const ranManualTest = getStepStatus(state, 'manual_test') !== 'skipped';
       await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest);
+      if (outcome.baseSha !== null && outcome.baseSha !== undefined) {
+        state.rebase_base_sha = outcome.baseSha;
+        await this.persistPendingStateChanges(state, 'persist rebase base provenance');
+      }
       await emitRebaseEvent(this.events, outcome);
       await recordRebaseStepCompletion(this.stateFilePath, outcome);
       return { success: true };
@@ -15386,6 +15390,10 @@ export class Conductor {
     if (sealRejectionReason) {
       await writeSealHalt(this.projectRoot, sealRejectionReason, this.events);
     } else {
+      if ('baseSha' in outcome && outcome.baseSha !== null && outcome.baseSha !== undefined) {
+        state.rebase_base_sha = outcome.baseSha;
+        await this.persistPendingStateChanges(state, 'persist rebase base provenance');
+      }
       await emitRebaseEvent(this.events, outcome);
     }
 
