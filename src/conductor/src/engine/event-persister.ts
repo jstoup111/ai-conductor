@@ -78,6 +78,11 @@ export class EventPersistError extends Error {
   }
 }
 
+export interface EventPersisterDependencies {
+  /** Test seam for observing the one-time canonical replay index scan. */
+  readonly readPersistedEvents?: (filePath: string) => string | undefined;
+}
+
 /**
  * EventPersister subscribes to every ConductorEvent and appends each event
  * as a newline-delimited JSON line (with timestamp) to the specified file.
@@ -103,16 +108,20 @@ export class EventPersister {
     filePath: string,
     emitter: ConductorEventEmitter,
     clock: IntervalClock = epochAnchoredMonotonicClock,
+    dependencies: EventPersisterDependencies = {},
   ) {
     this.filePath = filePath;
     this.emitter = emitter;
     this.clock = clock;
+    this.readPersistedEvents = dependencies.readPersistedEvents ?? readCanonicalEvents;
     this.executionScope = { featureId: filePath, runId: 'event-persister' };
 
     this.handler = (event: ConductorEvent): void => {
       this.persist(event);
     };
   }
+
+  private readonly readPersistedEvents: (filePath: string) => string | undefined;
 
   /**
    * Subscribe to all ConductorEvent types.
@@ -239,9 +248,10 @@ export class EventPersister {
     // Preserve the existing delayed write-error boundary for an invalid target
     // such as a directory: subscribing succeeds and the emitter owns that
     // failure when an event is actually projected.
-    if (!existsSync(this.filePath) || !statSync(this.filePath).isFile()) return;
     try {
-      for (const line of readFileSync(this.filePath, 'utf8').split('\n')) {
+      const content = this.readPersistedEvents(this.filePath);
+      if (content === undefined) return;
+      for (const line of content.split('\n')) {
         if (!line) continue;
         try {
           const id = observationEventId(JSON.parse(line) as ConductorEvent);
@@ -262,6 +272,11 @@ export class EventPersister {
       executionContext,
     })?.correlationKey;
   }
+}
+
+function readCanonicalEvents(filePath: string): string | undefined {
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) return undefined;
+  return readFileSync(filePath, 'utf8');
 }
 
 const OBSERVATION_EVENT_TYPES = new Set<ConductorEvent['type']>([
