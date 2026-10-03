@@ -733,7 +733,12 @@ describe('genuine wedge preserved — remediation and HALT shapes unchanged (pla
       join(dir, '.pipeline/build-stall-question.md'),
       'utf-8',
     ).catch(() => null);
-    expect(questionContent).toMatch(/^Build stall: no forward progress \(resolved \d+ → \d+ tasks\)\. Completion gate: .+\.$/m);
+    expect(questionContent).toContain(
+      'build stalled: no task progress (resolved tasks stayed at 0 after 3 attempt(s))',
+    );
+    expect(questionContent).toContain(
+      'Completion gate: 3/3 tasks pending/not completed: 1, 2, 3 — 1 "Step 1"; 2 "Step 2"; 3 "Step 3".',
+    );
 
     // Terminal HALT reason shape preserved — "build stalled: no task
     // progress…" — and it must be the ONLY reason on disk (never overwritten

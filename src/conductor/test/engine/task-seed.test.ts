@@ -1067,7 +1067,7 @@ The original implementation plan text.
 ## Task 1: Rewritten task
 The plan text changed after implementation.
 `;
-      await execa('git', ['init'], { cwd: dir });
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'task-seed@example.test'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Task Seed Test'], { cwd: dir });
       await fsPromises.writeFile(planPath, originalPlan);

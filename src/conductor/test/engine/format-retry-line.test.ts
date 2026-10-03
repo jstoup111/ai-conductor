@@ -55,10 +55,10 @@ describe('format-retry-line', () => {
     // Covers: task:11
     it('keeps every pending task id ahead of titles in a bounded BUILD retry line', () => {
       const ids = ['1', '2', '3', '4', '5', '6'];
-      const firstTitle = 'A deliberately long task title that forces the retry line to truncate';
+      const firstTitle = 'First task';
       const reason =
         `6/6 tasks pending/not completed: ${ids.join(', ')} — ` +
-        ids.map((id, index) => `${id} "${index === 0 ? firstTitle : `Task ${id}`}"`).join('; ');
+        ids.map((id, index) => `${id} "${index === 0 ? firstTitle : `A deliberately long task ${id} title that forces the retry line to truncate`}"`).join('; ');
 
       const result = formatRetryReason(reason);
 
