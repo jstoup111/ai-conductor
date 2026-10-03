@@ -4,8 +4,8 @@
  * These tests verify that the surgical retry classification logic correctly:
  * 1. Rejects mixed gaps (recording + other) → standard prompt, not surgical
  * 2. Handles legacy results without `missing` field → standard prompt
- * 3. Exhausts surgical retry budget into recovery path
- * 4. Ensures surgical prompt contains only CLI (no engine-side marker write)
+ * 3. Leaves recording recovery to the engine-owned publication coordinator
+ * 4. Ensures the prompt does not direct a managed session to a blocked CLI
  *
  * Story 4: Negative paths ("mixed gap → full re-walk"; "absent code → full";
  * "bounded budget"; "refusal preserved")
@@ -79,8 +79,8 @@ describe('conductor/surgical-retry', () => {
       const hint = buildRetryHint('finish', reason, missing);
 
       // Should contain surgical hint
-      expect(hint).toContain('finish-record');
-      expect(hint).toContain('--choice');
+      expect(hint).toContain('publication coordinator');
+      expect(hint).toContain('re-observe');
       expect(hint).toContain('Do NOT repeat the full /finish walk');
       // Should NOT say "Finish the work now" (that's standard)
       expect(hint).not.toContain('Finish the work now');
@@ -131,124 +131,89 @@ describe('conductor/surgical-retry', () => {
   });
 
   // ───────────────────────────────────────────────────────────────────
-  // AC 3: Surgical retries decrement same per-step retry budget and
-  //       exhaust into recovery path
+  // AC 3: Recording recovery is coordinator-owned
   // ───────────────────────────────────────────────────────────────────
 
   describe('AC 3: Surgical retries exhaust shared budget', () => {
-    it('should indicate in surgical prompt that budget is shared with standard retries', async () => {
-      // The surgical hint should communicate to the user that retries are limited
+    it('should keep recording recovery independent of the deprecated CLI arguments', async () => {
       const reason = '.pipeline/finish-choice is missing';
       const missing: 'recording' | undefined = 'recording';
-      const pipelineDir = join(dir, '.pipeline');
+      const hint = buildRetryHint('finish', reason, missing, join(dir, '.pipeline'));
 
-      const hint = buildRetryHint('finish', reason, missing, pipelineDir);
-
-      // Should mention that the step is not complete until finish-record exits 0
-      // (implying there is a termination condition / budget constraint)
-      expect(hint).toContain('is NOT complete until');
-      expect(hint).toContain('exits 0');
-      // Should provide exact pipeline dir argument
-      expect(hint).toContain(pipelineDir);
+      expect(hint).toContain('coordinator');
+      expect(hint).toContain('record completion when authorized');
+      expect(hint).not.toContain('finish-record');
     });
 
-    it('should not grant unlimited retries in surgical path', async () => {
-      // Verify that the hint does not suggest retrying indefinitely
+    it('should not direct the session to retry a blocked recording command', async () => {
       const reason = '.pipeline/finish-choice is missing';
       const missing: 'recording' | undefined = 'recording';
 
       const hint = buildRetryHint('finish', reason, missing);
 
-      // Should NOT suggest looping or retrying multiple times
-      // (that would be indicated by "try again" or "retry" without exit condition)
-      expect(hint).toContain('ai-conductor finish-record');
-      // The single command run is the requirement, not loops
+      expect(hint).toContain('Do NOT repeat the full /finish walk');
+      expect(hint).not.toContain('finish-record');
       expect(hint).not.toContain('try again');
     });
   });
 
   // ───────────────────────────────────────────────────────────────────
-  // AC 4: Surgical prompt's command is fail-closed CLI (no engine-side
-  //       marker write in conductor code)
+  // AC 4: Surgical prompt is fail-closed (coordinator-only, no managed CLI)
   // ───────────────────────────────────────────────────────────────────
 
-  describe('AC 4: Surgical prompt is fail-closed (CLI-only, no engine marker write)', () => {
-    it('should contain only CLI command, not automatic engine write', async () => {
-      // The surgical hint should instruct the user to RUN a command,
-      // not describe automatic engine actions
+  describe('AC 4: Surgical prompt is fail-closed (coordinator-only, no managed CLI)', () => {
+    it('should direct recording recovery to the coordinator, not a blocked CLI', async () => {
       const reason = '.pipeline/finish-choice is missing';
       const missing: 'recording' | undefined = 'recording';
 
       const hint = buildRetryHint('finish', reason, missing);
 
-      // Should contain the CLI command
-      expect(hint).toContain('ai-conductor finish-record --choice');
-      // Should be instructional (user-facing)
-      expect(hint).toContain('run ONLY');
-      // Should NOT mention automatic marker writes or engine state
-      expect(hint).not.toContain('engine');
+      expect(hint).toContain('engine-owned publication coordinator');
+      expect(hint).toContain('record completion when authorized');
+      expect(hint).not.toContain('finish-record');
       expect(hint).not.toContain('marker');
-      expect(hint).not.toContain('write');
     });
 
-    it('should specify exact --pipeline-dir when provided', async () => {
-      // When pipelineDir is provided, the hint must include it
-      // to ensure the CLI runs with the correct working directory
+    it('should not expose a pipeline path for coordinator-owned recovery', async () => {
       const reason = '.pipeline/finish-choice is missing';
       const missing: 'recording' | undefined = 'recording';
       const pipelineDir = join(dir, 'custom', '.pipeline');
 
       const hint = buildRetryHint('finish', reason, missing, pipelineDir);
 
-      // Must include the exact pipelineDir path
-      expect(hint).toContain(`--pipeline-dir ${pipelineDir}`);
-      // Should warn about cwd requirement
-      expect(hint).toContain('do NOT `cd` elsewhere');
+      expect(hint).not.toContain(pipelineDir);
+      expect(hint).not.toContain('--pipeline-dir');
     });
 
-    it('should default to .pipeline when pipelineDir is not provided', async () => {
-      // Surgical prompt should have a sensible default
+    it('should not direct a coordinator-owned recovery to .pipeline', async () => {
       const reason = '.pipeline/finish-choice is missing';
       const missing: 'recording' | undefined = 'recording';
       // pipelineDir not provided (undefined)
 
       const hint = buildRetryHint('finish', reason, missing);
 
-      // Should default to .pipeline
-      expect(hint).toContain('.pipeline');
-      expect(hint).toContain('--pipeline-dir');
+      expect(hint).not.toContain('--pipeline-dir');
     });
 
-    it('should not mention engine state updates in surgical prompt', async () => {
-      // Verify no engine-side writes or state modifications are mentioned
+    it('should explain the coordinator-owned observation boundary', async () => {
       const reason = '.pipeline/finish-choice is missing';
       const missing: 'recording' | undefined = 'recording';
 
       const hint = buildRetryHint('finish', reason, missing);
 
-      // Should only mention user action (CLI), not engine action
-      expect(hint).toContain('determine the finish outcome');
-      expect(hint).toContain('run ONLY');
-      // Should NOT mention engine persistence or automatic recording
-      // (repo state lookup is acceptable; engine state write is not)
-      expect(hint).not.toContain('persist');
-      expect(hint).not.toContain('record the');
-      expect(hint).not.toContain('update .pipeline');
+      expect(hint).toContain('re-observe the existing result');
+      expect(hint).toContain('record completion when authorized');
+      expect(hint).not.toContain('finish-record');
     });
 
-    it('should make CLI requirement explicit (no automation)', async () => {
-      // The surgical prompt must make it clear that the user must run the CLI
-      // (not an automatic re-run by the engine)
+    it('should make the no-full-walk restriction explicit', async () => {
       const reason = '.pipeline/finish-choice is missing';
       const missing: 'recording' | undefined = 'recording';
 
       const hint = buildRetryHint('finish', reason, missing);
 
-      // Should be clear that this is a user action
-      expect(hint).toMatch(/run ONLY/i);
-      // Should NOT suggest automation
-      expect(hint).not.toContain('automatic');
-      expect(hint).not.toContain('will');
+      expect(hint).toContain('Do NOT repeat the full /finish walk');
+      expect(hint).not.toContain('finish-record');
     });
   });
 
@@ -285,7 +250,7 @@ describe('conductor/surgical-retry', () => {
 
       // Only finish should be surgical
       const finishHint = buildRetryHint('finish', reason, missing);
-      expect(finishHint).toContain('finish-record');
+      expect(finishHint).toContain('publication coordinator');
     });
   });
 
@@ -301,8 +266,8 @@ describe('conductor/surgical-retry', () => {
       const hint = buildRetryHint('finish', reason, missing);
 
       // Should not crash, should still be surgical
-      expect(hint).toContain('finish-record');
-      expect(hint).toContain('--choice');
+      expect(hint).toContain('publication coordinator');
+      expect(hint).toContain('re-observe');
     });
 
     it('should handle undefined reason with surgical missing', async () => {
@@ -312,7 +277,7 @@ describe('conductor/surgical-retry', () => {
       const hint = buildRetryHint('finish', reason, missing);
 
       // Should not crash, should still be surgical
-      expect(hint).toContain('finish-record');
+      expect(hint).toContain('publication coordinator');
     });
 
     it('should preserve reason text in surgical hint', async () => {
@@ -323,7 +288,7 @@ describe('conductor/surgical-retry', () => {
 
       // Should include the provided reason
       expect(hint).toContain(reason);
-      expect(hint).toContain('finish-record');
+      expect(hint).toContain('publication coordinator');
     });
 
     it("missing='presentation' asks only for a PR body rewrite, never for more implementation", async () => {
