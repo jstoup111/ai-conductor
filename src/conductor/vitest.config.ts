@@ -15,7 +15,9 @@ ensureRunTmpRootSync();
 export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
-    exclude: ['test/smoke/**', '**/*.smoke.test.ts'],
+    // Smoke (opt-in, real third parties) and e2e (real tmux / real daemon
+    // drives; see vitest.e2e.config.ts) tiers are excluded from the default suite.
+    exclude: ['test/smoke/**', '**/*.smoke.test.ts', '**/*.e2e.test.ts'],
     environment: 'node',
     // Global guards (see test/setup.ts): never spawn a real build daemon, and
     // block the pr-labels gh/git seam from real exec (AI_CONDUCTOR_NO_REAL_EXEC).

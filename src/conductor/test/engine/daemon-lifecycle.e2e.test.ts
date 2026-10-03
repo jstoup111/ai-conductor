@@ -1,4 +1,4 @@
-// daemon-lifecycle-e2e.test.ts — End-to-end lifecycle walkthrough (T37, FR acceptance)
+// daemon-lifecycle.e2e.test.ts — End-to-end lifecycle walkthrough (T37, FR acceptance)
 // Tests: pause all → publish → restart all → resume all with real store/markers.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';

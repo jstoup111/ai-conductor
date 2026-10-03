@@ -65,14 +65,30 @@ before assuming a race in the code under test.
 
 ### Deterministic daemon end-to-end fixture
 
-`test/engine/daemon-e2e-fixture.test.ts` drives a committed fixture from
+`test/engine/daemon-e2e-fixture.e2e.test.ts` drives a committed fixture from
 `test/fixtures/daemon-e2e/` through the real daemon claim, Conductor build,
 evidence, completion-gate, and local finish path. A scripted provider fake is
 the only external boundary; it makes real local Git commits while the internal
 pipeline remains production code. The negative case proves missing task
 evidence halts instead of completing.
 
-This test runs in ordinary CI without a separate workflow job.
+This test belongs to the end-to-end tier described below.
+
+### End-to-end tier
+
+Files named `*.e2e.test.ts` use real tmux sockets or drive the whole daemon. They are
+the slowest and most load-sensitive tests, so `vitest.config.ts` excludes them from the
+default suite (`npm test`, and therefore the `test_suite` gate). `vitest.e2e.config.ts`
+runs them with the ordinary runtime guards:
+
+```bash
+npm run test:e2e
+```
+
+CI runs the tier in its own `conductor-e2e` job, which `ci-gate` requires, so every PR
+still executes it. `test/structural/e2e-tier.test.ts` keeps the exclusion, the config,
+the script, and the CI job in step. Name a new test `*.e2e.test.ts` only when it needs a
+real tmux server or a whole-daemon drive; mock the process boundary otherwise.
 `vitest.config.ts` includes `test/**/*.test.ts` and excludes only smoke paths
 and `*.smoke.test.ts` names, so the existing `conductor` job's `npm test`
 invocation runs it and reports through `ci-gate`.

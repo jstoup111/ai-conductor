@@ -194,6 +194,31 @@ jobs:
       - run: npm test -- --shard=${{ matrix.shard }}/4
         working-directory: src/conductor
 
+  # End-to-end tier (vitest.e2e.config.ts): real tmux sockets and whole-daemon
+  # drives, excluded from the default suite so local and test_suite runs stay
+  # fast. It still gates every PR through ci-gate.
+  conductor-e2e:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: src/conductor/.tool-versions
+          cache: npm
+          cache-dependency-path: src/conductor/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y tmux
+      - run: npm ci
+        working-directory: src/conductor
+      - run: npm run build
+        working-directory: src/conductor
+      - run: npm run test:e2e
+        working-directory: src/conductor
+
   # DELIBERATELY UNGATED — no `if: docs_only != 'true'`.
   #
   # `docs_only` is true only when EVERY changed path is under `.docs/` (the internal
@@ -217,7 +242,7 @@ jobs:
           fail: true
 
   ci-gate:
-    needs: [changes, integrity, shellcheck, lint, typecheck, conductor, links]
+    needs: [changes, integrity, shellcheck, lint, typecheck, conductor, conductor-e2e, links]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -228,10 +253,11 @@ jobs:
           LINT: ${{ needs.lint.result }}
           TYPECHECK: ${{ needs.typecheck.result }}
           CONDUCTOR: ${{ needs.conductor.result }}
+          CONDUCTOR_E2E: ${{ needs.conductor-e2e.result }}
           LINKS: ${{ needs.links.result }}
         run: |
-          summary="changes=$CHANGES integrity=$INTEGRITY shellcheck=$SHELLCHECK lint=$LINT typecheck=$TYPECHECK conductor=$CONDUCTOR links=$LINKS"
-          for r in "$CHANGES" "$INTEGRITY" "$SHELLCHECK" "$LINT" "$TYPECHECK" "$CONDUCTOR" "$LINKS"; do
+          summary="changes=$CHANGES integrity=$INTEGRITY shellcheck=$SHELLCHECK lint=$LINT typecheck=$TYPECHECK conductor=$CONDUCTOR conductor_e2e=$CONDUCTOR_E2E links=$LINKS"
+          for r in "$CHANGES" "$INTEGRITY" "$SHELLCHECK" "$LINT" "$TYPECHECK" "$CONDUCTOR" "$CONDUCTOR_E2E" "$LINKS"; do
             case "$r" in
               failure|cancelled)
                 echo "CI gate failed: $summary" >&2
