@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-03T21:57:06.577Z
 Slug: build-step-completes-with-every-plan-task-still-pe
 Class: needs-human
 Halting step: unknown
