@@ -76,6 +76,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Skill templates now resolve relative to each skill's own directory, and self-host provider homes copy them as real files, so `/prd`, `/architecture-review`, `/assess`, and `/bootstrap` find their templates however the skill is installed. ([implementation PR #2906](https://github.com/jstoup111/ai-conductor/pull/2906)).
 - Kickback lap raises are no longer refused after an earlier raise on the same remediation gate. ([implementation PR #2921](https://github.com/jstoup111/ai-conductor/pull/2921)).
 - coverage_binding no longer refuses checks whose pinned outcome entails the criterion. ([implementation PR #2926](https://github.com/jstoup111/ai-conductor/pull/2926)).
+- coverage_binding no longer halts on ADRs that landed on origin/main when the local default branch lags. ([implementation PR #2930](https://github.com/jstoup111/ai-conductor/pull/2930)).
 
 ## Migration
 
