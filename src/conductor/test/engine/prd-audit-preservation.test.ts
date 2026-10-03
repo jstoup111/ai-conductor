@@ -106,6 +106,7 @@ describe('typed PRD-audit preservation', () => {
     const fixture = await repository();
     const reviewed = await commit(fixture, { 'src/feature.ts': 'export const feature = true;\n' }, 'feat: reviewed feature');
     await writeTypedPass(fixture.root, reviewed, 'prior-review-run');
+    const originalArtifact = await readFile(join(fixture.root, PRD_AUDIT_VERDICT_PATH), 'utf8');
     await utimes(join(fixture.root, PRD_AUDIT_VERDICT_PATH), oldMtime, oldMtime);
     await writeFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'not a verdict\n', 'utf8');
 
@@ -117,6 +118,7 @@ describe('typed PRD-audit preservation', () => {
 
     expect(completion).toMatchObject({ done: true });
     expect(completion.verdictFreshness).toMatchObject({ outcome: 'preserved_surface_miss' });
+    expect(await readFile(join(fixture.root, PRD_AUDIT_VERDICT_PATH), 'utf8')).toBe(originalArtifact);
   });
 
   it.each(['.docs/stories/active.md', '.docs/specs/active.md'])(
