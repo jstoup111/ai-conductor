@@ -172,6 +172,7 @@ Exported traces gain the commit a run built, the base it was built against, the 
 
 **Done when:**
 - `buildResource` for the traces signal sets `conductor.source.ref` only when `sourceRef` is a non-empty string and `provenance.issue` is true, and the metrics signal never sets it, as asserted in `resource.test.ts`.
+- With OTel enabled and no `otel.provenance` config, `provenance.issue` defaults to true and the trace Resource built for a run with `sourceRef` `jstoup111/ai-conductor#2000` carries `conductor.source.ref` equal to `jstoup111/ai-conductor#2000`, as asserted in `resource.test.ts`.
 - With `provenance.feature` false, the trace Resource has no `conductor.feature` attribute and its `service.instance.id` is the project name, a slash, and the run id.
 - With `provenance.feature` false, the metric Resource attributes and every step-metric data-point `feature` label equal those recorded with the toggle on, as asserted in `resource.test.ts` and `metrics-listener.test.ts`.
 - An `OtelVisualizer` test with an in-memory exporter starts a run with `sourceRef` set, ends one step, and after `forceFlush` and before `stop()` asserts the exported closed step span's Resource carries `conductor.source.ref` while no `conductor.run` span has been exported.
