@@ -7,7 +7,7 @@ const sourceRoot = resolve(import.meta.dirname, '../../src');
 const launchSeamImport = /from\s+['"][^'"]*execution\/interactive-launch(?:\.js)?['"]/;
 
 // New importers require an explicit review of the foreground-only authority boundary.
-const permittedImporters: readonly string[] = ['engine/engineer-cli.ts', 'engine/monitor/session.ts'];
+const permittedImporters: readonly string[] = ['engine/monitor/session.ts'];
 
 async function sourcePaths(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });

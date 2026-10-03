@@ -5,6 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { dispatchEngineer, type DispatchEngineerOpts } from '../../../src/engine/engineer-cli.js';
 import type { ConfigResult } from '../../../src/engine/config.js';
+import { discoverInstalledProviders } from '../../../src/engine/provider-discovery.js';
+
+vi.mock('../../../src/engine/provider-discovery.js', () => ({
+  discoverInstalledProviders: vi.fn(),
+}));
 
 function launchOptions(
   config: ConfigResult,
@@ -48,8 +53,8 @@ describe('dispatchEngineer interactive host launch', () => {
     expect({ code, spawnCalls: spawnHost.mock.calls, confirmCalls: confirmAnother.mock.calls }).toEqual({
       code: 0,
       spawnCalls: [
-        ['/hosts/initial-codex', ['exec'], process.cwd()],
-        ['/hosts/initial-codex', ['exec'], process.cwd()],
+        ['/hosts/initial-codex', ['$composer add retries'], process.cwd()],
+        ['/hosts/initial-codex', ['$composer'], process.cwd()],
       ],
       confirmCalls: [[], []],
     });
@@ -69,7 +74,7 @@ describe('dispatchEngineer interactive host launch', () => {
 
     expect({ code, spawnCalls: spawnHost.mock.calls, confirmCalls: confirmAnother.mock.calls }).toEqual({
       code: 23,
-      spawnCalls: [['codex', ['exec'], process.cwd()]],
+      spawnCalls: [['codex', ['$composer'], process.cwd()]],
       confirmCalls: [[]],
     });
   });
@@ -181,13 +186,15 @@ describe('dispatchEngineer interactive host launch', () => {
       code,
       diagnostics: printErr.mock.calls.flat(),
       spawnCalls: spawnHost.mock.calls,
+      discoveryCalls: vi.mocked(discoverInstalledProviders).mock.calls,
     }).toEqual({
       code: 1,
       diagnostics: expect.arrayContaining([
         'engineer: could not launch codex executable codex (spawn codex ENOENT). ' +
           'Install it or set CODEX_EXECUTABLE; if already in a session, run $composer directly.',
       ]),
-      spawnCalls: [['codex', ['exec'], process.cwd()]],
+      spawnCalls: [['codex', ['$composer'], process.cwd()]],
+      discoveryCalls: [],
     });
   });
 
@@ -205,7 +212,7 @@ describe('dispatchEngineer interactive host launch', () => {
     expect([code, printErr.mock.calls.flat(), spawnHost.mock.calls]).toEqual([
       1,
       expect.arrayContaining([expect.stringContaining('/opt/missing/codex'), expect.stringContaining('CODEX_EXECUTABLE'), expect.stringContaining('$composer')]),
-      [['/opt/missing/codex', ['exec'], process.cwd()]],
+      [['/opt/missing/codex', ['$composer'], process.cwd()]],
     ]);
   });
 
@@ -217,11 +224,31 @@ describe('dispatchEngineer interactive host launch', () => {
       launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost),
     );
 
-    expect({ code, spawnCalls: spawnHost.mock.calls })
+    expect({ code, spawnCalls: spawnHost.mock.calls, discoveryCalls: vi.mocked(discoverInstalledProviders).mock.calls })
       .toEqual({
         code: 0,
         spawnCalls: [['claude', ['--permission-mode', 'default', '/composer'], process.cwd()]],
+        discoveryCalls: [],
       });
+  });
+
+  it('launches compose as an interactive codex session and honours the claude permission-mode override', async () => {
+    const codexSpawn = vi.fn(async () => 0);
+    const claudeSpawn = vi.fn(async () => 0);
+
+    await dispatchEngineer(
+      { kind: 'launch', provider: 'codex' },
+      launchOptions({ ok: true, config: {}, warnings: [] }, codexSpawn),
+    );
+    await dispatchEngineer(
+      { kind: 'launch', provider: 'claude' },
+      launchOptions({ ok: true, config: {}, warnings: [] }, claudeSpawn, { CONDUCT_ENGINEER_PERMISSION_MODE: 'acceptEdits' }),
+    );
+
+    expect([codexSpawn.mock.calls, claudeSpawn.mock.calls]).toEqual([
+      [['codex', ['$composer'], process.cwd()]],
+      [['claude', ['--permission-mode', 'acceptEdits', '/composer'], process.cwd()]],
+    ]);
   });
 
   it('keeps the selected host when a later loop spawn is missing', async () => {
@@ -248,7 +275,7 @@ describe('dispatchEngineer interactive host launch', () => {
           'engineer: could not launch codex executable codex (spawn codex ENOENT). ' +
             'Install it or set CODEX_EXECUTABLE; if already in a session, run $composer directly.',
         ]),
-        spawnCalls: [['codex', ['exec'], process.cwd()], ['codex', ['exec'], process.cwd()]],
+        spawnCalls: [['codex', ['$composer'], process.cwd()], ['codex', ['$composer'], process.cwd()]],
         confirmCalls: [[]],
       });
   });
@@ -327,7 +354,7 @@ describe('dispatchEngineer interactive host launch', () => {
       launchOptions({ ok: true, config: { llm_provider: 'codex' }, warnings: [] }, spawnHost),
     );
 
-    expect(spawnHost).toHaveBeenCalledWith('codex', ['exec'], process.cwd());
+    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], process.cwd());
   });
 
   it.each([
@@ -358,7 +385,7 @@ describe('dispatchEngineer interactive host launch', () => {
 
     expect([composeSpawn.mock.calls[0], engineerSpawn.mock.calls[0]]).toEqual([
       ['claude', ['--permission-mode', 'default', '/composer'], process.cwd()],
-      ['codex', ['exec'], process.cwd()],
+      ['codex', ['$composer add retries'], process.cwd()],
     ]);
   });
 
@@ -377,7 +404,7 @@ describe('dispatchEngineer interactive host launch', () => {
     );
 
     expect([codexSpawn.mock.calls[0], claudeSpawn.mock.calls[0]]).toEqual([
-      ['/opt/hosts/codex', ['exec'], process.cwd()],
+      ['/opt/hosts/codex', ['$composer add retries'], process.cwd()],
       ['claude', ['--permission-mode', 'default', '/composer'], process.cwd()],
     ]);
   });
@@ -426,7 +453,7 @@ describe('dispatchEngineer interactive host launch', () => {
       await rm(root, { recursive: true, force: true });
     }
 
-    expect(spawnHost).toHaveBeenCalledWith('codex', ['exec'], project);
+    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], project);
   });
 
   it('accepts user-only configuration keys when the launching project has none', async () => {
@@ -464,7 +491,7 @@ describe('dispatchEngineer interactive host launch', () => {
       await rm(root, { recursive: true, force: true });
     }
 
-    expect(spawnHost).toHaveBeenCalledWith('codex', ['exec'], project);
+    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], project);
   });
 
   it.each(['claude', 'codex'] as const)('refuses %s without an attached terminal before configuration, polling, or spawning', async (provider) => {

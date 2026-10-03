@@ -20,8 +20,8 @@
 //   ai-conductor compose handoff        → {kind:'handoff'}  — open spec PR + ensureRunning
 //   (malformed subcommand / missing flags → {kind:'guide'} — print usage)
 
+import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { launchInteractiveSession } from '../execution/interactive-launch.js';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRegistryReader } from './registry.js';
 import { ConductorEventEmitter } from '../ui/events.js';
@@ -552,6 +552,17 @@ export interface DispatchEngineerOpts {
   confirmAnother?: () => boolean | Promise<boolean>;
 }
 
+/**
+ * Spawn an interactive host with the operator's terminal attached.
+ */
+function spawnInteractiveHost(executable: string, argv: string[], cwd: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, argv, { stdio: 'inherit', cwd });
+    child.on('error', reject);
+    child.on('exit', (code) => resolve(code ?? 0));
+  });
+}
+
 async function loadLaunchConfig(launchingDirectory: string): Promise<ConfigResult> {
   const result = await loadMergedConfig(launchingDirectory);
   if (result.ok || result.error.type !== 'missing') return result;
@@ -975,26 +986,11 @@ export async function dispatchEngineer(
       const executable = host ? resolveProviderExecutable(host.id) : undefined;
       const launchOne = opts.launchInteractive ?? ((idea?: string) => {
         const prompt = `${host!.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
-        return launchInteractiveSession({ provider: host!.id, openingPrompt: prompt, cwd: launchingDirectory }, {
-          // `launchInteractiveSession` owns the process boundary, but `compose`
-          // owns the retry loop and its actionable diagnostics.  Suppress the
-          // lower-level ENOENT report so an unavailable host reaches the catch
-          // below, which ends the loop instead of treating it as a normal exit.
-          report: () => {},
-          isInteractiveTerminal: () => true,
-          spawn: opts.spawnHost === undefined ? undefined : async (binary, argv, launchOptions) => ({
-            // Resolve the executable once for this compose invocation. A
-            // follow-on idea must not switch hosts if a launch callback changes
-            // the process environment between sessions.
-            exitCode: await opts.spawnHost!(executable ?? binary, argv, launchOptions.cwd),
-          }),
-        }).then((outcome) => {
-          if (outcome.kind === 'exited') return outcome.exitCode;
-          throw Object.assign(
-            new Error(`spawn ${executable ?? host!.defaultExecutable} ENOENT`),
-            { code: 'ENOENT' },
-          );
-        });
+        return (opts.spawnHost ?? spawnInteractiveHost)(
+          executable!,
+          host!.interactiveLaunch.argv(prompt, launchEnv),
+          launchingDirectory,
+        );
       });
 
       // Intake pre-poll: prime the durable inbox before launching so the spawned

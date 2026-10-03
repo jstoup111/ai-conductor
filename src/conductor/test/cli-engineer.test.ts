@@ -84,7 +84,7 @@ describe('legacy engineer CLI alias — process dispatch boundary', () => {
     expect(loadLaunchConfig).toHaveBeenCalledOnce();
     expect(prePoll).toHaveBeenCalledOnce();
     expect(spawnHost).toHaveBeenCalledOnce();
-    expect(spawnHost).toHaveBeenCalledWith('codex', ['exec'], process.cwd());
+    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], process.cwd());
     expect(vi.mocked(discoverInstalledProviders)).not.toHaveBeenCalled();
   });
 });
