@@ -81,4 +81,14 @@ describe('remediate build_review case-mode contract', () => {
     expect(caseMode).toMatch(/do not append[\s\S]*approved plan/i);
     expect(caseMode).toMatch(/write.*only.*`\.pipeline\/remediation\.json`/is);
   });
+
+  it('declares distinctFrom only for an unbound case-v2 concern that is not a resolved recurrence', async () => {
+    const skill = await readFile(remediateSkillPath, 'utf8');
+    const caseMode = section(skill, 'Engine-selected build_review case-v1 mode');
+
+    expect(caseMode).toMatch(/unbound row.*optional[\s\S]*?`distinctFrom`/i);
+    expect(caseMode).toMatch(/concern.*not.*resolved case.*recurring/i);
+    expect(caseMode).toMatch(/exactly[\s\S]*?resolved[\s\S]*?action cases[\s\S]*?linking[\s\S]*?sources/i);
+    expect(caseMode).toMatch(/omits?[\s\S]*?`distinctFrom`[\s\S]*?regression/i);
+  });
 });
