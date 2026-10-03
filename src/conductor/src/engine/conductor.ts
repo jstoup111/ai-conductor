@@ -7296,33 +7296,39 @@ export class Conductor {
       const activePlanIdentity = planBinding.kind === 'bound' ? planBinding.identity : null;
       if (restored.ok && activePlanIdentity !== null) {
         const ledger = await readKickbackLedger(this.projectRoot);
-        for (const obligation of Object.values(restored.value.records)) {
+        const buildHints: string[] = [];
+        for (const obligation of Object.values(restored.value.records).sort((a, b) => a.id.localeCompare(b.id))) {
           if (obligation.planIdentity !== activePlanIdentity) continue;
           const isCurrent = obligation.taskIds.some(
             (taskId) => restored.value.currentByPlan[obligation.planIdentity]?.[taskId] === obligation.id,
           );
           const hasOpenTask = Object.values(obligation.tasks).some((task) => task.status === 'open');
-          if (!isCurrent || !hasOpenTask || obligation.settlement !== 'settled') continue;
+          if (!hasOpenTask || obligation.settlement !== 'settled') continue;
 
-          const receiptGates = ledger.settlementReceipts?.[obligation.id]?.gates ?? [];
-          for (const gate of receiptGates) {
-            if (steps.some((step) => step.name === gate)) {
-              this.pendingNoOpBaselines.set(gate as StepName, {
-                treeHash: obligation.baseline.tree || null,
-                resolvedCount: obligation.baseline.resolvedCount ?? 0,
-              });
+          // Gate baseline bookkeeping remains current-obligation-only. It is
+          // distinct from BUILD context, where every still-open obligation is
+          // authoritative after a restart.
+          if (isCurrent) {
+            const receiptGates = ledger.settlementReceipts?.[obligation.id]?.gates ?? [];
+            for (const gate of receiptGates) {
+              if (steps.some((step) => step.name === gate)) {
+                this.pendingNoOpBaselines.set(gate as StepName, {
+                  treeHash: obligation.baseline.tree || null,
+                  resolvedCount: obligation.baseline.resolvedCount ?? 0,
+                });
+              }
             }
           }
           // The build step is the only target of an existing-task repair.
-          // Preserve the actionable finding rather than inventing a new
-          // planner route or silently dropping the original instruction.
-          if (!pendingRetryHints.has('build')) {
-            pendingRetryHints.set(
-              'build',
-              `Resume admitted repair ${obligation.id}: ${obligation.source.findingId}. ` +
-                `${obligation.source.instruction}`,
-            );
-          }
+          // Preserve every actionable finding rather than choosing a
+          // first-wins subset after a process restart.
+          buildHints.push(
+            `Resume admitted repair ${obligation.id}: ${obligation.source.findingId}. ` +
+              `${obligation.source.instruction}`,
+          );
+        }
+        if (buildHints.length > 0) {
+          pendingRetryHints.set('build', buildHints.join('\n'));
         }
       }
     } catch {

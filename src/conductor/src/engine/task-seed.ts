@@ -22,6 +22,16 @@ export class TaskReopenError extends Error {
   }
 }
 
+/**
+ * The admission key and durable record id must have exactly the same identity
+ * components.  In particular, task ids are only unique within a plan: using
+ * the digest alone let an identical task in another plan replay this plan's
+ * obligation.
+ */
+function planAmendmentObligationId(planIdentity: string, taskId: string, digest: string): string {
+  return `plan_amendment:${planIdentity}:${canonicalTaskId(taskId)}:${digest}`;
+}
+
 export interface TaskStatusRecord {
   id: string;
   name?: string;
@@ -257,13 +267,14 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
           resolveTaskIds(projectRoot, Array.from(planTasks.keys())),
         ]);
         const repairStore = createRepairObligationStore(projectRoot, engineStatePath);
+        const planIdentity = repairPlanIdentity(projectRoot, resolvedPlanPath);
         for (const taskId of changedTaskIds) {
-          const canonicalId = canonicalTaskId(taskId);
           const digest = currentDigests[taskId];
+          const obligationId = planAmendmentObligationId(planIdentity, taskId, digest);
           const admission = await repairStore.admitOrReplay(
-            `plan_amendment:${canonicalId}:${digest}`,
+            obligationId,
             {
-              id: `plan_amendment:${canonicalId}:${digest}`,
+              id: obligationId,
               planPath: resolvedPlanPath,
               taskIds: [taskId],
               source: {
