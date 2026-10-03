@@ -488,8 +488,10 @@ After generating the plan, cross-reference:
   constraints first. If satisfying a task would violate a criterion, or the task's design cannot
   represent state a criterion depends on, fix the plan before landing or surface it to the operator.
   Example: Story 6 negative "the only assertion changes are the added credential option" vs a task
-  whose Done-when requires new endpoint assertions — covered, yet contradictory.
-- Run the independent coverage judgement (§7a) and resolve every refusal before landing
+  whose Done-when requires new endpoint assertions — covered, yet contradictory. The pass is run by
+  an independent judge, never the plan's author (§7b).
+- Run the independent coverage judgement (§7a) and the independent contradiction judgement (§7b),
+  and resolve every refusal and conflict before landing
 - Present the coverage mapping to the user
 
 Record the mapping in a `## Coverage Check` table. At every tier, use one four-cell
@@ -529,6 +531,37 @@ one-turn fix.
 
 For M and L plans, `coherence-check` repeats this judgement on its own criterion rows, because those
 rows are what `coverage_binding` judges at those tiers.
+
+#### 7b. Independent Contradiction Judgement
+
+**GATE: before the plan lands, at every tier, a fresh subagent checks the whole plan against every
+criterion and every approved ADR decision the plan is subject to. The plan's author never judges its
+own plan for contradictions.** The author wrote the tasks to fit the criteria it read; a pass in the
+same context re-reads them the same way. A contradiction that reaches BUILD costs a full build and
+its review laps before it surfaces, and then an amendment and an operator reseal.
+
+1. Supply the subagent with the stories file, every plan task (id, title, Steps, and `Done when`
+   bullets, verbatim), and the `## Decision` section of each approved ADR the plan is subject to:
+   every ADR in the current spec change set, plus every ADR whose filename stem the plan text cites.
+   Include nothing else: no coverage table, rationale, or author commentary.
+2. Dispatch it with fresh context through the selected host's available subagent facility. Instruct
+   it to check every task against every criterion and every decision, cited or not, negative paths
+   and "only"/"never"/"no" constraints first. It records a conflict only when satisfying the task
+   would necessarily violate the criterion or decision, or when the task's design cannot represent
+   state the criterion depends on. A criterion that is merely uncovered, or covered by a different
+   task, is not a conflict. Each conflict names the task, the criterion text or `<adr-stem>#D<n>`,
+   and quotes both opposing passages verbatim. If the host has no subagent facility, stop and tell
+   the operator; do not judge in the authoring context.
+3. Resolve each conflict in DECIDE: change the plan, or route a wrong criterion or decision through
+   the stories step or an ADR amendment. Then re-judge in a new subagent.
+4. Stop after three rounds. A conflict still standing is a blocking assumption under the correctness
+   gate: interactive runs present it to the operator and wait; autonomous runs HALT naming the task
+   and the criterion or decision. Never land it.
+5. Never overrule a conflict by argument. If you believe the judge misread, show the operator both
+   passages and let them decide.
+
+For M and L plans, `coherence-check` repeats this judgement over the final plan (its §4d sweep),
+because amendments made after this pass can introduce a new conflict.
 
 **GATE: Every citable decision in each non-deleted land-accepted ADR (`APPROVED` or `SUPERSEDED`) in
 the current spec change set must have exactly one row in `## Architecture Obligation Coverage`.** Use
@@ -614,6 +647,8 @@ any code is written. The full flow from here is:
 - [ ] Each task has specific test and implementation descriptions
 - [ ] Every `Done when:` check names a mechanism and its observable assertion, rather than merely
       restating the mapped criterion; each bullet occupies one physical line
+- [ ] A fresh subagent found no contradiction between any task and any criterion or subject ADR
+      decision (§7b)
 - [ ] Every outcome in each mapped criterion's Then-clause, including absence/no-op outcomes, is
       explicitly required by a cited task's `Done when:` check at the criterion's precision (§3c)
 - [ ] Dependencies are declared and acyclic

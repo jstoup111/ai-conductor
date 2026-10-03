@@ -162,6 +162,8 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
 // This is deliberately an exact set rather than a volume count: a newly-persisted
 // non-halt event must update this contract explicitly.
 const PINNED_PERSISTED_EVENT_TYPES = [
+  'otel_spool_drop',
+  'otel_spool_backlog',
   'daemon_backlog_snapshot',
   'daemon_memory_sample',
   'daemon_heap_dump_written',
@@ -571,6 +573,34 @@ describe('event sink subscriptions', () => {
       rendered: expect.not.arrayContaining(['plan_slices_changed']),
       audited: expect.not.arrayContaining(['plan_slices_changed']),
       otel: expect.not.arrayContaining(['plan_slices_changed']),
+    });
+  });
+
+  it('persists OTel spool health without rendering, audit, or OpenTelemetry export', () => {
+    expect({
+      drop: {
+        sink: EVENT_SINKS.otel_spool_drop,
+        rendered: renderedEventTypes().includes('otel_spool_drop'),
+        persisted: persistedEventTypes().includes('otel_spool_drop'),
+        audited: auditedEventTypes().includes('otel_spool_drop'),
+        otel: (otelEventTypes() as readonly ConductorEvent['type'][]).includes('otel_spool_drop'),
+      },
+      backlog: {
+        sink: EVENT_SINKS.otel_spool_backlog,
+        rendered: renderedEventTypes().includes('otel_spool_backlog'),
+        persisted: persistedEventTypes().includes('otel_spool_backlog'),
+        audited: auditedEventTypes().includes('otel_spool_backlog'),
+        otel: (otelEventTypes() as readonly ConductorEvent['type'][]).includes('otel_spool_backlog'),
+      },
+    }).toEqual({
+      drop: {
+        sink: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
+        rendered: false, persisted: true, audited: false, otel: false,
+      },
+      backlog: {
+        sink: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
+        rendered: false, persisted: true, audited: false, otel: false,
+      },
     });
   });
 

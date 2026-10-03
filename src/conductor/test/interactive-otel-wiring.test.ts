@@ -2,8 +2,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AggregationTemporality, InMemoryMetricExporter } from '@opentelemetry/sdk-metrics';
 import { CapturingSpanExporter as InMemorySpanExporter } from './fixtures/capturing-span-exporter.js';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { buildInteractiveVisualizers } from '../src/index.js';
 import { PluginRegistry } from '../src/engine/plugin-registry.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
@@ -12,10 +14,80 @@ import type { VisualizerFactoryContext } from '../src/types/plugin.js';
 import type { OtelVisualizerStartContext } from '../src/engine/otel/wire.js';
 
 const buildExporters = vi.hoisted(() => vi.fn());
+const execFile = promisify(execFileCallback);
 
 vi.mock('../src/engine/otel/transport.js', () => ({ buildExporters }));
 
 describe('interactive OTel wiring', () => {
+  it('warns once when enabled interactive spooling cannot resolve a Git checkout', async () => {
+    const project = await mkdtemp(join(process.env.TMPDIR!, 'interactive-otel-no-git-'));
+    const pipelineDir = join(project, '.pipeline');
+    const emitter = new ConductorEventEmitter();
+    const errors: Array<{ rendererName: string; error: string }> = [];
+    buildExporters.mockReturnValue({
+      spanExporter: new InMemorySpanExporter(),
+      metricExporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
+    });
+    emitter.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') errors.push({ rendererName: event.rendererName, error: event.error });
+    });
+    await mkdir(pipelineDir, { recursive: true });
+    const context: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = {
+      config: { otel: { exporter: 'otlp', endpoint: 'http://fake-collector:4318', spool: { enabled: true } } } as HarnessConfig,
+      pipelineDir, emitter,
+      startContext: { feature: 'interactive-feature', project, pipelineDir, branch: undefined, engineVersion: undefined, harnessVersion: undefined },
+    };
+
+    try {
+      const visualizers = buildInteractiveVisualizers(new PluginRegistry(), context.config, context);
+      expect(errors).toEqual([{ rendererName: 'otel', error: expect.stringContaining('main git checkout could not be resolved') }]);
+      await Promise.all(visualizers.map((visualizer) => visualizer.stop()));
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it('emits the disabled-spool warning through the interactive production wiring', async () => {
+    const project = await mkdtemp(join(process.env.TMPDIR!, 'interactive-otel-disabled-spool-'));
+    const pipelineDir = join(project, '.pipeline');
+    const emitter = new ConductorEventEmitter();
+    const errors: Array<{ rendererName: string; error: string }> = [];
+    buildExporters.mockReturnValue({
+      spanExporter: new InMemorySpanExporter(),
+      metricExporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
+    });
+    emitter.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') errors.push({ rendererName: event.rendererName, error: event.error });
+    });
+    await execFile('git', ['init', '--initial-branch=main', project]);
+    await mkdir(pipelineDir, { recursive: true });
+    await mkdir(join(project, '.daemon', 'otel-spool'), { recursive: true });
+    await writeFile(join(project, '.daemon', 'otel-spool', 'pending'), 'batch');
+
+    const context: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = {
+      config: { otel: { exporter: 'otlp', endpoint: 'http://fake-collector:4318', spool: { enabled: false } } } as HarnessConfig,
+      pipelineDir,
+      emitter,
+      startContext: {
+        feature: 'interactive-feature', project, pipelineDir, branch: undefined, engineVersion: undefined, harnessVersion: undefined,
+      },
+    };
+
+    try {
+      const visualizers = buildInteractiveVisualizers(new PluginRegistry(), context.config, context);
+      for (let turn = 0; turn < 1_000 && errors.length === 0; turn += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      await Promise.all(visualizers.map((visualizer) => visualizer.stop()));
+
+      expect(errors).toEqual([
+        { rendererName: 'otel', error: expect.stringContaining('spool disabled') },
+      ]);
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+
   it('carries valid configured attributes through both interactive OTel constructors and reports dropped keys once', async () => {
     const pipelineDir = await mkdtemp(join(process.env.TMPDIR!, 'interactive-otel-'));
     const emitter = new ConductorEventEmitter();
