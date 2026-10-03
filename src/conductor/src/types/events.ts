@@ -1664,7 +1664,16 @@ export type ConductorEvent =
       /** A halt (operator park or daemon HALT) was cleared, resuming the feature. */
       type: 'halt_cleared';
       step?: StepName;
-      cause: 'operator' | 'rekick' | 'kickback-budget';
+      cause: 'operator' | 'rekick' | 'kickback-budget' | 'stall-remediation';
+    }
+  | {
+      /** An interactive operator authorized clearing a halted feature. */
+      type: 'halt_clear_authorized';
+      feature: string;
+      operator: string;
+      rationale: string;
+      haltClass: string;
+      step: StepName;
     }
   | {
       /** Operator authorized a bounded recovery for one halted kickback gate. */
