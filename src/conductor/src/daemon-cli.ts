@@ -54,6 +54,10 @@ import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
 import { CODEX_PROVIDER, providerDescriptor } from './execution/provider-catalog.js';
+import {
+  prepareManagedSessionContext,
+  type ManagedSessionContext,
+} from './execution/managed-session-context.js';
 import { createProviderAvailability, restoreProviderAvailabilityFromDaemonLedger } from './engine/provider-availability.js';
 import {
   normalizeProviderSelection,
@@ -855,6 +859,40 @@ export function createForcedSetupPrepare(
 }
 
 /**
+ * Establish the one immutable context for a daemon feature dispatch. The
+ * daemon owns both roots and the dispatch identity, so this deliberately
+ * accepts no cwd-derived input.
+ */
+export async function prepareDaemonFeatureManagedSessionContext(input: {
+  readonly projectRoot: string;
+  readonly worktreeRoot: string;
+  readonly featureSlug: string;
+  readonly dispatchId: string;
+  readonly provider: string;
+}): Promise<ManagedSessionContext> {
+  const producerRoot = join(
+    input.worktreeRoot,
+    '.pipeline',
+    'session-events',
+    input.dispatchId,
+  );
+  await mkdir(producerRoot, { recursive: true });
+  const prepared = await prepareManagedSessionContext({
+    projectRoot: input.projectRoot,
+    worktreeRoot: input.worktreeRoot,
+    producerRoot,
+    scope: { kind: 'feature', featureSlug: input.featureSlug },
+    dispatchId: input.dispatchId,
+    provider: input.provider,
+    daemonFeature: true,
+  });
+  if (!prepared.ok) {
+    throw new Error(`daemon managed-session context refused: ${prepared.code}`);
+  }
+  return prepared.context;
+}
+
+/**
  * Daemon entry (Phase 6). Drains the backlog of features with existing
  * stories+plan, running each in its own worktree via the gate loop
  * (verifyArtifacts + the engine's unconditional fresh-session-per-step),
@@ -1308,6 +1346,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const sessionId = uuidv4();
     const persistence = startFeatureEventPersistence(worktree.path, events, item.slug);
     const featureEvents = persistence.events;
+    const providerExecution = createProviderExecution(featureEvents, featureLogFor(item.slug));
+    const provider = providerExecution.configuredProviders[0];
+    let managedSessionContext: ManagedSessionContext;
+    try {
+      if (!provider) throw new Error('daemon feature dispatch requires a configured provider');
+      managedSessionContext = await prepareDaemonFeatureManagedSessionContext({
+        projectRoot,
+        worktreeRoot: worktree.path,
+        featureSlug: item.slug,
+        dispatchId: sessionId,
+        provider,
+      });
+    } catch (error) {
+      persistence.stop();
+      throw error;
+    }
     const pipelineDir = join(worktree.path, '.pipeline');
     const persistedSessionId = await readFile(join(pipelineDir, 'conduct-session-id'), 'utf8')
       .catch(() => undefined);
@@ -1345,7 +1399,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       rootEvents: events,
       sessionId,
       visualizer,
-      providerExecution: createProviderExecution(featureEvents, featureLog),
+      providerExecution: { ...providerExecution, managedSessionContext },
       log: featureLog,
       stop,
     };
