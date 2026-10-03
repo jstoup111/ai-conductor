@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-03T15:55:08.042Z
 Slug: interrupted-intake-claim-still-strands-high-priori
 Class: needs-human
 Halting step: prd_audit
