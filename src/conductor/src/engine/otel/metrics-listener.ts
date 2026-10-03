@@ -87,6 +87,7 @@ export class MetricsListener {
     build_stall: (listener, event) => listener.recorder.onStall((event as Extract<OtelEvent, { type: 'build_stall' }>).reason),
     build_progress: () => {},
     build_no_progress: () => {},
+    build_active_stall: () => {},
     pipeline_closeout: (listener, event) => listener.feature(event)?.onPipelineCloseout(event as Extract<OtelEvent, { type: 'pipeline_closeout' }>),
     gate_verdict: (listener, event) => {
       const verdict = event as Extract<OtelEvent, { type: 'gate_verdict' }>;

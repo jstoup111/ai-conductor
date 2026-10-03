@@ -6,6 +6,8 @@ import { join } from 'node:path';
 
 import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
+import type { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import {
   EVENT_SINKS,
   auditedEventTypes,
@@ -18,6 +20,14 @@ import {
 import type { SchedulingUnitRef } from '../../src/engine/conductor.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+
+const ACTIVE_STALL_EVENT: ConductorEvent = {
+  type: 'build_stall',
+  step: 'build',
+  reason: 'active_stall',
+  resolvedBefore: 2,
+  resolvedAfter: 2,
+};
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends
@@ -76,6 +86,7 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'build_progress',
   'unattributed_progress',
   'build_no_progress',
+  'build_active_stall',
   'build_stall',
   'renderer_error',
   'pipeline_tail_diagnostic',
@@ -429,6 +440,43 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
+  it('routes active build stalls through render, persistence, and OTel with a closed stall reason', async () => {
+    const reasons: string[] = [];
+    const events = new ConductorEventEmitter();
+    const listener = new MetricsListener({
+      onStall: (reason: string) => reasons.push(reason),
+    } as MetricsRecorder);
+
+    listener.start(events);
+    try {
+      await events.emit(ACTIVE_STALL_EVENT);
+
+      expect({
+        event: ACTIVE_STALL_EVENT,
+        sinks: EVENT_SINKS.build_active_stall,
+        persisted: persistedEventTypes().includes('build_active_stall'),
+        rendered: renderedEventTypes().includes('build_active_stall'),
+        otel: otelEventTypes().includes('build_active_stall'),
+        stallReasons: reasons,
+      }).toEqual({
+        event: {
+          type: 'build_stall',
+          step: 'build',
+          reason: 'active_stall',
+          resolvedBefore: 2,
+          resolvedAfter: 2,
+        },
+        sinks: { render: true, persist: true, audit: false, otel: true, otelTrace: false },
+        persisted: true,
+        rendered: true,
+        otel: true,
+        stallReasons: ['active_stall'],
+      });
+    } finally {
+      listener.stop();
+    }
+  });
+
   it('renders and persists read-only review capability results through the event spine', () => {
     const capability = {
       type: 'build_review_read_only_capability',
@@ -583,6 +631,7 @@ describe('event sink subscriptions', () => {
       'memory_setup',
       'feature_usage_total',
       'feature_cost_snapshot',
+      'build_active_stall',
     ] satisfies Array<ConductorEvent['type']>;
     const traced = [
       'step_started',
@@ -621,6 +670,7 @@ describe('event sink subscriptions', () => {
       'build_stall',
       'build_progress',
       'build_no_progress',
+      'build_active_stall',
       'pipeline_closeout',
       'group_member_step',
       'gate_verdict',
@@ -1288,6 +1338,7 @@ describe('event sink subscriptions', () => {
   it('derives the daemon-rendered set from switch-handled and declarative render event types', () => {
     expect(new Set(renderedEventTypes())).toEqual(new Set([
       ...DAEMON_SWITCH_HANDLED_EVENT_TYPES,
+      'build_active_stall',
       'tracker_backend_unavailable',
       'halt_marker_write_failed',
       'halt_record_written',

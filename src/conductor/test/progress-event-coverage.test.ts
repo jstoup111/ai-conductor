@@ -54,6 +54,15 @@ describe('progress event coverage guard', () => {
     ).toEqual([]);
   });
 
+  it('registers build_active_stall for persistence and terminal rendering', () => {
+    const terminalRenderer = readFileSync(join(SRC_ROOT, 'ui', 'terminal-renderer.ts'), 'utf-8');
+
+    expect({
+      persisted: EVENT_SINKS.build_active_stall.persist,
+      subscribed: terminalRenderer.includes("'build_active_stall'"),
+    }).toEqual({ persisted: true, subscribed: true });
+  });
+
   const lists: Array<{ name: string; file: string }> = [
     { name: 'daemon-cli.ts renderer switch', file: join(SRC_ROOT, 'daemon-cli.ts') },
     { name: 'ui/terminal-renderer.ts TTY renderer switch', file: join(SRC_ROOT, 'ui', 'terminal-renderer.ts') },
