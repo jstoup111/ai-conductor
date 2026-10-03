@@ -1010,7 +1010,7 @@ describe('gateVerdictStillValid', () => {
     const s = await makeRepo();
     scratches.push(s.repo);
     const baseline = await commit(s, {
-      '.docs/plans/active.md': '# plan\n',
+      '.docs/plans/active.md': '# plan\n\nGoverned by adr-governing.\n',
       '.pipeline/conduct-state.json': JSON.stringify({ feature_desc: 'active' }),
       'src/feature.ts': 'f\n',
     }, 'approved inputs');
@@ -1021,12 +1021,14 @@ describe('gateVerdictStillValid', () => {
     ).resolves.toBe('rerun');
   });
 
-  // Operator-accepted widening (prd_audit NC.1): outside any rebase, a
-  // `.docs/decisions/` edit stales the gates that consume governing ADRs, and
-  // nothing else.
+  // Operator-accepted widening (prd_audit NC.1): outside any rebase, an edit
+  // to a decision record the feature CITES stales the gates that consume
+  // governing ADRs, and nothing else.  An uncited ADR is not an input.
   it.each([
     ['architecture_review_as_built', '.docs/decisions/adr-governing.md', 'rerun'],
     ['coverage_binding', '.docs/decisions/adr-governing.md', 'rerun'],
+    ['coverage_binding', '.docs/decisions/adr-upstream-uncited.md', 'preserve'],
+    ['architecture_review_as_built', '.docs/decisions/adr-upstream-uncited.md', 'preserve'],
     ['architecture_review_as_built', '.docs/notes/unrelated.md', 'preserve'],
     ['prd_audit', '.docs/decisions/adr-governing.md', 'preserve'],
     ['build_review', '.docs/decisions/adr-governing.md', 'preserve'],
@@ -1034,7 +1036,7 @@ describe('gateVerdictStillValid', () => {
     const s = await makeRepo();
     scratches.push(s.repo);
     const baseline = await commit(s, {
-      '.docs/plans/active.md': '# plan\n',
+      '.docs/plans/active.md': '# plan\n\nGoverned by `.docs/decisions/adr-governing.md`.\n',
       '.pipeline/conduct-state.json': JSON.stringify({ feature_desc: 'active' }),
       'src/feature.ts': 'f\n',
     }, 'approved inputs');

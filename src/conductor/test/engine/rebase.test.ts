@@ -1336,18 +1336,16 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(Object.keys(byGate).sort()).toEqual(
       ['coverage_binding', 'prd_audit', 'architecture_review_as_built'].sort(),
     );
+    // Document-bound gates declare only their document inputs.
     expect(byGate.prd_audit.surface).toEqual([
-      'src/feature.ts',
       '<.docs/stories/|.docs/specs/>',
     ]);
     expect(byGate.coverage_binding.surface).toEqual([
-      'src/feature.ts',
       '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/|.docs/decisions/>',
     ]);
     // The as-built review consumes the same coverage/review decision inputs
-    // as coverage_binding; its test path is excluded from the source surface.
+    // as coverage_binding.
     expect(byGate.architecture_review_as_built.surface).toEqual([
-      'src/feature.ts',
       '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/|.docs/decisions/>',
     ]);
     expect(byGate.prd_audit.deltaConsidered).toEqual([]);
@@ -1359,7 +1357,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(byGate.manual_test).toBeUndefined();
   });
 
-  it('emits only feature runtime and declared document inputs for PRD-input gates', async () => {
+  it('emits only declared document inputs (never runtime) for document-bound gates', async () => {
     const outcome: RebaseOutcome = {
       kind: 'changed',
       changedCodePaths: [
@@ -1381,12 +1379,10 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     const byGate = Object.fromEntries(invalidated.map((event) => [event.gate, event.matchedPaths]));
     expect(byGate.coverage_binding).toEqual([
-      'src/feature.ts',
       '.docs/stories/feature.md',
       '.docs/specs/feature.md',
     ]);
     expect(byGate.prd_audit).toEqual([
-      'src/feature.ts',
       '.docs/stories/feature.md',
       '.docs/specs/feature.md',
     ]);
@@ -2216,8 +2212,10 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     });
     if (outcome.kind === 'changed' && outcome.featureSurface) {
       expect(classifyGateInvalidation(outcome.changedCodePaths, outcome.featureSurface, true)).toEqual({
-        invalidated: ['coverage_binding', 'build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built'],
-        preserved: [],
+        // Overlapping feature runtime reopens build_review but not the
+        // document-bound gates.
+        invalidated: ['build_review', 'test_suite', 'manual_test'],
+        preserved: ['coverage_binding', 'prd_audit', 'architecture_review_as_built'],
       });
     }
   }, 20000);
@@ -2630,5 +2628,33 @@ describe('resolveRebaseConflicts — delta classification matches the clean path
     expect(outcome.changedCodePaths).toEqual(['feature-3.ts', 'shared.ts']);
     expect(outcome.allChangedPaths).toEqual(['docs/template.md', 'feature-3.ts', 'shared.ts']);
     expect(outcome.featureSurface).toBeDefined();
+  });
+});
+
+describe('engine/rebase — resolveReviewInputs decision scoping', () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'review-inputs-'));
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(root, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'active' }));
+    await writeFile(join(root, '.docs', 'plans', 'active.md'), '# plan\n\nBound by `.docs/decisions/adr-2026-01-01-cited.md` and adr-2026-01-02-bare.\n');
+    await writeFile(join(root, '.docs', 'decisions', 'adr-2026-01-01-cited.md'), 'cited\n');
+    await writeFile(join(root, '.docs', 'decisions', 'adr-2026-01-03-upstream.md'), 'upstream\n');
+  });
+  afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+
+  it('binds only decision records the feature cites, never every ADR in the checkout', async () => {
+    const { resolveReviewInputs } = await import('../../src/engine/rebase.js');
+    const inputs = await resolveReviewInputs(root, ['.docs/decisions/adr-2026-01-03-upstream.md']);
+
+    expect(inputs).toContain('.docs/plans/active.md');
+    expect(inputs).toContain('.docs/decisions/adr-2026-01-01-cited.md');
+    expect(inputs).toContain('.docs/decisions/adr-2026-01-02-bare.md');
+    expect(inputs).not.toContain('.docs/decisions/adr-2026-01-03-upstream.md');
+    expect(classifyGateInvalidation(['.docs/decisions/adr-2026-01-03-upstream.md'], [], true, inputs).invalidated).toEqual([]);
+    expect(classifyGateInvalidation(['.docs/decisions/adr-2026-01-01-cited.md'], [], true, inputs).invalidated.sort())
+      .toEqual(['architecture_review_as_built', 'coverage_binding']);
   });
 });

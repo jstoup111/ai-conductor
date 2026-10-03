@@ -461,6 +461,8 @@ export async function gateVerdictStillValid(
     surface === 'feature-codetest' ||
     surface === 'feature-runtime-or-prd-inputs' ||
     surface === 'feature-runtime-or-coverage-inputs' ||
+    surface === 'feature-prd-inputs' ||
+    surface === 'feature-coverage-inputs' ||
     surface === 'all-runtime'
       ? await deriveFeatureSurface(ctx)
       : [];
@@ -485,10 +487,19 @@ export async function gateVerdictStillValid(
       break;
     case 'feature-runtime-or-prd-inputs':
     case 'feature-runtime-or-coverage-inputs':
-    case 'feature-prd-inputs':
-    case 'feature-coverage-inputs':
       isSurfaceMiss = projectGateSurfaces(delta, F, await resolveReviewInputs(ctx.projectRoot, delta))[surface].matchedPaths.length === 0;
       break;
+    // Outside a rebase, a feature-owned code change is the feature's own new
+    // work (e.g. a kickback fix), so document-bound gates still re-judge it.
+    // Only the post-rebase classifier narrows them to document inputs.
+    case 'feature-prd-inputs':
+    case 'feature-coverage-inputs': {
+      const withRuntime = surface === 'feature-prd-inputs'
+        ? 'feature-runtime-or-prd-inputs'
+        : 'feature-runtime-or-coverage-inputs';
+      isSurfaceMiss = projectGateSurfaces(delta, F, await resolveReviewInputs(ctx.projectRoot, delta))[withRuntime].matchedPaths.length === 0;
+      break;
+    }
     case 'all-runtime':
       isSurfaceMiss = featureSrc.length === 0 && foreignSrc.length === 0;
       break;

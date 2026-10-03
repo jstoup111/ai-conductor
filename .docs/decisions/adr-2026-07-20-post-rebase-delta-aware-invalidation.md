@@ -89,6 +89,8 @@ delta touches their source.
 
 > **Amended 2026-09-11 by #2253:** adr-2026-09-11-selective-post-rebase-verification refines post-rebase preservation with exact expected-replay evidence and one explicit state/verdict/event decision. A proved unchanged contribution may preserve already-passing feature-scoped reviews despite shared-file upstream edits; changed active review inputs remain invalidating. Rebase refresh no longer uses a positional downstream-stale sweep. Combined-runtime verification, conservative fallback, and unrelated repair obligations remain governed as described by the new ADR.
 
+> **Amended 2026-10-03 (hotfix):** `coverage_binding`, `prd_audit` and `architecture_review_as_built` no longer reopen on feature runtime overlap (`D_featureSrc`) or on an unproved replay after a file-changing rebase. They reopen only when one of the feature's own declared document inputs changes: `prd_audit` on its stories/specs/PRD; `coverage_binding` and `architecture_review_as_built` on its plan, coherence, stories, specs, or a decision record the feature cites. An ADR the feature does not cite is not an input. `build_review`, `test_suite` and `manual_test` are unchanged. The `prd_audit` and `architecture_review_as_built` rows in the table below are superseded by this amendment.
+
 Adopt **Option A**. On a `changed` rebase, compute `D` (rebase delta) and `F` (feature claimed
 surface); partition `D` into `D_test` (test-only paths), `D_featureSrc = D ∩ F ∩ runtime-source`,
 and `D_foreignSrc = D ∩ runtime-source \ F`. Apply this **conservative** per-gate rule:
