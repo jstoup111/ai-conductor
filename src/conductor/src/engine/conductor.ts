@@ -9851,7 +9851,9 @@ export class Conductor {
                 consumed: allowance === 'laps'
                   ? settlementLedger?.gates[gate]?.laps ?? fallbackLapCap
                   : settlementGrowth?.added ?? growthCap ?? 0,
-                limit: allowance === 'laps' ? fallbackLapCap : growthCap ?? 0,
+                limit: allowance === 'laps'
+                  ? settlementLedger?.gates[gate]?.effectiveLapCap ?? fallbackLapCap
+                  : growthCap ?? 0,
                 latestReason: findings,
                 allowance,
               });
