@@ -132,7 +132,7 @@ long reasoning interval is not mistaken for a dead process.
 ### Done When
 
 - [ ] A silent-provider regression test advances beyond the former threshold and completes without a kill.
-- [ ] No production path converts heartbeat age or external process discovery into post-spawn termination.
+- [ ] No production path converts heartbeat absence, heartbeat staleness, or external process discovery into post-spawn termination; the opt-in active-stall end of a build attempt (adr-2026-07-10-intra-step-build-progress-events decisions 8 and 9) is a distinct authority.
 - [ ] Status documentation explicitly labels activity freshness as telemetry.
 
 ## Story TI-5: Provider lifecycle capability fails closed
