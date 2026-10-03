@@ -2903,14 +2903,16 @@ export class Conductor {
 
     try {
       if (step === 'prd_audit') {
-        const absentReason = `prd_audit dispatch ${expectedRunId ?? 'current attempt'} produced no terminal typed verdict; expected ${PRD_AUDIT_VERDICT_PATH}`;
+        const absentReason =
+          `prd_audit dispatch ${expectedRunId ?? 'current attempt'} produced no verdict; ` +
+          `expected terminal typed output ${PRD_AUDIT_VERDICT_PATH}`;
         if (dispatchOutput?.startsWith('structured-result-rejected:')) {
           const diagnostics = dispatchOutput.slice('structured-result-rejected:'.length).trim();
           return {
             done: false,
             routeClass: 'absent',
             retrySignal: 'structured-result-rejected',
-            reason: `prd_audit dispatch ${expectedRunId ?? 'current attempt'} produced an incomplete judgment${diagnostics ? `: ${diagnostics}` : ''}`,
+            reason: `${absentReason}; incomplete judgment${diagnostics ? `: ${diagnostics}` : ''}`,
           };
         }
         if (dispatchOutput === 'structured-result-missing') {
@@ -2931,21 +2933,39 @@ export class Conductor {
               outcome: 'stale_invalidated',
               fresh: false,
             },
-            reason: `${PRD_AUDIT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${expectedRunId}`,
+            reason:
+              `${absentReason}; ${PRD_AUDIT_VERDICT_PATH} was produced by run ` +
+              `${stored.value.attemptId}, not the current run ${expectedRunId}`,
           };
         }
         if (!stored.value.complete) {
-          return { done: false, routeClass: 'absent', retrySignal: 'structured-result-rejected', reason: `${PRD_AUDIT_VERDICT_PATH} is incomplete: ${stored.value.diagnostics.join('; ')}` };
+          return {
+            done: false,
+            routeClass: 'absent',
+            retrySignal: 'structured-result-rejected',
+            reason: `${absentReason}; incomplete judgment: ${stored.value.diagnostics.join('; ')}`,
+          };
         }
         return undefined;
       }
       if (step === 'architecture_review_as_built') {
-        const absentReason = `architecture_review_as_built dispatch ${expectedRunId ?? 'current attempt'} produced no terminal typed verdict; expected ${AS_BUILT_VERDICT_PATH}`;
+        const absentReason =
+          `architecture_review_as_built dispatch ${expectedRunId ?? 'current attempt'} produced no verdict; ` +
+          `expected terminal typed output ${AS_BUILT_VERDICT_PATH}`;
         // A rejected structured result persisted nothing; record the
         // rejection (and its named field) as its own absent outcome rather
         // than a generic missing file or a prior lap's verdict.
         if (dispatchOutput?.startsWith('structured-result-rejected:')) {
-          return { done: false, routeClass: 'absent', retrySignal: 'structured-result-rejected', reason: dispatchOutput };
+          const diagnostics = dispatchOutput.slice('structured-result-rejected:'.length).trim();
+          return {
+            done: false,
+            routeClass: 'absent',
+            retrySignal: 'structured-result-rejected',
+            reason: `${absentReason}; structured result rejected${diagnostics ? `: ${diagnostics}` : ''}`,
+          };
+        }
+        if (dispatchOutput === 'structured-result-missing') {
+          return { done: false, routeClass: 'absent', retrySignal: 'structured-result-missing', reason: absentReason };
         }
         const stored = await readAsBuiltVerdict(this.projectRoot);
         if (stored.kind !== 'present') {
@@ -2960,7 +2980,9 @@ export class Conductor {
           return {
             done: false, routeClass: 'absent', retrySignal: 'stale-run-identity',
             verdictFreshness: { artifact: join(this.projectRoot, AS_BUILT_VERDICT_PATH), floorSource: 'run-identity', outcome: 'stale_invalidated', fresh: false },
-            reason: `${AS_BUILT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${expectedRunId}`,
+            reason:
+              `${absentReason}; ${AS_BUILT_VERDICT_PATH} was produced by run ` +
+              `${stored.value.attemptId}, not the current run ${expectedRunId}`,
           };
         }
         return undefined;
@@ -8367,6 +8389,7 @@ export class Conductor {
                             event.member as StepName,
                             branchRunIds.get(event.member),
                             branchDispatchStartedAt.get(event.member),
+                            memberAttemptResults.get(event.member)?.output,
                           );
                           if (handshake) branchHandshakeFailures.set(event.member, handshake);
                           else branchHandshakeFailures.delete(event.member);
