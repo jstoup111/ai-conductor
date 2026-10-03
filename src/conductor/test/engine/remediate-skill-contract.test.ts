@@ -9,6 +9,18 @@ function section(skill: string, heading: string): string {
 }
 
 describe('remediate build_review case-mode contract', () => {
+  it('keeps SHIP verdict inputs read-only and records resolved findings in the gap plan', async () => {
+    const skill = await readFile(remediateSkillPath, 'utf8');
+    const loadInput = section(skill, 'Practices')
+      .match(/### 1\. Load Input\n([\s\S]*?)(?=\n### 2\. Dispatch|$)/)?.[1] ?? '';
+
+    expect(loadInput).toMatch(/read-only evidence:[\s\S]*?`\.pipeline\/prd-audit\.md`/i);
+    expect(loadInput).toMatch(/read-only evidence:[\s\S]*?`\.pipeline\/architecture-review-as-built\.md`/i);
+    expect(loadInput).toMatch(/gap-plan mode,[\s\S]*?`\.pipeline\/remediation\.json`.*only write/i);
+    expect(loadInput).toMatch(/finding is resolved,[\s\S]*?record[\s\S]*?`\.pipeline\/remediation\.json`/i);
+    expect(loadInput).toMatch(/do not edit, delete, or recreate[\s\S]*?verdict\s+artifact/i);
+  });
+
   it('selects case-v1 only from engine context and keeps the legacy gap-plan contract', async () => {
     const skill = await readFile(remediateSkillPath, 'utf8');
     const caseMode = section(skill, 'Engine-selected build_review case-v1 mode');

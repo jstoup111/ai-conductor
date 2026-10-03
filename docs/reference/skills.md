@@ -505,6 +505,11 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `.pipeline/pipeline-events.jsonl` per completed evaluator gate, written via `ai-conductor
   closeout-event`. `.pipeline/current-task` and `.pipeline/task-status.json` are written by engine
   hooks and must not be hand-edited.
+- **Read-only SHIP verdicts** — BUILD sessions, including remediation retries and every implementer
+  dispatch, may read but never write, delete, rename, or recreate the SHIP validator verdict artifacts
+  (`prd-audit.md`, `architecture-review-as-built.md`/`.json`) or their code-stamp sidecars. Only the
+  validator's next dispatch produces a new verdict; a fixed finding is proven through
+  [`ai-conductor task done <id> --done-when <n>=<evidence>`](cli.md#ai-conductor-task).
 - **Gate role** — blocking. Evaluator dispatch at each batch boundary is mandatory; a missing or empty
   `review.json` halts and re-dispatches. A missing, malformed, or non-matching `evaluator`
   `pipeline_closeout` record is an independent second hard gate (waived for a batch already in flight
@@ -706,7 +711,9 @@ the aggregate gate. Scoped success alone never satisfies that gate.
   longer dispatches `/remediate`: it routes straight back to `build` with its own best-effort
   `plan contract:` and `prior attempts:` pointer lines (see
   [gates](../explanation/gates.md#where-a-build_review-fail-goes)).
-- **Outputs** — `.pipeline/remediation.json`, overwritten each run. The engine then appends each task
+- **Outputs** — `.pipeline/remediation.json`, overwritten each run and the only write in gap-plan
+  mode. The SHIP verdict inputs are read-only: a finding judged resolved is recorded in
+  `remediation.json`, never by editing, deleting, or recreating a verdict artifact. The engine then appends each task
   into the feature's plan. For a `prd_audit` finding without a PRD, its disposition ID is the report
   criterion `S<story>.<ordinal>` (for example, `S5.1`); the engine admits criterion IDs
   case-insensitively. An `existing-task` disposition binds the gap to task id(s) already in the

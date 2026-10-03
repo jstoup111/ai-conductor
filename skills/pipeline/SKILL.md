@@ -259,10 +259,22 @@ when an approved-plan check is unsatisfiable. The CLI still supports operator re
 resetting a task after a crash), but the evidence and plan-gap forms are the normal per-task flow.
 You report the subagent's result (PASS/FAIL) to inform the conductor's logging and audit trail.
 
+**SHIP validator verdict artifacts are read-only during BUILD.** `.pipeline/prd-audit.json` is the
+typed PRD verdict authority (ADR D2.2), and `.pipeline/prd-audit.md` is its derived human report.
+`.pipeline/architecture-review-as-built.md`, `.pipeline/architecture-review-as-built.json`,
+`.pipeline/prd-audit-code-stamp.json`, and
+`.pipeline/architecture-review-as-built-code-stamp.json` are owned by their SHIP validators and
+the engine. BUILD sessions, including remediation retries that cite them, must never write, delete,
+rename, or recreate them. Reading `.pipeline/remediation.json` and the cited verdict artifact remains allowed.
+Only the validator's own next dispatch produces a new verdict. A BUILD session that fixes a finding
+records its task-level proof through `conduct task done <id> --done-when <n>=<evidence>` instead of
+editing a verdict artifact.
+
 **Subagent context scoping:** The implementer receives ONLY:
 - The task description and acceptance criteria (from the plan)
 - File paths to modify (from the plan's "Files likely touched")
 - The TDD skill instructions
+- Every implementer dispatch prompt MUST carry this SHIP verdict read-only rule.
 - A focused **current-HEAD pattern basis** when the task affects an established local pattern:
   current-checkout paths for the relevant target and exemplar, stable symbol or role hints that
   locate the behavior despite code movement, and the semantic traits the task must preserve or
