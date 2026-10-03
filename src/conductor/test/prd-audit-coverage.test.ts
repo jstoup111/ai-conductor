@@ -61,7 +61,11 @@ async function persistCoverageVerdict(
     complete: options.complete ?? true,
     judgment: { version: 'v1', criterionJudgments, noOwnerObservations: [] },
     diagnostics: options.diagnostics ?? [], recordedDispositions: [],
-  }, { attemptId: 'fixture-run', codeStamp: options.codeStamp ?? null });
+  // Managed PRD-audit settlement stamps every persisted judgment.  A fixture
+  // that omits an explicit stamp models a newly written verdict whose stamp
+  // cannot be preserved in this non-git scratch directory, not legacy
+  // unstamped evidence (which the typed migration correctly rejects).
+  }, { attemptId: 'fixture-run', codeStamp: options.codeStamp ?? 'fixture-head' });
 }
 
 describe('resolveFeaturePrdPaths', () => {

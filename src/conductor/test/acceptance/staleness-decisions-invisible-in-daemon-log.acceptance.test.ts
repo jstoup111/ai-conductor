@@ -247,7 +247,7 @@ async function writeBuildReviewVerdict(
 /** Writes typed PRD authority; its Markdown report is derived only. */
 async function writePrdAuditVerdict(
   repo: string,
-  codeStamp?: string,
+  codeStamp = 'fixture-head',
 ): Promise<string> {
   const path = join(repo, PRD_AUDIT_VERDICT_PATH);
   await persistPrdAuditVerdict(repo, {
@@ -263,7 +263,7 @@ async function writePrdAuditVerdict(
     },
     diagnostics: [],
     recordedDispositions: [],
-  }, { attemptId: 'fixture-run', codeStamp: codeStamp ?? null });
+  }, { attemptId: 'fixture-run', codeStamp });
   await utimes(path, OLD_MTIME, OLD_MTIME);
   return path;
 }
