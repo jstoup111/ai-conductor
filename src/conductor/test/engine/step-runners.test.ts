@@ -2832,6 +2832,10 @@ describe('DefaultStepRunner', () => {
       build: {
         success: true,
         output: 'codex built',
+        managedGhObservationCoverage: {
+          boundary: 'managed-path-resolved-gh',
+          completeness: 'unknown',
+        },
         tokenUsage: { input: 11, output: 4 },
         model: 'gpt-5.6-terra',
         effort: 'medium',
@@ -2852,6 +2856,10 @@ describe('DefaultStepRunner', () => {
       explore: {
         success: true,
         output: 'claude explored',
+        managedGhObservationCoverage: {
+          boundary: 'managed-path-resolved-gh',
+          completeness: 'unknown',
+        },
         tokenUsage: { input: 7, output: 3 },
         model: 'opus',
         effort: 'high',

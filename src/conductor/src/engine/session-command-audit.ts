@@ -46,8 +46,10 @@ export function auditManagedSessionInstructionSource(input: SessionCommandSource
     const commandBearingConstruction = /(?:prompt|instruction)/i.test(
       input.source.split('\n')[instruction.line - 1] ?? '',
     );
-    if (input.family === 'engine' && commandBearingConstruction && !declared && !malformed) {
-      return [{ ...instruction, reason: 'unclassified session-command context in engine instruction' }];
+    if (input.family === 'engine' && !declared && !malformed) {
+      return commandBearingConstruction
+        ? [{ ...instruction, reason: 'unclassified session-command context in engine instruction' }]
+        : [];
     }
     if (instruction.context !== 'managed') {
       return [{ ...instruction, reason: 'managed dispatch cannot execute an operator-only instruction' }];
