@@ -140,7 +140,7 @@ As an operator, I want the provider catalog to state truthfully that Pi reports 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the pi catalog descriptor, when `costSelfReporting` is queried, then it returns true, while `selfHost`, `reviewPolicyCatalog`, `writeFence`, `readiness`, and `interactiveLaunch` still return false.
+- Given the pi catalog descriptor, when `costSelfReporting` is queried, then it returns true, while `reviewPolicyCatalog`, `writeFence`, `readiness`, and `interactiveLaunch` still return false.
 - Given the built-in catalog, when `COST_SELF_REPORTING_PROVIDERS` is read, then it contains `claude` and `pi` and not `codex`.
 
 #### Negative Paths

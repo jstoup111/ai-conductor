@@ -16,7 +16,7 @@ As an operator, I want a Pi reviewer to be limited to read-only tools, so that a
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the pi catalog descriptor, when `supportsProviderCapability` is queried for `readOnlyReview`, then it returns true, while `selfHost`, `reviewPolicyCatalog`, `writeFence`, `readiness` and `interactiveLaunch` still return false.
+- Given the pi catalog descriptor, when `supportsProviderCapability` is queried for `readOnlyReview`, then it returns true, while `reviewPolicyCatalog`, `writeFence`, `readiness` and `interactiveLaunch` still return false.
 - Given a Pi invocation with the read-only review option set, when the adapter spawns pi, then the argv contains `--no-extensions`, `-na`, a `--tools` value naming exactly `read,grep,find,ls,git_read`, and `-e` followed by the absolute path of the harness extension asset.
 - Given a Pi invocation with the read-only review option set and a native output schema, when the adapter spawns pi, then the `--tools` value names exactly `read,grep,find,ls,git_read,submit_result`.
 

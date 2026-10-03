@@ -40,7 +40,7 @@ As an operator, I want a step that needs a capability Pi does not yet have to fa
 - Given pi is selected for an ordinary build step, when the step dispatches, then no capability refusal occurs.
 
 #### Negative Paths
-- Given pi is selected for a path that requires the selfHost capability, when that path is reached, then it fails before spawning with an error naming provider pi, capability selfHost, and the owning intake.
+- Given pi is selected for a path that requires the interactiveLaunch capability, when that path is reached, then it fails before spawning with an error naming provider pi, capability interactiveLaunch, and the owning intake.
 - Given pi is selected for build-review with a custom review policy, when the review-policy catalog path is reached, then it fails naming capability reviewPolicyCatalog instead of falling into the codex or claude branch.
 - Given a descriptor omits a capability flag, when any consumer queries it, then the capability is treated as unsupported.
 
