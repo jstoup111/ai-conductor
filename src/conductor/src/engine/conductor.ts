@@ -10359,6 +10359,12 @@ export class Conductor {
           // no watcher instance is constructed at all (not merely started as
           // a no-op), so operators who disable the feature pay zero overhead
           // and the existing post-hoc stall-breaker (below) is unaffected.
+          // This controller belongs solely to one build attempt. It is
+          // deliberately not registered with the daemon-wide shutdown set:
+          // an active-stall policy ends this provider attempt, not the run.
+          const buildAttemptController = step.name === 'build'
+            ? new AbortController()
+            : undefined;
           const buildWatcher: BuildProgressWatcher | null =
             step.name === 'build' && resolveBuildProgressConfig(this.config).enabled
               ? new BuildProgressWatcher({
@@ -10367,6 +10373,7 @@ export class Conductor {
                   step: step.name,
                   featureSlug: state.feature_desc,
                   config: this.config,
+                  endAttempt: () => buildAttemptController?.abort(),
                 })
               : null;
           buildWatcher?.start();
@@ -10623,6 +10630,9 @@ export class Conductor {
                                 modelOverride: esc.model,
                                 effortOverride: esc.effort,
                                 executionContext: serialExecutionContext,
+                                ...(buildAttemptController === undefined
+                                  ? {}
+                                  : { abortSignal: buildAttemptController.signal }),
                                 // D1 scope: only a SHIP-tail verdict gate hands its
                                 // identity to the lifecycle, so that gate's
                                 // `attempt.id` and its sidecar stamp are one value.
@@ -10664,6 +10674,28 @@ export class Conductor {
           // Settlement owns its HALT marker and loop-halt event. Preserve the
           // pre-existing terminal routing without retry or failure accounting.
           if (result.pendingRepairSettlementHalt) return;
+
+          // An end_attempt policy is an ordinary failed provider attempt: it
+          // spends the existing retry budget, but records its distinct cause
+          // before generic failure handling. The controller is attempt-local,
+          // so a retry always receives a fresh, non-aborted signal/watcher.
+          if (
+            step.name === 'build' &&
+            buildAttemptController?.signal.aborted === true &&
+            !result.success
+          ) {
+            const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
+            lastBuildStallReason =
+              `build stalled: active without movement for ` +
+              `${resolveBuildProgressConfig(this.config).active_stall_minutes} minutes`;
+            await emitTracked({
+              type: 'build_stall',
+              step: step.name,
+              reason: 'active_stall',
+              resolvedBefore: resolvedTasksBefore,
+              resolvedAfter: resolvedTasksAfter,
+            });
+          }
 
           // Rebase setup exhaustion is a pre-invocation environmental refusal.
           // Its native handler has already written the HALT and recorded the

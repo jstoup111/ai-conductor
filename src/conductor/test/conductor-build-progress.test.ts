@@ -19,16 +19,27 @@ const stops: string[] = [];
 const constructedWith: Array<{ projectRoot: string; step: string }> = [];
 const closeoutTailStarts: string[] = [];
 const closeoutTailStops: string[] = [];
+let endAttemptOnStart = false;
 
 vi.mock('../src/engine/build-progress-watcher.js', () => {
   class FakeBuildProgressWatcher {
     private step: string;
-    constructor(opts: { projectRoot: string; step: string }) {
+    private readonly endAttempt?: (reason: 'active_stall') => void;
+    constructor(opts: {
+      projectRoot: string;
+      step: string;
+      endAttempt?: (reason: 'active_stall') => void;
+    }) {
       this.step = opts.step;
+      this.endAttempt = opts.endAttempt;
       constructedWith.push({ projectRoot: opts.projectRoot, step: opts.step });
     }
     start(): void {
       starts.push(this.step);
+      if (endAttemptOnStart) {
+        endAttemptOnStart = false;
+        this.endAttempt?.('active_stall');
+      }
     }
     stop(): void {
       stops.push(this.step);
@@ -88,6 +99,7 @@ describe('conductor/build-progress-watcher wiring', () => {
     constructedWith.length = 0;
     closeoutTailStarts.length = 0;
     closeoutTailStops.length = 0;
+    endAttemptOnStart = false;
   });
 
   afterEach(async () => {
@@ -216,5 +228,41 @@ describe('conductor/build-progress-watcher wiring', () => {
     expect(constructedWith).toEqual([]);
     expect(starts).toEqual([]);
     expect(stops).toEqual([]);
+  });
+
+  it('ends an active-stalled build attempt through its local abort signal and spends one retry', async () => {
+    endAttemptOnStart = true;
+    const abortSignals: AbortSignal[] = [];
+    let buildCalls = 0;
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName, _state, options): Promise<StepRunResult> => {
+        if (step !== 'build') return { success: true };
+        buildCalls++;
+        if (options?.abortSignal) abortSignals.push(options.abortSignal);
+        return options?.abortSignal?.aborted
+          ? { success: false, output: 'attempt ended by active stall' }
+          : { success: true };
+      }),
+    };
+    const stalls: Array<Extract<import('../src/types/events.js').ConductorEvent, { type: 'build_stall' }>> = [];
+    events.on('build_stall', (event) => stalls.push(event));
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      fromStep: 'build',
+      maxRetries: 2,
+    });
+
+    await conductor.run();
+
+    expect(buildCalls).toBe(2);
+    expect(abortSignals).toHaveLength(2);
+    expect(abortSignals[0]?.aborted).toBe(true);
+    expect(abortSignals[1]?.aborted).toBe(false);
+    expect(stalls).toEqual([expect.objectContaining({ reason: 'active_stall' })]);
   });
 });
