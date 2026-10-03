@@ -48,6 +48,28 @@ multi-worker claim). 9.3b must not build that now, but must not foreclose it eit
 5. **Poll-on-launch + standalone `engineer poll` subcommand.** The harness supervises no
    always-on process; the operator may cron `engineer poll` if they want background capture.
 
+
+   > **Amended 2026-10-02 by #2733:** decision 4's lock-free atomic-rename claim does not survive
+   > a claimer that dies mid-walk: the banded walk renames every pending envelope to `.claimed`
+   > and only a `finally` releases them, so a killed `compose claim` strands its whole batch
+   > (129 strands observed 2026-09-24). The rename primitive stays the per-envelope single-winner
+   > mechanism; one decision is added:
+   >
+   > 6. **The claim walk runs under an intake claim lease, and reconciles orphans first.**
+   >    `compose claim` acquires a dedicated `createConductStateLease` instance on the intake inbox
+   >    (pid owner, dead-owner recovery, bounded wait) before its walk and releases it on return.
+   >    While holding it, and before walking, every `.claimed` envelope whose ledger entry is
+   >    `pending` is released back to `.json`. This is safe because a successful claim acks
+   >    (deletes) the winning envelope before moving its ledger entry to `claimed`, and the claim
+   >    walk is the only producer of `.claimed` envelopes, so under the lease such a pairing can
+   >    only be a dead walk's strand. A concurrent claim that cannot acquire the lease within the
+   >    bound fails with a "claim in progress" error naming the owner pid; it never walks unguarded.
+   >    The lease is not `daemon-lock.ts` and is independent of the ledger lease, which stays
+   >    short-held per ledger operation and is only ever taken inside the claim lease.
+   >    `.claimed` envelopes whose ledger entry is `done` or absent are out of scope.
+   >    This is not the #243 session claim lease (`adr-2026-07-22-heartbeat-lease-deferred`): it is held
+   >    only for one `compose claim` command, and the accepted duplicate-processing window is unchanged.
+
 ## Rationale
 - Processing is human-gated, so for **re-queryable pull sources** capture latency is irrelevant —
   a background poller buys no throughput at solo scale and adds a supervised process + concurrency
