@@ -41,13 +41,14 @@ charge budgets. Events extend the existing union/emitter/persister.
 The inspected base exposes v1/v2 case records, explicit v2 writers in PRD capture/offers/migration/
 coordination, StepRunOptions.remediationRequest, and typed as-built projection/clear paths. These
 are verified source facts. New review-history files below are proposed implementation locations,
-not claims that these modules already exist. Consume a subsequently landed PRD typed contract via
-its public adapter; do not implement #2521's parser migration. Cross-gate equivalence and combined
+not claims that these modules already exist. Consume #2521's landed PRD typed contract via its public
+adapter (`prd-audit-projection.ts`, `prd-audit-verdict-store.ts`); do not reimplement its parser migration. Cross-gate equivalence and combined
 routing remain out of scope. There are no unconfirmed load-bearing environment assumptions.
 
 ## Prerequisites and execution discipline
 
 - Accepted stories, approved D1-D12 and approved older-contract amendments, clean conflict report.
+- #2521 (PRD-audit typed verdict and input projection) and #2464 (lifecycle-scoped build_review source uniqueness) have merged; #2440 is blocked_by both. Tasks 1, 11, 12, and 38 build on their landed modules.
 - Preserve current #2429 widening authority, #2188 typed as-built behavior, #2753 repair settlement,
   and #1831 repair obligations through their existing seams. No external service is needed.
 - Every task uses scoped RED/GREEN via `ai-conductor scoped-run <listed test path>`. The engine's
@@ -82,15 +83,16 @@ routing remain out of scope. There are no unconfirmed load-bearing environment a
 **Steps:**
 1. Add a failing integration fixture in `src/conductor/test/engine/review-history-store.test.ts` for the criteria and observable checks below; use injected adapters and isolated temporary state at the named boundary.
 2. Confirm RED through `ai-conductor scoped-run src/conductor/test/engine/review-history-store.test.ts`.
-3. Add separate prd_audit and architecture_review_as_built history records to the v3 envelope. Normalize supported v1/v2 under mutate; preserve feature identity, full cases/effects/suppressions/widening provenance. Engine-owned occurrence and case ids include domain ownership. Compare before/after record inventories and reread with a fresh store instance.
+3. Add separate prd_audit and architecture_review_as_built history records to the v3 envelope. Normalize supported v1/v2 under mutate; preserve feature identity, full cases/effects/suppressions/widening provenance. Engine-owned occurrence and case ids include domain ownership. Compare before/after record inventories and reread with a fresh store instance. Preserve #2464's lifecycle-scoped source uniqueness: several resolved build_review cases per source and their `distinctFrom` links survive, and the v3 envelope passes the remediation-case validator.
 4. Confirm GREEN through the same scoped selector and commit this behavior with message `feat(review-history): add the v3 history envelope and lossless migration`.
 
 **Done when:**
 - The integration fixture `S1H1` in `src/conductor/test/engine/review-history-store.test.ts` exercises RemediationCaseStore.mutate and its persisted v3 reader: Given a feature with supported older history containing build-review cases, effects, suppressions, and PRD widening provenance, when history is upgraded, then every original record and reference remains attributable to the same feature with unchanged authority.
 - The integration fixture `S1H3` in `src/conductor/test/engine/review-history-store.test.ts` exercises RemediationCaseStore.mutate and its persisted v3 reader: Given both review gates have a finding with the same report-local label, when their histories are recorded and reread after restart, then their observations remain separate and neither gate inherits the other's relationships or approval.
 - The v3 migration reaches the existing leased atomic replacement and retains immutable original observations, subsequent observations, decisions by reference, repair facts, resolution/reopening evidence, and receipts; no second storage path is created.
+- Upgrading v2 state that holds several resolved build_review cases for one source with `distinctFrom` links keeps every case, link, and relation unchanged, and the upgraded envelope passes `remediation-case-validator.ts` without a source-uniqueness violation.
 
-**Files:** `src/conductor/src/engine/remediation-case-store.ts`, `src/conductor/src/engine/remediation-case-artifact.ts`, `src/conductor/src/engine/review-history-contract.ts`, `src/conductor/test/engine/review-history-store.test.ts`
+**Files:** `src/conductor/src/engine/remediation-case-store.ts`, `src/conductor/src/engine/remediation-case-artifact.ts`, `src/conductor/src/engine/remediation-case-validator.ts`, `src/conductor/src/engine/review-history-contract.ts`, `src/conductor/test/engine/review-history-store.test.ts`
 
 ### Task 2: Preserve v3 in existing domain writers
 **Story:** 1 (S1H2)
@@ -256,7 +258,7 @@ routing remain out of scope. There are no unconfirmed load-bearing environment a
 **Steps:**
 1. Add a failing integration fixture in `src/conductor/test/engine/review-history-projection.test.ts` for the criteria and observable checks below; use injected adapters and isolated temporary state at the named boundary.
 2. Confirm RED through `ai-conductor scoped-run src/conductor/test/engine/review-history-projection.test.ts`.
-3. Build immutable per-gate history after original PRD decision capture. Thread it through StepRunOptions and group-core member options into step-runners and the as-built input projection. Preserve all open/resolved/absent/uncertain/reopened records and provenance. Extend the two existing review skills with judgment-only use of supplied history; schemas and file recipes stay engine-owned. Capture production dispatch inputs with fake runners, then terminate at that boundary.
+3. Build immutable per-gate history after original PRD decision capture. Thread it through StepRunOptions and group-core member options into step-runners, the as-built input projection, and #2521's typed PRD-audit input projection. Preserve all open/resolved/absent/uncertain/reopened records and provenance. Extend the two existing review skills with judgment-only use of supplied history, building on their existing re-review-lap guidance (#2932) rather than restating it; schemas and file recipes stay engine-owned. Capture production dispatch inputs with fake runners, then terminate at that boundary.
 4. Confirm GREEN through the same scoped selector and commit this behavior with message `feat(review-history): thread immutable complete history into both review shapes`.
 
 **Done when:**
@@ -264,8 +266,9 @@ routing remain out of scope. There are no unconfirmed load-bearing environment a
 - The integration fixture `S4H2` in `src/conductor/test/engine/review-history-projection.test.ts` exercises the review-history projection and StepRunOptions dispatch boundary: Given equivalent feature state is reviewed serially or in a concurrent validation group, when the reviewers are dispatched, then each receives the same gate-local history content and authority for the same evidence snapshot.
 - The integration fixture `S4H3` in `src/conductor/test/engine/review-history-projection.test.ts` exercises the review-history projection and StepRunOptions dispatch boundary: Given both gates run concurrently, when one gate's history differs from the other's, then each input remains attributable to its intended member with no transfer of sibling-only case authority.
 - The integration fixture `S4N3` in `src/conductor/test/engine/review-history-projection.test.ts` exercises the review-history projection and StepRunOptions dispatch boundary: Given a sibling gate changes after one member's immutable input was prepared, when that member is dispatched, then it receives its own prepared history and never the sibling's replacement context.
+- PRD-audit history reaches the provider only through `prd-audit-projection.ts`, the typed PRD-audit input projection; no parallel prompt path carries it.
 
-**Files:** `src/conductor/src/engine/review-history-projection.ts`, `src/conductor/src/engine/conductor.ts`, `src/conductor/src/engine/group-core.ts`, `src/conductor/src/engine/step-runners.ts`, `src/conductor/src/engine/as-built-projection.ts`, `skills/prd-audit/SKILL.md`, `skills/architecture-review/SKILL.md`, `src/conductor/test/engine/review-history-projection.test.ts`
+**Files:** `src/conductor/src/engine/review-history-projection.ts`, `src/conductor/src/engine/conductor.ts`, `src/conductor/src/engine/group-core.ts`, `src/conductor/src/engine/step-runners.ts`, `src/conductor/src/engine/as-built-projection.ts`, `src/conductor/src/engine/prd-audit-projection.ts`, `skills/prd-audit/SKILL.md`, `skills/architecture-review/SKILL.md`, `src/conductor/test/engine/review-history-projection.test.ts`
 
 ### Task 12: Enforce complete history limits without trimming
 **Story:** 4 (S4H4, S4N2)
@@ -275,15 +278,16 @@ routing remain out of scope. There are no unconfirmed load-bearing environment a
 **Steps:**
 1. Add a failing unit fixture in `src/conductor/test/engine/review-history-projection.test.ts` for the criteria and observable checks below; use injected adapters and isolated temporary state at the named boundary.
 2. Confirm RED through `ai-conductor scoped-run src/conductor/test/engine/review-history-projection.test.ts`.
-3. Count UTF-8 bytes and all nested decisions/attempts/evidence in the serialized projection. Constants: 512 current sources/gate,128 cases/gate,512 observations/case,64 references/source or resolution,256 bytes/identifier,8000 bytes/prose field,512 KiB history/reconciliation input. Keep existing PRD/as-built contract bounds independently. Test exact-boundary and boundary-plus-one values, including multibyte text.
+3. Count UTF-8 bytes and all nested decisions/attempts/evidence in the serialized projection. Constants: 512 current sources/gate,128 cases/gate,512 observations/case,64 references/source or resolution,256 bytes/identifier,8000 bytes/prose field,512 KiB history/reconciliation input. Keep existing PRD/as-built contract bounds independently, and size #2521's PRD-audit input total (its D7.2) to accommodate the 512 KiB history component plus envelope overhead. Test exact-boundary and boundary-plus-one values, including multibyte text.
 4. Confirm GREEN through the same scoped selector and commit this behavior with message `feat(review-history): enforce complete history limits without trimming`.
 
 **Done when:**
 - The unit fixture `S4H4` in `src/conductor/test/engine/review-history-projection.test.ts` exercises the review-history projection and StepRunOptions dispatch boundary: Given inputs fit all approved history limits, including values exactly at an individual boundary while other dimensions fit, when prepared, then they are retained completely; the gate's pre-existing input requirements remain enforced.
 - The unit fixture `S4N2` in `src/conductor/test/engine/review-history-projection.test.ts` exercises the review-history projection and StepRunOptions dispatch boundary: Given any approved count or byte bound is exceeded, when input is prepared, then the result names the dimension, actual value, and limit and preserves the untrimmed stored history without a provider call.
 - The projection tests enforce exactly these limits without trimming: 512 current sources per gate, 128 cases per gate, 512 observations per case, 64 evidence references per source/resolution, 256 UTF-8 bytes per identifier/reference, 8000 bytes per prose field, and 512 KiB total serialized history/reconciliation input; decisions, attempts, and evidence count toward the total and prior review-contract limits remain independently enforced.
+- A PRD-audit input whose history sits exactly at 512 KiB, with every other component within its documented limit, passes the PRD-audit projection total; the history dimension alone over its limit is named as history, not as the projection total.
 
-**Files:** `src/conductor/src/engine/review-history-contract.ts`, `src/conductor/src/engine/review-history-projection.ts`, `src/conductor/test/engine/review-history-projection.test.ts`
+**Files:** `src/conductor/src/engine/review-history-contract.ts`, `src/conductor/src/engine/review-history-projection.ts`, `src/conductor/src/engine/prd-audit-projection.ts`, `src/conductor/test/engine/review-history-projection.test.ts`
 
 ### Task 13: Stop projection on missing evidence or capture failure
 **Story:** 4 (S4N1, S4N4)
@@ -524,15 +528,16 @@ routing remain out of scope. There are no unconfirmed load-bearing environment a
 **Steps:**
 1. Add a failing integration fixture in `src/conductor/test/engine/review-history-coordinator.test.ts` for the criteria and observable checks below; use injected adapters and isolated temporary state at the named boundary.
 2. Confirm RED through `ai-conductor scoped-run src/conductor/test/engine/review-history-coordinator.test.ts`.
-3. Inject case replacement and completion-reference failures independently. Distinguish missing/mismatched receipt from a recoverable matching write. Hook existing rebase/invalidation eligibility into receipt consumption without deleting history; raw review invalidation cannot be overridden by retained cases.
+3. Inject case replacement and completion-reference failures independently. Distinguish missing/mismatched receipt from a recoverable matching write. Hook existing rebase/invalidation eligibility into receipt consumption without deleting history; raw review invalidation cannot be overridden by retained cases. Key receipt code/diff identity to the gate's rebase-translated code stamp, so a gate the rebase preserves (document inputs unchanged, no regrade judged) keeps its receipt.
 4. Confirm GREEN through the same scoped selector and commit this behavior with message `feat(review-history): keep failed publications and invalidated receipts non-publishable`.
 
 **Done when:**
 - The integration fixture `S8N2` in `src/conductor/test/engine/review-history-coordinator.test.ts` exercises the review-history coordinator and its gate-local publication transition: Given history replacement or the completion-reference write fails, when execution stops, then no incomplete batch qualifies a gate and the recoverable persisted state identifies which publication step remains incomplete.
 - The integration fixture `S8N3` in `src/conductor/test/engine/review-history-coordinator.test.ts` exercises the review-history coordinator and its gate-local publication transition: Given a current reference names a missing or mismatched receipt, when reuse is attempted, then no success is granted and the named inconsistency remains recoverable.
 - The integration fixture `S8N4` in `src/conductor/test/engine/review-history-coordinator.test.ts` exercises the review-history coordinator and its gate-local publication transition: Given rebase or normal invalidation makes current review evidence unusable, when reuse is considered, then its existing authority rules prevent reuse while the historical cases remain available for fresh review.
+- After a file-changing rebase that preserves a done `prd_audit` or `architecture_review_as_built` gate (document inputs unchanged, regrade not judged necessary), its matching receipt remains eligible against the rebase-translated code stamp, effective completion holds, and no review is redispatched; a rebase that reopens the gate makes the receipt ineligible.
 
-**Files:** `src/conductor/src/engine/review-history-coordinator.ts`, `src/conductor/src/engine/review-history-recovery.ts`, `src/conductor/src/engine/review-history-completion.ts`, `src/conductor/src/engine/artifacts.ts`, `src/conductor/test/engine/review-history-coordinator.test.ts`
+**Files:** `src/conductor/src/engine/review-history-coordinator.ts`, `src/conductor/src/engine/review-history-recovery.ts`, `src/conductor/src/engine/review-history-completion.ts`, `src/conductor/src/engine/artifacts.ts`, `src/conductor/src/engine/gate-code-validity.ts`, `src/conductor/test/engine/review-history-coordinator.test.ts`
 
 ### Task 27: Import actual admission receipts idempotently
 **Story:** 9 (S9H1, S9H4, S9N1)
@@ -735,14 +740,15 @@ routing remain out of scope. There are no unconfirmed load-bearing environment a
 **Steps:**
 1. Add a failing integration fixture in `src/conductor/test/engine/review-history-rendering.test.ts` for the criteria and observable checks below; use injected adapters and isolated temporary state at the named boundary.
 2. Confirm RED through `ai-conductor scoped-run src/conductor/test/engine/review-history-rendering.test.ts`.
-3. Add one deterministic history view renderer used by current PRD/as-built and shipped projections. Keep original raw evidence separate; expose references, reasons, attempts, current resolution, and acknowledged legacy gap. Mark generated PRD history as engine-owned projection so the existing raw parser cannot ingest it as reviewer findings. No new Markdown judgment parser.
+3. Add one deterministic history view renderer used by current PRD/as-built and shipped projections. Keep original raw evidence separate; expose references, reasons, attempts, current resolution, and acknowledged legacy gap. Mark generated PRD history as engine-owned projection so #2521's typed PRD verdict store cannot ingest it as reviewer findings. No new Markdown judgment parser.
 4. Confirm GREEN through the same scoped selector and commit this behavior with message `feat(review-history): render source-case history without granting text authority`.
 
 **Done when:**
 - The integration fixture `S12H1` in `src/conductor/test/engine/review-history-rendering.test.ts` exercises the review-history renderer consumed by current and shipped views: Given a finding is reconciled, reused, resolved, reopened, or uncertain, when its human-readable current/shipped view is produced, then it names the source and case references, reason, relevant repair outcome, and any acknowledged legacy gap without replacing the original reviewer evidence.
 - The integration fixture `S12N2` in `src/conductor/test/engine/review-history-rendering.test.ts` exercises the review-history renderer consumed by current and shipped views: Given rendered report text is edited or contains history-like material, when effective completion is read, then it cannot create relationships or approvals; derived as-built text and generated history sections are not reparsed as authority.
+- A PRD report carrying a rendered history section is read through `prd-audit-verdict-store.ts` with the same typed findings as without it.
 
-**Files:** `src/conductor/src/engine/review-history-renderer.ts`, `src/conductor/src/engine/as-built-verdict-store.ts`, `src/conductor/src/engine/shipped-record.ts`, `src/conductor/src/engine/artifacts.ts`, `src/conductor/src/engine/review-history-completion.ts`, `src/conductor/test/engine/review-history-rendering.test.ts`
+**Files:** `src/conductor/src/engine/review-history-renderer.ts`, `src/conductor/src/engine/as-built-verdict-store.ts`, `src/conductor/src/engine/prd-audit-verdict-store.ts`, `src/conductor/src/engine/shipped-record.ts`, `src/conductor/src/engine/artifacts.ts`, `src/conductor/src/engine/review-history-completion.ts`, `src/conductor/test/engine/review-history-rendering.test.ts`
 
 ### Task 39: Emit attributable transitions on the existing spine
 **Story:** 12 (S12H2, S12N1)

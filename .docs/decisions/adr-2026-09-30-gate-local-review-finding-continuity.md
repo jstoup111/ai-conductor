@@ -42,6 +42,8 @@ First use with no evidence of an earlier gate is explicitly fresh. Before upgrad
 
 For valid legacy stores only, recovery may offer an explicit new coverage boundary at the current review: persist a feature/gate/input-digest-bound offer in existing conduct-state, capture an attributed operator choice and rationale through the existing HALT/cleared-decision pattern, and record the acknowledged gap permanently. An unedited clear grants nothing. This acknowledgement approves starting history coverage here, never the findings, a widening, or a gate pass. It cannot discard known records, apply to already-enrolled lost history, or repair corrupt/foreign state. Corrupt or lost enrolled history requires restoration of matching evidence; preserve damaged bytes.
 
+The lossless v1/v2→v3 migration also preserves #2464's lifecycle-scoped `build_review` source uniqueness (adr-2026-09-07-durable-prd-widening-decision-reconciliation D2.1): every resolved case for a source, its links, and its `distinctFrom` relations survive the upgrade unchanged, and the upgraded envelope passes the existing remediation-case validator.
+
 ### D3 — Occurrence identity is not semantic identity
 
 Engine source IDs identify immutable occurrences using feature, gate, contract, reviewed snapshot, and row/field identity. Report-local NC/as-built IDs and text changes are not case identity. Preserve full original and current evidence plus governing references; hashes detect replay/freshness, never substantive equivalence.
@@ -55,6 +57,8 @@ Prepare gate-local history before serial dispatch and before validation-group fa
 Include all cases of that gate: open, resolved, absent, uncertain, and reopened; original/current observations; authoritative decision references; admitted repair task IDs and attempts with actual state; resolution evidence; acknowledged legacy gaps; and governing criterion/ADR/plan references. Both review skills use it as evidence. A reviewer judges the present implementation, cannot claim historic text alone proves equivalence, and cannot author engine IDs or operator decisions.
 
 Approved initial explicit engineering limits: 512 current finding sources per gate; 128 cases per gate; 512 retained observations per case; 64 evidence references per source or resolution; 256 UTF-8 bytes per identifier/reference; 8,000 bytes per prose field; and 512 KiB total serialized history/reconciliation projection per gate. These are design constants, not measured capacity claims. Count all included arrays, decisions, attempts, and evidence toward the total; independently preserve existing review-contract bounds. Overflow names the dimension, actual size, and limit and halts without truncation or pruning. No history is silently selected away to fit.
+
+PRD-audit history enters the typed PRD-audit input projection that #2521 introduces, not a parallel prompt path. The 512 KiB per-gate history allowance is a documented component of that projection's total under adr-2026-09-07-durable-prd-widening-decision-reconciliation D7.2, so the PRD total accommodates it plus envelope overhead; each bound still names its own dimension, actual, and limit on overflow.
 
 ### D5 — Typed reconciliation through existing provider dispatch
 
@@ -81,6 +85,8 @@ Do not hold leases across provider calls. Under case-store mutation, recheck the
 Persist current observations, relationships, case transitions, and the batch receipt atomically. The receipt distinguishes the pre-judgment revision from its own post-publication revision; replay must not invalidate itself merely because publication added history. Unrelated or later changes to the relevant gate/decision/repair evidence do invalidate it. Concurrent authority changes reject stale results without losing prior decisions.
 
 Then persist the matching checkpoint/completion reference through the existing state owner. A crash after case publication reuses the receipt and completes the checkpoint without another judgment or effect. A missing/mismatched receipt or checkpoint is non-publishable; recover from matching persisted evidence or stop. Rebase and gate invalidation discard effective-use eligibility when their existing authority rules require it, but retain case history for fresh review. Neither replay nor history presence marks a gate done by itself.
+
+The frozen code/diff identity follows the gate's rebase-translated code stamp. When a file-changing rebase preserves a completed `prd_audit` or `architecture_review_as_built` gate under adr-2026-07-20-post-rebase-delta-aware-invalidation (its document inputs are unchanged and no regrade is judged necessary), its matching receipt stays eligible against the translated identity, with no fresh judgment and no redispatch. When that rebase reopens the gate, the receipt loses effective-use eligibility while case history is retained.
 
 ### D8 — Record repair attempts at existing owners
 
@@ -115,6 +121,8 @@ Shared engine contracts and production adapters serve both Claude and Codex. Ski
 This feature includes state migration, gate inputs/results, repair-history capture, both execution shapes, objective completion/reuse integration, human-readable traceability, recovery guidance, and relevant README/reference/runbook updates. It excludes new routing/budget policy, cross-gate matching, build-review rubric changes, and the outstanding parser migrations.
 
 As part of this approved DECIDE pass before stories/BUILD, add beside #2429 D2 an amendment authorizing v3 and preservation of the two new history domains while retaining its authority constraints. Add beside the as-built bounded-route ADR D6/D7 an amendment requiring complete durable history to retain known finding/repair facts before the existing pending projection is cleared. Preserve original text and use the harness additive amendment form. This does not move those corrections into BUILD tasks or amend unrelated historical statements. The typed-as-built ADR already reserves new history for #2440; apply its existing native-contract/authority decisions.
+
+For PRD audit, the parser migration has landed as #2521's typed verdict; the rendered PRD history view is a human projection that the typed PRD verdict store never ingests as reviewer findings; no Markdown judgment parser is introduced or relied on.
 
 > **Amended 2026-09-30 by #2440 (operator-approved conflict resolution):** D12 also requires the narrow compatibility corrections recorded in this feature's conflict report: qualify older PRD/as-built raw-routing and satisfaction clauses with D6/D9; qualify concurrent-group D5 with the branch-validation/join-satisfaction split in D7/D9; correct the older accepted routing, stale-reuse, projection, and clear stories in place. This records the same approved behavior at its older contracts, without changing budgets, review ownership, or raw validation.
 
