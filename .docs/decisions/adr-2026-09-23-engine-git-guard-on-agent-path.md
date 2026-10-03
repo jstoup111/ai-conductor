@@ -114,6 +114,12 @@ Option A.
    > #1354's tests name. Parsing every other spelling git accepts is delivered by #2904. That
    > includes global options such as `--config-env=<name>=<envvar>` and alias text quoted the way
    > git quotes it. Until #2904 ships, those spellings are a recorded limit under D10.
+
+   > **Amended 2026-10-03 by #1354 (operator decision):** the shipped guard already classifies the
+   > `--config-env`, `--attr-source` and `--super-prefix` global options and splits alias text the
+   > way git quotes it, delivered by this feature's remediation tasks ahead of #2904. Those spellings
+   > are therefore not a recorded limit under D10, and the D10 control inventory says so. Every other
+   > non-canonical spelling, such as `branch -d -f` or `-df`, stays a recorded limit until #2904.
 6. **Every refusal explains itself.** It exits non-zero without running `git`. Its stderr names the
    refused operation, why it is refused, and the safe alternative: `--force-with-lease`,
    `reset --keep`, `branch -d`, `clean -n`, or committing a WIP first or using a temporary worktree.
