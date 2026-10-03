@@ -45,7 +45,7 @@ import { ensureRunning, type EnsureRunningOpts } from './daemon-lock.js';
 // deterministic engineer commands and the interactive launch pre-poll.
 import { brainLoopAlive } from './engineer/brain-liveness.js';
 import { CorruptLedgerError, createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
-import { createFileQueue } from './engineer/intake/queue.js';
+import { createFileQueue, type FileIntakeQueue } from './engineer/intake/queue.js';
 import {
   createGithubIntakeAuthorization,
   createGithubIssuesAdapter,
@@ -486,6 +486,8 @@ export interface DispatchEngineerOpts {
   engineerDir?: string;
   /** Bound the intake claim lease wait; production uses the five-minute default. */
   intakeClaimLeaseWaitMs?: number;
+  /** Injectable file queue for claim recovery fault tests; production creates the inbox queue. */
+  intakeFileQueue?: FileIntakeQueue;
   /** Print to stdout (default: process.stdout.write). */
   print?: (s: string) => void;
   /** Print to stderr (default: process.stderr.write). */
@@ -1509,7 +1511,8 @@ export async function dispatchEngineer(
     // and heal stale entries (duplicate envelopes, delivered PRs) transparently.
     case 'claim': {
       const engDir = engineerDir ?? resolveEngineerDir({});
-      const { ledger, queue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr, events: opts.events });
+      const { ledger, queue: productionQueue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr, events: opts.events });
+      const queue = opts.intakeFileQueue ?? productionQueue;
 
       // Resolve the project-level config (`.ai-conductor/config.yml` at cwd) so an
       // operator's `stale_claim_window_hours` override reaches the reap pass below —
@@ -1518,7 +1521,8 @@ export async function dispatchEngineer(
       const claimConfigResult = await loadConfig(process.cwd());
       const claimConfig = claimConfigResult.ok ? claimConfigResult.config : undefined;
 
-      return withIntakeClaimLease(engDir, async () => {
+      try {
+        return await withIntakeClaimLease(engDir, async () => {
         const reconciliation = await reconcileStrandedClaims({ queue, ledger });
         if (reconciliation.released.length > 0) {
           printErr(`released ${reconciliation.released.length} stranded intake claim(s)`);
@@ -1598,7 +1602,12 @@ export async function dispatchEngineer(
           }),
         );
         return 0;
-      }, { waitTimeoutMs: opts.intakeClaimLeaseWaitMs ?? INTAKE_CLAIM_LEASE_WAIT_MS });
+        }, { waitTimeoutMs: opts.intakeClaimLeaseWaitMs ?? INTAKE_CLAIM_LEASE_WAIT_MS });
+      } catch (error: unknown) {
+        if (error instanceof CorruptLedgerError) return reportCorruptLedger(error);
+        printErr(`engineer claim: ${error instanceof Error ? error.message : String(error)}`);
+        return 1;
+      }
     }
 
     // ── forget ──────────────────────────────────────────────────────────────────
