@@ -6,6 +6,7 @@ import { execa } from 'execa';
 import { planTaskDigests } from '../../src/engine/plan-task-parse.js';
 // Covers: task:3, task:5
 import { seedTaskStatus } from '../../src/engine/task-seed.js';
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
 
 const reopenObservation = vi.hoisted(() => ({
   active: false,
@@ -1167,6 +1168,69 @@ The plan text changed after implementation.
       expect(repairs.records[secondId]).toMatchObject({
         planIdentity: '.docs/plans/second.md', settlement: 'settled', tasks: { '1': { status: 'open' } },
       });
+    });
+  });
+
+  describe('Task 13: resolved matching-digest builds stay closed', () => {
+    it('completes without an obligation, then remains closed after an unchanged rewind-to-build re-seed', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const planText = `# Plan
+
+### Task 1: First completed task
+**Story:** 3
+
+### Task 2: Second completed task
+**Story:** 3
+`;
+      const digests = Object.fromEntries(planTaskDigests(planText));
+
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(planPath, planText);
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [
+          { id: '1', name: 'First completed task', status: 'completed', commit: 'already-complete' },
+          { id: '2', name: 'Second completed task', status: 'skipped', commit: 'already-complete' },
+        ],
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: planPath,
+        taskDigests: { version: 1, byPlan: { '.docs/plans/test.md': digests } },
+      }));
+
+      reopenObservation.active = true;
+      reopenObservation.events = [];
+      reopenObservation.restageCalls = 0;
+      try {
+        await seedTaskStatus(dir, planPath);
+        expect(await checkStepCompletion(dir, 'build', {
+          projectRoot: dir,
+          planPath,
+        })).toEqual({ done: true });
+
+        // A plain rewind to BUILD changes orchestration state, not plan text
+        // or task status. BUILD entry therefore re-seeds this same state.
+        await seedTaskStatus(dir, planPath);
+        expect(await checkStepCompletion(dir, 'build', {
+          projectRoot: dir,
+          planPath,
+        })).toEqual({ done: true });
+      } finally {
+        reopenObservation.active = false;
+      }
+
+      // The predicate re-seeds at each BUILD entry as well; every observed
+      // repair-store interaction must therefore still be absent.
+      expect(reopenObservation.events).toHaveLength(4);
+      expect(reopenObservation.events).toEqual(
+        Array.from({ length: 4 }, () => 'recordTaskDigests'),
+      );
+      expect(reopenObservation.restageCalls).toBe(0);
+      expect(JSON.parse(await fsPromises.readFile(statusPath, 'utf8')).tasks).toEqual([
+        expect.objectContaining({ id: '1', status: 'completed' }),
+        expect.objectContaining({ id: '2', status: 'skipped' }),
+      ]);
     });
   });
 
