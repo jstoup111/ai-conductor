@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-03T07:36:36.330Z
 Slug: durable-otel-export-queue-telemetry-is-buffered-wh
 Class: needs-human
 Halting step: unknown
