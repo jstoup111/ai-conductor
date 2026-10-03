@@ -988,6 +988,130 @@ describe('repair-obligation residue citations (Task 7)', () => {
   });
 });
 
+describe('plan_amendment repair-boundary translation (S1.14)', () => {
+  it('translates an open plan_amendment obligation to its rebased first-parent successor', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'rebase-plan-amendment-successor-'));
+    const residueSha = '1111111111111111111111111111111111111111';
+    const successorPreImageSha = '2222222222222222222222222222222222222222';
+    const successorPostImageSha = '3333333333333333333333333333333333333333';
+    const obligationId = 'plan_amendment:.docs/plans/feature.md:9:digest';
+
+    try {
+      await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+      await writeFile(join(projectRoot, '.pipeline', 'engine-state.json'), JSON.stringify({
+        repairObligations: {
+          version: 1,
+          records: {
+            [obligationId]: {
+              id: obligationId,
+              planIdentity: '.docs/plans/feature.md',
+              taskIds: ['9'],
+              source: {
+                findingId: 'digest',
+                authority: 'plan_amendment',
+                instruction: 'Task 9 plan text changed since it was implemented; reopen it in BUILD.',
+              },
+              baseline: { head: residueSha, tree: 'tree', resolvedTaskIds: [] },
+              settlement: 'settled',
+              tasks: { '9': { status: 'open' } },
+            },
+          },
+          currentByPlan: { '.docs/plans/feature.md': { '9': obligationId } },
+          admissionsByPlan: {},
+        },
+      }));
+      const fakeGit = makeFakeGit({
+        revList: {
+          'onto..orig-head': [successorPreImageSha, residueSha],
+          'onto..new-head': [successorPostImageSha],
+        },
+        show: {
+          [residueSha]: 'absorbed plan amendment boundary',
+          [successorPreImageSha]: 'surviving successor',
+          [successorPostImageSha]: 'surviving successor',
+        },
+        patchId: {
+          'absorbed plan amendment boundary': 'absorbed',
+          'surviving successor': 'survivor',
+        },
+      });
+      const git: GitRunner = async (args, options) => args.includes('--first-parent')
+        ? { exitCode: 0, stdout: `${residueSha}\n${successorPreImageSha}\n`, stderr: '' }
+        : fakeGit(args, options);
+
+      await translateAfterRebase(git, projectRoot, 'onto', 'orig-head', 'new-head');
+
+      const state = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf8'));
+      expect(state.repairObligations.records[obligationId]).toMatchObject({
+        source: { authority: 'plan_amendment' },
+        baseline: { head: successorPostImageSha },
+        tasks: { '9': { status: 'open' } },
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves a no-successor plan_amendment obligation open without admitting its old boundary evidence', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'rebase-plan-amendment-residue-'));
+    const residueSha = '4444444444444444444444444444444444444444';
+    const obligationId = 'plan_amendment:.docs/plans/feature.md:9:digest';
+
+    try {
+      await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+      await writeFile(join(projectRoot, '.pipeline', 'engine-state.json'), JSON.stringify({
+        repairObligations: {
+          version: 1,
+          records: {
+            [obligationId]: {
+              id: obligationId,
+              planIdentity: '.docs/plans/feature.md',
+              taskIds: ['9'],
+              source: {
+                findingId: 'digest',
+                authority: 'plan_amendment',
+                instruction: 'Task 9 plan text changed since it was implemented; reopen it in BUILD.',
+              },
+              baseline: { head: residueSha, tree: 'tree', resolvedTaskIds: ['9'] },
+              settlement: 'settled',
+              tasks: { '9': { status: 'open' } },
+            },
+          },
+          currentByPlan: { '.docs/plans/feature.md': { '9': obligationId } },
+          admissionsByPlan: {},
+        },
+      }));
+      const git = makeFakeGit({
+        revList: { 'onto..orig-head': [residueSha], 'onto..new-head': [] },
+        show: { [residueSha]: 'unmatched plan amendment boundary' },
+        patchId: { 'unmatched plan amendment boundary': 'unmatched' },
+      });
+
+      await translateAfterRebase(
+        git,
+        projectRoot,
+        'onto',
+        'orig-head',
+        'new-head',
+        new ConductorEventEmitter(),
+      );
+
+      const state = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf8'));
+      expect(state.repairObligations.records[obligationId]).toMatchObject({
+        source: { authority: 'plan_amendment' },
+        baseline: { head: residueSha, resolvedTaskIds: ['9'] },
+        tasks: { '9': { status: 'open' } },
+      });
+      const persisted = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'rebase-residue.json'), 'utf8'));
+      expect(persisted.residue).toEqual(expect.arrayContaining([
+        expect.objectContaining({ sha: residueSha, citingObligationIds: [obligationId] }),
+      ]));
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('resolveThroughMap — module contract: never maps a non-key sha (Task 13)', () => {
   // This is the structural no-laundering gate: `resolveThroughMap` is a
   // strict map-key lookup (see src/engine/rebase-translate.ts). A sha that
