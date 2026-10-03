@@ -309,3 +309,20 @@ Task 6 ─────────────┴─▶ Task 8 ─▶ Task 9 (al
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-ab1-1: src/conductor/src/daemon-cli.ts:1314 beginFeatureRun — pass ...(item.sourceRef ? { sourceRef: item.sourceRef } : {}) into the wireOtelVisualizer start context; add a RED-first case in src/conductor/test/daemon-otel-wiring.test.ts asserting a backlog item with sourceRef reaches the visualizer start context and an item without one omits the key (preserves Task 7's foreground behavior in visualizer-selection.test.ts)
+**Gate:** as-built
+**Rationale:** REMEDIABLE (99%): daemon-cli.ts:1314-1323 calls wireOtelVisualizer without sourceRef although item.sourceRef is available from daemon-backlog.ts:1111-1181, so daemon traces never carry conductor.source.ref; index.ts:1692 (Task 7) is the only wired caller. Swept: wireOtelVisualizer has exactly two production callers (index.ts:320, daemon-cli.ts:1314), so the daemon site is the whole remainder; approved architecture (adr-014 D20) is unchanged.
+**Parent task:** 7
+**Governing clause:** Task 7
+**Done when:**
+- Task 7 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab1-1 is complete.
+
+### Task rem-as-built-rem-ab2-1: src/conductor/src/engine/conductor.ts:6117 emitLoopHalt — compute effectivePrUrl = prUrl ?? this.haltState.pr_url and use it for both the prUrl field and resolvePrDisposition; add a RED-first case in src/conductor/test/engine/conductor-terminal-marker.test.ts for a halt with haltState.pr_url set and no prUrl argument asserting prUrl and prDisposition 'opened', keeping Task 4's no-PR-URL 'unrecorded' and no-prUrl-key case passing
+**Gate:** as-built
+**Rationale:** REMEDIABLE (98%): conductor.ts:6131-6139 emitLoopHalt derives prUrl/prDisposition only from its transient argument, ignoring this.haltState.pr_url, whereas completeRun (conductor.ts:6103-6106, Task 3) uses state.pr_url — a halt after the SHIP draft PR is stored reports 'unrecorded'; Task 4 Step 3 requires parity with Task 3, so the fix conforms to adr-014 D19 without an architecture change. Swept: emitLoopHalt is the single centralized halt seam (adr-2026-08-11 D2), so no sibling site exists.
+**Governing clause:** adr-014-otel-observability-exporter decision 19
+**Done when:**
+- adr-014-otel-observability-exporter decision 19 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-1 is complete.
