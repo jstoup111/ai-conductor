@@ -365,6 +365,40 @@ export async function withFeatureEventPersistence<T>(input: {
 /** The feature ledger every persisted event of a worktree is appended to. */
 export const FEATURE_EVENT_LOG_PATH = '.pipeline/events.jsonl';
 
+export interface SessionEventTailOwner {
+  /** Preserve the legacy synchronous stop boundary for short-lived callers. */
+  stop(): void;
+  /** Stop polling, join an in-flight read, then make one settled final pass. */
+  drain(): Promise<void>;
+}
+
+/**
+ * Own the external producer tail for one persistence lifetime. Project-scoped
+ * foreground/prelude callers use this with their existing EventPersister;
+ * feature callers use it below with their forwarding feature emitter.
+ */
+export function startSessionEventTail(
+  projectRoot: string,
+  events: ConductorEventEmitter,
+  featureSlug?: string,
+): SessionEventTailOwner {
+  const tail = new CloseoutEventTail({ projectRoot, featureSlug, events });
+  tail.start();
+  let drainPromise: Promise<void> | undefined;
+  return {
+    stop: () => tail.stop(),
+    drain: () => {
+      if (!drainPromise) {
+        drainPromise = (async () => {
+          tail.stop();
+          await tail.drain();
+        })();
+      }
+      return drainPromise;
+    },
+  };
+}
+
 export function startFeatureEventPersistence(
   worktreePath: string,
   globalEvents: ConductorEventEmitter,
@@ -380,8 +414,11 @@ export function startFeatureEventPersistence(
   // therefore the sole lifecycle owner: it starts before provider invocation
   // and drains before feature listeners detach, rather than adding a daemon
   // observer or coupling the tail to BUILD.
-  const tail = new CloseoutEventTail({ projectRoot: worktreePath, featureSlug: slug ?? basename(worktreePath), events: featureEvents });
-  tail.start();
+  const tail = startSessionEventTail(
+    worktreePath,
+    featureEvents,
+    slug ?? basename(worktreePath),
+  );
   let drainPromise: Promise<void> | undefined;
   return {
     events: featureEvents,
@@ -394,7 +431,6 @@ export function startFeatureEventPersistence(
     drain: () => {
       if (!drainPromise) {
         drainPromise = (async () => {
-          tail.stop();
           // The first poll joins any interval-triggered read already in
           // flight; the second is the bounded final pass after that read has
           // settled, so a producer record completed at the boundary is not
