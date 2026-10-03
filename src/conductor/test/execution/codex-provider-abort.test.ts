@@ -40,13 +40,13 @@ describe('CodexProvider abort handling', () => {
 
     const result = await invocation;
     const subprocessOptions = subprocessFactory.mock.calls[0]?.[2];
+    expect(result).not.toHaveProperty('sessionExpired');
     expect({
       result: {
         success: result.success,
         output: result.output,
         rateLimited: result.rateLimited,
         authFailure: result.authFailure,
-        sessionExpired: result.sessionExpired,
       },
       cancelSignal: subprocessOptions?.cancelSignal,
       forceKillAfterDelay: subprocessOptions?.forceKillAfterDelay,
@@ -56,7 +56,6 @@ describe('CodexProvider abort handling', () => {
         output: 'Codex invocation aborted.',
         rateLimited: undefined,
         authFailure: undefined,
-        sessionExpired: undefined,
       },
       cancelSignal: controller.signal,
       forceKillAfterDelay: undefined,
