@@ -52,11 +52,14 @@ describe('pre-push hook', () => {
     expect(result.exitCode).not.toBe(0); expect(result.stderr).toContain('refused push to refs/heads/main');
     expect(result.stderr).toContain('would overwrite remote history this worktree has not fetched');
     expect(result.stderr).toContain('git fetch'); expect(result.stderr).toContain('git push --force-with-lease');
+    expect(result.stdout).toBe('');
     expect((await f.git(f.bare, 'rev-parse', 'main')).stdout).toBe((await f.git(f.clone, 'rev-parse', 'main')).stdout);
   });
 
   it('allows a force update when the tracking ref proves the remote value and permits new and delete refs', async () => {
     const f = await fixture(); await commit(f, f.worktree, 'rewrite.txt');
+    expect((await f.git(f.worktree, 'push', '--force-with-lease', 'origin', 'HEAD:main')).exitCode).toBe(0);
+    await commit(f, f.worktree, 'second-rewrite.txt');
     expect((await f.git(f.worktree, 'push', '--force', 'origin', 'HEAD:main')).exitCode).toBe(0);
     await commit(f, f.worktree, 'fast-forward.txt'); expect((await f.git(f.worktree, 'push', 'origin', 'HEAD:main')).exitCode).toBe(0);
     expect((await f.git(f.worktree, 'push', 'origin', 'HEAD:new-branch')).exitCode).toBe(0);
