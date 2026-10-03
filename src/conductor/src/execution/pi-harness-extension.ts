@@ -47,7 +47,7 @@ export default function(pi: any) {
           args: { type: 'array', items: { type: 'string' } },
         },
       },
-      // Pi marks a tool result as an error only when execute throws.
+      // The host marks a tool result as an error only when execute throws.
       async execute(_toolCallId: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
         const subcommand = params?.subcommand;
         const args: string[] = Array.isArray(params?.args) ? params.args : [];
