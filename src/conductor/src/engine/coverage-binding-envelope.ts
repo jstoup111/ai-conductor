@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import { parsePlanTaskBodies, resolveCitedPlanTaskIds } from './plan-task-parse.js';
 
 export interface CoverageBindingDigestClaim {
   readonly criterion: string;
@@ -108,6 +109,10 @@ export type CoverageBindingAmendmentJudgeVerdict =
   | { readonly verdict: 'carried'; readonly taskIds: readonly string[]; readonly contradictsCompleted?: readonly string[] }
   | { readonly verdict: 'not-carried'; readonly missingObligation: string; readonly contradictsCompleted?: readonly string[] }
   | { readonly verdict: 'no-plan-obligation'; readonly contradictsCompleted?: readonly string[] };
+
+export type CoverageBindingConflictJudgeVerdict =
+  | { readonly verdict: 'consistent' }
+  | { readonly verdict: 'conflicts'; readonly taskIds: readonly string[]; readonly conflict: string };
 
 /** Session-fresh, engine-stamped completion evidence for coverage_binding. */
 export interface CoverageBindingEnvelope {
@@ -420,6 +425,74 @@ export function parseAmendmentBatchPayload(
     verdicts.set(digest, verdict.value);
   }
   for (const [id, digest] of issuedIds) if (!answered.has(id)) return { ok: false, reason: `amendment batch verdict is missing issued claim id ${id} (${digest})` };
+  return { ok: true, verdicts };
+}
+
+function parseConflictJudgePayloadValue(
+  value: unknown,
+  planTaskIds: ReadonlySet<string>,
+): { ok: true; value: CoverageBindingConflictJudgeVerdict } | { ok: false; reason: string } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { ok: false, reason: 'conflict payload must be a JSON object' };
+  }
+  const candidate = value as Record<string, unknown>;
+  if (candidate.verdict === 'consistent') {
+    return exactKeys(candidate, ['verdict'])
+      ? { ok: true, value: { verdict: 'consistent' } }
+      : { ok: false, reason: 'consistent payload must contain only verdict' };
+  }
+  if (candidate.verdict !== 'conflicts') {
+    return { ok: false, reason: 'conflict payload verdict must be consistent or conflicts' };
+  }
+  if (!exactKeys(candidate, ['verdict', 'taskIds', 'conflict']) ||
+    !stringList(candidate.taskIds) || candidate.taskIds.length === 0 || !text(candidate.conflict)) {
+    return { ok: false, reason: 'conflicts payload requires non-empty taskIds and conflict' };
+  }
+  const resolution = resolveCitedPlanTaskIds(candidate.taskIds, planTaskIds);
+  if (resolution.kind !== 'resolved') {
+    return { ok: false, reason: 'conflicts payload taskIds must resolve against the plan' };
+  }
+  return { ok: true, value: { verdict: 'conflicts', taskIds: resolution.ids, conflict: candidate.conflict } };
+}
+
+/**
+ * Parses one complete conflict batch keyed by issued claim id, returning
+ * verdicts keyed by digest. Any malformed member rejects the whole batch.
+ */
+export function parseConflictBatchPayload(
+  payload: string,
+  issuedIds: ReadonlyMap<string, string>,
+  planText: string,
+): { ok: true; verdicts: ReadonlyMap<string, CoverageBindingConflictJudgeVerdict> } | { ok: false; reason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return { ok: false, reason: 'conflict batch payload is not valid JSON' };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed) ||
+    !exactKeys(parsed as Record<string, unknown>, ['verdicts']) || !Array.isArray((parsed as Record<string, unknown>).verdicts)) {
+    return { ok: false, reason: 'conflict batch payload must contain only a verdicts array' };
+  }
+
+  const planTaskIds = new Set(parsePlanTaskBodies(planText).keys());
+  const answered = new Set<string>();
+  const verdicts = new Map<string, CoverageBindingConflictJudgeVerdict>();
+  for (const entry of (parsed as { verdicts: unknown[] }).verdicts) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return { ok: false, reason: 'conflict batch verdict entry must be a JSON object' };
+    const candidate = entry as Record<string, unknown>;
+    if (!text(candidate.id)) return { ok: false, reason: 'conflict batch verdict entry requires a non-empty claim id' };
+    const digest = issuedIds.get(candidate.id);
+    if (digest === undefined) return { ok: false, reason: `conflict batch verdict has unknown claim id ${candidate.id}` };
+    if (answered.has(candidate.id)) return { ok: false, reason: `conflict batch verdict repeats claim id ${candidate.id}` };
+    const { id, ...verdictPayload } = candidate;
+    const verdict = parseConflictJudgePayloadValue(verdictPayload, planTaskIds);
+    if (!verdict.ok) return { ok: false, reason: `conflict batch verdict for claim id ${id as string}: ${verdict.reason}` };
+    if (!agreesWithRecorded(verdicts.get(digest), verdict.value)) return { ok: false, reason: `conflict batch verdict for claim id ${id as string} conflicts with another verdict for digest ${digest}` };
+    answered.add(candidate.id);
+    verdicts.set(digest, verdict.value);
+  }
+  for (const [id, digest] of issuedIds) if (!answered.has(id)) return { ok: false, reason: `conflict batch verdict is missing issued claim id ${id} (${digest})` };
   return { ok: true, verdicts };
 }
 

@@ -10,6 +10,7 @@ import {
   coverageBindingEnvelopePath,
   parseCoverageBindingEnvelope,
   parseAmendmentBatchPayload,
+  parseConflictBatchPayload,
   parseJudgeBatchPayload,
   parseJudgePayload,
   issueJudgeClaimIds,
@@ -293,6 +294,52 @@ describe('coverage binding envelope', () => {
         ['sha256:not-carried', { verdict: 'not-carried', missingObligation: 'The task omits the amendment obligation.' }],
         ['sha256:no-obligation', { verdict: 'no-plan-obligation' }],
       ]),
+    });
+  });
+
+  it('resolves a closed conflict batch to issued digests and canonical plan task ids', () => {
+    const planText = [
+      '# Implementation Plan: conflict parser',
+      '',
+      '### Task 1: First task',
+      '',
+      '### Task 2: Second task',
+    ].join('\n');
+
+    expect(parseConflictBatchPayload(JSON.stringify({
+      verdicts: [
+        { id: 'x1', verdict: 'consistent' },
+        { id: 'x2', verdict: 'conflicts', taskIds: ['task-2'], conflict: 'Task 2 contradicts the sealed criterion.' },
+      ],
+    }), new Map([['x1', 'sha256:first'], ['x2', 'sha256:second']]), planText)).toEqual({
+      ok: true,
+      verdicts: new Map([
+        ['sha256:first', { verdict: 'consistent' }],
+        ['sha256:second', { verdict: 'conflicts', taskIds: ['2'], conflict: 'Task 2 contradicts the sealed criterion.' }],
+      ]),
+    });
+  });
+
+  it.each([
+    ['an unknown task id', { id: 'x1', verdict: 'conflicts', taskIds: ['99'], conflict: 'Unknown task.' }, 'taskIds'],
+    ['an empty task id list', { id: 'x1', verdict: 'conflicts', taskIds: [], conflict: 'Missing task.' }, 'taskIds'],
+    ['an empty conflict statement', { id: 'x1', verdict: 'conflicts', taskIds: ['1'], conflict: '' }, 'conflict'],
+    ['a missing issued id', { id: 'x1', verdict: 'consistent' }, 'is missing issued claim id x2'],
+    ['a foreign id', { id: 'x3', verdict: 'consistent' }, 'has unknown claim id x3'],
+    ['a duplicated id', { id: 'x1', verdict: 'consistent' }, 'repeats claim id x1'],
+    ['an out-of-vocabulary verdict', { id: 'x1', verdict: 'unjudged' }, 'verdict'],
+  ] as const)('rejects a conflict batch with %s', (_kind, entry, reason) => {
+    const verdicts = reason.includes('missing')
+      ? [entry]
+      : reason.includes('repeats')
+        ? [entry, entry]
+        : [entry, { id: 'x2', verdict: 'consistent' }];
+
+    expect(parseConflictBatchPayload(JSON.stringify({ verdicts }), new Map([
+      ['x1', 'sha256:first'], ['x2', 'sha256:second'],
+    ]), '### Task 1: First task\n\n### Task 2: Second task')).toEqual({
+      ok: false,
+      reason: expect.stringContaining(reason),
     });
   });
 
