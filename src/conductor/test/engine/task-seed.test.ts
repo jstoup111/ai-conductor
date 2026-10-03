@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import * as autoheal from '../../src/engine/autoheal.js';
-// Covers: task:1, task:2, task:3, task:5
+// Covers: task:1, task:2, task:3, task:4, task:5
 import { seedTaskStatus } from '../../src/engine/task-seed.js';
 
 vi.mock('../../src/engine/autoheal.js', { spy: true });
@@ -308,6 +308,117 @@ Content with \`src/file3.ts\`
       expect(status.tasks.find((task: any) => task.id === '19')).toEqual({
         id: '19', name: 'Missing sibling', status: 'pending',
       });
+    });
+
+    it('keeps an in_progress row with a branch-scoped Task trailer at a dispatch boundary', async () => {
+      await initializeRepository();
+      await commitForTask('19');
+      const planPath = await writePlan(true);
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [
+          { id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' },
+          { id: '18', name: 'Restored work', status: 'pending' },
+          { id: '19', name: 'Missing sibling', status: 'in_progress' },
+        ] }),
+      );
+
+      await seedTaskStatus(dir, planPath, undefined, { dispatchBoundary: true });
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks.find((task: any) => task.id === '19')).toEqual({
+        id: '19', name: 'Missing sibling', status: 'in_progress',
+      });
+    });
+
+    it('keeps a trailerless in_progress row during a default seed', async () => {
+      await initializeRepository();
+      const planPath = await writePlan(true);
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [
+          { id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' },
+          { id: '18', name: 'Restored work', status: 'pending' },
+          { id: '19', name: 'Missing sibling', status: 'in_progress' },
+        ] }),
+      );
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks.find((task: any) => task.id === '19')).toEqual({
+        id: '19', name: 'Missing sibling', status: 'in_progress',
+      });
+    });
+
+    it('passes the dispatch-boundary option only from pre-BUILD task telemetry', async () => {
+      const readEngineSources = async (directory: URL): Promise<string[]> => {
+        const entries = await fsPromises.readdir(directory, { withFileTypes: true });
+        return (await Promise.all(entries.map(async (entry) => {
+          const path = new URL(entry.name + (entry.isDirectory() ? '/' : ''), directory);
+          if (entry.isDirectory()) return readEngineSources(path);
+          return entry.name.endsWith('.ts') ? [await fsPromises.readFile(path, 'utf8')] : [];
+        }))).flat();
+      };
+      const [conductor, artifacts, repairRestage] = await Promise.all([
+        fsPromises.readFile(new URL('../../src/engine/conductor.ts', import.meta.url), 'utf8'),
+        fsPromises.readFile(new URL('../../src/engine/artifacts.ts', import.meta.url), 'utf8'),
+        fsPromises.readFile(new URL('../../src/engine/repair-restage.ts', import.meta.url), 'utf8'),
+      ]);
+      const dispatchOptionCount = (await readEngineSources(new URL('../../src/engine/', import.meta.url)))
+        .flatMap((source) => source.match(/dispatchBoundary:\s*true/g) ?? [])
+        .length;
+
+      expect({
+        dispatchOptionCount,
+        dispatch: conductor.includes('await seedTaskStatus(projectRoot, planPath, undefined, { dispatchBoundary: true });'),
+        remediation: conductor.includes('await seedTaskStatus(this.projectRoot, planPath);'),
+        completion: artifacts.includes('await seedTaskStatus(ctx.projectRoot, ctx.planPath, enginePlanPath);'),
+        repairRestage: repairRestage.includes('await seedTaskStatus(projectRoot, planPath);'),
+      }).toEqual({ dispatchOptionCount: 1, dispatch: true, remediation: true, completion: true, repairRestage: true });
+    });
+
+    it('resets an in_progress row to pending at a dispatch boundary without an origin ref', async () => {
+      await initializeRepository(false);
+      const planPath = await writePlan(true);
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [
+          { id: '1', name: 'Already recorded', status: 'completed', commit: 'kept' },
+          { id: '18', name: 'Restored work', status: 'pending' },
+          { id: '19', name: 'Missing sibling', status: 'in_progress' },
+        ] }),
+      );
+
+      await seedTaskStatus(dir, planPath, undefined, { dispatchBoundary: true });
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks.find((task: any) => task.id === '19')).toEqual({
+        id: '19', name: 'Missing sibling', status: 'pending',
+      });
+    });
+
+    it('preserves a completed row without a Task trailer during default and dispatch seeds', async () => {
+      await initializeRepository();
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.writeFile(planPath, '# Plan\n\n## Task 5: Finished work\n');
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: '5', name: 'Finished work', status: 'completed', commit: 'recorded-sha' }] }),
+      );
+
+      await seedTaskStatus(dir, planPath);
+      await seedTaskStatus(dir, planPath, undefined, { dispatchBoundary: true });
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks).toEqual([
+        { id: '5', name: 'Finished work', status: 'completed', commit: 'recorded-sha' },
+      ]);
     });
   });
 
