@@ -93,6 +93,8 @@ delta touches their source.
 
 > **Amended 2026-10-03 (hotfix, regrade judgement):** when the replay proof says the rebase CHANGED the feature's own contribution (conflict resolution altered the feature diff) and the document inputs are unchanged, whether `prd_audit` and `architecture_review_as_built` need a new grade is a judgement call. The engine computes the feature's pre- versus post-rebase own-diff delta (bounded), dispatches one auxiliary judgement through the shipped `rebase-regrade` skill under the resolved `rebase` provider policy, and validates its closed result (`regrade`, candidate `gates`, non-empty `rationale`). It reopens exactly the judged gates; an unavailable, failed, or schema-invalid judgement reopens every candidate. Each judgement is persisted as a `rebase_regrade_judged` event. An unchanged replay dispatches no judgement. `coverage_binding` stays document-only because it never reads code.
 
+> **Amended 2026-10-03 (hotfix, unproved replay):** the first 2026-10-03 amendment's exemption for an unproved replay is withdrawn. An unproved replay has no expected tree, so the rebase transition cannot bind preservation authority for any gate; `coverage_binding`, `prd_audit` and `architecture_review_as_built` reopen on an unproved replay, as before. The document-input-only rule applies to unchanged and changed replays.
+
 Adopt **Option A**. On a `changed` rebase, compute `D` (rebase delta) and `F` (feature claimed
 surface); partition `D` into `D_test` (test-only paths), `D_featureSrc = D ∩ F ∩ runtime-source`,
 and `D_foreignSrc = D ∩ runtime-source \ F`. Apply this **conservative** per-gate rule:
