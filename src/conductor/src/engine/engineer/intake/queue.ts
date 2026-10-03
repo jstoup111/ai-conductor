@@ -27,6 +27,8 @@ export interface IntakeQueue {
   release(e: Envelope): Promise<void>;
   /** List all pending (un-claimed) Envelopes currently in the inbox. */
   list(): Promise<Envelope[]>;
+  /** List all claimed (in-flight) Envelopes currently in the inbox. */
+  listClaimed(): Promise<Envelope[]>;
   /** Remove a pending Envelope from the inbox. Benign no-op if already absent. */
   remove(e: Envelope): Promise<void>;
 }
@@ -173,6 +175,30 @@ export function createFileQueue(dir: string): IntakeQueue {
         } catch {
           // File disappeared between readdir and readFile (concurrent claim/ack).
           continue;
+        }
+        envelopes.push(JSON.parse(content) as Envelope);
+      }
+      return envelopes;
+    },
+
+    // ── listClaimed ──────────────────────────────────────────────────────────
+
+    async listClaimed(): Promise<Envelope[]> {
+      await mkdir(dir, { recursive: true });
+      const entries = await readdir(dir);
+      const claimedFiles = entries.filter((f) => f.endsWith('.claimed')).sort();
+
+      const envelopes: Envelope[] = [];
+      for (const filename of claimedFiles) {
+        let content: string;
+        try {
+          content = await readFile(join(dir, filename), 'utf8');
+        } catch (error: unknown) {
+          if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+            // File disappeared between readdir and readFile (concurrent ack/release).
+            continue;
+          }
+          throw error;
         }
         envelopes.push(JSON.parse(content) as Envelope);
       }

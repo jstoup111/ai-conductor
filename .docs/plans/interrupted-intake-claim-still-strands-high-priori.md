@@ -14,7 +14,7 @@ Seven tasks make `compose claim` hold an intake claim lease for its whole walk a
 
 - **Decision source:** `adr-011-async-intake-queue-and-github-source` decision 6 (amended 2026-10-02). Scope is the operator-confirmed minimal boundary in `.docs/track/interrupted-intake-claim-still-strands-high-priori.md`: no change to `compose unclaim`, `compose requeue --stale`, `brain status`, or `.claimed` envelopes whose ledger entry is `done` or absent.
 - **Claim lease (Task 1).** A second `createConductStateLease` instance, path `«engineer dir»/inbox` (lease directory `inbox.lease`), label `intake claim`, default wait bound `INTAKE_CLAIM_LEASE_WAIT_MS` = 5 minutes, sized to a full banded walk (one sequential label read per pending entry plus issue-state and dependency reads). Pattern: the ledger's `withLedgerLease` — preserve pid ownership, the transient owner-metadata retry, release in `finally`, fail closed on `recovery_refused`; allowed variation is the longer bound. Search hints: `withLedgerLease`, `createConductStateLease`.
-- **Reconciliation (Tasks 2-3).** The file queue gains `listClaimed()` (typed `FileIntakeQueue`; the `IntakeQueue` port is unchanged). `reconcileStrandedClaims` reads the ledger once via `ledger.list()` (which fails closed on a corrupt ledger before any rename), then releases only pending-ledger `.claimed` envelopes through the queue's existing `release` mapping. Safety rests on two verified facts: a successful claim acks the winner before the ledger becomes `claimed`, and the claim walk is the only producer of `.claimed` files — so under the lease every pending/`.claimed` pair is a dead walk's strand.
+- **Reconciliation (Tasks 2-3).** The file queue gains `listClaimed()` (Task 8 lifts it onto the `IntakeQueue` port per the 2026-10-03 adr-011 amendment, decision 7, so reconciliation depends only on the port). `reconcileStrandedClaims` reads the ledger once via `ledger.list()` (which fails closed on a corrupt ledger before any rename), then releases only pending-ledger `.claimed` envelopes through the queue's existing `release` mapping. Safety rests on two verified facts: a successful claim acks the winner before the ledger becomes `claimed`, and the claim walk is the only producer of `.claimed` files — so under the lease every pending/`.claimed` pair is a dead walk's strand.
 - **Wiring (Task 4, integration owner).** The `claim` case of `engineer-cli.ts` runs lease → reconcile → existing delivery-guarded `claimUnblocked` walk → winner ack and ledger transition → lease release. `claimUnblocked`, the delivery guard and banding are unchanged. Lock order: the ledger lease is only ever taken inside the claim lease.
 - **Negative coverage (Tasks 5-7)** drive the real `dispatchEngineer` claim path with fixture engineer dirs, an injected gh runner and real files; no real GitHub call, no `git stash`.
 
@@ -58,7 +58,7 @@ Approved amendments to `adr-011-async-intake-queue-and-github-source` and `adr-2
 **Done when:**
 - `createFileQueue(dir).listClaimed()` returns the parsed envelope of every `.claimed` file in the inbox and none of the `.json` files, as asserted by the queue unit test.
 - `listClaimed()` skips a `.claimed` file deleted between `readdir` and `readFile` instead of throwing.
-- The `IntakeQueue` port type is unchanged and the existing queue unit and acceptance tests pass unmodified.
+- Task 2 leaves the existing `enqueue`/`claim`/`ack`/`release` signatures unchanged and the existing queue unit and acceptance tests pass unmodified.
 
 ### Task 3: Reconcile stranded claims against the ledger
 
@@ -95,7 +95,7 @@ Approved amendments to `adr-011-async-intake-queue-and-github-source` and `adr-2
 - With strands and no `inbox.lease` directory ever created, the first `claim` recovers every strand with no manual rename, and each recovered entry other than the claimed winner keeps ledger status `pending` with `attempts` unchanged.
 - With an `inbox.lease` owned by a non-live pid plus strands, `claim` recovers the lease and the strands without operator action and exits 0 with a claim.
 - When strands were recovered, stderr carries exactly one line `released N stranded intake claim(s)` with N equal to the recovered count.
-- With no strands in the inbox, the inbox listing after `claim` equals the seeded listing minus the claimed winner and stderr carries no `stranded` line.
+- With no strands in the inbox, the inbox listing after `claim` equals the seeded listing minus the claimed winner, an `intakeFileQueue` rename spy records no rename of any inbox file before the walk, and stderr carries no `stranded` line.
 
 ### Task 5: Serialize overlapping claims on the lease
 
@@ -134,8 +134,8 @@ Approved amendments to `adr-011-async-intake-queue-and-github-source` and `adr-2
 - With a strand plus a same-named claimable `.json` copy, `claim` hands that sourceRef out once and afterwards no claimable envelope for it remains in the inbox.
 - When one strand's recovery rename fails with a non-ENOENT error (its target `.json` path is a non-empty directory), `claim` exits 1 naming that envelope, the injected gh runner receives no call, and a second `claim` after removing the obstruction recovers every other strand.
 - When a strand's `.claimed` file is deleted between listing and release through the `intakeFileQueue` seam, `claim` skips it and recovers the remaining strands.
-- When `inbox.lease` holds invalid owner metadata, `claim` exits 1 with stderr naming the intake claim lease problem, the injected gh runner receives no call, and no inbox file is renamed.
-- With an unparseable `ledger.json` and seeded strands, `claim` exits non-zero with the existing corrupt-ledger error and every seeded `.claimed` file is still `.claimed`.
+- When `inbox.lease` holds invalid owner metadata, and separately when it holds ambiguous owner metadata (an owner record naming a live pid whose identity cannot be confirmed), `claim` exits 1 with stderr naming the intake claim lease problem, the injected gh runner receives no call, and no inbox file is renamed.
+- With an unparseable `ledger.json` and seeded strands, `claim` exits non-zero with the existing corrupt-ledger error and every seeded `.claimed` file is still `.claimed`, with no `.json` envelope created or renamed and no envelope recovered before the failure.
 
 ### Task 7: Limit recovery to pending-ledger strands
 
@@ -152,12 +152,29 @@ Approved amendments to `adr-011-async-intake-queue-and-github-source` and `adr-2
 **Done when:**
 - Seeding `.claimed` envelopes with `pending`, `claimed`, `done` and absent ledger entries, `claim` returns only the `pending` one to `.json`, and the `claimed`, `done` and absent envelopes remain byte-identical `.claimed` files.
 - The `claimed`- and `done`-ledger envelopes' sourceRefs never appear in the claim JSON or in the refs passed to the label read.
-- When a claim run's only effects are recovery and an `empty` or `all-blocked` outcome, `ledger.json` is byte-identical before and after the claim.
+- When a claim run's only effects are recovery and an `empty` or `all-blocked` outcome, `ledger.json` is byte-identical before and after the claim, and when recovery precedes handing out a pending envelope, every ledger entry other than the claimed winner keeps its status, attempts and timestamps unchanged.
 - Stale-claim reaping of `claimed` ledger entries is unchanged: `engineer-cli-claim-stale-reap.acceptance.test.ts` passes unmodified.
+
+### Task 8: Put claimed-envelope listing on the IntakeQueue port
+
+**Story:** 1
+**Type:** infrastructure
+**Files:** `src/conductor/src/engine/engineer/intake/queue.ts`, `src/conductor/src/engine/engineer/intake/reconcile-strands.ts`, `src/conductor/src/engine/engineer-cli.ts`, `src/conductor/test/engine/engineer/intake/queue.test.ts`, `src/conductor/test/engine/engineer/intake/reconcile-strands.test.ts`
+**Dependencies:** Task 3, Task 4
+
+**Steps:**
+1. Write a failing test that drives `reconcileStrandedClaims` with an in-memory `IntakeQueue` test double (no file queue) carrying a pending-ledger strand; confirm RED because reconciliation requires `FileIntakeQueue`.
+2. Add `listClaimed(): Promise<Envelope[]>` to the `IntakeQueue` interface, fold `FileIntakeQueue` back into `IntakeQueue` (the file queue already implements it), and retype `reconcileStrandedClaims` and the `engineer-cli.ts` claim composition to accept `IntakeQueue`.
+3. Run the tests to GREEN and commit.
+
+**Done when:**
+- The `IntakeQueue` interface declares `listClaimed()` and no production module imports or names a `FileIntakeQueue` type.
+- `reconcileStrandedClaims` accepts an `IntakeQueue`, and a unit test driving it with a non-file in-memory `IntakeQueue` double releases the pending-ledger strand through that double's `release`.
+- The `engineer-cli.ts` claim composition passes the queue to reconciliation typed as `IntakeQueue`, and the existing claim, strand-scope and lease CLI tests pass unmodified.
 
 ## Task Dependency Graph
 
-Independent starts: Task 1, Task 2. Task 2 → Task 3. Tasks 1 + 3 → Task 4. Task 4 → Tasks 5, 6, 7 (Task 6 also edits `engineer-cli.ts`, so it serializes after Task 4's change; Tasks 5 and 7 are test-only and can run concurrently).
+Independent starts: Task 1, Task 2. Task 2 → Task 3. Tasks 1 + 3 → Task 4. Tasks 3 + 4 → Task 8. Task 4 → Tasks 5, 6, 7 (Task 6 also edits `engineer-cli.ts`, so it serializes after Task 4's change; Tasks 5 and 7 are test-only and can run concurrently).
 
 ## Integration ownership
 
@@ -175,7 +192,7 @@ All rows are diff-local: fixtures supply the inbox, ledger, lease directory and 
 | Story 1 happy: Given the prior claim process died while holding the claim lease, when the next `compose claim` starts, then it recovers the dead owner's lease and proceeds without operator action | 4 | With an `inbox.lease` owned by a non-live pid plus strands, `claim` recovers the lease and the strands without operator action and exits 0 with a claim. | diff-local |
 | Story 1 happy: Given strands were recovered, when the claim completes, then stderr carries one line stating how many strands were released back to the inbox | 4 | When strands were recovered, stderr carries exactly one line `released N stranded intake claim(s)` with N equal to the recovered count. | diff-local |
 | Story 1 negative: Given a strand whose envelope has a same-named claimable copy already present in the inbox, when the claim recovers strands, then exactly one claimable envelope remains for that entry and the claim never hands the entry out twice | 6 | With a strand plus a same-named claimable `.json` copy, `claim` hands that sourceRef out once and afterwards no claimable envelope for it remains in the inbox. | diff-local |
-| Story 1 negative: Given the inbox holds no strands, when the operator runs `compose claim`, then no file in the inbox is renamed before the walk and no recovery line is printed | 4 | With no strands in the inbox, the inbox listing after `claim` equals the seeded listing minus the claimed winner and stderr carries no `stranded` line. | diff-local |
+| Story 1 negative: Given the inbox holds no strands, when the operator runs `compose claim`, then no file in the inbox is renamed before the walk and no recovery line is printed | 4 | With no strands in the inbox, the inbox listing after `claim` equals the seeded listing minus the claimed winner, an `intakeFileQueue` rename spy records no rename of any inbox file before the walk, and stderr carries no `stranded` line. | diff-local |
 | Story 1 negative: Given recovering one strand fails with a filesystem error other than the file having already vanished, when the claim runs, then the claim exits non-zero naming the failing envelope and performs no walk, leaving every other envelope in a state the next claim can recover | 6 | When one strand's recovery rename fails with a non-ENOENT error (its target `.json` path is a non-empty directory), `claim` exits 1 naming that envelope, the injected gh runner receives no call, and a second `claim` after removing the obstruction recovers every other strand. | diff-local |
 | Story 1 negative: Given a strand's envelope disappears between listing and recovery, when the claim runs, then that envelope is skipped as already handled and recovery of the rest continues | 6 | When a strand's `.claimed` file is deleted between listing and release through the `intakeFileQueue` seam, `claim` skips it and recovers the remaining strands. | diff-local |
 | Story 2 happy: Given claim A is mid-walk holding the claim lease and the drained envelopes, when claim B starts, then claim B waits for the lease and does not recover, rename or walk any envelope while A holds it | 5 | While the test holds the intake claim lease from a live owner, a concurrent `claim` stays pending, renames no inbox file, writes no ledger byte, and the injected gh runner receives no call during the hold. | diff-local |
@@ -183,12 +200,12 @@ All rows are diff-local: fixtures supply the inbox, ledger, lease directory and 
 | Story 2 happy: Given a claim finishes by claiming an entry, returning `empty`, or returning `all-blocked`, when it returns, then the claim lease has been released | 5 | After `claim` returns a claim, `empty` or `all-blocked`, and after the walk throws an injected resolver error, the `inbox.lease` directory is absent and a following `claim` acquires without waiting. | diff-local |
 | Story 2 negative: Given claim A holds the claim lease longer than claim B's wait bound (for example a hung process), when claim B's wait expires, then claim B exits non-zero with a message stating a claim is in progress and naming A's pid, and makes no change to the inbox or ledger | 5 | When the hold outlasts the injected wait bound, `claim` exits 1, stderr contains `claim in progress` and the holder pid, and the inbox listing and ledger bytes are unchanged. | diff-local |
 | Story 2 negative: Given the claim walk throws an unexpected error after acquiring the lease, when the process exits, then the claim lease is released and every held envelope is released back to the inbox | 5 | After the injected walk error, every envelope the walk drained is a `.json` file in the inbox again. | diff-local |
-| Story 2 negative: Given the claim lease cannot be acquired because its owner metadata is invalid or ambiguous, when the operator runs `compose claim`, then the claim fails closed with a non-zero exit naming the lease problem and never walks without the lease | 6 | When `inbox.lease` holds invalid owner metadata, `claim` exits 1 with stderr naming the intake claim lease problem, the injected gh runner receives no call, and no inbox file is renamed. | diff-local |
+| Story 2 negative: Given the claim lease cannot be acquired because its owner metadata is invalid or ambiguous, when the operator runs `compose claim`, then the claim fails closed with a non-zero exit naming the lease problem and never walks without the lease | 6 | When `inbox.lease` holds invalid owner metadata, and separately when it holds ambiguous owner metadata (an owner record naming a live pid whose identity cannot be confirmed), `claim` exits 1 with stderr naming the intake claim lease problem, the injected gh runner receives no call, and no inbox file is renamed. | diff-local |
 | Story 3 happy: Given an inbox holding a claimed envelope with a `pending` ledger entry, one with a `done` ledger entry, and one with no ledger entry, when the operator runs `compose claim`, then only the `pending` one returns to the claimable state and the other two stay claimed byte-for-byte | 7 | Seeding `.claimed` envelopes with `pending`, `claimed`, `done` and absent ledger entries, `claim` returns only the `pending` one to `.json`, and the `claimed`, `done` and absent envelopes remain byte-identical `.claimed` files. | diff-local |
-| Story 3 happy: Given recovery runs, when it inspects ledger state, then it reads ledger entries without changing any entry's status, attempts or timestamps | 7 | When a claim run's only effects are recovery and an `empty` or `all-blocked` outcome, `ledger.json` is byte-identical before and after the claim. | diff-local |
+| Story 3 happy: Given recovery runs, when it inspects ledger state, then it reads ledger entries without changing any entry's status, attempts or timestamps | 7 | When a claim run's only effects are recovery and an `empty` or `all-blocked` outcome, `ledger.json` is byte-identical before and after the claim, and when recovery precedes handing out a pending envelope, every ledger entry other than the claimed winner keeps its status, attempts and timestamps unchanged. | diff-local |
 | Story 3 negative: Given a claimed envelope whose ledger entry is `claimed` (a session already holds it), when the operator runs `compose claim`, then that envelope is not recovered by strand reconciliation and stale-claim reaping of `claimed` entries behaves exactly as before | 7 | Stale-claim reaping of `claimed` ledger entries is unchanged: `engineer-cli-claim-stale-reap.acceptance.test.ts` passes unmodified. | diff-local |
 | Story 3 negative: Given a claimed envelope whose ledger entry is `done`, when the operator runs `compose claim`, then it is neither recovered nor handed out | 7 | The `claimed`- and `done`-ledger envelopes' sourceRefs never appear in the claim JSON or in the refs passed to the label read. | diff-local |
-| Story 3 negative: Given the intake ledger is corrupt, when the operator runs `compose claim`, then the claim fails closed with the existing corrupt-ledger error before any envelope is recovered or renamed | 6 | With an unparseable `ledger.json` and seeded strands, `claim` exits non-zero with the existing corrupt-ledger error and every seeded `.claimed` file is still `.claimed`. | diff-local |
+| Story 3 negative: Given the intake ledger is corrupt, when the operator runs `compose claim`, then the claim fails closed with the existing corrupt-ledger error before any envelope is recovered or renamed | 6 | With an unparseable `ledger.json` and seeded strands, `claim` exits non-zero with the existing corrupt-ledger error and every seeded `.claimed` file is still `.claimed`, with no `.json` envelope created or renamed and no envelope recovered before the failure. | diff-local |
 
 ## Architecture Obligation Coverage
 
@@ -198,10 +215,11 @@ All ten citable decisions of the two amended ADRs are dispositioned.
 |---|---|---|---|
 | adr-011-async-intake-queue-and-github-source#D1 | no-change | none | The IntakeSource capture interface and poll() are untouched; reconciliation and the claim lease live entirely on the claim path. |
 | adr-011-async-intake-queue-and-github-source#D2 | no-change | none | The github-issues adapter, its gh issue list polling and Envelope shape are untouched. |
-| adr-011-async-intake-queue-and-github-source#D3 | task | task-2 | The `IntakeQueue` port type is unchanged and the existing queue unit and acceptance tests pass unmodified. |
+| adr-011-async-intake-queue-and-github-source#D3 | task | task-8 | The `IntakeQueue` interface declares `listClaimed()` and no production module imports or names a `FileIntakeQueue` type. |
 | adr-011-async-intake-queue-and-github-source#D4 | task | task-1 | `claim-lease.ts` imports `createConductStateLease` from `conduct-state-lease.ts` and does not import `daemon-lock.ts`. |
 | adr-011-async-intake-queue-and-github-source#D5 | no-change | none | Poll-on-launch and the standalone poll subcommand are untouched; only the claim command changes. |
 | adr-011-async-intake-queue-and-github-source#D6 | task | task-4, task-5 | When the hold outlasts the injected wait bound, `claim` exits 1, stderr contains `claim in progress` and the holder pid |
+| adr-011-async-intake-queue-and-github-source#D7 | task | task-8 | `reconcileStrandedClaims` accepts an `IntakeQueue`, and a unit test driving it with a non-file in-memory `IntakeQueue` double releases the pending-ledger strand through that double's `release`. |
 | adr-2026-07-10-intake-claim-priority-banding#D1 | no-change | none | claimUnblocked ordering inside the walk is unchanged; the walk now merely runs after reconciliation under the claim lease. |
 | adr-2026-07-10-intake-claim-priority-banding#D2 | no-change | none | Claim-time band resolution from issue labels via resolveClaimBands is unchanged. |
 | adr-2026-07-10-intake-claim-priority-banding#D3 | no-change | none | Fail-open to receivedAt FIFO on a label-reader throw is unchanged. |
