@@ -27,7 +27,6 @@ import {
 } from './gate-code-validity.js';
 import type { VerdictRunIdentity } from './gate-code-validity.js';
 import {
-  readOverScopeDecisions,
   type IntentRelation,
 } from './accepted-widenings.js';
 import { AcceptedWideningDecisionStore } from './accepted-widenings.js';
@@ -59,7 +58,6 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { createEngineStateStore } from './engine-state-store.js';
-import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
 import {
   parsePlanTaskStoryIds,
 } from './plan-task-parse.js';
@@ -4152,21 +4150,7 @@ export async function classifyPrdAuditWideningProjection(
     const featureRead = await readRemediationCaseStoreFeature(dir);
     if (!featureRead.ok) {
       evidenceFault = 'corrupt-case-store';
-    } else if (featureRead.feature === undefined) {
-      // Criterion-owned legacy authority never used a summary as identity.
-      // Keep it readable during the v1→v2 migration, but deliberately do not
-      // manufacture NC authority from it.
-      decisions = (await readOverScopeDecisions(dir)).decisions
-        .filter((decision) => !isPrdAuditNoOwnerOrdinal(decision.criterion))
-        .map((decision, index) => ({
-          id: `legacy-criterion-${index + 1}`,
-          criterion: decision.criterion,
-          authority: decision.decision,
-          rationale: decision.rationale,
-          operator: decision.operator,
-          revision: index + 1,
-        }));
-    } else {
+    } else if (featureRead.feature !== undefined) {
       const caseStore = new RemediationCaseStore(dir, featureRead.feature);
       const caseRead = await caseStore.read();
       if (!caseRead.ok) {

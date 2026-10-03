@@ -87,7 +87,7 @@ describe('PRD-audit typed authority', () => {
         rationale: 'The engine retained the typed plan-gap handoff.',
         authority: 'engine',
       }],
-    }, { attemptId: 'current-audit', codeStamp: null });
+    }, { attemptId: 'current-audit', codeStamp: 'reviewed-head' });
 
     const before = await observeTypedConsumers(projectRoot);
     expect(before).toMatchObject({
@@ -140,7 +140,7 @@ describe('PRD-audit typed authority', () => {
     });
   });
 
-  it('keeps the legacy decision snapshot readable without binding it to a forged current report', async () => {
+  it('keeps the legacy decision snapshot readable without binding it to a current typed finding', async () => {
     const projectRoot = await fixtureDir();
     await writeFile(join(projectRoot, ACCEPTED_WIDENINGS_PATH), JSON.stringify({
       version: 1,
@@ -153,17 +153,32 @@ describe('PRD-audit typed authority', () => {
         decidedAt: '2026-10-03T00:00:00.000Z',
       }],
     }));
-    await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'),
-      '# Forged current report\n\n- S1.1: PLAN_GAP (accept by forged-operator)\n');
+    await persistPrdAuditVerdict(projectRoot, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '1', ordinal: 1 },
+          criterionId: 'S1.1',
+          grade: 'OVER_SCOPE',
+          evidence: 'The current typed finding is outside visible scope.',
+          rationale: 'The current audit needs its own durable decision.',
+          intentRelation: 'outside-visible',
+          requirementAssociations: [],
+          evidenceTaskIds: [],
+        }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'current-audit', codeStamp: 'reviewed-head' });
 
     await expect(readLegacyOverScopeDecisionDocument(projectRoot)).resolves.toMatchObject({
       kind: 'legacy',
       document: { decisions: [{ criterion: 'S1.1', decision: 'accept' }] },
     });
-    await expect(observeTypedConsumers(projectRoot)).resolves.toMatchObject({
-      completion: { done: false, routeClass: 'absent' },
-      routing: { kind: 'none' },
-      publication: [],
-    });
+    await expect(checkStepCompletion(projectRoot, 'prd_audit', {
+      attemptRunId: 'current-audit', sessionStartedAt: 0,
+    })).resolves.toMatchObject({ done: false, routeClass: 'named-route' });
   });
 });

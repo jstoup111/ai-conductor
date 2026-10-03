@@ -516,12 +516,9 @@ function parseDecisionInput(value: unknown): Omit<AcceptedWideningDecision, 'id'
   };
 }
 
-export type OverScopeDecision = LegacyOverScopeDecision;
-interface OverScopeDecisionsFile { version: 1; decisions: OverScopeDecision[] }
-
 export type IntentRelation = 'within' | 'outside-harmless' | 'outside-visible';
 
-function isOverScopeDecision(value: unknown): value is OverScopeDecision {
+function isOverScopeDecision(value: unknown): value is LegacyOverScopeDecision {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const entry = value as Record<string, unknown>;
   return typeof entry.criterion === 'string' && entry.criterion.trim().length > 0 && typeof entry.summary === 'string' && entry.summary.trim().length > 0 && (entry.decision === 'accept' || entry.decision === 'refuse') && typeof entry.rationale === 'string' && entry.rationale.trim().length > 0 && typeof entry.operator === 'string' && entry.operator.trim().length > 0 && typeof entry.decidedAt === 'string' && entry.decidedAt.trim().length > 0;
@@ -561,15 +558,6 @@ export async function readLegacyOverScopeDecisionDocument(
     kind: 'legacy',
     document: { version: 1, documentId: legacyDocumentId(serialized), decisions: parsed.decisions },
   };
-}
-
-/** Non-conforming (including the retired `entries` schema) deliberately reads as absent. */
-export async function readOverScopeDecisions(projectRoot: string): Promise<{ decisions: OverScopeDecision[] }> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(join(projectRoot, ACCEPTED_WIDENINGS_PATH), 'utf8'));
-    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) && (parsed as { version?: unknown }).version === 1 && Array.isArray((parsed as { decisions?: unknown }).decisions) && (parsed as { decisions: unknown[] }).decisions.every(isOverScopeDecision)) return { decisions: (parsed as OverScopeDecisionsFile).decisions };
-  } catch { /* absent/corrupt state is never a decision */ }
-  return { decisions: [] };
 }
 
 export interface OverScopeRenderableFinding { criterion: string; summary: string; relation: IntentRelation }

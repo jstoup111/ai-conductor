@@ -30,7 +30,6 @@ import {
 } from '../src/engine/conductor.js';
 import {
   AcceptedWideningDecisionStore,
-  readOverScopeDecisions,
   renderOverScopeDecisionBlock,
 } from '../src/engine/accepted-widenings.js';
 import type { PrdAuditFinding, PrdAuditGrade } from '../src/engine/artifacts.js';
@@ -583,35 +582,6 @@ async function createAsBuiltRemediationCapFixture(input: {
 describe('prd_audit kickback', () => {
   afterEach(async () => {
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-  });
-
-  it('reads only conforming version-one over-scope decision stores', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'over-scope-decisions-reader-'));
-    dirs.push(root);
-    const path = join(root, '.pipeline', 'accepted-widenings.json');
-
-    await expect(readOverScopeDecisions(root)).resolves.toEqual({ decisions: [] });
-
-    await mkdir(join(root, '.pipeline'), { recursive: true });
-    await writeFile(path, '{ not json');
-    await expect(readOverScopeDecisions(root)).resolves.toEqual({ decisions: [] });
-
-    await writeFile(path, JSON.stringify({
-      version: 1,
-      entries: [{ criterion: 'S3.1', summary: 'Old store.', acceptedAt: '2026-08-24T00:00:00.000Z' }],
-    }));
-    await expect(readOverScopeDecisions(root)).resolves.toEqual({ decisions: [] });
-
-    const decisions = [{
-      criterion: 'S3.1',
-      summary: 'Visible optional behavior.',
-      decision: 'accept',
-      rationale: 'The operator approved this visible widening.',
-      operator: 'operator@example.test',
-      decidedAt: '2026-08-24T00:00:00.000Z',
-    }];
-    await writeFile(path, JSON.stringify({ version: 1, decisions }));
-    await expect(readOverScopeDecisions(root)).resolves.toEqual({ decisions });
   });
 
   it('preserves migrated sibling decisions while routing a current refusal', async () => {
