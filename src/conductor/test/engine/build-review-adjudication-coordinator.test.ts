@@ -1045,7 +1045,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     }));
   });
 
-  it('keeps a rejected store transition distinct from malformed persisted history', async () => {
+  it('reports both ordinary transition owners and their source when the store rejects a non-decision-stop transition', async () => {
     const root = await projectRoot();
     const events: RemediationCaseLifecycleEvent[] = [];
     const mutate = vi.spyOn(RemediationCaseStore.prototype, 'mutate')
