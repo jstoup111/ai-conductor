@@ -224,9 +224,48 @@ describe('remediation case store', () => {
   });
 
   it.each([
-    ['v1', { version: 'v1', feature: FEATURE, cases: CASE_STATE.cases, suppressions: [] }],
-    ['v2', CASE_STATE],
-  ] as const)('reads an existing %s state with unique sources without writing it', async (_version, persistedState) => {
+    [
+      'v1',
+      { version: 'v1', feature: FEATURE, cases: CASE_STATE.cases, suppressions: [] },
+      { ...CASE_STATE, suppressions: [] },
+    ],
+    ['v2', CASE_STATE, CASE_STATE],
+    [
+      'an empty case list',
+      { version: 'v2', feature: FEATURE, cases: [], prdWideningCases: [], suppressions: [] },
+      { version: 'v2', feature: FEATURE, cases: [], prdWideningCases: [], suppressions: [] },
+    ],
+    [
+      'populated suppressions',
+      {
+        ...CASE_STATE,
+        suppressions: [{
+          findingId: 'finding-1',
+          rubric: 'testQuality',
+          summary: 'Low confidence finding.',
+          confidence: 40,
+          floor: 70,
+          lastSeenLap: 'lap-first',
+        }],
+      },
+      {
+        ...CASE_STATE,
+        suppressions: [{
+          findingId: 'finding-1',
+          rubric: 'testQuality',
+          summary: 'Low confidence finding.',
+          confidence: 40,
+          floor: 70,
+          lastSeenLap: 'lap-first',
+        }],
+      },
+    ],
+    [
+      'PRD-widening cases',
+      { ...CASE_STATE, prdWideningCases: [PRD_WIDENING_CASE] },
+      { ...CASE_STATE, prdWideningCases: [PRD_WIDENING_CASE] },
+    ],
+  ] as const)('reads an existing %s state with unique sources without writing it', async (_version, persistedState, expectedState) => {
     const projectRoot = await createProjectRoot();
     const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
     const serialized = JSON.stringify(persistedState);
@@ -235,7 +274,7 @@ describe('remediation case store', () => {
 
     await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
       ok: true,
-      state: { ...CASE_STATE, suppressions: [] },
+      state: expectedState,
     });
     await expect(readFile(statePath, 'utf8')).resolves.toBe(serialized);
   });
