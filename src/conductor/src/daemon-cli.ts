@@ -38,6 +38,7 @@ import {
   resolveFeatureApplicabilityConfig,
 } from './engine/resolved-config.js';
 import {
+  probeManagedObservationDestination,
   probeReadOnlyReviewCapability,
   type ReadOnlyReviewCapability,
 } from './engine/build-review-read-only-capability.js';
@@ -1449,7 +1450,16 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       ...providerExecution,
       managedSessionContext,
       prepareManagedSessionObservation: async ({ provider, context, readOnlyReview }: { provider: string; context: ManagedSessionContext; readOnlyReview: boolean }) =>
-        prepareManagedSessionObservationDestination({ provider, context, readOnlyReview, probe: async () => ({ producerWrite: 'allowed', protectedWrites: 'refused' }) }),
+        prepareManagedSessionObservationDestination({
+          provider, context, readOnlyReview,
+          probe: (input) => probeManagedObservationDestination({
+            ...input,
+            runProcess: async (executable, args) => {
+              const result = await execFile(executable, [...args]);
+              return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+            },
+          }),
+        }),
     };
   };
   // The pool emits a feature's start/resume/done records before and after its
@@ -1538,7 +1548,16 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         ...providerExecution,
         managedSessionContext,
         prepareManagedSessionObservation: async ({ provider, context, readOnlyReview }: { provider: string; context: ManagedSessionContext; readOnlyReview: boolean }) =>
-          prepareManagedSessionObservationDestination({ provider, context, readOnlyReview, probe: async () => ({ producerWrite: 'allowed', protectedWrites: 'refused' }) }),
+          prepareManagedSessionObservationDestination({
+            provider, context, readOnlyReview,
+            probe: (input) => probeManagedObservationDestination({
+              ...input,
+              runProcess: async (executable, args) => {
+                const result = await execFile(executable, [...args]);
+                return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+              },
+            }),
+          }),
       },
       log: featureLog,
       stop,

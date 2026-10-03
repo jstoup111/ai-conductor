@@ -59,6 +59,7 @@ import {
 } from './engine/provider-model-probe.js';
 import { resolveBuildReviewConfig } from './engine/resolved-config.js';
 import {
+  probeManagedObservationDestination,
   probeReadOnlyReviewCapability,
   type ReadOnlyReviewCapability,
 } from './engine/build-review-read-only-capability.js';
@@ -1731,7 +1732,16 @@ async function dispatchCliCommand(): Promise<void> {
     ...providerExecution,
     managedSessionContext: preparedPreludeContext.context,
     prepareManagedSessionObservation: async ({ provider, context, readOnlyReview }) =>
-      prepareManagedSessionObservationDestination({ provider, context, readOnlyReview, probe: async () => ({ producerWrite: 'allowed', protectedWrites: 'refused' }) }),
+      prepareManagedSessionObservationDestination({
+        provider, context, readOnlyReview,
+        probe: (input) => probeManagedObservationDestination({
+          ...input,
+          runProcess: async (executable, args) => {
+            const result = await execa(executable, [...args], { reject: false });
+            return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
+          },
+        }),
+      }),
   };
 
   // Select UI subscriber based on config (default: 'terminal')
