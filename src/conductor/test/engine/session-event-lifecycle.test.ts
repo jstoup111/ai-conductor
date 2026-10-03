@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   startFeatureEventPersistence,
   startSessionEventTail,
+  withSessionEventTail,
   withFeatureEventPersistence,
 } from '../../src/engine/event-persister.js';
 import {
@@ -129,6 +130,60 @@ describe('feature session-event lifecycle', () => {
     await tail.drain();
 
     expect(received).toEqual(['event-1']);
+  });
+
+  it('drains a transient repair worktree into the retained feature persistence scope after failure', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'transient-repair-session-owner-'));
+    roots.push(root);
+    const retainedWorktree = join(root, 'retained-feature');
+    const transientWorktree = join(root, 'transient-repair');
+    const producerRoot = join(transientWorktree, '.pipeline', 'session-events', 'dispatch-1');
+    await mkdir(producerRoot, { recursive: true });
+
+    const scope = startFeatureEventPersistence(retainedWorktree, new ConductorEventEmitter(), 'feature-a');
+    const rendered: string[] = [];
+    scope.events.on('session_command_refused', (event) => renderDaemonEvent(event, (line) => rendered.push(line)));
+    scope.events.on('github_bypass_result', (event) => {
+      renderDaemonEvent(event, (line) => rendered.push(line));
+    });
+
+    await expect(withSessionEventTail({
+      projectRoot: transientWorktree,
+      events: scope.events,
+      featureSlug: 'feature-a',
+      run: async () => {
+        await writeFile(join(producerRoot, 'repair.jsonl'), [
+          {
+            type: 'session_command_refused',
+            eventId: 'repair-refusal-1',
+            sourceTime: '2026-10-03T12:00:00.000Z',
+            dispatchId: 'dispatch-1',
+            provider: 'codex',
+            scope: { kind: 'feature', featureSlug: 'feature-a' },
+            subcommand: 'finish-record',
+          },
+          {
+            type: 'github_bypass_result',
+            eventId: 'repair-result-1',
+            sourceTime: '2026-10-03T12:00:00.000Z',
+            dispatchId: 'dispatch-1',
+            provider: 'codex',
+            scope: { kind: 'feature', featureSlug: 'feature-a' },
+            attemptId: 'repair-attempt-1',
+            outcome: 'cli-failed',
+          },
+        ].map((event) => `${JSON.stringify(event)}\n`).join(''));
+        throw new Error('repair cancelled');
+      },
+    })).rejects.toThrow('repair cancelled');
+    await scope.drain();
+
+    await expect(readFile(join(retainedWorktree, '.pipeline', 'events.jsonl'), 'utf8'))
+      .resolves.toContain('repair-result-1');
+    expect(rendered.join('\n')).toContain('managed session command refused');
+    expect(rendered.join('\n')).toContain('GitHub bypass result');
+    expect(rendered.join('\n')).toContain('repair-refusal-1');
+    expect(rendered.join('\n')).toContain('repair-result-1');
   });
 
   it('starts the feature owner before a failing managed invocation and drains its settled record before rethrowing', async () => {

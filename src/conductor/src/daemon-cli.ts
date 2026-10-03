@@ -90,7 +90,13 @@ import {
 } from './engine/finish-publication-production.js';
 import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-labels.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
-import { forwardedFeatureOf, isForwardedFromFeature, startDaemonEventPersistence, startFeatureEventPersistence } from './engine/event-persister.js';
+import {
+  forwardedFeatureOf,
+  isForwardedFromFeature,
+  startDaemonEventPersistence,
+  startFeatureEventPersistence,
+  withSessionEventTail,
+} from './engine/event-persister.js';
 import { heapDumpOptionsFromConfig, startDaemonMemorySampler } from './engine/daemon-memory.js';
 import {
   formatSessionOccurrence,
@@ -1440,13 +1446,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     scopedEvents.on('provider_attempt', (event) => renderDaemonEvent(event, scopedLog));
     scopedEvents.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
     scopedEvents.on('session_policy', (event) => renderDaemonEvent(event, scopedLog));
-    // Recovery tails added by Task 13 project managed-session occurrences onto
-    // this emitter. Keep their subscriber set derived from the event spine's
-    // render registry, rather than allowing recovery logging to drift from the
-    // feature-run renderer.
-    for (const type of renderedSessionOccurrenceTypes()) {
-      scopedEvents.on(type, (event) => renderDaemonEvent(event, scopedLog));
-    }
+    subscribeRecoverySessionOccurrences(scopedEvents, scopedLog);
     const providerExecution = createProviderExecution(scopedEvents, scopedLog);
     const provider = providerExecution.configuredProviders[0];
     if (!provider) throw new Error('daemon recovery dispatch requires a configured provider');
@@ -1468,6 +1468,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             },
           })),
     };
+  };
+  // Repair providers can write in a transient worktree, but their producer
+  // records are projected through the retained feature's persistence scope.
+  // Deriving this subscription from EVENT_SINKS keeps refusals and bypasses
+  // visible on the same feature logger as normal feature dispatches.
+  const subscribeRecoverySessionOccurrences = (
+    eventSource: ConductorEventEmitter,
+    eventLog: (message: string) => void,
+  ): void => {
+    for (const type of renderedSessionOccurrenceTypes()) {
+      eventSource.on(type, (event) => renderDaemonEvent(event, eventLog));
+    }
   };
   // The pool emits a feature's start/resume/done records before and after its
   // worktree scope exists. Cache the scoped logger by slug so those lifecycle
@@ -2764,6 +2776,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 const featureScope = startFeatureEventPersistence(
                   join(projectRoot, '.worktrees', entry.slug), events, entry.slug,
                 );
+                subscribeRecoverySessionOccurrences(
+                  featureScope.events,
+                  createFeatureDaemonLogger(
+                    entry.slug,
+                    (message) => log(message, true),
+                    formatDaemonFeatureTag(entry.slug),
+                  ),
+                );
                 try {
                   // Create a real Tier-2 resolver that dispatches to the /rebase skill
                   // FR-7: wire stepRunner and events for rebase resolution dispatch
@@ -2777,35 +2797,44 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     /* best-effort: event emission must not block resolution */
                   }
                   try {
-                    // Create a fresh step runner for this rebase resolution attempt
-                    const sessionId = uuidv4();
-                    const dispatchId = createSessionEventIdentity();
-                    const providerExecution = await createSlugScopedProviderExecution(
-                      entry.slug,
-                      ctx.projectRoot,
-                      dispatchId,
-                    );
-                    const selectedRuntime = providerExecution.runtimes.get(
-                      providerExecution.configuredProviders[0],
-                    );
-                    const stepRunner = new DefaultStepRunner(
-                      selectedRuntime.provider,
-                      sessionId,
-                      ctx.projectRoot,
-                      {
-                        featureDesc: `rebase-resolution-${entry.slug}`,
-                        config,
-                        modelPolicy: selectedRuntime.policy,
-                        mode: 'auto',
-                        providerExecution,
-                        log: createFeatureDaemonLogger(
+                    return await withSessionEventTail({
+                      // Rebase constructs a transient repair worktree. Tail
+                      // its producer root, while featureScope retains the
+                      // canonical ledger and feature-scoped renderer.
+                      projectRoot: ctx.projectRoot,
+                      events: featureScope.events,
+                      featureSlug: entry.slug,
+                      run: async () => {
+                        const sessionId = uuidv4();
+                        const dispatchId = createSessionEventIdentity();
+                        const providerExecution = await createSlugScopedProviderExecution(
                           entry.slug,
-                          (message) => log(message, true),
-                          formatDaemonFeatureTag(entry.slug),
-                        ),
+                          ctx.projectRoot,
+                          dispatchId,
+                        );
+                        const selectedRuntime = providerExecution.runtimes.get(
+                          providerExecution.configuredProviders[0],
+                        );
+                        const stepRunner = new DefaultStepRunner(
+                          selectedRuntime.provider,
+                          sessionId,
+                          ctx.projectRoot,
+                          {
+                            featureDesc: `rebase-resolution-${entry.slug}`,
+                            config,
+                            modelPolicy: selectedRuntime.policy,
+                            mode: 'auto',
+                            providerExecution,
+                            log: createFeatureDaemonLogger(
+                              entry.slug,
+                              (message) => log(message, true),
+                              formatDaemonFeatureTag(entry.slug),
+                            ),
+                          },
+                        );
+                        return stepRunner.resolveRebaseConflict(ctx);
                       },
-                    );
-                    return await stepRunner.resolveRebaseConflict(ctx);
+                    });
                   } catch (err) {
                     return {
                       resolved: false,
@@ -2853,6 +2882,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             },
             dispatch: async (entry, state) => {
               if (!ciFixEnabled) return;
+              const featureScope = startFeatureEventPersistence(
+                join(projectRoot, '.worktrees', entry.slug), events, entry.slug,
+              );
+              subscribeRecoverySessionOccurrences(
+                featureScope.events,
+                createFeatureDaemonLogger(
+                  entry.slug,
+                  (message) => log(message, true),
+                  formatDaemonFeatureTag(entry.slug),
+                ),
+              );
+              try {
               const dispatchCiFix = createDaemonCiFixDispatch({
                 tracker: createGithubTrackerClient(makeProductionGh()),
                 // Feature-scoped transport: pin gh to the entry's repo so the remote
@@ -2873,38 +2914,47 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 // runner directly — mirrors the resolveRebaseConflict /
                 // DefaultStepRunner pattern used for rebase resolution above.
                   resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: typeof entry }) => {
-                    const sessionId = uuidv4();
-                    const dispatchId = createSessionEventIdentity();
-                    const providerExecution = await createSlugScopedProviderExecution(
-                      ctx.entry.slug,
-                      ctx.worktreePath,
-                      dispatchId,
-                    );
-                    const selectedRuntime = providerExecution.runtimes.get(
-                      providerExecution.configuredProviders[0],
-                    );
-                    const stepRunner = new DefaultStepRunner(
-                      selectedRuntime.provider,
-                      sessionId,
-                      ctx.worktreePath,
-                      {
-                        featureDesc: `ci-fix-resolution-${ctx.entry.slug}`,
-                        config,
-                        modelPolicy: selectedRuntime.policy,
-                        mode: 'auto',
-                        providerExecution,
-                        log: createFeatureDaemonLogger(
+                    return withSessionEventTail({
+                      // CI repair owns a transient checkout just like rebase;
+                      // delivery still belongs to the retained feature scope.
+                      projectRoot: ctx.worktreePath,
+                      events: featureScope.events,
+                      featureSlug: ctx.entry.slug,
+                      run: async () => {
+                        const sessionId = uuidv4();
+                        const dispatchId = createSessionEventIdentity();
+                        const providerExecution = await createSlugScopedProviderExecution(
                           ctx.entry.slug,
-                          (message) => log(message, true),
-                          formatDaemonFeatureTag(ctx.entry.slug),
-                        ),
+                          ctx.worktreePath,
+                          dispatchId,
+                        );
+                        const selectedRuntime = providerExecution.runtimes.get(
+                          providerExecution.configuredProviders[0],
+                        );
+                        const stepRunner = new DefaultStepRunner(
+                          selectedRuntime.provider,
+                          sessionId,
+                          ctx.worktreePath,
+                          {
+                            featureDesc: `ci-fix-resolution-${ctx.entry.slug}`,
+                            config,
+                            modelPolicy: selectedRuntime.policy,
+                            mode: 'auto',
+                            providerExecution,
+                            log: createFeatureDaemonLogger(
+                              ctx.entry.slug,
+                              (message) => log(message, true),
+                              formatDaemonFeatureTag(ctx.entry.slug),
+                            ),
+                          },
+                        );
+                        return stepRunner.resolveCiFailure({
+                          worktreePath: ctx.worktreePath,
+                          prUrl: ctx.entry.prUrl,
+                          hint: ctx.hint,
+                          slug: ctx.entry.slug,
+                        });
                       },
-                    );
-                    return stepRunner.resolveCiFailure({
-                      worktreePath: ctx.worktreePath,
-                      prUrl: ctx.entry.prUrl,
-                      hint: ctx.hint,
-                      slug: ctx.entry.slug,
                     });
                   },
                 }),
@@ -2917,6 +2967,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 await events.emit(ciRepairOutcomeDiagnostic(entry, outcome));
               }
               return outcome;
+              } finally {
+                await featureScope.drain();
+              }
             },
           },
           operations: (entry) => {

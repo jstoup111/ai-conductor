@@ -402,6 +402,25 @@ export function startSessionEventTail(
   };
 }
 
+/**
+ * Bind a transient managed invocation to the already-owned feature persistence
+ * scope. The producer's worktree may be a repair checkout, while canonical
+ * persistence and rendering remain attached to the retained feature scope.
+ */
+export async function withSessionEventTail<T>(input: {
+  projectRoot: string;
+  events: ConductorEventEmitter;
+  featureSlug?: string;
+  run: () => Promise<T>;
+}): Promise<T> {
+  const tail = startSessionEventTail(input.projectRoot, input.events, input.featureSlug);
+  try {
+    return await input.run();
+  } finally {
+    await tail.drain();
+  }
+}
+
 export function startFeatureEventPersistence(
   worktreePath: string,
   globalEvents: ConductorEventEmitter,
