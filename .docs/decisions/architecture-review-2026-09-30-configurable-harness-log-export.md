@@ -5,7 +5,7 @@
 **Tier:** Large
 **Input reviewed:** [Approved PRD](../specs/harness-logs-have-no-export-path-daemon-log-is-a-f.md), FR-1–FR-11; [approved diagram set](../architecture/harness-logs-have-no-export-path-daemon-log-is-a-f.md). Stories do not yet exist: this is the full pre-stories review.
 **Technical verdict:** APPROVED WITH CONDITIONS
-**Operator decision:** APPROVED in composer chat, 2026-09-30. D18–D21 are appended to ADR-014; stories may proceed.
+**Operator decision:** APPROVED in composer chat, 2026-09-30. D27–D30 are appended to ADR-014; stories may proceed.
 **Implementation dependency:** [#2870](https://github.com/jstoup111/ai-conductor/issues/2870), recorded as a GitHub blocking dependency of #1935.
 
 ## Feasibility
@@ -73,7 +73,7 @@ Use one exhaustive sink registry and typed projection table. Formatting is a pur
 
 **Approval state: APPROVED**, 2026-09-30. The following decisions have been appended to ADR-014, preserving earlier text. ADR-014 is the authoritative copy.
 
-### D18 — Independent project-level log consent and configuration
+### D27 — Independent project-level log consent and configuration
 
 Add `otel.logs` with the following supported fields:
 
@@ -105,7 +105,7 @@ otel:
     enabled: true
 ```
 
-### D19 — Shared event projection and diagnostic capture
+### D28 — Shared event projection and diagnostic capture
 
 One log owner is attached to the daemon root bus; one owner is attached to an interactive run's bus. Per-feature daemon buses forward existing occurrences with full feature identity and do not own exporters. Recovery/provider execution buses use the same forwarding mechanism.
 
@@ -119,7 +119,7 @@ Use immutable logger ownership and async execution context for deferred diagnost
 
 Export standard OTel timestamp, observed timestamp, severity and body, plus record attributes `project`, `worker`, `conductor.scope`, `conductor.event.name`, and `feature` for feature-owned occurrences. Include step/attempt only when supplied by that event. Use a worker-stable log Resource, inheriting validated static attributes, project name, worker name and release identity. No log resource construction creates or rewrites run/session identity files. Conductor-owned keys override custom attributes.
 
-### D20 — Bounded shared delivery and replay authorization
+### D29 — Bounded shared delivery and replay authorization
 
 Use the log SDK provider with one explicit bounded batch processor implementing its public processor interface. The processor owns the sole in-memory admission queue, counts rejected records, and schedules asynchronous serialization/export. Avoid stacking an additional SDK queue or inspecting private SDK fields. Both modes use this same implementation.
 
@@ -144,7 +144,7 @@ Direct batches also retain their originating destination identity: a policy chan
 
 Extend existing typed spool/drop health events to cover logs and admission loss; use the same spine and local health renderer. Mark every log-export health event and its rendering `logs: false` so failures cannot feed themselves. Do not export credentials, request headers, raw backend response bodies, or unsanitized exception text in these warnings.
 
-### D21 — Ownership, startup, shutdown, and interoperability
+### D30 — Ownership, startup, shutdown, and interoperability
 
 Install the shared diagnostic capture and log owner before the first configured-run lifecycle diagnostic, then keep them alive through the final completion/shutdown diagnostic. Entry paths before configuration can be resolved remain local-only. Use try/finally teardown on startup failure, ordinary completion and exceptional shutdown. Restore any scoped console warn/error bridge exactly once. Do not intercept arbitrary stdout or raw subprocess streams.
 
@@ -208,11 +208,11 @@ This is advisory and reflects the refs available to the scanner. Manual review a
 
 ## ADRs Created
 
-None. Structural reuse check found ADR-014 already governs the integration, persistence and owner boundaries. D18–D21 above are an operator-approved additive amendment to that governing ADR; no competing authority is introduced. No prior decision is silently rewritten.
+None. Structural reuse check found ADR-014 already governs the integration, persistence and owner boundaries. D27–D30 above are an operator-approved additive amendment to that governing ADR; no competing authority is introduced. No prior decision is silently rewritten.
 
 ## Conditions
 
-1. Satisfied: operator approved D18–D21 and they were appended to ADR-014 before stories, 2026-09-30.
+1. Satisfied: operator approved D27–D30 and they were appended to ADR-014 before stories, 2026-09-30.
 2. Carry #2870 into the plan prerequisites; do not build a parallel spool to work around it.
 3. Stories must cover the inventory and all PRD outcomes, including disabled retained delivery, concurrent ownership, log-only validation failures, destination changes, bounded shutdown, and local output preservation.
 4. Test behavior through production wiring with isolated filesystem/HTTP boundaries; no live credentials or operator processes. Detailed tests are BUILD work, not executed by this specification review.

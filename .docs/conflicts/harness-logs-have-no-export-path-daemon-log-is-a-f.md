@@ -13,7 +13,7 @@ The content scan loaded all 518 story files, 61 specs, 307 prior conflict report
 
 This is a repository-wide subject scan followed by detailed comparison of overlapping contracts, not a claim that every unrelated story pair was independently re-reviewed. Existing-versus-existing unrelated conflicts are outside this change. Every new story was compared against its overlapping story/ADR subjects below; the 66 pairs within the new set were checked for shared scenarios, with both directions evaluated when they shared behavior. The ADR disposition appendix records all examined and narrowed-out files. Partial/ambiguous supersessions were retained; no selected decision was discarded merely because an amendment exists.
 
-The approved PRD and D18–D21 already settle the independent log control, replay policy, resource bounds, and ownership. The earlier durable-export conflict report was read: its gRPC default compatibility, health visibility, lease succession, disabled backlog and respawn resolutions remain intact.
+The approved PRD and D27–D30 already settle the independent log control, replay policy, resource bounds, and ownership. The earlier durable-export conflict report was read: its gRPC default compatibility, health visibility, lease succession, disabled backlog and respawn resolutions remain intact.
 
 ## Contract comparisons
 
@@ -21,7 +21,7 @@ Each row records the two-directional check: implementing the new contract leaves
 
 | Comparison | New stories | Why both contracts hold |
 | --- | --- | --- |
-| ADR-014 D1–D7 and `otel-observability.md` | 1, 2, 7, 8, 12 | Existing traces/metrics remain optional event-fed observers. D18–D21 explicitly add separately enabled logs. The original Phase-1 “unchanged emit sites” condition governed its trace/metric delivery scope; it does not prohibit later approved diagnostic event types. Logs-off introduces no log sender. |
+| ADR-014 D1–D7 and `otel-observability.md` | 1, 2, 7, 8, 12 | Existing traces/metrics remain optional event-fed observers. D27–D30 explicitly add separately enabled logs. The original Phase-1 “unchanged emit sites” condition governed its trace/metric delivery scope; it does not prohibit later approved diagnostic event types. Logs-off introduces no log sender. |
 | ADR-014 D8–D14, identity/static-attribute/dimension stories | 4, 7 | Log records may carry full feature identity while their Resource stays worker-stable. Existing trace resources, metric label sets, temporality and custom-attribute precedence do not change. |
 | Durable-export Stories 1–6 and ADR-014 D15–D17 | 1, 7, 9, 12 | Reuse the completed runtime rather than implement it again. The 512 MiB existing trace/metric policy and new independent 64 MiB log cap apply to different retained data. Spool-disabled processes leave old data untouched; log consent further restricts log sends. |
 | Durable default-on HTTP spool versus gRPC compatibility | 7, 11 | Logs' always-HTTP transport has its own endpoint when the parent is gRPC/file. No new restriction is imposed on parent `otel.protocol`, headers or spool defaults. |

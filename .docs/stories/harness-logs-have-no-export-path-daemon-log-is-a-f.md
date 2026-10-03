@@ -5,7 +5,7 @@
 
 **Source:** [#1935](https://github.com/jstoup111/ai-conductor/issues/1935)
 **Product authority:** [Approved PRD](../specs/harness-logs-have-no-export-path-daemon-log-is-a-f.md), FR-1–FR-11.
-**Architecture authority:** [ADR-014](../decisions/adr-014-otel-observability-exporter.md), operator-approved D18–D21; [full review](../decisions/architecture-review-2026-09-30-configurable-harness-log-export.md).
+**Architecture authority:** [ADR-014](../decisions/adr-014-otel-observability-exporter.md), operator-approved D27–D30; [full review](../decisions/architecture-review-2026-09-30-configurable-harness-log-export.md).
 **Build prerequisite:** [#2870](https://github.com/jstoup111/ai-conductor/issues/2870) completes the already-specified durable transport. These stories extend that delivery behavior to logs, without assigning its implementation to this feature.
 
 ## Story 1: Explicitly consent to log sending across both execution modes
@@ -323,7 +323,7 @@ No distinct full-workflow acceptance/system test is required beyond these focuse
 
 ## Verify-Claims Ledger
 
-**Verdict: CLEAR for story authoring.** The PRD, scope, diagrams and ADR D18–D21 are operator-approved inputs (verified against the artifacts and chat). These criteria describe intended behavior, not already-implemented capabilities. The existing OTel, durable-export and daemon-feature-tag stories were read to preserve their ownership and local display contracts. No new load-bearing product choice is introduced here.
+**Verdict: CLEAR for story authoring.** The PRD, scope, diagrams and ADR D27–D30 are operator-approved inputs (verified against the artifacts and chat). These criteria describe intended behavior, not already-implemented capabilities. The existing OTel, durable-export and daemon-feature-tag stories were read to preserve their ownership and local display contracts. No new load-bearing product choice is introduced here.
 
 Durable transport completion is explicitly conditional on #2870. Destination tests establish the emitted protocol contract using faithful fakes; live vendor-account compatibility is not claimed. No implementation or behavioral test has been executed in this composer step.
 

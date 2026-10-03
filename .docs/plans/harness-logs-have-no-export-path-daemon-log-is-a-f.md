@@ -7,7 +7,7 @@
 **Design:** [Approved PRD](../specs/harness-logs-have-no-export-path-daemon-log-is-a-f.md)
 **Stories:** .docs/stories/harness-logs-have-no-export-path-daemon-log-is-a-f.md
 **Conflict check:** [Clean, 2026-09-30](../conflicts/harness-logs-have-no-export-path-daemon-log-is-a-f.md)
-**Architecture:** [ADR-014](../decisions/adr-014-otel-observability-exporter.md), especially approved D18–D21.
+**Architecture:** [ADR-014](../decisions/adr-014-otel-observability-exporter.md), especially approved D27–D30.
 
 ## Summary
 
@@ -247,7 +247,7 @@ All listed criteria are diff-local under a fixed checked-out dependency baseline
 **Steps:**
 1. Write failing targeted tests for the named checks through the lowest sufficient layer: unit for parsing/projection/state transitions, integration for the named production entry or storage/network adapter boundary.
 2. Run those selectors through `ai-conductor scoped-run` and establish RED.
-3. Declare direct compatible log API/SDK dependencies and implement the SDK public processor interface with one admission queue. Count admitted/in-flight records and normalized bytes until settlement. Schedule an unreferenced timer and serialize/split off the event callback. The installed stock batch processor exposes no suitable overflow callback; D20 explicitly authorizes this bounded processor rather than stacking SDK/private queues.
+3. Declare direct compatible log API/SDK dependencies and implement the SDK public processor interface with one admission queue. Count admitted/in-flight records and normalized bytes until settlement. Schedule an unreferenced timer and serialize/split off the event callback. The installed stock batch processor exposes no suitable overflow callback; D29 explicitly authorizes this bounded processor rather than stacking SDK/private queues.
 4. Run the same selectors to GREEN and applicable static checks; do not launch an aggregate suite.
 5. Commit the scoped behavior and its tests with the task identity.
 
@@ -439,7 +439,7 @@ All listed criteria are diff-local under a fixed checked-out dependency baseline
 - Main-root runtime registration shares the prerequisite drainer/lease rather than creating a logs drainer, preserves independent trace/metric loops, and does not let per-feature release stop another owner's transport.
 - Starting with retained log batches and absent/false log enablement emits one bounded local notice that the backlog remains unsent; it performs no log send or backlog purge.
 
-> **Amended 2026-09-30 by #1935:** Coherence review makes D20's disabled-backlog notice explicit in Task 16 completion checks; approved consent, retention and local-output behavior are unchanged.
+> **Amended 2026-09-30 by #1935:** Coherence review makes D29's disabled-backlog notice explicit in Task 16 completion checks; approved consent, retention and local-output behavior are unchanged.
 
 **Files:**
 - src/conductor/src/engine/otel/spool-wiring.ts
@@ -677,26 +677,26 @@ Each changed boundary has one integration-proof owner; sibling unit checks do no
 | Decision | Disposition | Task(s) | Evidence |
 | --- | --- | --- | --- |
 | adr-014-otel-observability-exporter#D1 | task | task-8, task-18 | `LogListener` subscribes from the exhaustive logs registry and its total typed projection table; each selected event is handled, deliberate exclusions stay excluded, and existing trace/metric/render/persist/audit declarations remain unchanged. |
-| adr-014-otel-observability-exporter#D2 | no-change | none | Existing trace visualizer packaging remains unchanged; logs ownership is the explicit additive D18–D21 extension, not a replacement plugin kind. |
+| adr-014-otel-observability-exporter#D2 | no-change | none | Existing trace visualizer packaging remains unchanged; logs ownership is the explicit additive D27–D30 extension, not a replacement plugin kind. |
 | adr-014-otel-observability-exporter#D3 | no-change | none | The original generic visualizer discovery/selection remains unchanged; this feature invokes a shared log owner beside the established trace/metric wiring. |
 | adr-014-otel-observability-exporter#D4 | task | task-9 | `BoundedLogProcessor.onEmit` admits bounded records synchronously and returns without awaiting disk/network; a stalled fake exporter leaves its producer and subsequent event handlers unblocked. |
 | adr-014-otel-observability-exporter#D5 | task | task-12, task-17, task-23 | Thrown/rejected serialization, policy and credential operations and never-settling fake operations return safe delivery failure without escaping into the build or exceeding the attempt deadline; controlled late resolutions produce zero further requests. |
-| adr-014-otel-observability-exporter#D6 | no-change | none | Existing file and OTLP trace/metric transport choices remain unchanged; independent HTTP logs are governed by D18. |
+| adr-014-otel-observability-exporter#D6 | no-change | none | Existing file and OTLP trace/metric transport choices remain unchanged; independent HTTP logs are governed by D27. |
 | adr-014-otel-observability-exporter#D7 | task | task-18, task-19, task-20, task-21 | The daemon root log owner outlives one feature's finish and continues sending for the daemon and remaining features with their own attribution; no feature constructs another log exporter or reads shared-root policy directly. |
 | adr-014-otel-observability-exporter#D8 | no-change | none | Existing trace/metric identity rules remain unchanged; no metric label or run-id behavior is added by this feature. |
 | adr-014-otel-observability-exporter#D9 | task | task-4, task-19 | Forwarding retains its existing local persistence and root forwarded marker behavior without duplicating a persisted occurrence or changing source event payload fields unrelated to logs. |
 | adr-014-otel-observability-exporter#D10 | no-change | none | No metric instruments, labels, bucket boundaries, dispatch accounting or cost semantics change; logs only consume occurrences. |
 | adr-014-otel-observability-exporter#D11 | no-change | none | Existing optional metric dimensions on lifecycle events are preserved; no new metric dimension is introduced. |
 | adr-014-otel-observability-exporter#D12 | no-change | none | Existing custom attribute validation, reserved namespaces and limits are reused; no new attribute source or parent-signal policy is introduced. |
-| adr-014-otel-observability-exporter#D13 | no-change | none | Trace/metric Resource and data-point metadata placement is preserved; the additional log Resource and record mapping is governed by D19. |
+| adr-014-otel-observability-exporter#D13 | no-change | none | Trace/metric Resource and data-point metadata placement is preserved; the additional log Resource and record mapping is governed by D28. |
 | adr-014-otel-observability-exporter#D14 | no-change | none | Existing feature/step tier metric placement and unresolved-absence behavior are unchanged; no metric is recorded from the log listener. |
 | adr-014-otel-observability-exporter#D15 | task | task-13, task-15 | The logs spooling exporter serializes and commits a complete immutable protobuf batch before acknowledging retention and before any network send; a later authorized owner over the same storage observes and delivers that payload after the first exits. |
 | adr-014-otel-observability-exporter#D16 | task | task-11, task-13, task-14, task-16, task-23 | The shared runtime's log loop sends retained logs only for its current authorized lease owner and enabled matching log policy; contention/lost-ownership fixtures permit only that owner to send, and a trace/metric owner with logs disabled sends zero log requests. |
 | adr-014-otel-observability-exporter#D17 | task | task-17 | Delivery health events reach the existing persisted/local render path with logs disabled for their sink and rendering capture suppressed; an induced failure episode produces zero exported health records and zero recursive send attempts. |
-| adr-014-otel-observability-exporter#D18 | task | task-1, task-2, task-3, task-10, task-11, task-19, task-20, task-21 | `sendLogBatch` re-reads canonical consent before each new direct, retained or fallback request and issues none when policy is false, invalid, missing or unreadable, even if an earlier process/attempt admitted the batch; a running-sender fixture proves revocation stops the next request without asserting retraction of one already issued. |
-| adr-014-otel-observability-exporter#D19 | task | task-4, task-5, task-6, task-7, task-8, task-19, task-20 | Feature-to-root plus terminal/daemon render integration emits exactly one logical remote record for one forwarded/rendered occurrence before transport retries; two separate occurrences with identical message text still produce two records. |
-| adr-014-otel-observability-exporter#D20 | task | task-9, task-10, task-11, task-12, task-13, task-14, task-15, task-16, task-17, task-23 | `BoundedLogProcessor` permits at most 1,024 records and 8 MiB normalized payload including in-flight records; an overflow drops the newest record with an exact loss count and never increases admitted state beyond either cap. |
-| adr-014-otel-observability-exporter#D21 | task | task-10, task-19, task-20, task-22, task-23 | Daemon and interactive owner-stop integration includes the final lifecycle diagnostic in the flush/preservation attempt, then returns within one total two-second log shutdown budget even when destination or storage never completes; it clears/unrefs log timers and prevents any late request after stop. |
+| adr-014-otel-observability-exporter#D27 | task | task-1, task-2, task-3, task-10, task-11, task-19, task-20, task-21 | `sendLogBatch` re-reads canonical consent before each new direct, retained or fallback request and issues none when policy is false, invalid, missing or unreadable, even if an earlier process/attempt admitted the batch; a running-sender fixture proves revocation stops the next request without asserting retraction of one already issued. |
+| adr-014-otel-observability-exporter#D28 | task | task-4, task-5, task-6, task-7, task-8, task-19, task-20 | Feature-to-root plus terminal/daemon render integration emits exactly one logical remote record for one forwarded/rendered occurrence before transport retries; two separate occurrences with identical message text still produce two records. |
+| adr-014-otel-observability-exporter#D29 | task | task-9, task-10, task-11, task-12, task-13, task-14, task-15, task-16, task-17, task-23 | `BoundedLogProcessor` permits at most 1,024 records and 8 MiB normalized payload including in-flight records; an overflow drops the newest record with an exact loss count and never increases admitted state beyond either cap. |
+| adr-014-otel-observability-exporter#D30 | task | task-10, task-19, task-20, task-22, task-23 | Daemon and interactive owner-stop integration includes the final lifecycle diagnostic in the flush/preservation attempt, then returns within one total two-second log shutdown budget even when destination or storage never completes; it clears/unrefs log timers and prevents any late request after stop. |
 
 ## Coverage Check
 
@@ -783,7 +783,7 @@ Verified against local source: `ConductorEventEmitter` awaits handler promises; 
 
 The spool modules are an explicit approved-but-pending prerequisite. Their exact merged API signatures are not assumed. Direct log SDK/transformer compatibility was verified in installed 0.221.0 declarations during architecture review; use the compatible dependency family at BUILD HEAD. Structural disagreement with either prerequisite returns to DECIDE; it does not authorize an alternative transport.
 
-No new load-bearing product assumption: canonical consent, record/storage/time bounds, destination binding, shared paths and failure dispositions were explicitly approved with D18–D21. Verdict: CLEAR for planning on the stated prerequisite baseline.
+No new load-bearing product assumption: canonical consent, record/storage/time bounds, destination binding, shared paths and failure dispositions were explicitly approved with D27–D30. Verdict: CLEAR for planning on the stated prerequisite baseline.
 
 ## Verification
 
