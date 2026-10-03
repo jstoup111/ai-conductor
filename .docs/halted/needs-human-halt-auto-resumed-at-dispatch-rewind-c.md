@@ -1,25 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-10-03T15:52:19.358Z
+Status: halted
 Slug: needs-human-halt-auto-resumed-at-dispatch-rewind-c
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-needs-human-halt-auto-resumed-at-dispatch-rewind-c
-Head SHA: f9d84673f3a7c590847e1a5e5efde6457aff3b43
-Halted at: 2026-10-03T13:50:51.220Z
+Head SHA: c3cc8289cd97dc65a1a82308818a19bc899fcb98
+Halted at: 2026-10-03T17:03:29.443Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-coverage_binding refused: cited Done when checks do not assert the required claim.
+Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — Blocking findings: AB-REACH-1 (REMEDIABLE; plan task 5): Verified, 96% confidence: halt-class propagation is only partially wired. The first build-stall remediation consumer passes outcome.haltClass at conductor.ts:12161-12167, but the later reachable outcome.kind === 'halt' consumer at conductor.ts:13191-13199 omits it and silently falls back to needs-human.; AB-ADR-1 (DESIGN; adr-2026-08-29-kickback-budget-recovery-uses-needs-human-halt-class decision 4): Verified, 98% confidence: cli.ts:418-429, index.ts:870-873, and halt-clear-cli.ts:75,90-106 allow a generic kickback-cap clear that directly deletes the halt pair. D4 requires staged, generation-bound authorization and daemon-side clearing. Because the sealed plan explicitly requires direct kickback-cap clearing, resolution needs a human architectural decision.; AB-ADR-2 (REMEDIABLE; adr-2026-08-24-over-scope-decision-block-and-durable-refusals decision 3): Verified, 98% confidence: halt-clear-cli.ts:104-105 unlinks an over-scope HALT instead of preserving its operator-edited decision block as HALT.cleared. This discards the approved carrier before the next prd_audit lap can parse it.
 
-Criterion: Story 1 happy: Given a feature worktree whose `.pipeline/HALT` exists, whose `.pipeline/HALT.class` reads `needs-human`, and whose `.pipeline/conduct-state.json` records `last_step` as `build`, when the operator runs `ai-conductor halt clear --feature <slug> --rationale "plan amended and resealed"` from an interactive terminal, then the command exits 0, both `.pipeline/HALT` and `.pipeline/HALT.class` are absent, and `last_step` is still `build`.
-Task ids: 2
-Done when checks: The CLI test drives `detectHaltClearCommand` into `dispatchHaltClearCommand` on a `needs-human` halt with `last_step` `build` and asserts exit 0, `.pipeline/HALT` and `.pipeline/HALT.class` both absent, and `conduct-state.json` byte-identical so `last_step` is still `build`. | The same test asserts `.pipeline/events.jsonl` contains exactly one `halt_clear_authorized` event with the resolved operator identity, the trimmed rationale, `haltClass` `needs-human`, and the feature slug, and the `appendEvent` spy observed both `.pipeline/HALT` and `.pipeline/HALT.class` still present when the event was appended. | The same test asserts `.docs/halted/<slug>.md` is committed with status resolved and cause `operator` by `supersedeHaltRecord`. | A parameterized test seeds `HALT.class` as each of `kickback-cap`, `plan-gap`, `over-scope`, `protected-artifact` and asserts exit 0, both markers absent, and the `halt_clear_authorized` event's `haltClass` equals the seeded class.
-Missing assertion: "from an interactive terminal"
+Blocking findings:
+AB-REACH-1 (REMEDIABLE; plan task 5): Verified, 96% confidence: halt-class propagation is only partially wired. The first build-stall remediation consumer passes outcome.haltClass at conductor.ts:12161-12167, but the later reachable outcome.kind === 'halt' consumer at conductor.ts:13191-13199 omits it and silently falls back to needs-human.; AB-ADR-1 (DESIGN; adr-2026-08-29-kickback-budget-recovery-uses-needs-human-halt-class decision 4): Verified, 98% confidence: cli.ts:418-429, index.ts:870-873, and halt-clear-cli.ts:75,90-106 allow a generic kickback-cap clear that directly deletes the halt pair. D4 requires staged, generation-bound authorization and daemon-side clearing. Because the sealed plan explicitly requires direct kickback-cap clearing, resolution needs a human architectural decision.; AB-ADR-2 (REMEDIABLE; adr-2026-08-24-over-scope-decision-block-and-durable-refusals decision 3): Verified, 98% confidence: halt-clear-cli.ts:104-105 unlinks an over-scope HALT instead of preserving its operator-edited decision block as HALT.cleared. This discards the approved carrier before the next prd_audit lap can parse it.
 ```
