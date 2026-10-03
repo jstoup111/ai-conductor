@@ -851,6 +851,122 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events).toEqual(['remediation_adjudication_started', 'remediation_adjudication_failed']);
   });
 
+  it('records validator rejection evidence while confirming persisted history remains valid', async () => {
+    const root = await projectRoot();
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const invalid = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: 'testQuality:unknown', outcome: 'acted', caseRef: 'case-invalid' }],
+      cases: [{
+        caseRef: 'case-invalid', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Invalid source identity.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Do not persist this case' }] },
+      }],
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => invalid),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      detail: expect.stringMatching(/persisted case history is valid; failure kind: invalid-judgement/),
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'invalid-judgement',
+      caseIds: [], sourceIds: ['testQuality:unknown'],
+    }));
+  });
+
+  it('records both owners and their source when reconciliation rejects a second unresolved owner', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [
+        {
+          id: 'case-resolved', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'Resolved anchor.', resolution: 'resolved',
+          sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+          effect: { id: 'effect-resolved', kind: 'action', status: 'applied', workOrderId: 'order-resolved' },
+        },
+        {
+          id: 'case-current-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'Current owner.', resolution: 'open',
+          sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+          effect: { id: 'effect-current-owner', kind: 'action', status: 'reserved' },
+        },
+      ],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      ...actionJudgement(),
+      cases: [{ ...actionJudgement().cases[0]!, distinctFrom: ['case-resolved'] }],
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), generateId: sequentialIds('case-second-owner'),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      detail: expect.stringMatching(/persisted case history is valid; failure kind: reconciliation-rejected/),
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'reconciliation-rejected',
+      caseIds: ['case-current-owner', 'case-second-owner-1'], sourceIds: [sourceId],
+    }));
+  });
+
+  it('keeps a rejected store transition distinct from malformed persisted history', async () => {
+    const root = await projectRoot();
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const mutate = vi.spyOn(RemediationCaseStore.prototype, 'mutate')
+      .mockResolvedValueOnce({ ok: false, reason: 'rejected-transition' } as never);
+
+    try {
+      const result = await coordinateBuildReviewAdjudication({
+        ...input(root, async () => actionJudgement()),
+        emit: async (event) => { events.push(event); },
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        detail: expect.stringMatching(/persisted case history is valid; failure kind: rejected-transition/),
+      });
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'remediation_adjudication_failed', failureKind: 'rejected-transition',
+        caseIds: [], sourceIds: [sourceId],
+      }));
+    } finally {
+      mutate.mockRestore();
+    }
+  });
+
+  it('classifies persisted duplicate unresolved owners as malformed history', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+      version: 'v2', feature, suppressions: [], prdWideningCases: [],
+      cases: ['case-a', 'case-b'].map((id) => ({
+        id, domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: id,
+        resolution: 'open', sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: `effect-${id}`, kind: 'action', status: 'reserved' },
+      })),
+    }), 'utf8');
+    const events: RemediationCaseLifecycleEvent[] = [];
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'persisted-malformed',
+    }));
+  });
+
   it('fails closed before reconciliation when durable attempt evidence is invalid', async () => {
     const root = await projectRoot();
     await mkdir(join(root, '.pipeline'), { recursive: true });

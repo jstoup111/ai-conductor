@@ -55,6 +55,12 @@ export type BuildReviewAdjudicationCoordinatorResult =
       } }
   | { readonly ok: false; readonly detail: string };
 
+type AdjudicationFailureEvidence = {
+  readonly failureKind: Extract<ConductorEvent, { type: 'remediation_adjudication_failed' }>['failureKind'];
+  readonly caseIds: readonly string[];
+  readonly sourceIds: readonly string[];
+};
+
 
 /**
  * The case-v1 contract's plan evidence, sourced from the feature worktree.
@@ -183,9 +189,19 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
           ? record.sources.filter((source) => source.outcome === 'merged').map((source) => source.sourceId)
           : [],
     ));
-  const fail = async (detail: string): Promise<BuildReviewAdjudicationCoordinatorResult> => {
-    await input.emit?.({ type: 'remediation_adjudication_failed', domain: 'build_review', lapId: input.aggregate.lapId, reason: detail });
-    return { ok: false, detail };
+  const fail = async (
+    detail: string,
+    evidence?: AdjudicationFailureEvidence,
+  ): Promise<BuildReviewAdjudicationCoordinatorResult> => {
+    const persistedHistoryIsValid = evidence?.failureKind !== undefined && evidence.failureKind !== 'persisted-malformed';
+    const terminalDetail = persistedHistoryIsValid
+      ? `${detail}; persisted case history is valid; failure kind: ${evidence.failureKind}`
+      : detail;
+    await input.emit?.({
+      type: 'remediation_adjudication_failed', domain: 'build_review', lapId: input.aggregate.lapId, reason: terminalDetail,
+      ...(evidence === undefined ? {} : evidence),
+    });
+    return { ok: false, detail: terminalDetail };
   };
   const store = new RemediationCaseStore(input.projectRoot, input.feature);
   // Not a second writer: the same seam the effective-verdict path already ran
@@ -197,7 +213,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     suppressions: input.suppressions ?? [],
     store,
   });
-  if (!persisted.ok) return fail(`case store ${persisted.reason}`);
+  if (!persisted.ok) return fail(`case store ${persisted.reason}`, persisted.reason === 'malformed-state'
+    ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
+    : undefined);
   // Before the judge is dispatched there is no frozen dispatch set, so live ids
   // are computed against the raw join. The two agree for every all-accepted lap,
   // and this is reassigned to the frozen set once one exists.
@@ -268,7 +286,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       }
     }
     const settled = await store.read();
-    if (!settled.ok) return fail(`case store ${settled.reason}`);
+    if (!settled.ok) return fail(`case store ${settled.reason}`, settled.reason === 'malformed-state'
+      ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
+      : undefined);
     // The settlement above awaited durable work, so even an entry snapshot
     // taken moments ago can be stale. Every terminal decision below derives
     // from an authority read that FOLLOWS the last awaited operation: settle
@@ -441,6 +461,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
        * `finalize` then derives the surviving sibling's route.
        */
       readonly caseSourceIds?: readonly ReadonlySet<string>[];
+      /** Typed evidence for a rejected provider graph or reconciliation transition. */
+      readonly failureEvidence?: AdjudicationFailureEvidence;
     },
   ): Promise<BuildReviewAdjudicationCoordinatorResult> => {
     let latest: ReadonlySet<string>;
@@ -454,7 +476,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     // Read authority once more after that await. The emitted failure stands
     // (the content failure did occur, exactly as a retired reserved effect
     // still emits its durable transition); only the obsolete HALT is avoided.
-    const failed = await fail(detail);
+    const failed = await fail(detail, options.failureEvidence);
     let afterDelivery: ReadonlySet<string>;
     try { afterDelivery = await operatorResolvedFindingIds(); } catch { return failed; }
     const liveAfterDelivery = liveSourceIdsFor(afterDelivery);
@@ -481,7 +503,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   }
   let currentSources = sources.filter((source) => !resolved.has(source.findingId));
   const prior = await store.read();
-  if (!prior.ok) return fail(`case store ${prior.reason}`);
+  if (!prior.ok) return fail(`case store ${prior.reason}`, prior.reason === 'malformed-state'
+    ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
+    : undefined);
   // An exact source bound to a refutation with unfinished durable follow-up
   // is not new content for the judge. The reducer names that effect and
   // blocks PASS below.
@@ -566,7 +590,14 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     existingCaseIds: prior.state.cases.map((record) => record.id),
     admittedTaskIds: planContract.admittedTaskContracts?.map((task) => task.id) ?? [],
   });
-  if (!graph.ok) return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, { settleAbsentAttempted: true });
+  if (!graph.ok) return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, {
+    settleAbsentAttempted: true,
+    failureEvidence: {
+      failureKind: 'invalid-judgement',
+      caseIds: [...new Set(judgement.cases.flatMap((row) => row.existingCaseId ? [row.existingCaseId] : []))],
+      sourceIds: [...new Set(judgement.sourceOutcomes.map((source) => source.sourceId))],
+    },
+  });
   // The v2 consistency/escalation gate is an effect authority, not advisory
   // context: no partial action set survives a blocked or escalated judgement.
   const authorizedActionRefs = new Set(authorizeBuildReviewRemediationActionEffects({ judgement, validation: graph }));
@@ -609,12 +640,28 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   if (!reconciled.ok) {
     // A store fault stays fail-closed; a rejected graph is content-specific
     // and, like every failure above, may be obsolete under a late acceptance.
-    if (reconciled.reason === 'store-failure') return fail(`case store ${reconciled.storeReason}`);
+    if (reconciled.reason === 'store-failure') return fail(`case store ${reconciled.storeReason}`, reconciled.storeReason === 'rejected-transition'
+      ? {
+        failureKind: 'rejected-transition', caseIds: [],
+        sourceIds: [...new Set(admitted.flatMap((proposed) => proposed.sources.map((source) => source.sourceId)))],
+      }
+      : reconciled.storeReason === 'malformed-state'
+        ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
+        : undefined);
     if (reconciled.reason === 'refutation-repeat') {
       const repeatedCaseId = admitted.find((proposed) => proposed.case.disposition === 'refute')?.case.existingCaseId;
       return failUnlessAccepted(`refutation repeat ${repeatedCaseId ?? 'unknown'}`, { settleAbsentAttempted: false });
     }
-    return failUnlessAccepted(`case reconciliation ${reconciled.reason}`, { settleAbsentAttempted: true });
+    return failUnlessAccepted(`case reconciliation ${reconciled.reason}`, {
+      settleAbsentAttempted: true,
+      failureEvidence: {
+        failureKind: 'reconciliation-rejected',
+        caseIds: 'caseIds' in reconciled ? reconciled.caseIds : [],
+        sourceIds: 'sourceIds' in reconciled
+          ? reconciled.sourceIds
+          : [...new Set(admitted.flatMap((proposed) => proposed.sources.map((source) => source.sourceId)))],
+      },
+    });
   }
 
   // Reconciliation owns durable identity, so it reports the caseRef -> case-id

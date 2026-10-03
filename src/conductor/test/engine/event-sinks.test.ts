@@ -965,6 +965,43 @@ describe('event sink subscriptions', () => {
     ));
   });
 
+  it('accepts typed adjudication failure evidence on every registered lifecycle sink', async () => {
+    const failure = {
+      type: 'remediation_adjudication_failed', domain: 'build_review', lapId: 'lap-typed-failure',
+      reason: 'invalid remediation judgement unknown-source; persisted case history is valid; failure kind: invalid-judgement',
+      failureKind: 'invalid-judgement', caseIds: ['case-current-owner', 'case-proposed'], sourceIds: ['testQuality:sha256-source'],
+    } satisfies ConductorEvent;
+
+    const projectRoot = await mkdtemp(join(tmpdir(), 'typed-adjudication-failure-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+
+    try {
+      persister.start();
+      await events.emit(failure);
+      persister.stop();
+
+      expect({
+        sinks: EVENT_SINKS[failure.type],
+        persisted: persistedEventTypes().includes(failure.type),
+        rendered: renderedEventTypes().includes(failure.type),
+        audited: auditedEventTypes().includes(failure.type),
+        otel: otelEventTypes().includes(failure.type as never),
+        ledger: JSON.parse(await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8')),
+      }).toEqual({
+        sinks: { render: false, persist: true, audit: false, otel: false },
+        persisted: true,
+        rendered: false,
+        audited: false,
+        otel: false,
+        ledger: { ...failure, ts: expect.any(String) },
+      });
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('renders, persists, and audits a refuted remediation case without exporting it to OpenTelemetry', () => {
     expect(EVENT_SINKS.remediation_case_refuted).toEqual({
       render: true,

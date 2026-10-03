@@ -79,6 +79,7 @@ export const EVENT_SINKS = {
   // event ledger is the complete reader path for this detail.
   remediation_adjudication_started: { render: false, persist: true, audit: false, otel: false },
   remediation_adjudication_completed: { render: true, persist: true, audit: false, otel: false },
+  // Typed failure evidence is durable diagnosis, not a rendered or exported signal.
   remediation_adjudication_failed: { render: false, persist: true, audit: false, otel: false },
   remediation_case_reconciled: { render: false, persist: true, audit: false, otel: false },
   remediation_case_refuted: { render: true, persist: true, audit: true, otel: false },

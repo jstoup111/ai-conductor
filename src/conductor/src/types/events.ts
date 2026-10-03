@@ -706,6 +706,12 @@ export type ConductorEvent =
       domain: 'build_review';
       lapId: string;
       reason: string;
+      /** Classifies a rejected adjudication without conflating it with corrupt persisted history. */
+      failureKind?: 'rejected-transition' | 'invalid-judgement' | 'reconciliation-rejected' | 'persisted-malformed';
+      /** Durable case identities implicated by the rejection, when available. */
+      caseIds?: readonly string[];
+      /** Frozen or durable source identities implicated by the rejection. */
+      sourceIds?: readonly string[];
     }
   | {
       /** One canonical remediation case was reconciled against the current lap. */
