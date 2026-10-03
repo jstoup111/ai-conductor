@@ -1421,7 +1421,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // so their provider_fallback transitions and subprocess diagnostics render
   // tagged with the slug (e.g. `[daemon][<slug>] ...`) instead of falling
   // back to the untagged global logger.
-  const createSlugScopedProviderExecution = (slug: string): ProviderExecutionContext => {
+  const createSlugScopedProviderExecution = async (
+    slug: string,
+    worktreeRoot: string,
+    dispatchId: string,
+  ): Promise<ProviderExecutionContext> => {
     const scopedEvents = new ConductorEventEmitter();
     const scopedLog = createFeatureDaemonLogger(
       slug,
@@ -1431,7 +1435,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     scopedEvents.on('provider_attempt', (event) => renderDaemonEvent(event, scopedLog));
     scopedEvents.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
     scopedEvents.on('session_policy', (event) => renderDaemonEvent(event, scopedLog));
-    return createProviderExecution(scopedEvents, scopedLog);
+    const providerExecution = createProviderExecution(scopedEvents, scopedLog);
+    const provider = providerExecution.configuredProviders[0];
+    if (!provider) throw new Error('daemon recovery dispatch requires a configured provider');
+    const managedSessionContext = await prepareDaemonFeatureManagedSessionContext({
+      projectRoot,
+      worktreeRoot,
+      featureSlug: slug,
+      dispatchId,
+      provider,
+    });
+    return {
+      ...providerExecution,
+      managedSessionContext,
+      prepareManagedSessionObservation: async ({ provider, context, readOnlyReview }: { provider: string; context: ManagedSessionContext; readOnlyReview: boolean }) =>
+        prepareManagedSessionObservationDestination({ provider, context, readOnlyReview, probe: async () => ({ producerWrite: 'allowed', protectedWrites: 'refused' }) }),
+    };
   };
   // The pool emits a feature's start/resume/done records before and after its
   // worktree scope exists. Cache the scoped logger by slug so those lifecycle
@@ -2731,7 +2750,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                   try {
                     // Create a fresh step runner for this rebase resolution attempt
                     const sessionId = uuidv4();
-                    const providerExecution = createSlugScopedProviderExecution(entry.slug);
+                    const providerExecution = await createSlugScopedProviderExecution(
+                      entry.slug,
+                      ctx.projectRoot,
+                      sessionId,
+                    );
                     const selectedRuntime = providerExecution.runtimes.get(
                       providerExecution.configuredProviders[0],
                     );
@@ -2821,7 +2844,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 // DefaultStepRunner pattern used for rebase resolution above.
                   resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: typeof entry }) => {
                     const sessionId = uuidv4();
-                    const providerExecution = createSlugScopedProviderExecution(ctx.entry.slug);
+                    const providerExecution = await createSlugScopedProviderExecution(
+                      ctx.entry.slug,
+                      ctx.worktreePath,
+                      sessionId,
+                    );
                     const selectedRuntime = providerExecution.runtimes.get(
                       providerExecution.configuredProviders[0],
                     );
