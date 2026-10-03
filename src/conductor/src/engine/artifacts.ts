@@ -2781,8 +2781,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           reason: 'missing .pipeline/task-status.json — the pipeline skill must create it',
         };
       }
+      let statusRows: TaskEntry[];
       try {
-        JSON.parse(raw);
+        statusRows = extractTasks(JSON.parse(raw));
       } catch {
         return { done: false, reason: 'invalid JSON in .pipeline/task-status.json' };
       }
@@ -2796,14 +2797,24 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       const unresolved = planTaskIds.filter((id) => !resolvedIds.has(id));
 
       if (unresolved.length > 0) {
-        const names = unresolved.slice(0, 3).join(', ');
-        const more = unresolved.length > 3 ? ` (+${unresolved.length - 3} more)` : '';
+        const { parsePlanTasks } = await import('./autoheal.js');
+        const planTasks = parsePlanTasks(planText!);
+        const statusNames = new Map(
+          statusRows.flatMap((task) => task.id && task.name ? [[task.id, task.name]] : []),
+        );
+        const ids = unresolved.join(', ');
+        const titles = unresolved
+          .map((id) => {
+            const title = planTasks.get(id)?.name ?? statusNames.get(id);
+            return title ? `${id} "${title}"` : id;
+          })
+          .join('; ');
         const repairReason = unresolved
           .map((id) => taskResolution.unavailableReasons.get(id))
           .find((reason): reason is string => Boolean(reason));
         return {
           done: false,
-          reason: `${unresolved.length}/${planTaskIds.length} tasks pending/not completed: ${names}${more}` +
+          reason: `${unresolved.length}/${planTaskIds.length} tasks pending/not completed: ${ids} — ${titles}` +
             (repairReason ? `; ${repairReason}` : ''),
         };
       }
@@ -5397,6 +5408,7 @@ function splitOnHeadings(text: string, headingRe: RegExp): string[] {
 
 interface TaskEntry {
   id?: string;
+  name?: string;
   status?: string;
 }
 
@@ -5409,11 +5421,19 @@ function extractTasks(parsed: unknown): TaskEntry[] {
   if (Array.isArray(container)) {
     return container
       .filter((t): t is Record<string, unknown> => typeof t === 'object' && t !== null)
-      .map((t) => ({ id: t.id as string | undefined, status: t.status as string | undefined }));
+      .map((t) => ({
+        id: t.id as string | undefined,
+        name: t.name as string | undefined,
+        status: t.status as string | undefined,
+      }));
   }
   if (container && typeof container === 'object') {
     return Object.entries(container).map(([id, v]) => ({
       id,
+      name:
+        v && typeof v === 'object' && 'name' in v
+          ? ((v as Record<string, unknown>).name as string | undefined)
+          : undefined,
       status:
         v && typeof v === 'object' && 'status' in v
           ? ((v as Record<string, unknown>).status as string | undefined)
