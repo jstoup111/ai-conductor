@@ -1,15 +1,33 @@
 // Covers: task:16
+import { execFile as execFileCallback } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { promisify } from 'node:util';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { wireDaemonOtel, wireOtelVisualizer } from '../../../src/engine/otel/wire.js';
+import { wireDaemonOtel, wireInteractiveOtelMetrics, wireOtelVisualizer } from '../../../src/engine/otel/wire.js';
 import { startDaemonEventPersistence } from '../../../src/engine/event-persister.js';
 import { SpoolDrainer } from '../../../src/engine/otel/spool-drainer.js';
 import { SpoolStore } from '../../../src/engine/otel/spool-store.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
+
+const execFile = promisify(execFileCallback);
+const leaseUnlinkFailures = vi.hoisted(() => new Set<string>());
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const filesystem = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...filesystem,
+    rm: async (path: Parameters<typeof filesystem.rm>[0], options?: Parameters<typeof filesystem.rm>[1]) => {
+      if (leaseUnlinkFailures.has(String(path))) {
+        throw Object.assign(new Error('lease unlink denied'), { code: 'EACCES' });
+      }
+      return filesystem.rm(path, options);
+    },
+  };
+});
 
 const directories: string[] = [];
 const servers: Server[] = [];
@@ -17,6 +35,12 @@ const servers: Server[] = [];
 async function temporaryDirectory(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'spool-daemon-wiring-'));
   directories.push(directory);
+  return directory;
+}
+
+async function temporaryProject(): Promise<string> {
+  const directory = await temporaryDirectory();
+  await execFile('git', ['init', '--initial-branch=main', directory]);
   return directory;
 }
 
@@ -46,13 +70,14 @@ async function listeningEndpoint(onRequest: (path: string) => void): Promise<{ e
   return { endpoint: `http://127.0.0.1:${address.port}`, request: requestReceived };
 }
 
-async function eventually(predicate: () => boolean): Promise<void> {
-  for (let turn = 0; turn < 1_000 && !predicate(); turn += 1) {
+async function eventually(predicate: () => boolean | Promise<boolean>): Promise<void> {
+  for (let turn = 0; turn < 1_000 && !(await predicate()); turn += 1) {
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
 }
 
 afterEach(async () => {
+  leaseUnlinkFailures.clear();
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -75,6 +100,52 @@ describe('daemon OTel spool wiring', () => {
     await expect(daemon?.stop()).resolves.toBeUndefined();
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain('spool lease or drainer failed');
+  });
+
+  it('contains an EACCES lease unlink during daemon shutdown', async () => {
+    const mainRoot = await temporaryDirectory();
+    const rootEvents = new ConductorEventEmitter();
+    const failures: Array<{ rendererName: string; error: string }> = [];
+    rootEvents.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') failures.push(event);
+    });
+    const daemon = wireDaemonOtel({ otel: { exporter: 'otlp', endpoint: 'http://127.0.0.1:1', spool: { enabled: true } } }, {
+      mainRoot, project: mainRoot, projectName: 'test', rootEvents,
+    });
+    const leasePath = join(mainRoot, '.daemon', 'otel-spool', 'lease.json');
+    await daemon?.spoolRuntime?.lease.acquire();
+    leaseUnlinkFailures.add(leasePath);
+
+    await expect(daemon?.stop()).resolves.toBeUndefined();
+
+    expect(failures).toEqual([expect.objectContaining({
+      rendererName: 'otel', error: expect.stringContaining('lease unlink denied'),
+    })]);
+  });
+
+  it('contains an EACCES lease unlink during interactive visualizer and metrics shutdown', async () => {
+    const project = await temporaryProject();
+    const events = new ConductorEventEmitter();
+    const failures: Array<{ rendererName: string; error: string }> = [];
+    events.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') failures.push(event);
+    });
+    const config = { otel: { exporter: 'otlp' as const, endpoint: 'http://127.0.0.1:1', spool: { enabled: true } } };
+    const context = {
+      pipelineDir: join(project, '.pipeline'), runId: 'run', feature: 'feature', project,
+      branch: 'feature', engineVersion: 'test', harnessVersion: 'test', metrics: false,
+    };
+    const visualizer = wireOtelVisualizer(config, context, events);
+    const metrics = wireInteractiveOtelMetrics(config, context, events);
+    const leasePath = join(project, '.daemon', 'otel-spool', 'lease.json');
+    await eventually(async () => access(leasePath).then(() => true, () => false));
+    leaseUnlinkFailures.add(leasePath);
+
+    await expect(Promise.all([visualizer?.stop(), metrics?.stop()])).resolves.toEqual([undefined, undefined]);
+
+    expect(failures).toEqual([expect.objectContaining({
+      rendererName: 'otel', error: expect.stringContaining('lease unlink denied'),
+    })]);
   });
 
   it('leaves flushed dispatch spans and daemon metrics in the spool when the endpoint is closed', async () => {
