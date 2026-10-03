@@ -192,9 +192,19 @@ export const PRE_COMMIT_HOOK = [
  * Provisioned now so every prepared worktree has the complete hook surface;
  * subsequent tasks add its preventive ref-deletion policy.
  */
-export const REFERENCE_TRANSACTION_HOOK = `#!/bin/bash
-exit 0
-`;
+export const REFERENCE_TRANSACTION_HOOK = [
+  '#!/bin/bash',
+  '[[ "${1:-}" == "prepared" ]] || exit 0',
+  '',
+  "while IFS=' ' read -r old new ref; do",
+  '  if [[ "$ref" == refs/heads/* && "$new" =~ ^0+$ ]]; then',
+  '    exit 1',
+  '  fi',
+  'done',
+  '',
+  'exit 0',
+  '',
+].join('\n');
 
 /**
  * pre-push hook.
