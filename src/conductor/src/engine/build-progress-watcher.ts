@@ -157,6 +157,8 @@ export interface BuildProgressWatcherOptions {
   step: StepName;
   featureSlug?: string;
   config?: Pick<HarnessConfig, 'build_progress'>;
+  /** Called only when an active-stall policy ends the current provider attempt. */
+  endAttempt?: (reason: 'active_stall') => void;
   /**
    * Injectable time source for elapsed-time decisions (quiet-episode and
    * heartbeat checks, `lastChangeAt`/`lastEmitAt` stamps). Defaults to
@@ -222,6 +224,7 @@ export class BuildProgressWatcher {
   private readonly featureSlug?: string;
   private readonly resolvedConfig: ResolvedBuildProgressConfig;
   private readonly now: () => number;
+  private readonly endAttempt?: (reason: 'active_stall') => void;
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastSnapshot: TickSnapshot | null = null;
   private lastCommitHead: string | undefined;
@@ -240,6 +243,7 @@ export class BuildProgressWatcher {
    */
   private lastChangeAt: number | null = null;
   private quietFired = false;
+  private activeStallFired = false;
 
   constructor(opts: BuildProgressWatcherOptions) {
     this.projectRoot = opts.projectRoot;
@@ -248,6 +252,7 @@ export class BuildProgressWatcher {
     this.featureSlug = opts.featureSlug;
     this.resolvedConfig = resolveBuildProgressConfig(opts.config ?? {});
     this.now = opts.now ?? Date.now;
+    this.endAttempt = opts.endAttempt;
   }
 
   /** No-op if already started, or if `build_progress.enabled` is false. */
@@ -293,23 +298,29 @@ export class BuildProgressWatcher {
    */
   private async classifyActivity(changed: boolean): Promise<BuildActivity> {
     if (changed) return 'active-committing';
-    if (this.dispatchStartedAtMs === null) return 'quiet';
+    const lastActivityAt = await this.readDispatchActivityAt();
+    if (lastActivityAt === undefined) return 'quiet';
 
+    const ageMs = Math.max(0, this.now() - lastActivityAt);
+    return ageMs < this.resolvedConfig.quiet_minutes * 60 * 1000
+      ? 'active-not-committing'
+      : 'quiet';
+  }
+
+  /** Return the latest valid heartbeat timestamp only for this dispatch. */
+  private async readDispatchActivityAt(): Promise<number | undefined> {
+    if (this.dispatchStartedAtMs === null) return undefined;
     try {
       const heartbeat = await readStepHeartbeat(this.projectRoot);
       if (!heartbeatBelongsToDispatch(heartbeat, this.step, this.dispatchStartedAtMs)) {
-        return 'quiet';
+        return undefined;
       }
-      const timestamp = Date.parse(heartbeat.ts);
-      if (!Number.isFinite(timestamp)) return 'quiet';
-      const ageMs = Math.max(0, this.now() - timestamp);
-      return ageMs < this.resolvedConfig.quiet_minutes * 60 * 1000
-        ? 'active-not-committing'
-        : 'quiet';
+      const timestamp = Date.parse(heartbeat?.ts ?? '');
+      return Number.isFinite(timestamp) ? timestamp : undefined;
     } catch {
       // Heartbeat visibility is best-effort telemetry; failure is quiet, not
       // a reason to abort or suppress the watcher tick.
-      return 'quiet';
+      return undefined;
     }
   }
 
@@ -406,6 +417,38 @@ export class BuildProgressWatcher {
       this.lastSnapshot = snapshot;
       if (this.stopped) return;
 
+      const activity = await this.classifyActivity(false);
+
+      // Active-stall tracking is separate from the quiet episode: an active
+      // provider heartbeat means the build is not quiet, but it may still be
+      // making no observable progress. Warn once per such episode, and leave
+      // any attempt-ending policy to the explicit opt-in action.
+      if (
+        this.lastChangeAt !== null &&
+        !this.activeStallFired &&
+        activity === 'active-not-committing'
+      ) {
+        const activeStallElapsed = this.now() - this.lastChangeAt;
+        const activeStallMs = this.resolvedConfig.active_stall_minutes * 60 * 1000;
+        if (activeStallElapsed >= activeStallMs) {
+          this.activeStallFired = true;
+          await this.events.emit({
+            type: 'build_active_stall',
+            step: this.step,
+            minutes: Math.floor(activeStallElapsed / 60000),
+            resolved,
+            total,
+            lastCommitAt: this.lastCommitAt,
+            lastActivityAt: await this.readDispatchActivityAt(),
+            action: this.resolvedConfig.active_stall_action,
+            featureSlug: this.featureSlug,
+          });
+          if (this.resolvedConfig.active_stall_action === 'end_attempt') {
+            this.endAttempt?.('active_stall');
+          }
+        }
+      }
+
       // Quiet-episode check (Task 7): fire build_no_progress exactly once
       // per quiet episode once quiet_minutes has elapsed since the last
       // observed change. `lastChangeAt` is only set once a baseline tick has
@@ -416,20 +459,7 @@ export class BuildProgressWatcher {
         const quietElapsed = this.now() - this.lastChangeAt;
         if (quietElapsed >= quietMs) {
           this.quietFired = true;
-          let lastActivityAt: number | undefined;
-          try {
-            const heartbeat = await readStepHeartbeat(this.projectRoot);
-            if (
-              this.dispatchStartedAtMs !== null
-              && heartbeatBelongsToDispatch(heartbeat, this.step, this.dispatchStartedAtMs)
-            ) {
-              const timestamp = Date.parse(heartbeat!.ts);
-              if (Number.isFinite(timestamp)) lastActivityAt = timestamp;
-            }
-          } catch {
-            // Provider activity is optional display metadata. A read failure
-            // must not suppress the quiet warning or abort its poll tick.
-          }
+          const lastActivityAt = await this.readDispatchActivityAt();
           await this.events.emit({
             type: 'build_no_progress',
             step: this.step,
@@ -439,7 +469,7 @@ export class BuildProgressWatcher {
             currentTaskId: snapshot.currentTaskId,
             lastCommitAt: this.lastCommitAt,
             ...(lastActivityAt === undefined ? {} : { lastActivityAt }),
-            activity: await this.classifyActivity(false),
+            activity,
             featureSlug: this.featureSlug,
           });
         }
@@ -465,7 +495,7 @@ export class BuildProgressWatcher {
           headMoved: false,
           lastCommitAt: this.lastCommitAt,
           noEvidenceAttempts,
-          activity: await this.classifyActivity(false),
+          activity,
           featureSlug: this.featureSlug,
         });
       }
@@ -501,6 +531,7 @@ export class BuildProgressWatcher {
     // again.
     this.lastChangeAt = this.now();
     this.quietFired = false;
+    this.activeStallFired = false;
 
     // Change-driven emission resets the heartbeat clock so a heartbeat never
     // fires immediately on the heels of a real change (no interleaved
