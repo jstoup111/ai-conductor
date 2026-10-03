@@ -208,6 +208,41 @@ describe('executeProviderCandidates', () => {
     }));
   });
 
+  it('pins daemon context through auxiliary custom-policy fallback candidates', async () => {
+    const context: ManagedSessionContext = {
+      projectRoot: '/project', worktreeRoot: '/project/worktree', producerRoot: '/project/worktree/.pipeline/session-events',
+      scope: { kind: 'feature', featureSlug: 'custom-policy-feature' }, dispatchId: 'custom-policy-dispatch', provider: 'codex',
+    };
+    const hostile: ManagedSessionContext = { ...context, dispatchId: 'candidate-override', provider: 'pi' };
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false, output: 'model unavailable', exitCode: 1, modelUnavailable: true,
+    }));
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'judged', exitCode: 0 }));
+
+    const result = await executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'custom-policy',
+      policy: {
+        enabled: true, llm_provider: ['codex', 'claude'], model: 'gpt-5.6-sol', effort: 'high',
+        model_fallback_ladder: ['gpt-5.6-sol'], max_projection_bytes: 1_048_576, max_retries: 1, escalate: false, min_confidence: 0,
+      },
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: codexInvoke }),
+        runtime('claude', { invoke: claudeInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'custom policy', cwd: '/workspace', managedSessionContext: context },
+      optionsForCandidate: () => ({ prompt: 'candidate custom policy', managedSessionContext: hostile }),
+    });
+
+    expect(result.success).toBe(true);
+    expect(codexInvoke).toHaveBeenCalledWith(expect.objectContaining({
+      managedSessionContext: { ...context, provider: 'codex' },
+    }));
+    expect(claudeInvoke).toHaveBeenCalledWith(expect.objectContaining({
+      managedSessionContext: { ...context, provider: 'claude' },
+    }));
+  });
+
   it('suppresses session resume for a Pi adapter when its descriptor omits supportsSessionResume', async () => {
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: 'done' }));
     const result = await invokeProviderCandidate({
