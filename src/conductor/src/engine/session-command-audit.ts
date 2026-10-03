@@ -3,6 +3,7 @@ import { join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { evaluateDaemonSessionCommandPolicy } from '../execution/daemon-session.js';
 import {
+  defaultSessionCommandContext,
   parseSessionCommandContexts,
   sessionCommandContextAt,
   type SessionCommandContext,
@@ -62,21 +63,33 @@ export function auditManagedSessionInstructionSource(input: SessionCommandSource
  * turn a dispatch-time refusal into an invisible authoring escape.
  */
 export function auditShippedManagedSessionInstructionSource(input: SessionCommandSource): SessionCommandInstruction[] {
-  // This is the production variant, not a second classifier.  Context
-  // diagnostics and the operator-only contradiction are actionable at the
-  // repository boundary.  Ordinary command-policy findings in implementation
-  // strings remain owned by their runtime guard, rather than making every
-  // internal command construction a prose-dispatch finding.
+  const contexts = parseSessionCommandContexts(input.source, input.family);
+  const explicitlyManaged = (line: number): boolean => contexts.ranges.some((range) =>
+    range.context === 'managed'
+    && range.startLine <= line
+    && line <= range.endLine
+    && !(range.startLine === 1 && defaultSessionCommandContext(input.family) === 'managed'),
+  );
+
+  // This is the production variant, not a second classifier. A skill is a
+  // dispatchable instruction source by default, while engine literals become
+  // provider directions only inside an explicit managed region. This keeps
+  // ordinary engine CLI construction out of prose validation without hiding a
+  // blocked command that a marked prompt can actually render.
   return auditManagedSessionInstructionSource(input).filter((instruction) =>
     /session-command context/i.test(instruction.reason ?? '')
     || (
       instruction.reason === 'managed dispatch cannot execute an operator-only instruction'
-      // A skill's operator-only region is documentation by design.  The
+      // A skill's operator-only region is documentation by design. The
       // shipped executable prompt/prelude is the one place this contradiction
       // proves a managed dispatch would actually receive that instruction.
       && input.family === 'engine'
       && /(?:^|\/)step-runners\.ts$/.test(input.file)
       && /(?:build|system)Prompt/i.test(input.source)
+    )
+    || (
+      /blocked subcommand/i.test(instruction.reason ?? '')
+      && (input.family === 'skill' || explicitlyManaged(instruction.line))
     ),
   );
 }
