@@ -58,8 +58,12 @@ function runner(
   providerExecution?: Pick<ProviderExecutionContext, 'prepareCandidateSelfHost'>,
   mode: 'auto' | 'interactive' = 'auto',
   gitRunner?: GitRunner,
+  onInvoke?: () => void,
 ) {
-  const invoke = vi.fn(async (_: InvokeOptions) => result);
+  const invoke = vi.fn(async (_: InvokeOptions) => {
+    onInvoke?.();
+    return result;
+  });
   const provider = { name: 'claude', invoke } as unknown as LLMProvider;
   const sessionStore = new ProviderSessionStore();
   const runtimes = new ProviderRuntimeSet([{
@@ -177,7 +181,12 @@ describe('PRD audit typed provider dispatch', () => {
       history: { decisions: [expect.objectContaining({ id: 'decision-1', criterion: 'NC-1', authority: 'accept' })], cases: [] },
     });
     const persisted = JSON.parse(await readFile(join(root, PRD_AUDIT_VERDICT_PATH), 'utf8'));
-    expect(persisted).toMatchObject({ attemptId: 'prd-attempt', complete: true, judgment: passingJudgment });
+    expect(persisted).toMatchObject({
+      attemptId: 'prd-attempt',
+      codeStamp: dispatchedProjection(invoke).changes.head,
+      complete: true,
+      judgment: passingJudgment,
+    });
     await expect(readFile(join(root, PRD_AUDIT_REPORT_PATH), 'utf8')).resolves.toContain('S1.2: PASS — Negative path is covered.');
   });
 
@@ -268,6 +277,34 @@ describe('PRD audit typed provider dispatch', () => {
       success: false,
       output: expect.stringContaining('reviewed code stamp unavailable'),
     });
+    await expectNoPrdAuditEvidence(root);
+  });
+
+  it('rejects a judgment when HEAD moves after the provider reviews the projected code', async () => {
+    const root = await fixture();
+    let providerReturned = false;
+    const movedHead = 'f'.repeat(40);
+    const currentHead = vi.fn(async () => {
+      expect(providerReturned).toBe(true);
+      return { stdout: `${movedHead}\n`, stderr: '', exitCode: 0 };
+    });
+    const { invoke, runner: subject } = runner(
+      root,
+      { success: true, output: 'done', finalStructuredResult: passingJudgment } as InvokeResult,
+      true,
+      undefined,
+      'auto',
+      currentHead as GitRunner,
+      () => { providerReturned = true; },
+    );
+
+    const projectedHead = await execFileAsync('git', ['-C', root, 'rev-parse', 'HEAD']);
+    await expect(subject.run('prd_audit', { complexity_tier: 'S' })).resolves.toMatchObject({
+      success: false,
+      output: `reviewed HEAD moved during prd_audit review (projected ${projectedHead.stdout.trim()}, current ${movedHead})`,
+    });
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(currentHead).toHaveBeenCalledWith(['rev-parse', 'HEAD']);
     await expectNoPrdAuditEvidence(root);
   });
 

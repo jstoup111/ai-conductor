@@ -1256,21 +1256,30 @@ export class DefaultStepRunner implements StepRunner {
             requirements,
             tasks: projection.projection.tasks,
           });
-          let codeStamp: string | null = null;
+          let currentHead: string | null = null;
           try {
             const head = await this.gitRunner(['rev-parse', 'HEAD']);
-            codeStamp = head.exitCode === 0 && head.stdout.trim().length > 0 ? head.stdout.trim() : null;
+            currentHead = head.exitCode === 0 && head.stdout.trim().length > 0 ? head.stdout.trim() : null;
           } catch {
             // A stamp is required authority evidence. Treat a Git invocation
             // failure exactly like an empty or non-zero rev-parse result.
           }
-          if (codeStamp === null) {
+          if (currentHead === null) {
             return {
               ...this.toStepRunResult(step, result),
               success: false,
               output: 'prd-audit authority persistence failed: reviewed code stamp unavailable (git rev-parse HEAD failed or returned empty output)',
             };
           }
+          const reviewedHead = projection.projection.changes.head;
+          if (currentHead !== reviewedHead) {
+            return {
+              ...this.toStepRunResult(step, result),
+              success: false,
+              output: `reviewed HEAD moved during prd_audit review (projected ${reviewedHead}, current ${currentHead})`,
+            };
+          }
+          const codeStamp = reviewedHead;
           if (!validated.ok) {
             if (validated.judgment) {
               try {
