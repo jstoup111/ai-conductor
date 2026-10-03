@@ -31,25 +31,26 @@ function completePi() {
 describe('managed session adapter environments', () => {
   it.each([
     ['claude', () => {
-      const calls: Array<{ env?: NodeJS.ProcessEnv }> = [];
-      return { provider: new ClaudeProvider(undefined, ((_file: string, _args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
-        calls.push({ env: launch.env }); return Promise.resolve(completeClaude());
+      const calls: Array<{ args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
+      return { provider: new ClaudeProvider(undefined, ((_file: string, args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
+        calls.push({ args, env: launch.env }); return Promise.resolve(completeClaude());
       }) as never), calls };
     }],
     ['codex', () => {
-      const calls: Array<{ env?: NodeJS.ProcessEnv }> = [];
-      return { provider: new CodexProvider(vi.fn(async () => ({ stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }), exitCode: 0 })) as never, 'codex', undefined, ((_file: string, _args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
-        calls.push({ env: launch.env }); return Promise.resolve(completeCodex());
+      const calls: Array<{ args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
+      return { provider: new CodexProvider(vi.fn(async () => ({ stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }), exitCode: 0 })) as never, 'codex', undefined, ((_file: string, args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
+        calls.push({ args, env: launch.env }); return Promise.resolve(completeCodex());
       }) as never), calls };
     }],
     ['pi', () => {
-      const calls: Array<{ env?: NodeJS.ProcessEnv }> = [];
-      return { provider: new PiProvider('pi', ((_file: string, _args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
-        calls.push({ env: launch.env }); return Promise.resolve(completePi());
+      const calls: Array<{ args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
+      return { provider: new PiProvider('pi', ((_file: string, args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
+        calls.push({ args, env: launch.env }); return Promise.resolve(completePi());
       }) as never), calls };
     }],
   ] as const)('passes authoritative managed context to the %s subprocess after overlays', async (_provider, create) => {
     const { provider, calls } = create();
+    const priorMarker = process.env.CONDUCT_DAEMON_SESSION;
     await provider.invoke(options);
     const env = calls[0]?.env;
 
@@ -60,5 +61,9 @@ describe('managed session adapter environments', () => {
     });
     expect(JSON.parse(env?.CONDUCT_MANAGED_SESSION_CONTEXT ?? '')).toMatchObject({ dispatchId: 'dispatch-8', scope: { kind: 'feature', featureSlug: 'feature-a' } });
     expect(env?.TMUX).toBeUndefined();
+    expect(process.env.CONDUCT_DAEMON_SESSION).toBe(priorMarker);
+    expect(calls[0]?.args).toEqual(expect.arrayContaining(
+      _provider === 'claude' ? ['--print'] : _provider === 'codex' ? ['--json'] : ['--no-session'],
+    ));
   });
 });

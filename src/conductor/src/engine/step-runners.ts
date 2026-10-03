@@ -3432,6 +3432,13 @@ export class DefaultStepRunner implements StepRunner {
       },
       taskAttribution: this.taskAttribution,
       providerAvailability: this.providerExecutionContext?.providerAvailability,
+      // This custom-policy path is intentionally direct: unlike the ordinary
+      // rubric branches it does not pass through lifecycle supervision.  Keep
+      // the daemon-established context on that path as well, so every
+      // provider candidate and fallback receives the same child attribution.
+      ...(this.providerExecutionContext?.managedSessionContext
+        ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
+        : {}),
       withCandidateSafety: this.candidateSafetyFor('build_review')?.wrapper ?? this.withCandidateSafety,
       prepareCandidateSelfHost: this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
       onAttempt: this.providerAttempt, warn: this.providerWarn, options,
