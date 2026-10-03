@@ -110,7 +110,7 @@ A project-only, default-off toggle lets a feature's merged DECIDE marker declare
 
 **Done when:**
 - `landSpec` succeeds for an enabled project whose idea worktree carries a marker declaring `manual_test` inapplicable with a non-empty reason, and the resulting land commit includes the marker file, as asserted in `test/engine/engineer/land-spec-applicability.test.ts`.
-- `landSpec` for an enabled project whose idea worktree has no applicability marker succeeds with the same committed file list it produces when the capability is disabled.
+- `landSpec` for an enabled project whose idea worktree has no applicability marker succeeds with the same committed file list it produces when the capability is disabled, so markerless land behaves exactly as before this feature, as asserted in `land-spec-applicability.test.ts`.
 - `validateApplicability` in `engine/feature-applicability.ts` returns ok with the parsed declarations for a valid marker and is the only validator imported by both `landSpec` and the daemon backlog.
 
 **Files:** src/conductor/src/engine/feature-applicability.ts; src/conductor/src/engine/engineer/land-spec.ts; src/conductor/test/engine/engineer/land-spec-applicability.test.ts
