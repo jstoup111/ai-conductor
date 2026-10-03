@@ -79,6 +79,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - coverage_binding no longer halts on ADRs that landed on origin/main when the local default branch lags. ([implementation PR #2930](https://github.com/jstoup111/ai-conductor/pull/2930)).
 - Post-rebase coverage_binding, prd_audit and as-built review now reopen only when the feature's own plan, stories, specs or cited ADRs change. ([implementation PR #2928](https://github.com/jstoup111/ai-conductor/pull/2928)).
 - SHIP as-built and PRD audits now report every violating site of a decision in one pass instead of one per remediation lap. ([implementation PR #2932](https://github.com/jstoup111/ai-conductor/pull/2932)).
+- Rebases without replay proof no longer halt with a refused state transition. ([implementation PR #2936](https://github.com/jstoup111/ai-conductor/pull/2936)).
 
 ## Migration
 
