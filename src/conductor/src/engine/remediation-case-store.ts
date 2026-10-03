@@ -461,13 +461,12 @@ function parseBuildReviewCases(value: unknown):
   | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state' } {
   if (!Array.isArray(value) || value.length > MAX_CASES) return { ok: false, reason: 'malformed-state' };
   // Canonical identity: one row per case id, one case per durable effect id,
-  // one link per source within a case. Downstream readers index by these ids
-  // (`new Map(cases.map(...))`), which would silently collapse a duplicate
-  // while the array kept both rows — so duplicates are rejected here, before
-  // any caller can consume or mutate the state.
+  // one link per source within a case, and one unresolved owner per source.
+  // Downstream readers index these current owners by source id, while resolved
+  // links remain durable history and therefore do not compete for ownership.
   const caseIds = new Set<string>();
   const effectIds = new Set<string>();
-  const sourceIds = new Set<string>();
+  const unresolvedSourceOwners = new Map<string, string>();
   const cases: RemediationCaseRecord[] = [];
   for (const caseValue of value) {
     const parsed = parseRemediationCaseDomainRecord(caseValue);
@@ -480,12 +479,14 @@ function parseBuildReviewCases(value: unknown):
       if (effectIds.has(record.effect.id)) return { ok: false, reason: 'malformed-state' };
       effectIds.add(record.effect.id);
     }
+    const caseSourceIds = new Set<string>();
     for (const source of record.sources) {
-      // Global, not per-case: a source id repeated across two canonical cases
-      // is ambiguous durable history in exactly the way a repeat within one
-      // case is, and both readers index sources back to a single case.
-      if (sourceIds.has(source.sourceId)) return { ok: false, reason: 'malformed-state' };
-      sourceIds.add(source.sourceId);
+      if (caseSourceIds.has(source.sourceId)) return { ok: false, reason: 'malformed-state' };
+      caseSourceIds.add(source.sourceId);
+      if (record.resolution === 'open') {
+        if (unresolvedSourceOwners.has(source.sourceId)) return { ok: false, reason: 'malformed-state' };
+        unresolvedSourceOwners.set(source.sourceId, record.id);
+      }
     }
     cases.push(record);
   }

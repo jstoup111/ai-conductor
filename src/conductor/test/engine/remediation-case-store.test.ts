@@ -66,6 +66,28 @@ const REFUTED_CASE_STATE: RemediationCaseStoreState = {
     refutation: REFUTATION,
   }],
 };
+
+const RESOLVED_ACTION_CASE = {
+  ...CASE_STATE.cases[0],
+  id: 'case-resolved',
+  resolution: 'resolved' as const,
+  effect: {
+    id: 'effect-resolved',
+    kind: 'action' as const,
+    status: 'applied' as const,
+    workOrderId: 'work-order-resolved',
+  },
+};
+
+const OPEN_CASE_AT_RESOLVED_SOURCE = {
+  ...CASE_STATE.cases[0],
+  id: 'case-open',
+  effect: {
+    id: 'effect-open',
+    kind: 'action' as const,
+    status: 'reserved' as const,
+  },
+};
 const PRD_WIDENING_CASE = {
   id: 'prd-case-1',
   domain: 'prd_widening',
@@ -157,6 +179,38 @@ describe('remediation case store', () => {
       ok: true,
       state: CASE_STATE,
     });
+  });
+
+  it('reads a resolved and an open build-review case at one source without altering either case', async () => {
+    const projectRoot = await createProjectRoot();
+    const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
+    const state: RemediationCaseStoreState = {
+      ...CASE_STATE,
+      cases: [RESOLVED_ACTION_CASE, OPEN_CASE_AT_RESOLVED_SOURCE],
+    };
+    const serialized = JSON.stringify(state);
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(statePath, serialized, 'utf8');
+
+    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({ ok: true, state });
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(serialized);
+  });
+
+  it.each([
+    ['v1', { version: 'v1', feature: FEATURE, cases: CASE_STATE.cases, suppressions: [] }],
+    ['v2', CASE_STATE],
+  ] as const)('reads an existing %s state with unique sources without writing it', async (_version, persistedState) => {
+    const projectRoot = await createProjectRoot();
+    const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
+    const serialized = JSON.stringify(persistedState);
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(statePath, serialized, 'utf8');
+
+    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
+      ok: true,
+      state: { ...CASE_STATE, suppressions: [] },
+    });
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(serialized);
   });
 
   it.each([
