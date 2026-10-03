@@ -29,6 +29,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Unclassified provider dispatch failures now include recorded exit codes, signals, and output sizes. ([implementation PR #2853](https://github.com/jstoup111/ai-conductor/pull/2853)).
 - You can configure provider-specific models, fallback ladders, and escalation orders for Pi-backed steps. ([implementation PR #2880](https://github.com/jstoup111/ai-conductor/pull/2880)).
 - Intake filers receive evidence-path overlap suggestions and can explicitly link or decline related work. ([implementation PR #2872](https://github.com/jstoup111/ai-conductor/pull/2872)).
+- Pi users can run harness skills with shared instructions and catalog discovery. ([implementation PR #2863](https://github.com/jstoup111/ai-conductor/pull/2863)).
 
 ### Changed
 
@@ -74,6 +75,12 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - `/prd`, `/architecture-review`, and `/assess` now state that their templates resolve against the harness root, so authors find `design-doc`, `api-response-contract`, `adr`, and `technical-assessment` templates instead of hitting a missing path. ([implementation PR #2905](https://github.com/jstoup111/ai-conductor/pull/2905)).
 - Skill templates now resolve relative to each skill's own directory, and self-host provider homes copy them as real files, so `/prd`, `/architecture-review`, `/assess`, and `/bootstrap` find their templates however the skill is installed. ([implementation PR #2906](https://github.com/jstoup111/ai-conductor/pull/2906)).
 - Kickback lap raises are no longer refused after an earlier raise on the same remediation gate. ([implementation PR #2921](https://github.com/jstoup111/ai-conductor/pull/2921)).
+
+## Migration
+
+```bash migration
+./bin/install --update --providers=pi
+```
 
 ## [1.5.0] - 2026-09-27
 
