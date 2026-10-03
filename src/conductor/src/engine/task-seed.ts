@@ -11,7 +11,7 @@ import {
 import { createTaskEvidence } from './task-evidence.js';
 import { planTaskDigests, parsePlanTaskPaths } from './plan-task-parse.js';
 import { createRepairObligationStore, repairPlanIdentity } from './repair-obligations.js';
-import { readTaskDigests, recordTaskDigests } from './task-digests.js';
+import { readTaskDigests, readTaskDigestsLeniently, recordTaskDigests } from './task-digests.js';
 import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import { resolveTaskIds } from './task-progress.js';
 /** A seed failure that occurred while reopening a task whose plan text changed. */
@@ -251,11 +251,18 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     if (recordedDigests.kind === 'incompatible') {
       // Repair obligations are the durable authority that excludes historic
       // Task trailers after a plan amendment.  If that section is malformed,
-      // a rewritten task cannot safely be reopened; preserve the specific
-      // failure class so BUILD refuses completion rather than treating this
-      // as an unrelated seed problem.
+      // a rewritten task cannot safely be reopened; report a reopen failure
+      // only when a recorded digest shows a task actually changed, so a seed
+      // that needed no reopen keeps the neutral seed-failure reason.
       if (recordedDigests.message.includes('repairObligations')) {
-        throw new TaskReopenError(`Unable to read repair obligations while reopening plan tasks: ${recordedDigests.message}`);
+        const lenient = await readTaskDigestsLeniently(projectRoot, resolvedPlanPath);
+        const reopenDue = lenient.kind === 'present' && Object.entries(currentDigests).some(([taskId, digest]) => {
+          const recorded = lenient.digests[taskId];
+          return recorded?.startsWith('v1:') === true && recorded !== digest;
+        });
+        if (reopenDue) {
+          throw new TaskReopenError(`Unable to read repair obligations while reopening plan tasks: ${recordedDigests.message}`);
+        }
       }
       throw new Error(`Unable to seed task status from task digests: ${recordedDigests.message}`);
     }

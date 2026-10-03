@@ -114,4 +114,14 @@ describe('build completion fails closed when plan-amendment reopen cannot persis
     });
     expect(await storedDigest()).toBe(planTaskDigests(REWRITTEN_PLAN).get('1'));
   });
+  it('keeps the neutral seed reason for malformed repair obligations when no task changed', async () => {
+    const state = JSON.parse(await fs.readFile(statePath, 'utf8'));
+    await fs.writeFile(planPath, ORIGINAL_PLAN);
+    await fs.writeFile(statePath, JSON.stringify({ ...state, repairObligations: 'malformed' }));
+
+    await expect(checkBuild()).resolves.toMatchObject({
+      done: false,
+      reason: expect.stringMatching(/^failed to seed task-status from plan: .*repairObligations section is incompatible/),
+    });
+  });
 });

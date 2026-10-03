@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createEngineStateStore, type EngineState } from './engine-state-store.js';
 import { repairPlanIdentity } from './repair-obligations.js';
@@ -41,6 +42,24 @@ export async function readTaskDigests(projectRoot: string, planPath: string): Pr
   const result = await createEngineStateStore(statePath(projectRoot)).read();
   if (!result.ok) return { kind: 'incompatible', message: result.message };
   const parsed = parseSection(result.value);
+  if (parsed.kind !== 'present') return parsed;
+  const digests = parsed.section.byPlan[repairPlanIdentity(projectRoot, planPath)];
+  return digests === undefined ? { kind: 'absent' } : { kind: 'present', digests: { ...digests } };
+}
+
+/**
+ * Read only the task-digest section, tolerating a malformed sibling section.
+ * Diagnostic use: lets a seed failure tell whether a reopen was actually due.
+ */
+export async function readTaskDigestsLeniently(projectRoot: string, planPath: string): Promise<TaskDigestReadResult> {
+  let state: unknown;
+  try {
+    state = JSON.parse(await readFile(statePath(projectRoot), 'utf8'));
+  } catch {
+    return { kind: 'incompatible', message: 'Engine state is unreadable' };
+  }
+  if (!isRecord(state)) return { kind: 'incompatible', message: 'Engine state must be a JSON object' };
+  const parsed = parseSection(state as EngineState);
   if (parsed.kind !== 'present') return parsed;
   const digests = parsed.section.byPlan[repairPlanIdentity(projectRoot, planPath)];
   return digests === undefined ? { kind: 'absent' } : { kind: 'present', digests: { ...digests } };
