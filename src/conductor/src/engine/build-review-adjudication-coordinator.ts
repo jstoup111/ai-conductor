@@ -701,6 +701,27 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved });
   }
   const liveSourceIdsBeforeRepeat = liveSourceIdsFor(resolved);
+  const recurringCases: RemediationCaseRecord[] = [];
+  for (const [caseRef, recurringCaseIds] of reconciled.recurringCaseIdsByRef ?? []) {
+    const proposed = admitted.find((candidate) => candidate.case.caseRef === caseRef);
+    if (!proposed || proposed.sources.every((source) => !liveSourceIdsBeforeRepeat.has(source.sourceId))) continue;
+    for (const caseId of recurringCaseIds) {
+      const record = reconciledCasesById.get(caseId);
+      if (!record) return fail(`recurring case ${caseId} is unavailable`);
+      recurringCases.push(record);
+      await input.emit?.({
+        type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: input.aggregate.lapId,
+        caseId, ...(record.effect.kind === 'none' ? {} : { effectId: record.effect.id }), reason: 'regressed',
+      });
+    }
+  }
+  if (recurringCases.length > 0) {
+    const caseIds = recurringCases.map((record) => record.id);
+    return failUnlessAccepted(`semantic remediation case regression ${caseIds.join(', ')}`, {
+      settleAbsentAttempted: false,
+      caseSourceIds: recurringCases.map((record) => new Set(record.sources.map((source) => source.sourceId))),
+    });
+  }
   for (const proposed of admitted) {
     if (proposed.sources.every((source) => !liveSourceIdsBeforeRepeat.has(source.sourceId))) continue;
     const caseId = caseIdsByRef.get(proposed.case.caseRef);

@@ -40,6 +40,8 @@ export type ReconcileRemediationCasesResult =
       readonly ok: true;
       readonly state: RemediationCaseStoreState;
       readonly caseIdsByRef: ReadonlyMap<string, string>;
+      /** Unbound action proposals that reuse resolved action-source history. */
+      readonly recurringCaseIdsByRef?: ReadonlyMap<string, readonly string[]>;
       /**
        * Every case this reconciliation transitioned that no current `caseRef`
        * points at — today, prior attempted action cases absent from the
@@ -76,6 +78,7 @@ type Reconciliation =
       readonly state: RemediationCaseStoreState;
       readonly changed: boolean;
       readonly caseIdsByRef: ReadonlyMap<string, string>;
+      readonly recurringCaseIdsByRef?: ReadonlyMap<string, readonly string[]>;
       readonly resolvedAbsentCaseIds: readonly string[];
     }
   | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection }
@@ -162,11 +165,26 @@ function reconcileState(
   const replacements = new Map<string, RemediationCaseRecord>();
   const additions: RemediationCaseRecord[] = [];
   const caseIdsByRef = new Map<string, string>();
+  const recurringCaseIdsByRef = new Map<string, readonly string[]>();
   const claimed = new Set<string>();
 
   for (const proposed of input.graph.cases) {
     const { case: caseRow, sources } = proposed;
     if (!caseRow.existingCaseId) {
+      // A new action against a resolved action source is a regression unless
+      // the judge explicitly declared the new concern distinct.  The durable
+      // source link is sufficient bookkeeping; semantic distinction remains
+      // the judge's case-v2 declaration, never a prose comparison here.
+      if (caseRow.disposition === 'act' && caseRow.distinctFrom === undefined) {
+        const recurringCaseIds = state.cases
+          .filter((record) => record.disposition === 'act' && record.resolution === 'resolved')
+          .filter((record) => record.sources.some((link) => sources.some((source) => source.sourceId === link.sourceId)))
+          .map((record) => record.id);
+        if (recurringCaseIds.length > 0) {
+          recurringCaseIdsByRef.set(caseRow.caseRef, recurringCaseIds);
+          continue;
+        }
+      }
       // `distinctFrom` is an admitted declaration that this proposal is not
       // the open case with otherwise matching sources.  It must therefore
       // reach the owner check and (when unowned) stamp its own durable case.
@@ -360,6 +378,7 @@ function reconcileState(
     state: { ...state, cases: [...cases, ...additions] },
     changed,
     caseIdsByRef,
+    ...(recurringCaseIdsByRef.size === 0 ? {} : { recurringCaseIdsByRef }),
     resolvedAbsentCaseIds,
   };
 }
@@ -384,6 +403,7 @@ export async function reconcileRemediationCases(
         ok: true,
         state: mutation.value.state,
         caseIdsByRef: mutation.value.caseIdsByRef,
+        ...(mutation.value.recurringCaseIdsByRef === undefined ? {} : { recurringCaseIdsByRef: mutation.value.recurringCaseIdsByRef }),
         resolvedAbsentCaseIds: mutation.value.resolvedAbsentCaseIds,
       }
     : mutation.value;
