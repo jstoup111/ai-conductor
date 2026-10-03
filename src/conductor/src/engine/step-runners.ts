@@ -4214,9 +4214,6 @@ export class DefaultStepRunner implements StepRunner {
               // an operator REPL response. Keep this explicit rather than
               // inheriting the enclosing conductor mode.
               interactive: false,
-              // Candidate preparation runs before optionsForCandidate. Make
-              // the selected review policy visible at that boundary too.
-              readOnlyReview: true,
               nativeSchema: getBuildReviewRubricDescriptor(branch.rubric).contract.output.jsonSchema,
             },
             optionsForCandidate: (providerKey) => ({
