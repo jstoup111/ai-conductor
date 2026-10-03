@@ -485,6 +485,8 @@ export async function gateVerdictStillValid(
       break;
     case 'feature-runtime-or-prd-inputs':
     case 'feature-runtime-or-coverage-inputs':
+    case 'feature-prd-inputs':
+    case 'feature-coverage-inputs':
       isSurfaceMiss = projectGateSurfaces(delta, F, await resolveReviewInputs(ctx.projectRoot, delta))[surface].matchedPaths.length === 0;
       break;
     case 'all-runtime':

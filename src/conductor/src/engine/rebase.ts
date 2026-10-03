@@ -1,6 +1,6 @@
 import { execa } from 'execa';
 import { createHash } from 'node:crypto';
-import { writeFile, readFile, access, mkdir, rename, readdir } from 'node:fs/promises';
+import { writeFile, readFile, access, mkdir, rename } from 'node:fs/promises';
 import { join, isAbsolute, relative, basename, resolve, dirname } from 'node:path';
 import type { CiRepairDiagnosticReason, StepName } from '../types/index.js';
 import {
@@ -1285,8 +1285,6 @@ export function citedDecisionStems(text: string): string[] {
     stems.add(match[1].replace(/\.md$/, '').replace(/[._-]+$/, ''));
   }
   return [...stems];
-}
-  return [...new Set(inputs.map(repoPath))];
 }
 
 function reviewDelta(outcome: Extract<RebaseOutcome, { kind: 'changed' }>): string[] {
@@ -2652,10 +2650,11 @@ export async function recordRebaseStepCompletion(
  *
  * For invalidated gates, `matchedPaths` carries only the delta paths that
  * justify invalidating THIS specific gate, per its `GATE_SURFACE` kind:
- *   - 'feature-runtime' (architecture_review_as_built): featureSrc.
- *   - 'feature-runtime-or-prd-inputs' (prd_audit): feature runtime paths
- *     plus active stories/PRD inputs. Coverage additionally includes the
- *     active plan and coherence carrier ('feature-runtime-or-coverage-inputs').
+ *   - 'feature-prd-inputs' (prd_audit): changed declared stories/spec/PRD
+ *     inputs only.
+ *   - 'feature-coverage-inputs' (coverage_binding,
+ *     architecture_review_as_built): changed declared plan, coherence,
+ *     stories, spec and cited-ADR inputs only.
  *   - 'feature-codetest' (build_review): featureSrc ∪ the feature's own test
  *     paths.
  *   - 'all-runtime' (manual_test): featureSrc ∪ foreignSrc.
