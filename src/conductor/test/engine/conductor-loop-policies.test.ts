@@ -53,7 +53,7 @@ import {
   appendRemediationTasks,
 } from '../../src/engine/conductor.js';
 import { Conductor } from '../test-conductor.js';
-import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
 import type { GroupBranchLifecycleObserver } from '../../src/engine/group-core.js';
 import { runGroupBranch } from '../../src/engine/group-core.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
@@ -64,6 +64,7 @@ import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import {
   checkStepCompletion,
 } from '../../src/engine/artifacts.js';
+import * as artifactModule from '../../src/engine/artifacts.js';
 import * as rebaseModule from '../../src/engine/rebase.js';
 import {
   CLAUDE_MODEL_POLICY,
@@ -504,12 +505,16 @@ describe('build-step stall circuit breaker', () => {
   // every gate evaluation — so these tests' notion of "progress" must be
   // evidence-backed completions, or the stall breaker would (correctly) fire
   // on all of them.
-  async function writeTaskStatus(completed: number, total: number): Promise<void> {
+  async function writeTaskStatus(
+    completed: number,
+    total: number,
+    titles: readonly string[] = [],
+  ): Promise<void> {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
     const planLines: string[] = ['# Plan', ''];
     for (let i = 1; i <= total; i++) {
-      planLines.push(`### Task ${i}: Step ${i}`, '');
+      planLines.push(`### Task ${i}: ${titles[i - 1] ?? `Step ${i}`}`, '');
     }
     await writeFile(join(dir, '.docs/plans/2026-04-18-plan.md'), planLines.join('\n'));
     const tasks: Array<{ id: number; status: string }> = [];
@@ -570,6 +575,64 @@ describe('build-step stall circuit breaker', () => {
       reason:
         'Previous attempt did not satisfy the completion check: 3/5 tasks pending/not completed: 3, 4, 5. Finish the work now.',
     });
+  });
+
+  // Covers: task:11
+  it('passes all pending ids and titles through the next BUILD retry hint and step_retry event', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    const titles = [
+      'Prepare alpha',
+      'Prepare beta',
+      'Prepare gamma',
+      'Prepare delta',
+      'Prepare epsilon',
+      'Prepare zeta',
+    ];
+    await writeTaskStatus(0, titles.length, titles);
+
+    const buildHints: string[] = [];
+    const retryReasons: string[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
+        if (step === 'build' && options?.retryReason) buildHints.push(options.retryReason);
+        return { success: true };
+      }),
+    };
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry' && event.step === 'build') retryReasons.push(event.reason);
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 2,
+      onRecovery: vi.fn().mockResolvedValue('quit' as const),
+    });
+
+    await conductor.run();
+
+    expect(buildHints).not.toHaveLength(0);
+    expect(retryReasons).not.toHaveLength(0);
+    for (const value of [...buildHints, ...retryReasons]) {
+      for (let i = 0; i < titles.length; i++) {
+        expect(value).toContain(String(i + 1));
+        expect(value).toContain(titles[i]);
+      }
+    }
+
+    const identicalReason = retryReasons[0];
+    expect(artifactModule.classifyRetryDecision({
+      // BUILD itself retains its dedicated progress accounting; this guards
+      // the shared retry classifier's unchanged-reason comparison.
+      step: 'build_review',
+      completion: { done: false, reason: identicalReason },
+      attempt: 2,
+      priorReason: identicalReason,
+      inputsUnchanged: true,
+    })).toEqual({ decision: 'route', signal: 'identical-repeat' });
   });
 
   it('triggers build_stall on the first retry when .pipeline/halt-user-input-required is present', async () => {

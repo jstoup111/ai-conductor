@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { formatRetryReason, formatProgressDelta } from '../../src/engine/format-retry-line.js';
 import { composeContainmentAdvisoryOutput } from '../../src/engine/per-task-commit-floor.js';
+import { renderDaemonEvent, stripAnsi } from '../../src/daemon-cli.js';
 
 describe('format-retry-line', () => {
   describe('formatRetryReason', () => {
@@ -49,6 +50,32 @@ describe('format-retry-line', () => {
       const result = formatRetryReason(longText);
       expect(result.length).toBeLessThanOrEqual(120);
       expect(result).toMatch(/…$/);
+    });
+
+    // Covers: task:11
+    it('keeps every pending task id ahead of titles in a bounded BUILD retry line', () => {
+      const ids = ['1', '2', '3', '4', '5', '6'];
+      const firstTitle = 'A deliberately long task title that forces the retry line to truncate';
+      const reason =
+        `6/6 tasks pending/not completed: ${ids.join(', ')} — ` +
+        ids.map((id, index) => `${id} "${index === 0 ? firstTitle : `Task ${id}`}"`).join('; ');
+
+      const result = formatRetryReason(reason);
+
+      expect(result).toHaveLength(120);
+      expect(result).not.toContain('\n');
+      expect(result).not.toContain('\r');
+      for (const id of ids) {
+        expect(result).toContain(id);
+        expect(result.indexOf(id)).toBeLessThan(result.indexOf(firstTitle));
+      }
+
+      const lines: string[] = [];
+      renderDaemonEvent(
+        { type: 'step_retry', step: 'build', attempt: 2, maxAttempts: 2, reason },
+        (line) => lines.push(stripAnsi(line)),
+      );
+      expect(lines).toEqual([`· ↻ build retry (try 2/2: ${result})`]);
     });
 
     it('truncates multi-line input to maxLen', () => {
