@@ -92,7 +92,11 @@ import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-label
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { forwardedFeatureOf, isForwardedFromFeature, startDaemonEventPersistence, startFeatureEventPersistence } from './engine/event-persister.js';
 import { heapDumpOptionsFromConfig, startDaemonMemorySampler } from './engine/daemon-memory.js';
-import { formatSessionOccurrence, renderedEventTypes } from './engine/event-sinks.js';
+import {
+  formatSessionOccurrence,
+  renderedEventTypes,
+  renderedSessionOccurrenceTypes,
+} from './engine/event-sinks.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
 import { formatGithubCredentialFallback, formatGithubOperationRefusal } from './engine/github-operations.js';
 import { createBotCoAuthorResolver, formatBotCoAuthorSkipped, installDaemonBotCoAuthor } from './engine/bot-co-author.js';
@@ -1436,6 +1440,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     scopedEvents.on('provider_attempt', (event) => renderDaemonEvent(event, scopedLog));
     scopedEvents.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
     scopedEvents.on('session_policy', (event) => renderDaemonEvent(event, scopedLog));
+    // Recovery tails added by Task 13 project managed-session occurrences onto
+    // this emitter. Keep their subscriber set derived from the event spine's
+    // render registry, rather than allowing recovery logging to drift from the
+    // feature-run renderer.
+    for (const type of renderedSessionOccurrenceTypes()) {
+      scopedEvents.on(type, (event) => renderDaemonEvent(event, scopedLog));
+    }
     const providerExecution = createProviderExecution(scopedEvents, scopedLog);
     const provider = providerExecution.configuredProviders[0];
     if (!provider) throw new Error('daemon recovery dispatch requires a configured provider');

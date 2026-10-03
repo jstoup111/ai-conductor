@@ -252,6 +252,26 @@ type RenderedSessionOccurrence = Extract<ConductorEvent,
   | { type: 'session_event_delivery_diagnostic' }
 >;
 
+const SESSION_OCCURRENCE_TYPES: readonly RenderedSessionOccurrence['type'][] = [
+  'session_command_refused',
+  'github_bypass_attempt',
+  'github_bypass_result',
+  'github_possible_bypass',
+  'session_event_delivery_diagnostic',
+];
+
+/**
+ * The session occurrence subset of the render registry. Recovery dispatches
+ * subscribe through this projection rather than maintaining a second list,
+ * so a declared renderable occurrence cannot disappear from their daemon log.
+ */
+export function renderedSessionOccurrenceTypes(): RenderedSessionOccurrence['type'][] {
+  return renderedEventTypes().filter(
+    (type): type is RenderedSessionOccurrence['type'] =>
+      (SESSION_OCCURRENCE_TYPES as readonly ConductorEvent['type'][]).includes(type),
+  );
+}
+
 /**
  * Render the closed, producer-sanitized fields of a managed-session occurrence.
  * A local CLI outcome is deliberately not represented as remote-state proof.

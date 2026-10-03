@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { renderDaemonEvent } from '../../src/daemon-cli.js';
 import type { ConductorEvent } from '../../src/types/events.js';
-import { EVENT_SINKS } from '../../src/engine/event-sinks.js';
+import { EVENT_SINKS, renderedSessionOccurrenceTypes } from '../../src/engine/event-sinks.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { TerminalSubscriber } from '../../src/ui/subscriber.js';
 
@@ -59,6 +59,7 @@ describe('session event daemon rendering', () => {
 
   it('derives all session occurrence subscriptions from the render registry', () => {
     for (const event of occurrences) expect(EVENT_SINKS[event.type].render).toBe(true);
+    expect(renderedSessionOccurrenceTypes()).toEqual(occurrences.map((event) => event.type));
   });
 
   it('delivers every declared occurrence through the existing terminal subscriber', async () => {
