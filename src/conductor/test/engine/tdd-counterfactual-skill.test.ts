@@ -20,6 +20,7 @@ describe('tdd skill pre-diff sensitivity check', () => {
     expect(item).toContain('temporary detached worktree at the base commit');
     expect(item).toContain('git worktree add --detach «tmp» «base»');
     expect(item).toMatch(/copy only the new or changed test files into it/);
+    expect(item).toContain('run them there');
     expect(item).toContain('git worktree remove --force «tmp»');
   });
 
