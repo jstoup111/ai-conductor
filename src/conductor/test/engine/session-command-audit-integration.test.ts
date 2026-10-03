@@ -3,7 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { auditManagedSessionInstructionSource, auditShippedManagedSessionInstructionSource } from '../../src/engine/session-command-audit.js';
+import {
+  auditManagedSessionInstructionSource,
+  auditShippedManagedSessionInstructionSource,
+  MANAGED_DISPATCH_PROMPT_SURFACES,
+} from '../../src/engine/session-command-audit.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -41,6 +45,35 @@ describe('managed session instruction contexts', () => {
     })).toEqual([expect.objectContaining({
       reason: 'unclassified session-command context in engine instruction',
     })]);
+  });
+
+  it('fails unmarked template, array, and concatenated engine constructions without prose-name heuristics', () => {
+    const source = [
+      'const unrelated = `Run ai-conductor daemon park feature-a`;',
+      "const pieces = ['Run ai-conductor ', 'daemon park feature-b'];",
+      "const chained = 'Run ai-conductor ' +\n  'daemon park feature-c';",
+    ].join('\n');
+    const findings = auditShippedManagedSessionInstructionSource({
+      file: 'engine/new-dispatch.ts', source, family: 'engine',
+    });
+    expect(findings).toHaveLength(3);
+    expect(findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'unclassified session-command context in engine instruction' }),
+    ]));
+  });
+
+  it('carries a conductor retry/recovery contradiction from the registered production surface', () => {
+    const productionSource = readFileSync(join(__dirname, '../../src/engine/conductor.ts'), 'utf8');
+    const retrySurface = MANAGED_DISPATCH_PROMPT_SURFACES.find((surface) => surface.file === 'conductor.ts');
+    expect(retrySurface?.symbols).toContain('buildRetryHint');
+    const source = productionSource.replace(
+      '// ai-conductor:session-command-context=managed',
+      '// ai-conductor:session-command-context=operator-only',
+    );
+    expect(auditShippedManagedSessionInstructionSource({ file: 'engine/conductor.ts', source, family: 'engine' }))
+      .toContainEqual(expect.objectContaining({
+        reason: 'managed dispatch cannot execute an operator-only instruction',
+      }));
   });
 
   it('allows a managed instruction and excludes an unmarked operator instruction', () => {

@@ -61,7 +61,7 @@ import {
   prepareManagedSessionContext,
   type ManagedSessionContext,
 } from './execution/managed-session-context.js';
-import { prepareManagedSessionObservationDestination } from './execution/managed-session-preparation.js';
+import { createManagedSessionObservationPreparer } from './execution/managed-session-preparation.js';
 import { createSessionEventIdentity } from './execution/session-event-identity.js';
 import { createProviderAvailability, restoreProviderAvailabilityFromDaemonLedger } from './engine/provider-availability.js';
 import {
@@ -1449,17 +1449,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     return {
       ...providerExecution,
       managedSessionContext,
-      prepareManagedSessionObservation: async ({ provider, context, readOnlyReview }: { provider: string; context: ManagedSessionContext; readOnlyReview: boolean }) =>
-        prepareManagedSessionObservationDestination({
-          provider, context, readOnlyReview,
-          probe: (input) => probeManagedObservationDestination({
+      prepareManagedSessionObservation: createManagedSessionObservationPreparer((input) => probeManagedObservationDestination({
             ...input,
             runProcess: async (executable, args) => {
               const result = await execFile(executable, [...args]);
               return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
             },
-          }),
-        }),
+          })),
     };
   };
   // The pool emits a feature's start/resume/done records before and after its
@@ -1554,17 +1550,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       providerExecution: {
         ...providerExecution,
         managedSessionContext,
-        prepareManagedSessionObservation: async ({ provider, context, readOnlyReview }: { provider: string; context: ManagedSessionContext; readOnlyReview: boolean }) =>
-          prepareManagedSessionObservationDestination({
-            provider, context, readOnlyReview,
-            probe: (input) => probeManagedObservationDestination({
+        prepareManagedSessionObservation: createManagedSessionObservationPreparer((input) => probeManagedObservationDestination({
               ...input,
               runProcess: async (executable, args) => {
                 const result = await execFile(executable, [...args]);
                 return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
               },
-            }),
-          }),
+            })),
       },
       log: featureLog,
       stop,

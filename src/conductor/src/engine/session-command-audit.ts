@@ -26,6 +26,41 @@ export interface SessionCommandInstruction {
 }
 
 /**
+ * Engine prompt builders whose output is handed to a managed provider.  Keep
+ * this small and explicit: ordinary engine strings are not prompt surfaces.
+ * Tests import this registry when constructing production-shaped fixtures so
+ * the gate cannot silently drift from the dispatch paths it protects.
+ */
+export const MANAGED_DISPATCH_PROMPT_SURFACES = [
+  { file: 'step-runners.ts', symbols: ['buildSystemPrompt'] },
+  { file: 'conductor.ts', symbols: ['buildRetryHint', 'buildRemediationHint'] },
+  { file: 'project-prelude.ts', symbols: ['buildProjectPreludePrompt'] },
+] as const;
+
+export function isManagedDispatchPromptSurface(input: Pick<SessionCommandSource, 'file' | 'source'>, line?: number): boolean {
+  const normalizedFile = input.file.replace(/\\/g, '/');
+  const surface = MANAGED_DISPATCH_PROMPT_SURFACES.find((entry) => normalizedFile.endsWith(`/${entry.file}`));
+  if (!surface) return false;
+  if (line === undefined) return surface.symbols.some((symbol) => new RegExp(`\\b${symbol}\\b`).test(input.source));
+  const parsed = ts.createSourceFile(input.file, input.source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  let contained = false;
+  const visit = (node: ts.Node): void => {
+    if (contained) return;
+    const name = (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isFunctionExpression(node))
+      ? node.name?.getText(parsed)
+      : ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) ? node.name.text : undefined;
+    if (name && surface.symbols.includes(name as never)) {
+      const start = parsed.getLineAndCharacterOfPosition(node.getStart(parsed)).line + 1;
+      const end = parsed.getLineAndCharacterOfPosition(node.getEnd()).line + 1;
+      if (start <= line && line <= end) contained = true;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parsed);
+  return contained;
+}
+
+/**
  * Check every command-bearing executable instruction source rendered into a
  * marked provider dispatch.  Engine prose needs an explicit bounded context:
  * without one we cannot prove whether it is a managed instruction or an
@@ -43,13 +78,8 @@ export function auditManagedSessionInstructionSource(input: SessionCommandSource
     // additionally require a bounded declaration; a source-family baseline
     // cannot distinguish provider prompt text from operator documentation.
     const malformed = contexts.problems.some((problem) => problem.line <= instruction.line);
-    const commandBearingConstruction = /(?:prompt|instruction)/i.test(
-      input.source.split('\n')[instruction.line - 1] ?? '',
-    );
     if (input.family === 'engine' && !declared && !malformed) {
-      return commandBearingConstruction
-        ? [{ ...instruction, reason: 'unclassified session-command context in engine instruction' }]
-        : [];
+      return [{ ...instruction, reason: 'unclassified session-command context in engine instruction' }];
     }
     if (instruction.context !== 'managed') {
       return [{ ...instruction, reason: 'managed dispatch cannot execute an operator-only instruction' }];
@@ -86,8 +116,7 @@ export function auditShippedManagedSessionInstructionSource(input: SessionComman
       // shipped executable prompt/prelude is the one place this contradiction
       // proves a managed dispatch would actually receive that instruction.
       && input.family === 'engine'
-      && /(?:^|\/)step-runners\.ts$/.test(input.file)
-      && /(?:build|system)Prompt/i.test(input.source)
+      && isManagedDispatchPromptSurface(input, instruction.line)
     )
     || (
       /blocked subcommand/i.test(instruction.reason ?? '')
@@ -188,6 +217,14 @@ function constantString(
   if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     return { segments: [{ text: node.text, start: node.getStart(source) + 1 }], unresolved: false };
   }
+  if (ts.isArrayLiteralExpression(node)) {
+    return node.elements.reduce<ResolvedString>(
+      (result, element) => ts.isExpression(element)
+        ? append(result, constantString(element, source, constants, seen, depth + 1))
+        : { ...result, unresolved: true },
+      { segments: [], unresolved: false },
+    );
+  }
   if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
     return append(constantString(node.left, source, constants, seen, depth + 1), constantString(node.right, source, constants, seen, depth + 1));
   }
@@ -215,6 +252,7 @@ function constantString(
 function stringConstructionRoot(node: ts.Node): node is ts.Expression {
   if (!ts.isExpression(node)) return false;
   if (!(ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateExpression(node)
+    || ts.isArrayLiteralExpression(node)
     || (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken))) return false;
   return !ts.isBinaryExpression(node.parent) && !ts.isTemplateSpan(node.parent);
 }

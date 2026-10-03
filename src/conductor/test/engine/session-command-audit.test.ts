@@ -21,7 +21,7 @@ async function fixtureRoot(): Promise<string> {
 }
 
 describe('session command instruction discovery', () => {
-  it('finds a newly introduced production prompt source without registering it and excludes CLI usage text', async () => {
+  it('finds every newly introduced engine instruction without registering it', async () => {
     const root = await fixtureRoot();
     await writeFile(join(root, 'src', 'engine', 'conductor.ts'), [
       '// ai-conductor:session-command-context=managed',
@@ -32,6 +32,7 @@ describe('session command instruction discovery', () => {
 
     expect(discoverShippedSessionCommandSources(root).flatMap(auditManagedSessionInstructionSource)).toEqual([
       expect.objectContaining({ file: 'engine/conductor.ts', subcommand: 'daemon', context: 'managed' }),
+      expect.objectContaining({ file: 'engine/config.ts', subcommand: 'config', reason: 'unclassified session-command context in engine instruction' }),
     ]);
   });
 

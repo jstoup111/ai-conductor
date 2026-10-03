@@ -3405,6 +3405,13 @@ export class DefaultStepRunner implements StepRunner {
       // enclosing conductor is serving an interactive operator session.
       interactive: false,
       nativeSchema: entry.contract.output.jsonSchema,
+      readOnlyReview: true,
+      // This direct custom-policy path bypasses lifecycle supervision. Pin the
+      // daemon-owned child context in candidate options, where the executor
+      // reads it; a top-level input field is intentionally not authoritative.
+      ...(this.providerExecutionContext?.managedSessionContext
+        ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
+        : {}),
     };
     let failure: { reason: import('./build-review-artifacts.js').BuildReviewCustomInfrastructureFailureReason; detail: string } = {
       reason: 'provider-error', detail: `custom policy ${entry.id} did not produce a judgment`,
@@ -3432,13 +3439,6 @@ export class DefaultStepRunner implements StepRunner {
       },
       taskAttribution: this.taskAttribution,
       providerAvailability: this.providerExecutionContext?.providerAvailability,
-      // This custom-policy path is intentionally direct: unlike the ordinary
-      // rubric branches it does not pass through lifecycle supervision.  Keep
-      // the daemon-established context on that path as well, so every
-      // provider candidate and fallback receives the same child attribution.
-      ...(this.providerExecutionContext?.managedSessionContext
-        ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
-        : {}),
       withCandidateSafety: this.candidateSafetyFor('build_review')?.wrapper ?? this.withCandidateSafety,
       prepareCandidateSelfHost: this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
       onAttempt: this.providerAttempt, warn: this.providerWarn, options,
@@ -4214,6 +4214,9 @@ export class DefaultStepRunner implements StepRunner {
               // an operator REPL response. Keep this explicit rather than
               // inheriting the enclosing conductor mode.
               interactive: false,
+              // Candidate preparation runs before optionsForCandidate. Make
+              // the selected review policy visible at that boundary too.
+              readOnlyReview: true,
               nativeSchema: getBuildReviewRubricDescriptor(branch.rubric).contract.output.jsonSchema,
             },
             optionsForCandidate: (providerKey) => ({

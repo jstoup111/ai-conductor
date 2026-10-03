@@ -49,6 +49,25 @@ export type ManagedObservationDestinationProof = {
   readonly protectedWrites: 'refused' | 'unproven';
 };
 
+/**
+ * The two Codex entrypoints spell the same policy differently. Keep their
+ * read-only base and the sole producer-root exception in one builder so the
+ * launch contract and its admission proof change together.
+ */
+export function buildCodexReadOnlyProducerRootPolicyArgs(
+  producerRoot: string | undefined,
+  entrypoint: 'exec' | 'sandbox',
+): readonly string[] {
+  if (entrypoint === 'sandbox') {
+    return producerRoot === undefined
+      ? ['-P', ':read-only']
+      : ['-P', ':read-only', '-P', `${producerRoot}:read-write`];
+  }
+  return producerRoot === undefined
+    ? ['--config', 'sandbox_mode="read-only"']
+    : ['--config', 'sandbox_mode="read-only"', '--add-dir', producerRoot];
+}
+
 const CODEX_PROBE_OBSERVATIONS = new Set([
   'sandbox-started',
   'probe-write-refused',
@@ -210,7 +229,7 @@ export async function probeManagedObservationDestination(
     // failures; only existing protected surfaces can demonstrate refusal.
     const protectedPaths = options.protectedPaths.filter(existsSync);
     result = await options.runProcess(options.executable ?? resolveProviderExecutable(CODEX_PROVIDER), [
-      'sandbox', '-P', ':read-only', '-P', `${options.producerRoot}:read-write`, '--',
+      'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(options.producerRoot, 'sandbox'), '--',
       '/bin/bash', '-c', OBSERVATION_DESTINATION_PROBE, 'managed-observation-policy',
       options.producerRoot, ...protectedPaths,
     ]);

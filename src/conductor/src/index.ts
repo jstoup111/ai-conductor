@@ -43,7 +43,7 @@ import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
 import { prepareManagedSessionContext } from './execution/managed-session-context.js';
-import { prepareManagedSessionObservationDestination } from './execution/managed-session-preparation.js';
+import { createManagedSessionObservationPreparer } from './execution/managed-session-preparation.js';
 import { createSessionEventIdentity } from './execution/session-event-identity.js';
 import {
   normalizeProviderSelection,
@@ -1744,17 +1744,13 @@ async function dispatchCliCommand(): Promise<void> {
   const preludeProviderExecution: ProviderExecutionContext = {
     ...providerExecution,
     managedSessionContext: preparedPreludeContext.context,
-    prepareManagedSessionObservation: async ({ provider, context, readOnlyReview }) =>
-      prepareManagedSessionObservationDestination({
-        provider, context, readOnlyReview,
-        probe: (input) => probeManagedObservationDestination({
+    prepareManagedSessionObservation: createManagedSessionObservationPreparer((input) => probeManagedObservationDestination({
           ...input,
           runProcess: async (executable, args) => {
             const result = await execa(executable, [...args], { reject: false });
             return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
           },
-        }),
-      }),
+        })),
   };
 
   // Select UI subscriber based on config (default: 'terminal')

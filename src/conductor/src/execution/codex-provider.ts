@@ -39,6 +39,7 @@ import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 import { fromCodexStrictResult, toCodexStrictSchema } from './codex-strict-schema.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
 import { providerDescriptor } from './provider-catalog.js';
+import { buildCodexReadOnlyProducerRootPolicyArgs } from '../engine/build-review-read-only-capability.js';
 
 function codexDisplayName(): string {
   return providerDescriptor('codex').displayName;
@@ -1024,16 +1025,13 @@ export class CodexProvider implements LLMProvider {
     if (unattended) {
       if (options.readOnlyReview) {
         args.push(
-          '--config', 'sandbox_mode="read-only"',
+          ...buildCodexReadOnlyProducerRootPolicyArgs(options.managedSessionContext?.producerRoot, 'exec'),
           '--config', 'approval_policy="never"',
           '--config', 'shell_environment_policy.ignore_default_excludes=false',
         );
         // The read-only admission probe proves this exact narrow exception.
         // It is the only writable path available to a managed reviewer, where
         // it appends session observations; the worktree remains read-only.
-        if (options.managedSessionContext?.producerRoot) {
-          args.push('--add-dir', options.managedSessionContext.producerRoot);
-        }
       } else {
         args.push(
           '--config', 'sandbox_mode="workspace-write"',

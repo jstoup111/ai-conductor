@@ -152,6 +152,17 @@ export interface PrepareManagedSessionObservationDestinationInput {
 }
 
 /**
+ * Bind the provider-execution seam to the one destination preparer.  Keeping
+ * the executable in the forwarded shape is important for self-hosted
+ * candidates: probing the catalog binary would prove a different policy.
+ */
+export function createManagedSessionObservationPreparer(
+  probe: ObservationDestinationProbe,
+): (input: Omit<PrepareManagedSessionObservationDestinationInput, 'probe'>) => Promise<{ readonly producerRoot: string }> {
+  return (input) => prepareManagedSessionObservationDestination({ ...input, probe });
+}
+
+/**
  * Admit the one producer root only when the selected native review policy
  * proves both halves of the contract.  This does not alter native profiles;
  * the supplied probe is the provider-specific policy seam.
