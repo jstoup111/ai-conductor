@@ -62,6 +62,19 @@ atomicity, dedup, schema, redaction, and error reporting; the three entry points
   form before write (FR-11). No token reaches disk.
 - **Reader:** types-only `RegistryReader` + `ProjectRecord` exported for 9.3; no runtime consumer.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — A single registry module is the only writer, exposed as `conduct register`/`conduct create`, and `/bootstrap` invokes `conduct register` (above: "Adopt Option A — a single registry module")
+> **D2** — The registry path resolves via `resolveRegistryPath({home, env})` to `~/.ai-conductor/registry.json`, with an `$AI_CONDUCTOR_REGISTRY` override, injectable for tests (above: "Path: `resolveRegistryPath`")
+> **D3** — Writes are atomic: serialize the whole registry, write `registry.json.tmp`, `rename` over the target; readers never see a partial file (above: "Atomic write:")
+> **D4** — Records are deduplicated by canonicalized absolute path (`realpath`) (above: "Dedup: by canonicalized absolute path")
+> **D5** — register/create surface write failures as non-zero exit + message, not swallowed (above: "Error reporting:")
+> **D6** — `create` is a skeleton: git init + template CLAUDE.md + `.gitignore` + register, no stack detection; `--remote` is `git remote add` only, no push (above: "`create` = skeleton:")
+> **D7** — An upsert does not downgrade `created` → `registered` (above: "Status provenance:")
+> **D8** — A `remote` URL embedding `user:token@` is stripped to a credential-free form before write; no token reaches disk (above: "Credential redaction:")
+> **D9** — Types-only `RegistryReader` + `ProjectRecord` are exported for 9.3, with no runtime consumer (above: "Reader: types-only")
+
 ## Consequences
 
 ### Positive

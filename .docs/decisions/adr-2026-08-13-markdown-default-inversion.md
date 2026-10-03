@@ -105,6 +105,12 @@ a consumer's markdown outside those paths — a prompt file, a fixture, a templa
 likely to be load-bearing than prose. Where a consumer keeps prose outside `docs/`, the cost is a
 re-verification lap, never an incorrect verdict.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Invert the default: `isCodeOrTestPath` excludes exactly `.docs/`, `docs/`, `README` at any depth with any extension, and `CHANGELOG.md`, and classifies every other path as code/test, markdown included; the blanket `\.(md|mdx|txt|rst)$` exclusion is removed. (above: "**Invert the default.")
+> **D2** — `isTestPath` is unchanged, so `isRuntimeSourcePath` keeps its meaning and the `GATE_SURFACE` partitions keep their present semantics. (above: "`isTestPath` is unchanged")
+
 ## Assumptions
 
 | Assumption | Confidence | Basis | Impact if wrong | Confirmation |

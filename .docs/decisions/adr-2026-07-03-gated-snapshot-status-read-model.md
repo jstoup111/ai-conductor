@@ -50,6 +50,14 @@ ADR's rejection of a side-channel file: that rejected a file as the *dashboard's
 truth; here the dashboard never reads the snapshot — it is purely the out-of-process read
 model.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — One snapshot file per repo at `.daemon/gated.json` (`{ writtenAt, repoWarnings[], gated[] }`), serialized from the same in-memory gated list the dashboard consumes (above: "**Option A.** One snapshot file per repo")
+> **D2** — The snapshot is written temp-then-rename at the end of every discovery pass, including passes with zero gated specs and the identity-unresolved early return (above: "written temp-then-rename at the end of every discovery pass")
+> **D3** — The status CLI is read-only on this file, renders `written-at` as an age label, and degrades to "gated state unknown" on missing/unreadable (FR-14) (above: "The status CLI is read-only on this file")
+> **D4** — The dashboard never reads the snapshot; it is purely the out-of-process read model (above: "here the dashboard never reads the snapshot")
+
 ## Consequences
 
 ### Positive

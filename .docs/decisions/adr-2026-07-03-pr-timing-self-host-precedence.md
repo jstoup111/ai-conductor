@@ -33,6 +33,13 @@ line stating the configured value and the downgrade reason. Config validation is
 unchanged — `early-draft` remains a valid value in the self-host repo's config; it simply
 has no effect on self-host builds. Precedence: guardrails > `pr_timing`.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — When the SelfHostDetector identifies a self-host build, the effective publish mode is `finish` regardless of the configured `pr_timing`; precedence: guardrails > `pr_timing` (above: "Option A. When the SelfHostDetector identifies")
+> **D2** — The daemon logs one loud line stating the configured value and the downgrade reason (above: "the daemon logs one loud line")
+> **D3** — Config validation is unchanged: `early-draft` remains a valid value in the self-host repo's config and simply has no effect on self-host builds (above: "Config validation is unchanged")
+
 ## Consequences
 
 ### Positive

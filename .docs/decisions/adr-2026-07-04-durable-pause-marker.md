@@ -73,6 +73,16 @@ mirror). `ensureRunning` must stay launch-not-manage (ADR-005).
 - **Status (FR-5):** paused is a first-class state alongside running/stopped/stale —
   an enum in the status row model, not a boolean bolt-on.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Marker: `.daemon/PAUSED` in the target repo; existence is authoritative, contents are informational JSON, and a single-source pause-marker module owns the path, a best-effort writer/remover, and an `isPaused(repoRoot)` predicate (above: "**Option A.**" and "**Marker:**")
+> **D2** — Loop integration: the predicate is injected as a daemon dep and checked at the fill-pool boundary before any dispatch and re-polled on the idle tick; in-flight features drain normally, HALT semantics are untouched, and a paused daemon keeps sweeping/observing (above: "**Loop integration:**")
+> **D3** — Queue position (FR-2): pause never mutates backlog state; resume re-enters the unchanged discovery path (above: "**Queue position (FR-2):**")
+> **D4** — Verbs: `pause`/`resume` join the human-only management verbs; fleet forms iterate the registry for enumeration only and act per repo, reporting per-repo outcomes, and one repo's failure never aborts the rest (above: "**Verbs:**")
+> **D5** — Startup: the daemon logs pause state at boot and comes up paused when the marker exists, including daemons started by `ensureRunning`, which itself is unchanged (above: "**Startup:**")
+> **D6** — Status (FR-5): paused is a first-class state alongside running/stopped/stale — an enum in the status row model, not a boolean bolt-on (above: "**Status (FR-5):**")
+
 ## Negative paths / adversarial review
 
 - **Unreadable marker (EACCES, IO error — not ENOENT):** treat as **paused** and warn.

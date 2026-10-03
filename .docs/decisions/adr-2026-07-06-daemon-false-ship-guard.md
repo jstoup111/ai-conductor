@@ -71,6 +71,13 @@ After `/pr` runs and before writing `finish-choice=pr`: verify the PR URL is non
 the pushed branch's remote-tracking ref contains HEAD. On failure, do NOT write
 `finish-choice`/`pr_url` — STOP (mirrors the existing §1b STOP-gate pattern).
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Finish completion gate requires push evidence: for `finish-choice=pr` the gate additionally requires HEAD to be an ancestor of the branch's remote-tracking ref, injected via `CompletionContext` and skipped when the injection is absent; in daemon (auto) mode only, `keep` and `merge-local` no longer converge `DONE` (above: "### 1. Finish completion gate requires push evidence")
+> **D2** — Daemon ship guard: the daemon writes a `shipped` processed marker only when `outcome.finishChoice === 'pr'` and `outcome.prUrl` is non-null; any other done-outcome is a failed ship that writes HALT, escalates, keeps the worktree, and reports `halted`, never `done` (`repairProcessed` exempt per the scope note) (above: "### 2. Daemon ship guard")
+> **D3** — Skill STOP gate: after `/pr` runs and before writing `finish-choice=pr`, verify the PR URL is non-empty and the pushed branch's remote-tracking ref contains HEAD; on failure do not write `finish-choice`/`pr_url` — STOP (above: "### 3. Skill STOP gate")
+
 ## Consequences
 
 - A gh/push failure in daemon mode now produces a kept worktree + HALT (+ best-effort

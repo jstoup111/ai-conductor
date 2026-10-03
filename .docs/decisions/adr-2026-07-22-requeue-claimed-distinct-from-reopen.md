@@ -22,6 +22,13 @@ recovery recovers a *never-delivered, abandoned* idea. Recovery must preserve `c
   and the reverted-entry `reopen` (`done → pending`) from entangling with crash recovery.
 - It preserves `capturedAt` unchanged so recovered ideas keep their queue position.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Add a dedicated ledger operation for `claimed → pending` recovery (working name `requeueClaimed`), separate from `reopen` (above: "Add a dedicated ledger operation")
+> **D2** — It transitions only an entry currently in `claimed`; for any other status it is a no-op (or a reported refusal for the single-idea verb) (above: "It transitions **only** an entry currently in `claimed`")
+> **D3** — It preserves `capturedAt` unchanged so recovered ideas keep their queue position (above: "It preserves `capturedAt` unchanged")
+
 ## Consequences
 
 - Three explicit, non-overlapping lifecycle recoveries exist: delivered → `done` (delivery-guard),

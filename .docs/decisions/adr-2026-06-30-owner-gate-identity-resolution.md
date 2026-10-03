@@ -59,6 +59,13 @@ code (e.g. `specOwner` / `ownerIdentity` / `operatorId`) and MUST NOT be named b
 neighborhood of `daemon-lock.ts`, whose `owner` means the lock-holding process. The lock's `owner`
 is left unchanged (renaming stable lock code carries risk for no functional gain).
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Introduce an `IdentityResolver` seam with ordered resolution: configured owner wins; else the gh-authed login; else `unresolved` — configured always beats gh. (above: "Introduce an **`IdentityResolver` seam**")
+> **D2** — `unresolved` is fail-open: the gate is inactive, every content-eligible spec builds exactly as today, and a single warn-once "gate inactive" line is emitted per pass; an explicit configured owner is the recommended EKS posture. (above: "`unresolved` is **fail-open**")
+> **D3** — Vocabulary: the operator / spec owner MUST be named distinctly in code and MUST NOT be named bare `owner` near `daemon-lock.ts`; the lock's `owner` is left unchanged. (above: "**Vocabulary:**")
+
 ## Consequences
 
 ### Positive

@@ -77,6 +77,16 @@ safe to automate because byte-identity against a known branch proves the content
 exists in git — restoring loses nothing. The fence is cheap on the existing seam and shrinks
 recurrence, but is heuristic, so it is deliberately the second layer, not the load-bearing one.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Phase 1: when `maybeFastForward` finds a dirty tree, before giving up it classifies every dirty entry against candidate branch heads (branches of in-flight daemon builds first, then local `feat/*` heads). (above: "**Phase 1 — LeakTriage + AutoHeal on the FF-skip path.**")
+> **D2** — A modified tracked file is explained iff its working-tree content is byte-identical to the same path's blob at a candidate branch head; an untracked stray is explained iff its content hash matches some blob in that same candidate branch's tree. (above: "A **modified tracked file** is *explained* iff")
+> **D3** — All-or-nothing gate: heal runs only when a single candidate branch explains every dirty entry (and the index has no staged changes); then restore the modified files, delete the explained strays, log one loud WARN naming the culprit branch and each healed path, and let the same poll's fast-forward proceed. (above: "**All-or-nothing gate:**")
+> **D4** — Anything unexplained → no heal at all; keep the skip behavior but escalate the log to a leak-suspect WARN with the per-file diff-stat. (above: "Anything unexplained → **no heal at all**")
+> **D5** — Phase 2: `provisionSandboxBuildEnv` merges a daemon-owned PreToolUse write-fence into the sandbox's copied `settings.json` that blocks file-tool writes and (heuristically) Bash commands targeting the main checkout outside the build worktree, and never fires on worktree-internal paths, the OS temp dir, or non-harness repos. (above: "**Phase 2 — write-fence in the self-build sandbox.**")
+> **D6** — Scope: the fence covers self-builds only; consumer-repo daemon builds keep the operator's global guard, and extending the fence there is a follow-up, not part of this decision. (above: "Scope: the fence rides the sandbox seam")
+
 ## Assumption ledger (verify-claims)
 
 - FF-skip behavior and location — **verified** (read `daemon-backlog.ts:175-184`).

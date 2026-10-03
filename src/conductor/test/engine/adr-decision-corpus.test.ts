@@ -105,4 +105,31 @@ describe('ADR decision corpus compatibility', () => {
 
     expect(uncitable, 'APPROVED ADRs whose numbered decisions cannot be cited as governing clauses').toEqual([]);
   });
+
+  /**
+   * A prose `## Decision` with no id at all is the case the parser cannot rescue,
+   * so #2140 backfilled an additive decision index into every one. This holds the
+   * corpus there: an APPROVED ADR either carries a citable id or says, in its own
+   * text, why its decision cannot be enumerated.
+   */
+  it('gives every APPROVED ADR decision section a citable id or an explicit not-enumerable marker', async () => {
+    const decisionDirectory = join(REPOSITORY_ROOT, '.docs', 'decisions');
+    const files = await decisionMarkdownFiles(decisionDirectory);
+    const idless: string[] = [];
+
+    for (const path of files) {
+      const content = await readFile(path, 'utf8');
+      if (!/^(?:\*\*)?status(?:\*\*)?\s*:(?:\*\*)?\s*approved\b/im.test(content)) continue;
+      const section = decisionSection(content);
+      if (section === null) continue;
+      if (/Decision index \(#2140\): not enumerable\./.test(section)) continue;
+
+      const parsed = parseAdrDecisions(content);
+      if (parsed.kind !== 'decisions' || parsed.ids.size === 0) {
+        idless.push(relative(REPOSITORY_ROOT, path));
+      }
+    }
+
+    expect(idless, 'APPROVED ADRs whose decision section has no citable decision id').toEqual([]);
+  });
 });

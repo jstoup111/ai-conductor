@@ -59,6 +59,13 @@ happened through `conduct-ts daemon status`, which this change does cover. How t
 should present blocked work is part of its redesign, tracked by
 [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option A: `BLOCKED` is its own channel from `discoverBacklog`, its own snapshot, and its own `daemon status` section (above: "Option A. `BLOCKED` is its own channel")
+> **D2** — `HALTED`, `GATED`, park, and the dependency gate are untouched (above: "`HALTED`, `GATED`, park, and the dependency gate are untouched.")
+> **D3** — Startup-dashboard rendering of blocked work is deliberately deferred to the dashboard redesign tracked by #1332 (above: "**Startup-dashboard rendering is deliberately deferred.**")
+
 ## Consequences
 
 - The `blocked` channel is available to the dashboard as data from the moment this ships;

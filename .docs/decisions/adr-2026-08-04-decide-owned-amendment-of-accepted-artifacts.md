@@ -144,6 +144,16 @@ approved plan (per `adr-2026-07-27-protected-artifact-seal-self-amendment-visibi
 No new SHIP gate, no new `finish` predicate. The guarantee the intake wants is the one the seal
 already provides; what was missing was a sanctioned way to satisfy it, which is §1.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — An amendment to an accepted `.docs/` artifact is written into that artifact during the DECIDE pass that necessitates it, committed on the spec branch, in the codified additive `> **Amended YYYY-MM-DD by #NNN:**` note form; the original assertion is never rewritten or deleted. (above: "### 1. The mutation happens at DECIDE, in place")
+> **D2** — The ban on tasking a mutation binds every skill: the contract is stated once in `HARNESS.md` and each affected skill carries the obligation given in the table above. (above: "### 2. The ban on tasking a mutation binds every skill")
+> **D3** — The ban covers the sealed directories (five, as amended 2026-08-19 by #1736 above) and other features' artifacts only; own-feature paths remain tolerated. (above: "### 3. Scope of the ban: sealed directories, other features' artifacts")
+> **D4** — Enforcement is deterministic and engine-side at two checkpoints, a blocking authoring-time `conduct-ts` check invoked by `/plan` and a land-time gate in `land-spec.ts`, mechanical and not LLM-judged. (above: "### 4. Enforcement is deterministic and engine-side")
+> **D5** — A mid-BUILD discovery that an accepted assertion is falsified returns to DECIDE; `remediate` may never dispose it to `build` or `acceptance_specs`, and there is no new artifact, deferred-request file, parallel ledger, or write-allowlist entry. (above: "### 5. A mid-BUILD discovery returns to DECIDE.")
+> **D6** — The fail-closed guarantee needs no new machinery: the existing seal halt and `build_review` Scope rubric are the backstops, with no new SHIP gate or `finish` predicate. (above: "### 6. The fail-closed guarantee needs no new machinery")
+
 ## Alternatives considered and rejected
 
 **Enforcement alone (the filer's hypothesis).** Cross-check `**Files:**` against the sealed set and

@@ -66,6 +66,16 @@ depends only on the port; the `claude-session` adapter is the only wired impleme
   idea). On-disk inbox buffering + the capture/processing split are **9.3b** — this phase processes the
   chat Envelope **synchronously** through the same port.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt the hexagonal intake port (A): the `Envelope` is the sole contract, the engineer core depends only on the port, and the `claude-session` adapter is the only wired implementation this phase (above: "Adopt the hexagonal intake port (A)")
+> **D2** — The Envelope is `{ id, source, sourceRef, text, hintRepo?, status, receivedAt }`, validated at the port boundary: empty/whitespace `text`, out-of-set `status`, or a missing required field is rejected with a field-named error (above: "Envelope: `{ id, source, sourceRef, text, hintRepo?, status, receivedAt }`")
+> **D3** — The `claude-session` adapter (FR-14) builds a `pending` Envelope from operator chat input with a never-empty `sourceRef`, and no github poll/timer starts (above: "`claude-session` adapter (FR-14):")
+> **D4** — Idempotency (FR-15) keys on `source + sourceRef`, not `text`: a repeat is a reported duplicate, and same `text` with a different `sourceRef` processes both (above: "Idempotency (FR-15): the dedup key is")
+> **D5** — Loose coupling (FR-13): the engineer core imports the port interface only, never a concrete adapter, asserted by a dependency/import test (above: "Loose coupling (FR-13): engineer core imports")
+> **D6** — Bidirectional-ready: the port reserves `report(sourceRef, status)` for 9.3b write-back (no-op for `claude-session`), and this phase processes the chat Envelope synchronously, with inbox buffering deferred to 9.3b (above: "Bidirectional-ready: the port reserves")
+
 ## Consequences
 
 ### Positive

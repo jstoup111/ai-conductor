@@ -76,6 +76,16 @@ Why: it is the only option among the three that simultaneously satisfies "never 
 "never lose" (FR-13a), and "self-heal" (FR-13b), and it does so by reusing the always-available default
 store adr-2026-06-29-shared-memory-store-placement-and-durability already establishes.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt Option A: the default local store is the write-fallback sink, with one-directional, idempotent reconcile when the active platform returns. (above: "Adopt **Option A**: the **default local store")
+> **D2** — Memory operations are best-effort and non-blocking: recall/persist failures produce bounded warnings and the run always continues. (above: "Memory operations are **best-effort and non-blocking**")
+> **D3** — A write the active platform cannot accept is saved to the default local store and tagged pending-reconcile, not lost. (above: "A write the active platform cannot accept")
+> **D4** — When the active platform is available again, pending fallback entries are reconciled into it idempotently; until then they are not surfaced from the active platform. (above: "When the active platform is available again")
+> **D5** — Warnings are bounded (de-duplicated/capped) so repeated failures never flood or abort. (above: "Warnings are **bounded**")
+> **D6** — Reconcile is the agent persisting entries into the platform; the harness adds no retrieval/ranking and only provides the fallback store and the pending bookkeeping. (above: "This is consistent with FR-3")
+
 ## Consequences
 
 ### Positive

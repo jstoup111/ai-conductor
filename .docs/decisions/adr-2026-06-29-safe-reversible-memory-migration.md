@@ -76,6 +76,16 @@ Why: copy-verify-swap is the standard non-destructive migration shape and maps o
 "preserve all, no destructive change on failure, one-time reversible," while the detect step delivers
 FR-12 and idempotency for free.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt Option A: copy-verify-swap with a one-time pre-migration backup, gated by a detect step (above: "Adopt **Option A**")
+> **D2** — Detect → skip for fresh/empty/already-migrated projects (FR-12, idempotent FR-11), as amended 2026-09-09 by #2062 for an empty real `.memory/` (above: "Detect → skip")
+> **D3** — Preserve-before-destroy: the original is backed up and the symlink swap happens only after the canonical copy is verified complete; a failed verify aborts with no destructive change and restores the original (above: "Preserve-before-destroy:")
+> **D4** — Merge, don't overwrite: if the canonical store already holds entries, the copy is a union and no entry is overwritten or lost (above: "Merge, don't overwrite:")
+> **D5** — Reverse = one-time rollback: restoring the pre-migration backup returns the project to its prior state, and after a successful migration ongoing memory accrues in the new model only, not a two-way sync (above: "Reverse = one-time rollback:")
+> **D6** — Re-run safe: an interrupted migration re-runs to completion, losing no entries (above: "Re-run safe:")
+
 ## Consequences
 
 ### Positive

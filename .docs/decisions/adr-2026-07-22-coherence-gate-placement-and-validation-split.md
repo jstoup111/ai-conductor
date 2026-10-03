@@ -102,6 +102,18 @@ L-tier pins the opus tier for the `/coherence-check` authoring (the harness patt
 opus-pinning only the highest-judgment steps). The land validator has no model at any
 tier.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option A: a new `/coherence-check` skill runs as the final DECIDE step (after `/plan`), authoring `.docs/coherence/<plan-stem>.md` with one row per chain link and a per-row verdict (above: "**Option A.** A new `/coherence-check` skill")
+> **D2** — `landSpec` gains a `CoherenceValidator` rung that parses the artifact fail-closed, mechanically cross-checks every cited id via the existing parsers, and computes set-difference coverage, rejecting with a per-gap report (above: "`landSpec` gains a `CoherenceValidator` rung")
+> **D3** — Semantic-at-authoring, mechanical-at-land: the LLM contributes only semantic correspondence, authored in-session; everything enforceable by code is enforced by code at the boundary (above: "Semantic-at-authoring, mechanical-at-land.")
+> **D4** — A plan task is covered iff its `**Story:**` line cites a story id present in the stories file, or its `**Type:**` is `infrastructure`/`refactor` with a non-empty supporting purpose; anything else is an orphan (above: "Orphan-task rule (FR-5), mechanical form:")
+> **D5** — Required layers derive from committed markers; absence of a layer is never a gap, absence of a required layer's mapping rows is (above: "Track/origin degradation (FR-10/11), mechanical form:")
+> **D6** — Small-tier specs are exempt: the step is registered skippable for tier S and the land validator engages only when the tier ≠ S, checked before the fail-closed missing-artifact rule (as narrowed by the 2026-08-31 #2088 amendment) (above: "Tier exemption (FR-12")
+> **D7** — Claimed intake Desired-outcome bullets are staged in the worktree's gitignored `.pipeline/` and committed by `land` inside the existing plan-stem-keyed `.docs/intake/<plan-stem>.md` marker (above: "Outcome persistence (conflict-check amendment")
+> **D8** — The semantic-mapping dispatch steps up by tier (M: session-default model; L: opus-pinned), and the land validator has no model at any tier (above: "Model selection for the mapping step")
+
 ## Consequences
 
 ### Positive

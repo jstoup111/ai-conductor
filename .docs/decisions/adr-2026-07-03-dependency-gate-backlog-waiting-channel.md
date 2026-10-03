@@ -53,6 +53,15 @@ the dashboard, not the log.
 Owner-gate skips are **not** migrated into the channel in this feature (scope: #208), but the
 channel is deliberately shaped so #208 becomes "add a second reason kind."
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option A: the `DependencyGate` runs last in the `discoverBacklog` gauntlet, after content filters and the owner gate (above: "**Option A.** The `DependencyGate` runs **last**")
+> **D2** — The discovery result is widened to carry `waiting` entries `{ slug, sourceRef, reason, blockers[] }`, which `daemon-dashboard.ts` renders as a WAITING group; a waiting spec appears only in WAITING (above: "The discovery result is widened")
+> **D3** — Specs without a `Source-Ref` bypass the gate entirely (above: "Specs without a `Source-Ref` bypass")
+> **D4** — Announcement is warn-once per state change (blocker set / reason transition), not once-per-slug-forever; continuous visibility lives in the dashboard, not the log (above: "Announcement is warn-once **per state change**")
+> **D5** — Owner-gate skips are not migrated into the channel in this feature, but the channel is shaped so #208 becomes "add a second reason kind" (above: "Owner-gate skips are **not** migrated")
+
 ## Consequences
 
 ### Positive

@@ -84,6 +84,13 @@ remove only the one note this feature makes untrue.
 This is a deliberate scope merge: leaving it out would ship a per-provider cost-metering state
 that no reporting surface can display, which is not a completed outcome.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — The `## Cost` block grows by addition only: `cost_unmetered:` is added as a new top-level line and a per-provider field, and no existing field is renamed, reordered, reformatted, or given new meaning (above: "### 1. The block grows by addition only")
+> **D2** — Cost aggregation and token aggregation are decoupled: an `unmetered` dispatch disqualifies the feature from both aggregates, a `cost-unmetered` dispatch from cost aggregates only, and feature lines render the distinction explicitly (above: "### 2. Cost aggregation and token aggregation are decoupled")
+> **D3** — #1008's rendering facet is fixed in the same change while the issue itself stays open: `conduct kpi` gains the `providers:` parser/renderer and the six fields, only the one KPI note is removed, and the PR does not close #1008 (above: "### 3. #1008's *rendering* facet is fixed in the same change")
+
 ## Consequences
 
 - Writer and reader must change together in one commit; a split lands a record no reader

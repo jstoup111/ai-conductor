@@ -30,6 +30,14 @@ An `EXIT` trap calls `sandbox_down`, which removes `<tmp>` (scoped to exactly th
 `sandbox_up` created — never a glob). GitHub-touching steps target the sandbox store or a
 `--repo` fixture; no example opens a PR against the real remote.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Every example sources `examples/lib/common.sh` and calls `sandbox_up` before running any flow, creating one throwaway root (above: "Every example sources `examples/lib/common.sh`")
+> **D2** — For the duration of the run only, `sandbox_up` exports `HOME`, `AI_CONDUCTOR_REGISTRY`, and `AI_CONDUCTOR_ENGINEER_DIR` under the throwaway root and uses a fresh `git init` project there as the flow's working root (above: "`HOME=<tmp>/home`")
+> **D3** — An `EXIT` trap calls `sandbox_down`, which removes exactly the one path `sandbox_up` created — never a glob (above: "An `EXIT` trap calls `sandbox_down`")
+> **D4** — GitHub-touching steps target the sandbox store or a `--repo` fixture; no example opens a PR against the real remote (above: "GitHub-touching steps target the sandbox store")
+
 ## Consequences
 
 - Examples are safe to run repeatedly and in any order; a demo can never mutate real state.

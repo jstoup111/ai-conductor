@@ -80,6 +80,14 @@ the class.
 The preserve/rerun decision itself (`gate-code-validity.ts` `gateVerdictStillValid`) is
 **not** changed. This ADR covers reporting only.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Replace the three hand-maintained lists with one registry typed `Record<ConductorEvent['type'], SinkDeclaration>` and derive each sink's subscription set from it, so adding a `ConductorEvent` member fails compilation until it declares where it goes (above: "**Replace the three hand-maintained lists with one registry")
+> **D2** — `false` is a first-class, reviewable declaration: exhaustiveness forces a decision per event type, not membership in every sink (above: "**`false` is a first-class, reviewable declaration.**")
+> **D3** — `verdictFreshness` gains a discriminated outcome `'rewritten' | 'preserved_surface_miss' | 'stale_invalidated'` populated at every return site, carried by the `verdict_freshness` event and rendered by `daemon-cli.ts` as a line naming the class (above: "Alongside the registry, `verdictFreshness` gains")
+> **D4** — The preserve/rerun decision (`gateVerdictStillValid`) is not changed; this ADR covers reporting only (above: "The preserve/rerun decision itself")
+
 ## Consequences
 
 **Positive.** The next event type added cannot be born dead — the build stops until its sinks

@@ -92,6 +92,14 @@ safe — `decodePrProseJudgment` fails closed, so a non-compliant provider degra
 a generic reason and never to a false pass. The cost is a less precise halt reason, never an
 unsound one. Should a machinery-only route to reachability appear, it supersedes this.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option A: a reason-expansion map plus an optional provider-supplied `detail`, with two operator conditions attached (above: "**Option A**, with two conditions attached")
+> **D2** — The rendering happens inside `routeFinishPublicationDisposition`'s `human_required` arm, not in a new export, so `route.reason` reaches the existing `writeHaltMarker` site already in prose form and `conductor.ts` requires no change (above: "The rendering happens inside `routeFinishPublicationDisposition`'s")
+> **D3** — Condition 1: `human_required.reason` is narrowed to the closed union of reason tokens so the map is exhaustive by construction, and a fail-closed generic rendering is retained for any token that fails to resolve at runtime — both, not either (above: "**Condition 1 — the reason union must be closed.**")
+> **D4** — Condition 2: the reliance on provider compliance with the published verdict contract is recorded as an accepted cost, superseded should a machinery-only route to reachability appear (above: "**Condition 2 — the reliance on provider compliance is recorded as an accepted cost.**")
+
 ## Consequences
 
 ### Positive

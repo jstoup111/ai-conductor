@@ -69,6 +69,15 @@ signature — only its implementation changes). The respawn-in-place pattern
   loss explicitly** — restart must succeed; degraded continuity is reported, never
   silent.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option A: the tmux adapter's `restart` becomes respawn-in-place with the port's verb surface unchanged, targeting the daemon session's canonical name and its window 0 / pane 0, leaving operator-created extra windows untouched (above: "**Supervisor change:** the tmux adapter's `restart`")
+> **D2** — Gating: restart proceeds only when the daemon is idle or paused; not-running with the session absent is a `start`, and not-running with a dead pane present is revived by respawn (above: "**Gating:** restart proceeds only when")
+> **D3** — Pidfile handoff preserves adr-010: `respawn-pane -k` terminates the old pane process, and the old process's exit backstop or the new process's `acquire` reclaim handles the pidfile, with no new lock semantics (above: "**Pidfile handoff (adr-010 preserved):**")
+> **D4** — Engine adoption: the respawned command re-enters through `bin/conduct-ts`, which resolves the `current` engine realpath, so restart adopts the newest version with no daemon-side logic (above: "**Engine adoption (FR-8/14):**")
+> **D5** — Fallback: if respawn fails, fall back to kill-session + new-session and report the session loss explicitly; restart must succeed and degraded continuity is never silent (above: "**Fallback:** if respawn fails")
+
 ## Negative paths / adversarial review
 
 - **Old process ignores termination:** tmux's pane kill is not polite-SIGTERM-first by

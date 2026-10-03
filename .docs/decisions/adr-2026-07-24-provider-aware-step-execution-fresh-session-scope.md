@@ -74,6 +74,15 @@ may correlate an invocation with its owning step and provider, but it never
 authorizes resume. A legacy marker must never cause any dispatch to resume an
 old conversation.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Session identity is scoped by step and provider: each provider's first invocation for an executed step starts a fresh native session, never reused by another provider or carried into a later step, and crossing a step boundary invalidates every provider session of the prior step (above: "### 1. Session identity is scoped by step and provider")
+> **D2** — Every retry starts a fresh session: budget-consuming and non-consuming recovery retries create a new session identity for every dispatch, unconditionally, and stale-session recovery's replacement invocation is another cold start (above: "### 2. Every retry starts a fresh session")
+> **D3** — Provider fallback starts provider-native context: the fallback provider's first attempt creates a fresh session with its own permissions and authentication, and nothing crosses the provider boundary (above: "### 3. Provider fallback starts provider-native context")
+> **D4** — Concurrency and auxiliary paths stay isolated: concurrent branches remain branch-, step-, and provider-local, one-shot auxiliary paths keep their fresh-session behavior, and any retry they implement also starts fresh (above: "### 4. Concurrency and auxiliary paths stay isolated")
+> **D5** — Persistence remains compatible without restoring cross-step context: persistence may correlate an invocation with its owning step and provider but never authorizes resume, and a legacy marker must never cause any dispatch to resume an old conversation (above: "### 5. Persistence remains compatible without restoring cross-step context")
+
 ## Preserved Decisions
 
 All non-session decisions from

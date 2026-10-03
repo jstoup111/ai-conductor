@@ -87,6 +87,18 @@ liveness; the registry `daemonState` is a reporting mirror only.
   authoring, and the daemon loop call **only** that boundary, so swapping the single-winner model
   later (the PRD's flagged iteration) is a localized change with no ripple.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt the pidfile `O_EXCL` lock (A): the atomic create is the 1-per-repo mutex, `kill(pid,0)` is liveness, and the registry `daemonState` is a reporting mirror only. (above: "**Adopt the pidfile `O_EXCL` lock (A).**")
+> **D2** — The daemon acquires `.daemon/daemon.pid` with `O_EXCL` on boot; the atomic create is the single-winner gate and the loser no-ops/exits 0. (above: "**Lock = mutex (FR-17/20):**")
+> **D3** — `process.kill(pid, 0)` → `ESRCH` = dead (reclaim); success/`EPERM` = alive, never reclaimed; a `uuid` in the pidfile guards against pid reuse. (above: "**Liveness (FR-18):**")
+> **D4** — A dead lock is reclaimed by re-creating via `O_EXCL`, and a repo is never permanently refused because of a stale pidfile + half-built worktree. (above: "**Stale reclaim (FR-19):**")
+> **D5** — ensure-running probes the lock: alive → no-op, none/stale → spawn one detached daemon; fire-and-forget, no lifecycle ownership. (above: "**ensure-running (FR-21) — non-autonomous (ADR-005):**")
+> **D6** — `launchDaemonDetached` spawns with `cwd: repoPath`, not the bogus `--project` flag, detached + stdio-detached. (above: "**`launchDaemonDetached` fix (FR-22):**")
+> **D7** — The registry `daemonState` mirror is explicitly non-authoritative: on any disagreement the pidfile wins and no control decision reads the mirror. (above: "**Registry mirror (FR-23):**")
+> **D8** — The entire lock/liveness primitive is confined behind a single module boundary (acquire / isLive / reclaim / ensureRunning) that routing, authoring, and the daemon loop call exclusively. (above: "**Isolation for the flagged future change (FR-20 caveat):**")
+
 ## Consequences
 
 ### Positive

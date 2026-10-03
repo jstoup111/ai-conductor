@@ -68,6 +68,14 @@ the cutover) is unchanged. Only the ambiguous *un-owned* case changes.
 Neither layer adds a merge-time or dispatch-time **rejection/HALT** — Layer B only ever
 turns a silent skip into a build-with-loud-log.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Layer A, born owned: every conduct-ts path that writes an intake marker stamps `Owner:` from machine identity at creation time, closing the `authoring.ts` gap with the `readMachineOwnerConfig()` fallback (above: "### Layer A — Born owned (write boundary)")
+> **D2** — Layer B, no silent dead spec: the `unowned-post-cutover` and `unowned-indeterminate` branches return a default-build attributed to the daemon's own resolved owner (`unowned-defaulted`), and `daemon-backlog.ts` emits a loud, actionable escalation instead of the silent skip (above: "### Layer B — No silent dead spec (read boundary)")
+> **D3** — Invariant preserved: a marker stamped with a different owner still returns `other-owner` → SKIP, and `grandfathered` is unchanged; only the ambiguous un-owned case changes (above: "**Invariant preserved:**")
+> **D4** — Neither layer adds a merge-time or dispatch-time rejection/HALT (above: "Neither layer adds a merge-time or dispatch-time")
+
 ## Options weighed (Layer B — the un-owned arrival)
 
 - **Option 1 — Loud-log only, keep the skip.** Reword the skip line louder but still don't

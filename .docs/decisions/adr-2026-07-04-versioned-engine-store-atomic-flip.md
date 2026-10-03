@@ -88,6 +88,17 @@ cleanup; FR-16 requires clear failure when the current version is broken.
   `dist` is a real directory otherwise (guards against raw-tsup habits resurrecting the
   hazard). Consumer-facing paths (`bin/conduct-ts`, docs) do not change.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option A: the store is `src/conductor/dist-versions/<version-id>/`, one immutable dir per published build with a unique `<version-id>`. (above: "**Option A.** Layout and flow"; "**Store:**")
+> **D2** — Publish is atomic: build into a staging dir, finalize as `dist-versions/<version-id>/`, retarget the `dist` symlink atomically; a published version dir is never written to again. (above: "**Publish (atomic):**")
+> **D3** — `bin/conduct-ts` resolves `dist` to its realpath and hands node the concrete version entry, so a running process keeps a self-consistent module graph until it restarts. (above: "**Pinning:**")
+> **D4** — The daemon records its engine dir in its pidfile record (additive field), and `daemon status` surfaces the version id per repo. (above: "**Version visibility:**")
+> **D5** — GC is fail-closed for deletion: a version dir is deleted only if all listed conditions hold, any enumeration/read error skips deletion entirely, and GC never blocks a publish. (above: "**GC (fail-closed for deletion, FR-15):**")
+> **D6** — The launcher's missing-dist error extends to a dangling/incomplete `current` target with a clear actionable message; running daemons are unaffected. (above: "**Broken current (FR-16):**")
+> **D7** — First publish converts the existing real `dist/` into `dist-versions/<bootstrap-id>/` + symlink, the build wrapper otherwise refuses to run while `dist` is a real directory, and consumer-facing paths do not change. (above: "**Migration:**")
+
 ## Negative paths / adversarial review
 
 - **Flip vs. mid-import race:** `rename(2)` of the symlink is atomic on POSIX; a reader

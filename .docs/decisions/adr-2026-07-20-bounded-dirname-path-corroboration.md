@@ -75,6 +75,13 @@ Rationale: the trailer proves intent; the file-path check is corroboration, not 
 Widening corroboration by one deterministic, tightly-bounded step credits legitimate
 subsystem-local work without granting the LLM more authority or reopening #445.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Add a bounded dirname/subsystem branch to path-corroboration: a commit file corroborates a task iff its immediate parent directory equals the immediate parent directory of a plan-declared path for that task, in addition to today's exact/suffix match, with the `Task: N` trailer guard unchanged. (above: "Add a **bounded** dirname/subsystem branch")
+> **D2** — The bound is the immediate parent directory only — never any ancestor, never repo-root — which keeps #445 closed. (above: "The bound is deliberately the *immediate* parent directory only")
+> **D3** — The semantic judge fallback and its gating are left byte-for-byte unchanged; when the dirname pass also misses, behavior is exactly as today (judge-if-armed, else reject). (above: "The semantic judge fallback and its gating are **left byte-for-byte unchanged**")
+
 ## Consequences
 
 ### Positive

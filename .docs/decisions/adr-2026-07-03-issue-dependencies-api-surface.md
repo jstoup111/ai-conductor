@@ -61,6 +61,14 @@ link to exist, the gate honors it. The **migration**, however, only *creates* sa
 cross-repo Open Question without a bespoke policy: the platform's own link admissibility is
 the policy.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option A: `BlockerResolver` reads `GET …/issues/{n}/dependencies/blocked_by` for the issue parsed from the spec's `Source-Ref`. (above: "**Option A.** `BlockerResolver` reads")
+> **D2** — A blocker is open iff its returned `state` is not `closed` (any close reason satisfies). (above: "A blocker is open iff its returned `state`")
+> **D3** — The migration writes links with `POST …/dependencies/blocked_by` `{"issue_id": …}` and treats 422 "already exists"-class responses as success. (above: "The migration writes links with `POST")
+> **D4** — Cross-repo blockers: enforce whatever the platform returns; the migration only creates same-repo links, and cross-repo prose refs (`owner/repo#N`) are listed for manual review, never auto-linked. (above: "**Cross-repo blockers: enforce whatever the platform returns.**")
+
 ## Consequences
 
 ### Positive

@@ -142,6 +142,14 @@ Initial, grouped, retried, resumed, auxiliary, and replacement-provider dispatch
 the same protected-artifact and provider-home boundary. A retry cannot restore global stamping,
 inherit live provider settings, relink live globals, or invoke a raw provider beneath the wrapper.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Section 1: task identity is task-local, non-authoritative telemetry — dispatches carry the validated plan-task id, multiple rows may be `in_progress`, `.pipeline/current-task` is removed as a required surface and mutation authorization, and each task authors its own non-required `Task: <id>` trailer (above: "1. Task identity is task-local, non-authoritative telemetry")
+> **D2** — Section 2: mutation safety is independent of task attribution — the provider-neutral safety authority owns the protected-artifact seal and self-host boundary, and concurrent tasks may mutate non-overlapping files in the same feature worktree (above: "2. Mutation safety is independent of task attribution")
+> **D3** — Section 3: Claude and Codex receive equivalent fresh minimal throwaway self-host provider homes with no unrelated live state, child-only environment changes, the narrow cached-login opaque handoff, fail-closed provisioning, and bounded `finally` cleanup (above: "3. Claude and Codex receive equivalent minimal self-host homes")
+> **D4** — Section 4: initial, grouped, retried, resumed, auxiliary, and replacement-provider dispatches all pass through the same protected-artifact and provider-home boundary (above: "4. Retry, resume, and provider replacement keep the same boundaries")
+
 ## Consequences
 
 ### Positive

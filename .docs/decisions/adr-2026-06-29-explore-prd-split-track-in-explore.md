@@ -23,6 +23,14 @@ where they're hollow.
 - **Track is an output of `explore`** (`product` | `technical`), operator-confirmed. There is no
   separate classification step — exploration is exactly where you learn what the work is.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Retire `brainstorm` and introduce two steps, `explore` and `prd`. (above: "Retire `brainstorm`; introduce two steps")
+> **D2** — `explore` is `enforcement: advisory` and always runs; it explores context, asks questions, and proposes 2–3 approaches, keeps working notes ephemeral in `.pipeline/`, persists the selected approach and rejected alternatives to `.memory/decisions/`, and writes no `.docs/` artifact except the track marker. (above: "**`explore`** — `enforcement: advisory`, **always runs**")
+> **D3** — `prd` is `enforcement: gating`, conditional on `Track: product`, and writes the product-only design doc to `.docs/specs/`. (above: "**`prd`** — `enforcement: gating`")
+> **D4** — Track (`product` | `technical`) is an operator-confirmed output of `explore`; there is no separate classification step. (above: "**Track is an output of `explore`**")
+
 ## OQ2 resolution — explore skippability
 
 `explore` **always runs** in the standard flow (it is where the track is decided; skipping it would

@@ -42,6 +42,14 @@ to a live user.
 Usage is per-invocation (verified); the engine already emits one `step_completed` per invocation, so
 the per-feature total is a sum over events — no cumulative-usage query.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Switch the autonomous `invoke()` dispatch to `claude --print --output-format json`, prompt still on stdin (output format amended 2026-08-19 by #1441, above) (above: "Switch the autonomous `invoke()` dispatch to")
+> **D2** — Parse the single result object: text output from `.result`, usage from `.usage.{input_tokens,output_tokens,cache_read_input_tokens,cache_creation_input_tokens}`, cost/meta from `.total_cost_usd`, `.num_turns`, `.duration_ms` (above: "Parse the single result object:")
+> **D3** — Reject `stream-json` (this rejection no longer holds per the 2026-08-19 amendment above) (above: "Reject `stream-json`: with `--print`")
+> **D4** — Usage is per-invocation, and the per-feature total is a sum over `step_completed` events, with no cumulative-usage query (above: "Usage is per-invocation (verified)")
+
 ## Consequences
 
 - `parseTokenUsage` (or its replacement) parses a json object rather than scanning lines.

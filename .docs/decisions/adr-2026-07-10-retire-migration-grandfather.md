@@ -63,6 +63,13 @@ With adr-2026-07-10-evidence-range-anchor-resolution this makes the build gate, 
 post-rebase pre-verify provably agree: same predicate, same anchor, same single evidence currency
 — an evidence-less status flip can never pass any of them, so the #463 loop cannot form.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option B, retire H8: the gate resolves a task only by a real `evidenceStamps` entry, re-derived from git on every evaluation (above: "**Option B — retire H8.**")
+> **D2** — `seedTaskStatus` stops stamping `migrationGrandfather` and gate resolution stops reading it, while loading old sidecar files with the field remains harmless (above: "`seedTaskStatus` stops stamping")
+> **D3** — With adr-2026-07-10-evidence-range-anchor-resolution, the build gate, auto-heal, and post-rebase pre-verify use the same predicate, same anchor, and same single evidence currency, so an evidence-less status flip can never pass any of them (above: "With adr-2026-07-10-evidence-range-anchor-resolution this makes")
+
 ## Consequences
 
 ### Positive

@@ -161,6 +161,17 @@ never by `ProviderSessionScope`. Per-invocation provider identity does not churn
 Any implementation that begins writing per-invocation provider identifiers to that file is out
 of contract.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Claude declares `supportsSessionResume: false` and the `--resume` branch is removed from its `buildArgs`, leaving `--session-id «id»` unconditionally, so neither adapter can construct a resume invocation. (above: "### 1. Claude declares no resume, and its resume argv is deleted")
+> **D2** — `ProviderSessionScope.prepare()` mints a fresh id on every call and returns `resume: false`; `ProviderSessionStore` keeps its scoping and audit-correlation behavior. (above: "### 2. Session identity is minted per invocation")
+> **D3** — The two ungated dispatch paths (`group-core.ts:464-469`, `step-runners.ts:529-530`) are each changed to dispatch `resume: false` with a freshly minted id, closed at their own source rather than at the capability gate. (above: "### 3. The two ungated dispatch paths are closed at their own source")
+> **D4** — `supportsSessionResume` is retained with no `true` case; `ProviderSession.created`, `markCreated`, and `forceFreshSession` are evaluated for deletion only after the Decision 6 guard tests are green. (above: "### 4. `supportsSessionResume` is retained, with no `true` case")
+> **D5** — `runInteractive` receives the failure context as an explicit input and renders it into its prompt, so the stall-breaker and recovery-menu "interactive fix" open on a session that states what just failed and why. (above: "### 5. Interactive recovery cold-starts with explicit context")
+> **D6** — The stale/in-use recovery path (`SESSION_IN_USE_RE`, `STALE_SESSION_RE`, `CODEX_SESSION_EXPIRED_RE`, `sessionExpired`, non-budget-consuming `session_reset`) survives with the narrower meaning "the CLI rejected the identifier we minted", and the `session_policy` diagnostic is retained and must stay once-per-step. (above: "### 6. The stale/in-use recovery path survives")
+> **D7** — Telemetry correlation is unaffected: `conductor.run.id` resolves from `.pipeline/conduct-session-id`, written only from the step runner's own `this.sessionId` and never by `ProviderSessionScope`; writing per-invocation provider identifiers to that file is out of contract. (above: "### 7. Telemetry correlation is unaffected")
+
 ## Consequences
 
 **Positive**

@@ -43,6 +43,14 @@ refinement, recorded here as an available follow-up rather than built now.
 
 The HALT class stays `needs-human`, matching the existing publication-exhaustion HALT.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Bound the non-charging re-entry with a single engine-level total progress allowance: a counter of publication advances that bypassed the retry budget, checked against a fixed ceiling of twice the number of publication transitions, which also records the last transition seen so the HALT reason names where the run stopped (above: "Bound the non-charging re-entry with a single engine-level limit")
+> **D2** — The counter is scoped to a single `finish` step execution and resets when the step is re-entered from outside, exactly as `progressAttempts` does (above: "The counter is scoped to a single `finish` step execution")
+> **D3** — A per-transition stuck cap is deliberately NOT part of this decision; it is recorded as an available follow-up (above: "**A per-transition stuck cap is deliberately NOT part of this decision.**")
+> **D4** — The HALT class stays `needs-human`, matching the existing publication-exhaustion HALT (above: "The HALT class stays `needs-human`")
+
 ## Consequences
 
 - Termination is guaranteed: the allowance bounds the loop at twelve bypassed advances

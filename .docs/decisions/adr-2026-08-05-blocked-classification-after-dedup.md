@@ -71,6 +71,14 @@ Option A, with these rules pinned:
   change — this is asserted by a test that runs discovery over one fixture under both
   behaviours (PRD FR-8).
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option A, with the gauntlet dedup order `isProcessed` → shipped-by-stem → stories resolution → content vetting → shipped-by-content → owner gate → dependency gate (above: "Dedup order in the gauntlet")
+> **D2** — A spec that is processed, shipped by stem, shipped by content, or operator-parked is never emitted as blocked (above: "A spec that is processed, shipped by stem")
+> **D3** — `resolveStoriesRef` distinguishes "reference does not resolve" from "reference resolves but the target is absent on the default branch" instead of collapsing both into one `null` (above: "`resolveStoriesRef` stops collapsing")
+> **D4** — Blocked classification is visibility-only: the eligible `items` set must be identical to the pre-change set except for plans made newly resolvable by the resolver change, asserted by a test over one fixture under both behaviours (above: "Blocked classification is visibility-only.")
+
 ## Consequences
 
 - In a repository without `.daemon/processed/` markers and without shipped records, old

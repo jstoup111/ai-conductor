@@ -60,6 +60,12 @@ Because the arming (`conductor.ts:3289`) and the citation path-relaxation
 the lane and relaxes path-overlap for verification tasks with **no change to either
 consumer**.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Decision 1: `Evidence: skipped` mints a stamp — the skip branch of `deriveCompletionInternal` writes `evidenceStamps.set(id, { sha: <the Evidence: skipped commit sha>, form: 'evidence:skipped' })` while the task stays `skipped` (above: "**Decision 1 — `Evidence: skipped` mints a stamp.**")
+> **D2** — Decision 2: `**Type:** verification` is verify-only-eligible — `parsePlanTaskVerifyOnly` returns `true` for a `verification` Type token in union with the existing `**Verify-only:** yes` marker, with no change to either consumer (above: "**Decision 2 — `**Type:** verification` is verify-only-eligible.**")
+
 ## Consequences
 
 **Preserved (fail-closed, no whitewash):**

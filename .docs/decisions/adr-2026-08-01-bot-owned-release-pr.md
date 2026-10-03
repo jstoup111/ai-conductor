@@ -64,6 +64,19 @@ Tagged-channel update detection derives the installed release identity from the 
 
 As a one-time transition, automation analyzes the current `[Unreleased]` entries plus merged PR evidence since the latest tag, removes intermediate repairs to unreleased work, consolidates related changes into final reader-facing outcomes, and records inclusion/exclusion reasons. The operator approves this proposal. Recurring GitHub Actions maintenance performs no semantic AI curation.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt Option A: after an implementation PR merges, a serialized GitHub Actions workflow collects structured release metadata from merged PRs since the latest release tag and creates or regenerates one bot-owned release branch and PR (above: "Adopt Option A." / "After an implementation PR merges")
+> **D2** — Implementation branches do not edit `CHANGELOG.md` or `VERSION` in the steady state (above: "Implementation branches do not edit")
+> **D3** — Each implementation PR declares one release-note category and reader-facing note or an explicit no-note disposition, and a semver impact of patch, minor, or major when a release note is present (above: "Each implementation PR declares:")
+> **D4** — A required deterministic PR check rejects missing, contradictory, or malformed dispositions before merge (above: "A required deterministic PR check rejects")
+> **D5** — The release PR renderer includes every merged PR in an auditable disposition set, renders only eligible notes, chooses the highest declared semver impact, and regenerates idempotently from the latest `main` plus merged-PR evidence since the latest tag (above: "The release PR renderer includes every merged PR")
+> **D6** — The workflow authenticates with a narrowly scoped GitHub App installation token rather than the repository `GITHUB_TOKEN`, with only the contents and pull-request permissions required (above: "The workflow authenticates with a narrowly scoped GitHub App")
+> **D7** — The operator approves by merging the release PR; a separate deterministic publisher verifies the merge came from the designated release PR with complete evidence, then creates the tag and GitHub Release; no package manager is introduced (above: "The operator approves the consolidated notes")
+> **D8** — Tagged-channel update detection derives the installed release identity from the checked-out/recorded tag, never from the repository's forward-looking `VERSION` value (above: "Tagged-channel update detection derives")
+> **D9** — A one-time, operator-approved transition consolidates the current `[Unreleased]` entries; recurring GitHub Actions maintenance performs no semantic AI curation (above: "As a one-time transition")
+
 ## Consequences
 
 ### Positive

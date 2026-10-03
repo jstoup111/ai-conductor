@@ -41,6 +41,15 @@ not a re-wire.
 The KPI/trend surface (`conduct kpi`) reads committed `.docs/shipped/*.md` Cost blocks — no new
 database, no daemon-shared store; trend survives machine changes because the data is in git.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Persist the rollup as a `Cost:` block in the existing committed `.docs/shipped/<slug>.md` record, written at ship by aggregating the feature's own per-worktree `events.jsonl` plus the existing dispatch/retry/halt signals (above: "Persist the rollup as a `Cost:` block")
+> **D2** — The block records, per feature, `tokens` (four classes summed over metered `step_completed` events), `cost_usd`, `dispatches`/`retries`/`halts` counts, and `unmetered` `{count, duration_ms}` so a partial total is visibly partial (above: "The block records, per feature:")
+> **D3** — Attribution requires no change to the shared event bus, because `.pipeline/` is per-worktree and `events.jsonl` is already per-feature (above: "Attribution requires no change to the shared event bus")
+> **D4** — The `step_completed` emit carries `model` alongside `tokenUsage`, keeping the existing OTel `conductor.step.tokens` counter fed so the OTel-first work is a consumer swap, not a re-wire (above: "The `step_completed` emit carries `model`")
+> **D5** — The KPI/trend surface (`conduct kpi`) reads committed `.docs/shipped/*.md` Cost blocks, with no new database and no daemon-shared store (above: "The KPI/trend surface (`conduct kpi`) reads")
+
 ## Consequences
 
 - Ship becomes the aggregation point; `writeShippedRecord` gains the Cost block. If the worktree's

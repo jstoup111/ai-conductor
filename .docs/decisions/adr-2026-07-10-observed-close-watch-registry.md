@@ -98,6 +98,14 @@ never blocks dispatch. Per-entry state machine:
 - Filing and merging operator flows — zero new steps; the marker is authored by the
   engineer DECIDE flow, not by the operator.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Section 1, spec-time declaration: each spec carries a committed `.docs/observation/<plan-stem>.md` (`Signature:` or `close-on-merge` with `Rationale:`, `Surface:`, `Window-days:`) that `engineer land` asserts exists and is well-formed, with `daemon-log` as the sole v1 surface (above: "1. Spec-time declaration")
+> **D2** — Section 2, ship-time enrollment: at the existing injection site, an absent marker or `close-on-merge` keeps `Closes`; a declared signature injects `Refs` and enrolls `.daemon/observation-watch.jsonl` using the mergeable-watch registry idioms with a `v: 1` schema tag (above: "2. Ship-time enrollment")
+> **D3** — Section 3, watch: `sweepObservationWatch` is a third best-effort call in `sweepBestEffort`, running the awaiting-merge / watching per-entry state machine — close on first post-`mergedAt` match, and on window expiry comment + `observation:no-show` label with the issue left OPEN (above: "3. Watch: `sweepObservationWatch`")
+> **D4** — Section 4, what does not change: spec PR `Refs`, hand-authored specs, halted builds, and the filing and merging operator flows are untouched (above: "4. What does NOT change")
+
 ## Consequences
 
 - Closing an issue now asserts *exercised*, not *merged*; the distinct no-show terminal

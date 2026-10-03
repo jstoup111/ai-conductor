@@ -63,6 +63,14 @@ branch keep the existing documented fail-closed behavior (zero commits).
 The hardcoded `origin/main` in `getEvidenceRange` and `listCommits` is replaced with the derived
 origin default branch (reusing the existing helper), per the repo-wide convention.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option B: anchor resolution is single-sourced in `getEvidenceRange` with the ladder above (explicit reachable anchor, `merge-base --fork-point`, plain `merge-base`, fail-closed zero commits) (above: "**Option B.** Anchor resolution is single-sourced")
+> **D2** — The genesis fallback in `deriveCompletion` is deleted outright, so all completion verdict callers (build gate, auto-heal, post-rebase pre-verify) compute over the identical range by construction (above: "the genesis fallback in `deriveCompletion` is deleted outright")
+> **D3** — When no branch base is derivable while a remote default branch exists, the range is empty (fail-closed: nothing completes, anomaly logged), never the whole history or an arbitrary `-n 100` window; repos with no remote default branch keep the existing fail-closed zero commits (above: "Every rung is deterministic; when no branch base")
+> **D4** — The hardcoded `origin/main` in `getEvidenceRange` and `listCommits` is replaced with the derived origin default branch, reusing the existing helper (above: "The hardcoded `origin/main` in `getEvidenceRange`")
+
 ## Consequences
 
 ### Positive

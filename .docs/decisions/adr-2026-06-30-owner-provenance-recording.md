@@ -49,6 +49,14 @@ share one metadata path rather than forking it.
 A missing/blank stamp is **not** a valid owner — it is the "un-owned" case handled by the cutover
 ADR and stories FR-8/FR-9/FR-12.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Extend the existing per-spec intake marker to also carry the operator/owner identity, written on every `land` path, including the no-remote / local-commit fallback (above: "**Extend the existing per-spec intake marker")
+> **D2** — The owner is read back through a `ProvenanceReader` seam whose current implementation is `CommittedStampReader` (reads the marker from the base-branch tree), replaceable by a future `SignedProvenance` without changing the gate (above: "read back through a **`ProvenanceReader` seam**")
+> **D3** — The exact field name and marker schema MUST be coordinated with phase-9.3b so both features share one metadata path (above: "The exact field name and marker schema MUST be")
+> **D4** — A missing/blank stamp is not a valid owner; it is the "un-owned" case handled by the cutover ADR and stories FR-8/FR-9/FR-12 (above: "A missing/blank stamp is **not** a valid owner")
+
 ## Consequences
 
 ### Positive
