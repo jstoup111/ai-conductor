@@ -89,7 +89,12 @@ export async function resolveCoverageBindingDecideSet(
 
   const git = makeGitRunner(projectRoot);
   const baseBranch = (await originDefaultBranch(git)) ?? 'main';
-  const changedPaths = await changedPathsSinceMergeBase(git, baseBranch, 'HEAD');
+  // Prefer the remote-tracking ref: a daemon worktree's LOCAL default branch can
+  // lag origin, which would make ADRs landed upstream (and rebased into the
+  // feature) look feature-changed. Fall back to the local branch when absent.
+  const remoteRef = `origin/${baseBranch}`;
+  const remoteExists = (await git(['rev-parse', '--verify', '--quiet', `${remoteRef}^{commit}`])).exitCode === 0;
+  const changedPaths = await changedPathsSinceMergeBase(git, remoteExists ? remoteRef : baseBranch, 'HEAD');
   for (const path of changedPaths ?? []) {
     if (ADR_PATH.test(path) && await exists(projectRoot, path)) adrPaths.add(path);
   }

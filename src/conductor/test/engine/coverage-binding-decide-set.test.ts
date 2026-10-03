@@ -76,6 +76,22 @@ describe('resolveCoverageBindingDecideSet', () => {
     ]);
   });
 
+  it('measures against origin/<default> when local main lags it', async () => {
+    // origin/main gains an ADR that the feature then merges; local main stays behind.
+    await git('checkout', '-q', '-b', 'upstream', 'main');
+    await write('.docs/decisions/adr-landed-upstream.md', '# Landed upstream\n');
+    await commit('upstream ADR');
+    await git('update-ref', 'refs/remotes/origin/main', 'upstream');
+    await git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+    await git('checkout', '-q', 'feature');
+    await git('merge', '-q', '--no-edit', 'origin/main');
+
+    const decideSet = await resolveCoverageBindingDecideSet(projectRoot, 'feature');
+    if (!decideSet) throw new Error('expected feature plan to resolve');
+    expect(decideSet.paths).not.toContain('.docs/decisions/adr-landed-upstream.md');
+    expect(decideSet.paths).toContain('.docs/decisions/adr-branch-changed.md');
+  });
+
   it('omits a missing PRD and architecture review without failing', async () => {
     await git('rm', '-q', '.docs/specs/feature.md', '.docs/decisions/architecture-review-2026-09-24-feature.md');
     await git('commit', '-q', '-m', 'remove optional artifacts');
