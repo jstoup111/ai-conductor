@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:3
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -90,6 +90,36 @@ describe('reference-transaction hook', () => {
     });
 
     expect(result.exitCode).not.toBe(0);
+    expect((await fixture.git(fixture.worktree, 'rev-parse', `refs/heads/${branch}`)).stdout).toBe(tip);
+  });
+
+  it('explains how to safely delete a refused unique-tip branch', async () => {
+    const fixture = await createFixture(true);
+    const branch = await uniqueTipBranch(fixture);
+    const tip = (await fixture.git(fixture.worktree, 'rev-parse', `refs/heads/${branch}`)).stdout;
+
+    const result = await fixture.git(fixture.worktree, 'branch', '-D', branch);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('refused branch deletion');
+    expect(result.stderr).toContain(`refs/heads/${branch}`);
+    expect(result.stderr).toContain('its commits would become unreachable');
+    expect(result.stderr).toContain('push or merge it first');
+    expect(result.stderr).toContain('git branch -d');
+    expect((await fixture.git(fixture.worktree, 'rev-parse', `refs/heads/${branch}`)).stdout).toBe(tip);
+  });
+
+  it('explains how to safely rename a refused unique-tip branch', async () => {
+    const fixture = await createFixture(true);
+    const branch = await uniqueTipBranch(fixture);
+    const newName = 'renamed-unique-tip';
+    const tip = (await fixture.git(fixture.worktree, 'rev-parse', `refs/heads/${branch}`)).stdout;
+
+    const result = await fixture.git(fixture.worktree, 'branch', '-m', branch, newName);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('create the new branch first');
+    expect(result.stderr).toContain('git branch -d');
     expect((await fixture.git(fixture.worktree, 'rev-parse', `refs/heads/${branch}`)).stdout).toBe(tip);
   });
 

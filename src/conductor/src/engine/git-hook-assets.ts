@@ -198,6 +198,7 @@ export const REFERENCE_TRANSACTION_HOOK = [
   '',
   "while IFS=' ' read -r old new ref; do",
   '  if [[ "$ref" == refs/heads/* && "$new" =~ ^0+$ ]]; then',
+  "    printf 'refused branch deletion of %s: its commits would become unreachable. Safe alternatives: push or merge it first, or use git branch -d. To rename, create the new branch first and then delete the old one with git branch -d.\\n' \"$ref\" >&2",
   '    exit 1',
   '  fi',
   'done',
