@@ -35,6 +35,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Agent sessions now refuse destructive Git commands in prepared worktrees. ([implementation PR #2773](https://github.com/jstoup111/ai-conductor/pull/2773)).
 - Telemetry exporters retain buffered OTLP data across transient delivery outages. ([implementation PR #2868](https://github.com/jstoup111/ai-conductor/pull/2868)).
 - Daemon operators can configure detection and automatic termination of active builds that stop advancing. ([implementation PR #2952](https://github.com/jstoup111/ai-conductor/pull/2952)).
+- Intake claims recover stranded work and wait safely for concurrent claims. ([implementation PR #2934](https://github.com/jstoup111/ai-conductor/pull/2934)).
 
 ### Changed
 
