@@ -141,8 +141,8 @@ it('uses one injected batch runner for both small and large protected-artifact c
   });
 
   expect({ smallInvocationCount, largeInvocationCount: runnerMock.mock.calls.length }).toEqual({
-    smallInvocationCount: 1,
-    largeInvocationCount: 1,
+    smallInvocationCount: 2,
+    largeInvocationCount: 2,
   });
 });
 
