@@ -434,7 +434,11 @@ describe('engine/artifacts — prd_audit predicate (per-attempt verdict freshnes
     const S = Date.now() - 60_000;
     const T = Date.now();
     await utimes(full, new Date(S + 30_000), new Date(S + 30_000));
-    const r = await checkGateCompletion(dir, 'prd_audit', { sessionStartedAt: S, attemptStartedAt: T });
+    const r = await checkGateCompletion(dir, 'prd_audit', {
+      sessionStartedAt: S,
+      attemptStartedAt: T,
+      config: { gate_code_validity: { enabled: false } },
+    });
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/no fresh verdict/i);
     expect(r.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'attempt' });
@@ -447,6 +451,7 @@ describe('engine/artifacts — prd_audit predicate (per-attempt verdict freshnes
     const r = await checkGateCompletion(dir, 'prd_audit', {
       sessionStartedAt: T - 60_000,
       attemptStartedAt: T,
+      config: { gate_code_validity: { enabled: false } },
     });
     expect(r.done).toBe(true);
     expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'attempt' });
@@ -500,13 +505,19 @@ describe('engine/artifacts — verdict-freshness floor regression/fallback', () 
     void prdAligned;
     const full = await prdPass();
     const S = Date.now() - 60_000;
-    const r = await checkGateCompletion(dir, 'prd_audit', { sessionStartedAt: S });
+    const r = await checkGateCompletion(dir, 'prd_audit', {
+      sessionStartedAt: S,
+      config: { gate_code_validity: { enabled: false } },
+    });
     expect(r.done).toBe(true);
     expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'session' });
 
     const old = new Date(S - 60_000);
     await utimes(full, old, old);
-    const r2 = await checkGateCompletion(dir, 'prd_audit', { sessionStartedAt: S });
+    const r2 = await checkGateCompletion(dir, 'prd_audit', {
+      sessionStartedAt: S,
+      config: { gate_code_validity: { enabled: false } },
+    });
     expect(r2.done).toBe(false);
     expect(r2.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'session' });
   });
@@ -530,7 +541,9 @@ describe('engine/artifacts — verdict-freshness floor regression/fallback', () 
     await prdPass();
     await buildReviewPass();
 
-    const rPrd = await checkGateCompletion(dir, 'prd_audit', {});
+    const rPrd = await checkGateCompletion(dir, 'prd_audit', {
+      config: { gate_code_validity: { enabled: false } },
+    });
     expect(rPrd.done).toBe(true);
     expect(rPrd.verdictFreshness).toMatchObject({ fresh: true, floorMs: undefined });
 

@@ -9,6 +9,16 @@ vi.mock('execa', () => ({
     Promise.resolve({ stdout: '', stderr: '', exitCode: 0 })
   ),
 }));
+vi.mock('../../src/engine/pr-labels.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/pr-labels.js')>();
+  return {
+    ...actual,
+    // These orchestration fixtures use synthetic audit stamps and do not
+    // exercise Git history. Keep that boundary injected so code-validity
+    // observes a clean, preservable fixture state.
+    makeProductionGit: () => async () => ({ stdout: '' }),
+  };
+});
 vi.mock('../../src/engine/self-host/operator-credentials.js', () => ({
   readOperatorCredentialsState: vi.fn().mockResolvedValue('fresh'),
   waitForCredentialsChange: vi.fn(),

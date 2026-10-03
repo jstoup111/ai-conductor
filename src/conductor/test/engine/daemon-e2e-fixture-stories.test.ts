@@ -48,6 +48,9 @@ describe('daemon E2E fixture stories', () => {
       planPath: join(dir, `.docs/plans/${slug}.md`),
       featureDesc: slug,
       sessionStartedAt: 0,
+      // This fixture verifies criterion extraction, not code-stamp reuse.
+      // It has no Git history from which a synthetic stamp can be preserved.
+      config: { gate_code_validity: { enabled: false } },
     });
 
     expect(result, JSON.stringify(result)).toMatchObject({ done: true });
