@@ -365,7 +365,7 @@ export function startFeatureEventPersistence(
   // therefore the sole lifecycle owner: it starts before provider invocation
   // and drains before feature listeners detach, rather than adding a daemon
   // observer or coupling the tail to BUILD.
-  const tail = new CloseoutEventTail({ projectRoot: worktreePath, events: featureEvents });
+  const tail = new CloseoutEventTail({ projectRoot: worktreePath, featureSlug: slug ?? basename(worktreePath), events: featureEvents });
   tail.start();
   let drainPromise: Promise<void> | undefined;
   return {
@@ -384,8 +384,7 @@ export function startFeatureEventPersistence(
           // flight; the second is the bounded final pass after that read has
           // settled, so a producer record completed at the boundary is not
           // detached with the feature listeners.
-          await tail.poll();
-          await tail.poll();
+          await tail.drain();
           persister.stop();
         })();
       }

@@ -91,17 +91,13 @@ export function discoverSessionCommandSources(repositoryRoot: string): SessionCo
   return sources.sort((left, right) => left.file.localeCompare(right.file));
 }
 
-/** Sources whose instruction text is rendered into a managed dispatch. */
+/**
+ * Every executable engine prompt and shipped skill can be rendered into a
+ * managed session. Discovery, rather than an occurrence inventory, keeps new
+ * instructions inside the validation boundary.
+ */
 export function discoverShippedSessionCommandSources(repositoryRoot: string): SessionCommandSource[] {
-  const shipped = new Set([
-    'engine/conductor.ts',
-    'engine/step-runners.ts',
-    'skills/bootstrap/SKILL.md',
-    'skills/conduct/SKILL.md',
-    'skills/finish/SKILL.md',
-    'skills/pr/SKILL.md',
-  ]);
-  return discoverSessionCommandSources(repositoryRoot).filter((source) => shipped.has(source.file));
+  return discoverSessionCommandSources(repositoryRoot);
 }
 
 function sourceLocation(source: string, offset: number): { line: number; column: number } {

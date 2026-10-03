@@ -85,12 +85,14 @@ export class CloseoutEventTail {
 
   constructor({
     projectRoot,
+    featureSlug,
     events,
     readLedger,
     sessionReader,
     emitEvent,
   }: {
     projectRoot: string;
+    featureSlug?: string;
     events: ConductorEventEmitter;
     readLedger?: (path: string) => Promise<Buffer>;
     /** Test seam; production reads the validated dispatch-local producer files. */
@@ -100,7 +102,7 @@ export class CloseoutEventTail {
   }) {
     this.projectRoot = projectRoot;
     this.reader = new CloseoutTailReader(projectRoot, readLedger);
-    this.sessionReader = sessionReader ?? new SessionEventReader({ projectRoot });
+    this.sessionReader = sessionReader ?? new SessionEventReader({ projectRoot, featureSlug });
     this.events = events;
     // Producer offsets advance only after every subscriber, including the
     // canonical EventPersister, has acknowledged this occurrence. Pipeline
@@ -133,7 +135,11 @@ export class CloseoutEventTail {
         });
       }
     }
-    for (const record of await this.sessionReader.read()) {
+    await this.projectSessionRecords(false);
+  }
+
+  private async projectSessionRecords(settled: boolean): Promise<void> {
+    for (const record of await (settled ? this.sessionReader.drain() : this.sessionReader.read())) {
       if (record.kind === 'event') {
         await this.emitEvent(record.event);
       } else {
@@ -170,5 +176,11 @@ export class CloseoutEventTail {
     if (!this.interval) return;
     clearInterval(this.interval);
     this.interval = null;
+  }
+
+  /** Final, awaited producer pass after the owner has stopped new polling. */
+  async drain(): Promise<void> {
+    await this.poll();
+    await this.projectSessionRecords(true);
   }
 }

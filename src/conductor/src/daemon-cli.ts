@@ -60,6 +60,7 @@ import {
   prepareManagedSessionContext,
   type ManagedSessionContext,
 } from './execution/managed-session-context.js';
+import { createSessionEventIdentity } from './execution/session-event-identity.js';
 import { createProviderAvailability, restoreProviderAvailabilityFromDaemonLedger } from './engine/provider-availability.js';
 import {
   normalizeProviderSelection,
@@ -1448,7 +1449,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     return featureLog;
   };
   const beginFeatureRun = async (worktree: FeatureWorktree, item: BacklogItem) => {
-    const sessionId = uuidv4();
+    const sessionId = createSessionEventIdentity();
     const persistence = startFeatureEventPersistence(worktree.path, events, item.slug);
     const featureEvents = persistence.events;
     const featureLog = featureLogFor(item.slug);

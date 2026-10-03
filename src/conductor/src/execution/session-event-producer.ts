@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -12,6 +11,7 @@ import type {
   SessionEventDeliveryDiagnosticEvent,
   SessionObservationScope,
 } from '../types/events.js';
+import { createSessionEventIdentity, isSessionEventIdentity } from './session-event-identity.js';
 
 /** PIPE_BUF-safe ceiling for one producer-owned JSONL record, including its newline. */
 export const MAX_SESSION_EVENT_RECORD_BYTES = 4_096;
@@ -57,10 +57,10 @@ export class SessionEventProducer {
     // UUIDs may begin with a digit, while producer file identities are
     // deliberately letter-prefixed. Keep the random portion but make the
     // default producer usable for production entry-point observations.
-    this.producerId = dependencies.producerId ?? `producer-${randomUUID()}`;
+    this.producerId = dependencies.producerId ?? createSessionEventIdentity('p');
     if (!isIdentity(this.producerId)) throw new SessionEventProducerError('producer-path-invalid');
     this.path = join(context.producerRoot, `${this.producerId}.jsonl`);
-    this.generateId = dependencies.generateId ?? randomUUID;
+    this.generateId = dependencies.generateId ?? (() => createSessionEventIdentity('e'));
     this.now = dependencies.now ?? (() => new Date().toISOString());
     this.appendRecord = dependencies.append ?? ((path, record) => {
       mkdirSync(context.producerRoot, { recursive: true });
@@ -143,5 +143,5 @@ function safeIdentity(value: unknown): string | 'unknown' {
 }
 
 function isIdentity(value: unknown): value is string {
-  return typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value);
+  return isSessionEventIdentity(value);
 }

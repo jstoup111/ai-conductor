@@ -102,7 +102,12 @@ function classifyApi(tokens: readonly string[]): GhObservationClassification {
       method = token.slice('--method='.length).toUpperCase();
       continue;
     }
-    if (API_FIELD_FLAGS.has(token) || [...API_FIELD_FLAGS].some((flag) => token.startsWith(`${flag}=`))) {
+    if (token.startsWith('-X') && token.length > 2) {
+      method = token.slice(2).toUpperCase();
+      continue;
+    }
+    if (API_FIELD_FLAGS.has(token) || [...API_FIELD_FLAGS].some((flag) => token.startsWith(`${flag}=`))
+      || /^-[fF].+/.test(token)) {
       hasField = true;
       if (API_FIELD_FLAGS.has(token)) index += 1;
       continue;

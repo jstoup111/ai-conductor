@@ -5,6 +5,7 @@ import {
   type SessionEventProducerContext,
 } from './session-event-producer.js';
 import type { SessionCommandRefusedEvent } from '../types/events.js';
+import { isSessionEventIdentity } from './session-event-identity.js';
 
 /**
  * Deterministic daemon-session boundary enforcement for the ai-conductor CLI.
@@ -281,5 +282,5 @@ function isScope(value: unknown): value is SessionEventProducerContext['scope'] 
 }
 
 function isIdentity(value: unknown): value is string {
-  return typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value);
+  return isSessionEventIdentity(value);
 }
