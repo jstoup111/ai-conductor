@@ -31,6 +31,7 @@ import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { Conductor, resolveLastStep } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { readHaltClass } from '../../src/engine/halt-marker.js';
 
@@ -145,7 +146,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     };
     await writeState(statePath, state);
 
-    let completed: Record<string, unknown> | undefined;
+    let completed: ConductorEvent | undefined;
     events.on('feature_complete', (event) => {
       completed = event;
     });
@@ -177,7 +178,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     await writeState(statePath, state);
     await writeFile(join(dir, '.pipeline/finish-choice'), 'keep\n');
 
-    let completed: Record<string, unknown> | undefined;
+    let completed: ConductorEvent | undefined;
     events.on('feature_complete', (event) => {
       completed = event;
     });
@@ -201,7 +202,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     const state: ConductState = {};
     await writeState(statePath, state);
 
-    let completed: Record<string, unknown> | undefined;
+    let completed: ConductorEvent | undefined;
     events.on('feature_complete', (event) => {
       completed = event;
     });
@@ -227,7 +228,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     const state: ConductState = {};
     await writeState(statePath, state);
 
-    let completed: Record<string, unknown> | undefined;
+    let completed: ConductorEvent | undefined;
     events.on('feature_complete', (event) => {
       completed = event;
     });
@@ -251,7 +252,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     const state: ConductState = {
       rebase_base_sha: 'B',
     };
-    let halted: Record<string, unknown> | undefined;
+    let halted: ConductorEvent | undefined;
     events.on('loop_halt', (event) => {
       halted = event;
     });
@@ -279,7 +280,7 @@ describe('conductor/terminal-marker-guarantee', () => {
 
   it('uses the halting state PR URL when a halt caller provides none', async () => {
     const state: ConductState = { pr_url: 'https://github.com/acme/project/pull/42' };
-    let halted: Record<string, unknown> | undefined;
+    let halted: ConductorEvent | undefined;
     events.on('loop_halt', (event) => {
       halted = event;
     });
@@ -302,7 +303,7 @@ describe('conductor/terminal-marker-guarantee', () => {
   });
 
   it('records unrecorded and omits prUrl on a loop halt with no PR or keep choice', async () => {
-    let halted: Record<string, unknown> | undefined;
+    let halted: ConductorEvent | undefined;
     events.on('loop_halt', (event) => {
       halted = event;
     });
@@ -321,7 +322,7 @@ describe('conductor/terminal-marker-guarantee', () => {
   });
 
   it('omits baseSha on a loop halt when no rebase base was recorded', async () => {
-    let halted: Record<string, unknown> | undefined;
+    let halted: ConductorEvent | undefined;
     events.on('loop_halt', (event) => {
       halted = event;
     });

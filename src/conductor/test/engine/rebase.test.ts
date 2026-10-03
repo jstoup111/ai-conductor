@@ -34,7 +34,8 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { Conductor } from '../test-conductor.js';
-import type { ConductState, StepRunResult } from '../../src/types/index.js';
+import type { ConductState } from '../../src/types/index.js';
+import type { StepRunResult } from '../../src/engine/conductor.js';
 
 // A scripted GitRunner: matches argv prefixes to canned results.
 function fakeGit(

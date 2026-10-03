@@ -67,7 +67,7 @@ import type { ConductorEvent } from '../types/events.js';
 
 /** Minimal git runner — injected so the helpers are unit-testable without a repo. */
 export interface GitRunner {
-  (args: string[], opts?: { input?: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' }): Promise<GitResult>;
+  (args: string[], opts?: { input?: string; cwd?: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' }): Promise<GitResult>;
 }
 
 export interface GitResult {
@@ -101,7 +101,7 @@ async function classifyProspectiveMerge(
 
 /** A real git runner rooted at `cwd`, never throwing on non-zero exit. */
 export function makeGitRunner(cwd: string): GitRunner {
-  return async (args: string[], opts?: { input?: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' }): Promise<GitResult> => {
+  return async (args: string[], opts?: { input?: string; cwd?: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' }): Promise<GitResult> => {
     try {
       // Engine bookkeeping marker (#505 Task 8): any `git commit` this runner
       // spawns is engine-authored (rebase mechanics, quarantine, etc.), never
@@ -121,7 +121,7 @@ export function makeGitRunner(cwd: string): GitRunner {
         }
       }
       const r = await execa('git', args, {
-        cwd,
+        cwd: opts?.cwd ?? cwd,
         reject: false,
         ...(env ? { env } : isCommit ? { env: withEngineCommitEnv() } : {}),
         ...(opts?.input !== undefined ? { input: opts.input } : {}),
@@ -684,7 +684,7 @@ type RebaseOutcomeKind =
   | {
       kind: 'noop';
       /** The resolved base tip, or null when Git could not resolve it. */
-      baseSha: string | null;
+      baseSha?: string | null;
       /** Complete rebase delta when the base advanced without touching code/test paths. */
       allChangedPaths?: string[];
       replay?: ReplayIdentity;
@@ -702,7 +702,7 @@ type RebaseOutcomeKind =
       kind: 'changed';
       changedCodePaths: string[];
       /** The resolved base tip, or null when Git could not resolve it. */
-      baseSha: string | null;
+      baseSha?: string | null;
       /** Complete pre-filter rebase delta; absent when the delta is uncomputable. */
       allChangedPaths?: string[];
       featureSurface?: string[];
