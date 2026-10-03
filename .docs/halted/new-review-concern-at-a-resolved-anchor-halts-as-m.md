@@ -6,153 +6,18 @@ Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-new-review-concern-at-a-resolved-anchor-halts-as-m
-Head SHA: 4da147deb51f56a066974d6f04205249203120ec
-Halted at: 2026-10-03T11:29:45.135Z
+Head SHA: cbb232b40ae9b9e6cb1e9d2756f006bf21a3adcd
+Halted at: 2026-10-03T13:21:58.463Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-coverage_binding refused: architecture obligation coverage does not carry every current ADR decision.
+coverage_binding refused: cited Done when checks do not assert the required claim.
 
-ADR: .docs/decisions/adr-2026-07-10-intra-step-build-progress-events.md
-Decision: D1
-Violation: architecture decision adr-2026-07-10-intra-step-build-progress-events#D1 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-10-intra-step-build-progress-events.md
-Decision: D2
-Violation: architecture decision adr-2026-07-10-intra-step-build-progress-events#D2 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-10-intra-step-build-progress-events.md
-Decision: D3
-Violation: architecture decision adr-2026-07-10-intra-step-build-progress-events#D3 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-10-intra-step-build-progress-events.md
-Decision: D4
-Violation: architecture decision adr-2026-07-10-intra-step-build-progress-events#D4 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-10-intra-step-build-progress-events.md
-Decision: D5
-Violation: architecture decision adr-2026-07-10-intra-step-build-progress-events#D5 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-10-intra-step-build-progress-events.md
-Decision: D6
-Violation: architecture decision adr-2026-07-10-intra-step-build-progress-events#D6 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-10-intra-step-build-progress-events.md
-Decision: D7
-Violation: architecture decision adr-2026-07-10-intra-step-build-progress-events#D7 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-10-intra-step-build-progress-events.md
-Decision: D8
-Violation: architecture decision adr-2026-07-10-intra-step-build-progress-events#D8 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-10-intra-step-build-progress-events.md
-Decision: D9
-Violation: architecture decision adr-2026-07-10-intra-step-build-progress-events#D9 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-30-provider-preparation-lifecycle-supervision.md
-Decision: D1
-Violation: architecture decision adr-2026-07-30-provider-preparation-lifecycle-supervision#D1 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-30-provider-preparation-lifecycle-supervision.md
-Decision: D2
-Violation: architecture decision adr-2026-07-30-provider-preparation-lifecycle-supervision#D2 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-30-provider-preparation-lifecycle-supervision.md
-Decision: D3
-Violation: architecture decision adr-2026-07-30-provider-preparation-lifecycle-supervision#D3 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-30-provider-preparation-lifecycle-supervision.md
-Decision: D4
-Violation: architecture decision adr-2026-07-30-provider-preparation-lifecycle-supervision#D4 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-30-provider-preparation-lifecycle-supervision.md
-Decision: D5
-Violation: architecture decision adr-2026-07-30-provider-preparation-lifecycle-supervision#D5 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-30-provider-preparation-lifecycle-supervision.md
-Decision: D6
-Violation: architecture decision adr-2026-07-30-provider-preparation-lifecycle-supervision#D6 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-30-provider-preparation-lifecycle-supervision.md
-Decision: D7
-Violation: architecture decision adr-2026-07-30-provider-preparation-lifecycle-supervision#D7 has no coverage row
-
-ADR: .docs/decisions/adr-2026-07-30-provider-preparation-lifecycle-supervision.md
-Decision: D8
-Violation: architecture decision adr-2026-07-30-provider-preparation-lifecycle-supervision#D8 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D1
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D1 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D2
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D2 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D3
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D3 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D4
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D4 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D5
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D5 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D6
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D6 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D7
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D7 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D8
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D8 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D9
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D9 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D10
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D10 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D11
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D11 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D12
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D12 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D13
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D13 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D14
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D14 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D15
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D15 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D16
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D16 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D17
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D17 has no coverage row
-
-ADR: .docs/decisions/adr-2026-09-24-built-in-provider-catalog-and-boot-discovery.md
-Decision: D18
-Violation: architecture decision adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D18 has no coverage row
+Criterion: Story 6 happy: Given any store written before this change, when the fixed engine reads it, then it parses unchanged with no migration and no rewrite on read.
+Task ids: 1
+Done when checks: `parseBuildReviewCases` admits a build_review store where one source id is linked by a resolved case and by at most one unresolved case, as asserted by a store test that reads the resolved-plus-open fixture back with every case field preserved. | A persisted store whose same source id is linked by two unresolved cases fails `RemediationCaseStore.load` with reason `malformed-state`, as asserted by a store test over that fixture. | A source id repeated within one case still fails `RemediationCaseStore.load` with reason `malformed-state`. | Pre-change v1 and v2 store fixtures with globally unique sources load through `RemediationCaseStore.load` with identical parsed state and no write, as asserted by a byte comparison of each file after the read.
+Missing assertion: Given any store written before this change
 ```
