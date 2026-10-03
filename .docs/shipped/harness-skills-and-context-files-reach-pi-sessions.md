@@ -4,6 +4,13 @@ spec_hash: 5bdf537814c8684c096e4fccc9fa39970491ec6e10d56c2163cb6f711acef94b
 pr: https://github.com/jstoup111/ai-conductor/pull/2863
 shipped: 2026-10-03
 engine_version: 20261003T073458Z-05ea0de5cafb
+findings:
+  - gate: architecture_review_as_built
+    finding: AR-REACH-2
+    class: REMEDIABLE
+    governing_clause: "Task 1"
+    outcome: remediated
+    summary: "Verified at 99% confidence: the production project prelude passes hardcoded `/bootstrap` and `/assess` prompts through executeProviderCandidates without optionsForCandidate (src/conductor/src/engine/project-prelude.ts:122-188). Pi recognizes only `/skill:` commands, so these real skill dispatches bypass the changed provider-native renderer and Pi skill-resolution path."
 ---
 
 ## Cost
