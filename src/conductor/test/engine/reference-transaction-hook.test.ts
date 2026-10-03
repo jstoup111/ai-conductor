@@ -123,6 +123,41 @@ describe('reference-transaction hook', () => {
     expect((await fixture.git(fixture.worktree, 'rev-parse', `refs/heads/${branch}`)).stdout).toBe(tip);
   });
 
+  it('allows deleting and renaming a branch whose tip remains in another local branch', async () => {
+    const fixture = await createFixture(true);
+    const branch = await uniqueTipBranch(fixture);
+    const tip = (await fixture.git(fixture.worktree, 'rev-parse', branch)).stdout;
+    expect((await fixture.git(fixture.worktree, 'branch', 'contains-tip', branch)).exitCode).toBe(0);
+
+    expect((await fixture.git(fixture.worktree, 'branch', '-m', branch, 'renamed-tip')).exitCode).toBe(0);
+    expect((await fixture.git(fixture.worktree, 'rev-parse', 'renamed-tip')).stdout).toBe(tip);
+    expect((await fixture.git(fixture.worktree, 'branch', '-D', 'renamed-tip')).exitCode).toBe(0);
+  });
+
+  it('allows deleting a branch whose tip remains in its remote-tracking ref', async () => {
+    const fixture = await createFixture(true);
+    const bare = join(fixture.dir, 'remote.git');
+    expect((await fixture.git(fixture.root, 'init', '--bare', bare)).exitCode).toBe(0);
+    expect((await fixture.git(fixture.root, 'remote', 'add', 'origin', bare)).exitCode).toBe(0);
+    const branch = await uniqueTipBranch(fixture);
+    expect((await fixture.git(fixture.worktree, 'push', 'origin', `${branch}:${branch}`)).exitCode).toBe(0);
+    expect((await fixture.git(fixture.worktree, 'fetch', 'origin')).exitCode).toBe(0);
+
+    expect((await fixture.git(fixture.worktree, 'branch', '-D', branch)).exitCode).toBe(0);
+  });
+
+  it('allows pack-refs and gc to prune loose duplicates but retains packed unique branches', async () => {
+    const fixture = await createFixture(true);
+    const branch = await uniqueTipBranch(fixture);
+    const tip = (await fixture.git(fixture.worktree, 'rev-parse', branch)).stdout;
+
+    expect((await fixture.git(fixture.worktree, 'pack-refs', '--all')).exitCode).toBe(0);
+    expect((await fixture.git(fixture.worktree, 'gc')).exitCode).toBe(0);
+    expect((await fixture.git(fixture.worktree, 'rev-parse', branch)).stdout).toBe(tip);
+    expect((await fixture.git(fixture.worktree, 'branch', '-D', branch)).exitCode).not.toBe(0);
+    expect((await fixture.git(fixture.worktree, 'rev-parse', branch)).stdout).toBe(tip);
+  });
+
   it.each([
     ['git commit', async (fixture: Fixture) => {
       await writeFile(join(fixture.worktree, 'commit.txt'), 'commit\n');
