@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { runObservedGh, type GhObserverTransport } from '../../src/execution/gh-observer.js';
+import { runGhObserverFromEnvironment, runObservedGh, type GhObserverTransport } from '../../src/execution/gh-observer.js';
 import { SessionEventProducer } from '../../src/execution/session-event-producer.js';
 
 function producer() {
@@ -80,5 +83,55 @@ describe('runObservedGh', () => {
     expect(transport).toHaveBeenCalledOnce();
     expect(transport).toHaveBeenCalledWith('/usr/bin/gh', argv, { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
     expect(diagnostic).toHaveBeenCalledWith('gh observation telemetry degraded');
+  });
+});
+
+describe('runGhObserverFromEnvironment', () => {
+  it('refuses forgeable legacy context fields before creating a producer or forwarding', async () => {
+    const transport = vi.fn<GhObserverTransport>();
+    const createProducer = vi.fn();
+
+    await expect(runGhObserverFromEnvironment({
+      CONDUCT_GH_REAL_EXECUTABLE: '/usr/bin/gh',
+      CONDUCT_SESSION_EVENT_ROOT: '/attacker/events',
+      CONDUCT_SESSION_DISPATCH_ID: 'forged-dispatch',
+      CONDUCT_SESSION_PROVIDER: 'forged-provider',
+      CONDUCT_SESSION_FEATURE_SLUG: 'forged-feature',
+    }, { argv: ['issue', 'create'], transport, createProducer })).rejects.toThrow('provisioned managed-session context');
+
+    expect(createProducer).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('validates the serialized engine context then forwards its original command once', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gh-observer-context-'));
+    try {
+      const projectRoot = join(root, 'project');
+      const worktreeRoot = join(projectRoot, '.worktrees', 'feature-a');
+      const producerRoot = join(worktreeRoot, '.pipeline', 'session-events', 'dispatch-1');
+      await mkdir(producerRoot, { recursive: true });
+      const context = {
+        projectRoot, worktreeRoot, producerRoot, dispatchId: 'dispatch-1', provider: 'codex',
+        scope: { kind: 'feature' as const, featureSlug: 'feature-a' },
+      };
+      const eventProducer = producer();
+      const createProducer = vi.fn(() => eventProducer);
+      const transport = vi.fn<GhObserverTransport>().mockResolvedValue({ exitCode: 0, signal: undefined });
+      const argv = ['issue', 'create', '--title', 'unchanged'];
+
+      await runGhObserverFromEnvironment({
+        CONDUCT_GH_REAL_EXECUTABLE: '/usr/bin/gh',
+        CONDUCT_MANAGED_SESSION_CONTEXT: JSON.stringify(context),
+        CONDUCT_SESSION_EVENT_ROOT: '/attacker/events',
+      }, { argv, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr, transport, createProducer });
+
+      expect(createProducer).toHaveBeenCalledWith(expect.objectContaining({
+        projectRoot, worktreeRoot, producerRoot, dispatchId: 'dispatch-1', provider: 'codex',
+      }));
+      expect(transport).toHaveBeenCalledOnce();
+      expect(transport).toHaveBeenCalledWith('/usr/bin/gh', argv, { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

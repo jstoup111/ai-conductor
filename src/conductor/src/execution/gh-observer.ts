@@ -3,6 +3,11 @@ import { isAbsolute } from 'node:path';
 import type { Stream } from 'node:stream';
 
 import { classifyGhObservation } from './gh-observation-classifier.js';
+import {
+  prepareManagedSessionContext,
+  type ManagedSessionContext,
+  type ManagedSessionContextInput,
+} from './managed-session-context.js';
 import { SessionEventProducer, type SessionEventProducerContext } from './session-event-producer.js';
 
 /**
@@ -124,28 +129,47 @@ export const runRealGhTransport: GhObserverTransport = (executable, argv, stream
  * Entry point used by the packaged wrapper asset. Context values are supplied
  * only by managed-session preparation; absence is an explicit setup failure.
  */
-export async function runGhObserverFromEnvironment(environment: NodeJS.ProcessEnv = process.env): Promise<GhObserverTerminalResult> {
+export interface GhObserverEnvironmentDependencies {
+  readonly argv?: readonly string[];
+  readonly stdin?: GhObserverStream;
+  readonly stdout?: GhObserverStream;
+  readonly stderr?: GhObserverStream;
+  readonly transport?: GhObserverTransport;
+  readonly createProducer?: (context: SessionEventProducerContext) => SessionEventProducer;
+  readonly diagnostic?: (message: string) => void;
+}
+
+export async function runGhObserverFromEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+  dependencies: GhObserverEnvironmentDependencies = {},
+): Promise<GhObserverTerminalResult> {
   const realExecutable = environment[GH_OBSERVER_REAL_EXECUTABLE_ENV];
-  const producerRoot = environment.CONDUCT_SESSION_EVENT_ROOT;
-  const dispatchId = environment.CONDUCT_SESSION_DISPATCH_ID;
-  const provider = environment.CONDUCT_SESSION_PROVIDER;
-  const featureSlug = environment.CONDUCT_SESSION_FEATURE_SLUG;
-  if (!realExecutable || !producerRoot || !dispatchId || !provider || !featureSlug) {
+  const context = await validatedManagedContext(environment);
+  if (!realExecutable || context === undefined) {
     throw new Error('gh observer requires provisioned managed-session context');
   }
-  const context: SessionEventProducerContext = {
-    projectRoot: environment.CONDUCT_SESSION_PROJECT_ROOT ?? '',
-    worktreeRoot: environment.CONDUCT_SESSION_WORKTREE_ROOT ?? '',
-    producerRoot, dispatchId, provider, scope: featureSlug === 'project' ? { kind: 'project' } : { kind: 'feature', featureSlug },
-  };
   return runObservedGh({
     realExecutable,
-    argv: process.argv.slice(2),
-    stdin: process.stdin,
-    stdout: process.stdout,
-    stderr: process.stderr,
-    producer: new SessionEventProducer(context),
-    transport: runRealGhTransport,
-    diagnostic: (message) => process.stderr.write(`${message}\n`),
+    argv: dependencies.argv ?? process.argv.slice(2),
+    stdin: dependencies.stdin ?? process.stdin,
+    stdout: dependencies.stdout ?? process.stdout,
+    stderr: dependencies.stderr ?? process.stderr,
+    producer: (dependencies.createProducer ?? ((value) => new SessionEventProducer(value)))(context),
+    transport: dependencies.transport ?? runRealGhTransport,
+    diagnostic: dependencies.diagnostic ?? ((message) => process.stderr.write(`${message}\n`)),
   });
+}
+
+/** Do not reconstruct identity from individual environment fields. */
+async function validatedManagedContext(environment: NodeJS.ProcessEnv): Promise<ManagedSessionContext | undefined> {
+  const raw = environment.CONDUCT_MANAGED_SESSION_CONTEXT;
+  if (typeof raw !== 'string') return undefined;
+  let candidate: unknown;
+  try {
+    candidate = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  const prepared = await prepareManagedSessionContext(candidate as ManagedSessionContextInput);
+  return prepared.ok ? prepared.context : undefined;
 }
