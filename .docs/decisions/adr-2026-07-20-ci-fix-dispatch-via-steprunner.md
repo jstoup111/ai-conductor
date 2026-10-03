@@ -32,6 +32,13 @@ preserving the existing `CiFixRunner` interface so tests keep their fake runner 
 `AI_CONDUCTOR_NO_REAL_EXEC` kill-switch still short-circuits). The dispatcher builds a
 CI-failure system prompt + the existing `buildCiFixHint` payload and dispatches one-shot.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option 1: reuse `DefaultStepRunner` through a new `resolveCiFailure` (above: "**Option 1 — reuse `DefaultStepRunner` through a new `resolveCiFailure`.**")
+> **D2** — The production `CiFixRunner` seam is rewired to an injected StepRunner-backed dispatcher, preserving the existing `CiFixRunner` interface so tests keep their fake runner and the `AI_CONDUCTOR_NO_REAL_EXEC` kill-switch still short-circuits (above: "The production `CiFixRunner` seam is rewired")
+> **D3** — The dispatcher builds a CI-failure system prompt plus the existing `buildCiFixHint` payload and dispatches one-shot (above: "The dispatcher builds a CI-failure system prompt")
+
 ## Rationale
 
 - **Proven path.** `resolveSetupFailure` already dispatches headless Claude in production with

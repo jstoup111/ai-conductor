@@ -107,6 +107,16 @@ Narrowing the parallel-member unions at `types/events.ts:489,500` is **not** req
 decision: `wiring_check` remains a valid member, and the BUILD parallel group keeps both branches.
 That is a further simplification available whenever the name is finally deleted.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option C: `wiring_check` is retained as a deprecated no-op step that always completes successfully, never produces a gap, never kicks back, and dispatches no agent. (above: "**Option C.** `wiring_check` is retained")
+> **D2** — All of `wiring_check`'s machinery (`wiring-probe.ts`, `wired-into.ts`, `validate-wired-into.ts`, the completion predicate's evidence handling, and the `WIRING_EVIDENCE` artifact) is deleted. (above: "All of its machinery")
+> **D3** — Two-phase step-retirement contract: remove the machinery first and leave the step as a deprecated no-op; delete the name only in a later, separate change, once no live state or consumer config can still reference it. (above: "This establishes the contract for retiring any engine step")
+> **D4** — Operator waiver (2026-08-28), scoped to `wiring_check` only: the "no live state can still reference it" precondition is waived for this name, safe because a persisted `wiring_check` stays loadable; any future retirement invoking it as precedent must demonstrate the loadability property. (above: "**Operator waiver (2026-08-28, scoped to `wiring_check` only).**")
+> **D5** — The deprecation notice rides the event spine as a new `ConductorEvent` variant carrying the deprecated step name and a short reason. (above: "**The deprecation notice rides the event spine.**")
+> **D6** — Narrowing the parallel-member unions at `types/events.ts:489,500` is not required: `wiring_check` remains a valid member and the BUILD parallel group keeps both branches. (above: "Narrowing the parallel-member unions")
+
 ## Consequences
 
 ### Positive

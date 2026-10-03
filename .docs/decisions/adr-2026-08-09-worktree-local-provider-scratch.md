@@ -178,6 +178,18 @@ durable state read by name — exception C of the event-spine skill — not tele
 | A signal-0 process probe is a sufficient liveness test on Linux and macOS | verified for the mechanism; pid reuse is the known imperfection | 90% | A recycled pid makes a dead owner read as live — retention, the safe direction, resolved at reap |
 | The daemon dispatch boundary can host a best-effort sweep | verified — the same seam already hosts `reconcileHaltPrs`, `reconcileParkedFeatures`, `sweepMergeableLabels` (`daemon.ts:425-447`) | 96% | The sweep needs a new boundary of its own |
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Throwaway provider homes are created under `«worktree»/.daemon/scratch/«runId»/«attempt»-«provider»/`, resolved by a single worktree-anchored scratch port that replaces the direct `os.tmpdir()` default in `provisionProviderHome` and `provisionSandboxBuildEnv` (above: "Throwaway provider homes are created under")
+> **D2** — Each home carries an owner lease recording repository, feature slug, run id, attempt, owning process id, and start time (above: "Each home carries an owner lease")
+> **D3** — The existing `finally` teardown remains the fast path, unchanged (above: "The existing `finally` teardown remains the fast path")
+> **D4** — A dead-owner sweep runs at the daemon dispatch boundary; it decides by liveness (a signal-0 probe of the recorded process id), not age, and deletes a dead owner's home immediately (above: "A dead-owner sweep runs at the daemon dispatch boundary" and "**Why liveness and not age.**")
+> **D5** — The scratch root is computed from the worktree path alone and the run id is injected by the caller rather than read from `.pipeline/conduct-session-id` (above: "**Why the resolver is anchored to the worktree, not to run-state.**")
+> **D6** — The sweep fails toward retention: a home whose lease is missing, unreadable, or whose liveness cannot be established is retained and the reason is reported (above: "**Why the sweep fails toward retention.**")
+> **D7** — Token-liveness is out of scope: `verifyTokenLiveness` keeps using `os.tmpdir()` (above: "**Why token-liveness is out of scope.**")
+> **D8** — Cleanup decisions and failures are emitted as `ConductorEvent` variants on the existing spine; the owner lease is the one new file, durable state rather than telemetry (above: "Cleanup decisions and failures are emitted as `ConductorEvent` variants" and "**Observability rides the existing spine.**")
+
 ## Consequences
 
 ### Positive

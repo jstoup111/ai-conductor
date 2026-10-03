@@ -80,6 +80,15 @@ Normal-dispatch probe failures use the existing per-feature `diagnosticLog`, whi
 
 No new event bus, datastore, service, credential reader, external integration, retry budget, or provider fallback behavior is introduced.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Readiness is a discriminated result (`ready`, `missing`, `unusable`, `probe-failed`), where `probe-failed` carries a closed failure kind and only allowlisted structured facts, never raw stdout, stderr, doctor summaries, or credential material. (above: "### 1. Make readiness a discriminated result")
+> **D2** — On ordinary dispatch, `probe-failed` writes one sanitized degraded-readiness diagnostic and proceeds with the real Codex invocation, which remains authoritative; probe failure never advances fallback, retry, or escalation state. (above: "### 2. Ordinary dispatch proceeds on probe failure")
+> **D3** — A `probe-failed` recovery probe returns `trial-required` and authorizes exactly one real Codex invocation for that recovery episode, with no recursive probe-bypass cycle, under one disposition contract for all caller shapes. (above: "### 3. A failed recovery probe authorizes exactly one real trial")
+> **D4** — Add the top-level config key `codex_doctor_timeout_seconds` (default `10`, finite positive, invalid fails validation), resolved once and injected; no private runtime constant owns production behavior. (above: "### 4. Make the doctor timeout reviewed configuration")
+> **D5** — Probe failures use the existing `diagnosticLog` and `credentials_park_progress` event, and no new event bus, datastore, service, credential reader, external integration, retry budget, or provider fallback behavior is introduced. (above: "### 5. Preserve observability and security boundaries")
+
 ## Consequences
 
 ### Positive

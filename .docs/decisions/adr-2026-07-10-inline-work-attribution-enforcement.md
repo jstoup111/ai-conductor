@@ -123,6 +123,15 @@ All new hook installation follows #452/#494: provisioning failure degrades to to
 behavior — enforcement machinery must never block worktree provisioning. Blocking
 happens only inside sessions/commits when the machinery is verifiably installed.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above. Ids follow this ADR's own `### N.` numbering (D0 = §0).
+>
+> **D0** — Adopt A + B + net, all gated on one deterministic activation predicate: the engine-written `.pipeline/build-step-active` marker (build step only) AND a passed `attribution_enforcement_cutover`; sessions for other steps and engineer worktrees are untouched. (above: "**Adopt A + B + net (operator-approved)"; "### 0. Activation predicate")
+> **D1** — Surface A: when the predicate holds, the worktree `commit-msg` hook rejects a content-bearing commit with no `Task:` trailer, with the listed exemptions never rejected. (above: "### 1. Surface A — fail-closed `commit-msg` branch")
+> **D2** — Surface B: a session PreToolUse gate on `Edit|Write|NotebookEdit` exits 2 when the predicate holds and `.pipeline/current-task` is absent, and on `Bash` blocks only unstamped `git commit` commands; the arbitrary-Bash-write bypass is accepted. (above: "### 2. Surface B — dispatch-shaped execution")
+> **D3** — Surface net: at build-step session end, zero dispatches and zero new commits and no halt marker records a deterministic `zero_work_product` kickback, injects a corrective preamble, and counts the attempt via `noEvidenceAttempts`. (above: "### 3. Surface net — zero-work-product step-end kickback")
+> **D4** — All new hook installation is fail-open: provisioning failure degrades to today's behavior and must never block worktree provisioning. (above: "### Fail-open provisioning (unchanged constraint)")
+
 ## Consistency with merged ADRs
 
 - `adr-2026-07-09-deterministic-evidence-attribution-enforcement`: abstain-not-misstamp

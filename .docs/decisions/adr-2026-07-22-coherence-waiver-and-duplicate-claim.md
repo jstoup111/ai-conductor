@@ -77,6 +77,17 @@ network happens to be available, an open-spec-PR scan MAY warn — reusing the e
 `overlap-scan` machinery, not a second scanner — but it never blocks and never gates
 (fail-open advisory), preserving offline land.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — A coherence waiver mirrors the release-gate pattern: a file under `.docs/coherence-waivers/<plan-stem>.md` in the spec's own change set with `Waives:` and `Rationale:` lines (above: "**Waiver — mirror the release-gate pattern.**")
+> **D2** — Gap ids are the validator's own stable identifiers, and an unknown or misspelled gap id is malformed, never silently accepted (above: "Gap ids are the validator's own stable identifiers")
+> **D3** — The waiver must appear in the worktree's own `.docs` change set; a waiver landed by a prior spec never satisfies a later one (above: "The waiver must appear in the worktree's own `.docs` change set")
+> **D4** — Partial coverage still blocks, naming the unwaived remainder (above: "Partial coverage still blocks")
+> **D5** — A waived land records the waiver in the committed artifact set, so the spec PR shows both the gap and its approval (above: "A waived land records the waiver")
+> **D6** — The blocking duplicate check reads only local git state: any `.docs/intake/*.md` reachable on the default branch carrying the same `Source-Ref` refuses with the conflicting slug, waivable as `duplicate:<ref>`, with `.docs/shipped/` excluded from the blocking scan (above: "**Duplicate lookback — committed intake markers on the default branch, blocking;")
+> **D7** — When the network is available, an open-spec-PR scan MAY warn by reusing the existing `overlap-scan` machinery, but it never blocks and never gates (above: "When the network happens to be available")
+
 ## Consequences
 
 ### Positive

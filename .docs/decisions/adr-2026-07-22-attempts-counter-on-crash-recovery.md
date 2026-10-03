@@ -19,6 +19,12 @@ crash recovery also increment `attempts`, or leave it untouched?
   whose sessions repeatedly die may warrant operator attention or `needs-manual`), so counting
   crash re-entries the same as delivery-failure re-entries is desirable.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Increment `attempts` on `claimed → pending` recovery (both automatic and manual), consistent with `reopen`, counting crash re-entries the same as delivery-failure re-entries. (above: "**Increment `attempts` on recovery**")
+> **D2** — `capturedAt` is left untouched, so FIFO ordering (FR-4) is unaffected; `attempts` is a churn counter, not an ordering key. (above: "`capturedAt` is left untouched")
+
 ## Consequences
 
 - `attempts` becomes a combined re-entry count across both crash recovery and delivery-failure

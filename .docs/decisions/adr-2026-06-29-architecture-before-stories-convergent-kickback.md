@@ -29,6 +29,16 @@ architecture-review). Moving architecture before stories adds new kickback edges
   - The existing per-gate kickback cap applies to the new targets; exceeding it **HALTs** for a human
     rather than looping.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — The DECIDE order is `explore → [prd] → architecture-diagram → architecture-review → stories → conflict-check → plan`, with APPROVED ADRs produced before stories (above: "Order:")
+> **D2** — conflict-check classifies each conflict's root and kicks back to `prd`, `architecture`, or `stories` (above: "conflict-check root routing")
+> **D3** — The kickback target set is extended from `{stories, plan}` to `{prd, architecture, stories, plan}` (above: "Kickback target set")
+> **D4** — architecture-review has a full (pre-stories) mode and a targeted-amendment (re-entry) mode that addresses only the kickback's specific structural gap, never a from-scratch re-derivation (above: "architecture-review has two modes")
+> **D5** — Only a genuine structural gap (missing component/seam/boundary) may re-open architecture; story phrasing / coverage nits may not (above: "Only a genuine **structural** gap")
+> **D6** — The existing per-gate kickback cap applies to the new targets, and exceeding it HALTs for a human rather than looping (above: "The existing per-gate kickback cap")
+
 ## Consequences
 
 - Behavior-first is preserved (PRD states behavior before architecture); stories become design-aware

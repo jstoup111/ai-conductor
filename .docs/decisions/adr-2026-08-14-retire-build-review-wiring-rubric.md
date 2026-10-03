@@ -62,6 +62,16 @@ reintroduce the `Unknown step` hazard that ADR exists to prevent.
 > `adr-2026-08-11-deprecated-no-op-step-retirement` always contemplated, and proceeds under the
 > conditions of `architecture-review-2026-08-26-hard-delete-the-retired-wiring-check-step-name-fro`.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Wiring is removed from `build_review` entirely; the gate scores four rubric items — Tautology, Scope, Root cause, Completeness — under the same all-or-FAIL rule (as narrowed to the registry by the 2026-08-22 #1805 amendment) (above: "Remove Wiring from `build_review` entirely.")
+> **D2** — The grader prompt no longer describes a Wiring item, no longer receives entry points, and states explicitly that reachability is not judged (above: "The grader prompt no longer describes a Wiring item")
+> **D3** — `rubric.wiring` and `findings.wiring` leave the `.pipeline/build-review.json` contract, and unknown keys in a stored verdict are ignored rather than rejected (above: "`rubric.wiring` and `findings.wiring` leave")
+> **D4** — The `findings.wiring`-required-when-`rubric.wiring`-is-true validation rule retires with the item (above: "The `findings.wiring`-required-when-`rubric.wiring`-is-true validation rule retires")
+> **D5** — `wiring.entry_points` leaves `.ai-conductor/config.yml` and the `HarnessConfig` type, while the `wiring` key stays on the accepted-key list, ignored (above: "`wiring.entry_points` leaves `.ai-conductor/config.yml`")
+> **D6** — `wiring_check` remains a deprecated no-op, unchanged by this ADR; the prohibition on removing its name is lifted by the 2026-08-26 #1896 amendment (above: "`wiring_check` remains a deprecated no-op.")
+
 ## Consequences
 
 - A production surface no configured entry point reaches now passes `build_review`. That is the

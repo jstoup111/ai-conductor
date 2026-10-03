@@ -150,6 +150,13 @@ worktree predates the file. Tolerant in both directions — this is deliberately
 closeout ADR's gate-enforced emission, because there is no gate here to enforce it and inventing one
 would reintroduce blocking.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — E1: a new `ConductorEvent` variant records the unresolvable check, and `runScopeCheck`'s exit codes split into 0 (allowed/silent), 0 with advisory stderr (out-of-floor), and 3 (no verdict), with exit 2 left unused and reserved. (above: "**E1 — A new `ConductorEvent` variant")
+> **D2** — E2: one writer per ledger file; the engine keeps `.pipeline/events.jsonl`, the git-hook process owns `.pipeline/hook-events.jsonl`, and readers merge by `ts`. (above: "**E2 — One writer per ledger file.**")
+> **D3** — E3: writing is best-effort and must never throw into the hook or fail a commit; readers tolerate an absent ledger and report the condition as unrecorded. (above: "**E3 — Writing is best-effort; reading is tolerant.**")
+
 ## Consequences
 
 **Positive**

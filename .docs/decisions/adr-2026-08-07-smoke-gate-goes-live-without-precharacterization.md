@@ -75,6 +75,19 @@ the ADR clause it mirrors.
 exist as an Actions secret before this feature merges. Gate mode fails closed on its absence and
 names the secret, but the release is still blocked until it is provisioned.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — The gate goes live now: `publish-interrupted.smoke.test.ts` is not pre-characterized, and the clause requiring every previously-ungated file be fixed or explicitly quarantined before go-live is withdrawn (above: "**The gate goes live now.")
+> **D2** — Each smoke file declares the capability it requires, co-located with the test, from the closed enum `hermetic` / `toolchain` / `credentialed`, with a shared helper resolving availability once (above: "**Each smoke file declares the capability it requires")
+> **D3** — Advisory mode (default, local): an unmet capability is a skip, recorded with the specific capability that was missing (above: "**Advisory mode (default, local):**")
+> **D4** — Gate mode (release): an unmet capability is a failure (above: "**Gate mode (release):**")
+> **D5** — One entry point, discovery by glob: `npm run smoke` runs `vitest.smoke.config.ts`, whose `include` globs are exactly the default config's `exclude` globs, with a deliberate `exclude: []` (above: "**One entry point, discovery by glob.**")
+> **D6** — `vitest.config.ts` is not touched; the gate is additive (above: "**`vitest.config.ts` is not touched.**")
+> **D7** — The run emits a per-file ledger — ran / skipped / failed, naming the unmet capability on a skip and the evidence path on a failure (above: "**The run emits a per-file ledger**")
+> **D8** — Condition C-2 is discharged by this decision, not by evidence; for `publish-interrupted` it is withdrawn (above: "**Condition C-2 is discharged by this decision")
+> **D9** — Condition C-1 is unaffected and remains a merge prerequisite: `CLAUDE_CODE_OAUTH_TOKEN` must exist as an Actions secret before this feature merges (above: "**Condition C-1 is unaffected")
+
 ## Rationale
 
 The accepted cost is bounded and recoverable. If `publish-interrupted` fails in the gate, the

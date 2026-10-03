@@ -55,6 +55,17 @@ contract, not a convention:
   removes the partial (TR-5).
 - Any ambient `CLAUDE_CONFIG_DIR` in the daemon env is restored after the child build (no bleed).
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — For a harness self-build only, run the build step with a throwaway `CLAUDE_CONFIG_DIR` whose `skills/` and `hooks/` symlink into the build worktree's edited copies; the global `~/.claude` is never mutated. (above: "For a harness self-build only, run the build step")
+> **D2** — The sandbox is torn down after the build (pass or fail) under a try/finally-style guarantee, and teardown on the error/crash branch is asserted, not assumed. (above: "The sandbox is torn down after the build"; "Teardown runs on the error/crash branch")
+> **D3** — The sandbox copies `.credentials.json` from the operator's live config dir so the build authenticates. (above: "**Copies** `.credentials.json`")
+> **D4** — The sandbox copies `settings.json` and retargets every absolute path under the harness main checkout to the worktree; personal `~/.claude/hooks` paths are left as-is. (above: "**Copies** `settings.json` and **retargets**")
+> **D5** — Credentials and settings are copies, never symlinks, and no sandbox symlink ever resolves to a global-config target (TR-6). (above: "Both are **copies, never symlinks**"; "No sandbox **symlink** ever resolves")
+> **D6** — A missing worktree `skills/` or `hooks/` dir fails closed (`SandboxProvisionError`), and a provisioning failure never launches a partially-built sandbox; it fails/HALTs and removes the partial (TR-5). (above: "A missing worktree `skills/` or `hooks/` dir **fails closed**"; "Provisioning failure (EACCES/disk)")
+> **D7** — Any ambient `CLAUDE_CONFIG_DIR` in the daemon env is restored after the child build. (above: "Any ambient `CLAUDE_CONFIG_DIR`")
+
 ## Consequences
 
 - **Positive:** true self-verification — the daemon exercises its real edits before the operator

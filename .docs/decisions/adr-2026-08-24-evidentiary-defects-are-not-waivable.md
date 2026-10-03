@@ -101,6 +101,15 @@ trailer: the behavior is ratified, the process defect is not excused.
 
 Story 5's criterion is amended to scope its guarantee to coverage rejections, matching this ADR.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option C: the coherence waiver mechanism covers coverage gaps (a criterion, outcome, FR, story, or task the record does not account for), not evidentiary defects (a record the validator cannot read, or one whose citations do not resolve) (above: "**Option C.** The coherence waiver mechanism covers **coverage gaps**")
+> **D2** — `unparseable-coherence-artifact`, `unparseable-criterion-row`, `criterion:stories-unparseable`, and the fabricated-id cross-check refusal are refused fail-closed and are never waivable (above: "Concretely, these four classes are refused fail-closed")
+> **D3** — This narrows the closing clause of `adr-2026-08-23-diff-locality-is-an-authored-disposition` to coverage rejections: a coverage refusal with no waivable gap id remains a design defect, and an evidentiary refusal with no waivable gap id is the intended design (above: "This **narrows** the closing clause")
+> **D4** — The widening landed by commit `f25d8dad4`, making `criterion:stories-unparseable` non-waivable, is retroactively sanctioned; the behavior is ratified, the process defect is not excused (above: "The widening landed by commit `f25d8dad4`")
+> **D5** — Story 5's criterion is amended to scope its guarantee to coverage rejections (above: "Story 5's criterion is amended")
+
 ## Consequences
 
 ### Positive

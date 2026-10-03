@@ -69,6 +69,17 @@ ends up with two mechanisms where A has one.
 - A **stub reader interface** (types only, no behavior) is exported so 9.3's engineer consumes a
   consumer-aware schema.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt Option A: skip the in-loop `retro` step for daemon runs and have the emission step own narrative production (as amended 2026-08-26 by #1905 above). (above: "**Adopt Option A** — skip the in-loop")
+> **D2** — The store is `~/.ai-conductor/engineer/signals.jsonl`, append-only with one JSON line per feature-run, plus narratives at `narratives/<project>/<feature>-<runId>.md` keyed by `runId` so re-runs never overwrite. (above: "`~/.ai-conductor/engineer/signals.jsonl` — append-only")
+> **D3** — The record schema is as listed above, with `narrativeRef` optional. (above: "Record schema (FR-3)")
+> **D4** — Each record is appended in one atomic append write; full narratives live in separate files, never inline. (above: "**Concurrency (FR-11):** each record is appended")
+> **D5** — The entire emission is best-effort: any store error is logged and swallowed, and `FeatureOutcome` and teardown/PR are unaffected. (above: "**Best-effort (FR-10):**")
+> **D6** — The store path is overridable via `$AI_CONDUCTOR_ENGINEER_DIR` / user config and the dir is auto-created. (above: "Path override via")
+> **D7** — A stub reader interface (types only, no behavior) is exported for 9.3's engineer. (above: "A **stub reader interface**")
+
 ## Consequences
 
 ### Positive

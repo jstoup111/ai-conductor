@@ -55,6 +55,15 @@ A renderer that throws does not poison the others; a `renderer_error` event is e
 
 `src/conductor/src/ui/create-renderer.ts` → `src/conductor/src/ui/terminal-renderer.ts`. The old name described the closure-factory pattern; the new name describes the class. Test file renamed in lockstep.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt Option B: `UIRenderer` (`handle(event)` / `stop()`) is the plugin contract. (above: "Adopt **Option B**." and "`UIRenderer` interface (the plugin contract)")
+> **D2** — `UISubscriber` is an internal lifecycle wrapper, not a plugin point: `start(renderers)` subscribes to the event bus and fans out via `Promise.all`; `stop()` calls `stop()` on each renderer. (above: "`UISubscriber` interface (internal lifecycle wrapper, not a plugin point)")
+> **D3** — `UISubscriber.start()` subscribes once and dispatches every event to all renderers via `Promise.all`; a renderer that throws does not poison the others, a `renderer_error` event is emitted, and remaining renderers receive subsequent events normally. (above: "Multi-renderer dispatch")
+> **D4** — `TerminalRenderer` registers as `kind: ui_renderer, name: terminal` via the loader (ADR-002); new backends drop into `~/.ai-conductor/plugins/<name>/` with `plugin.yml` declaring `kind: ui_renderer`. (above: "Plugin registry integration")
+> **D5** — `src/conductor/src/ui/create-renderer.ts` is renamed to `src/conductor/src/ui/terminal-renderer.ts`, with the test file renamed in lockstep. (above: "File rename")
+
 ## Consequences
 
 - **Pro:** A new backend is one file (`class JsonRenderer implements UIRenderer { ... }`) plus a manifest. Zero conductor edits.

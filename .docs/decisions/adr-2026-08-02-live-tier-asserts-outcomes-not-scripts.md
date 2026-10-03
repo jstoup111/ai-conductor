@@ -41,6 +41,16 @@ artifacts**, never properties of the agent's wording or call count:
 Anything the agent chose freely — wording, dispatch count, ordering, retries — is out of scope for
 assertion and belongs only in the failure diagnostics.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — The live tier asserts only properties of the pipeline's terminal state and its committed artifacts, never properties of the agent's wording or call count. (above: "The live tier asserts only properties of the **pipeline's terminal state")
+> **D2** — `.pipeline/DONE` exists, and neither `.pipeline/HALT` nor `.daemon/parked/<slug>` exists. (above: "`.pipeline/DONE` exists.")
+> **D3** — At least one commit exists beyond the seeded `T0` baseline, and its diff touches `test/fixtures/daemon-e2e/touched.txt`. (above: "At least one commit exists beyond the seeded `T0` baseline")
+> **D4** — The commit's `Task:` trailer presence is asserted; its exact subject line is not. (above: "The commit carries a `Task:` trailer")
+> **D5** — The summed `InvokeResult.tokenUsage` across all dispatches is at or under the configured cap. (above: "The summed `InvokeResult.tokenUsage`")
+> **D6** — Anything the agent chose freely — wording, dispatch count, ordering, retries — is out of scope for assertion and belongs only in the failure diagnostics. (above: "Anything the agent chose freely")
+
 ## Consequences
 
 **Positive.** The tier fails for exactly one reason: the pipeline did not carry a real agent's work

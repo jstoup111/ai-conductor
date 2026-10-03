@@ -101,6 +101,13 @@ The workflow header's "set labels REST endpoint (a full replace)" claim is repla
 accurate description of namespace-scoped replace + the authority ladder. A full replace is
 explicitly rejected below.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — `syncIssueLabels` applies a per-namespace three-tier authority rule (explicit > existing > default) as a namespace-scoped replace (add the winner, remove every other `priority: ` / `size: ` label), and when a namespace already holds more than one label the single non-default member wins, while two or more non-default members leave the namespace untouched and reported. (above: "### 1. `syncIssueLabels` gains a three-tier authority rule")
+> **D2** — `bin/intake-file` renders `### Priority` / `### Size` headings into the issue body in the shape `extractField` already parses; the parser regex is not touched. (above: "### 2. `bin/intake-file` renders `### Priority` / `### Size`")
+> **D3** — The workflow header's "full replace" claim is corrected to describe namespace-scoped replace + the authority ladder; a full replace is rejected. (above: "### The doc is corrected to match")
+
 ## Alternatives considered
 
 - **A true `PUT .../labels` full replace, as the header claims.** Rejected on two counts.

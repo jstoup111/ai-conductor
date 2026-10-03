@@ -21,6 +21,13 @@ undefined` in `artifacts.ts`, mirroring `parseComplexityTier` and `parseIntakeSo
 - Committed alongside the other DECIDE artifacts by `land-spec`; read from the base-branch tree by
   `discoverBacklog` (same pattern as the complexity + intake markers).
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Use a dedicated `.docs/track/<slug>.md` marker containing a `Track: product|technical` line, parsed by a new `parseTrack` in `artifacts.ts` (above: "Use a **dedicated `.docs/track/<slug>.md`** marker")
+> **D2** — When the marker is absent the track defaults to `product` (above: "**Default when absent → `product`.**")
+> **D3** — The marker is committed alongside the other DECIDE artifacts by `land-spec` and read from the base-branch tree by `discoverBacklog` (above: "Committed alongside the other DECIDE artifacts")
+
 ## Rationale
 
 - **Single responsibility / orthogonal axes:** complexity is S/M/L (how big); track is

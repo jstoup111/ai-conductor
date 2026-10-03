@@ -97,6 +97,13 @@ plus the credential it supplies on purpose, leaving FR-8's guarantee about the h
 untouched. For a non-Claude leg the credential arrives through `prepareSelfHostAuth`,
 which `provisionProviderHome:172` already invokes.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — The fixture provisions its own isolated provider home from the checkout under test, using the same provider-keyed machinery the self-host build path uses, passes that home's `childEnv()` through the existing `InvokeOptions.selfHost` seam, and tears it down under `finally`; no new provider surface, no argv change (above: "The fixture provisions its own isolated provider home")
+> **D2** — The primitive is `provisionProviderHome` for every leg, not the Claude-specific sandbox: it copies rather than symlinks, reads no ambient operator state, and installs no settings and no hooks (above: "The primitive is `provisionProviderHome`")
+> **D3** — The credential is supplied explicitly by the fixture, not inherited: the dispatch env is the home's `childEnv()` plus the credential the fixture supplies on purpose, and a non-Claude leg's credential arrives through `prepareSelfHostAuth` (above: "The credential is supplied explicitly by the fixture")
+
 ## Alternatives considered
 
 - **Run `bin/install` in the workflow (the issue's first hypothesis).** Rejected as

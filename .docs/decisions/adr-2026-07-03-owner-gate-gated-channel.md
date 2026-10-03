@@ -44,6 +44,14 @@ result** — an empty dashboard with no explanation is the invisibility bug agai
 dashboard renders GATED after WAITING; a spec appears in exactly one bucket. Gate decisions
 and build outcomes are byte-identical — this channel only observes `GateDecision`.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option A: `gated` is a sibling list to `waiting`, carrying per-spec entries (slug, gate reason, per-reason remedy hint) plus repo-scoped warning entries for identity-unresolved and no-cutover (above: "**Option A.** `gated` is a sibling list to `waiting`")
+> **D2** — The identity-unresolved fail-closed early return must return the repo warning in `gated` rather than a bare empty result (above: "**The identity-unresolved fail-closed early return")
+> **D3** — The dashboard renders GATED after WAITING, and a spec appears in exactly one bucket (above: "The dashboard renders GATED after WAITING")
+> **D4** — Gate decisions and build outcomes are byte-identical; this channel only observes `GateDecision` (above: "Gate decisions and build outcomes are byte-identical")
+
 ## Consequences
 
 ### Positive

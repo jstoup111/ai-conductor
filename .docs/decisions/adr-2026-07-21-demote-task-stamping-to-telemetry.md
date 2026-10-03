@@ -89,6 +89,15 @@ deleted graph — zero imports of `deriveCompletion`/`evidenceStamps`/`attributi
 counter): `wiring_check` export-reachability, `acceptance_specs` RED-evidence, shipped-record
 dedup, owner-gate provenance, push-evidence finish guard.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Adopt Option A: delete the per-task mechanical stamp gating listed above (autoheal derivation/reconcile, the attribution-lane citation gate and `evidence judge`, evidence-based reseed, the no-evidence park branch and evidence-coupled stall verdict). (above: "Adopt **Option A**. Delete the per-task mechanical stamp **gating**")
+> **D2** — The `COMMIT_MSG_HOOK` fail-closed evidence rejection is deleted and the `attribution-enforcement.ts` commit gate becomes advisory, keeping trailer grammar validation. (above: "`git-hook-assets.ts` COMMIT_MSG_HOOK: the fail-closed **evidence rejection**")
+> **D3** — `Task:` trailer stamping, the `task-evidence.json` sidecar as a record, progress counts and `build-progress` events, the attribution spot-audit ledger, and retro Part C are kept as telemetry. (above: "**Keep as telemetry (untouched or lightly reframed):**")
+> **D4** — `parsePlanTaskPaths` and `TASK_ID_PATTERN` are shared utilities that MUST be preserved/relocated, not deleted. (above: "**Constraint — preserve shared utilities.**")
+> **D5** — The listed same-named systems (`wiring_check`, `acceptance_specs` RED-evidence, shipped-record dedup, owner-gate provenance, push-evidence finish guard) are out of scope and stay untouched. (above: "**Out of scope — separate same-named systems")
+
 ## Consequences
 
 ### Positive

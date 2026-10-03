@@ -60,6 +60,13 @@ Option A. Normalization is a separate, tested step that precedes validation; val
 its current refusals verbatim. Backtick span beats Markdown link beats first token, checked in
 that order, so an inline-code path containing a space still resolves.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option A: normalization of the `**Stories:**` reference to a single token is a separate, tested step that precedes validation. (above: "Option A. Normalization is a separate, tested step")
+> **D2** — Validation keeps its current refusals verbatim. (above: "validation keeps its current refusals verbatim")
+> **D3** — Backtick span beats Markdown link beats first token, checked in that order, so an inline-code path containing a space still resolves. (above: "Backtick span beats Markdown link beats first token")
+
 ## Consequences
 
 - Plans whose reference was previously `null` now resolve. In this repository that makes 82

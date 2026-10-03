@@ -110,6 +110,14 @@ contradiction guard is specific to the empty/missing-plan park and would refuse 
 setup-failure park for reasons that do not apply. `park-marker.ts` remains the single source of
 truth for the marker, which is what keeps this fix from recreating the split-brain it removes.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — A single termination primitive at the `daemon-runner.ts` boundary accepts a park intent plus a reason; with park intent it calls `writeAutoPark` and then renders the HALT note from that call's result (marker first, note second), and without it writes no marker and renders an errored-and-will-be-re-dispatched note. (above: "**The primitive.**")
+> **D2** — Only site `:356` (triage outcome `park`) declares park intent; sites `:484`, `:536`, and `:556` declare no park intent and receive honest wording. (above: "**The partition.**")
+> **D3** — A park whose durable marker could not be written must not report itself as parked: the note states the park failed, names the error, and directs the operator to `conduct-ts daemon park <slug>`. (above: "**Write failure is loud.**")
+> **D4** — The primitive calls `park-marker.ts` directly, with no second marker writer and no routing through `daemon-auto-park.ts`; `park-marker.ts` remains the single source of truth for the marker. (above: "**Reuse, not a parallel path.**")
+
 ## Consequences
 
 ### Positive

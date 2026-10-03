@@ -47,6 +47,16 @@ The floor is the cheap deterministic "did work happen at all" first pass; the LL
 completeness rubric remains the semantic "was it sufficient" authority. Belt-and-
 suspenders, not a replacement.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — The floor is a standalone deterministic advisory computed inside the `build_review` step, before the isolated grader dispatch. (above: "Implement the floor as a **standalone deterministic advisory**")
+> **D2** — A planned task is covered if ≥1 branch commit carries a matching `Task:` trailer, marked if it has a verify-only/verification plan marker or a `skipped` status row; a gap is neither covered nor marked. (above: "**Signal (wedge-free):**")
+> **D3** — The floor is non-blocking: it writes `.pipeline/per-task-floor.json` and emits WARNING advisory lines per gap, and does not alter the grader's verdict, inject into `buildGraderPrompt`, or trigger a kickback. (above: "**Disposition:** NON-BLOCKING.")
+> **D4** — Any git/parse error is fail-soft: `skipNotes`, `satisfied: true`, zero gaps. (above: "**Fail-soft:**")
+> **D5** — An optional additive `build_review.perTaskFloor` kill-switch exists, default on. (above: "**Kill-switch:**")
+> **D6** — The floor is the deterministic "did work happen at all" first pass; the LLM completeness rubric remains the semantic "was it sufficient" authority. (above: "The floor is the cheap deterministic")
+
 ## Alternatives considered (and rejected)
 
 ### Alt A — Blocking native kickback gate (wiring_check-style)

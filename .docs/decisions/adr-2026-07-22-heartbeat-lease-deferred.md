@@ -23,6 +23,13 @@ during DECIDE, and release it on exit — touching the session lifecycle, not ju
 - A lease/heartbeat that closes the window entirely is explicitly noted as future work (it would
   let automatic recovery skip any entry whose lease is still live, eliminating the race).
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Do not build a heartbeat/lease in this feature; ship time-based automatic recovery with a generous default window plus the manual override as the primary tool for known-dead sessions. (above: "**Do not build a heartbeat/lease in this feature.**")
+> **D2** — The duplicate-processing window is recorded as a known, bounded, accepted residual risk. (above: "Record the duplicate-processing window")
+> **D3** — A lease/heartbeat that closes the window entirely is explicitly noted as future work. (above: "A lease/heartbeat that closes the window entirely")
+
 ## Consequences
 
 - The feature is small and self-contained (no session-lifecycle changes), and solves the actual

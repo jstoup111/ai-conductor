@@ -55,6 +55,15 @@ For the v1.0 program specifically: the auto-proposed patterns cover the explicit
 list in the same run — the acceptance bar (PRD: "#217–#229 fully linked") is met by the
 combination, verified in the dry-run output before any write.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option A: high-confidence patterns auto-proposed, heuristics flagged for manual review, dry-run-first (above: "**Option A.**")
+> **D2** — Idempotency is GET-before-POST per edge plus treating GitHub's "already exists" error class as success (above: "Idempotency is GET-before-POST per edge")
+> **D3** — The migration is additive only: it never deletes links and never closes/edits/relabels issues (above: "additive only: the migration never deletes links")
+> **D4** — The migration is a standalone operator-invoked command, not part of daemon or intake flow, with same-repo-only write scope from adr-2026-07-03-issue-dependencies-api-surface (above: "The migration is a standalone operator-invoked command")
+> **D5** — For the v1.0 program, auto-proposed patterns cover the explicit prose and #228's phase structure is confirmed by the operator from the manual-review list in the same run, verified in the dry-run output before any write (above: "For the v1.0 program specifically")
+
 ## Consequences
 
 ### Positive

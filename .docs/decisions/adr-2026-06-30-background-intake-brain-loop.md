@@ -74,6 +74,12 @@ ADR only adds the concurrency boundary it omitted.
 We chose A/A because it is the *only* option that honors brain≠daemon, keeps the build daemon a
 Non-Goal, and makes Q2 dissolve instead of requiring new locking — the cheapest correct design.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Q1 = A: host the cross-repo intake poll in a single brain/supervisor loop that polls, captures, auto-routes, and notifies each tick, never spawns `claude`, runs DECIDE, or opens a PR, and reuses the daemon's idle-poll + tmux-supervisor hosting. (above: "**Q1 = A. Host the cross-repo intake poll")
+> **D2** — Q2 = A: the ledger stays single-writer by construction; the launcher pre-poll becomes a no-op when a brain loop is live, ledger writes remain atomic (temp+rename), and no new lock is added (ADR-012 remains authoritative). (above: "**Q2 = A. The ledger stays single-writer")
+
 ## Consequences
 
 ### Positive

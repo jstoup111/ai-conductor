@@ -79,6 +79,16 @@ The cap check must stay first so outcome 4 ("existing kickback caps / anti-ping-
 preserved") holds unchanged on the interactive path, and so a daemon run that trips the cap
 still reports the *ping-pong* reason rather than being masked by the phase reason.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Extract one pure, I/O-free predicate, `decideKickbackDisposition` in `src/conductor/src/engine/kickback-policy.ts`, and consult it at both backward-navigation seams (above: "**Extract one pure predicate and consult it at both seams.**")
+> **D2** — Rule: `daemon === true && phaseOf(target) === 'DECIDE'` → `halt`, otherwise `route`, with phase resolved from the passed `steps` table, never a hardcoded name list (above: "Rule: `daemon === true && phaseOf(target) === 'DECIDE'`")
+> **D3** — At `planRemediation` the predicate replaces the inline #644 check, behavior-identical, preserving the existing halt detail string and `{kind:'halt'}` return shape (above: "**`planRemediation`** — replacing the inline #644 check")
+> **D4** — At `scanKickbackVerdicts` the predicate is new coverage, evaluated after the existing counter bump, `kickback` event emit and `MAX_KICKBACKS_PER_GATE` cap check, and before `navigateBack` (above: "**`scanKickbackVerdicts`** — new coverage")
+> **D5** — The new halt is written with `writeHaltMarker(body, 'needs-human')`, never a bare `writeFile`, and follows the canonical marker → `writeState` → `surfaceRemediationPr` → `loop_halt` emit sequence (above: "The new halt is written with `writeHaltMarker(body, 'needs-human')`")
+> **D6** — Ordering: the cap check stays first and the phase check second, so a daemon run that trips the cap still reports the ping-pong reason (above: "The cap check must stay first")
+
 ## Consequences
 
 - The invariant "in daemon mode the index never moves backward into DECIDE" becomes true of the

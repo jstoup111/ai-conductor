@@ -92,6 +92,13 @@ The neighbouring `i17-recorded-tag` case (`:357-369`) needs **no** change: its c
 highest reachable tag is `v0.3.0`, so the new resolver reports the same `v0.3.0 → v0.4.0`
 offer the assertion already expects, now derived from the checkout instead of the record.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option B: the `unverifiable` outcome is retained but its trigger moves from "no recorded identity" to "no reachable release tag", an explicit contract change (above: "**Option B.** The `unverifiable` outcome is retained")
+> **D2** — The test changes in the table above are required, with the `:355` row as corrected by the 2026-08-09 amendment: the emptiness assertion moves to the new no-reachable-tag fixture, and the between-releases fixture asserts `currentVersion == v0.3.0` and `!= v0.4.0` (above: "Test changes required:" and "**Amended 2026-08-09 by #1437")
+> **D3** — The neighbouring `i17-recorded-tag` case (`:357-369`) needs no change (above: "The neighbouring `i17-recorded-tag` case")
+
 ## Consequences
 
 ### Positive

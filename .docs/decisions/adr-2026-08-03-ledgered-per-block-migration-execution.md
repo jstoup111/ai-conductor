@@ -111,6 +111,15 @@ worktree or branch removal, or restarts a daemon without operator action.
 deliberately narrow and pattern-based; it is a backstop for known-bad shapes, not a general safety
 proof.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — A durable per-consumer-project applied-block ledger, keyed by release label plus a content hash of the block body, is the authority for what runs: candidates are parsed blocks minus applied blocks, with the version range retained only as advisory display context (above: "### 1. A durable applied-block ledger is the authority for what runs")
+> **D2** — One block per invocation: each approved block runs in its own shell under `set -euo pipefail` with `HARNESS_DIR` exported, and a non-zero result fails that block, stops the sequence, and leaves it and everything after it pending (above: "### 2. One block per invocation, under fail-fast semantics")
+> **D3** — Approval is per block (accept, skip, accept-all, stop), skipped and unreached blocks are recorded as pending, and with no approval channel nothing executes and nothing is recorded as applied (above: "### 3. Approval is per block, and declining is recorded as pending")
+> **D4** — The queued 0.99.20 block bodies are corrected in place in the frozen `## [0.99.20]` entry, as a one-time exemption from the `CHANGELOG.md` rule that the implementation branch must not widen (above: "### 4. The queued 0.99.20 block bodies are corrected in place")
+> **D5** — The block authoring contract is enforced by a repository integrity check rejecting working-directory-relative harness binary calls, destructive repository operations, and unattended daemon restarts (above: "### 5. The block authoring contract is enforced by a repository check")
+
 ## Out of scope
 
 - Removing the duplicated update logic in `bin/conduct` (#226). It calls the same `bin/migrate` and

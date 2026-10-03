@@ -100,6 +100,15 @@ Backwards compatibility at BUILD is a fixed requirement of this decision, not a 
 
 > **Amended 2026-08-31 by #2088:** strictness on the criterion layer's *shape and grounding* stays inside `runCoherenceGate` at `landSpec` exactly as ruled, and `runCoherenceGate` now also engages that single layer at tier S over the plan-carried criterion rows (`adr-2026-08-31-coverage-binding-judge-step` D3). One BUILD consumer is added by that ADR's D4: the config-gated, default-off `coverage_binding` step *reads* criterion claims where present and judges their binding. It requires nothing — a merged spec with zero `criterion` rows and an S plan with no table both pass it — so the zero-`criterion`-rows invariant and the "no BUILD or SHIP consumer may require a `criterion` row" rule are preserved.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option D: `criterion` joins the structural layer set in `resolveRequiredLayers`, alongside `story`, `orphan-task`, and `coverage-table` (above: "**Option D.** `criterion` joins the structural layer set")
+> **D2** — adr-2026-08-09 is amended, not superseded: its signal-gating rule stands for row classes tracking a genuine variable, and the test for a future row class is "can a correct spec legitimately have none of these?", not "is it new?" (above: "adr-2026-08-09 is amended, not superseded")
+> **D3** — Backwards compatibility at BUILD: a merged spec carrying zero `criterion` rows remains a valid coherence artifact at discovery and continues to build, as amended 2026-08-26 by #1881 (above: "`hasCoherenceTableDataRow` and the discovery-side coherence check are **not** modified")
+> **D4** — No BUILD or SHIP consumer may require a `criterion` row, as amended 2026-08-31 by #2088 (above: "No BUILD or SHIP consumer may require a `criterion` row.")
+> **D5** — All added strictness lives inside `runCoherenceGate`, which runs only at `landSpec`, as amended 2026-08-31 by #2088 (above: "All added strictness lives inside `runCoherenceGate`")
+
 ## Consequences
 
 ### Positive

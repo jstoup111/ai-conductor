@@ -50,6 +50,13 @@ We chose A because origin routing for a GitHub issue is unambiguous and must be 
 the human gate that ADR-008 exists to protect is fully retained — the operator still affirmatively
 accepts or redirects before any authoring.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — For an idea captured from a GitHub issue, the brain loop sets the routing proposal to the originating repo, mechanically, via the envelope's origin/source-ref (above: "**Option A.** For an idea captured from a GitHub issue")
+> **D2** — The ADR-008 routing discriminated union and human gate are unchanged: when the operator claims the idea for DECIDE, the pre-seeded target is presented and they may `confirmed`, `redirected`, or `declined` (drop, zero writes) (above: "The ADR-008 routing **discriminated union and human gate are unchanged**")
+> **D3** — Only the proposal source changes, and only for origin-bearing intake ideas; chat/CLI ideas without an origin keep ADR-008's LLM-over-registry inference unchanged (above: "Only the *proposal source* changes")
+
 ## Consequences
 
 ### Positive

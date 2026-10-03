@@ -93,6 +93,19 @@ from the mergeable sweep's autoresolve/CI-fix candidates, and carries no `mergea
 Self-host builds are therefore **not** exempt from ship-start drafting — which matters,
 because the changelog-token cycling this ADR fixes is a self-host problem.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Option B, hardcoded timing: the engine opens one draft PR for the feature branch at the first SHIP step that will actually execute, after every skip has been evaluated, and `finish` flips it ready for review (above: "Option B. The engine opens one **draft** PR")
+> **D2** — A new module `src/engine/ship-draft-pr.ts` (`openShipDraftPr`) sits behind the existing injected `GhRunner`/`GitRunner` seam, plain-pushes, and calls the existing `findOrCreatePr({ draft: true })`; no raw `execFile`, no second gh implementation (above: "New module `src/engine/ship-draft-pr.ts`")
+> **D3** — It never force-pushes; a non-fast-forward rejection is reported, not forced (above: "Never force-pushes.")
+> **D4** — It is lazy: `git rev-list --count <base>..HEAD` (falling back to `origin/<base>`) must be non-zero (above: "Lazy:")
+> **D5** — It is advisory: every failure logs one loud `[ship-draft-pr]` line and returns an outcome, and nothing throws into the conductor loop (above: "Advisory:")
+> **D6** — It is idempotent: `findOrCreatePr` returns an already-OPEN PR untouched, and a per-run latch keeps the SHIP phase to a single push + lookup (above: "Idempotent:")
+> **D7** — No new flip mechanic: the existing `ensureShipReady` draft→ready flip, wired through `repairFinishPr`, performs it (above: "No new flip mechanic.")
+> **D8** — The placeholder body carries `PR_BODY_FLOOR_MARKER`, no halt banner, and no `needs-remediation:` title prefix (above: "The placeholder body carries `PR_BODY_FLOOR_MARKER`.")
+> **D9** — Self-host precedence is narrowed to "No self-host PR reaches ready-for-review before the VERSION-approval and release-artifact gates pass"; self-host builds are not exempt from ship-start drafting (above: "Self-host precedence — narrowed")
+
 ## Consequences
 
 ### Positive

@@ -87,6 +87,15 @@ Why: a skill-per-provider with selection-by-active-provider makes every provider
 skill-resolution path — while keeping the FR-3 invariant (guidance is prose for the agent, no harness
 retrieval logic) untouched.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — A memory-guidance skill exists for every provider (default included), and the harness selects the skill matching the installed/active provider (above: "Adopt **Option A**")
+> **D2** — Today's `skills/memory/SKILL.md` is the skill selected when the active provider is `local`, behavior-identical to today, no special-casing (above: "Default = `local`'s skill:")
+> **D3** — A non-default provider ships its memory-guidance skill, and when it is the resolved active provider its recall/persist guidance is in effect (above: "Non-default = the provider's own skill:")
+> **D4** — Selection keys on the resolved active provider, so switching providers switches the selected skill (above: "Selection keys on the resolved active provider")
+> **D5** — If the active provider has no usable guidance skill, the harness surfaces a clear warning and `/memory` falls back to default (`local`) recall/persist semantics (above: "Missing skill for an active provider")
+
 ## Consequences
 
 ### Positive

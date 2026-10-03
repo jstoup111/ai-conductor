@@ -109,6 +109,15 @@ repository that installs the harness.
   guesses at intent from file paths — the intent is precisely what a recorded exception states
   directly.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — A waiver of the RED requirement is valid only when recorded in the marker as a structured exception (kind `remediation`, non-empty reason, attribution); `validateAcceptanceRedEvidence` accepts `failed == 0` only with a well-formed exception, and `errors == 0`, `skipped == 0`, `executed >= 1` still apply (above: "A waiver of the RED requirement is valid only when it is recorded in the marker.")
+> **D2** — A waived pass is reported as waived, never as proven: `acceptance_red` is emitted with `state: satisfied` and `viaException: true`, and the live status line and the ledger carry that distinction (above: "A waived pass is reported as waived, never as proven.")
+> **D3** — An unrecorded green run stays rejected, with its failure text (`0 failed — RED not established`) unchanged (above: "An unrecorded green run stays rejected")
+> **D4** — Per the 2026-08-09 #1246 amendment: the exec result owns observed counters and a recorded declaration survives re-execution — the self-heal carries an existing `exception` forward, never invents one, and never repairs a malformed one (above: "the exec result owns observed counters; a recorded declaration survives re-execution")
+> **D5** — `skills/remediate/SKILL.md` states the obligation to declare the exception rather than combine acceptance and production changes silently, in provider-neutral prose, with the consumer-facing rule in `HARNESS.md` (above: "`skills/remediate/SKILL.md` states the obligation.")
+
 ## Consequences
 
 **Positive.** A legitimate exception becomes expressible, attributable, and visible on the same

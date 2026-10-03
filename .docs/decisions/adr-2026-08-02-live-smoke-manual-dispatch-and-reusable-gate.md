@@ -66,6 +66,15 @@ Claude leg successfully and wants the second.
 changelog/unreleased-issue implementation landing first. This ADR only guarantees the seam exists so
 that wiring is a caller change, not a rewrite.
 
+> **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
+> no change of substance. Each id names a decision exactly as already stated above.
+>
+> **D1** — Trigger: `workflow_dispatch` (operator-run, advisory) plus `workflow_call` (reusable) in a new workflow file, with no `schedule`, no `pull_request`, and absent from `ci-gate`'s `needs` so it can never block a merge (above: "**Trigger:**")
+> **D2** — Two modes, one workflow: `workflow_call` takes a `require_credentials` boolean defaulting to `false`; advisory mode skips a leg whose credential or CLI is missing, and gate mode (reserved for the future release caller) fails it (above: "**Two modes, one workflow.**")
+> **D3** — Matrix: the provider is a matrix dimension with `fail-fast: false`, each leg independently credentialed and independently skippable (above: "**Matrix:**")
+> **D4** — Codex is deferred, not dropped: Codex moves to a follow-on and the matrix carries a single `claude` value, as amended 2026-08-02 and qualified by the 2026-08-12 #1264 amendment (above: "**Codex is deferred, not dropped (amended 2026-08-02).**")
+> **D5** — Out of scope: wiring this workflow into `release.yml` belongs to #1259; this ADR only guarantees the seam exists (above: "**Out of scope:**")
+
 ## Alternatives considered
 
 - **Nightly schedule (the issue's hypothesis).** Rejected: recurring spend with no release coupling,
