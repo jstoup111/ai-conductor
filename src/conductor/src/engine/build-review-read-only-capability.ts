@@ -115,6 +115,12 @@ async function probeClaude(options: ProbeReadOnlyReviewCapabilityOptions): Promi
 }
 
 const PI_READ_ONLY_FLAGS = ['--tools', '--no-extensions', '--extension', '--no-approve'] as const;
+
+/** Matches a flag as a help token, permitting the punctuation that separates aliases. */
+function piHelpListsFlag(help: string, flag: string): boolean {
+  return new RegExp(`(?:^|\\s)${flag}(?=$|[\\s,;:=])`).test(help);
+}
+
 async function probePi(options: ProbeReadOnlyReviewCapabilityOptions): Promise<ReadOnlyReviewCapability> {
   let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
   const executable = resolveProviderExecutable(PI_PROVIDER);
@@ -127,7 +133,7 @@ async function probePi(options: ProbeReadOnlyReviewCapabilityOptions): Promise<R
     return unavailable(options, processFailureReason(error, PI_PROVIDER));
   }
   if (result.exitCode !== 0) return unavailable(options, exitedReason(PI_PROVIDER, result.exitCode, result.stderr));
-  const missing = PI_READ_ONLY_FLAGS.find((flag) => !result.stdout.includes(flag));
+  const missing = PI_READ_ONLY_FLAGS.find((flag) => !piHelpListsFlag(result.stdout, flag));
   if (missing) return unavailable(options, `${providerDescriptor(PI_PROVIDER).displayName} help does not list ${missing}`);
   try { await (options.materializePiExtension ?? materializePiHarnessExtension)(); }
   catch (error) { return unavailable(options, error instanceof Error ? error.message : String(error)); }

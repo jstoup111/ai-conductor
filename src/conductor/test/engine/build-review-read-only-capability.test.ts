@@ -176,6 +176,26 @@ describe('probeReadOnlyReviewCapability', () => {
       });
     });
 
+    it.each([
+      ['--extension', '--extension-preview', 'Pi help does not list --extension'],
+      ['--no-approve', '--no-approve-preview', 'Pi help does not list --no-approve'],
+    ])('does not treat a longer Pi help token as %s', async (missingFlag, deceptiveFlag, reason) => {
+      const runProcess = helpRunner(
+        PI_HELP
+          .split('\n')
+          .filter((line) => !line.includes(`${missingFlag},`))
+          .concat(`  ${deceptiveFlag} <value>  Deceptive option`)
+          .join('\n'),
+      );
+      const materializePiExtension = vi.fn(async () => join(tempRoot, 'unexpected-asset.ts'));
+
+      await expect(probePi(runProcess, materializePiExtension)).resolves.toEqual({
+        provider: 'pi', platform: 'linux', status: 'unavailable', reason,
+      });
+      expect(materializePiExtension).not.toHaveBeenCalled();
+      expectOnlyHelp(runProcess);
+    });
+
     it('names the unavailable executable when pi is not found, without throwing', async () => {
       const runProcess = vi.fn(async () => { throw Object.assign(new Error('spawn pi ENOENT'), { code: 'ENOENT' }); });
 
