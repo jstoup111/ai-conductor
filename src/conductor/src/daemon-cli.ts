@@ -1320,6 +1320,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       engineVersion: resolveEngineVersion(__dirname),
       metrics: false,
       harnessVersion: await resolveHarnessVersion(__dirname),
+      ...(item.sourceRef ? { sourceRef: item.sourceRef } : {}),
     }, featureEvents);
     const featureLog = featureLogFor(item.slug);
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);

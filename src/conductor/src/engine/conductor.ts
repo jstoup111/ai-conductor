@@ -6161,15 +6161,16 @@ export class Conductor {
     const finishChoice = await readFile(join(this.projectRoot, FINISH_CHOICE_MARKER), 'utf-8')
       .then((choice) => choice.trim() as FinishChoice)
       .catch(() => undefined);
+    const effectivePrUrl = prUrl ?? this.haltState.pr_url;
     await this.events.emit({
       type: 'loop_halt',
       ...(step ? { step } : {}),
       reason,
-      ...(prUrl === undefined ? {} : { prUrl }),
+      ...(effectivePrUrl === undefined ? {} : { prUrl: effectivePrUrl }),
       ...(this.haltState.complexity_tier === undefined ? {} : { tier: this.haltState.complexity_tier }),
       ...(headSha === undefined ? {} : { headSha }),
       ...(this.haltState.rebase_base_sha === undefined ? {} : { baseSha: this.haltState.rebase_base_sha }),
-      prDisposition: resolvePrDisposition({ prUrl, finishChoice }),
+      prDisposition: resolvePrDisposition({ prUrl: effectivePrUrl, finishChoice }),
     });
   }
 

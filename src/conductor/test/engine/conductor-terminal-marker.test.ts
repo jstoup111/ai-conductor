@@ -277,6 +277,30 @@ describe('conductor/terminal-marker-guarantee', () => {
     });
   });
 
+  it('uses the halting state PR URL when a halt caller provides none', async () => {
+    const state: ConductState = { pr_url: 'https://github.com/acme/project/pull/42' };
+    let halted: Record<string, unknown> | undefined;
+    events.on('loop_halt', (event) => {
+      halted = event;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      git: async () => ({ exitCode: 0, stdout: 'H\n', stderr: '' }),
+    });
+    (conductor as unknown as { haltState: ConductState }).haltState = state;
+
+    await (conductor as unknown as { emitLoopHalt(reason: string): Promise<void> }).emitLoopHalt('halted');
+
+    expect(halted).toMatchObject({
+      type: 'loop_halt',
+      prUrl: 'https://github.com/acme/project/pull/42',
+      prDisposition: 'opened',
+    });
+  });
+
   it('records unrecorded and omits prUrl on a loop halt with no PR or keep choice', async () => {
     let halted: Record<string, unknown> | undefined;
     events.on('loop_halt', (event) => {

@@ -161,6 +161,45 @@ describe('OtelVisualizer', () => {
     });
   });
 
+  it('retains a rebase base on a halt terminal event after a null rebase base', async () => {
+    const visualizer = makeVisualizer();
+    visualizer.start(emitter, { runId: 'run-1', feature: 'feature', project: 'project' });
+
+    await emitter.emit({ type: 'step_started', step: 'rebase', index: 0 });
+    await emitter.emit({ type: 'rebase_changed', baseSha: 'B', changedPaths: [] });
+    await emitter.emit({ type: 'rebase_changed', baseSha: null, changedPaths: [] });
+    await emitter.emit({ type: 'loop_halt', reason: 'halted' });
+    await visualizer.stop();
+
+    expect(spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')?.attributes['vcs.base.sha'])
+      .toBe('B');
+  });
+
+  it('uses unrecorded PR disposition when stopped without a terminal event', async () => {
+    const visualizer = makeVisualizer();
+    visualizer.start(emitter, { runId: 'run-1', feature: 'feature', project: 'project' });
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await visualizer.stop();
+
+    const run = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')!;
+    expect(run.attributes['conductor.pr.disposition']).toBe('unrecorded');
+    expect(run.attributes).not.toHaveProperty('vcs.head.sha');
+    expect(run.attributes).not.toHaveProperty('conductor.pr.url');
+  });
+
+  it('omits a missing terminal head SHA', async () => {
+    const visualizer = makeVisualizer();
+    visualizer.start(emitter, { runId: 'run-1', feature: 'feature', project: 'project' });
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'feature_complete', prDisposition: 'unrecorded' });
+    await visualizer.stop();
+
+    const run = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')!;
+    expect(run.attributes).not.toHaveProperty('vcs.head.sha');
+  });
+
   it('omits only VCS span attributes when commit provenance is disabled', async () => {
     const visualizer = new OtelVisualizer(
       resolveOtelConfig({
