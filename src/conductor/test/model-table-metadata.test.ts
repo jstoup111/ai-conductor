@@ -304,6 +304,7 @@ describe('AUXILIARY_MODEL_TABLE_ROWS auxiliary-judge registration', () => {
       'build-review-test-quality',
       'build-review-security',
       'coverage-binding',
+      'rebase-regrade',
     ]);
     expect(Object.keys(STEP_RATIONALE)).not.toEqual(expect.arrayContaining(names));
 
