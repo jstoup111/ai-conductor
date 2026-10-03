@@ -1,6 +1,6 @@
 export * from './types/index.js';
 export { wireOtelVisualizer } from './engine/otel/wire.js';
-export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, detectKickbackBudgetCommand, type CLIOptions } from './cli.js';
+export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, detectHaltClearCommand, detectKickbackBudgetCommand, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
 
 import type { RunMode } from './types/index.js';
@@ -79,6 +79,7 @@ import {
   detectBuildReviewRecordReducedCoverageCommand,
   detectDecideGrantCommand,
   dispatchDecideGrantCommand,
+  detectHaltClearCommand,
   detectKickbackBudgetCommand,
   detectPlanProtectedTargetsCommand,
   planProtectedTargetsCommand,
@@ -92,6 +93,7 @@ import {
   type CLIOptions,
 } from './cli.js';
 import { dispatchKickbackBudgetCommand } from './engine/kickback-budget-cli.js';
+import { dispatchHaltClearCommand } from './engine/halt-clear-cli.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from './engine/build-review-cli.js';
 import type { StepName } from './types/index.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
@@ -862,6 +864,12 @@ async function main(): Promise<void> {
   const kickbackBudgetCmd = detectKickbackBudgetCommand(process.argv);
   if (kickbackBudgetCmd) {
     process.exitCode = await dispatchKickbackBudgetCommand(kickbackBudgetCmd);
+    return;
+  }
+
+  const haltClearCmd = detectHaltClearCommand(process.argv);
+  if (haltClearCmd) {
+    process.exitCode = await dispatchHaltClearCommand(haltClearCmd);
     return;
   }
 
