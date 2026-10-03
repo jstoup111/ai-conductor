@@ -13308,7 +13308,7 @@ export class Conductor {
 
                 if (outcome.kind === 'halt') {
                   const reason = stallQuestion + '\n\n' + outcome.detail;
-                  await writeStallHalt(this.projectRoot, stallQuestion, outcome.detail, this.events);
+                  await writeStallHalt(this.projectRoot, stallQuestion, outcome.detail, this.events, outcome.haltClass);
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);

@@ -19,6 +19,7 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import { AcceptedWideningDecisionStore } from '../../src/engine/accepted-widenings.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
@@ -926,6 +927,68 @@ describe('build-stall remediation halt classes', () => {
     const halt = await readFile(join(projectRoot, '.pipeline/HALT'), 'utf8');
     expect(halt).toMatch(new RegExp(`^${question.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     if (outcome.kind === 'halt') expect(halt).toContain(outcome.detail);
+  });
+
+  it('forwards the remediation halt class from the budget-gated post-retry build-stall halt', async () => {
+    // Attempt 1 stalls on a halt marker and remediation routes back to build
+    // (one round spent, no attempt burned). Attempt 2 makes task progress but
+    // misses completion; with the progress bypass off, retries exhaust without a further in-loop dispatch.
+    // The post-retry stall path then dispatches with budget left and halts.
+    await writeFile(
+      join(projectRoot, '.docs/plans/feature.md'),
+      '# Plan\n\n### Task 1: repair\n\n### Task 2: finish\n',
+      'utf8',
+    );
+    const question = 'Which approved boundary should this repair use?';
+    let buildRuns = 0;
+    const runner: StepRunner = {
+      run: async (step) => {
+        if (step === 'build') {
+          buildRuns++;
+          await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+          if (buildRuns === 1) {
+            await writeFile(join(projectRoot, '.pipeline/halt-user-input-required'), question, 'utf8');
+          }
+          await writeFile(
+            join(projectRoot, '.pipeline/task-status.json'),
+            JSON.stringify({
+              tasks: ['1', '2'].map((id) => ({
+                id,
+                status: Number(id) < buildRuns ? 'completed' : 'pending',
+              })),
+            }),
+            'utf8',
+          );
+        }
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'build',
+      config: { build_progress_halt: { enabled: false } } as HarnessConfig,
+    });
+    const planRemediation = vi
+      .fn()
+      .mockResolvedValueOnce({ kind: 'route', target: 'build', hint: 'use the approved boundary', evidence: 'answered' })
+      .mockResolvedValue({ kind: 'halt', detail: 'Plan growth requires operator approval.', haltClass: 'kickback-cap' });
+    (conductor as unknown as { planRemediation: unknown }).planRemediation = planRemediation;
+
+    await conductor.run();
+
+    expect(buildRuns).toBe(2);
+    expect(planRemediation).toHaveBeenCalledTimes(2);
+    expect(planRemediation.mock.calls[1][3]).toMatchObject({ source: 'build-stall' });
+    expect(await readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf8')).toBe('kickback-cap');
+    const halt = await readFile(join(projectRoot, '.pipeline/HALT'), 'utf8');
+    expect(halt).toContain('Plan growth requires operator approval.');
   });
 
   it('attributes a build-stall marker clear and its halt-record resolution to stall remediation', async () => {
