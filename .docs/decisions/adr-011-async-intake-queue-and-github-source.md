@@ -67,6 +67,8 @@ multi-worker claim). 9.3b must not build that now, but must not foreclose it eit
    >    The lease is not `daemon-lock.ts` and is independent of the ledger lease, which stays
    >    short-held per ledger operation and is only ever taken inside the claim lease.
    >    `.claimed` envelopes whose ledger entry is `done` or absent are out of scope.
+   >    This is not the #243 session claim lease (`adr-2026-07-22-heartbeat-lease-deferred`): it is held
+   >    only for one `compose claim` command, and the accepted duplicate-processing window is unchanged.
 
 ## Rationale
 - Processing is human-gated, so for **re-queryable pull sources** capture latency is irrelevant —
