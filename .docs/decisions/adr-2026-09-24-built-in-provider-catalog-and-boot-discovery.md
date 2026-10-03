@@ -241,6 +241,70 @@ D8. Order and scope of the startup check. Validation of configured provider name
 > set, and the tmux variables are scrubbed. The harness launches no interactive Pi session (D9),
 > so interactive operator use of Pi is unaffected.
 
+> **Amended 2026-10-02 by #1889 (operator decision, James Stoup, composer DECIDE):** D5 says the
+> adapter parses "the cumulative `usage` field", and D6 says Pi's cost is `cost-unmetered` and that
+> `costSelfReporting` belongs to #1889. Both D5 and D6 statements are falsified. Pi 0.84.3 emits no
+> top-level `usage` on any JSON-mode event. The `pi-agent-core` event union carries usage only on
+> `message_end.message`, an `AssistantMessage`, as `message.usage`. That usage is per LLM call, not
+> cumulative. Its `input` is fresh-only, with `cacheRead` and `cacheWrite` split out. It includes
+> `cost.total`, which Pi computes from its model registry. The message also names the model that
+> ran in `message.provider` and `message.model`. These facts were verified locally on 2026-10-02
+> against `pi-ai/dist/types.d.ts` (`Usage`, `AssistantMessage`), `pi-agent-core/dist/types.d.ts`
+> (the agent event union), `pi-ai/dist/models.js` (`calculateCost`) and
+> `pi-ai/dist/api/openai-responses-shared.js` (fresh-input normalization). Every other statement in
+> D1–D18 is unchanged, except the #1886 amendment's clause that Pi "still declares no
+> `costSelfReporting`", which D22 replaces. Pi still declares no `selfHost`,
+> `reviewPolicyCatalog`, `writeFence`, `readiness` or `interactiveLaunch`. Four decisions are added.
+>
+> **D19.** A **usage-bearing message** is a `message_end` event whose `message.role` is `assistant` or
+> `toolResult` and whose `message.usage` carries finite numeric `input` and `output`. Only
+> `message_end` counts. `message_start`, `message_update`, `turn_end` and `agent_end` repeat the same
+> message and its usage, and are never summed. Pi's usage is the sum of `message.usage` over the
+> run's usage-bearing messages. `input` maps to `TokenUsage.input`, `output` to `output`,
+> `cacheRead` to `cacheRead`, `cacheWrite` to `cacheCreation`, and `reasoning`, when present, to
+> `reasoningOutput`. The count of assistant `message_end` events maps to `numTurns`. When there is no
+> usage-bearing message, or the summed `input`, `output`, `cacheRead` and `cacheWrite` are all zero,
+> the adapter returns no `TokenUsage` at all. Pi reports all-zero usage on a failed turn (captured
+> live 2026-10-02). It never zero-fills usage, so the dispatch is `unmetered` per
+> adr-2026-07-27-cost-unmetered-is-a-first-class-state D6. A failed invocation (non-zero exit, or an
+> error stop under D14) also returns no `TokenUsage`, as it does today. Pi itself totals usage the
+> same way, per message (`pi-coding-agent/dist/core/usage-totals.js`).
+>
+> **D20.** A Pi dispatch's cost resolves in fixed precedence, all-or-nothing per dispatch. Here a
+> message's **model that ran** is `message.provider` plus `message.responseModel` when present,
+> else `message.model`, which is the key Pi's own usage totals use. Only usage-bearing messages with
+> non-zero tokens need a price; a zero-token message contributes nothing.
+> (a) When every such message reports a finite, positive `cost.total`, `TokenUsage.costUsd` is
+> their sum and `costSource` is `'provider'`.
+> (b) Otherwise, when every such message is an assistant message whose model that ran (the bare
+> model part, without the provider) is priced by the committed rate card
+> (adr-2026-08-25-committed-rate-card-prices-codex-and-its-repl-is-one-shot D1, extended here from
+> codex to Pi), `costUsd` is the sum of `applyRateCard` over those messages and `costSource` is
+> `'rate-card'`.
+> (c) Otherwise `costUsd` stays absent and the dispatch is `cost-unmetered`. A `toolResult` message
+> names no model, so if Pi gives it no price the dispatch falls to (c).
+> A Pi `cost.total` of zero alongside non-zero tokens means Pi had no price for that model, so it is
+> treated as absent, never as a real $0. A dispatch never sums a partial cost over only the messages
+> that were priced. Pi's figure is reported by Pi from its own price list, as Claude Code's
+> `total_cost_usd` is. It reuses `costSource: 'provider'`; a distinct label for Pi-computed figures
+> is out of scope.
+>
+> **D21.** `TokenUsage` gains one optional field, `attributedModel`: the `provider/model` id of the
+> model that ran (D20) on the last assistant usage-bearing message that names both a provider and a
+> model. It is set whenever Pi's usage is present and some assistant message named both, including on
+> a `cost-unmetered` dispatch, and is absent otherwise. Under D20(b) each message is priced by its own model that ran, so one unpriced
+> message leaves the whole dispatch `cost-unmetered`. The field is additive under
+> adr-2026-07-27-additive-cost-block-evolution-and-split-aggregates D1. Existing consumers, including
+> the cost rollup's `event.model` dimension and the committed `## Cost` block, are unchanged. Claude
+> and codex do not set it. Consequently the cost rollup's per-step `model` dimension and the exported
+> OTel `model` label for a Pi dispatch remain the requested model, and `attributedModel` is read from
+> the persisted event when the model that ran is needed.
+>
+> **D22.** Pi declares `costSelfReporting`, and `PROVIDER_CAPABILITY_OWNERS` drops its
+> `costSelfReporting: '#1889'` entry. The flag's only consumer, `COST_SELF_REPORTING_PROVIDERS`,
+> excludes the provider from the `rate-card refresh` model list. Pi's built-in policy ships no model
+> ids (D13), so that list is unchanged. D20's adapter-level rate-card fallback does not depend on
+> the flag.
 ## Consequences
 
 - Adding a fourth provider is one descriptor plus one adapter. The structural test fails if a new id literal appears elsewhere.
