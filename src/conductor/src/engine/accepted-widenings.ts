@@ -709,6 +709,9 @@ function isPersistedOffer(value: OverScopeRenderableFinding | OverScopePersisted
   return 'offerEntryId' in value;
 }
 
+/** Names the sanctioned clear: `halt clear` renames HALT to HALT.cleared, the only file the next lap harvests. */
+const OVER_SCOPE_CLEAR_INSTRUCTION = 'run `ai-conductor halt clear --feature <slug> --rationale "<why>"`, which preserves this block for the next audit lap. Do not delete this file: deleting it discards every decision recorded here.';
+
 export function renderOverScopeDecisionBlock(undecided: readonly (OverScopeRenderableFinding | OverScopePersistedOffer)[], refused: readonly OverScopeRenderableFinding[] = [], defects: readonly { kind: string; criterion?: string; message?: string }[] = []): string {
   const parts: string[] = [];
   const editable = undecided.filter((finding) => finding.relation === 'outside-visible');
@@ -732,14 +735,14 @@ export function renderOverScopeDecisionBlock(undecided: readonly (OverScopeRende
   };
   if (pending.length) {
     parts.push(`Blocking criteria awaiting a decision: ${pending.map((f) => f.criterion).join(', ')}.`);
-    parts.push('Edit each `decision` to `accept` or `refuse` with a `rationale`, then clear this halt.');
+    parts.push(`Edit each \`decision\` to \`accept\` or \`refuse\` with a \`rationale\`, then ${OVER_SCOPE_CLEAR_INSTRUCTION}`);
     parts.push(`\`\`\`json over-scope-decisions\n${JSON.stringify(pending.map(renderOffer), null, 2)}\n\`\`\``);
   }
   if (revisions.length || refused.length) {
     parts.push(`Refused — rework required: ${[...revisions, ...refused].map((f) => f.criterion).join(', ')}.`);
   }
   if (revisions.length) {
-    parts.push('To revise a refusal, edit each `decision` to `accept` or `refuse` with a `rationale`; leaving `decision` as `pending` keeps the prior decision unchanged. Then clear this halt.');
+    parts.push(`To revise a refusal, edit each \`decision\` to \`accept\` or \`refuse\` with a \`rationale\`; leaving \`decision\` as \`pending\` keeps the prior decision unchanged. Then ${OVER_SCOPE_CLEAR_INSTRUCTION}`);
     parts.push(`\`\`\`json over-scope-decisions\n${JSON.stringify(revisions.map(renderOffer), null, 2)}\n\`\`\``);
   }
   if (defects.length) parts.push(`Unreadable scope decisions: ${defects.map((d) => d.message ? `${d.kind} (${d.message})` : d.criterion ? `${d.kind} (${d.criterion})` : d.kind).join(', ')}.`);

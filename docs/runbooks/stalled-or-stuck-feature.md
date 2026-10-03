@@ -1299,14 +1299,13 @@ Version-2 `accepted-widenings.json` preserves valid legacy attributed evidence i
 order. A refusal is also preserved: revise it only through its offered explicit revision entry,
 never by reusing an old accepted clear or deleting history.
 
-Then clear by **renaming** the edited body to `.pipeline/HALT.cleared` — never `rm -f` it. The
-next prd_audit lap harvests your decisions from `HALT.cleared` and from nowhere else, so deleting
-the body silently discards every decision you just authored and the feature re-halts with the
-same blocking set:
+Then clear with `ai-conductor halt clear` — never `rm -f` the body. For an over-scope halt the
+command renames the edited body to `.pipeline/HALT.cleared`; the next prd_audit lap harvests your
+decisions from `HALT.cleared` and from nowhere else, so deleting the body silently discards every
+decision you just authored and the feature re-halts with the same blocking set:
 
 ```bash
-mv .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.cleared
-rm -f .worktrees/<slug>/.pipeline/HALT.class
+ai-conductor halt clear --feature <slug> --rationale "<why these decisions>"
 ```
 
 **What it changes:** the daemon registers a filesystem watcher on each halted feature's marker
