@@ -16446,8 +16446,7 @@ export function buildRetryHint(
       'boilerplate, no remediation narrative (those belong in a guarded `pull-request.comment.create` request), and ' +
       'no engine placeholder text.\n' +
       '  2. If the PR is still a draft, submit a guarded `pull-request.ready` request through the same CLI.\n' +
-      'Then re-record the finish outcome. The step is NOT complete until the recorded ' +
-      'PR carries an authored body.'
+      'The engine-owned publication coordinator will re-observe the edited PR, record completion when authorized, and verify it.'
     );
   }
   if (step === 'finish' && missing === 'recording') {

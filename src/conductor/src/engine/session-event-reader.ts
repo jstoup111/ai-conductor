@@ -1,6 +1,6 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { lstat, realpath, readdir, readFile } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import type { ConductorEvent, SessionObservationScope } from '../types/events.js';
 import { isSessionEventIdentity, SESSION_EVENT_IDENTITY } from '../execution/session-event-identity.js';
@@ -74,6 +74,15 @@ export class SessionEventReader {
 
   private async producerPaths(): Promise<string[]> {
     const root = join(this.projectRoot, SESSION_EVENTS_DIRECTORY);
+    // Refuse a swapped/symlinked ledger root before traversing it.  Producer
+    // paths are authoritative filesystem ownership, not a convenience hint.
+    try {
+      const rootStat = await lstat(root);
+      if (rootStat.isSymbolicLink() || resolve(await realpath(root)) !== resolve(root)) return [];
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
     let dispatches: Dirent[];
     try { dispatches = await this.list(root); } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
@@ -90,7 +99,11 @@ export class SessionEventReader {
       }
       for (const producer of producers) {
         if (producer.isFile() && /^[a-z][a-z0-9-]{0,63}\.jsonl$/.test(producer.name)) {
-          paths.push(join(dispatchPath, producer.name));
+          const path = join(dispatchPath, producer.name);
+          try {
+            const canonical = await realpath(path);
+            if (within(root, canonical)) paths.push(canonical);
+          } catch { /* producer disappeared or is unresolvable; skip it */ }
         }
       }
     }
@@ -154,8 +167,14 @@ export class SessionEventReader {
   /** Directory ownership is authoritative; a producer cannot claim another dispatch or feature. */
   private belongsToContainingProducer(path: string, event: SessionProducerEvent): boolean {
     if (event.dispatchId !== basename(dirname(path))) return false;
-    return event.scope.kind !== 'feature' || this.featureSlug === undefined || event.scope.featureSlug === this.featureSlug;
+    if (this.featureSlug === undefined) return event.scope.kind === 'project';
+    return event.scope.kind === 'feature' && event.scope.featureSlug === this.featureSlug;
   }
+}
+
+function within(root: string, candidate: string): boolean {
+  const offset = relative(root, candidate);
+  return offset !== '..' && !offset.startsWith(`..${sep}`) && !isAbsolute(offset);
 }
 
 function isSessionProducerEvent(value: unknown): value is SessionProducerEvent {

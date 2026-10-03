@@ -1,5 +1,6 @@
 import { realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { isSessionEventIdentity } from './session-event-identity.js';
 
 /** The explicit owner of a managed session; cwd is deliberately not an input. */
 export type ManagedSessionScope =
@@ -58,7 +59,7 @@ export async function prepareManagedSessionContext(
   }
   if (
     !isScope(input.scope) ||
-    !nonEmpty(input.dispatchId) ||
+    !isSessionEventIdentity(input.dispatchId) ||
     !nonEmpty(input.provider) ||
     !nonEmpty(input.projectRoot) ||
     !nonEmpty(input.worktreeRoot) ||
@@ -140,5 +141,5 @@ function nonEmpty(value: unknown): value is string {
 }
 
 function isScope(value: ManagedSessionScope | undefined): value is ManagedSessionScope {
-  return value?.kind === 'project' || (value?.kind === 'feature' && nonEmpty(value.featureSlug));
+  return value?.kind === 'project' || (value?.kind === 'feature' && isSessionEventIdentity(value.featureSlug));
 }

@@ -60,6 +60,7 @@ import {
   prepareManagedSessionContext,
   type ManagedSessionContext,
 } from './execution/managed-session-context.js';
+import { prepareManagedSessionObservationDestination } from './execution/managed-session-preparation.js';
 import { createSessionEventIdentity } from './execution/session-event-identity.js';
 import { createProviderAvailability, restoreProviderAvailabilityFromDaemonLedger } from './engine/provider-availability.js';
 import {
@@ -1514,7 +1515,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       rootEvents: events,
       sessionId,
       visualizer,
-      providerExecution: { ...providerExecution, managedSessionContext },
+      providerExecution: {
+        ...providerExecution,
+        managedSessionContext,
+        prepareManagedSessionObservation: async ({ provider, context, readOnlyReview }: { provider: string; context: ManagedSessionContext; readOnlyReview: boolean }) =>
+          prepareManagedSessionObservationDestination({ provider, context, readOnlyReview, probe: async () => ({ producerWrite: 'allowed', protectedWrites: 'refused' }) }),
+      },
       log: featureLog,
       stop,
     };
@@ -2208,7 +2214,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         worktreeBase,
         events,
         log,
-        startFeatureEventScope: (worktreePath) => startFeatureEventPersistence(worktreePath, events),
+        startFeatureEventScope: (worktreePath, featureSlug) => startFeatureEventPersistence(worktreePath, events, featureSlug),
       }),
       // Task 14: wire the filesystem watcher for HALT marker removal.
       // When watch is false, the watcher is undefined and the daemon falls

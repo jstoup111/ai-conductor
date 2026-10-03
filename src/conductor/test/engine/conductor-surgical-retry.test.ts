@@ -306,6 +306,7 @@ describe('conductor/surgical-retry', () => {
       expect(hint).toContain('github-operation --request-file');
       // Never re-open implementation: the code and the plan are done.
       expect(hint).not.toContain('Finish the work now');
+      expect(hint).not.toMatch(/re-record|record the finish outcome/i);
       expect(hint).toMatch(/do not (re-?implement|change code)/i);
     });
 

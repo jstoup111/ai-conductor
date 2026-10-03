@@ -36,7 +36,7 @@ describe('managed observation destination preparation', () => {
     expect(probe).toHaveBeenCalledWith(expect.objectContaining({
       producerRoot: managed.producerRoot,
       protectedPaths: [
-        join(managed.worktreeRoot, 'source'),
+        managed.worktreeRoot,
         join(managed.worktreeRoot, '.pipeline', 'sealed'),
         join(managed.worktreeRoot, '.pipeline', 'unrelated'),
         join(managed.projectRoot, '.codex'),

@@ -1680,6 +1680,7 @@ export class DefaultStepRunner implements StepRunner {
             withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
             prepareCandidateSelfHost:
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+            prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
             onAttempt: this.providerAttempt,
             warn: this.providerWarn,
             options,
@@ -1782,6 +1783,7 @@ export class DefaultStepRunner implements StepRunner {
           withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
           prepareCandidateSelfHost:
             this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+          prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
           onAttempt: this.providerAttempt,
           warn: this.providerWarn,
           options,

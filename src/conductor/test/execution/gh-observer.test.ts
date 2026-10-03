@@ -99,20 +99,20 @@ describe('runObservedGh', () => {
 });
 
 describe('runGhObserverFromEnvironment', () => {
-  it('refuses forgeable legacy context fields before creating a producer or forwarding', async () => {
+  it('refuses forged attribution but forwards the original transport once', async () => {
     const transport = vi.fn<GhObserverTransport>();
     const createProducer = vi.fn();
 
-    await expect(runGhObserverFromEnvironment({
+    await runGhObserverFromEnvironment({
       CONDUCT_GH_REAL_EXECUTABLE: '/usr/bin/gh',
       CONDUCT_SESSION_EVENT_ROOT: '/attacker/events',
       CONDUCT_SESSION_DISPATCH_ID: 'forged-dispatch',
       CONDUCT_SESSION_PROVIDER: 'forged-provider',
       CONDUCT_SESSION_FEATURE_SLUG: 'forged-feature',
-    }, { argv: ['issue', 'create'], transport, createProducer })).rejects.toThrow('provisioned managed-session context');
+    }, { argv: ['issue', 'create'], transport, createProducer });
 
     expect(createProducer).not.toHaveBeenCalled();
-    expect(transport).not.toHaveBeenCalled();
+    expect(transport).toHaveBeenCalledOnce();
   });
 
   it('validates the serialized engine context then forwards its original command once', async () => {

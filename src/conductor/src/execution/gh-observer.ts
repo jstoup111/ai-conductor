@@ -152,8 +152,19 @@ export async function runGhObserverFromEnvironment(
 ): Promise<GhObserverTerminalResult> {
   const realExecutable = environment[GH_OBSERVER_REAL_EXECUTABLE_ENV];
   const context = await validatedManagedContext(environment);
-  if (!realExecutable || context === undefined) {
-    throw new Error('gh observer requires provisioned managed-session context');
+  // Observation must never become a new transport denial. A forged or stale
+  // context records no attribution, but the already-resolved original command
+  // still runs exactly once.
+  if (!realExecutable || !isAbsolute(realExecutable)) {
+    throw new Error('gh: command not found');
+  }
+  if (context === undefined) {
+    (dependencies.diagnostic ?? ((message) => process.stderr.write(`${message}\n`)))('managed gh observation degraded: invalid session context');
+    return (dependencies.transport ?? runRealGhTransport)(realExecutable, dependencies.argv ?? process.argv.slice(2), {
+      stdin: dependencies.stdin ?? process.stdin,
+      stdout: dependencies.stdout ?? process.stdout,
+      stderr: dependencies.stderr ?? process.stderr,
+    });
   }
   return runObservedGh({
     realExecutable,

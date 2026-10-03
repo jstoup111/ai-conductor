@@ -24,7 +24,7 @@ async function fixture(): Promise<{ root: string; producer: string; canonical: s
 
 const occurrence = {
   type: 'session_command_refused', eventId: 'event-1', sourceTime: '2026-10-02T12:00:00.000Z',
-  dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'feature', featureSlug: 'feature-a' }, subcommand: 'finish-record',
+  dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'project' }, subcommand: 'finish-record',
 } as const;
 
 async function canonicalOccurrences(path: string): Promise<Array<{ eventId?: unknown }>> {

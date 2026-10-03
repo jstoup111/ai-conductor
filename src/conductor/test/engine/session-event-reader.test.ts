@@ -31,7 +31,7 @@ describe('SessionEventReader', () => {
     const expected = { ...event, note: 'café' };
     const record = JSON.stringify(expected);
     await writeFile(producer, record);
-    const reader = new SessionEventReader({ projectRoot: root });
+    const reader = new SessionEventReader({ projectRoot: root, featureSlug: 'feature-a' });
 
     expect(await reader.read()).toEqual([]);
     await appendFile(producer, '\n');
@@ -45,7 +45,7 @@ describe('SessionEventReader', () => {
   it('reports an incomplete record only when the producer is settled without exposing its contents', async () => {
     const { root, producer } = await fixture();
     await writeFile(producer, JSON.stringify(event));
-    const reader = new SessionEventReader({ projectRoot: root });
+    const reader = new SessionEventReader({ projectRoot: root, featureSlug: 'feature-a' });
 
     expect(await reader.read()).toEqual([]);
     expect(await reader.drain()).toEqual([expect.objectContaining({ kind: 'diagnostic', code: 'incomplete-record' })]);
@@ -60,10 +60,17 @@ describe('SessionEventReader', () => {
       JSON.stringify(event),
       '',
     ].join('\n'));
-    const reader = new SessionEventReader({ projectRoot: root });
+    const reader = new SessionEventReader({ projectRoot: root, featureSlug: 'feature-a' });
 
     const records = await reader.read();
     expect(records.map((record) => record.kind === 'diagnostic' ? record.code : record.event.eventId))
       .toEqual(['malformed-json', 'invalid-attribution', 'record-too-large', 'event-1']);
+  });
+
+  it('refuses forged feature scope', async () => {
+    const { root, producer } = await fixture();
+    await writeFile(producer, `${JSON.stringify({ ...event, scope: { kind: 'feature', featureSlug: 'other-feature' } })}\n`);
+    const reader = new SessionEventReader({ projectRoot: root, featureSlug: 'feature-a' });
+    expect(await reader.read()).toEqual([expect.objectContaining({ kind: 'diagnostic', code: 'invalid-attribution' })]);
   });
 });

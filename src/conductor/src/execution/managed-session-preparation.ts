@@ -57,7 +57,9 @@ export async function prepareManagedGhObservation(
     await mkdir(wrapperDirectory, { recursive: true });
     await writeFile(
       join(wrapperDirectory, GH_OBSERVER_EXECUTABLE_NAME),
-      renderGhObserverAsset(input.observerModuleUrl ?? new URL('./gh-observer.js', import.meta.url).href),
+      // tsup preserves this executable entry under dist/execution even when
+      // this module itself is folded into a dist-root chunk.
+      renderGhObserverAsset(input.observerModuleUrl ?? new URL('./execution/gh-observer.js', import.meta.url).href),
       { mode: 0o755 },
     );
     await chmod(join(wrapperDirectory, GH_OBSERVER_EXECUTABLE_NAME), 0o755);
@@ -164,7 +166,7 @@ export async function prepareManagedSessionObservationDestination(
 
 function protectedPaths(context: ManagedSessionContext): readonly string[] {
   return [
-    `${context.worktreeRoot}/source`,
+    context.worktreeRoot,
     `${context.worktreeRoot}/.pipeline/sealed`,
     `${context.worktreeRoot}/.pipeline/unrelated`,
     `${context.projectRoot}/.codex`,

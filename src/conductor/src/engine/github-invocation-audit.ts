@@ -28,6 +28,7 @@ import { join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { GITHUB_OPERATION_REGISTRY, type GithubOperationName } from './github-operations.js';
 import {
+  auditManagedSessionInstructionSource,
   auditSessionCommandSource,
   discoverShippedSessionCommandSources,
 } from './session-command-audit.js';
@@ -855,7 +856,11 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
   const sessionRepositoryRoot = existsSync(join(conductorRoot, 'src', 'engine'))
     ? conductorRoot
     : join(conductorRoot, '..', '..');
-  for (const instruction of discoverShippedSessionCommandSources(sessionRepositoryRoot).flatMap(auditSessionCommandSource)) {
+  const sessionSources = discoverShippedSessionCommandSources(sessionRepositoryRoot);
+  for (const instruction of sessionSources.flatMap((source) => [
+    ...auditSessionCommandSource(source),
+    ...auditManagedSessionInstructionSource(source),
+  ])) {
     if (!instruction.reason) continue;
     findings.push({
       file: instruction.file,

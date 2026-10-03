@@ -139,7 +139,9 @@ export class CloseoutEventTail {
   }
 
   private async projectSessionRecords(settled: boolean): Promise<void> {
-    for (const record of await (settled ? this.sessionReader.drain() : this.sessionReader.read())) {
+    // acknowledge() shifts the reader's pending queue; iterate a snapshot so
+    // every record in a batch is persisted and advances its own offset.
+    for (const record of [...await (settled ? this.sessionReader.drain() : this.sessionReader.read())]) {
       if (record.kind === 'event') {
         await this.emitEvent(record.event);
       } else {

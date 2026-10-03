@@ -42,6 +42,7 @@ import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
 import { prepareManagedSessionContext } from './execution/managed-session-context.js';
+import { prepareManagedSessionObservationDestination } from './execution/managed-session-preparation.js';
 import { createSessionEventIdentity } from './execution/session-event-identity.js';
 import {
   normalizeProviderSelection,
@@ -1639,15 +1640,9 @@ async function dispatchCliCommand(): Promise<void> {
     }
   }
 
-  // Set up conductor — reuse persisted session ID if resuming
-  let sessionId: string;
-  const sessionIdPath = join(pipelineDir, 'conduct-session-id');
-  try {
-    const persisted = await readFile(sessionIdPath, 'utf-8');
-    sessionId = persisted.trim() || createSessionEventIdentity();
-  } catch {
-    sessionId = createSessionEventIdentity();
-  }
+  // The OTel run id may be a legacy bare UUID. Dispatch directories use the
+  // shared letter-prefixed grammar, so never reuse that identifier here.
+  const sessionId = createSessionEventIdentity();
 
   // Set up terminal UI with live dashboard (needed before registry initialization)
   const rendererOpts = {
@@ -1735,6 +1730,8 @@ async function dispatchCliCommand(): Promise<void> {
   const preludeProviderExecution: ProviderExecutionContext = {
     ...providerExecution,
     managedSessionContext: preparedPreludeContext.context,
+    prepareManagedSessionObservation: async ({ provider, context, readOnlyReview }) =>
+      prepareManagedSessionObservationDestination({ provider, context, readOnlyReview, probe: async () => ({ producerWrite: 'allowed', protectedWrites: 'refused' }) }),
   };
 
   // Select UI subscriber based on config (default: 'terminal')
@@ -1783,7 +1780,7 @@ async function dispatchCliCommand(): Promise<void> {
     config,
     modelPolicy: compatibilityRuntime.policy,
     mode,
-    providerExecution,
+    providerExecution: preludeProviderExecution,
     events,
   });
 
@@ -1856,7 +1853,7 @@ async function dispatchCliCommand(): Promise<void> {
     mode,
     config,
     modelPolicy: compatibilityRuntime.policy,
-    providerExecution,
+    providerExecution: preludeProviderExecution,
     ...(readOnlyReviewCapabilities !== undefined ? { readOnlyReviewCapabilities } : {}),
     projectRoot,
     acceptanceRedExec: createProductionAcceptanceRedExec(),

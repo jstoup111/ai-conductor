@@ -161,8 +161,8 @@ describe('executeProviderCandidates', () => {
       options: { prompt: 'build', cwd: '/changed-child-cwd', managedSessionContext: context },
     });
 
-    expect(codexInvoke.mock.calls[0]).toMatchObject([{ managedSessionContext: context, cwd: '/changed-child-cwd' }]);
-    expect(claudeInvoke.mock.calls[0]).toMatchObject([{ managedSessionContext: context, cwd: '/changed-child-cwd' }]);
+    expect(codexInvoke.mock.calls[0]).toMatchObject([{ managedSessionContext: { ...context, provider: 'codex' }, cwd: '/changed-child-cwd' }]);
+    expect(claudeInvoke.mock.calls[0]).toMatchObject([{ managedSessionContext: { ...context, provider: 'claude' }, cwd: '/changed-child-cwd' }]);
   });
 
   it('suppresses session resume for a Pi adapter when its descriptor omits supportsSessionResume', async () => {

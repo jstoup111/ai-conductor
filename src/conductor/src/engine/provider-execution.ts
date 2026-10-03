@@ -343,6 +343,7 @@ export interface ProviderExecutionContext {
   diagnosticLog?: (message: string) => void;
   /** Immutable identity established by the daemon before provider dispatch. */
   managedSessionContext?: ManagedSessionContext;
+  prepareManagedSessionObservation?: ExecuteProviderCandidatesInput['prepareManagedSessionObservation'];
 }
 
 function hasRecoveryPrecedence(result: InvokeResult): boolean {
@@ -902,13 +903,16 @@ export async function executeProviderCandidates({
       : abortSignal !== undefined
         ? { ...options, abortSignal, ...(descriptorTrust === undefined ? {} : { trustProjectFiles: descriptorTrust }) }
         : { ...options, ...(descriptorTrust === undefined ? {} : { trustProjectFiles: descriptorTrust }) };
+    const ownedCandidateOptions = candidateOptions.managedSessionContext === undefined
+      ? candidateOptions
+      : { ...candidateOptions, managedSessionContext: { ...candidateOptions.managedSessionContext, provider: providerKey } };
     const candidate: ProviderCandidate = {
       step,
       providerKey,
       model: resolved.model,
       effort: resolved.effort,
     };
-    let candidateObserver: ReturnType<NonNullable<typeof candidateOptions.providerStreamObserverForCandidate>> | undefined;
+    let candidateObserver: ReturnType<NonNullable<typeof ownedCandidateOptions.providerStreamObserverForCandidate>> | undefined;
     let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
     let selfHost: SelfHostInvocation | undefined;
     let setupUnavailable: ProviderSetupUnavailable | undefined;
@@ -930,15 +934,15 @@ export async function executeProviderCandidates({
       invocationResult ??= (async () => {
         const candidateInvocationOptions = candidateObserver
           ? {
-              ...candidateOptions,
+              ...ownedCandidateOptions,
               ...overrides,
               streamConsumer: candidateObserver,
               onProviderStream: candidateObserver.onProviderStream,
               ...(selfHost ? { selfHost } : {}),
             }
           : selfHost
-            ? { ...candidateOptions, ...overrides, selfHost }
-            : { ...candidateOptions, ...overrides };
+            ? { ...ownedCandidateOptions, ...overrides, selfHost }
+            : { ...ownedCandidateOptions, ...overrides };
         invocation = await invokeProviderCandidate({
           providerKey,
           runtime,
@@ -988,26 +992,26 @@ export async function executeProviderCandidates({
         // structurally cannot carry machine envelopes, so it is not merely
         // inert — it must never be created or attached. Create it before
         // preparation so its close boundary survives preparation failures.
-        candidateObserver = candidateOptions.interactive
+        candidateObserver = ownedCandidateOptions.interactive
           ? undefined
-          : candidateOptions.providerStreamObserverForCandidate?.(providerKey);
+          : ownedCandidateOptions.providerStreamObserverForCandidate?.(providerKey);
         try {
           selfHost = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index, member: auxiliaryMember });
           // Only a native provider adapter owns a managed child process. Test
           // runtimes and policy-only providers receive the context as data but
           // must not acquire a filesystem wrapper as a side effect.
-          if (candidateOptions.managedSessionContext && runtime.provider.lifecycleCapability?.synchronousSpawnPermit === true) {
+          if (ownedCandidateOptions.managedSessionContext && runtime.provider.lifecycleCapability?.synchronousSpawnPermit === true) {
             await prepareManagedGhObservation({
-              context: candidateOptions.managedSessionContext,
+              context: ownedCandidateOptions.managedSessionContext,
             });
           }
-          if (candidateOptions.readOnlyReview && candidateOptions.managedSessionContext && prepareManagedSessionObservation) {
+          if (ownedCandidateOptions.readOnlyReview && ownedCandidateOptions.managedSessionContext && prepareManagedSessionObservation) {
             await prepareManagedSessionObservation({
               provider: providerKey,
-              context: candidateOptions.managedSessionContext,
+              context: ownedCandidateOptions.managedSessionContext,
               readOnlyReview: true,
             });
-          } else if (candidateOptions.readOnlyReview && candidateOptions.managedSessionContext) {
+          } else if (ownedCandidateOptions.readOnlyReview && ownedCandidateOptions.managedSessionContext) {
             throw new ProviderSetupUnavailableError({
               provider: providerKey,
               capability: 'managed-observation-destination',

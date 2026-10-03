@@ -12,6 +12,7 @@ import type {
   SessionObservationScope,
 } from '../types/events.js';
 import { createSessionEventIdentity, isSessionEventIdentity } from './session-event-identity.js';
+import { validateManagedSessionProducerPath } from './managed-session-context.js';
 
 /** PIPE_BUF-safe ceiling for one producer-owned JSONL record, including its newline. */
 export const MAX_SESSION_EVENT_RECORD_BYTES = 4_096;
@@ -105,6 +106,8 @@ export class SessionEventProducer {
       throw new SessionEventProducerError('record-too-large');
     }
     try {
+      const validated = await validateManagedSessionProducerPath(this.context, this.path);
+      if (!validated.ok || validated.path !== this.path) throw new SessionEventProducerError('producer-path-invalid');
       this.appendRecord(this.path, record);
       return this.path;
     } catch {

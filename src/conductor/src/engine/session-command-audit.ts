@@ -97,15 +97,10 @@ export function discoverSessionCommandSources(repositoryRoot: string): SessionCo
  * every command in a listed source is still discovered from its AST/text.
  */
 export function discoverShippedSessionCommandSources(repositoryRoot: string): SessionCommandSource[] {
-  const shipped = new Set([
-    'engine/conductor.ts',
-    'engine/step-runners.ts',
-    'skills/bootstrap/SKILL.md',
-    'skills/conduct/SKILL.md',
-    'skills/finish/SKILL.md',
-    'skills/pr/SKILL.md',
-  ]);
-  return discoverSessionCommandSources(repositoryRoot).filter((source) => shipped.has(source.file));
+  // Kept as the production-named entry point for the established boundary
+  // audit.  Do not turn this into an occurrence registry: every executable
+  // engine prompt and shipped skill must be discovered as it is introduced.
+  return discoverSessionCommandSources(repositoryRoot);
 }
 
 function sourceLocation(source: string, offset: number): { line: number; column: number } {
