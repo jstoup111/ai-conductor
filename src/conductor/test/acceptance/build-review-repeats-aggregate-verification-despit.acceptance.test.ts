@@ -53,10 +53,6 @@ beforeEach(async () => {
     join(fixtureRoot, 'scripts', 'run-vitest.mjs'),
   );
   await copyFile(
-    join(CONDUCTOR_ROOT, 'scripts', 'run-vitest-shards.mjs'),
-    join(fixtureRoot, 'scripts', 'run-vitest-shards.mjs'),
-  );
-  await copyFile(
     join(CONDUCTOR_ROOT, 'scripts', 'vitest-temp.mjs'),
     join(fixtureRoot, 'scripts', 'vitest-temp.mjs'),
   );

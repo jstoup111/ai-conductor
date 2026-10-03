@@ -78,7 +78,7 @@ describe('Story 1: one command discovers the complete smoke tier', () => {
 
     const config = await readFile(resolve(CONDUCTOR_ROOT, 'vitest.smoke.config.ts'), 'utf8');
     expect(config).toMatch(/include\s*:\s*\[[^\]]*['"]test\/smoke\/\*\*['"][^\]]*['"]\*\*\/\*\.smoke\.test\.ts['"][^\]]*\]/s);
-    expect(config).toMatch(/exclude\s*:\s*\[\s*\]/);
+    expect(config).toMatch(/exclude\s*:\s*\[\s*['"]\*\*\/\.vitest-tmp\/\*\*['"]\s*\]/);
 
     const discovered = smokeFiles(await filesBelow(resolve(CONDUCTOR_ROOT, 'test')));
     expect(discovered).toHaveLength(16);

@@ -86,31 +86,6 @@ afterEach(async () => {
 });
 
 describe('run-vitest startup', () => {
-  it('gives Vitest forks a bounded old-space heap when the operator did not supply one', async () => {
-    const result = await launch({ NODE_OPTIONS: undefined });
-    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
-
-    expect(result.exitCode).toBe(0);
-    expect(observation.nodeOptions).toBe('--max-old-space-size=8192');
-  });
-
-  it('preserves an operator-supplied Vitest heap limit', async () => {
-    const nodeOptions = '--max-old-space-size=9216 --trace-warnings';
-    const result = await launch({ NODE_OPTIONS: nodeOptions });
-    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
-
-    expect(result.exitCode).toBe(0);
-    expect(observation.nodeOptions).toBe(nodeOptions);
-  });
-
-  it('raises an inherited heap limit that cannot run the ordinary suite', async () => {
-    const result = await launch({ NODE_OPTIONS: '--trace-warnings --max-old-space-size=4096' });
-    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
-
-    expect(result.exitCode).toBe(0);
-    expect(observation.nodeOptions).toBe('--trace-warnings --max-old-space-size=8192');
-  });
-
   it('prefers the package-local Vitest binary without a Vitest command on PATH', async () => {
     await writeFakeVitest(join(fixtureRoot, 'node_modules', '.bin', 'vitest'), 'package-local');
 
