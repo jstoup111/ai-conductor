@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 
 import {
   PRD_AUDIT_JUDGMENT_CONTRACT_VERSION,
+  isPrdAuditNoOwnerOrdinal,
   type PrdAuditJudgment,
 } from './prd-audit-contract.js';
 
@@ -97,7 +98,7 @@ function validCriterionJudgment(value: unknown): boolean {
 
 function validNoOwnerObservation(value: unknown): boolean {
   return isRecord(value) && exactKeys(value, ['presentationOrdinal', 'grade', 'evidence', 'rationale', 'intentRelation']) &&
-    nonEmptyText(value.presentationOrdinal) && value.grade === 'OVER_SCOPE' && nonEmptyText(value.evidence) && nonEmptyText(value.rationale) &&
+    nonEmptyText(value.presentationOrdinal) && isPrdAuditNoOwnerOrdinal(value.presentationOrdinal) && value.grade === 'OVER_SCOPE' && nonEmptyText(value.evidence) && nonEmptyText(value.rationale) &&
     (value.intentRelation === 'within' || value.intentRelation === 'outside-harmless' || value.intentRelation === 'outside-visible');
 }
 
@@ -105,7 +106,8 @@ function validJudgment(value: unknown): value is PrdAuditJudgment {
   return isRecord(value) && exactKeys(value, ['version', 'criterionJudgments', 'noOwnerObservations']) &&
     value.version === PRD_AUDIT_JUDGMENT_CONTRACT_VERSION && Array.isArray(value.criterionJudgments) &&
     value.criterionJudgments.every(validCriterionJudgment) && Array.isArray(value.noOwnerObservations) &&
-    value.noOwnerObservations.every(validNoOwnerObservation);
+    value.noOwnerObservations.every(validNoOwnerObservation) &&
+    new Set(value.noOwnerObservations.map((observation) => observation.presentationOrdinal)).size === value.noOwnerObservations.length;
 }
 
 function validRecordedDisposition(value: unknown): value is PrdAuditRecordedDisposition {

@@ -2904,7 +2904,16 @@ export class Conductor {
     try {
       if (step === 'prd_audit') {
         const absentReason = `prd_audit dispatch ${expectedRunId ?? 'current attempt'} produced no terminal typed verdict; expected ${PRD_AUDIT_VERDICT_PATH}`;
-        if (dispatchOutput === 'structured-result-missing' || dispatchOutput?.startsWith('structured-result-rejected:')) {
+        if (dispatchOutput?.startsWith('structured-result-rejected:')) {
+          const diagnostics = dispatchOutput.slice('structured-result-rejected:'.length).trim();
+          return {
+            done: false,
+            routeClass: 'absent',
+            retrySignal: 'structured-result-rejected',
+            reason: `prd_audit dispatch ${expectedRunId ?? 'current attempt'} produced an incomplete judgment${diagnostics ? `: ${diagnostics}` : ''}`,
+          };
+        }
+        if (dispatchOutput === 'structured-result-missing') {
           return { done: false, routeClass: 'absent', retrySignal: 'structured-result-missing', reason: absentReason };
         }
         const stored = await readPrdAuditVerdict(this.projectRoot);
@@ -13334,7 +13343,7 @@ export class Conductor {
               }
               const reason =
                 cls.kind === 'invalid-evidence'
-                  ? `prd-audit halted: current typed output is unavailable — ${cls.summary}`
+                  ? `prd-audit halted: current typed output is unavailable — ${lastError ?? cls.summary}`
                   : cls.kind === 'impl-only'
                   ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${prdAuditRemediationLapCap}): ${cls.summary}`
                   : `prd-audit halted: product/plan gap needs human DECIDE — ${cls.summary}`;

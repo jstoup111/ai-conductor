@@ -8,7 +8,7 @@ export function formatPrdAuditNoOwnerOrdinal(ordinal: number): string {
   return `NC-${ordinal}`;
 }
 
-/** Accept the retired dotted presentation form while emitting only NC-<n>. */
+/** Accept the engine-minted form plus the retired dotted form in historical evidence. */
 export function isPrdAuditNoOwnerOrdinal(value: string): boolean {
   return /^NC[-.]\d+$/i.test(value);
 }

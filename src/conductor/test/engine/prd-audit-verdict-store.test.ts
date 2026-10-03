@@ -122,4 +122,31 @@ describe('PRD audit typed verdict store', () => {
       kind: 'unreadable', reason: expect.stringContaining('invalid evidence'),
     });
   });
+
+  it.each([
+    ['a forged criterion ordinal', 'S1.1'],
+    ['a duplicate engine ordinal', 'NC-1'],
+  ])('rejects %s in persisted no-owner evidence', async (_label, presentationOrdinal) => {
+    const dir = await mkdtemp(join(tmpdir(), 'prd-audit-store-invalid-no-owner-'));
+    dirs.push(dir);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const noOwner = {
+      presentationOrdinal,
+      grade: 'OVER_SCOPE',
+      evidence: 'Visible unowned behavior.',
+      rationale: 'The behavior has no criterion owner.',
+      intentRelation: 'outside-visible',
+    };
+    const observations = presentationOrdinal === 'NC-1' ? [noOwner, { ...noOwner }] : [noOwner];
+    await writeFile(join(dir, PRD_AUDIT_VERDICT_PATH), JSON.stringify({
+      ...validEvidence,
+      attemptId: 'invalid-no-owner',
+      codeStamp: 'reviewed-head',
+      judgment: { ...validEvidence.judgment, noOwnerObservations: observations },
+    }));
+
+    await expect(readPrdAuditVerdict(dir)).resolves.toMatchObject({
+      kind: 'unreadable', reason: expect.stringContaining('invalid evidence'),
+    });
+  });
 });

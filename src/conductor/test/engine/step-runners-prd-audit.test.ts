@@ -10,6 +10,7 @@ import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/executi
 import { CodexProvider } from '../../src/execution/codex-provider.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import type { GitRunner } from '../../src/engine/rebase.js';
 import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
@@ -56,6 +57,7 @@ function runner(
   native = true,
   providerExecution?: Pick<ProviderExecutionContext, 'prepareCandidateSelfHost'>,
   mode: 'auto' | 'interactive' = 'auto',
+  gitRunner?: GitRunner,
 ) {
   const invoke = vi.fn(async (_: InvokeOptions) => result);
   const provider = { name: 'claude', invoke } as unknown as LLMProvider;
@@ -70,6 +72,7 @@ function runner(
     mode, featureDesc: 'feature',
     config: { llm_provider: 'claude', steps: { prd_audit: { llm_provider: 'claude' } } },
     configuredProviders: ['claude'], providerRuntimes: runtimes, sessionStore,
+    ...(gitRunner === undefined ? {} : { gitRunner }),
     ...(providerExecution === undefined ? {} : {
       providerExecution: { configuredProviders: ['claude'], runtimes, sessions: sessionStore, ...providerExecution },
     }),
@@ -228,6 +231,25 @@ describe('PRD audit typed provider dispatch', () => {
       judgment: { criterionJudgments: [expect.objectContaining({ criterionId: 'S1.1' })] },
     });
     expect(persisted.judgment.criterionJudgments).not.toContainEqual(expect.objectContaining({ criterionId: 'S999.1' }));
+  });
+
+  it('fails before persistence when the reviewed code stamp is unavailable', async () => {
+    const root = await fixture();
+    const unavailableHead: GitRunner = async () => ({ stdout: '', stderr: 'not a git worktree', exitCode: 128 });
+    const { runner: subject } = runner(
+      root,
+      { success: true, output: 'done', finalStructuredResult: passingJudgment } as InvokeResult,
+      true,
+      undefined,
+      'auto',
+      unavailableHead,
+    );
+
+    await expect(subject.run('prd_audit', { complexity_tier: 'S' })).resolves.toMatchObject({
+      success: false,
+      output: expect.stringContaining('reviewed code stamp unavailable'),
+    });
+    await expectNoVerdict(root);
   });
 
   it.each([

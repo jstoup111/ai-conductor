@@ -91,7 +91,7 @@ describe('typed PRD-audit scope routing', () => {
       },
       diagnostics: input.diagnostics ?? [],
       recordedDispositions: [],
-    }, { attemptId: 'typed-scope', codeStamp: null });
+    }, { attemptId: 'typed-scope', codeStamp: 'reviewed-head' });
   }
 
   it('records typed within-intent and outside-harmless scope observations without operator authority', async () => {

@@ -90,7 +90,6 @@ import {
 import {
   PRD_AUDIT_REPORT_PATH,
   PRD_AUDIT_VERDICT_PATH,
-  persistPrdAuditVerdict,
   readPrdAuditVerdict,
   type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
@@ -2560,22 +2559,6 @@ function staleVerdictRunIdentityResult(
   };
 }
 
-async function writePrdAuditCodeStamp(dir: string, ctx: CompletionContext): Promise<void> {
-  const stored = await readPrdAuditVerdict(dir);
-  // The runner stamps the original judgment at dispatch.  A completion check
-  // may fill the historical missing-stamp case, but it must never turn a
-  // preserved resume/replay into a different judge identity by advancing that
-  // stamp to the current HEAD.
-  if (stored.kind !== 'present' || stored.value.codeStamp !== null) return;
-  const codeStamp = await stampCode(ctx);
-  await persistPrdAuditVerdict(dir, {
-    complete: stored.value.complete,
-    judgment: stored.value.judgment,
-    diagnostics: stored.value.diagnostics,
-    recordedDispositions: stored.value.recordedDispositions,
-  }, { attemptId: stored.value.attemptId, codeStamp }).catch(() => {});
-}
-
 /** Shared code-stamp-first then dispatch-identity decision for every PRD reader. */
 export async function prdAuditVerdictIdentity(
   dir: string,
@@ -3232,6 +3215,13 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: `${PRD_AUDIT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${ctx.attemptRunId}`,
       };
     }
+    if (stored.value.codeStamp === null) {
+      return {
+        done: false,
+        routeClass: 'absent',
+        reason: `${PRD_AUDIT_VERDICT_PATH} has no reviewed code stamp — scoring 'not-current output'; a fresh audit is required`,
+      };
+    }
     if (!stored.value.complete) {
       return {
         done: false,
@@ -3259,7 +3249,6 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         };
       }
     }
-    await writePrdAuditCodeStamp(dir, ctx);
     return {
       done: true,
       verdictFreshness: await verdictFreshnessFor(

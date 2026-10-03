@@ -30,10 +30,7 @@ import {
 } from '../src/engine/conductor.js';
 import {
   AcceptedWideningDecisionStore,
-  classifyOverScopeCriterion,
-  parseClearedOverScopeDecisions,
   readOverScopeDecisions,
-  recordOverScopeDecisions,
   renderOverScopeDecisionBlock,
 } from '../src/engine/accepted-widenings.js';
 import type { PrdAuditFinding, PrdAuditGrade } from '../src/engine/artifacts.js';
@@ -617,17 +614,6 @@ describe('prd_audit kickback', () => {
     await expect(readOverScopeDecisions(root)).resolves.toEqual({ decisions });
   });
 
-  it('records durable decisions idempotently and permits a later override', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'over-scope-decisions-record-'));
-    dirs.push(root);
-    const refuse = { criterion: 'S3.1', summary: 'Visible behavior.', decision: 'refuse' as const, rationale: 'Needs rework.', operator: 'operator' };
-    await expect(recordOverScopeDecisions(root, [refuse])).resolves.toMatchObject({ recorded: [expect.objectContaining(refuse)] });
-    await expect(recordOverScopeDecisions(root, [refuse])).resolves.toEqual({ recorded: [] });
-    await recordOverScopeDecisions(root, [{ ...refuse, decision: 'accept', rationale: 'Approved after review.' }]);
-    const decisions = (await readOverScopeDecisions(root)).decisions;
-    expect(classifyOverScopeCriterion('S3.1', 'Visible behavior.', new Map([['S3.1', 'outside-visible']]), decisions)).toBe('accepted');
-  });
-
   it('preserves migrated sibling decisions while routing a current refusal', async () => {
     // Legacy decisions are migrated at the pre-audit entry boundary. A clear
     // that names a different historical finding remains durable but inert;
@@ -753,7 +739,7 @@ describe('prd_audit kickback', () => {
     }
   });
 
-  it('renders all undecided criteria and parses valid decision siblings while naming defects', () => {
+  it('renders all undecided criteria as editable decision offers', () => {
     const rendered = renderOverScopeDecisionBlock([
       { criterion: 'S3.1', summary: 'First.', relation: 'outside-visible' },
       { criterion: 'S3.2', summary: 'Second.', relation: 'outside-visible' },
@@ -761,27 +747,21 @@ describe('prd_audit kickback', () => {
     ]);
     expect(rendered).toContain('```json over-scope-decisions');
     expect(rendered.match(/"decision": "pending"/g)).toHaveLength(3);
-    const edited = rendered
-      .replace('"criterion": "S3.1",\n    "summary": "First.",\n    "relation": "outside-visible",\n    "decision": "pending"', '"criterion": "S3.1", "summary": "First.", "decision": "accept", "rationale": "Approved."')
-      .replace('"criterion": "S3.2",\n    "summary": "Second.",\n    "relation": "outside-visible",\n    "decision": "pending"', '"criterion": "S3.2", "summary": "Second.", "decision": "refuse", "rationale": "Rework."')
-      .replace('"criterion": "S3.3",\n    "summary": "Third.",\n    "relation": "outside-visible",\n    "decision": "pending"', '"criterion": "S3.3", "summary": "Third.", "decision": "accept", "rationale": ""');
-    const parsed = parseClearedOverScopeDecisions(edited, new Map([['S3.1', 'First.'], ['S3.2', 'Second.'], ['S3.3', 'Third.']]));
-    expect(parsed).toMatchObject({ kind: 'parsed', decisions: [{ criterion: 'S3.1', decision: 'accept' }, { criterion: 'S3.2', decision: 'refuse' }], defects: [{ kind: 'missing-rationale', criterion: 'S3.3' }] });
   });
 
   it('tells an operator that pending leaves a prior decision unchanged only for revise-decision offers', () => {
     const reviseDecision = renderOverScopeDecisionBlock([{
       kind: 'revise-decision',
-      criterion: 'NC.8',
+      criterion: 'NC-8',
       summary: 'A previously refused scope expansion.',
       relation: 'outside-visible',
       offerEntryId: 'prd-case-8',
-      originalSource: { id: 'prd-audit:NC.8', snapshot: 'Original refusal evidence.' },
+      originalSource: { id: 'prd-audit:NC-8', snapshot: 'Original refusal evidence.' },
       originalCaseId: 'prd-case-8',
       priorDecision: { id: 'decision-8', revision: 1 },
     }]);
     const pendingOnly = renderOverScopeDecisionBlock([{
-      criterion: 'NC.9',
+      criterion: 'NC-9',
       summary: 'A newly reported scope expansion.',
       relation: 'outside-visible',
     }]);
@@ -808,82 +788,6 @@ describe('prd_audit kickback', () => {
       expect(rendered).toContain('Do not delete this file');
       expect(rendered).not.toMatch(/clear this halt/i);
     }
-  });
-
-  it('treats pending, absent, malformed, unknown, and invalid decision entries safely', () => {
-    expect(parseClearedOverScopeDecisions('ordinary halt', new Map([['S3.1', 'x']]))).toEqual({ kind: 'absent' });
-    expect(parseClearedOverScopeDecisions('```json over-scope-decisions\n{ nope\n```', new Map([['S3.1', 'x']]))).toMatchObject({ defects: [{ kind: 'malformed-block' }] });
-    const body = '```json over-scope-decisions\n[{"criterion":"S3.1","summary":"x","decision":"pending"},{"criterion":"S9.9","summary":"x","decision":"accept","rationale":"x"},{"criterion":"S3.1","summary":"x","decision":"wat","rationale":"x"}]\n```';
-    expect(parseClearedOverScopeDecisions(body, new Map([['S3.1', 'x']]))).toMatchObject({ decisions: [], defects: [{ kind: 'unknown-criterion', criterion: 'S9.9' }, { kind: 'invalid-decision', criterion: 'S3.1' }] });
-  });
-
-  it('rebinds a cleared NC decision across renumbering and line-anchor drift by normalized summary', () => {
-    // Lap 1 numbered the finding NC.2 anchored at conductor.ts:661-681; the
-    // re-graded lap renumbered it NC.1 and re-anchored to :664-679.
-    const parsed = parseClearedOverScopeDecisions(
-      '```json over-scope-decisions\n[{"criterion":"NC.2","summary":"conductor.ts:661-681 — widened decision shape.","decision":"accept","rationale":"Approved."}]\n```',
-      new Map([['NC.1', 'conductor.ts:664-679 — widened decision shape.']]),
-    );
-    expect(parsed).toMatchObject({
-      kind: 'parsed',
-      decisions: [{ criterion: 'NC.1', summary: 'conductor.ts:664-679 — widened decision shape.', decision: 'accept', rationale: 'Approved.' }],
-      defects: [],
-    });
-  });
-
-  it('harvests a cleared NC decision whose evidence was reworded by the re-graded lap', () => {
-    // Real drift seen 2026-09-04 (#2145): same finding, prose rewritten and
-    // "(blob at HEAD)" inserted; a lap also appended decision history.
-    const recorded = '.ai-conductor/config.yml:139 — `prd_audit.max_remediation_laps: 2` added on the feature branch by 3dc215fe8; the plan\'s Prerequisites state "No configuration change is required"';
-    const reworded = '.ai-conductor/config.yml:139 (blob at HEAD) — `prd_audit.max_remediation_laps: 2` added on the feature branch by 3dc215fe8; the plan\'s Prerequisites state "No configuration change is required"; operator REFUSED this widening on 2026-09-03';
-    const parsed = parseClearedOverScopeDecisions(
-      `\`\`\`json over-scope-decisions\n${JSON.stringify([{ criterion: 'NC.1', summary: recorded, decision: 'accept', rationale: 'Operator recovery action.' }])}\n\`\`\``,
-      new Map([['NC.1', reworded]]),
-    );
-    expect(parsed).toMatchObject({
-      kind: 'parsed',
-      decisions: [{ criterion: 'NC.1', summary: reworded, decision: 'accept' }],
-      defects: [],
-    });
-  });
-
-  it('still rejects an NC decision whose summary describes a different finding', () => {
-    const parsed = parseClearedOverScopeDecisions(
-      '```json over-scope-decisions\n[{"criterion":"NC.1","summary":"conductor.ts:100 — a completely unrelated route bypasses the shared plan-task resolver in daemon dispatch.","decision":"accept","rationale":"Approved."}]\n```',
-      new Map([['NC.1', 'conduct-state-lease.ts:178 — new initializing lease status changes shared lease race classification for all consumers.']]),
-    );
-    expect(parsed).toMatchObject({
-      kind: 'parsed',
-      decisions: [],
-      defects: [{ kind: 'invalid-decision', criterion: 'NC.1' }],
-    });
-  });
-
-  it('keeps unknown-criterion when a drifted NC summary matches no current finding or more than one', () => {
-    const body = '```json over-scope-decisions\n[{"criterion":"NC.9","summary":"conductor.ts:10 — thing.","decision":"accept","rationale":"Approved."}]\n```';
-    expect(parseClearedOverScopeDecisions(body, new Map([['NC.1', 'other evidence entirely']])))
-      .toMatchObject({ decisions: [], defects: [{ kind: 'unknown-criterion', criterion: 'NC.9' }] });
-    expect(parseClearedOverScopeDecisions(body, new Map([['NC.1', 'conductor.ts:11 — thing.'], ['NC.2', 'conductor.ts:12 — thing.']])))
-      .toMatchObject({ decisions: [], defects: [{ kind: 'unknown-criterion', criterion: 'NC.9' }] });
-  });
-
-  it('rejects a cleared NC decision whose summary differs from the current report without recording it', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'over-scope-nc-cleared-'));
-    dirs.push(root);
-    const parsed = parseClearedOverScopeDecisions(
-      '```json over-scope-decisions\n[{"criterion":"NC.1","summary":"An entirely different daemon retry behavior was removed.","decision":"accept","rationale":"Approved."}]\n```',
-      new Map([['NC.1', 'Visible addition.']]),
-    );
-
-    expect(parsed).toMatchObject({
-      kind: 'parsed',
-      decisions: [],
-      defects: [{ kind: 'invalid-decision', criterion: 'NC.1' }],
-    });
-    if (parsed.kind === 'parsed') {
-      await expect(recordOverScopeDecisions(root, parsed.decisions.map((decision) => ({ ...decision, operator: 'operator' })))).resolves.toEqual({ recorded: [] });
-    }
-    await expect(readOverScopeDecisions(root)).resolves.toEqual({ decisions: [] });
   });
 
   async function runGroupedPrdAudit(

@@ -552,6 +552,49 @@ describe('engine/conductor', () => {
       expect(result.reason).toContain('.pipeline/prd-audit.json');
     });
 
+    it('names rejected-entry diagnostics in the PRD-audit handshake', async () => {
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+      });
+
+      await expect((conductor as unknown as {
+        verdictDispatchHandshake: (
+          name: StepName,
+          expectedRunId: string,
+          startedAt: number,
+          output: string,
+        ) => Promise<{ done: boolean; retrySignal?: string; reason: string }>;
+      }).verdictDispatchHandshake(
+        'prd_audit',
+        'attempt-17',
+        Date.now(),
+        'structured-result-rejected: criterionJudgments[1].criterion S1.99 does not resolve; criterionJudgments[1].evidence is required',
+      )).resolves.toMatchObject({
+        done: false,
+        retrySignal: 'structured-result-rejected',
+        reason: expect.stringContaining('attempt-17'),
+      });
+      const result = await (conductor as unknown as {
+        verdictDispatchHandshake: (
+          name: StepName,
+          expectedRunId: string,
+          startedAt: number,
+          output: string,
+        ) => Promise<{ reason: string }>;
+      }).verdictDispatchHandshake(
+        'prd_audit',
+        'attempt-17',
+        Date.now(),
+        'structured-result-rejected: criterionJudgments[1].criterion S1.99 does not resolve; criterionJudgments[1].evidence is required',
+      );
+      expect(result.reason).toContain('incomplete judgment');
+      expect(result.reason).toContain('S1.99');
+      expect(result.reason).toContain('evidence is required');
+    });
+
     it('fails closed and warns without throwing when a verdict sidecar is corrupt', async () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       const report = join(dir, '.pipeline/prd-audit.md');
@@ -758,6 +801,53 @@ describe('engine/conductor', () => {
         await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(haltReason + '\n');
       },
     );
+
+    it('retries a rejected PRD judgment, then halts with its named diagnostics without BUILD remediation', async () => {
+      const seedResult = await readState(statePath);
+      const state = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
+      for (const step of ALL_STEPS) {
+        state[step.name] = step.name === 'prd_audit' ? 'pending' : 'skipped';
+        if (step.name === 'prd_audit') break;
+        state[step.name] = 'done';
+      }
+      state.prd_audit = 'pending';
+      state.architecture_review_as_built = 'skipped';
+      state.rebase = 'skipped';
+      state.finish = 'done';
+      await writeState(statePath, state as ConductState);
+
+      const dispatched: StepName[] = [];
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (step) => {
+            dispatched.push(step);
+            return {
+              success: false,
+              output: 'structured-result-rejected: criterionJudgments[1].criterion S1.99 does not resolve; criterionJudgments[1].evidence is required',
+            };
+          },
+        },
+        events,
+        fromStep: 'prd_audit',
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        maxRetries: 2,
+      });
+
+      await conductor.run();
+
+      expect(dispatched).toEqual(['prd_audit', 'prd_audit']);
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      expect(halt).toContain('S1.99');
+      expect(halt).toContain('evidence is required');
+      expect(halt).not.toContain('produced no terminal typed verdict');
+      expect(dispatched).not.toContain('remediate');
+      expect(dispatched).not.toContain('build');
+    });
 
     // Covers: task:11
     it('halts with the stale prd-audit handshake identity after its retry budget is exhausted', async () => {

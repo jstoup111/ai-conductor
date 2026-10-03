@@ -1258,6 +1258,13 @@ export class DefaultStepRunner implements StepRunner {
           });
           const head = await this.gitRunner(['rev-parse', 'HEAD']);
           const codeStamp = head.exitCode === 0 && head.stdout.trim().length > 0 ? head.stdout.trim() : null;
+          if (codeStamp === null) {
+            return {
+              ...this.toStepRunResult(step, result),
+              success: false,
+              output: 'prd-audit authority persistence failed: reviewed code stamp unavailable (git rev-parse HEAD failed or returned empty output)',
+            };
+          }
           if (!validated.ok) {
             if (validated.judgment) {
               try {

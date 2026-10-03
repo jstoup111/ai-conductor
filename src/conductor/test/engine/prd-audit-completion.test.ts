@@ -58,7 +58,7 @@ async function persistCompleteJudgment(
     judgment,
     diagnostics: [],
     recordedDispositions: [],
-  }, { attemptId: 'current-audit', codeStamp: null });
+  }, { attemptId: 'current-audit', codeStamp: 'reviewed-head' });
 }
 
 async function persistVisibleWideningEvidence(
@@ -117,7 +117,7 @@ describe('typed PRD-audit completion', () => {
       judgment: cleanJudgment,
       diagnostics: [],
       recordedDispositions: [],
-    }, { attemptId: 'current-audit', codeStamp: null });
+    }, { attemptId: 'current-audit', codeStamp: 'reviewed-head' });
     await mkdir(join(dir, '.docs', 'specs', 'current-feature.md'), { recursive: true });
 
     const completion = await checkStepCompletion(dir, 'prd_audit', {
@@ -127,6 +127,27 @@ describe('typed PRD-audit completion', () => {
 
     expect(completion.done).toBe(true);
     expect(completion.routeClass).toBeUndefined();
+  });
+
+  it('rejects a matching-attempt null-stamp verdict without rewriting it', async () => {
+    const dir = await fixtureDir();
+    await persistPrdAuditVerdict(dir, {
+      complete: true,
+      judgment: cleanJudgment,
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'current-audit', codeStamp: null });
+    const path = join(dir, PRD_AUDIT_VERDICT_PATH);
+    const before = await readFile(path, 'utf8');
+
+    await expect(checkStepCompletion(dir, 'prd_audit', {
+      attemptRunId: 'current-audit', sessionStartedAt: 0,
+    })).resolves.toMatchObject({
+      done: false,
+      routeClass: 'absent',
+      reason: expect.stringContaining('not-current output'),
+    });
+    await expect(readFile(path, 'utf8')).resolves.toBe(before);
   });
 
   it('settles an accepted outside-visible finding from the same durable projection used by routing', async () => {
@@ -139,6 +160,33 @@ describe('typed PRD-audit completion', () => {
     await expect(checkStepCompletion(dir, 'prd_audit', {
       attemptRunId: 'current-audit', sessionStartedAt: 0,
     })).resolves.toMatchObject({ done: true });
+  });
+
+  it('does not let a criterion-keyed acceptance settle a no-owner observation', async () => {
+    const dir = await fixtureDir();
+    await persistCompleteJudgment(dir, {
+      version: 'v1', criterionJudgments: [], noOwnerObservations: [visibleScopeObservation],
+    });
+    await persistVisibleWideningEvidence(dir);
+    const appended = await new AcceptedWideningDecisionStore(dir, {
+      version: 1,
+      repository: WIDENING_FEATURE.repository,
+      feature: WIDENING_FEATURE.feature,
+    }, { newDecisionId: () => 'criterion-accept' }).append({
+      criterion: 'S1.1',
+      authority: 'accept',
+      rationale: 'The operator accepted the criterion-owned finding.',
+      operator: 'operator@example.test',
+    });
+    if (!appended.ok) throw new Error(`fixture decision did not persist: ${appended.reason}`);
+
+    await expect(checkStepCompletion(dir, 'prd_audit', {
+      attemptRunId: 'current-audit', sessionStartedAt: 0,
+    })).resolves.toMatchObject({
+      done: false,
+      routeClass: 'named-route',
+      reason: expect.stringContaining('NC-1 (OVER_SCOPE)'),
+    });
   });
 
   it.each([
@@ -255,7 +303,7 @@ describe('typed PRD-audit completion', () => {
           authority: 'engine',
         },
       ],
-    }, { attemptId: 'current-audit', codeStamp: null });
+    }, { attemptId: 'current-audit', codeStamp: 'reviewed-head' });
     const verdictPath = join(dir, PRD_AUDIT_VERDICT_PATH);
     const before = await readFile(verdictPath, 'utf8');
 
@@ -277,7 +325,7 @@ describe('typed PRD-audit completion', () => {
       kind: 'present',
       value: {
         attemptId: 'current-audit',
-        codeStamp: null,
+        codeStamp: 'reviewed-head',
         complete: false,
         judgment: partialJudgment,
         diagnostics,
