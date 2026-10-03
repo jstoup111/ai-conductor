@@ -331,18 +331,17 @@ describe('Story 7 — package-script selector forwarding (Task 17)', () => {
     // worker retain more files as that happens, which previously restored the
     // OOM that sharding was intended to prevent.
     const testFiles = Array.from({ length: 577 }, (_, index) => `test/group-${index + 1}.test.ts`);
-    const heavyweightTestFile = 'test/heavyweight.test.ts';
+    const oversizedTestFile = 'test/oversized.test.ts';
     mkdirSync(scriptRoot, { recursive: true });
     mkdirSync(dirname(fakeVitestPath), { recursive: true });
     for (const file of [...testFiles, 'test/ignored.smoke.test.ts']) {
       mkdirSync(dirname(join(fixturePackageRoot, file)), { recursive: true });
       writeFileSync(join(fixturePackageRoot, file), 'export {};\n');
     }
-    // A file-count limit alone allows a near-limit fixture to share a worker
-    // with smaller files. Keep this source at the heavy-fixture threshold so
-    // the runner proves it is dispatched on its own before it can accumulate
-    // another test module's retained state.
-    writeFileSync(join(fixturePackageRoot, heavyweightTestFile), `export const fixture = '${'x'.repeat(120 * 1024)}';\n`);
+    // A file-count limit alone allows one large fixture to share a worker with
+    // four more files. Keep this source just above the runner's byte budget so
+    // the fixture proves an oversized file is dispatched on its own.
+    writeFileSync(join(fixturePackageRoot, oversizedTestFile), `export const fixture = '${'x'.repeat(128 * 1024)}';\n`);
     copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'run-vitest-shards.mjs'), join(scriptRoot, 'run-vitest-shards.mjs'));
     copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'run-vitest.mjs'), join(scriptRoot, 'run-vitest.mjs'));
     copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'vitest-temp.mjs'), join(scriptRoot, 'vitest-temp.mjs'));
@@ -377,13 +376,13 @@ describe('Story 7 — package-script selector forwarding (Task 17)', () => {
       exitCode: 0,
       stdout: 'AGGREGATE_TEST_SUITE_PASS\n',
       invocationCount: 194,
-      forwarded: [...testFiles, heavyweightTestFile].sort(),
+      forwarded: [...testFiles, oversizedTestFile].sort(),
     });
     expect(invocations.every((invocation) =>
       invocation.filter((argument) => argument.endsWith('.test.ts')).length <= 3,
     )).toBe(true);
-    expect(invocations.find((invocation) => invocation.includes(heavyweightTestFile)))
-      .toEqual(['run', '--reporter=dot', '--silent', '--slowTestThreshold=1800000', heavyweightTestFile]);
+    expect(invocations.find((invocation) => invocation.includes(oversizedTestFile)))
+      .toEqual(['run', '--reporter=dot', '--silent', '--slowTestThreshold=1800000', oversizedTestFile]);
   });
 
   it('keeps the legacy trailing-echo shape detectable by the fake runner', async () => {
