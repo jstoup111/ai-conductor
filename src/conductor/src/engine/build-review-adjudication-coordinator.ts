@@ -679,9 +679,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       settleAbsentAttempted: true,
       failureEvidence: {
         failureKind: 'reconciliation-rejected',
-        caseIds: 'caseIds' in reconciled ? reconciled.caseIds : [],
+        caseIds: ('caseIds' in reconciled ? reconciled.caseIds : undefined) ?? [],
         sourceIds: 'sourceIds' in reconciled
-          ? reconciled.sourceIds
+          ? reconciled.sourceIds ?? []
           : [...new Set(admitted.flatMap((proposed) => proposed.sources.map((source) => source.sourceId)))],
       },
     });
