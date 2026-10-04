@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-04T09:09:31.378Z
 Slug: pi-runs-report-token-usage-and-cost-into-harness-t
 Class: needs-human
 Halting step: unknown
