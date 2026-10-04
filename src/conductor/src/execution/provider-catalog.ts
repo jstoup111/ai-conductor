@@ -34,7 +34,6 @@ export type ProviderDiagnosticEnvelope = 'claude-json' | 'codex-jsonl';
 
 /** Follow-up intakes that own capability-specific provider behavior. */
 export const PROVIDER_CAPABILITY_OWNERS = {
-  selfHost: '#1887',
   interactiveLaunch: '#1007',
   readOnlyReview: '#1886',
   reviewPolicyCatalog: '#2852',
@@ -60,7 +59,15 @@ export interface ProviderModelCatalog {
   readonly parse: (stdout: string) => ProviderModelCatalogParseResult;
 }
 
-export interface BuiltInProviderDescriptor {
+export interface SelfHostShape {
+  readonly isolation: 'claude-config-sandbox' | 'provider-home';
+  readonly selectedAuthPath: string;
+  readonly claudeBuildPreflights: boolean;
+  readonly agentsSkillsLink: boolean;
+  readonly scrubVariables: readonly string[];
+}
+
+interface BuiltInProviderDescriptorBase {
   readonly id: string;
   /** Human-readable name for diagnostics and operator-facing status. */
   readonly displayName: string;
@@ -83,7 +90,6 @@ export interface BuiltInProviderDescriptor {
   readonly osSandbox: boolean;
   /** This provider has an explicit opt-in for project-owned provider files. */
   readonly projectFileTrust?: boolean;
-  readonly capabilities: ProviderCapabilityFlags;
   /** Provider-native mechanics for launching an interactive composer session. */
   readonly interactiveLaunch?: InteractiveLaunch;
   /** Known machine-envelope formats, ordered by the adapter's native output. */
@@ -91,6 +97,18 @@ export interface BuiltInProviderDescriptor {
   /** Registered discovery mechanism for installed build-review policies. */
   readonly reviewPolicyCatalog?: ReviewPolicyCatalogDiscovery;
 }
+
+/** A provider declaring self-host support must declare its isolation shape. */
+export type BuiltInProviderDescriptor = BuiltInProviderDescriptorBase & (
+  | {
+    readonly capabilities: ProviderCapabilityFlags & { readonly selfHost: true };
+    readonly selfHostShape: SelfHostShape;
+  }
+  | {
+    readonly capabilities: ProviderCapabilityFlags & { readonly selfHost?: false | undefined };
+    readonly selfHostShape?: undefined;
+  }
+);
 
 /** Pi owns its configured default model, so no harness model id is selected. */
 const PI_MODEL_POLICY: ProviderModelPolicy = {
@@ -140,6 +158,13 @@ export const BUILT_IN_PROVIDERS = [
       writeFence: true,
       nativeSchema: true,
     } as const satisfies ProviderCapabilityFlags,
+    selfHostShape: {
+      isolation: 'claude-config-sandbox',
+      selectedAuthPath: '.credentials.json',
+      claudeBuildPreflights: true,
+      agentsSkillsLink: false,
+      scrubVariables: ['CLAUDE_CODE_OAUTH_TOKEN'],
+    },
     interactiveLaunch: {
       sessionMarkers: ['CLAUDECODE'],
       argv: (prompt, env) => {
@@ -182,6 +207,13 @@ export const BUILT_IN_PROVIDERS = [
       supportsSessionResume: false,
       nativeSchema: true,
     } as const satisfies ProviderCapabilityFlags,
+    selfHostShape: {
+      isolation: 'provider-home',
+      selectedAuthPath: 'auth.json',
+      claudeBuildPreflights: false,
+      agentsSkillsLink: true,
+      scrubVariables: [],
+    },
     interactiveLaunch: {
       sessionMarkers: ['CODEX_THREAD_ID', 'CODEX_SESSION_ID'],
       argv: (prompt) => [prompt],
@@ -207,10 +239,18 @@ export const BUILT_IN_PROVIDERS = [
     osSandbox: false,
     projectFileTrust: true,
     capabilities: {
+      selfHost: true,
       readOnlyReview: true,
       costSelfReporting: true,
       nativeSchema: true,
     } as const satisfies ProviderCapabilityFlags,
+    selfHostShape: {
+      isolation: 'provider-home',
+      selectedAuthPath: 'auth.json',
+      claudeBuildPreflights: false,
+      agentsSkillsLink: false,
+      scrubVariables: ['PI_CODING_AGENT_SESSION_DIR'],
+    },
     diagnosticEnvelopes: [],
   },
 ] as const satisfies readonly BuiltInProviderDescriptor[];

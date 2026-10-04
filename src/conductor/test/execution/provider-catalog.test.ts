@@ -213,7 +213,7 @@ describe('built-in provider catalog', () => {
       const requireSelfHost = () => requireProviderCapability('claude', 'selfHost');
       expect(requireSelfHost).toThrow(ProviderCapabilityUnsupportedError);
       expect(requireSelfHost).toThrow(
-        /claude.*selfHost.*#1887/,
+        /claude.*selfHost.*#1884/,
       );
     } finally {
       Object.defineProperty(claude, 'capabilities', { configurable: true, value: capabilities });
@@ -221,6 +221,52 @@ describe('built-in provider catalog', () => {
 
     const provider: ProviderWith<'selfHost'> = requireProviderCapability('claude', 'selfHost');
     expect(provider).toBe(claude);
+  });
+
+  it('declares self-host shapes for every self-host provider', () => {
+    const selfHostShape = (id: string) => {
+      const provider = BUILT_IN_PROVIDERS.find((candidate) => candidate.id === id)!;
+      return (provider as { selfHostShape?: unknown }).selfHostShape;
+    };
+
+    expect({
+      piSelfHost: supportsProviderCapability(
+        BUILT_IN_PROVIDERS.find((provider) => provider.id === 'pi')!,
+        'selfHost',
+      ),
+      hasSelfHostOwner: Object.hasOwn(PROVIDER_CAPABILITY_OWNERS, 'selfHost'),
+      shapes: {
+        claude: selfHostShape('claude'),
+        codex: selfHostShape('codex'),
+        pi: selfHostShape('pi'),
+      },
+    }).toEqual({
+      piSelfHost: true,
+      hasSelfHostOwner: false,
+      shapes: {
+        claude: {
+          isolation: 'claude-config-sandbox',
+          selectedAuthPath: '.credentials.json',
+          claudeBuildPreflights: true,
+          agentsSkillsLink: false,
+          scrubVariables: ['CLAUDE_CODE_OAUTH_TOKEN'],
+        },
+        codex: {
+          isolation: 'provider-home',
+          selectedAuthPath: 'auth.json',
+          claudeBuildPreflights: false,
+          agentsSkillsLink: true,
+          scrubVariables: [],
+        },
+        pi: {
+          isolation: 'provider-home',
+          selectedAuthPath: 'auth.json',
+          claudeBuildPreflights: false,
+          agentsSkillsLink: false,
+          scrubVariables: ['PI_CODING_AGENT_SESSION_DIR'],
+        },
+      },
+    });
   });
 
   it('declares Pi\'s agent home and keeps its review-policy capability with its follow-up intake', () => {
