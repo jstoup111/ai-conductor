@@ -514,3 +514,11 @@ Task 16 <- 13
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-adr-a5-1: conductor.ts:7883-7924 — before honoring a seeded declaration, call isFeatureDeclarable(step, customStepNames) (steps.ts) and refuse to skip non-declarable steps, emitting step_inapplicable_ignored{cause:'invalid'} naming the step; test in conductor-feature-applicability.test.ts with a hand-seeded prd_audit declaration that is dispatched normally
+**Gate:** as-built
+**Rationale:** Dispatch honors persisted declarations without consulting isFeatureDeclarable or featureInapplicableAllowed (conductor.ts:7883-7924), which ADR D3 forbids ('dispatch never honors a declaration for one'). No existing Done-when asserts a dispatch-level declarability check, so one task is appended under the ADR D3 finding. The single declarability authority remains steps.ts isFeatureDeclarable, and no second step list is introduced.
+**Governing clause:** adr-2026-10-03-per-feature-step-applicability decision 3
+**Done when:**
+- adr-2026-10-03-per-feature-step-applicability decision 3 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-a5-1 is complete.
