@@ -80,7 +80,7 @@ Fix the Pi adapter so that a completed Pi dispatch records the tokens Pi actuall
 - A turn whose `message.usage.input` is a string or missing contributes no tokens, and when it is the only turn the result has no `tokenUsage` key, as asserted in pi-provider-usage.test.ts.
 - A stream with a top-level `usage` object and no `message.usage` returns no `tokenUsage` key, so the top-level object is ignored, as asserted in pi-provider-usage.test.ts.
 - An exit-0 stream whose only assistant turn reports all-zero input, output, cacheRead and cacheWrite returns no `tokenUsage` key, as asserted in pi-provider-usage.test.ts.
-- A conductor-level test asserts the `provider_attempt` event emitted for a no-usage dispatch carries no `tokenUsage` property at all (never input 0 / output 0), so the story's event-level claim is asserted end to end.
+- For each of the four no-usage variants (a terminal message without `message.usage`; `message.usage.input` a string or missing; a top-level `usage` with no `message.usage`; and all-zero usage), a conductor-level test asserts the emitted `provider_attempt` event carries no `tokenUsage` property (never input 0 / output 0), asserting the story's event-level claim end to end.
 
 **Files:** `src/conductor/src/execution/pi-provider.ts`, `src/conductor/test/execution/pi-provider-usage.test.ts`, `src/conductor/test/fixtures/pi/error-stop-live-capture.jsonl`
 
