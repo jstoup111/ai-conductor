@@ -13,9 +13,26 @@ import {
 } from './remediation-case-store.js';
 
 const HALT_CLEARED_PATH = '.pipeline/HALT.cleared';
+const REMEDIATION_CASES_PATH = '.pipeline/remediation-cases.json';
 
 function recordedDecisionNote(criterion: string, authority: 'accept' | 'refuse'): string {
   return `Over-scope decision: ${criterion} recorded as ${authority}.`;
+}
+
+function unreadableCaseStoreNote(): string {
+  return `The decision state in ${REMEDIATION_CASES_PATH} could not be read; repair it before the decision state can be trusted.`;
+}
+
+function unreadableDecisionStoreNote(): string {
+  return 'The recorded decision state could not be read; repair .pipeline/accepted-widenings.json before the decision state can be trusted.';
+}
+
+function unreadableClearNote(): string {
+  return `The recorded clear state in ${HALT_CLEARED_PATH} could not be read; repair it before the decision state can be trusted.`;
+}
+
+function clearDefectNote(defect: { kind: string; criterion?: string }): string {
+  return `Unreadable over-scope decision${defect.criterion ? ` for ${defect.criterion}` : ''}: ${defect.kind}; correct the over-scope-decisions block and re-run \`ai-conductor halt clear\`.`;
 }
 
 /**
@@ -25,11 +42,12 @@ function recordedDecisionNote(criterion: string, authority: 'accept' | 'refuse')
  */
 export async function renderRebaseFenceDecisionNote(projectRoot: string): Promise<string> {
   const featureRead = await readRemediationCaseStoreFeature(projectRoot);
-  if (!featureRead.ok || featureRead.feature === undefined) return '';
+  if (!featureRead.ok) return unreadableCaseStoreNote();
+  if (featureRead.feature === undefined) return '';
 
   const caseStore = new RemediationCaseStore(projectRoot, featureRead.feature);
   const caseRead = await caseStore.read();
-  if (!caseRead.ok) return '';
+  if (!caseRead.ok) return unreadableCaseStoreNote();
 
   const offers = (caseRead.state.version === 'v2'
     ? selectPrdWideningRemediationCases(caseRead.state.prdWideningCases)
@@ -44,21 +62,24 @@ export async function renderRebaseFenceDecisionNote(projectRoot: string): Promis
   });
   const decisionRead = await decisionStore.read();
   if (decisionRead.kind !== 'absent' && decisionRead.kind !== 'valid') {
-    return 'The recorded decision state could not be read.';
+    return unreadableDecisionStoreNote();
   }
 
   let cleared = '';
+  let clearReadError = false;
   try {
     cleared = await readFile(join(projectRoot, HALT_CLEARED_PATH), 'utf8');
-  } catch {
-    // An absent clear is the ordinary pending-offer case. Other read failures
-    // are equally non-authoritative, so do not fabricate a decision from them.
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') clearReadError = true;
   }
+  if (clearReadError) return unreadableClearNote();
   const parsedClear = parseClearedOverScopeDecisions(cleared, offeredFindings);
-  if (parsedClear.kind === 'parsed' && parsedClear.decisions.length > 0) {
-    return parsedClear.decisions
-      .map((decision) => recordedDecisionNote(decision.criterion, decision.decision))
-      .join('\n');
+  if (parsedClear.kind === 'parsed') {
+    const notes = [
+      ...parsedClear.decisions.map((decision) => recordedDecisionNote(decision.criterion, decision.decision)),
+      ...parsedClear.defects.map(clearDefectNote),
+    ];
+    if (notes.length > 0) return notes.join('\n');
   }
 
   const recorded = decisionRead.kind === 'valid'

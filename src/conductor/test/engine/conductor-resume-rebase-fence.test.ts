@@ -180,6 +180,7 @@ describe('Conductor resume rebase-operation fence', () => {
       { preserved: ['test_suite'], invalidated: ['build_review'] },
       [preservedCandidate('test_suite', suite)],
     );
+    const validatedOperation = (await readVerdict(projectRoot, 'rebase'))!.rebaseOperation;
 
     let operationAtFirstDispatch: unknown;
     events.on('step_started', async (event) => {
@@ -188,6 +189,9 @@ describe('Conductor resume rebase-operation fence', () => {
       }
     });
     await expect(resume(successfulRunner)).resolves.toEqual(['build_review']);
+    expect(completeInterruptedRebaseOperation).toHaveBeenCalledWith(expect.objectContaining({
+      operation: validatedOperation,
+    }));
     expect(operationAtFirstDispatch).toMatchObject({ status: 'applied', appliedAt: expect.any(Number) });
     await expect(readVerdict(projectRoot, 'test_suite')).resolves.toMatchObject({
       preservation: { gate: 'test_suite', operationId: 'rebase-operation-1' },
@@ -366,33 +370,58 @@ describe('Conductor resume rebase-operation fence', () => {
     ['a preserved prd_audit failed at the applied transition', async () => {
       await writeAppliedRebase({ preserved: ['prd_audit'], invalidated: [] });
       await writeVerdict(projectRoot, 'prd_audit', { satisfied: false, checkedAt: 100 });
-    }],
+    }, 'rebase transition still has an outstanding prd_audit repair or re-verification', 're-run the prd_audit gate or reconcile the persisted rebase operation before resuming'],
     ['a preserved prd_audit verdict is absent', async () => {
       await writeAppliedRebase({ preserved: ['prd_audit'], invalidated: [] });
-    }],
+    }, 'rebase transition still has an outstanding prd_audit repair or re-verification', 're-run the prd_audit gate or reconcile the persisted rebase operation before resuming'],
     ['a preserved build_review lacks replay-bound authority', async () => {
       await writeAppliedRebase({ preserved: ['build_review'], invalidated: [] });
       await writeVerdict(projectRoot, 'build_review', { satisfied: true, checkedAt: 100 });
-    }],
+    }, 'rebase transition preserved build_review without its replay-bound authority', 're-run the build_review gate or reconcile the persisted rebase operation before resuming'],
     ['the persisted rebase transition is malformed', async () => {
       await writeAppliedRebase({ preserved: ['build_review'], invalidated: ['build_review'] });
       await writeVerdict(projectRoot, 'build_review', { satisfied: true, checkedAt: 100 });
-    }],
-  ])('halts a resume when %s', async (_name, seed) => {
+    }, 'rebase transition record is malformed or inconsistent; reconcile it before publication', undefined],
+  ])('halts a resume when %s', async (_name, seed, fault, nextAction) => {
     await seed();
 
     await expect(resume(successfulRunner)).resolves.toEqual([]);
-    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(
-      /outstanding prd_audit repair|preserved build_review without its replay-bound authority|rebase transition record is malformed/,
-    );
+    const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain(fault);
+    if (nextAction !== undefined) expect(halt).toContain(nextAction);
     await expect(readFile(join(projectRoot, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
+  it.each([
+    ['missing authority', async () => {
+      await writeAppliedRebase({ preserved: ['build_review'], invalidated: [] });
+      await writeVerdict(projectRoot, 'build_review', { satisfied: true, checkedAt: 100 });
+    }, 'rebase transition preserved build_review without its replay-bound authority', 're-run the build_review gate or reconcile the persisted rebase operation before resuming'],
+    ['missing verdict', async () => {
+      await writeAppliedRebase({ preserved: ['prd_audit'], invalidated: [] });
+    }, 'rebase transition still has an outstanding prd_audit repair or re-verification', 're-run the prd_audit gate or reconcile the persisted rebase operation before resuming'],
+    ['pre-applied unsatisfied verdict', async () => {
+      await writeAppliedRebase({ preserved: ['prd_audit'], invalidated: [] });
+      await writeVerdict(projectRoot, 'prd_audit', { satisfied: false, checkedAt: 100 });
+    }, 'rebase transition still has an outstanding prd_audit repair or re-verification', 're-run the prd_audit gate or reconcile the persisted rebase operation before resuming'],
+  ])('includes recorded acceptance and a next action for %s', async (_name, seed, fault, nextAction) => {
+    await seed();
+    await writeOverScopeOffer(projectRoot);
+    await writeClearedAccept(projectRoot);
+
+    await expect(resume(successfulRunner)).resolves.toEqual([]);
+    const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain(fault);
+    expect(halt).toContain(nextAction);
+    expect(halt).toContain('NC.1');
+    expect(halt).toContain('recorded as accept');
   });
 
   it.each([
     ['a recorded accept', async () => {
       await writeOverScopeOffer(projectRoot);
       return writeClearedAccept(projectRoot);
-    }, ['NC.1', 'recorded as accept', 'reconcile it before publication']],
+    }, ['NC.1', 'recorded as accept']],
     ['a pending offer', async () => {
       await writeOverScopeOffer(projectRoot);
       return undefined;
@@ -404,17 +433,20 @@ describe('Conductor resume rebase-operation fence', () => {
       return undefined;
     }, ['recorded decision state could not be read']],
   ])('adds decision context to an integrity halt with %s without changing HALT.cleared', async (_name, arrange, expected) => {
-    await writeAppliedRebase({ preserved: ['build_review'], invalidated: ['build_review'] });
+    await writeAppliedRebase({ preserved: ['build_review'], invalidated: [] });
     await writeVerdict(projectRoot, 'build_review', { satisfied: true, checkedAt: 100 });
     const clearedBefore = await arrange();
 
     await expect(resume(successfulRunner)).resolves.toEqual([]);
 
     const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8');
-    expect(halt).toContain('rebase transition record is malformed or inconsistent; reconcile it before publication');
+    expect(halt).toContain('rebase transition preserved build_review without its replay-bound authority');
+    expect(halt).toContain('re-run the build_review gate or reconcile the persisted rebase operation before resuming');
     for (const fragment of expected) expect(halt).toContain(fragment);
     if (expected.length === 0) {
-      expect(halt).toBe('rebase transition record is malformed or inconsistent; reconcile it before publication\n');
+      expect(halt).toBe(
+        'rebase transition preserved build_review without its replay-bound authority; re-run the build_review gate or reconcile the persisted rebase operation before resuming\n',
+      );
     }
     await expect(readFile(join(projectRoot, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
     if (clearedBefore !== undefined) {

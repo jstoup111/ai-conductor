@@ -201,7 +201,15 @@ describe('classifyRebaseOperation', () => {
       },
     });
 
-    await expect(classifyRebaseOperation(s.repo)).resolves.toEqual({ kind: 'applying' });
+    await expect(classifyRebaseOperation(s.repo)).resolves.toEqual({
+      kind: 'applying',
+      operation: {
+        id: 'still-applying',
+        status: 'applying',
+        transition: { preserved: [], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
   });
 
   it.each([

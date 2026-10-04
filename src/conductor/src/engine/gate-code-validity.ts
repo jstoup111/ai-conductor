@@ -16,7 +16,12 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { StepName } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
-import { validRebaseOperationRecord, type GateVerdict, type ReplayEvidence } from './gate-verdicts.js';
+import {
+  validRebaseOperationRecord,
+  type GateVerdict,
+  type RebaseOperationRecord,
+  type ReplayEvidence,
+} from './gate-verdicts.js';
 import {
   ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   MANUAL_TEST_CODE_STAMP,
@@ -81,7 +86,7 @@ async function persistedVerdict(projectRoot: string, gate: StepName): Promise<Ga
 
 export type RebaseOperationClassification =
   | { kind: 'clear' }
-  | { kind: 'applying' }
+  | { kind: 'applying'; operation: RebaseOperationRecord }
   | { kind: 'outstanding-gate'; gate: StepName }
   | {
     kind: 'integrity-fault';
@@ -101,7 +106,7 @@ export async function classifyRebaseOperation(projectRoot: string): Promise<Reba
   if (!validRebaseOperationRecord(operation)) {
     return { kind: 'integrity-fault', reason: 'malformed-record' };
   }
-  if (operation.status === 'applying') return { kind: 'applying' };
+  if (operation.status === 'applying') return { kind: 'applying', operation };
   if (operation.status !== 'applied') {
     return { kind: 'integrity-fault', reason: 'malformed-record' };
   }

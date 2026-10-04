@@ -1,15 +1,42 @@
 // Covers: task:11
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+vi.mock('../../src/engine/build-review-effective.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/build-review-effective.js')>(),
+  resolveBuildReviewFeatureIdentity: vi.fn(async () => ({
+    version: 'v1' as const,
+    repository: '/fixture/repository',
+    feature: 'reconciled-reason',
+  })),
+}));
+
+// The git fixture exists only to give the verdict a reviewed code stamp; this
+// suite does not exercise protected-artifact sealing.
+vi.mock('../../src/engine/protected-artifact-seal.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/protected-artifact-seal.js')>(),
+  verifyProtectedArtifactSeal: vi.fn(async () => ({ ok: true, seal: undefined, selfAmendments: [] })),
+}));
+
 import { prdAuditBlockingFindings, prdAuditBlockingReason } from '../../src/engine/artifacts.js';
+import { readVerdict } from '../../src/engine/gate-verdicts.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { writeState } from '../../src/engine/state.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+import type { ConductState, ConductorEvent } from '../../src/types/index.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { PersistedPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { AcceptedWideningDecisionStore } from '../../src/engine/accepted-widenings.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
+
+const execFileAsync = promisify(execFile);
 
 const feature = { version: 'v1' as const, repository: '/fixture/repository', feature: 'reconciled-reason' };
 const evidence = 'The audit found a visible widening.';
@@ -128,5 +155,50 @@ describe('prd_audit reconciled verdict reasons', () => {
     }));
     expect(fixable).toContain('close the gap (BUILD) or amend the PRD (DECIDE)');
     expect(fixable).not.toMatch(/\[(awaiting-decision|uncertain-relation|corrupt-decision-store)\]/);
+  });
+  it('emits the reconciled awaiting-decision reason from a conductor-driven prd_audit lap', async () => {
+    const git = (...args: string[]) => execFileAsync('git', ['-C', projectRoot, ...args]);
+    await git('init', '-b', 'main');
+    await git('-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'base');
+    const codeStamp = (await git('rev-parse', 'HEAD')).stdout.trim();
+
+    await publishRelation('same-case');
+    const state = { feature_desc: feature.feature } as ConductState;
+    for (const step of ALL_STEPS) {
+      state[step.name] = step.name === 'prd_audit' ? 'pending' : 'done';
+      if (step.name === 'prd_audit') break;
+    }
+    await writeState(join(projectRoot, '.pipeline', 'conduct-state.json'), state);
+
+    const events = new ConductorEventEmitter();
+    const emitted: ConductorEvent[] = [];
+    events.on('gate_verdict', (event) => { emitted.push(event); });
+    const runner: StepRunner = {
+      run: async (step, _state, opts) => {
+        expect(step).toBe('prd_audit');
+        await persistPrdAuditVerdict(projectRoot, wideningVerdict, { attemptId: opts?.runId ?? 'fixture-run', codeStamp });
+        return { success: true };
+      },
+    };
+
+    await new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+      stepRunner: runner,
+      events,
+      fromStep: 'prd_audit',
+      verifyArtifacts: true,
+      maxRetries: 1,
+    }).run();
+
+    const persisted = await readVerdict(projectRoot, 'prd_audit');
+    expect(persisted?.reason).toContain('NC.1 (OVER_SCOPE) [awaiting-decision]');
+    expect(persisted?.reason).toContain('ai-conductor halt clear');
+    const verdictEvent = emitted.find((event) => event.type === 'gate_verdict' && event.step === 'prd_audit');
+    expect(verdictEvent).toEqual(expect.objectContaining({
+      type: 'gate_verdict',
+      satisfied: false,
+      reason: persisted?.reason,
+    }));
   });
 });

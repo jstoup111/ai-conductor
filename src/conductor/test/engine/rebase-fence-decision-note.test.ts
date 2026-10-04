@@ -92,4 +92,56 @@ describe('renderRebaseFenceDecisionNote', () => {
 
     await expect(renderRebaseFenceDecisionNote(root)).resolves.toContain('recorded decision state could not be read');
   });
+
+  it('reports a malformed remediation case store with a repair action', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'remediation-cases.json'), '{not json');
+
+    const note = await renderRebaseFenceDecisionNote(root);
+    expect(note).toContain('.pipeline/remediation-cases.json');
+    expect(note).toContain('repair it before the decision state can be trusted');
+  });
+
+  it('reports a non-absent unreadable clear state with a repair action', async () => {
+    const root = await projectRoot();
+    await writeOffer(root);
+    await mkdir(join(root, '.pipeline', 'HALT.cleared'));
+
+    const note = await renderRebaseFenceDecisionNote(root);
+    expect(note).toContain('.pipeline/HALT.cleared');
+    expect(note).toContain('repair it before the decision state can be trusted');
+  });
+
+  it('renders valid clear decisions alongside malformed decision rows', async () => {
+    const root = await projectRoot();
+    await writeOffer(root);
+    await writeFile(join(root, '.pipeline', 'HALT.cleared'), [
+      'Operator decision',
+      '',
+      '```json over-scope-decisions',
+      JSON.stringify([
+        { criterion: 'NC.1', summary: 'Visible behavior outside the approved plan.', decision: 'accept', rationale: 'Accepted.' },
+        { criterion: 'NC.2', summary: 'Unknown finding.', decision: 'accept', rationale: 'Accepted.' },
+        { criterion: 'NC.1', summary: 'Visible behavior outside the approved plan.', decision: 'refuse', rationale: '' },
+      ]),
+      '```',
+    ].join('\n'));
+
+    const note = await renderRebaseFenceDecisionNote(root);
+    expect(note).toContain('NC.1 recorded as accept');
+    expect(note).toContain('for NC.2: unknown-criterion');
+    expect(note).toContain('for NC.1: missing-rationale');
+    expect(note).toContain('correct the over-scope-decisions block and re-run `ai-conductor halt clear`');
+  });
+
+  it('reports a malformed over-scope decision block with a repair action', async () => {
+    const root = await projectRoot();
+    await writeOffer(root);
+    await writeFile(join(root, '.pipeline', 'HALT.cleared'), '```json over-scope-decisions\n{not json}\n```');
+
+    const note = await renderRebaseFenceDecisionNote(root);
+    expect(note).toContain('malformed-block');
+    expect(note).toContain('correct the over-scope-decisions block and re-run `ai-conductor halt clear`');
+  });
 });

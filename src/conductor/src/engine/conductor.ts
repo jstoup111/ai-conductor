@@ -7073,23 +7073,12 @@ export class Conductor {
       // selecting finish across an interrupted/inconsistent rebase write.
       let rebaseClassification = await classifyRebaseOperation(this.projectRoot);
       if (rebaseClassification.kind === 'applying') {
-        const operation = (await readVerdict(this.projectRoot, 'rebase'))?.rebaseOperation;
-        // The classifier has already validated this descriptor. Keep the
-        // defensive guard so a concurrent replacement cannot turn recovery
-        // into an unbounded or malformed state mutation.
-        if (!operation) {
-          await this.writeHaltMarker(
-            'rebase transition record is malformed or inconsistent; reconcile it before publication\n',
-            'needs-human',
-          );
-          return;
-        }
         const rebaseIndex = indexOf('rebase');
         const completion = await completeInterruptedRebaseOperation({
           projectRoot: this.projectRoot,
           stateFilePath: this.stateFilePath,
           stateStore: this.stateStore,
-          operation,
+          operation: rebaseClassification.operation,
           downstreamSteps: steps.slice(rebaseIndex + 1).map((step) => step.name),
           preVerify: (step) => this.preVerifyRebaseGate(state, step),
         });
@@ -7115,8 +7104,8 @@ export class Conductor {
         const rebaseBlocker = rebaseClassification.reason === 'malformed-record'
           ? 'rebase transition record is malformed or inconsistent; reconcile it before publication'
           : rebaseClassification.reason === 'missing-authority'
-            ? `rebase transition preserved ${rebaseClassification.gate} without its replay-bound authority`
-            : `rebase transition still has an outstanding ${rebaseClassification.gate} repair or re-verification`;
+            ? `rebase transition preserved ${rebaseClassification.gate} without its replay-bound authority; re-run the ${rebaseClassification.gate} gate or reconcile the persisted rebase operation before resuming`
+            : `rebase transition still has an outstanding ${rebaseClassification.gate} repair or re-verification; re-run the ${rebaseClassification.gate} gate or reconcile the persisted rebase operation before resuming`;
         const decisionNote = await renderRebaseFenceDecisionNote(this.projectRoot);
         await this.writeHaltMarker(
           `${rebaseBlocker}${decisionNote === '' ? '' : `\n${decisionNote}`}\n`,
@@ -11786,6 +11775,20 @@ export class Conductor {
                 await this.completionCtx(state),
                 { retainReplayPreservation: false },
               );
+              // A routed PRD-audit halt exits before the ordinary tail emits
+              // its gate event. Publish the re-scored durable verdict here so
+              // the event spine and gate file describe this same audit lap.
+              if (prdAuditRoute.kind !== 'record') {
+                const verdict = await readVerdict(this.projectRoot, 'prd_audit');
+                if (verdict) {
+                  await emitTracked({
+                    type: 'gate_verdict',
+                    step: 'prd_audit',
+                    satisfied: verdict.satisfied,
+                    reason: verdict.reason,
+                  });
+                }
+              }
               if (prdAuditRoute.kind === 'projection-halt') {
                 const reason = renderPrdAuditProjectionHalt(prdAuditRoute.reason);
                 await this.writeHaltMarker(reason + '\n', 'needs-human');
