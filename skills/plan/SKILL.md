@@ -219,6 +219,10 @@ before persistence, as asserted by the unsigned-artifact test." A test name alon
 name the behavior it verifies. Existing mechanisms remain valid for `Verify-only:` tasks, and internal
 tasks retain the lower-layer scope allowed by §3d.
 
+When a check requires a test as its close evidence, begin that check with the exact tag `[test]`.
+The tag is part of the authored check text and makes the task-close boundary require a committed
+`test:<path>::<title>` reference (or an explicit documented unverified reason).
+
 **Every Then outcome must be asserted.** Split each mapped criterion's Then-clause on its
 conjunctions: every outcome it states — including absence and no-op outcomes such as "no dispatch
 is attempted", "nothing is published", or "the branch settles `absent`" — must be explicitly

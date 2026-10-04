@@ -16,13 +16,14 @@ import {
 } from './remediation-case-store.js';
 import { parseCoherenceArtifact, type CoherenceRow } from './coherence-parse.js';
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskStoryIds } from './plan-task-parse.js';
+import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { makeGitRunner, originDefaultBranch, resolveBase, type GitRunner } from './rebase.js';
 import { readSealedStoryCriteria, splitStoryBlocks } from './story-criteria.js';
 import type { PrdAuditRequirementAssociation } from './prd-audit-contract.js';
 
 /** Incremented only when the engine-rendered PRD-audit input contract changes. */
-export const PRD_AUDIT_PROJECTION_VERSION = 4;
+export const PRD_AUDIT_PROJECTION_VERSION = 5;
 
 const PRD_AUDIT_DIFF_EXCERPT_PER_FILE_BYTES = 256 * 1024;
 const PRD_AUDIT_DIFF_EXCERPT_TOTAL_BYTES = 512 * 1024;
@@ -99,6 +100,12 @@ export interface PrdAuditProjection {
     readonly id: string;
     readonly storyIds: readonly string[];
     readonly doneWhen: readonly string[];
+  }[];
+  /** Explicit task-close exceptions for the auditor to judge in context. */
+  readonly unverifiedDoneWhen: readonly {
+    readonly taskId: string;
+    readonly check: string;
+    readonly reason: string;
   }[];
   readonly prd:
     | { readonly kind: 'absent' }
@@ -520,6 +527,13 @@ export async function buildPrdAuditProjection(
     'sources' in prd ? prd.sources : [],
   );
 
+  let taskStatus: unknown = {};
+  try {
+    taskStatus = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'task-status.json'), 'utf-8'));
+  } catch {
+    // Legacy and pre-BUILD projects have no task-status sidecar. Its absence
+    // means no explicit unverified close, rather than an audit input fault.
+  }
   const [changes, history] = await Promise.all([scopedChanges(projectRoot), wideningHistory(projectRoot, basename(planPath, '.md'))]);
   if (!changes) return { ok: false, fault: { dimension: 'changes', detail: 'scoped git changes are unavailable' } };
   if (history.kind === 'fault') return { ok: false, fault: { dimension: 'history', detail: history.detail } };
@@ -529,6 +543,7 @@ export async function buildPrdAuditProjection(
     plan: { intent },
     criteria,
     tasks,
+    unverifiedDoneWhen: collectUnverifiedDoneWhenChecks(taskStatus),
     prd,
     coherence,
     changes,

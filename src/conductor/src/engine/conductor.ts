@@ -117,6 +117,7 @@ import {
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import { redactSafetyText } from './safety-diagnostics.js';
 import { createEngineStateStore } from './engine-state-store.js';
+import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
 import { createRepairObligationStore } from './repair-obligations.js';
 import { admitAndRestageRepair } from './repair-restage.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
@@ -2839,7 +2840,32 @@ export class Conductor {
         this.retainedFullSuiteInspection = undefined;
         return retained ?? this.fullSuiteVerifier.inspect();
       },
+      unverifiedDoneWhenNudgeSpent: await this.unverifiedDoneWhenNudgeSpent(state),
     };
+  }
+
+  /** Durable once-per-BUILD-lap nudge marker; engine-state is the restart seam. */
+  private async unverifiedDoneWhenNudgeSpent(state: ConductState): Promise<boolean> {
+    const key = String(state.session_started_at ?? state.run_started_at ?? 'unknown');
+    const read = await createEngineStateStore(join(this.projectRoot, '.pipeline', 'engine-state.json')).read();
+    if (!read.ok) return false;
+    const laps = read.value.unverifiedDoneWhenNudges;
+    return typeof laps === 'object' && laps !== null && !Array.isArray(laps) && laps[key] === true;
+  }
+
+  private async recordUnverifiedDoneWhenNudge(state: ConductState): Promise<void> {
+    const key = String(state.session_started_at ?? state.run_started_at ?? 'unknown');
+    const store = createEngineStateStore(join(this.projectRoot, '.pipeline', 'engine-state.json'));
+    const result = await store.update((current) => ({
+      ...current,
+      unverifiedDoneWhenNudges: {
+        ...(typeof current.unverifiedDoneWhenNudges === 'object' && current.unverifiedDoneWhenNudges !== null && !Array.isArray(current.unverifiedDoneWhenNudges)
+          ? current.unverifiedDoneWhenNudges
+          : {}),
+        [key]: true,
+      },
+    }));
+    if (!result.ok) throw new Error(`Failed to persist unverified Done-when nudge (${result.kind}): ${result.message}`);
   }
 
   /**
@@ -11861,6 +11887,21 @@ export class Conductor {
               });
             }
 
+            if (step.name === 'build' && completion.done && await this.unverifiedDoneWhenNudgeSpent(state)) {
+              try {
+                const status = JSON.parse(await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8'));
+                const checks = collectUnverifiedDoneWhenChecks(status);
+                if (checks.length > 0) {
+                  await this.events.emit({
+                    type: 'build_done_when_unverified',
+                    checks: checks.map(({ taskId, check }) => ({ taskId, check })),
+                  });
+                }
+              } catch {
+                // Missing legacy task status means there is no event to emit.
+              }
+            }
+
             if (!completion.done) {
               lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
               if (
@@ -11879,6 +11920,13 @@ export class Conductor {
                 completion.missing,
                 join(this.projectRoot, '.pipeline'),
               );
+              if (
+                step.name === 'build' &&
+                attempt < stepMaxRetries &&
+                completion.reason?.startsWith('unverified Done-when checks require one BUILD review pass:')
+              ) {
+                await this.recordUnverifiedDoneWhenNudge(state);
+              }
 
               // #646: rerun-vs-route classifier. Generalizes the original
               // prd_audit-only short-circuit (retained verbatim below when

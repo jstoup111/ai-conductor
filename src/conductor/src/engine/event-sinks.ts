@@ -145,6 +145,7 @@ export const EVENT_SINKS = {
   build_review_stale_mirage_regrade: { render: true, persist: false, audit: false, otel: false },
   build_review_repair_context: { render: false, persist: true, audit: false, otel: false },
   mode_skip: { render: false, persist: true, audit: false, otel: false },
+  build_done_when_unverified: { render: true, persist: true, audit: false, otel: false },
   build_stall: { render: true, persist: true, audit: false, otel: true },
   build_progress: { render: true, persist: true, audit: false, otel: true },
   build_no_progress: { render: true, persist: true, audit: false, otel: true },

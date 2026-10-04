@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5
+// Covers: task:1, task:2, task:3, task:4, task:5, task:11
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -744,5 +744,29 @@ describe('PRD-audit feature projection', () => {
       },
       bytes: foreignStories,
     });
+  });
+  it('carries explicit unverified Done-when closes and an empty list for legacy or absent task status', async () => {
+    const root = await fixture();
+    const statusPath = join(root, '.pipeline', 'task-status.json');
+
+    const absent = await buildPrdAuditProjection(root);
+    expect(absent.ok && absent.projection.unverifiedDoneWhen).toEqual([]);
+
+    await writeFile(statusPath, JSON.stringify({ tasks: [{ id: '4', status: 'completed' }] }));
+    const legacy = await buildPrdAuditProjection(root);
+    expect(legacy.ok && legacy.projection.unverifiedDoneWhen).toEqual([]);
+
+    await writeFile(statusPath, JSON.stringify({ tasks: [{
+      id: '4',
+      status: 'completed',
+      doneWhen: [
+        { check: '[test] the service-backed outcome holds', evidence: 'service unavailable', source: 'unverified', reason: 'service unavailable' },
+        { check: 'a reported outcome', evidence: 'reported', source: 'reported' },
+      ],
+    }] }));
+    const unverified = await buildPrdAuditProjection(root);
+    expect(unverified.ok && unverified.projection.unverifiedDoneWhen).toEqual([
+      { taskId: '4', check: '[test] the service-backed outcome holds', reason: 'service unavailable' },
+    ]);
   });
 });

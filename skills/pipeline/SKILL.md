@@ -125,7 +125,10 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   declared `Done when:` block, close it with `conduct task done <id> --done-when <n>=<evidence>`
                   once for every declared check; the engine records the evidence through
                   `completeTaskDoneWhen` before it clears `.pipeline/current-task`. If a declared
-                  check cannot be satisfied within the approved plan, use `conduct task done <id> --plan-gap <n> --reason <text>`
+                  `[test]` check is closed, use `--done-when <n>=test:<path>::<title>` for a committed
+                  covering test, or `--unverified <n>=<reason>` when it cannot be verified. A missing
+                  test for a tagged check is never `--plan-gap`. For an untagged check that cannot be
+                  satisfied within the approved plan, use `conduct task done <id> --plan-gap <n> --reason <text>`
                   instead and report the resulting HALT — do not clear the task or append off-plan work.
                   For a legacy task with no `Done when:` block, close with `conduct task done <id>`.
                   Then read `.pipeline/task-status.json` and confirm the row reads `completed`.

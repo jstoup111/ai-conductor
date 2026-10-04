@@ -102,7 +102,8 @@ export function buildRemediationDoneWhenChecks(
     ?? collapseToOneLine(rationale)
     ?? collapseToOneLine(title)
     ?? `Remediation task ${id}`;
-  const checks = [`${primary} is satisfied by this task.`];
+  const criterionNeedsTest = gateSource === 'prd_audit' && normalizedCriterion !== undefined;
+  const checks = [`${criterionNeedsTest ? '[test] ' : ''}${primary} is satisfied by this task.`];
 
   if (normalizedCriterion !== undefined && normalizedClause !== undefined) {
     checks.push(`${normalizedClause} is satisfied by this task.`);
