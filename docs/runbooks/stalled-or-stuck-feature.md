@@ -899,7 +899,7 @@ resolved.
 **Blast radius:** the amendment rewrites committed DECIDE artifacts on the feature branch and
 re-runs BUILD and every later step. Nothing outside the feature moves.
 
-1. Read the gap. `.pipeline/prd-audit.md` (its per-criterion detail section) or
+1. Read the gap. `.pipeline/prd-audit.md` (the rendered view of `.pipeline/prd-audit.json`) or
    `.pipeline/architecture-review-as-built.md` (its `## Recorded Findings`) names each criterion and
    why no active plan task owns the repair.
 2. Amend the artifact the gap actually indicts, in the feature worktree — usually the plan (add a
@@ -962,9 +962,9 @@ finding. The three words name which way it diverged:
 | `Duplicate: <id>` | The planner proposed the same finding more than once. |
 
 **`Unexpected` on a criterion id is the common case, and it is a plan gap.** A criterion graded
-`PLAN_GAP` in `.pipeline/prd-audit.md` is unmet with no active task owning it, so it is not an
+`PLAN_GAP` in `.pipeline/prd-audit.json` is unmet with no active task owning it, so it is not an
 admitted finding — but it reads to the planner like work to schedule, and the planner writes tasks
-for it. Compare the `FIXABLE` rows in the same table: those carry a parent task and are admitted.
+for it. Compare the `FIXABLE` judgments in the same verdict: those carry an owner task and are admitted.
 
 Watch for one defect graded by both gates. In the example above, the as-built review's only
 `REMEDIABLE` finding said the same thing as `S2.4` — a story outcome with no runtime path that can
