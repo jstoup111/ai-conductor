@@ -106,6 +106,7 @@ export interface RebaseOperationRecord {
  * readers.  Unproved replay may continue, but cannot retain any review. */
 export function validRebaseOperationRecord(operation: RebaseOperationRecord | undefined): boolean {
   if (!operation || !operation.id || !operation.transition || !operation.replay) return false;
+  if (operation.status === 'applying' && operation.appliedAt !== undefined) return false;
   if (operation.appliedAt !== undefined &&
     (!Number.isFinite(operation.appliedAt) || operation.appliedAt <= 0)) return false;
   const { transition, replay } = operation;

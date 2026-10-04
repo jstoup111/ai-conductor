@@ -160,6 +160,12 @@ describe('engine/gate-verdicts', () => {
     expect(validRebaseOperationRecord({ ...operation, appliedAt: '123' } as never)).toBe(false);
   });
 
+  it('rejects an applying rebase operation carrying an applied timestamp', () => {
+    const operation = validRebaseOperationFixture();
+
+    expect(validRebaseOperationRecord({ ...operation, appliedAt: 123 })).toBe(false);
+  });
+
   it('accepts legacy rebase operation records without preservation evidence', () => {
     const operation = validRebaseOperationFixture();
 
