@@ -1514,7 +1514,7 @@ describe('CodexProvider', () => {
     expect(result.tokenUsage).toEqual({ input: 8, cacheRead: 4, output: 7, numTurns: 1 });
   });
 
-  it('uses the native exec read-only policy for every unattended review', async () => {
+  it('uses the read-only sandbox and the sole managed producer-root exception for an unattended review', async () => {
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('Reviewed.'), exitCode: 0 } as any);
     const producerRoot = '/workspace/project/.pipeline/session-events/dispatch-1';
 
@@ -1531,27 +1531,26 @@ describe('CodexProvider', () => {
         scope: { kind: 'feature', featureSlug: 'feature-a' },
       },
     } as InvokeOptions & { readOnlyReview: true });
-    await provider.invoke({ ...baseOptions, interactive: false, readOnlyReview: true });
     await provider.invoke({ ...baseOptions, interactive: false });
 
     const [, reviewArgs, reviewOptions] = mockExeca.mock.calls[0];
-    const [, noProducerRootArgs] = mockExeca.mock.calls[1];
-    const [, ordinaryArgs, ordinaryOptions] = mockExeca.mock.calls[2];
+    const [, ordinaryArgs, ordinaryOptions] = mockExeca.mock.calls[1];
     const reviewConfigValues = reviewArgs.flatMap((argument, index) =>
       argument === '--config' ? [reviewArgs[index + 1]] : [],
     );
 
+    // `codex exec` has no -P/--permission-profile option; the profile is
+    // defined and selected through config overrides only.
     expect(reviewArgs[0]).toBe('exec');
     expect(reviewArgs).not.toContain('-P');
     expect(reviewArgs).not.toContain('--permission-profile');
     expect(reviewConfigValues).toEqual(expect.arrayContaining([
-      'sandbox_mode="read-only"',
+      `permissions.conductor-managed-review={extends=":read-only", filesystem={"${producerRoot}"="write"}}`,
+      'default_permissions="conductor-managed-review"',
       'approval_policy="never"',
       'shell_environment_policy.ignore_default_excludes=false',
     ]));
-    expect(noProducerRootArgs.slice(1, 3)).toEqual([
-      '--config', 'sandbox_mode="read-only"',
-    ]);
+    expect(reviewConfigValues).not.toContain('sandbox_mode="read-only"');
     expect(reviewConfigValues).not.toEqual(expect.arrayContaining([
       'sandbox_mode="workspace-write"',
       'sandbox_workspace_write.network_access=true',

@@ -19,8 +19,6 @@ const tempRoot = mkdtempSync(join(tmpdir(), 'read-only-capability-'));
 const scratchDir = join(tempRoot, '.pipeline', 'read-only-capability');
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
 const execFileAsync = promisify(execFile);
-const CODEX_EXEC_ACCEPTED_POLICY_FLAGS = new Set(['-c', '--config', '-s', '--sandbox', '-p', '--profile']);
-const CODEX_READ_ONLY_POLICY = ['--config', 'sandbox_mode="read-only"'];
 
 /** Runs only the probe's inner /bin/sh command, standing in for the Codex sandbox boundary. */
 async function runInnerProbeScript(_executable: string, args: readonly string[]) {
@@ -41,7 +39,7 @@ describe('probeReadOnlyReviewCapability', () => {
       provider: 'codex', platform: 'linux', runProcess, scratchDir,
     })).resolves.toEqual({ provider: 'codex', platform: 'linux', status: 'available' });
     expect(runProcess).toHaveBeenCalledWith('codex', [
-      'sandbox', ...CODEX_READ_ONLY_POLICY, '--', '/bin/sh', '-c', expect.any(String), 'read-only-review-probe',
+      'sandbox', '-P', ':read-only', '--', '/bin/sh', '-c', expect.any(String), 'read-only-review-probe',
       `${scratchDir}/write-probe`, scratchDir,
     ]);
   });
@@ -241,15 +239,34 @@ describe('probeReadOnlyReviewCapability', () => {
 
 describe('buildCodexReadOnlyProducerRootPolicyArgs', () => {
   const producerRoot = '/repo/.pipeline/session-events/dispatch-1';
+  const definition = `permissions.conductor-managed-review={extends=":read-only", filesystem={"${producerRoot}"="write"}}`;
 
-  it.each([undefined, producerRoot])('uses only exec-accepted policy flags without -P for %s', (root) => {
-    const args = buildCodexReadOnlyProducerRootPolicyArgs(root);
+  it('selects the producer-root profile on exec through config only, since exec has no -P option', () => {
+    expect(buildCodexReadOnlyProducerRootPolicyArgs(producerRoot, 'exec')).toEqual([
+      '--config', definition,
+      '--config', 'default_permissions="conductor-managed-review"',
+    ]);
+  });
 
-    expect(args).toEqual(CODEX_READ_ONLY_POLICY);
-    for (const argument of args.filter((argument) => argument.startsWith('-'))) {
-      expect(CODEX_EXEC_ACCEPTED_POLICY_FLAGS).toContain(argument);
-    }
-    expect(args).not.toContain('-P');
+  it('proves the same profile definition in the sandbox probe by name', () => {
+    expect(buildCodexReadOnlyProducerRootPolicyArgs(producerRoot, 'sandbox')).toEqual([
+      '--config', definition,
+      '-P', 'conductor-managed-review',
+    ]);
+  });
+
+  it('keeps the plain read-only native review profile on exec without a producer root', () => {
+    expect(buildCodexReadOnlyProducerRootPolicyArgs(undefined, 'exec')).toEqual([
+      '--config', 'sandbox_mode="read-only"',
+    ]);
+    expect(buildCodexReadOnlyProducerRootPolicyArgs(undefined, 'sandbox')).toEqual(['-P', ':read-only']);
+  });
+
+  it('quotes a producer root containing TOML-significant characters', () => {
+    const [, quoted] = buildCodexReadOnlyProducerRootPolicyArgs('/repo/a "b"\\c', 'exec');
+    expect(quoted).toBe(
+      'permissions.conductor-managed-review={extends=":read-only", filesystem={"/repo/a \\"b\\"\\\\c"="write"}}',
+    );
   });
 });
 
@@ -273,7 +290,7 @@ describe('probeManagedObservationDestination', () => {
       provider: 'codex', producerRoot, protectedPaths, executable: '/isolated/codex', runProcess,
     })).resolves.toEqual({ producerWrite: 'allowed', protectedWrites: 'refused' });
     expect(runProcess).toHaveBeenCalledWith('/isolated/codex', [
-      'sandbox', ...CODEX_READ_ONLY_POLICY, '--',
+      'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(producerRoot, 'sandbox'), '--',
       '/bin/bash', '-c', expect.any(String), 'managed-observation-policy',
       producerRoot,
     ]);
