@@ -187,7 +187,11 @@ async function writeCompletedTaskStatus(projectDir: string, ids: readonly string
   }));
 }
 
-async function runConflictReplay(conflict: boolean, coverage = true) {
+async function runConflictReplay(
+  conflict: boolean,
+  coverage = true,
+  options: { events?: { emit(event: unknown): Promise<void> }; judgeEnabled?: boolean } = {},
+) {
   const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-conflict-runner-'));
   const featureDesc = 'conflict-replay';
   const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
@@ -213,7 +217,11 @@ async function runConflictReplay(conflict: boolean, coverage = true) {
   }) };
   const envelope = memoryEnvelopeFilesystem();
   const runner = new DefaultStepRunner(provider, 'coverage-conflict-runner', projectDir, {
-    featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true, batch_size: 8 } } }, coverageBindingFilesystem: envelope.filesystem,
+    featureDesc,
+    planPath,
+    config: { coverage_binding: { judge: { enabled: options.judgeEnabled ?? true, batch_size: 8 } } },
+    coverageBindingFilesystem: envelope.filesystem,
+    events: options.events as never,
   });
   return { projectDir, runner, provider, envelope };
 }
@@ -697,6 +705,59 @@ describe('coverage-binding runner batches', () => {
     try {
       await expect(replay.runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
       expect(replay.provider.invoke).toHaveBeenCalledTimes(1);
+    } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
+  });
+
+  it('emits one conflict judgement per claim without introducing a conflict-specific halt event', async () => {
+    const events: unknown[] = [];
+    const replay = await runConflictReplay(true, true, { events: { emit: async (event) => { events.push(event); } } });
+    try {
+      await expect(replay.runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
+        success: false,
+        refusal: { kind: 'needs-human' },
+      });
+
+      expect(events).toEqual([
+        expect.objectContaining({
+          type: 'coverage_binding_judged',
+          verdict: 'asserts',
+        }),
+        {
+          type: 'coverage_binding_conflict_judged',
+          step: 'coverage_binding',
+          claimKind: 'criterion',
+          claimId: 'stories#criterion-1',
+          verdict: 'conflicts',
+          taskIds: ['1'],
+        },
+      ]);
+      expect(events.map((event) => (event as { type: string }).type)).not.toContain('coverage_binding_conflict_halted');
+    } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
+  });
+
+  it('emits unjudged conflict observations without dispatching a disabled judge', async () => {
+    const events: unknown[] = [];
+    const replay = await runConflictReplay(false, true, {
+      judgeEnabled: false,
+      events: { emit: async (event) => { events.push(event); } },
+    });
+    try {
+      await expect(replay.runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
+        success: true,
+        output: 'coverage_binding judge disabled',
+      });
+      expect(replay.provider.invoke).not.toHaveBeenCalled();
+      expect(events).toEqual([
+        {
+          type: 'coverage_binding_conflict_judged',
+          step: 'coverage_binding',
+          claimKind: 'criterion',
+          claimId: 'stories#criterion-1',
+          verdict: 'unjudged',
+          taskIds: [],
+        },
+        { type: 'coverage_binding_disabled', step: 'coverage_binding' },
+      ]);
     } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
   });
 });

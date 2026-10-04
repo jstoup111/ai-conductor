@@ -358,6 +358,10 @@ const { coverage_binding_disabled: _coverageBindingDisabledOmitted, ...missingCo
 // @ts-expect-error -- coverage_binding_disabled must declare every sink decision.
 missingCoverageBindingDisabled satisfies Record<ConductorEvent['type'], SinkDeclaration>;
 
+const { coverage_binding_conflict_judged: _coverageBindingConflictJudgedOmitted, ...missingCoverageBindingConflictJudged } = EVENT_SINKS;
+// @ts-expect-error -- coverage_binding_conflict_judged must declare every sink decision.
+missingCoverageBindingConflictJudged satisfies Record<ConductorEvent['type'], SinkDeclaration>;
+
 // @ts-expect-error -- coverage_binding is intentionally terminal-only telemetry.
 const coverageBindingStarted: Extract<ConductorEvent, { type: 'coverage_binding_started' }> = { type: 'coverage_binding_started' };
 // @ts-expect-error -- coverage_binding halts are represented by the ordinary step outcome.
@@ -589,6 +593,8 @@ describe('event sink subscriptions', () => {
   it('persists coverage-binding terminal observations without rendering, audit, or OpenTelemetry', () => {
     expect({
       judged: EVENT_SINKS.coverage_binding_judged,
+      amendmentJudged: EVENT_SINKS.coverage_binding_amendment_judged,
+      conflictJudged: EVENT_SINKS.coverage_binding_conflict_judged,
       disabled: EVENT_SINKS.coverage_binding_disabled,
       persisted: persistedEventTypes(),
       rendered: renderedEventTypes(),
@@ -596,11 +602,13 @@ describe('event sink subscriptions', () => {
       otel: otelEventTypes(),
     }).toMatchObject({
       judged: { render: false, persist: true, audit: false, otel: false },
+      amendmentJudged: { render: false, persist: true, audit: false, otel: false },
+      conflictJudged: { render: false, persist: true, audit: false, otel: false },
       disabled: { render: false, persist: true, audit: false, otel: false },
-      persisted: expect.arrayContaining(['coverage_binding_judged', 'coverage_binding_disabled']),
-      rendered: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_disabled']),
-      audited: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_disabled']),
-      otel: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_disabled']),
+      persisted: expect.arrayContaining(['coverage_binding_judged', 'coverage_binding_amendment_judged', 'coverage_binding_conflict_judged', 'coverage_binding_disabled']),
+      rendered: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_amendment_judged', 'coverage_binding_conflict_judged', 'coverage_binding_disabled']),
+      audited: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_amendment_judged', 'coverage_binding_conflict_judged', 'coverage_binding_disabled']),
+      otel: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_amendment_judged', 'coverage_binding_conflict_judged', 'coverage_binding_disabled']),
     });
   });
 
