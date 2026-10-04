@@ -63,6 +63,12 @@ export interface StepDefinition {
   isCheckpoint: boolean;
   skillName?: string;
   /**
+   * This built-in step may be declared inapplicable for one feature by its
+   * merged DECIDE marker. Absence deliberately denies the declaration; custom
+   * steps are never declarable.
+   */
+  featureInapplicableAllowed?: true;
+  /**
    * The completion predicate mechanically re-verifies the current tree or
    * history, meeting adr-2026-07-08's admission bar (ADR-1 D1).
    */

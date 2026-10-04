@@ -152,6 +152,7 @@ export const ALL_STEPS: StepDefinition[] = [
     skippableForTiers: ['S'],
     isCheckpoint: false,
     skillName: 'writing-system-tests',
+    featureInapplicableAllowed: true,
   },
   {
     name: 'build',
@@ -207,6 +208,7 @@ export const ALL_STEPS: StepDefinition[] = [
     skippableForTiers: ['S'],
     isCheckpoint: true,
     skillName: 'manual-test',
+    featureInapplicableAllowed: true,
     loopGate: true,
     preservableOnStale: true,
     // Opt-in to per-project config disable (`steps.manual_test.disable: true`).
@@ -501,6 +503,28 @@ export function getSkippableSteps(tier: ComplexityTier): StepName[] {
   return ALL_STEPS
     .filter((s) => s.skippableForTiers.includes(tier))
     .map((s) => s.name);
+}
+
+export type FeatureDeclarabilityResult =
+  | { ok: true }
+  | { ok: false; step: string; reason: 'not-declarable' };
+
+/**
+ * Returns whether a feature's merged DECIDE marker may declare this step
+ * inapplicable. Only explicitly opted-in built-ins qualify; custom steps are
+ * always rejected, including before a name could be looked up as a built-in.
+ */
+export function isFeatureDeclarable(
+  name: string,
+  customStepNames: readonly string[],
+): FeatureDeclarabilityResult {
+  if (customStepNames.includes(name)) {
+    return { ok: false, step: name, reason: 'not-declarable' };
+  }
+
+  const definition = stepMap.get(name as StepName);
+  if (definition?.featureInapplicableAllowed) return { ok: true };
+  return { ok: false, step: name, reason: 'not-declarable' };
 }
 
 export function isCheckpointStep(step: StepName): boolean {
