@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:2, task:6
 import { describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile, chmod } from 'node:fs/promises';
@@ -11,27 +11,69 @@ import {
   realProviderHomeFs,
   type ProviderHomeFs,
 } from '../../../src/engine/self-host/provider-home.js';
-import { ProviderCapabilityUnsupportedError } from '../../../src/execution/provider-catalog.js';
+import { ProviderSetupUnavailableError } from '../../../src/engine/provider-setup-failure.js';
 import { OPERATOR_ONLY_SKILLS } from '../../../src/engine/worktree-prepare.js';
 
 const execFile = promisify(execFileCb);
 
 describe('provider-aware self-host homes', () => {
-  it('refuses Pi self-host preparation before the provider-owned spawn boundary', async () => {
-    const spawn = vi.fn();
-
-    await expect(provisionProviderHome({
-      provider: { id: 'pi', prepareSelfHostAuth: spawn },
-      worktreeRoot: '/unused-worktree',
-      baseDir: '/unused-homes',
-    })).rejects.toMatchObject({
-      name: ProviderCapabilityUnsupportedError.name,
-      provider: 'pi',
-      capability: 'selfHost',
-      owningIntake: '#1887',
+  it('gives Pi an isolated child environment without any other provider state', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-provider-home-env-'));
+    const worktree = join(root, 'worktree');
+    await mkdir(join(worktree, 'skills'), { recursive: true });
+    const home = await provisionProviderHome({
+      provider: { id: 'pi' },
+      worktreeRoot: worktree,
+      baseDir: root,
+      parentEnv: {
+        PATH: '/usr/bin',
+        PI_CODING_AGENT_DIR: '/live/pi',
+        PI_CODING_AGENT_SESSION_DIR: '/live/pi-sessions',
+        CODEX_HOME: '/live/codex',
+        CLAUDE_CONFIG_DIR: '/live/claude',
+        CLAUDE_CODE_OAUTH_TOKEN: 'live-token',
+      },
     });
+    try {
+      expect({
+        piHome: home.childEnv().PI_CODING_AGENT_DIR,
+        retainedPath: home.childEnv().PATH,
+        agentsView: await access(join(home.homeDir, '.agents')).then(() => 'present', () => 'absent'),
+        removed: [
+          home.childEnv().PI_CODING_AGENT_SESSION_DIR,
+          home.childEnv().CODEX_HOME,
+          home.childEnv().CLAUDE_CONFIG_DIR,
+          home.childEnv().CLAUDE_CODE_OAUTH_TOKEN,
+        ],
+      }).toEqual({ piHome: home.homeDir, retainedPath: '/usr/bin', agentsView: 'absent', removed: [undefined, undefined, undefined, undefined] });
+    } finally {
+      await home.teardown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
-    expect(spawn).not.toHaveBeenCalled();
+  it('preserves branded Pi setup-unavailability after releasing its scratch lease', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-provider-home-unavailable-'));
+    const worktree = join(root, 'worktree');
+    const scratchHome = join(worktree, '.daemon', 'scratch', 'run-2', '1-pi');
+    const unavailable = new ProviderSetupUnavailableError({
+      provider: 'pi', capability: 'self-host-isolation', reason: 'credential unavailable', recoveryAction: 'configure Pi',
+    });
+    await mkdir(join(worktree, 'skills'), { recursive: true });
+    try {
+      const error = await provisionProviderHome({
+        provider: { id: 'pi', prepareSelfHostAuth: async () => { throw unavailable; } },
+        worktreeRoot: worktree,
+        repository: 'owner/repository',
+        featureSlug: 'provider-home-unavailable',
+        runId: 'run-2',
+        attempt: 1,
+      }).then(() => undefined, (failure: unknown) => failure);
+      await expect(access(scratchHome)).rejects.toThrow();
+      expect(error).toBe(unavailable);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('provisions a Codex home from the worktree scratch root unless baseDir is explicit', async () => {
@@ -298,7 +340,7 @@ describe('provider-aware self-host homes', () => {
   // provider. Claude honors a `skillOverrides` entry; Codex discovers skills by
   // listing the directory and honors no override — so the enforcement that
   // covers both is pruning the throwaway copy, leaving no artifact to load.
-  it.each(['claude', 'codex'] as const)(
+  it.each(['claude', 'codex', 'pi'] as const)(
     'prunes every operator-only skill from the %s throwaway skills copy, leaving the worktree intact',
     async (providerId) => {
       const root = await mkdtemp(join(tmpdir(), 'operator-only-home-'));
