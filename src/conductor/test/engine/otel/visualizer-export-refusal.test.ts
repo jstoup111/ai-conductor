@@ -47,7 +47,7 @@ describe('OTel visualizer export refusal', () => {
         branch: 'feature', engineVersion: 'test', harnessVersion: 'test', env: { AI_CONDUCTOR_NO_REAL_EXEC: '1' },
       }, events);
       await Promise.resolve();
-      await expect(events.emit({ type: 'feature_dispatch_started', slug: 'feature', kind: 'feature' })).resolves.toBeUndefined();
+      await expect(events.emit({ type: 'feature_dispatch_started', slug: 'feature', kind: 'initial' })).resolves.toBeUndefined();
       await expect(events.emit({ type: 'step_started', step: 'build', index: 1 })).resolves.toBeUndefined();
       await expect(events.emit({ type: 'step_completed', step: 'build', status: 'done' })).resolves.toBeUndefined();
       expect(visualizer).toBeNull();

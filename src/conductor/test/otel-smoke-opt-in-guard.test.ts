@@ -15,7 +15,7 @@ const exemptions = [
 
 async function offenders(root: string): Promise<string[]> {
   const testRoot = await stat(join(root, 'test')).then(() => join(root, 'test')).catch(() => root);
-  const all = globSync(testRoot === root ? '**/*.ts' : 'test/**/*.ts', { cwd: root, nodir: true });
+  const all = globSync(testRoot === root ? '**/*.ts' : 'test/**/*.ts', { cwd: root });
   const smokeIncludes = smokeConfig.test?.include ?? [];
   return (await Promise.all(all.map(async (path) => {
     if (exemptions.includes(path as typeof exemptions[number]) || smokeIncludes.some((glob) => matchesGlob(path, glob))) return null;
