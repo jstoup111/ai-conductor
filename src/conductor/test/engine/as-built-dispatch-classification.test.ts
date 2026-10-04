@@ -282,7 +282,9 @@ describe('architecture_review_as_built dispatch classification', () => {
       events: new ConductorEventEmitter(),
     });
     const handshake = (conductor as unknown as {
-      verdictDispatchHandshake: (step: StepName, runId: string, startedAt: number, dispatchOutput?: string) => Promise<unknown>;
+      verdictDispatchHandshake: (step: StepName, runId: string, startedAt: number, dispatchOutput?: string) => Promise<{
+        done: false; routeClass: 'absent'; retrySignal?: string; reason: string;
+      } | undefined>;
     }).verdictDispatchHandshake;
 
     const rejection = 'structured-result-rejected: findings: not permitted for verdict APPROVED';
@@ -292,9 +294,9 @@ describe('architecture_review_as_built dispatch classification', () => {
       routeClass: 'absent',
       retrySignal: 'structured-result-rejected',
     });
-    expect(result.reason).toContain('architecture_review_as_built dispatch rejected-attempt produced no verdict');
-    expect(result.reason).toContain('expected terminal typed output .pipeline/architecture-review-as-built.json');
-    expect(result.reason).toContain('findings: not permitted for verdict APPROVED');
+    expect(result?.reason).toContain('architecture_review_as_built dispatch rejected-attempt produced no verdict');
+    expect(result?.reason).toContain('expected terminal typed output .pipeline/architecture-review-as-built.json');
+    expect(result?.reason).toContain('findings: not permitted for verdict APPROVED');
   });
 
   it('names the current attempt and expected typed output when a prose-only as-built dispatch has no verdict', async () => {
