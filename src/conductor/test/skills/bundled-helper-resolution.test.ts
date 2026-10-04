@@ -1,7 +1,6 @@
 // Covers: task:1
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { externalFixturePrefix } from '../tmpdir-leak-guard.js';
@@ -82,10 +81,10 @@ afterEach(async () => {
 });
 
 describe('bundled intake helper', () => {
-  it('contains its fixture under the worker-scoped temp root', async () => {
+  it('contains its fixture under the attributed external temp root', async () => {
     const setup = await fixture();
 
-    expect(resolve(setup.root).startsWith(`${resolve(tmpdir())}${sep}`)).toBe(true);
+    expect(resolve(setup.root).startsWith(resolve(externalFixturePrefix('bundled-intake-helper')))).toBe(true);
   });
 
   it('resolves a symlinked skill to its harness while preserving the caller directory and argument order', async () => {
