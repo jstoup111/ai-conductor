@@ -1,6 +1,7 @@
 // Covers: task:3
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,6 +33,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { persistPrdWideningOffers } from '../../src/engine/prd-widening-offers.js';
 import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
 import type { ConductState, StepDefinition, StepName } from '../../src/types/index.js';
+import type { RebasePreservedCandidate } from '../../src/engine/gate-verdicts.js';
 
 const report = [
   '**PRD:** none',
@@ -63,12 +65,37 @@ const resumedSteps: StepDefinition[] = [
   },
 ];
 
+const buildReviewVerdict = { satisfied: true, checkedAt: 100 };
+const replay = { preRebaseHead: 'pre', mergeBase: 'base', target: 'main', completedHead: 'head', expectedTree: 'tree' };
+
+function fixtureCandidate(gate: 'build_review' | 'prd_audit'): RebasePreservedCandidate {
+  const originalVerdict = gate === 'build_review'
+    ? buildReviewVerdict
+    : { satisfied: true, checkedAt: 99 };
+  const originalVerdictDigest = `sha256:${createHash('sha256').update(JSON.stringify(originalVerdict)).digest('hex')}`;
+  return {
+    gate,
+    original: {
+      artifactDigest: `sha256:${createHash('sha256').update(`${gate}-artifact`).digest('hex')}`,
+      attemptId: `${gate}-attempt`,
+      runId: `${gate}-run`,
+      codeStamp: 'head',
+    },
+    originalVerdictDigest,
+    relevantInputIdentities: [`.docs/specs/${gate}.md@sha256:${gate}-input`],
+  };
+}
+
+const preservationEvidence = [fixtureCandidate('build_review'), fixtureCandidate('prd_audit')];
+const buildReviewCandidate = preservationEvidence[0]!;
+
 const rebaseOperation = {
   id: 'rebase-operation-2983',
   status: 'applied' as const,
   appliedAt: 100,
   transition: { preserved: ['build_review', 'prd_audit'] as StepName[], invalidated: [], reverified: [] },
-  replay: { preRebaseHead: 'pre', mergeBase: 'base', target: 'main', completedHead: 'head', expectedTree: 'tree' },
+  replay,
+  preservationEvidence,
 };
 
 describe('integration/rebase-fence-over-scope-resume (#2983)', () => {
@@ -83,9 +110,14 @@ describe('integration/rebase-fence-over-scope-resume (#2983)', () => {
     await writeState(stateFilePath, { prd_audit: 'pending' } as ConductState);
     await writeVerdict(projectRoot, 'rebase', { satisfied: true, checkedAt: 150, rebaseOperation });
     await writeVerdict(projectRoot, 'build_review', {
-      satisfied: true,
-      checkedAt: 100,
-      preservation: { gate: 'build_review', operationId: rebaseOperation.id },
+      ...buildReviewVerdict,
+      preservation: {
+        gate: 'build_review',
+        original: buildReviewCandidate.original,
+        replay: rebaseOperation.replay,
+        relevantInputIdentities: buildReviewCandidate.relevantInputIdentities,
+        operationId: rebaseOperation.id,
+      },
     });
     await writeVerdict(projectRoot, 'prd_audit', { satisfied: false, checkedAt: 200 });
 
