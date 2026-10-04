@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-04T00:35:54.549Z
+Status: halted
 Slug: tasks-close-with-boilerplate-done-when-evidence-mi
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-tasks-close-with-boilerplate-done-when-evidence-mi
-Head SHA: 48783e6d0fd65fe76578809feeae96d5f40290b2
-Halted at: 2026-10-03T23:51:31.579Z
+Head SHA: 22f60d5f52c8f6af117c03904793204f638b6882
+Halted at: 2026-10-04T01:09:16.017Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
