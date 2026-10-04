@@ -28,7 +28,10 @@ export interface ExporterBuildOptions {
 type ExporterBuildEnvironment = NodeJS.ProcessEnv;
 
 function exporterBuildOptions(options: ExporterBuildOptions | ExporterBuildEnvironment): ExporterBuildOptions {
-  if ('env' in options || 'spoolStore' in options || 'events' in options) {
+  // The default empty options object is options, not an explicitly supplied
+  // empty environment: otherwise it suppresses the process-environment
+  // refusal fallback below.
+  if (Object.keys(options).length === 0 || 'env' in options || 'spoolStore' in options || 'events' in options) {
     return options as ExporterBuildOptions;
   }
   return { env: options as ExporterBuildEnvironment };
@@ -87,7 +90,7 @@ export function buildExporters(
 ): Exporters {
   const options = exporterBuildOptions(suppliedOptions);
   if (config.exporter === 'otlp') {
-    const message = otlpExportRefusal(options.env ?? process.env);
+    const message = otlpExportRefusal(options.env ?? globalThis.process.env);
     if (message) return { refused: true, message } as unknown as Exporters;
     const url = config.endpoint;
     if (config.protocol === 'grpc') {

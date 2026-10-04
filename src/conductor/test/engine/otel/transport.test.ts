@@ -4,8 +4,8 @@
  * FR-7: OTLP HTTP default (port 4318), gRPC (port 4317) selectable via config,
  *       file transport writes OTLP-JSON newline-delimited.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir } from 'fs/promises';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtemp, rm, mkdir, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -19,6 +19,41 @@ import { OTLPMetricExporter as OTLPGrpcMetricExporter } from '@opentelemetry/exp
 import { OTLPTraceExporter as OTLPHttpTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { OTLPMetricExporter as OTLPHttpMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
 import { AggregationTemporality, InstrumentType } from '@opentelemetry/sdk-metrics';
+import { BasicTracerProvider } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
+
+// Keep the real exporter implementation, but count construction at the
+// third-party boundary. A refusal must return before either protocol can
+// allocate an exporter (and therefore before it could open a connection).
+const otlpConstructors = vi.hoisted(() => ({ httpTrace: 0, httpMetric: 0, grpcTrace: 0, grpcMetric: 0 }));
+vi.mock('@opentelemetry/exporter-trace-otlp-http', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@opentelemetry/exporter-trace-otlp-http')>();
+  class CountingTraceExporter extends actual.OTLPTraceExporter {
+    constructor(...args: any[]) { otlpConstructors.httpTrace += 1; super(...args); }
+  }
+  return { ...actual, OTLPTraceExporter: CountingTraceExporter };
+});
+vi.mock('@opentelemetry/exporter-metrics-otlp-http', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@opentelemetry/exporter-metrics-otlp-http')>();
+  class CountingMetricExporter extends actual.OTLPMetricExporter {
+    constructor(...args: any[]) { otlpConstructors.httpMetric += 1; super(...args); }
+  }
+  return { ...actual, OTLPMetricExporter: CountingMetricExporter };
+});
+vi.mock('@opentelemetry/exporter-trace-otlp-grpc', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@opentelemetry/exporter-trace-otlp-grpc')>();
+  class CountingTraceExporter extends actual.OTLPTraceExporter {
+    constructor(...args: any[]) { otlpConstructors.grpcTrace += 1; super(...args); }
+  }
+  return { ...actual, OTLPTraceExporter: CountingTraceExporter };
+});
+vi.mock('@opentelemetry/exporter-metrics-otlp-grpc', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@opentelemetry/exporter-metrics-otlp-grpc')>();
+  class CountingMetricExporter extends actual.OTLPMetricExporter {
+    constructor(...args: any[]) { otlpConstructors.grpcMetric += 1; super(...args); }
+  }
+  return { ...actual, OTLPMetricExporter: CountingMetricExporter };
+});
 
 // Existing construction coverage exercises the production path deliberately,
 // but must not inherit the suite-wide network-export refusal marker.
@@ -78,6 +113,7 @@ describe('buildExporters', () => {
   describe('otlp exporter', () => {
     it('refuses HTTP and gRPC OTLP construction under the test marker unless smoke opts in', () => {
       for (const protocol of [undefined, 'grpc'] as const) {
+        const before = { ...otlpConstructors };
         const resolved = resolveOtelConfig(
           { otel: { exporter: 'otlp', endpoint: 'http://127.0.0.1:4318', ...(protocol ? { protocol } : {}) } },
           pipelineDir,
@@ -87,6 +123,7 @@ describe('buildExporters', () => {
         });
         expect(refused).toMatchObject({ refused: true });
         expect((refused as unknown as { message: string }).message).toContain('AI_CONDUCTOR_OTEL_SMOKE');
+        expect(otlpConstructors).toEqual(before);
       }
 
       const resolved = resolveOtelConfig(
@@ -96,6 +133,26 @@ describe('buildExporters', () => {
       expect(buildRawExporters(resolved as Extract<typeof resolved, { enabled: true }>, {
         env: { AI_CONDUCTOR_NO_REAL_EXEC: '1', AI_CONDUCTOR_OTEL_SMOKE: '1' },
       }).spanExporter).toBeDefined();
+    });
+
+    it('uses the marked process environment when no env argument is supplied', () => {
+      const priorMarker = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+      expect(process.env.AI_CONDUCTOR_NO_REAL_EXEC).toBe('1');
+      expect(globalThis.process.env.AI_CONDUCTOR_NO_REAL_EXEC).toBe('1');
+      const resolved = resolveOtelConfig(
+        { otel: { exporter: 'otlp', endpoint: 'http://127.0.0.1:4318' } },
+        pipelineDir,
+      );
+      const refused = buildRawExporters(resolved as Extract<typeof resolved, { enabled: true }>);
+
+      try {
+        expect(refused).toMatchObject({ refused: true });
+        expect((refused as unknown as { message: string }).message).toContain('AI_CONDUCTOR_NO_REAL_EXEC');
+      } finally {
+        if (priorMarker === undefined) delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+        else process.env.AI_CONDUCTOR_NO_REAL_EXEC = priorMarker;
+      }
     });
 
     it('returns spanExporter and metricExporter for otlp config', () => {
@@ -258,6 +315,23 @@ describe('buildExporters', () => {
       // Even an empty export should create the file
       await exporters.spanExporter.shutdown();
       // File may or may not exist for empty export; the key contract is no throw
+    });
+
+    it('keeps file export available under the test marker and appends an exported span', async () => {
+      const filePath = join(pipelineDir, 'marked-otel.jsonl');
+      const resolved = resolveOtelConfig({ otel: { exporter: 'file', file: filePath } }, pipelineDir);
+      const exporters = buildRawExporters(resolved as Extract<typeof resolved, { enabled: true }>);
+      const provider = new BasicTracerProvider();
+      const span = provider.getTracer('marked-file-export').startSpan('under-marker');
+      span.end();
+
+      await new Promise<void>((resolve, reject) => exporters.spanExporter.export(
+        [span as unknown as ReadableSpan],
+        (result) => result.code === 0 ? resolve() : reject(new Error(result.error?.message)),
+      ));
+
+      expect((await readFile(filePath, 'utf8')).trim()).not.toBe('');
+      await exporters.spanExporter.shutdown();
     });
 
     it('file exporter class exposes a shutdown method', () => {
