@@ -299,6 +299,9 @@ export function workOrderToBacklogItem(order: WorkOrder): BacklogItem {
     ...(order.track ? { track: order.track } : {}),
     ...(order.band ? { band: order.band } : {}),
     ...(order.resolutionMode ? { resolutionMode: order.resolutionMode } : {}),
+    ...(order.applicabilityDeclarations ? { applicabilityDeclarations: order.applicabilityDeclarations } : {}),
+    ...(order.applicabilityBaseContentSha256 ? { applicabilityBaseContentSha256: order.applicabilityBaseContentSha256 } : {}),
+    ...(order.applicabilityIgnored ? { applicabilityIgnored: order.applicabilityIgnored } : {}),
   };
 }
 
@@ -1832,6 +1835,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         track: item.track,
         band: item.band,
         resolutionMode: item.resolutionMode,
+        applicabilityDeclarations: item.applicabilityDeclarations,
+        applicabilityBaseContentSha256: item.applicabilityBaseContentSha256,
+        applicabilityIgnored: item.applicabilityIgnored,
       },
       workOrderGit,
     );

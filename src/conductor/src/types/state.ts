@@ -14,6 +14,8 @@ export type FeatureInapplicableRecord = FeatureApplicabilityDeclaration;
 /** A base marker which is retained for reporting but cannot be honored. */
 export interface FeatureApplicabilityIgnored {
   cause: 'invalid' | 'toggle-off';
+  /** Parsed declarations retained when a marker is disabled by configuration. */
+  steps?: StepName[];
   detail?: { kind: string; line: number; step?: string };
 }
 

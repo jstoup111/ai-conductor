@@ -4217,11 +4217,7 @@ export function parseApplicability(content: string): ParseApplicabilityResult {
 
     const body = line.slice('Inapplicable:'.length);
     const emDashIndex = body.indexOf(' — ');
-    const hyphenIndex = body.indexOf(' - ');
-    const separatorIndex = [emDashIndex, hyphenIndex]
-      .filter((position) => position >= 0)
-      .reduce<number | undefined>((first, position) =>
-        first === undefined || position < first ? position : first, undefined);
+    const separatorIndex = emDashIndex >= 0 ? emDashIndex : undefined;
     const lineNumber = index + 1;
 
     if (separatorIndex === undefined) {

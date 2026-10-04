@@ -697,7 +697,9 @@ export async function scanInheritedState(
         if (tier) entry.tier = tier;
         if (prUrl) entry.prUrl = prUrl;
         if (Array.isArray(state.feature_inapplicable)) {
-          entry.inapplicable = state.feature_inapplicable.map(({ step, reason }) => ({ step, reason }));
+          entry.inapplicable = state.feature_inapplicable
+            .filter(({ step }) => state[step] === 'skipped')
+            .map(({ step, reason }) => ({ step, reason }));
         }
       }
       // Best-effort: a missing/malformed heartbeat file is "no heartbeat yet",

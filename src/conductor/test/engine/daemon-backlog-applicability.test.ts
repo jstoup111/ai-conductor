@@ -88,6 +88,6 @@ describe('daemon backlog applicability seeding', () => {
       featureApplicabilityEnabled: false,
     })).items[0];
     expect(item.applicabilityDeclarations).toEqual([]);
-    expect(item.applicabilityIgnored).toEqual({ cause: 'toggle-off' });
+    expect(item.applicabilityIgnored).toEqual({ cause: 'toggle-off', steps: ['manual_test'] });
   });
 });

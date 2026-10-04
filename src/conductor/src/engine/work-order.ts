@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { posix, win32 } from 'node:path';
 import type { ComplexityTier, Track } from '../types/steps.js';
+import type { FeatureApplicabilityDeclaration, FeatureApplicabilityIgnored } from '../types/state.js';
 
 /** A document carried across the dispatcher-to-executor boundary. */
 export interface ManifestEntry {
@@ -26,6 +27,9 @@ export interface WorkOrder {
   track?: Track;
   band?: string;
   resolutionMode?: 'banded' | 'fallback' | 'off';
+  applicabilityDeclarations?: FeatureApplicabilityDeclaration[];
+  applicabilityBaseContentSha256?: string;
+  applicabilityIgnored?: FeatureApplicabilityIgnored;
 }
 
 export interface WorkOrderGitResult {
@@ -61,6 +65,9 @@ export interface BuildWorkOrderInput {
   track?: Track;
   band?: string;
   resolutionMode?: 'banded' | 'fallback' | 'off';
+  applicabilityDeclarations?: FeatureApplicabilityDeclaration[];
+  applicabilityBaseContentSha256?: string;
+  applicabilityIgnored?: FeatureApplicabilityIgnored;
 }
 
 /**
@@ -98,6 +105,9 @@ export async function buildWorkOrder(
     ...(input.track ? { track: input.track } : {}),
     ...(input.band ? { band: input.band } : {}),
     ...(input.resolutionMode ? { resolutionMode: input.resolutionMode } : {}),
+    ...(input.applicabilityDeclarations ? { applicabilityDeclarations: input.applicabilityDeclarations } : {}),
+    ...(input.applicabilityBaseContentSha256 ? { applicabilityBaseContentSha256: input.applicabilityBaseContentSha256 } : {}),
+    ...(input.applicabilityIgnored ? { applicabilityIgnored: input.applicabilityIgnored } : {}),
   };
 }
 

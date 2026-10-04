@@ -1187,11 +1187,18 @@ export async function discoverBacklog(
     let applicabilityIgnored: import('../types/state.js').FeatureApplicabilityIgnored | undefined;
     if (applicabilityMarker.content !== null) {
       applicabilityBaseContentSha256 = `sha256:${createHash('sha256').update(applicabilityMarker.content, 'utf8').digest('hex')}`;
+      // Parse with the capability enabled first so a disabled marker retains
+      // the steps it would otherwise have declared for truthful reporting.
       const validation = validateApplicability(applicabilityMarker.content, {
-        enabled: opts.featureApplicabilityEnabled ?? false,
+        enabled: true,
         customStepNames: opts.featureApplicabilityCustomStepNames ?? [],
       });
-      if (validation.ok) {
+      if (!(opts.featureApplicabilityEnabled ?? false)) {
+        applicabilityIgnored = {
+          cause: 'toggle-off',
+          ...(validation.ok ? { steps: validation.declarations.map((entry) => entry.step as import('../types/steps.js').StepName) } : {}),
+        };
+      } else if (validation.ok) {
         const decider = await (opts.resolveMarkerDecider ?? resolveMarkerDecider)(
           projectRoot,
           baseBranch,
@@ -1208,8 +1215,6 @@ export async function discoverBacklog(
             ...(decider.commit ? { commit: decider.commit } : {}),
           });
         }
-      } else if (validation.error.kind === 'capability-disabled') {
-        applicabilityIgnored = { cause: 'toggle-off' };
       } else {
         applicabilityIgnored = { cause: 'invalid', detail: validation.error };
       }

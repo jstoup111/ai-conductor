@@ -24,12 +24,14 @@ export function validateApplicability(
   content: string,
   { enabled, customStepNames }: ApplicabilityValidationOptions,
 ): ApplicabilityValidationResult {
+  // A marker is an opt-in to the capability, even when it contains only
+  // explanatory prose.  Reject it before parsing so an empty marker cannot
+  // bypass a disabled capability.
+  if (!enabled) {
+    return { ok: false, error: { kind: 'capability-disabled', line: 1 } };
+  }
   const parsed = parseApplicability(content);
   if (!parsed.ok) return parsed;
-
-  if (parsed.declarations.length > 0 && !enabled) {
-    return { ok: false, error: { kind: 'capability-disabled', line: parsed.declarations[0].line } };
-  }
 
   const seen = new Set<string>();
   for (const declaration of parsed.declarations) {
