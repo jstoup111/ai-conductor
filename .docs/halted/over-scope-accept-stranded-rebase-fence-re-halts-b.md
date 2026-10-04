@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-04T13:42:10.670Z
 Slug: over-scope-accept-stranded-rebase-fence-re-halts-b
 Class: needs-human
 Halting step: unknown
