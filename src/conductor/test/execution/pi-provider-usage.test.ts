@@ -1,3 +1,4 @@
+// Covers: task:1, task:2, task:3, task:4
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 import { PiProvider, type PiEnvironment, type PiSubprocessFactory } from '../../src/execution/pi-provider.js';
@@ -38,8 +39,11 @@ function terminalAssistantMessage(usage?: unknown): string {
   });
 }
 
-async function providerAttemptFor(stdout: string): Promise<ProviderAttemptEvent> {
-  const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+async function providerAttemptFor(stdout: string, exitCode = 0): Promise<{
+  readonly result: Awaited<ReturnType<DefaultStepRunner['run']>>;
+  readonly event: ProviderAttemptEvent;
+}> {
+  const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode });
   const pi = new PiProvider('/resolved/pi', spawn, environment);
   const emitted: ProviderAttemptEvent[] = [];
   const config: HarnessConfig = {
@@ -64,10 +68,10 @@ async function providerAttemptFor(stdout: string): Promise<ProviderAttemptEvent>
     providerAttempt: (step, attempt) => { emitted.push({ type: 'provider_attempt', step, ...attempt }); },
   });
 
-  await expect(runner.run('explore', {})).resolves.toMatchObject({ success: true });
+  const result = await runner.run('explore', {});
   const event = emitted.find((candidate) => candidate.provider === 'pi');
   expect(event).toBeDefined();
-  return event!;
+  return { result, event: event! };
 }
 
 describe('PiProvider usage', () => {
@@ -176,8 +180,42 @@ describe('PiProvider usage', () => {
     })],
     ['all-zero message usage', terminalAssistantMessage({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })],
   ])('emits no token usage in the conductor provider attempt for $0', async (_name, stdout) => {
-    const event = await providerAttemptFor(stdout);
+    const { result, event } = await providerAttemptFor(stdout);
 
+    expect(result).toMatchObject({ success: true });
     expect(event).not.toHaveProperty('tokenUsage');
+  });
+
+  it.each([
+    {
+      name: 'a non-zero exit after a usage-bearing stream',
+      stdout: () => readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8'),
+      exitCode: 1,
+      output: undefined,
+    },
+    {
+      name: 'an error stop with an otherwise successful process exit',
+      stdout: () => readFile(new URL('../fixtures/pi/error-stop-live-capture.jsonl', import.meta.url), 'utf8'),
+      exitCode: 0,
+      output: 'Free tier request failed.',
+    },
+  ])('fails $name without recording token usage in the conductor provider attempt', async ({ stdout, exitCode, output }) => {
+    const { result, event } = await providerAttemptFor(await stdout(), exitCode);
+
+    expect(result).toMatchObject({ success: false, ...(output === undefined ? {} : { output }) });
+    expect(event).not.toHaveProperty('tokenUsage');
+  });
+
+  it('skips malformed JSONL records while retaining usage from terminal assistant messages', async () => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const lines = workedStream.split('\n');
+    lines.splice(10, 0, '{ malformed JSONL');
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout: lines.join('\n'), stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({
+      success: true,
+      tokenUsage: { input: 200, output: 65 },
+    });
   });
 });
