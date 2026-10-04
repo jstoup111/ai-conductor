@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-04T12:37:19.538Z
 Slug: plans-that-contradict-sealed-story-criteria-or-app
 Class: needs-human
 Halting step: unknown
