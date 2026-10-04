@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-04T00:35:54.549Z
 Slug: tasks-close-with-boilerplate-done-when-evidence-mi
 Class: needs-human
 Halting step: unknown
