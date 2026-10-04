@@ -26,7 +26,7 @@ function matchesCandidateVerdict(
   if (verdictDigest(verdict) === candidate.originalVerdictDigest) return true;
   const preservation = verdict.preservation;
   if (!preservation || typeof preservation !== 'object') return false;
-  const stamp = preservation as Record<string, unknown>;
+  const stamp = preservation;
   if (stamp.gate !== candidate.gate || stamp.operationId !== operation.id ||
     JSON.stringify(stamp.original) !== JSON.stringify(candidate.original) ||
     JSON.stringify(stamp.replay) !== JSON.stringify(operation.replay) ||
