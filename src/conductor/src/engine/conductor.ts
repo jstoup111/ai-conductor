@@ -446,7 +446,12 @@ import {
   type CiFailureAttempt,
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
-import { applyRebaseTransition, clampRebaseContinuation, isRebaseCoverageRefresh } from './rebase-transition.js';
+import {
+  applyRebaseTransition,
+  clampRebaseContinuation,
+  completeInterruptedRebaseOperation,
+  isRebaseCoverageRefresh,
+} from './rebase-transition.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import {
   escalateBuildFailure as defaultEscalateBuildFailure,
@@ -6980,6 +6985,29 @@ export class Conductor {
     return parseNameStatus(r.stdout);
   }
 
+  /**
+   * The single objective reuse check for both a live rebase and resume-time
+   * completion of an interrupted rebase operation.  Recovery must not invent
+   * a second authority for whether a tree-attesting gate can remain closed.
+   */
+  private async preVerifyRebaseGate(state: ConductState, step: StepName) {
+    if (step === 'test_suite') {
+      const inspection = await this.fullSuiteVerifier.inspect();
+      if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
+        await this.recordFullSuitePreservation(inspection);
+      }
+      return inspection.status === 'PRESERVED_WITHIN_BUDGET'
+        ? { done: true, preservationBasis: 'test_suite_drift_budget' as const }
+        : { done: inspection.status === 'CURRENT' };
+    }
+    if (step !== 'build') return { done: false };
+    const ctx = await this.completionCtx(state);
+    if (!ctx.planPath) {
+      return { done: false, reason: 'no feature plan resolvable — evidence derivation not engaged; fail-closed' };
+    }
+    return checkStepCompletion(this.projectRoot, 'build', ctx);
+  }
+
   async run(): Promise<OperatorParkedTermination | undefined> {
     this.shutdownRequested = false;
     // #788 regression guard: the phase-active marker creates `.pipeline/`
@@ -7042,7 +7070,46 @@ export class Conductor {
       // A restarted process has no `lastRebaseOutcome`, so the durable
       // operation descriptor is the only authority that can prevent it from
       // selecting finish across an interrupted/inconsistent rebase write.
-      const rebaseClassification = await classifyRebaseOperation(this.projectRoot);
+      let rebaseClassification = await classifyRebaseOperation(this.projectRoot);
+      if (rebaseClassification.kind === 'applying') {
+        const operation = (await readVerdict(this.projectRoot, 'rebase'))?.rebaseOperation;
+        // The classifier has already validated this descriptor. Keep the
+        // defensive guard so a concurrent replacement cannot turn recovery
+        // into an unbounded or malformed state mutation.
+        if (!operation) {
+          await this.writeHaltMarker(
+            'rebase transition record is malformed or inconsistent; reconcile it before publication\n',
+            'needs-human',
+          );
+          return;
+        }
+        const rebaseIndex = indexOf('rebase');
+        const completion = await completeInterruptedRebaseOperation({
+          projectRoot: this.projectRoot,
+          stateFilePath: this.stateFilePath,
+          stateStore: this.stateStore,
+          operation,
+          downstreamSteps: steps.slice(rebaseIndex + 1).map((step) => step.name),
+          preVerify: (step) => this.preVerifyRebaseGate(state, step),
+        });
+        if (completion.stateResult === 'refused') {
+          await this.writeHaltMarker(
+            'rebase continuation state transition was refused; inspect concurrent state updates before resuming\n',
+            'needs-human',
+          );
+          return;
+        }
+        for (const gate of completion.invalidated) {
+          if (state[gate] !== 'skipped') state[gate] = 'pending';
+        }
+        this.recordPersistedFields(completion.invalidated.map((gate) => ({
+          field: gate,
+          expected: undefined,
+          intent: 'complete interrupted rebase operation',
+          next: 'pending' as const,
+        })));
+        rebaseClassification = await classifyRebaseOperation(this.projectRoot);
+      }
       if (rebaseClassification.kind === 'integrity-fault') {
         const rebaseBlocker = rebaseClassification.reason === 'malformed-record'
           ? 'rebase transition record is malformed or inconsistent; reconcile it before publication'
@@ -15408,26 +15475,7 @@ export class Conductor {
     const ranManualTest =
       getStepStatus(state, 'manual_test') !== 'skipped';
 
-    // Task 7: Inject pre-verify capability for daemon build gate-first re-verify.
-    // Closure checks build completion objectively (via evidence) after file-changing rebase.
-    // Non-daemon call site (line 2872) keeps today's behavior with no preVerify.
-    const preVerify = async (step: StepName) => {
-      if (step === 'test_suite') {
-        const inspection = await this.fullSuiteVerifier.inspect();
-        if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
-          await this.recordFullSuitePreservation(inspection);
-        }
-        return inspection.status === 'PRESERVED_WITHIN_BUDGET'
-          ? { done: true, preservationBasis: 'test_suite_drift_budget' as const }
-          : { done: inspection.status === 'CURRENT' };
-      }
-      if (step !== 'build') return { done: false };
-      const ctx = await this.completionCtx(state);
-      if (!ctx.planPath) {
-        return { done: false, reason: 'no feature plan resolvable — evidence derivation not engaged; fail-closed' };
-      }
-      return checkStepCompletion(this.projectRoot, 'build', ctx);
-    };
+    const preVerify = (step: StepName) => this.preVerifyRebaseGate(state, step);
 
     // A completed BUILD is not an ordinary rebase invalidation candidate.
     // Its evidence is the only authority that says the task list can remain
