@@ -888,6 +888,24 @@ is eligible.
 If the grant remains, the feature did not enter the authorized step; re-read the HALT rather than
 clearing it again.
 
+### coverage_binding refused a plan conflict
+
+**Symptom:** `.pipeline/HALT` is `needs-human` and contains `coverage_binding refused: plan tasks
+conflict with sealed criteria or ADR decisions.` Each block names a `Claim` (`stories#criterion-<n>`
+or `<adr-stem>#D<n>`), its text, the conflicting task ids, their Done when checks, and the conflict.
+
+**Diagnosis:** Read the `kind: "conflict"` entries in `.worktrees/<slug>/.pipeline/coverage-binding.json`
+and the `coverage_binding_conflict_judged` events. Decide which side is wrong: the plan task's Done
+when checks, or the sealed criterion or ADR decision. The refusal precedes reopens, so no completed
+task was reopened.
+
+**Recovery:** Revise the wrong artifact by hand per
+[a halt requests a plan revision](#a-halt-requests-a-plan-revision), including the reseal of any
+sealed artifact you amend. Changing a story criterion or ADR decision is a DECIDE change, not a plan
+fix.
+
+**Verification:** The next `coverage-binding.json` has no `conflicts` verdict and the step passes.
+
 ### The halt is a plan gap
 
 **Symptom:** `.pipeline/HALT.class` is `plan-gap`. `prd_audit` or the as-built architecture review
