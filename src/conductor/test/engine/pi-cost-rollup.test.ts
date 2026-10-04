@@ -9,10 +9,12 @@ import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import { type RateCard } from '../../src/execution/rate-card.js';
 import { computeCostRollup } from '../../src/engine/cost-rollup.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { classifyMetering } from '../../src/engine/metering.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
 import { resolveProviderModelPolicy } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet, type ProviderRuntime } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionScope } from '../../src/engine/provider-session.js';
+import { renderShippedRecordWithCost } from '../../src/engine/shipped-record.js';
 import type { ProviderAttemptEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -153,6 +155,46 @@ describe('Pi cost rollup integration', () => {
     expect(rollup.byDimension).not.toContainEqual(expect.objectContaining({
       step: 'build', model: 'openai/gpt-5.6-sol', provider: 'pi', source: 'provider',
     }));
+  });
+
+  it('renders cost-unmetered Pi usage without losing its tokens', async () => {
+    const zeroCostStream = (await workedStream())
+      .replaceAll('"total":0.0021', '"total":0')
+      .replaceAll('"total":0.0014', '"total":0')
+      .replaceAll('"provider":"openai"', '"provider":"cline"')
+      .replaceAll('"model":"gpt-5.6-luna"', '"model":"google/gemma-4-31b-it:free"');
+    await executePi(zeroCostStream);
+
+    const rendered = renderShippedRecordWithCost({
+      slug: 'pi-cost', specHash: 'abc', pr: 'https://example.test/pr/1', shipped: '2026-10-03',
+    }, await computeCostRollup(worktreeDir));
+
+    expect(rendered).toContain('input: 200\noutput: 65\n');
+    expect(rendered).toContain('cost_usd: 0\n');
+    expect(rendered).toContain('cost_unmetered: count: 1\n');
+    expect(rendered).toContain('  pi: input: 200, output: 65, cache_read: 700, cache_creation: 50, cost_usd: 0, dispatches: 1, cost_unmetered: 1\n');
+  });
+
+  it('renders legacy Claude and Codex Cost bytes unchanged', async () => {
+    const claudeUsage = { input: 100, output: 10, cacheRead: 5, cacheCreation: 1, costUsd: 0.01, costSource: 'provider' as const };
+    const codexUsage = { input: 20, output: 2, cacheRead: 3, cacheCreation: 0, costUsd: 0.02, costSource: 'rate-card' as const };
+    await events.emit({ type: 'provider_attempt', step: 'build', provider: 'claude', model: 'claude', outcome: 'success', invoked: true, tokenUsage: claudeUsage });
+    await events.emit({ type: 'provider_attempt', step: 'build_review', provider: 'codex', model: 'codex', outcome: 'success', invoked: true, tokenUsage: codexUsage });
+
+    expect(classifyMetering(claudeUsage)).toBe('fully-metered');
+    expect(classifyMetering(codexUsage)).toBe('fully-metered');
+    const rendered = renderShippedRecordWithCost({
+      slug: 'legacy', specHash: 'def', pr: 'https://example.test/pr/2', shipped: '2026-10-03',
+    }, await computeCostRollup(worktreeDir));
+
+    expect(rendered.slice(rendered.indexOf('## Cost'))).toBe(
+      '## Cost\n' +
+      'input: 120\noutput: 12\ncache_read: 8\ncache_creation: 1\ncost_usd: 0.03\n' +
+      'dispatches: 2\nretries: 0\nhalts: 0\nunmetered: count: 0, duration_ms: 0\ncost_unmetered: count: 0\n' +
+      'providers:\n' +
+      '  claude: input: 100, output: 10, cache_read: 5, cache_creation: 1, cost_usd: 0.01, dispatches: 1, cost_unmetered: 0\n' +
+      '  codex: input: 20, output: 2, cache_read: 3, cache_creation: 0, cost_usd: 0.02, dispatches: 1, cost_unmetered: 0\n',
+    );
   });
 
 });
