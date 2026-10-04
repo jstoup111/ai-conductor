@@ -24,6 +24,8 @@ const contextKeys = [
   VITEST_TMP_SCOPE_ENV,
   VITEST_ORIGINAL_TMPDIR_ENV,
   'TMPDIR',
+  'TMP',
+  'TEMP',
   'GIT_CEILING_DIRECTORIES',
 ];
 
@@ -200,7 +202,12 @@ export function installVitestTmpRoot({
   env[VITEST_TMP_ROOT_ENV] = allocation.root;
   env[VITEST_TMP_SCOPE_ENV] = allocation.scope;
   env[VITEST_ORIGINAL_TMPDIR_ENV] = originalTmpdir;
+  // Some native subprocesses choose TMP or TEMP before TMPDIR.  Keep all
+  // three conventional aliases on the same run root, including callers that
+  // install this module directly rather than going through run-vitest.mjs.
   env.TMPDIR = allocation.root;
+  env.TMP = allocation.root;
+  env.TEMP = allocation.root;
   appendGitCeiling(env, allocation.root);
 
   return {

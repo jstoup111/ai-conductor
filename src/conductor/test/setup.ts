@@ -37,6 +37,18 @@ import { join } from 'node:path';
 
 import { NO_AUTOLAUNCH_ENV } from '../src/engine/engineer/daemon-launch.js';
 
+// Vitest forks copy their environment when the pool worker is created. Reassert
+// the launcher-owned root from its semantic marker before this setup file (or a
+// nested Vitest instance a test creates) asks the OS for temporary storage.
+// Keeping the conventional aliases together matters for child tools that do
+// not select TMPDIR first.
+const runTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+if (runTmpRoot) {
+  process.env.TMPDIR = runTmpRoot;
+  process.env.TMP = runTmpRoot;
+  process.env.TEMP = runTmpRoot;
+}
+
 process.env[NO_AUTOLAUNCH_ENV] = '1';
 process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
 process.env.CONDUCT_DAEMON_SESSION_UNSAFE_ALLOW = '1';

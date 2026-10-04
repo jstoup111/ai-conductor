@@ -9,7 +9,7 @@ import {
 } from 'fs';
 import type { Dirent } from 'fs';
 import { mkdtemp, readdir, rm } from 'fs/promises';
-import { basename, dirname, join, resolve } from 'path';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'path';
 import { installVitestTmpRoot, VITEST_TMP_BASE_ENV } from '../scripts/vitest-temp.mjs';
 
 /**
@@ -263,10 +263,13 @@ export const IGNORED_TMPDIR_PREFIXES: readonly string[] = [
 ];
 
 /**
- * Return Vitest project temp entries that are direct children of the real tmpdir.
+ * Return direct real-tmpdir entries containing a supplied Vitest workspace.
  *
- * Vitest creates its project temp directory before the suite redirects TMPDIR.
- * Only that exact top-level entry may be exempted from the teardown leak diff.
+ * Vitest creates both its core and project workspaces before the suite redirects
+ * TMPDIR. Only their exact top-level entries may be exempted from the teardown
+ * leak diff. A project workspace can be nested below the core workspace, so
+ * derive the direct child rather than requiring the supplied path itself to be
+ * the direct child.
  */
 export function vitestOwnTmpdirEntries(
   projectTmpDirs: readonly (string | undefined)[],
@@ -277,9 +280,14 @@ export function vitestOwnTmpdirEntries(
   return projectTmpDirs.flatMap(projectTmpDir => {
     if (!projectTmpDir) return [];
     const resolvedProjectTmpDir = resolve(projectTmpDir);
-    return dirname(resolvedProjectTmpDir) === resolvedRealTmpdir
-      ? [basename(resolvedProjectTmpDir)]
-      : [];
+    const relativePath = relative(resolvedRealTmpdir, resolvedProjectTmpDir);
+    if (
+      relativePath === ''
+      || relativePath === '..'
+      || relativePath.startsWith(`..${sep}`)
+      || isAbsolute(relativePath)
+    ) return [];
+    return [relativePath.split(sep)[0]!];
   });
 }
 

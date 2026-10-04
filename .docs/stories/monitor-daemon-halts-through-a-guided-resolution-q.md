@@ -220,7 +220,7 @@ queue top-down is the right thing to do.
 - Given the ordering reuses the existing priority resolver, when several halts share one linked reference, then that reference's priority is fetched once for the pass rather than once per item.
 
 #### Negative Paths
-- Given a halted feature whose linked issue does not exist, when the queue is ordered, then that item is still queued and its band is reported as unresolved rather than the pass failing.
+- Given a halted feature whose linked issue does not exist, when the queue is ordered, then that item is still queued and its band is reported as unlabeled rather than the pass failing.
 - Given a halted feature with no linked issue reference at all, when the queue is ordered, then it is placed according to the existing band ranking for unlinked work and is still offered.
 - Given the priority lookup fails for one reference while succeeding for others, when the queue is ordered, then every halt is still queued and the failure is reported once rather than per item.
 
@@ -228,7 +228,7 @@ queue top-down is the right thing to do.
 - [ ] A fixture of mixed-priority unseen halts orders highest band first.
 - [ ] A fixture pairing a deferred critical halt with an unseen low-priority halt offers the unseen one first, proving deferral partitions ahead of priority.
 - [ ] Priority is resolved through the existing resolver, and a repeated reference within one pass causes one lookup, verified against a counting stub.
-- [ ] A halt whose linked issue is missing is still queued with its band reported as unresolved.
+- [ ] A halt whose linked issue is missing is still queued with its band reported as unlabeled.
 
 ## Story 10: Ties break stably and the applied ordering is visible
 
@@ -350,7 +350,7 @@ approval, so that I am not retyping every command in another terminal.
 - Given a guided session, when the operator declines a proposed recovery action, then the action is not performed and the halt remains.
 - Given the launch seam, when it is invoked from the daemon, a step runner, or any non-foreground path, then the launch is refused and no unmarked session is created.
 - Given a session dispatched by the engine rather than launched by the monitor, when it attempts a conductor state-changing operation, then it is refused exactly as it is today, the sanctioned-subcommand set being unchanged.
-- Given a guided session runs, when it writes provider configuration or acquires permissions, then those writes land inside the feature worktree and not in the main checkout.
+- Given a guided session runs, when it writes project-scoped provider configuration or acquires project-scoped permissions, then those writes land inside the feature worktree and not in the main checkout, while user-level provider homes are inherited unchanged so the session keeps the operator's credentials.
 
 ### Done When
 - [ ] A session opened through the launch seam is not stamped with the daemon-session marker and can invoke conductor operations.

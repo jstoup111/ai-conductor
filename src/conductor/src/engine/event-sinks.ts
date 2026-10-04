@@ -21,6 +21,12 @@ export const EVENT_SINKS = {
   feature_dispatch_started: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   feature_dispatch_ended: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   feature_shipped: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
+  // Foreground monitor transitions are durable telemetry. The monitor has no
+  // bespoke status ledger; consumers reconstruct this detail from the spine.
+  monitor_item_offered: { render: false, persist: true, audit: false, otel: false },
+  monitor_session_opened: { render: false, persist: true, audit: false, otel: false },
+  monitor_item_deferred: { render: false, persist: true, audit: false, otel: false },
+  monitor_session_ended: { render: false, persist: true, audit: false, otel: false },
   // adr-2026-09-06-inbound-intake-trust-boundary D13: the sole producer is a
   // short-lived CLI emitter with only EventPersister attached, so no production
   // path carries this occurrence to a live renderer. Persist-only keeps this

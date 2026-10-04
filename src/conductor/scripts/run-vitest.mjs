@@ -14,6 +14,11 @@ const child = spawn(vitestCommand, process.argv.slice(2), {
     ...process.env,
     AI_CONDUCTOR_TEST_TMP_ROOT: runRoot,
     TMPDIR: runRoot,
+    // Native subprocesses do not consistently prefer TMPDIR: some read TMP
+    // or TEMP first. Keep all three aliases inside the run root so they
+    // cannot bypass the global tmpdir leak guard.
+    TMP: runRoot,
+    TEMP: runRoot,
   },
   stdio: 'inherit',
 });

@@ -1178,6 +1178,18 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
+  // Foreground monitor (`monitor all|<project>`) is a pre-boot operator command.
+  // Keep its provider-launch composition lazy so ordinary CLI verbs do not load
+  // the interactive provider path, and dispatch it before any daemon handler.
+  if (process.argv[2] === 'monitor') {
+    const monitorCli = await import('./engine/monitor-cli.js');
+    const monitorCmd = monitorCli.detectMonitorCommand(process.argv);
+    if (monitorCmd) {
+      process.exitCode = await monitorCli.dispatchMonitorCommand(monitorCmd, process.cwd());
+      return;
+    }
+  }
+
   // `daemon --help` / `daemon -h`: print the daemon command surface (run flags +
   // status/logs + management verbs) and exit. MUST precede every daemon dispatcher
   // below — otherwise detectDaemonCommand treats `--help` as an unknown flag and

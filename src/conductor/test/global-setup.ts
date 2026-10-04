@@ -288,7 +288,11 @@ function installInterruptReap(
   };
 }
 
-export default async function setup(project?: { tmpDir?: string }) {
+export default async function setup(project?: {
+  tmpDir?: string;
+  /** Vitest's core workspace is removed only after project global teardown. */
+  vitest?: { _tmpDir?: string };
+}) {
   // Tmpdir leak guard (#1112), part 1 of 2 — the REDIRECT. It is installed one
   // stage earlier, in vitest.config.ts module scope (see `ensureRunTmpRootSync`
   // for why it cannot wait until here), so by now `TMPDIR` and `os.tmpdir()`
@@ -301,7 +305,15 @@ export default async function setup(project?: { tmpDir?: string }) {
   const runTmpRoot = installation.root;
   const ownsRunTmpRoot = isVitestTmpRootAllocatedByThisProcess(runTmpRoot);
   const originalTmpdir = installation.originalTmpdir ?? tmpdir();
-  const vitestTmpdirEntries = vitestOwnTmpdirEntries([project?.tmpDir], originalTmpdir);
+  // Vitest removes the core workspace after project global teardown. It is
+  // therefore present while this guard snapshots the real tmpdir, even though
+  // it is framework-owned rather than a test leak. Keep the exemption exact:
+  // only the direct real-tmpdir entry that contains Vitest's reported core or
+  // project workspace is allowed through.
+  const vitestTmpdirEntries = vitestOwnTmpdirEntries(
+    [project?.tmpDir, project?.vitest?._tmpDir],
+    originalTmpdir,
+  );
   const selectedParent = installation.parent ?? dirname(runTmpRoot);
   const nestedParent = dirname(runTmpRoot);
   const sweepParents = [...new Set([originalTmpdir, selectedParent, nestedParent])];
@@ -346,13 +358,11 @@ export default async function setup(project?: { tmpDir?: string }) {
   // snapshot below so that debris is never silently absorbed as "pre-existing,
   // therefore never inspected again".
   //
-  // Run this whole tmux window against the REAL tmpdir: the sweep and the reap
-  // decide what to kill via `isTmpdirRooted`, i.e. `os.tmpdir()` at call time.
-  // Under the redirect that would narrow to this run's root and blind the
-  // sweep to debris left under a PREVIOUS run's root. Nothing in the window
-  // writes temp files, so nothing escapes containment; teardown restores the
-  // real tmpdir before the reap for exactly the same reason.
-  process.env.TMPDIR = originalTmpdir;
+  // Run the sweep against the REAL tmpdir without opening an environment
+  // window: the explicit `tmuxRoots` argument below lets the tmux guard
+  // recognize debris under the original directory while `TMPDIR` continues
+  // to contain every setup-time subprocess and allocation inside this run
+  // root.
   const staleAfterOverride = Number(process.env.AI_CONDUCTOR_TEST_TMP_ROOT_STALE_AFTER_MS);
   const staleAfterOverridden = Number.isFinite(staleAfterOverride) && staleAfterOverride >= 0;
   const staleAfterMs = staleAfterOverridden ? staleAfterOverride : RUN_TMP_ROOT_STALE_AFTER_MS;
@@ -373,8 +383,8 @@ export default async function setup(project?: { tmpDir?: string }) {
   tmuxRoots.push(...reapedRoots);
 
   // Tmpdir leak guard (#1112), part 2 of 2 — the GUARD. Baseline the REAL
-  // tmpdir's top-level entries AFTER the stale-root sweep above and still
-  // inside the real-tmpdir window, so a root the sweep reaped is not
+  // tmpdir's top-level entries AFTER the stale-root sweep above, so a root
+  // the sweep reaped is not
   // baselined as pre-existing and a root it retained is.
   const tmpdirBefore = await snapshotTmpdirEntries(originalTmpdir);
   const sweep = sweepStaleDaemonSessions(undefined, tmuxRoots);
@@ -391,11 +401,6 @@ export default async function setup(project?: { tmpDir?: string }) {
   const daemonSnapshot = snapshotDaemonSessions();
   globalThis.__tmuxSnapshot = daemonSnapshot;
 
-  // Close the real-tmpdir window opened for the tmux sweep: from here on —
-  // crucially, before the pool forks its workers — TMPDIR points back at this
-  // run's root, which is what contains every test's `mkdtemp`.
-  process.env.TMPDIR = runTmpRoot;
-
   const removeInterruptHandlers = installInterruptReap(
     () => globalThis.__tmuxSnapshot ?? daemonSnapshot,
     console.error,
@@ -411,13 +416,13 @@ export default async function setup(project?: { tmpDir?: string }) {
     removeInterruptHandlers();
     heartbeat.stop();
 
-    // Restore the real tmpdir FIRST so every guard below observes exactly the
-    // `os.tmpdir()` it observed before this redirect existed — in particular
-    // the tmux reap's `isTmpdirRooted` corroboration, which must still match a
-    // pane cwd anywhere under the real tmpdir, not only under the run root.
-    process.env.TMPDIR = originalTmpdir;
-
     try {
+      // Keep containment installed through Vitest's close sequence. Vitest can
+      // allocate its transient nanoid workspace while global teardown is
+      // running; restoring TMPDIR here made that workspace escape into the
+      // operator's real tmpdir before Vitest removed it. Every guard below is
+      // already rooted explicitly at originalTmpdir or tmuxRoots, so none
+      // depends on mutating the process environment back first.
       await runTeardownGuards();
     } finally {
       // Reclaim the run root whatever the guards decided. In `finally` so a

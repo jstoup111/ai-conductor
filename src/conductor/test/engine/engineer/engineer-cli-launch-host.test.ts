@@ -232,6 +232,25 @@ describe('dispatchEngineer interactive host launch', () => {
       });
   });
 
+  it('launches compose as an interactive codex session and honours the claude permission-mode override', async () => {
+    const codexSpawn = vi.fn(async () => 0);
+    const claudeSpawn = vi.fn(async () => 0);
+
+    await dispatchEngineer(
+      { kind: 'launch', provider: 'codex' },
+      launchOptions({ ok: true, config: {}, warnings: [] }, codexSpawn),
+    );
+    await dispatchEngineer(
+      { kind: 'launch', provider: 'claude' },
+      launchOptions({ ok: true, config: {}, warnings: [] }, claudeSpawn, { CONDUCT_ENGINEER_PERMISSION_MODE: 'acceptEdits' }),
+    );
+
+    expect([codexSpawn.mock.calls, claudeSpawn.mock.calls]).toEqual([
+      [['codex', ['$composer'], process.cwd()]],
+      [['claude', ['--permission-mode', 'acceptEdits', '/composer'], process.cwd()]],
+    ]);
+  });
+
   it('keeps the selected host when a later loop spawn is missing', async () => {
     const missing = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' });
     const spawnHost = vi.fn()

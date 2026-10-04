@@ -55,6 +55,19 @@ ADR clause described claude's REPL and generalized to a provider that has none.
    of the REPL rule is retained verbatim and is now enforced at the attachment point in
    `provider-execution.ts`, not merely left inert in each adapter.
 
+> **Amendment (2026-09-30, operator-approved, monitor-daemon-halts-through-a-guided-resolution-q):**
+> Decisions 1-4 above stand unchanged. This amendment adds one scoped exception.
+>
+> 5. **The guided monitor session launches codex as its attached interactive TUI.** The
+>    operator-launched guided resolution session opened by `conduct monitor` runs codex as
+>    `codex [OPTIONS] "<prompt>"` (no `exec` subcommand), with the opening prompt passed as the
+>    positional argument and stdin, stdout, and stderr all inherited from the operator's terminal,
+>    mirroring the attached Claude REPL. The session needs a live operator channel so each
+>    state-changing recovery action can request and receive approval (FR-16), which a piped,
+>    closed-stdin one-shot cannot provide. The exception covers only that guided-monitor launch;
+>    every other `interactive: true` codex dispatch remains the bounded one-shot of decision 3,
+>    and decision 4 still applies.
+
 ## Consequences
 
 - KPI and cost rollups report a comparable dollar figure across providers. The figure is a

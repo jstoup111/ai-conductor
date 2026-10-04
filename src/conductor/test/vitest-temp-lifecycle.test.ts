@@ -36,6 +36,7 @@ afterEach(async () => {
 describe('relocated Vitest temporary lifecycle', () => {
   it.each([
     ['exempts the passed project tmpDir when it is the only new original-tmpdir entry', 'project', false, true],
+    ['exempts Vitest’s core workspace when it is the only new original-tmpdir entry', 'core', false, true],
     ['still reports another original-tmpdir entry beside the passed project tmpDir', 'project', true, false],
     ['reports the Vitest-named entry when setup has no project', 'none', false, false],
     ['does not exempt a project tmpDir inside the run root', 'run-root', true, false],
@@ -75,10 +76,18 @@ describe('relocated Vitest temporary lifecycle', () => {
     const { default: setup } = await import('./global-setup.js');
     const project = projectLocation === 'none'
       ? undefined
-      : { tmpDir: projectLocation === 'run-root' ? join(installation.root, 'vitest-project') : projectTmpDir };
+      : {
+          tmpDir: projectLocation === 'run-root' || projectLocation === 'core'
+            ? join(installation.root, 'vitest-project')
+            : projectTmpDir,
+          ...(projectLocation === 'core' ? { vitest: { _tmpDir: projectTmpDir } } : {}),
+        };
     const teardown = await setup(project);
 
-    await mkdir(project?.tmpDir ?? projectTmpDir, { recursive: true });
+    await Promise.all([
+      mkdir(project?.tmpDir ?? projectTmpDir, { recursive: true }),
+      ...(projectLocation === 'core' ? [mkdir(projectTmpDir, { recursive: true })] : []),
+    ]);
     if (createSeparateEntry) await writeFile(join(original, separateEntry), 'leak');
 
     if (shouldResolve) {
@@ -161,6 +170,7 @@ describe('relocated Vitest temporary lifecycle', () => {
       const original = join(fixture, 'original');
       const selected = join(fixture, 'selected');
       const removed: string[] = [];
+      const tmpdirsDuringSnapshots: Array<string | undefined> = [];
       await Promise.all([mkdir(original, { recursive: true }), mkdir(selected, { recursive: true })]);
       vi.doMock('./pipeline-leak-guard.js', () => ({
         snapshotPipeline: async () => ({ exists: false, entries: new Map() }),
@@ -172,7 +182,10 @@ describe('relocated Vitest temporary lifecycle', () => {
         writeRunRootOwnerMarker: () => {}, startRunRootHeartbeat: () => ({ stop: () => {} }),
         sweepStaleRunTmpRoots: async () => ({ reaped: [], retained: [], failures: [] }),
         removeRunTmpRoot: async (path: string) => { removed.push(path); },
-        snapshotTmpdirEntries: async () => ({ exists: true, entries: new Set<string>() }),
+        snapshotTmpdirEntries: async () => {
+          tmpdirsDuringSnapshots.push(process.env.TMPDIR);
+          return { exists: true, entries: new Set<string>() };
+        },
         diffTmpdirEntries: () => ({ stray: [], ignored: [] }),
         vitestOwnTmpdirEntries: () => [],
         runIdFromRunRoot: () => 'run-id',
@@ -196,6 +209,14 @@ describe('relocated Vitest temporary lifecycle', () => {
         await expect(teardown()).resolves.toBeUndefined();
       }
       expect(removed).toEqual([configInstallation.root]);
+      // A preceding pipeline-guard failure short-circuits the teardown before
+      // its second real-tmpdir snapshot; both paths must nevertheless retain
+      // the run-root redirect while the snapshot they do reach executes.
+      expect(tmpdirsDuringSnapshots).toEqual(
+        pipelineLeak
+          ? [configInstallation.root]
+          : [configInstallation.root, configInstallation.root]
+      );
       expect(existsSync(selected)).toBe(true);
       expect(process.env).toMatchObject(callerEnvironment);
     });

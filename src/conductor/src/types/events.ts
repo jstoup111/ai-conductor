@@ -390,6 +390,14 @@ export type ConductorEvent =
       runStartedAt?: number;
       active: { state: 'exact' | 'partial' | 'unavailable'; activeMs?: number };
     }
+  /** A foreground monitor presented one halted feature to the operator. */
+  | { type: 'monitor_item_offered'; project: string; feature: string }
+  /** A foreground monitor began a guided recovery session for one feature. */
+  | { type: 'monitor_session_opened'; project: string; feature: string }
+  /** An operator deferred one monitored halt for a later queue rotation. */
+  | { type: 'monitor_item_deferred'; project: string; feature: string }
+  /** A foreground monitor's guided recovery session returned control. */
+  | { type: 'monitor_session_ended'; project: string; feature: string }
   | { type: 'intake_inbound_sanitized'; sourceRef: string; neutralizations: import('../engine/engineer/intake/sanitize-inbound.js').InboundNeutralization[]; digest: string }
   | {
       type: 'intake_overlap_checked';

@@ -1,4 +1,4 @@
-// Covers: task:3, task:10, task:12
+// Covers: task:3, task:10, task:12, task:21
 
 import { describe, it, expect, vi } from 'vitest';
 import { execa } from 'execa';
@@ -240,6 +240,12 @@ describe('CLI', () => {
       ]) {
         expect(help).toContain(path);
       }
+    });
+
+    it('documents the foreground monitor verb and its project selectors', () => {
+      expect(help).toMatch(
+        /ai-conductor monitor\n[\s\S]*?Usage: ai-conductor monitor \[options\] <project>[\s\S]*?`all` registered projects/,
+      );
     });
 
     it('documents NESTED sub-subcommands (engineer + daemon trees)', () => {

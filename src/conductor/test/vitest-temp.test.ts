@@ -227,6 +227,8 @@ describe('Vitest temporary storage selection', () => {
   it('allocates distinct canonical roots and installs the owned context without duplicating Git ceilings', () => {
     const env = {
       TMPDIR: '/fixture/original-tmpdir',
+      TMP: '/fixture/original-tmp',
+      TEMP: '/fixture/original-temp',
       GIT_CEILING_DIRECTORIES: '/existing/ceiling',
     };
     const fs = fakeFilesystem();
@@ -246,6 +248,8 @@ describe('Vitest temporary storage selection', () => {
         ownsScope: true,
         environment: {
           TMPDIR: '/fixture/original-tmpdir',
+          TMP: '/fixture/original-tmp',
+          TEMP: '/fixture/original-temp',
           GIT_CEILING_DIRECTORIES: '/existing/ceiling',
         },
       },
@@ -255,6 +259,8 @@ describe('Vitest temporary storage selection', () => {
         AI_CONDUCTOR_TEST_TMP_SCOPE: '/canonical/storage/ai-conductor-vitest-run-3',
         AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR: '/fixture/original-tmpdir',
         TMPDIR: '/canonical/storage/ai-conductor-vitest-run-3',
+        TMP: '/canonical/storage/ai-conductor-vitest-run-3',
+        TEMP: '/canonical/storage/ai-conductor-vitest-run-3',
         GIT_CEILING_DIRECTORIES: '/existing/ceiling:/canonical/storage/ai-conductor-vitest-run-3',
       },
     });

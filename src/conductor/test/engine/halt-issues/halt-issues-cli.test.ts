@@ -123,14 +123,46 @@ describe('dispatchHaltIssuesSweep', () => {
 
   it('help prints usage and exits 0', async () => {
     const code = await dispatchHaltIssuesSweep({ kind: 'help' }, process.cwd());
-    expect(code).toBe(0);
-    expect(logSpy).toHaveBeenCalled();
+    expect({ code, output: logSpy.mock.calls }).toEqual({
+      code: 0,
+      output: [[
+        'Usage: ai-conductor halt-issues sweep [options]\n\n' +
+        'Orchestrate the full sweep pipeline for processing filed halt-monitor issues:\n' +
+        '  1. Parse monitor log → extract verdicts\n' +
+        '  2. Load/rebuild ledger with parsed verdicts\n' +
+        '  3. Process each entry: stamp, resolve, close\n' +
+        '  4. Write ledger atomically\n' +
+        '  5. Print summary and exit\n\n' +
+        'Options:\n' +
+        '  --dry-run             Run without writing to ledger\n' +
+        '  --repo-dir <dir>      Repository directory (required; target for file searches)\n' +
+        '  --gh-repo <repo>      GitHub repository owner/name (required)\n' +
+        '  --monitor-log <path>  Path to monitor.log (default: ~/.ai-conductor/halt-monitor/monitor.log)\n' +
+        '  --ledger <path>       Path to ledger.json (default: ~/.ai-conductor/halt-issues/ledger.json)',
+      ]],
+    });
   });
 
   it('guide prints usage to stderr and exits non-zero', async () => {
     const code = await dispatchHaltIssuesSweep({ kind: 'guide' }, process.cwd());
-    expect(code).not.toBe(0);
-    expect(errorSpy).toHaveBeenCalled();
+    expect({ code, output: errorSpy.mock.calls }).toEqual({
+      code: 1,
+      output: [[
+        'Usage: ai-conductor halt-issues sweep [options]\n\n' +
+        'Orchestrate the full sweep pipeline for processing filed halt-monitor issues:\n' +
+        '  1. Parse monitor log → extract verdicts\n' +
+        '  2. Load/rebuild ledger with parsed verdicts\n' +
+        '  3. Process each entry: stamp, resolve, close\n' +
+        '  4. Write ledger atomically\n' +
+        '  5. Print summary and exit\n\n' +
+        'Options:\n' +
+        '  --dry-run             Run without writing to ledger\n' +
+        '  --repo-dir <dir>      Repository directory (required; target for file searches)\n' +
+        '  --gh-repo <repo>      GitHub repository owner/name (required)\n' +
+        '  --monitor-log <path>  Path to monitor.log (default: ~/.ai-conductor/halt-monitor/monitor.log)\n' +
+        '  --ledger <path>       Path to ledger.json (default: ~/.ai-conductor/halt-issues/ledger.json)',
+      ]],
+    });
   });
 
   // Kill-switch / guarded-factory-only pinning test (no bespoke client

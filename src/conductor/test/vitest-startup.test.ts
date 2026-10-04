@@ -24,6 +24,7 @@ async function launch(
     'AI_CONDUCTOR_TEST_TMP_SCOPE',
     'AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR',
     'GIT_CEILING_DIRECTORIES',
+    'NODE_OPTIONS',
   ]) {
     if (key in env && env[key] === undefined) delete childEnv[key];
     else if (!(key in env)) delete childEnv[key];
@@ -49,10 +50,13 @@ async function writeFakeVitest(path: string, binary: string) {
     `  binary: '${binary}',`,
     '  argv: process.argv.slice(2),',
     '  tmpdir: process.env.TMPDIR,',
+    '  tmp: process.env.TMP,',
+    '  temp: process.env.TEMP,',
     '  root: process.env.AI_CONDUCTOR_TEST_TMP_ROOT,',
     '  scope: process.env.AI_CONDUCTOR_TEST_TMP_SCOPE,',
     '  originalTmpdir: process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR,',
     '  gitCeiling: process.env.GIT_CEILING_DIRECTORIES,',
+    '  nodeOptions: process.env.NODE_OPTIONS,',
     '}), \'utf8\');',
     'process.exitCode = Number(process.env.FAKE_VITEST_EXIT_CODE ?? 0);',
     '',
@@ -121,6 +125,8 @@ describe('run-vitest startup', () => {
     expect(observation.argv).toEqual(['run', 'selected.test.ts']);
     expect(observation.originalTmpdir).toBe(originalTmpdir);
     expect(observation.tmpdir).toBe(observation.root);
+    expect(observation.tmp).toBe(observation.root);
+    expect(observation.temp).toBe(observation.root);
     expect(observation.scope).toBe(observation.root);
     expect(observation.root).toMatch(new RegExp(`^${join(fixtureRoot, '.vitest-tmp', 'ai-conductor-vitest-run-')}`));
     expect(observation.gitCeiling?.split(delimiter)).toContain(observation.root);

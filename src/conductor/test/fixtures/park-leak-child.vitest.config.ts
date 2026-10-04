@@ -10,9 +10,8 @@ export default defineConfig({
     environment: 'node',
     setupFiles: ['./test/setup.ts'],
     pool: 'forks',
-    // The parent suite already uses two forks. This nested one-test fixture
-    // must remain serial so it cannot push the aggregate run beyond its
-    // memory ceiling.
+    // The parent suite is serial. Keep this nested one-test fixture serial so
+    // it cannot add worker pressure to the aggregate run.
     maxWorkers: 1,
     testTimeout: 20000,
     hookTimeout: 30000,
