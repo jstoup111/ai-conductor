@@ -155,25 +155,6 @@ const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
                                        // policy config and stays fingerprinted.
 ];
 
-/**
- * Lock-marker directories the provider CLI writes ANYWHERE under its home, one
- * file per live process (`plugins/cache/<marketplace>/<plugin>/<version>/.in_use/<pid>`).
- * Excluded by BASENAME rather than by path because the exclusion matcher is
- * deliberately root-level only, and these markers sit several levels deep.
- *
- * This is the narrow form on purpose. Codex's list excludes all of
- * `plugins/cache`; the Claude surface keeps every byte of installed plugin
- * content fingerprinted, because a self-host process rewriting a plugin's
- * skills or hooks in the operator home is exactly what this surface exists to
- * catch. Verified 2026-08-18 behind a false halt (`added
- * plugins/cache/claude-plugins-official/skill-creator/unknown/.in_use/1001617`):
- * of 348 files under a live `plugins/cache`, the ONLY paths that changed in the
- * preceding day were `.in_use` markers, each written by a concurrent Claude
- * process that no longer exists. Widen this only with the same kind of
- * observed-churn evidence.
- */
-const PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES: readonly string[] = ['.in_use'];
-
 /** Codex counterpart of `CLAUDE_PROVIDER_STATE_VOLATILE` — same leak-detector caveat applies. */
 const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'history.jsonl',        // append-only prompt/response log for every session on the machine
@@ -224,8 +205,35 @@ export const PROVIDER_STATE_VOLATILE: Readonly<Record<SelfHostProviderId, readon
   [PI_PROVIDER]: ['sessions', 'models-store.json'],
 };
 
+const PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES: Readonly<Record<SelfHostProviderId, readonly string[]>> = {
+  /**
+   * Lock-marker directories the provider CLI writes ANYWHERE under its home, one
+   * file per live process (`plugins/cache/<marketplace>/<plugin>/<version>/.in_use/<pid>`).
+   * Excluded by BASENAME rather than by path because the exclusion matcher is
+   * deliberately root-level only, and these markers sit several levels deep.
+   *
+   * This is the narrow form on purpose. Codex's list excludes all of
+   * `plugins/cache`; the Claude surface keeps every byte of installed plugin
+   * content fingerprinted, because a self-host process rewriting a plugin's
+   * skills or hooks in the operator home is exactly what this surface exists to
+   * catch. Verified 2026-08-18 behind a false halt (`added
+   * plugins/cache/claude-plugins-official/skill-creator/unknown/.in_use/1001617`):
+   * of 348 files under a live `plugins/cache`, the ONLY paths that changed in the
+   * preceding day were `.in_use` markers, each written by a concurrent Claude
+   * process that no longer exists. Widen this only with the same kind of
+   * observed-churn evidence.
+   */
+  [CLAUDE_PROVIDER]: ['.in_use'],
+  [CODEX_PROVIDER]: ['.in_use'],
+  [PI_PROVIDER]: [],
+};
+
 function providerStateVolatile(provider: ProviderWith<'selfHost'> | undefined): readonly string[] {
   return provider ? PROVIDER_STATE_VOLATILE[provider.id] : [];
+}
+
+function providerStateVolatileDirectoryBasenames(provider: ProviderWith<'selfHost'> | undefined): readonly string[] {
+  return provider ? PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES[provider.id] : ['.in_use'];
 }
 
 /**
@@ -346,6 +354,7 @@ export async function fingerprintLiveBoundary(args: {
     ...(provider ? [provider.selfHostShape.selectedAuthPath] : []),
     ...(args.selectedAuthPaths ?? []),
   ];
+  const excludeDirectoryBasenames = providerStateVolatileDirectoryBasenames(provider);
   const liveCheckout = await manifest(
     args.liveCheckout,
     LIVE_CHECKOUT_VOLATILE,
@@ -354,7 +363,7 @@ export async function fingerprintLiveBoundary(args: {
   const providerState = await manifest(
     args.unrelatedProviderState,
     excluded,
-    PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES,
+    excludeDirectoryBasenames,
   );
   return { surfaces: [
     {
@@ -368,7 +377,7 @@ export async function fingerprintLiveBoundary(args: {
       root: args.unrelatedProviderState,
       label: 'provider state',
       exclude: excluded,
-      excludeDirectoryBasenames: PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES,
+      excludeDirectoryBasenames,
       manifest: providerState.entries,
     },
   ], measurements: [

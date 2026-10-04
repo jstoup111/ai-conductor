@@ -76,6 +76,48 @@ describe('live self-host boundary', () => {
     }
   });
 
+  it('fingerprints nested Pi .in_use markers when they are added or changed, with or without containment', async () => {
+    const markerPath = join('extensions', 'x', '.in_use', '123');
+    for (const [change, initialContent, nextContent] of [
+      ['added', undefined, 'added'],
+      ['changed', 'before', 'after'],
+    ] as const) {
+      for (const containment of [
+        { contained: false, reason: 'per-step verification' },
+        { contained: true, evidence: 'probe evidence', reason: 'probe passed' },
+      ] as const) {
+        const root = await mkdtemp(join(tmpdir(), `live-boundary-pi-in-use-${change}-`));
+        const live = join(root, 'live'); const provider = join(root, 'provider');
+        const marker = join(provider, markerPath);
+        await Promise.all([mkdir(live), mkdir(join(provider, 'extensions', 'x', '.in_use'), { recursive: true })]);
+        if (initialContent) await writeFile(marker, initialContent);
+        const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'pi' });
+        await writeFile(marker, nextContent);
+        try {
+          expect(baseline.surfaces[1]?.excludeDirectoryBasenames).toEqual([]);
+          const result = await verifyLiveBoundary(baseline, containment);
+          expect(result.ok).toBe(false);
+          expect(result.reason).toContain('provider state');
+          expect(result.reason).toContain(markerPath);
+        } finally { await rm(root, { recursive: true, force: true }); }
+      }
+    }
+  });
+
+  it('continues to ignore nested .in_use markers for Claude and Codex', async () => {
+    const markerPath = join('extensions', 'x', '.in_use', '123');
+    for (const providerId of ['claude', 'codex'] as const) {
+      const root = await mkdtemp(join(tmpdir(), `live-boundary-${providerId}-in-use-`));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(join(provider, 'extensions', 'x', '.in_use'), { recursive: true })]);
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: providerId });
+      await writeFile(join(provider, markerPath), 'marker');
+      try {
+        expect(await verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' })).toEqual({ ok: true });
+      } finally { await rm(root, { recursive: true, force: true }); }
+    }
+  });
+
   it('pins the exhaustive provider volatile table to Pi plus the unchanged Claude and Codex lists', () => {
     expect(PROVIDER_STATE_VOLATILE).toEqual({
       claude: [
