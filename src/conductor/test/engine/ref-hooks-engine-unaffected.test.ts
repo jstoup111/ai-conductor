@@ -75,7 +75,7 @@ describe('engine ref operations with installed ref hooks', () => {
     await commit(f, f.feature, 'rewrite.txt');
     expect((await f.git(f.feature, 'merge-base', '--is-ancestor', remoteTip, 'HEAD')).exitCode).not.toBe(0);
     await withIsolatedEngineGit(f, f.feature, async (git) => {
-      expect((await git(['push', 'origin', 'HEAD:refs/heads/main', '--force-with-lease'])).exitCode).toBe(0);
+      expect((await git(['push', '-u', 'origin', 'HEAD:refs/heads/main', '--force-with-lease'])).exitCode).toBe(0);
     });
     expect((await f.git(f.bare, 'rev-parse', 'main')).stdout).toBe((await f.git(f.feature, 'rev-parse', 'HEAD')).stdout);
     expect((await f.git(f.feature, 'fetch', 'origin')).exitCode).toBe(0);
@@ -83,7 +83,7 @@ describe('engine ref operations with installed ref hooks', () => {
     expect((await f.git(f.clone, 'reset', '--hard', 'origin/main')).exitCode).toBe(0);
     await commit(f, f.clone, 'remote-advance.txt'); expect((await f.git(f.clone, 'push', 'origin', 'main')).exitCode).toBe(0);
     await commit(f, f.feature, 'local-rewrite.txt');
-    const stale = await withIsolatedEngineGit(f, f.feature, (git) => git(['push', 'origin', 'HEAD:refs/heads/main', '--force-with-lease']));
+    const stale = await withIsolatedEngineGit(f, f.feature, (git) => git(['push', '-u', 'origin', 'HEAD:refs/heads/main', '--force-with-lease']));
     expect(stale.exitCode).not.toBe(0); expect(stale.stderr).toContain('stale info'); expect(stale.stderr).not.toContain('has not fetched');
   });
 
