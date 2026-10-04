@@ -97,7 +97,9 @@ describe('pre-push hook', () => {
     expect((await f.git(f.worktree, 'push', '--force', 'origin', 'HEAD:main')).exitCode).toBe(0);
     expect((await f.git(f.bare, 'rev-parse', 'main')).stdout).toBe((await f.git(f.worktree, 'rev-parse', 'HEAD')).stdout);
     await commit(f, f.worktree, 'fast-forward.txt'); expect((await f.git(f.worktree, 'push', 'origin', 'HEAD:main')).exitCode).toBe(0);
+    expect((await f.git(f.bare, 'rev-parse', 'main')).stdout).toBe((await f.git(f.worktree, 'rev-parse', 'HEAD')).stdout);
     expect((await f.git(f.worktree, 'push', 'origin', 'HEAD:new-branch')).exitCode).toBe(0);
+    expect((await f.git(f.bare, 'rev-parse', 'new-branch')).stdout).toBe((await f.git(f.worktree, 'rev-parse', 'HEAD')).stdout);
     expect((await f.git(f.worktree, 'push', 'origin', '--delete', 'new-branch')).exitCode).toBe(0);
     expect((await f.git(f.bare, 'rev-parse', '-q', '--verify', 'new-branch')).exitCode).not.toBe(0);
   });
