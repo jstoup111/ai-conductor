@@ -2818,6 +2818,9 @@ describe('engine/artifacts', () => {
         expect(result.reason).toBe(
           '6/6 tasks pending/not completed: 1, 2, 3, 4, 5, 6 — 1 "First task"; 2 "Second task"; 3 "Third task"; 4 "Fourth task"; 5 "Fifth task"; 6 "Sixth task"',
         );
+        if (result.reason === undefined) {
+          throw new Error('expected incomplete build result to include a reason');
+        }
         for (const id of ['1', '2', '3', '4', '5', '6']) {
           expect(result.reason.indexOf(id)).toBeLessThan(result.reason.indexOf('"First task"'));
         }
