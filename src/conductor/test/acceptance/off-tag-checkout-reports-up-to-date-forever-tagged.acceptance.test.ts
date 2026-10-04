@@ -161,6 +161,7 @@ async function runEntry(
     env: {
       ...env,
       HOME: home,
+      AI_CONDUCTOR_USER_CONFIG_DIR: undefined,
       PATH: `${join(fixture.root, 'bin')}:/usr/bin:/bin:${process.env.PATH ?? ''}`,
     },
     input: options.input ?? '',
