@@ -6,6 +6,7 @@ import type { ReplayEvidence, RebaseOperationRecord, RebasePreservedCandidate } 
 import { readVerdict, writeVerdict } from './gate-verdicts.js';
 import { readState } from './state.js';
 import { creditKickbackGateLaps, updateKickbackLedger } from './kickback-ledger.js';
+import { reverifyOrInvalidateRebaseGate, type RebasePreVerifier } from './rebase.js';
 
 /** The durable result consumed by the conductor and the re-kick path. */
 export interface AppliedRebaseTransition {
@@ -66,6 +67,61 @@ export interface ApplyRebaseTransitionOptions {
   preservedCandidates: readonly RebasePreservedCandidate[];
   reverified?: readonly StepName[];
   operationId?: string;
+}
+
+export interface CompleteInterruptedRebaseOperationOptions {
+  projectRoot: string;
+  stateFilePath?: string;
+  stateStore: ConductStateStore<ConductState>;
+  operation: RebaseOperationRecord;
+  preVerify?: RebasePreVerifier;
+}
+
+/**
+ * Reconcile an interrupted applying descriptor from the candidate evidence it
+ * persisted before any state mutation. Candidates whose original verdict is
+ * no longer present use the same per-gate reverify-or-kickback writer as the
+ * normal rebase path; they can never be stamped as preserved retroactively.
+ */
+export async function completeInterruptedRebaseOperation(
+  options: CompleteInterruptedRebaseOperationOptions,
+): Promise<AppliedRebaseTransition> {
+  const candidates = options.operation.preservationEvidence ?? [];
+  const preserved: StepName[] = [];
+  const invalidated = [...options.operation.transition.invalidated];
+  const reverified = [...options.operation.transition.reverified];
+  const usableCandidates: RebasePreservedCandidate[] = [];
+
+  for (const candidate of candidates) {
+    const verdict = await readVerdict(options.projectRoot, candidate.gate);
+    const matchesOriginal = verdict?.satisfied === true && !verdict.kickback &&
+      createHash('sha256').update(JSON.stringify(verdict)).digest('hex') === candidate.originalVerdictDigest;
+    if (matchesOriginal) {
+      preserved.push(candidate.gate);
+      usableCandidates.push(candidate);
+      continue;
+    }
+    const result = await reverifyOrInvalidateRebaseGate(
+      options.projectRoot,
+      candidate.gate,
+      options.preVerify,
+      'persisted rebase preservation candidate no longer matches its original verdict',
+    );
+    if (result.kind === 'reverified') reverified.push(candidate.gate);
+    else invalidated.push(candidate.gate);
+  }
+
+  return applyRebaseTransition({
+    projectRoot: options.projectRoot,
+    ...(options.stateFilePath === undefined ? {} : { stateFilePath: options.stateFilePath }),
+    stateStore: options.stateStore,
+    replay: options.operation.replay,
+    invalidated: [...new Set(invalidated)],
+    preserved,
+    preservedCandidates: usableCandidates,
+    reverified: [...new Set(reverified)],
+    operationId: options.operation.id,
+  });
 }
 
 /**

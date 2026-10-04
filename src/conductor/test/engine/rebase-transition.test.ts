@@ -1,15 +1,16 @@
-// Covers: task:4
+// Covers: task:4, task:6
 import { describe, expect, it, afterEach } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
-import { readVerdict, validRebaseOperationRecord, writeVerdict } from '../../src/engine/gate-verdicts.js';
-import { applyRebaseTransition, clampRebaseContinuation } from '../../src/engine/rebase-transition.js';
+import { readVerdict, validRebaseOperationRecord, writeVerdict, type RebasePreservedCandidate } from '../../src/engine/gate-verdicts.js';
+import { applyRebaseTransition, clampRebaseContinuation, completeInterruptedRebaseOperation } from '../../src/engine/rebase-transition.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { classifyRebaseOperation } from '../../src/engine/gate-code-validity.js';
 
-function preservedCandidate(gate: 'build_review' | 'prd_audit', checkedAt = 2) {
+function preservedCandidate(gate: 'build_review' | 'prd_audit' | 'test_suite', checkedAt = 2) {
   const original = { satisfied: true, checkedAt, reason: 'approved' };
   // The production caller uses this same JSON digest to bind the candidate to
   // the original verdict captured before transition writes begin.
@@ -25,6 +26,28 @@ function preservedCandidate(gate: 'build_review' | 'prd_audit', checkedAt = 2) {
     originalVerdictDigest,
     relevantInputIdentities: [],
   };
+}
+
+async function writeApplyingOperation(
+  dir: string,
+  operation: {
+    id: string;
+    preserved: readonly ('build_review' | 'prd_audit' | 'test_suite')[];
+    invalidated: readonly ('build_review' | 'prd_audit' | 'test_suite')[];
+    evidence: readonly RebasePreservedCandidate[];
+  },
+) {
+  await writeVerdict(dir, 'rebase', {
+    satisfied: true,
+    checkedAt: 1,
+    rebaseOperation: {
+      id: operation.id,
+      status: 'applying',
+      transition: { preserved: operation.preserved, invalidated: operation.invalidated, reverified: [] },
+      replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      preservationEvidence: operation.evidence,
+    },
+  });
 }
 
 const dirs: string[] = [];
@@ -316,6 +339,90 @@ describe('applyRebaseTransition', () => {
     expect(result.stateResult).toBe('refused');
     expect(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'))).toMatchObject({ build_review: 'in_progress' });
     expect((await readVerdict(dir, 'rebase'))?.rebaseOperation?.status).not.toBe('applied');
+  });
+});
+
+describe('completeInterruptedRebaseOperation', () => {
+  it('stamps matching persisted candidates, invalidates recorded gates, and commits the applying operation', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    const statePath = join(dir, '.pipeline/conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(statePath, JSON.stringify({ test_suite: 'done', build_review: 'done', prd_audit: 'done' }));
+    await writeVerdict(dir, 'test_suite', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 2, reason: 'approved' });
+    await writeVerdict(dir, 'prd_audit', { satisfied: true, checkedAt: 3, reason: 'approved' });
+    const evidence = [preservedCandidate('build_review', 2), preservedCandidate('prd_audit', 3)];
+    await writeApplyingOperation(dir, { id: 'complete-matching', preserved: ['build_review', 'prd_audit'], invalidated: ['test_suite'], evidence });
+
+    const result = await completeInterruptedRebaseOperation({
+      projectRoot: dir,
+      stateStore: createFilesystemConductStateStore(statePath),
+      operation: (await readVerdict(dir, 'rebase'))!.rebaseOperation!,
+    });
+
+    expect(result.stateResult).toBe('applied');
+    expect(result.operation).toMatchObject({ id: 'complete-matching', status: 'applied' });
+    expect(result.operation.appliedAt).toSatisfy(Number.isFinite);
+    for (const gate of ['build_review', 'prd_audit'] as const) {
+      expect((await readVerdict(dir, gate))?.preservation?.operationId).toBe('complete-matching');
+    }
+    expect(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'))).toMatchObject({ test_suite: 'pending' });
+    expect((await readVerdict(dir, 'test_suite'))?.satisfied).toBe(false);
+    await expect(classifyRebaseOperation(dir)).resolves.toEqual({ kind: 'clear' });
+  });
+
+  it('removes a changed non-tree-attesting candidate and invalidates it for rerun', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    const statePath = join(dir, '.pipeline/conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(statePath, JSON.stringify({ build_review: 'done', prd_audit: 'done' }));
+    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    await writeVerdict(dir, 'prd_audit', { satisfied: true, checkedAt: 3, reason: 'later judgement' });
+    const evidence = [preservedCandidate('prd_audit', 2)];
+    await writeApplyingOperation(dir, { id: 'complete-prd-rerun', preserved: ['prd_audit'], invalidated: ['build_review'], evidence });
+
+    const result = await completeInterruptedRebaseOperation({
+      projectRoot: dir,
+      stateStore: createFilesystemConductStateStore(statePath),
+      operation: (await readVerdict(dir, 'rebase'))!.rebaseOperation!,
+      preVerify: async () => ({ done: true }),
+    });
+
+    expect(result.operation.transition).toMatchObject({ preserved: [], invalidated: ['build_review', 'prd_audit'] });
+    expect((await readVerdict(dir, 'prd_audit'))).toMatchObject({ satisfied: false, kickback: { from: 'rebase' } });
+    expect((await readVerdict(dir, 'prd_audit'))?.preservation).toBeUndefined();
+    expect(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'))).toMatchObject({ prd_audit: 'pending' });
+    await expect(classifyRebaseOperation(dir)).resolves.toEqual({ kind: 'clear' });
+  });
+
+  it('mechanically re-verifies a changed test-suite candidate instead of invalidating it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    const statePath = join(dir, '.pipeline/conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(statePath, JSON.stringify({ build_review: 'done', test_suite: 'done' }));
+    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    await writeVerdict(dir, 'test_suite', { satisfied: true, checkedAt: 3, reason: 'later suite result' });
+    const evidence = [preservedCandidate('test_suite', 2)];
+    await writeApplyingOperation(dir, { id: 'complete-suite-reverify', preserved: ['test_suite'], invalidated: ['build_review'], evidence });
+
+    const result = await completeInterruptedRebaseOperation({
+      projectRoot: dir,
+      stateStore: createFilesystemConductStateStore(statePath),
+      operation: (await readVerdict(dir, 'rebase'))!.rebaseOperation!,
+      preVerify: async (gate) => {
+        expect(gate).toBe('test_suite');
+        return { done: true };
+      },
+    });
+
+    expect(result.operation.transition).toMatchObject({ preserved: [], invalidated: ['build_review'], reverified: ['test_suite'] });
+    expect((await readVerdict(dir, 'test_suite'))).toMatchObject({ satisfied: true });
+    expect((await readVerdict(dir, 'test_suite'))?.preservation).toBeUndefined();
+    expect(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'))).toMatchObject({ test_suite: 'done' });
+    await expect(classifyRebaseOperation(dir)).resolves.toEqual({ kind: 'clear' });
   });
 });
 
