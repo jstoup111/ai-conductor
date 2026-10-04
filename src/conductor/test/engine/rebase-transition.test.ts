@@ -1,3 +1,4 @@
+// Covers: task:4
 import { describe, expect, it, afterEach } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -8,7 +9,7 @@ import { readVerdict, validRebaseOperationRecord, writeVerdict } from '../../src
 import { applyRebaseTransition, clampRebaseContinuation } from '../../src/engine/rebase-transition.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
-function preservedCandidate(gate: 'prd_audit', checkedAt = 2) {
+function preservedCandidate(gate: 'build_review' | 'prd_audit', checkedAt = 2) {
   const original = { satisfied: true, checkedAt, reason: 'approved' };
   // The production caller uses this same JSON digest to bind the candidate to
   // the original verdict captured before transition writes begin.
@@ -30,6 +31,46 @@ const dirs: string[] = [];
 afterEach(async () => { while (dirs.length) await rm(dirs.pop()!, { recursive: true, force: true }); });
 
 describe('applyRebaseTransition', () => {
+  it('persists every preservation candidate in the applying descriptor before the state batch and retains it after apply', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    const statePath = join(dir, '.pipeline/conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(statePath, JSON.stringify({ test_suite: 'done' }));
+    await writeVerdict(dir, 'test_suite', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
+    });
+    await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 2, reason: 'approved' });
+    await writeVerdict(dir, 'prd_audit', { satisfied: true, checkedAt: 3, reason: 'approved' });
+
+    const candidates = [preservedCandidate('build_review', 2), preservedCandidate('prd_audit', 3)];
+    const stateStore = createFilesystemConductStateStore(statePath);
+    const applyBatch = stateStore.applyBatch.bind(stateStore);
+    let applyingEvidence: unknown;
+    stateStore.applyBatch = async (batch) => {
+      applyingEvidence = (await readVerdict(dir, 'rebase'))?.rebaseOperation?.preservationEvidence;
+      return applyBatch(batch);
+    };
+
+    const result = await applyRebaseTransition({
+      projectRoot: dir,
+      stateStore,
+      operationId: 'preservation-evidence-operation',
+      replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      invalidated: ['test_suite'],
+      preserved: ['build_review', 'prd_audit'],
+      preservedCandidates: candidates,
+    });
+
+    expect(result.stateResult).toBe('applied');
+    expect(applyingEvidence).toEqual(candidates);
+    const applied = (await readVerdict(dir, 'rebase'))?.rebaseOperation;
+    expect(applied?.preservationEvidence).toEqual(candidates);
+    expect(validRebaseOperationRecord(applied)).toBe(true);
+  });
+
   it('uses one expected-value batch and leaves skipped gates alone', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
     dirs.push(dir);
@@ -82,6 +123,9 @@ describe('applyRebaseTransition', () => {
       preservedCandidates: [] as const,
     };
     expect((await applyRebaseTransition(input)).stateResult).toBe('applied');
+    const operation = (await readVerdict(dir, 'rebase'))?.rebaseOperation;
+    expect(operation?.preservationEvidence).toEqual([]);
+    expect(validRebaseOperationRecord(operation)).toBe(true);
     expect((await applyRebaseTransition(input)).stateResult).toBe('already-applied');
   });
 

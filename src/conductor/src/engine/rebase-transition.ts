@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { ConductState, StateMutation, StepName } from '../types/index.js';
 import type { ConductStateStore } from './conduct-state-store.js';
-import type { PreservedJudgeIdentity, ReplayEvidence, RebaseOperationRecord } from './gate-verdicts.js';
+import type { ReplayEvidence, RebaseOperationRecord, RebasePreservedCandidate } from './gate-verdicts.js';
 import { readVerdict, writeVerdict } from './gate-verdicts.js';
 import { readState } from './state.js';
 import { creditKickbackGateLaps, updateKickbackLedger } from './kickback-ledger.js';
@@ -48,12 +48,7 @@ async function creditBuildReviewConvergence(projectRoot: string, operationId: st
  * re-discovers after writes have begun: a later ordinary verdict must never be
  * retroactively claimed as the original replayed PASS.
  */
-export interface RebasePreservedCandidate {
-  gate: StepName;
-  original: PreservedJudgeIdentity;
-  originalVerdictDigest: string;
-  relevantInputIdentities: readonly string[];
-}
+export type { RebasePreservedCandidate } from './gate-verdicts.js';
 
 export interface ApplyRebaseTransitionOptions {
   projectRoot: string;
@@ -83,6 +78,9 @@ export async function applyRebaseTransition(
   options: ApplyRebaseTransitionOptions,
 ): Promise<AppliedRebaseTransition> {
   const statePath = options.stateFilePath ?? join(options.projectRoot, '.pipeline', 'conduct-state.json');
+  const preservationCandidates = new Map(
+    options.preservedCandidates.map((candidate) => [candidate.gate, candidate]),
+  );
   const operation: RebaseOperationRecord = {
     // The replay tuple is immutable. Its digest makes a resumed application
     // identify the same cross-file operation instead of reopening gates again.
@@ -99,6 +97,10 @@ export async function applyRebaseTransition(
       reverified: [...(options.reverified ?? [])],
     },
     replay: options.replay,
+    preservationEvidence: options.preserved.flatMap((gate) => {
+      const candidate = preservationCandidates.get(gate);
+      return candidate === undefined ? [] : [candidate];
+    }),
   };
   const priorRebase = await readVerdict(options.projectRoot, 'rebase');
   if (priorRebase?.rebaseOperation?.id === operation.id && priorRebase.rebaseOperation.status === 'applied') {
@@ -118,9 +120,6 @@ export async function applyRebaseTransition(
   // batch: another writer may have recorded a genuine later judgement in the
   // meantime, and attaching this replay to that newer authority would make it
   // look as though the old judgement survived it.
-  const preservationCandidates = new Map(
-    options.preservedCandidates.map((candidate) => [candidate.gate, candidate]),
-  );
   // A named preservation without its immutable original authority is not an
   // incomplete optimization; it is an inconsistent transition.  Refuse
   // before writing `applying` so no reader can publish a bare old PASS.
