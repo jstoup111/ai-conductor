@@ -1,4 +1,4 @@
-// Covers: task:5, task:6, task:7, task:14
+// Covers: task:5, task:6, task:7, task:9, task:14
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -178,6 +178,44 @@ async function runTierSAdrAmendment(options: { enabled: boolean; inherited?: boo
     gitRunner,
   });
   return { projectDir, provider, prompts, runner, gitRunner };
+}
+
+async function writeCompletedTaskStatus(projectDir: string, ids: readonly string[]) {
+  await mkdir(join(projectDir, '.pipeline'), { recursive: true });
+  await writeFile(join(projectDir, '.pipeline', 'task-status.json'), JSON.stringify({
+    tasks: ids.map((id) => ({ id, status: 'completed' })),
+  }));
+}
+
+async function runConflictReplay(conflict: boolean, coverage = true) {
+  const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-conflict-runner-'));
+  const featureDesc = 'conflict-replay';
+  const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+  await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(projectDir, '.docs', 'stories'), { recursive: true });
+  if (coverage) await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+  await writeFile(join(projectDir, '.docs', 'stories', 'story.md'), '# Stories\n\n## Story 1\n\n### Happy Path\n\n- Given the plan is evaluated, when coverage binding runs, then the sealed outcome is preserved.\n');
+  await writeFile(planPath, '**Stories:** .docs/stories/story.md\n\n### Task 1: Preserve the sealed outcome\n**Done when:**\n- The sealed outcome is preserved.\n');
+  if (coverage) await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | Story 1 happy: Given the plan is evaluated, when coverage binding runs, then the sealed outcome is preserved. | 1 | covered | "The sealed outcome is preserved." | diff-local |\n');
+  const git = (...args: string[]) => promisify(execFile)('git', ['-C', projectDir, ...args]);
+  await git('init', '-q', '-b', 'main');
+  await git('add', '.');
+  await git('-c', 'user.email=t@example.com', '-c', 'user.name=T', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'base');
+  await git('remote', 'add', 'origin', '.');
+  await git('fetch', '-q', 'origin', 'main:refs/remotes/origin/main');
+  await git('checkout', '-q', '-b', 'feature');
+  const provider: LLMProvider = { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+    const claims = promptClaims(options);
+    const isConflict = options.prompt.includes('complete plan task table');
+    return { success: true, exitCode: 0, output: JSON.stringify({ verdicts: claims.map(({ id }) => isConflict
+      ? { id, verdict: conflict ? 'conflicts' : 'consistent', ...(conflict ? { taskIds: ['1'], conflict: 'The task contradicts the sealed outcome.' } : {}) }
+      : { id, verdict: 'asserts' }) }) };
+  }) };
+  const envelope = memoryEnvelopeFilesystem();
+  const runner = new DefaultStepRunner(provider, 'coverage-conflict-runner', projectDir, {
+    featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true, batch_size: 8 } } }, coverageBindingFilesystem: envelope.filesystem,
+  });
+  return { projectDir, runner, provider, envelope };
 }
 
 describe('coverage-binding runner batches', () => {
@@ -594,5 +632,71 @@ describe('coverage-binding runner batches', () => {
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
+  });
+
+  it('refuses a conflict before reopening a completed task for a changed coverage digest', async () => {
+    const replay = await runConflictReplay(true);
+    try {
+      await writeCompletedTaskStatus(replay.projectDir, ['1']);
+      await writeCoverageBindingEnvelope(replay.projectDir, {
+        version: 1, slug: 'previous', runId: 'previous-run', status: 'invalidated', entries: [entryFor(99)],
+      }, replay.envelope.filesystem);
+
+      const result = await replay.runner.run('coverage_binding', { complexity_tier: 'M' });
+      const status = JSON.parse(await readFile(join(replay.projectDir, '.pipeline', 'task-status.json'), 'utf8')) as { tasks: Array<{ id: string; status: string }> };
+
+      expect({ result, status }).toMatchObject({
+        result: { success: false, refusal: { kind: 'needs-human' } },
+        status: { tasks: [{ id: '1', status: 'completed' }] },
+      });
+    } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
+  });
+
+  it('reopens a changed coverage digest after all conflict verdicts are consistent', async () => {
+    const replay = await runConflictReplay(false);
+    try {
+      await writeCompletedTaskStatus(replay.projectDir, ['1']);
+      await writeCoverageBindingEnvelope(replay.projectDir, {
+        version: 1, slug: 'previous', runId: 'previous-run', status: 'invalidated', entries: [entryFor(99)],
+      }, replay.envelope.filesystem);
+
+      await expect(replay.runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(JSON.parse(await readFile(join(replay.projectDir, '.pipeline', 'task-status.json'), 'utf8'))).toMatchObject({
+        tasks: [{ id: '1', status: 'pending' }],
+      });
+    } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
+  });
+
+  it('lets a does-not-assert coverage verdict refuse when every conflict verdict is consistent', async () => {
+    const replay = await runConflictReplay(false);
+    try {
+      (replay.provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+        const claims = promptClaims(options);
+        const conflict = options.prompt.includes('complete plan task table');
+        return {
+          success: true,
+          exitCode: 0,
+          output: JSON.stringify({ verdicts: claims.map(({ id }) => conflict
+            ? { id, verdict: 'consistent' }
+            : { id, verdict: 'does-not-assert', missingAssertion: 'The task omits the criterion.' }) }),
+        };
+      });
+
+      const result = await replay.runner.run('coverage_binding', { complexity_tier: 'M' });
+
+      expect(result).toMatchObject({
+        success: false,
+        refusal: { kind: 'needs-human' },
+        output: expect.stringContaining('Missing assertion: The task omits the criterion.'),
+      });
+    } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
+  });
+
+  it('completes when consistent conflict verdicts are the only claims', async () => {
+    const replay = await runConflictReplay(false, false);
+    try {
+      await expect(replay.runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(replay.provider.invoke).toHaveBeenCalledTimes(1);
+    } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
   });
 });
