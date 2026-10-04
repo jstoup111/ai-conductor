@@ -237,6 +237,39 @@ describe('probeReadOnlyReviewCapability', () => {
   });
 });
 
+describe('buildCodexReadOnlyProducerRootPolicyArgs', () => {
+  const producerRoot = '/repo/.pipeline/session-events/dispatch-1';
+  const definition = `permissions.conductor-managed-review={extends=":read-only", filesystem={"${producerRoot}"="write"}}`;
+
+  it('selects the producer-root profile on exec through config only, since exec has no -P option', () => {
+    expect(buildCodexReadOnlyProducerRootPolicyArgs(producerRoot, 'exec')).toEqual([
+      '--config', definition,
+      '--config', 'default_permissions="conductor-managed-review"',
+    ]);
+  });
+
+  it('proves the same profile definition in the sandbox probe by name', () => {
+    expect(buildCodexReadOnlyProducerRootPolicyArgs(producerRoot, 'sandbox')).toEqual([
+      '--config', definition,
+      '-P', 'conductor-managed-review',
+    ]);
+  });
+
+  it('keeps the plain read-only native review profile on exec without a producer root', () => {
+    expect(buildCodexReadOnlyProducerRootPolicyArgs(undefined, 'exec')).toEqual([
+      '--config', 'sandbox_mode="read-only"',
+    ]);
+    expect(buildCodexReadOnlyProducerRootPolicyArgs(undefined, 'sandbox')).toEqual(['-P', ':read-only']);
+  });
+
+  it('quotes a producer root containing TOML-significant characters', () => {
+    const [, quoted] = buildCodexReadOnlyProducerRootPolicyArgs('/repo/a "b"\\c', 'exec');
+    expect(quoted).toBe(
+      'permissions.conductor-managed-review={extends=":read-only", filesystem={"/repo/a \\"b\\"\\\\c"="write"}}',
+    );
+  });
+});
+
 describe('probeManagedObservationDestination', () => {
   const producerRoot = join(tempRoot, 'worktree', '.pipeline', 'session-events', 'dispatch-1');
   const protectedPaths = [

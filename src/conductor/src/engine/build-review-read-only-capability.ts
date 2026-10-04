@@ -49,19 +49,36 @@ export type ManagedObservationDestinationProof = {
   readonly protectedWrites: 'refused' | 'unproven';
 };
 
+/** Named Codex permissions profile carrying the sole producer-root exception. */
+export const CODEX_MANAGED_REVIEW_PERMISSION_PROFILE = 'conductor-managed-review';
+
 /**
  * Both Codex entrypoints use this permission profile. Keep the read-only
  * base and sole producer-root exception in one builder so admission proves
  * the exact policy the provider launch receives.
+ *
+ * `-P` names a configured profile and exists only on `codex sandbox`;
+ * `codex exec` rejects it, so exec selects the same profile through
+ * `default_permissions`. Without a producer root, exec keeps the plain
+ * `sandbox_mode="read-only"` native review profile.
  */
 export function buildCodexReadOnlyProducerRootPolicyArgs(
   producerRoot: string | undefined,
   entrypoint: 'exec' | 'sandbox',
 ): readonly string[] {
-  void entrypoint;
-  return producerRoot === undefined
-    ? ['-P', ':read-only']
-    : ['-P', ':read-only', '-P', `${producerRoot}:read-write`];
+  if (producerRoot === undefined) {
+    return entrypoint === 'exec'
+      ? ['--config', 'sandbox_mode="read-only"']
+      : ['-P', ':read-only'];
+  }
+  const profile = CODEX_MANAGED_REVIEW_PERMISSION_PROFILE;
+  const definition = [
+    '--config',
+    `permissions.${profile}={extends=":read-only", filesystem={${JSON.stringify(producerRoot)}="write"}}`,
+  ];
+  return entrypoint === 'exec'
+    ? [...definition, '--config', `default_permissions="${profile}"`]
+    : [...definition, '-P', profile];
 }
 
 const CODEX_PROBE_OBSERVATIONS = new Set([
