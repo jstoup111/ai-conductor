@@ -4,6 +4,12 @@ spec_hash: 251f74a3ea7ff8503e86040213f1bb8e1bbc879a6772782e6243a802a786437f
 pr: https://github.com/jstoup111/ai-conductor/pull/2929
 shipped: 2026-10-04
 engine_version: 20261003T201457Z-42a8ad9bcd91
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/engine/full-suite-verifier.test.ts — an unrelated FullSuiteVerifier recovery-claim test removes its leftover lock directory before shared cleanup; test-only, owned by no plan task, no Scope: trailer"
+    accepted: true
 ---
 
 ## Cost
