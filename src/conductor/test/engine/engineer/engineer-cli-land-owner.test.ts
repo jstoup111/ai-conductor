@@ -150,11 +150,15 @@ async function makeUserHome(body?: string): Promise<string> {
 /** Run `fn` with process.env.HOME pointed at `home`; always restores it. */
 async function withHome<T>(home: string, fn: () => Promise<T>): Promise<T> {
   const saved = process.env.HOME;
+  const savedUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
   process.env.HOME = home;
+  delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
   try {
     return await fn();
   } finally {
     process.env.HOME = saved;
+    if (savedUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+    else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = savedUserConfigDir;
   }
 }
 

@@ -226,7 +226,9 @@ describe('engineer land tracker write-back (Task 11)', () => {
     await mkdir(join(fakeHome, '.ai-conductor'), { recursive: true });
     await writeFile(join(fakeHome, '.ai-conductor', 'config.yml'), 'spec_owner: test-owner\n');
     const savedHome = process.env.HOME;
+    const savedUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
     process.env.HOME = fakeHome;
+    delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
     let code: number;
     try {
       code = await dispatchEngineer(
@@ -238,6 +240,8 @@ describe('engineer land tracker write-back (Task 11)', () => {
       );
     } finally {
       process.env.HOME = savedHome;
+      if (savedUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+      else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = savedUserConfigDir;
     }
 
     expect(code, err.join('\n')).toBe(0);
