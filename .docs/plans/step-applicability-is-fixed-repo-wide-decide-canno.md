@@ -161,7 +161,9 @@ A project-only, default-off toggle lets a feature's merged DECIDE marker declare
 - The metrics listener increments one counter per applicability event whose labels are limited to event type, step, and cause or prior status, as asserted in `test/engine/otel/metrics-listener.test.ts`.
 - No metric label emitted for an applicability event contains the declared reason, the decider identity, or the commit sha.
 
-**Files:** src/conductor/src/types/events.ts; src/conductor/src/engine/event-sinks.ts; src/conductor/src/engine/otel/metrics-listener.ts; src/conductor/test/engine/event-sinks.test.ts; src/conductor/test/engine/otel/metrics-listener.test.ts
+> **Amended 2026-10-04 (operator-approved plan-gap recovery):** No existing `MetricsRecorder` instrument carries the event-type/step/cause-or-prior-status labels, so the listener cases need a recorder projection. Task 6 also owns one bounded counter, `conductor.step.applicability`, and its recorder method in `src/conductor/src/engine/otel/metrics.ts`. Reason, decider and commit text never become labels.
+
+**Files:** src/conductor/src/types/events.ts; src/conductor/src/engine/event-sinks.ts; src/conductor/src/engine/otel/metrics-listener.ts; src/conductor/src/engine/otel/metrics.ts; src/conductor/test/engine/event-sinks.test.ts; src/conductor/test/engine/otel/metrics-listener.test.ts
 
 **Dependencies:** none
 
