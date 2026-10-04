@@ -31,6 +31,49 @@ export type DoneWhenTestReferenceVerification =
     readonly title?: string;
   };
 
+/** A tagged check explicitly closed without a verified test reference. */
+export interface UnverifiedDoneWhenCheck {
+  readonly taskId: string;
+  readonly check: string;
+  readonly reason: string;
+}
+
+/**
+ * Collects only explicit unverified close records from task-status content.
+ * Legacy rows and malformed status data are non-authoritative and ignored.
+ */
+export function collectUnverifiedDoneWhenChecks(status: unknown): UnverifiedDoneWhenCheck[] {
+  if (!status || typeof status !== 'object' || Array.isArray(status)) return [];
+  const root = status as Record<string, unknown>;
+  const tasks = 'tasks' in root ? root.tasks : root;
+  const rows = Array.isArray(tasks)
+    ? tasks.map((row) => [undefined, row] as const)
+    : tasks && typeof tasks === 'object' && !Array.isArray(tasks)
+      ? Object.entries(tasks)
+      : [];
+
+  const checks: UnverifiedDoneWhenCheck[] = [];
+  for (const [legacyId, value] of rows) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const row = value as Record<string, unknown>;
+    const taskId = typeof row.id === 'string' ? row.id : legacyId;
+    if (!taskId || !Array.isArray(row.doneWhen)) continue;
+
+    for (const record of row.doneWhen) {
+      if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
+      const close = record as Record<string, unknown>;
+      if (
+        close.source === 'unverified'
+        && typeof close.check === 'string'
+        && typeof close.reason === 'string'
+      ) {
+        checks.push({ taskId, check: close.check, reason: close.reason });
+      }
+    }
+  }
+  return checks;
+}
+
 /** Parses the user-facing `test:<path>::<title>` evidence form. */
 export function parseDoneWhenTestReference(evidence: string): DoneWhenTestReference | undefined {
   const match = evidence.trim().match(/^test:([^\r\n]+?)::([\s\S]+)$/);

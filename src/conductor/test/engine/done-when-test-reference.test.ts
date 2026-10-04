@@ -1,6 +1,9 @@
-// Covers: task:2
+// Covers: task:2, task:7
 import { describe, expect, it } from 'vitest';
-import { verifyDoneWhenTestReference } from '../../src/engine/done-when-test-reference.js';
+import {
+  collectUnverifiedDoneWhenChecks,
+  verifyDoneWhenTestReference,
+} from '../../src/engine/done-when-test-reference.js';
 
 const stories = `## Story 2: Verified test evidence
 
@@ -61,5 +64,46 @@ describe('verifyDoneWhenTestReference', () => {
         blobs,
       })).toMatchObject({ kind: 'verified' });
     }
+  });
+});
+
+describe('collectUnverifiedDoneWhenChecks', () => {
+  it('returns only explicit unverified close records across current and legacy task-status shapes', () => {
+    expect(collectUnverifiedDoneWhenChecks({
+      tasks: [
+        {
+          id: '7',
+          status: 'completed',
+          doneWhen: [
+            {
+              check: '[test] a service-backed outcome',
+              evidence: 'service unavailable',
+              source: 'unverified',
+              reason: 'service unavailable',
+            },
+            { check: 'a reported outcome', evidence: 'reported', source: 'reported' },
+            { check: '[test] a verified outcome', evidence: 'reference', source: 'verified' },
+            { check: '[test] a legacy outcome', evidence: 'legacy' },
+          ],
+        },
+        // Stamps and verify-only closes can resolve a tagged task without a close record.
+        { id: '8', status: 'completed' },
+        { id: '9', status: 'completed', doneWhen: 'legacy malformed record' },
+      ],
+    })).toEqual([
+      { taskId: '7', check: '[test] a service-backed outcome', reason: 'service unavailable' },
+    ]);
+
+    expect(collectUnverifiedDoneWhenChecks({
+      10: {
+        status: 'completed',
+        doneWhen: [
+          { check: '[test] map-shaped close', source: 'unverified', reason: 'legacy map' },
+          { check: 'old record', evidence: 'old' },
+        ],
+      },
+    })).toEqual([
+      { taskId: '10', check: '[test] map-shaped close', reason: 'legacy map' },
+    ]);
   });
 });
