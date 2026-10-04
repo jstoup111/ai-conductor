@@ -2,24 +2,21 @@
 
 Status: resolved
 Resolution cause: operator
-Resolved at: 2026-10-04T13:42:12.645Z
+Resolved at: 2026-10-04T21:49:30.893Z
 Slug: step-applicability-is-fixed-repo-wide-decide-canno
-Class: needs-human
-Halting step: unknown
-Phase: unknown
+Class: plan-gap
+Halting step: build
+Phase: BUILD
 Branch: feat/daemon-step-applicability-is-fixed-repo-wide-decide-canno
-Head SHA: 6b27490797f645edb4928cbd9d021594dbbedc2a
-Halted at: 2026-10-04T01:06:19.359Z
+Head SHA: 4eb45cdd78241c60c5c6064fc333d4f2bd95e8bf
+Halted at: 2026-10-04T14:29:42.286Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-coverage_binding refused: cited Done when checks do not assert the required claim.
-
-Criterion: Story 5 happy: Given an enabled repository and an idea worktree whose applicability marker declares manual_test inapplicable with a non-empty reason, when the spec is landed, then land succeeds and the marker is committed with the other DECIDE artifacts.
-Task ids: 4
-Done when checks: `landSpec` succeeds for an enabled project whose idea worktree carries a marker declaring `manual_test` inapplicable with a non-empty reason, and the resulting land commit includes the marker file, as asserted in `test/engine/engineer/land-spec-applicability.test.ts`. | `landSpec` for an enabled project whose idea worktree has no applicability marker succeeds with the same committed file list it produces when the capability is disabled, so markerless land behaves exactly as before this feature, as asserted in `land-spec-applicability.test.ts`. | `validateApplicability` in `engine/feature-applicability.ts` returns ok with the parsed declarations for a valid marker and is the only validator imported by both `landSpec` and the daemon backlog.
-Missing assertion: "the marker is committed with the other DECIDE artifacts"
+Plan gap: task 6, Done when check 2 cannot be satisfied under the approved plan.
+Check: The metrics listener increments one counter per applicability event whose labels are limited to event type, step, and cause or prior status, as asserted in `test/engine/otel/metrics-listener.test.ts`.
+Reason: Task 6 requires a new applicability counter and recorder projection in src/conductor/src/engine/otel/metrics.ts to emit the specified event-type/step/cause-or-priorStatus labels. That production file is not declared in Task 6, and no existing MetricsRecorder instrument can represent those labels.
 ```
