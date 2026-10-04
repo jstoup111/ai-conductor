@@ -8,6 +8,10 @@ import { readState } from './state.js';
 import { creditKickbackGateLaps, updateKickbackLedger } from './kickback-ledger.js';
 import { reverifyOrInvalidateRebaseGate, type RebasePreVerifier } from './rebase.js';
 
+function verdictDigest(verdict: unknown): string {
+  return `sha256:${createHash('sha256').update(JSON.stringify(verdict)).digest('hex')}`;
+}
+
 /** The durable result consumed by the conductor and the re-kick path. */
 export interface AppliedRebaseTransition {
   operation: RebaseOperationRecord;
@@ -132,7 +136,7 @@ export async function completeInterruptedRebaseOperation(
   for (const candidate of candidates) {
     const verdict = await readVerdict(options.projectRoot, candidate.gate);
     const matchesOriginal = verdict?.satisfied === true && !verdict.kickback &&
-      createHash('sha256').update(JSON.stringify(verdict)).digest('hex') === candidate.originalVerdictDigest;
+      verdictDigest(verdict) === candidate.originalVerdictDigest;
     if (matchesOriginal) {
       preserved.push(candidate.gate);
       usableCandidates.push(candidate);
@@ -235,7 +239,7 @@ export async function applyRebaseTransition(
     if (!candidate) continue;
     const verdict = await readVerdict(options.projectRoot, gate);
     if (!verdict?.satisfied || verdict.kickback || !options.replay.expectedTree ||
-      createHash('sha256').update(JSON.stringify(verdict)).digest('hex') !== candidate.originalVerdictDigest) continue;
+      verdictDigest(verdict) !== candidate.originalVerdictDigest) continue;
     originalPreserved.set(gate, candidate);
   }
 
@@ -289,7 +293,7 @@ export async function applyRebaseTransition(
     // A newer ordinary verdict wins.  Do not overwrite it and do not add this
     // operation's preservation metadata to it.
     if (!verdict?.satisfied || verdict.kickback ||
-      createHash('sha256').update(JSON.stringify(verdict)).digest('hex') !== original.originalVerdictDigest) continue;
+      verdictDigest(verdict) !== original.originalVerdictDigest) continue;
     await writeVerdict(options.projectRoot, gate, {
       ...verdict,
       preservation: {

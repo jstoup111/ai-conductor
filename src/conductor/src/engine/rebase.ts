@@ -2617,7 +2617,7 @@ export async function applyRebaseVerdicts(
           preservedCandidates.push({
             gate,
             original: identity,
-            originalVerdictDigest: createHash('sha256').update(JSON.stringify(original)).digest('hex'),
+            originalVerdictDigest: `sha256:${createHash('sha256').update(JSON.stringify(original)).digest('hex')}`,
             // `activeInputs` is only the changed slice.  Bound every resolved
             // review document instead, so a later story/plan/coherence/ADR
             // edit cannot silently retain this replay authority.

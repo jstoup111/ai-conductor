@@ -17,7 +17,7 @@ function preservedCandidate(gate: 'build_review' | 'prd_audit' | 'test_suite', c
   const original = { satisfied: true, checkedAt, reason: 'approved' };
   // The production caller uses this same JSON digest to bind the candidate to
   // the original verdict captured before transition writes begin.
-  const originalVerdictDigest = createHash('sha256').update(JSON.stringify(original)).digest('hex');
+  const originalVerdictDigest = `sha256:${createHash('sha256').update(JSON.stringify(original)).digest('hex')}`;
   return {
     gate,
     original: {

@@ -125,7 +125,7 @@ export function validRebaseOperationRecord(operation: RebaseOperationRecord | un
         typeof candidate.original.attemptId === 'string' && candidate.original.attemptId.length > 0 &&
         typeof candidate.original.runId === 'string' && candidate.original.runId.length > 0 &&
         typeof candidate.original.codeStamp === 'string' && candidate.original.codeStamp.length > 0 &&
-        typeof candidate.originalVerdictDigest === 'string' && candidate.originalVerdictDigest.length > 0 &&
+        typeof candidate.originalVerdictDigest === 'string' && /^sha256:[a-f0-9]{64}$/.test(candidate.originalVerdictDigest) &&
         Array.isArray(candidate.relevantInputIdentities) &&
         candidate.relevantInputIdentities.every((identity) => typeof identity === 'string');
     })) return false;

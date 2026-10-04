@@ -1,4 +1,4 @@
-// Covers: task:2, task:5
+// Covers: task:2, task:4, task:5
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -166,7 +166,7 @@ describe('engine/gate-verdicts', () => {
     expect(validRebaseOperationRecord(operation)).toBe(true);
   });
 
-  it('accepts complete preservation evidence with a non-empty verdict digest', () => {
+  it('accepts complete preservation evidence with a sha256 verdict digest', () => {
     const operation = validRebaseOperationFixture({
       preservationEvidence: [preservationEvidence('build_review')],
     });
@@ -188,13 +188,16 @@ describe('engine/gate-verdicts', () => {
     expect(validRebaseOperationRecord(operation)).toBe(false);
   });
 
-  it('rejects preservation evidence without a non-empty original verdict digest', () => {
-    const operation = validRebaseOperationFixture({
-      preservationEvidence: [{ ...preservationEvidence('build_review'), originalVerdictDigest: '' }],
-    });
+  it.each(['', 'persisted-verdict-digest', 'sha256:not-a-digest', `sha1:${'a'.repeat(64)}`])(
+    'rejects preservation evidence without a sha256 original verdict digest: %s',
+    (originalVerdictDigest) => {
+      const operation = validRebaseOperationFixture({
+        preservationEvidence: [{ ...preservationEvidence('build_review'), originalVerdictDigest }],
+      });
 
-    expect(validRebaseOperationRecord(operation)).toBe(false);
-  });
+      expect(validRebaseOperationRecord(operation)).toBe(false);
+    },
+  );
 
   it('drops obsolete preservation metadata when an ordinary verdict replaces the record', async () => {
     await writeVerdict(dir, 'build_review', {
@@ -263,7 +266,7 @@ function preservationEvidence(gate: 'build_review' | 'prd_audit') {
       runId: 'run-1',
       codeStamp: 'a'.repeat(40),
     },
-    originalVerdictDigest: 'persisted-verdict-digest',
+    originalVerdictDigest: `sha256:${'a'.repeat(64)}`,
     relevantInputIdentities: ['.docs/plans/feature.md@sha256:plan'],
   };
 }
