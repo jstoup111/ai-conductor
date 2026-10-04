@@ -23,7 +23,7 @@ export interface CoverageBindingConflictClaim {
 export interface AssembleConflictClaimsInput {
   readonly planText: string;
   readonly storiesText: string;
-  /** ADR texts are resolved by the caller; claim assembly is pure. */
+  /** ADR texts are resolved by the caller; base filtering stays fail-closed there. */
   readonly subjectAdrs: readonly { readonly path: string; readonly text: string }[];
   readonly amendmentClaims: readonly CoverageBindingAmendmentClaim[];
 }

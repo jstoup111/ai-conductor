@@ -9,17 +9,24 @@ import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/executi
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 
 type Fixture = { criterion?: string; adr?: string; decision?: string; adrs?: [string, string][]; tasks: [string, string, string][]; conflictTaskIds?: string[] };
+type ConflictPromptClaim = { id: string; kind: string; text: string; taskTable: Array<{ id: string; title: string; doneWhen: string[] }> };
 
 function conflictClaims(options: InvokeOptions): Array<{ id: string; kind: string; text: string }> {
   const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
   return (JSON.parse(body) as { claims: Array<{ id: string; kind: string; text: string }> }).claims;
 }
 
+function conflictPromptClaims(prompt: string): ConflictPromptClaim[] {
+  const body = prompt.slice(prompt.lastIndexOf('\n\n{') + 2);
+  const payload = JSON.parse(body) as { taskTable: ConflictPromptClaim['taskTable']; claims: Array<Omit<ConflictPromptClaim, 'taskTable'>> };
+  return payload.claims.map((claim) => ({ ...claim, taskTable: payload.taskTable }));
+}
+
 async function fixture(name: string): Promise<Fixture> {
   return JSON.parse(await readFile(join(process.cwd(), 'test', 'fixtures', 'coverage-binding-conflicts', `${name}.json`), 'utf8')) as Fixture;
 }
 
-async function runReplay(name: string, conflict = true) {
+async function runReplay(name: string, conflict = true, events?: { emit(event: unknown): Promise<void> }) {
   const data = await fixture(name);
   const projectDir = await mkdtemp(join(tmpdir(), 'coverage-conflict-replay-'));
   const feature = 'replay';
@@ -54,7 +61,7 @@ async function runReplay(name: string, conflict = true) {
       ? { id, verdict: conflict ? 'conflicts' : 'consistent', ...(conflict ? { taskIds: data.conflictTaskIds, conflict: 'Fixture contradiction.' } : {}) }
       : { id, verdict: 'asserts' }) }) };
   }) };
-  const runner = new DefaultStepRunner(provider, `replay-${name}`, projectDir, { featureDesc: feature, planPath, config: { coverage_binding: { judge: { enabled: true, batch_size: 2 } } } });
+  const runner = new DefaultStepRunner(provider, `replay-${name}`, projectDir, { featureDesc: feature, planPath, config: { coverage_binding: { judge: { enabled: true, batch_size: 2 } } }, events: events as never });
   return { projectDir, runner, prompts, provider, data };
 }
 
@@ -66,6 +73,10 @@ describe('coverage-binding conflict evidence replays', () => {
       expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
       expect(result.output).toContain(replay.data.criterion!);
       expect(result.output).toContain(`Task ids: ${replay.data.conflictTaskIds![0]}`);
+      const claim = replay.prompts.filter((prompt) => prompt.includes('complete plan task table')).flatMap(conflictPromptClaims)
+        .find((candidate) => candidate.text.includes(replay.data.criterion!));
+      expect(claim).toMatchObject({ kind: 'criterion' });
+      expect(claim?.taskTable).toEqual(replay.data.tasks.map(([id, title, doneWhen]) => ({ id, title, doneWhen: [doneWhen] })));
     } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
   });
 
@@ -75,7 +86,10 @@ describe('coverage-binding conflict evidence replays', () => {
       const result = await replay.runner.run('coverage_binding', { complexity_tier: 'S' });
       expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
       expect(result.output).toContain('adr-generated-values#D4');
-      for (const taskId of replay.data.conflictTaskIds!) expect(result.output).toContain(taskId);
+      expect(result.output).toContain('Task ids: 7, 8, 9, 10');
+      const claims = replay.prompts.filter((prompt) => prompt.includes('complete plan task table')).flatMap(conflictPromptClaims);
+      expect(claims).toHaveLength(1);
+      expect(claims[0]?.taskTable).toEqual(replay.data.tasks.map(([id, title, doneWhen]) => ({ id, title, doneWhen: [doneWhen] })));
     } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
   });
 
@@ -90,11 +104,22 @@ describe('coverage-binding conflict evidence replays', () => {
     } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
   });
 
-  it('keeps a consistent plan done and dispatches its first conflict batch', async () => {
+  it('keeps a consistent plan done after judging its conflict claim', async () => {
     const replay = await runReplay('consistent-plan', false);
     try {
       await expect(replay.runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
-      expect(replay.provider.invoke).toHaveBeenCalled();
+      const envelope = JSON.parse(await readFile(join(replay.projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
+      expect(envelope).toMatchObject({ status: 'done' });
+      expect(replay.provider.invoke).toHaveBeenCalledTimes(1);
+    } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
+  });
+
+  it('emits exactly one conflict event for a cached conflict claim', async () => {
+    const events: unknown[] = [];
+    const replay = await runReplay('case-1', true, { emit: async (event) => { events.push(event); } });
+    try {
+      await replay.runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(events.filter((event) => (event as { type?: string }).type === 'coverage_binding_conflict_judged')).toHaveLength(1);
     } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
   });
 });

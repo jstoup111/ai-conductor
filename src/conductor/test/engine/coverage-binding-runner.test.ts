@@ -237,6 +237,42 @@ describe('coverage-binding runner batches', () => {
     }
   });
 
+  it('fails closed when the DECIDE amendment merge base cannot be resolved', async () => {
+    const fixture = await runTierSAdrAmendment({ enabled: true });
+    try {
+      fixture.gitRunner.mockImplementation(async (args: string[]) => {
+        if (args[0] === 'rev-parse') return { exitCode: 0, stdout: 'head\n', stderr: '' };
+        if (args[0] === 'merge-base') return { exitCode: 1, stdout: '', stderr: 'no merge base' };
+        return { exitCode: 1, stdout: '', stderr: `unexpected git command: ${args.join(' ')}` };
+      });
+      const result = await fixture.runner.run('coverage_binding', { complexity_tier: 'S' });
+      expect(result).toMatchObject({ success: false, infrastructureFailure: expect.any(CoverageBindingPayloadError) });
+      expect(result.output).toContain('could not resolve merge base');
+      expect(fixture.provider.invoke).not.toHaveBeenCalled();
+    } finally {
+      await rm(fixture.projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when git show cannot read an artifact proved present at the amendment base', async () => {
+    const fixture = await runTierSAdrAmendment({ enabled: true });
+    try {
+      fixture.gitRunner.mockImplementation(async (args: string[]) => {
+        if (args[0] === 'rev-parse') return { exitCode: 0, stdout: 'head\n', stderr: '' };
+        if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base\n', stderr: '' };
+        if (args[0] === 'show') return { exitCode: 1, stdout: '', stderr: 'object read failed' };
+        if (args[0] === 'cat-file') return { exitCode: 0, stdout: '', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: `unexpected git command: ${args.join(' ')}` };
+      });
+      const result = await fixture.runner.run('coverage_binding', { complexity_tier: 'S' });
+      expect(result).toMatchObject({ success: false, infrastructureFailure: expect.any(CoverageBindingPayloadError) });
+      expect(result.output).toContain('could not read DECIDE amendment base input');
+      expect(fixture.provider.invoke).not.toHaveBeenCalled();
+    } finally {
+      await rm(fixture.projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('uses the selected Pi judge native model and ladder in a Claude run', async () => {
     const piModel = 'anthropic/claude-opus-4-5';
     const piFallback = 'openai/gpt-5.6-sol';

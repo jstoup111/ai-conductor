@@ -4719,21 +4719,37 @@ export class DefaultStepRunner implements StepRunner {
           // Amendments inherited from the default branch belong to the features
           // that landed them; only blocks this branch added are obligations.
           const originRef = await resolveOriginRef(this.projectDir).catch(() => null);
-          const amendmentBase = originRef === null ? undefined : await this.gitRunner(['merge-base', originRef, 'HEAD'])
-            .then((result) => (result.exitCode === 0 && result.stdout.trim() ? result.stdout.trim() : undefined))
-            .catch(() => undefined);
+          if (originRef === null) throw new Error('could not resolve the origin reference for DECIDE amendment inputs');
+          const mergeBase = await this.gitRunner(['merge-base', originRef, 'HEAD']);
+          const amendmentBase = mergeBase.exitCode === 0 && mergeBase.stdout.trim()
+            ? mergeBase.stdout.trim()
+            : (() => { throw new Error(`could not resolve merge base for DECIDE amendment inputs: ${mergeBase.stderr || mergeBase.stdout || originRef}`); })();
           const decideArtifacts = (await Promise.all([...resolvedDecideSet.paths]
             .filter((path) => path.startsWith('.docs/specs/') || /^\.docs\/decisions\/architecture-review-/.test(path) ||
               /^\.docs\/decisions\/adr-/.test(path))
             .map(async (path) => {
-              const text = await readFile(join(this.projectDir, path), 'utf8').catch(() => undefined);
-              if (text === undefined) return undefined;
+              let text: string;
+              try {
+                text = await readFile(join(this.projectDir, path), 'utf8');
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+                throw error;
+              }
+              const basePath = `${amendmentBase}:${path}`;
+              const baseResult = await this.gitRunner(['show', basePath]);
+              let baseText: string | undefined;
+              if (baseResult.exitCode === 0) {
+                baseText = baseResult.stdout;
+              } else {
+                const existsAtBase = await this.gitRunner(['cat-file', '-e', basePath]);
+                if (existsAtBase.exitCode === 0) {
+                  throw new Error(`could not read DECIDE amendment base input ${path}: ${baseResult.stderr || baseResult.stdout || 'git show failed'}`);
+                }
+              }
               return {
                 path,
                 text,
-                baseText: amendmentBase === undefined ? undefined : await this.gitRunner(['show', `${amendmentBase}:${path}`])
-                  .then((result) => (result.exitCode === 0 ? result.stdout : undefined))
-                  .catch(() => undefined),
+                baseText,
               };
             }))).flatMap((artifact) => artifact === undefined ? [] : [artifact]);
           amendmentClaims = assembleAmendmentClaims({ planText, decideArtifacts });
@@ -5050,10 +5066,6 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     const conflictPlan = { entries: planned.conflictEntries, batches: planned.conflictBatches };
-    for (const entry of conflictPlan.entries) {
-      const conflict = entry as unknown as CoverageBindingConflictEnvelopeEntry;
-      await this.events?.emit({ type: 'coverage_binding_conflict_judged', step: 'coverage_binding', claimKind: conflict.claimKind, claimId: conflict.claimId, verdict: conflict.verdict, taskIds: [...(conflict.taskIds ?? [])] });
-    }
     if (conflictPlan.entries.length > 0 || conflictPlan.batches.length > 0) await writeEnvelope('partial', entries);
     for (const [batchIndex, batch] of conflictPlan.batches.entries()) {
       const issuedIds = issueJudgeClaimIds(batch.map(({ claimDigest: digest }) => digest), 'criterion');
