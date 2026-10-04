@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 export interface ConsumerDeclaration {
-  consumer: string | 'none';
+  consumer: string | readonly string[] | 'none';
   reason?: string;
 }
 
@@ -15,7 +15,7 @@ export function flattenedConfigKeys(sets: ConfigKeySets): string[] {
   );
 }
 
-const consumer = (path: string): ConsumerDeclaration => ({ consumer: path });
+const consumer = (path: string | readonly string[]): ConsumerDeclaration => ({ consumer: path });
 const none = (reason: string): ConsumerDeclaration => ({ consumer: 'none', reason });
 
 // Consumer paths used more than once. Named so a moved module is one edit, and
@@ -85,6 +85,10 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   stacked_prs: none('reserved for #2724 build-loop slice checkpoints; replaced by a real consumer when #2724 lands'),
   build_review: consumer(RESOLVED_CONFIG),
   coverage_binding: consumer(RESOLVED_CONFIG),
+  feature_applicability: consumer([
+    'src/conductor/src/engine/engineer/land-spec.ts',
+    CONDUCTOR,
+  ]),
   conflict_check: consumer('skills/conflict-check/SKILL.md'),
   prd_audit: consumer(CONDUCTOR),
   architecture_review_as_built: consumer(AS_BUILT_POLICY),
@@ -262,6 +266,10 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'coverage_binding.judge': consumer(RESOLVED_CONFIG),
   'coverage_binding.judge.enabled': consumer(RESOLVED_CONFIG),
   'coverage_binding.judge.batch_size': consumer(RESOLVED_CONFIG),
+  'feature_applicability.enabled': consumer([
+    'src/conductor/src/engine/engineer/land-spec.ts',
+    CONDUCTOR,
+  ]),
 
   // ── ci_watch ──────────────────────────────────────────────────────────────
   'ci_watch.enabled': consumer(DAEMON_CLI),
@@ -369,8 +377,13 @@ export function assertRegistryCovers(sets: ConfigKeySets, registry: Record<strin
       if (!declaration.reason?.trim()) throw new Error(`Config key ${key} is none without a reason`);
       continue;
     }
-    if (!existsSync(resolve(repoRoot, declaration.consumer))) {
-      throw new Error(`Config key ${key} has unresolvable consumer: ${declaration.consumer}`);
+    const consumers = typeof declaration.consumer === 'string'
+      ? [declaration.consumer]
+      : declaration.consumer;
+    for (const consumerPath of consumers) {
+      if (!existsSync(resolve(repoRoot, consumerPath))) {
+        throw new Error(`Config key ${key} has unresolvable consumer: ${consumerPath}`);
+      }
     }
   }
   for (const key of Object.keys(registry)) {

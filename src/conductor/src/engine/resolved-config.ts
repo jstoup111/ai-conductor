@@ -135,6 +135,13 @@ export function resolveCoverageBindingConfig(
   };
 }
 
+/** Resolve the project-only feature applicability opt-in. */
+export function resolveFeatureApplicabilityConfig(
+  config: Pick<HarnessConfig, 'feature_applicability'> | undefined,
+): { enabled: boolean } {
+  return { enabled: config?.feature_applicability?.enabled ?? false };
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Resolution
 // ────────────────────────────────────────────────────────────────────────────
