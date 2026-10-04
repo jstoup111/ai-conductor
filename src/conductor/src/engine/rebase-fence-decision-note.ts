@@ -61,8 +61,8 @@ export async function renderRebaseFenceDecisionNote(projectRoot: string): Promis
     let cleared = '';
     try {
       cleared = await readFile(join(projectRoot, HALT_CLEARED_PATH), 'utf8');
-    } catch {
-      return '';
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return unreadableClearNote();
     }
     if (parseClearedOverScopeDecisions(cleared, new Map()).kind !== 'absent') {
       return orphanedDecisionStateNote(HALT_CLEARED_PATH);

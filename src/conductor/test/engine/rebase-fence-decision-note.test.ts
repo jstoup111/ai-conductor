@@ -107,6 +107,16 @@ describe('renderRebaseFenceDecisionNote', () => {
     expect(note).toContain('restore .pipeline/remediation-cases.json or remove the orphaned decision state');
   });
 
+  it('reports an unreadable clear state without a remediation case store', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.pipeline', 'HALT.cleared'), { recursive: true });
+
+    const note = await renderRebaseFenceDecisionNote(root);
+
+    expect(note).toContain('.pipeline/HALT.cleared');
+    expect(note).toContain('repair it before the decision state can be trusted');
+  });
+
   it('reports an unreadable recorded-decision state without throwing', async () => {
     const root = await projectRoot();
     await writeOffer(root);
