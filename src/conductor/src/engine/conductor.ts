@@ -2850,7 +2850,8 @@ export class Conductor {
     const read = await createEngineStateStore(join(this.projectRoot, '.pipeline', 'engine-state.json')).read();
     if (!read.ok) return false;
     const laps = read.value.unverifiedDoneWhenNudges;
-    return typeof laps === 'object' && laps !== null && !Array.isArray(laps) && laps[key] === true;
+    return typeof laps === 'object' && laps !== null && !Array.isArray(laps)
+      && (laps as Record<string, unknown>)[key] === true;
   }
 
   private async recordUnverifiedDoneWhenNudge(state: ConductState): Promise<void> {

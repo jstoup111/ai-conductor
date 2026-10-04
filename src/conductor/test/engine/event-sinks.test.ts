@@ -83,6 +83,7 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'dashboard_refresh',
   'auto_heal',
   'mode_skip',
+  'build_done_when_unverified',
   'build_progress',
   'unattributed_progress',
   'build_no_progress',
