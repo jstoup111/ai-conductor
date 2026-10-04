@@ -147,6 +147,9 @@ Pi gains the `selfHost` capability. A Pi self-host candidate runs in a throwaway
 - live-boundary test: for provider pi, a change to `settings.json` or `trust.json`, or an added `extensions/x.ts`, makes `verifyLiveBoundary` return not ok with a reason containing `provider state` and the changed path, under both an uncontained and a contained verdict
 - live-boundary test: for provider pi, an added root-level `sessions.json` makes `verifyLiveBoundary` return not ok
 - `PROVIDER_STATE_VOLATILE` is typed `Readonly<Record<SelfHostProviderId, readonly string[]>>`, so deleting its pi key fails `tsc`, and the claude and codex entries deep-equal the pre-change arrays
+- live-boundary test: under a contained verdict, a `settings.json` edit in the provider home makes `verifyLiveBoundary` return not ok for provider pi and for provider claude alike, and the two reasons are equal once each provider-home path is replaced by the same placeholder, each containing `provider state` and `settings.json`
+
+> **Amended 2026-10-04 by #1887 (coverage_binding refusal):** The last Done when check above was added so Story 2's contained-dispatch criterion is asserted as parity with a contained claude dispatch, not only as a pi failure.
 
 **Files:** src/conductor/src/engine/self-host/live-boundary.ts; src/conductor/test/engine/self-host/live-boundary.test.ts
 
@@ -213,6 +216,10 @@ Pi gains the `selfHost` capability. A Pi self-host candidate runs in a throwaway
 - conductor pi test: a successful pi dispatch's invocation argv and env contain no `K`, and after teardown its home directory and `auth.json` no longer exist and its lease is released
 - conductor pi test: a pi dispatch whose invoke fails, and one that is aborted, each still remove the home directory and its `auth.json`
 - conductor pi test: when the live Pi home's `settings.json` changes during a dispatch, `pendingLiveBoundaryHalt` is a reason containing `provider state` and `settings.json` and the next dispatch boundary writes the HALT marker, while a dispatch that changes only `sessions/` sets no pending halt
+- conductor pi test: with a failing resolver whose stderr contains `K`, the refusal diagnostic (the `ProviderSetupUnavailableError` message and the settled candidate's reason), every emitted event payload, and the written HALT text each do not contain `K`
+- conductor pi test: when the live Pi home's `settings.json` changes before verification, the live-boundary verification result is not ok with a reason containing `provider state` and `settings.json`, and the next dispatch boundary writes the HALT marker carrying that reason
+
+> **Amended 2026-10-04 by #1887 (coverage_binding refusal):** The last two Done when checks were added so Story 1's no-`K` criterion covers the refusal diagnostic as well as events and HALT text, and Story 2's pre-verification criterion asserts the verification failure itself, not only the pending halt.
 
 **Files:** src/conductor/test/engine/conductor-pi-self-host.test.ts; src/conductor/src/engine/conductor.ts
 
@@ -251,10 +258,15 @@ Pi gains the `selfHost` capability. A Pi self-host candidate runs in a throwaway
 **Done when:**
 - provider-id-literals test: the new check reports a finding for an in-test fixture containing `provider.homeVariable === 'CODEX_HOME'` and one for `provider?.environmentPrefix === 'CODEX_'`
 - provider-id-literals test: the new check reports zero findings for `engine/conductor.ts`, `engine/self-host/provider-home.ts` and `engine/self-host/live-boundary.ts`
+- provider-id-literals test: the new check reports a finding for in-test fixtures containing `provider.homeVariable === 'CLAUDE_CONFIG_DIR'`, `'CODEX_HOME' !== provider.homeVariable` and `provider.environmentPrefix === 'CLAUDE_'`
+- provider-id-literals test: the `homeVariable`/`environmentPrefix` string-literal rule scans every production `.ts` file under `src/conductor/src` except `execution/provider-catalog.ts` and the provider adapter modules (`execution/claude-provider.ts`, `execution/codex-provider.ts`, `execution/pi-provider.ts`), and reports zero findings
+- `engine/self-host/sandbox-build-env.ts` selects its sandbox provider by `selfHostShape.isolation === 'claude-config-sandbox'`, with no `homeVariable` comparison
 
-**Files:** src/conductor/test/engine/provider-id-literals.test.ts
+> **Amended 2026-10-04 by #1887 (coverage_binding refusal):** Story 4's criterion covers all production source outside the catalog and provider adapters and both `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. The `homeVariable`/`environmentPrefix` literal rule therefore scans that whole surface, not only the three modules in Step 1; the `CLAUDE_PROVIDER`/`CODEX_PROVIDER` constant rule keeps Step 1's three-module scope. The wider scan reaches `sandboxProvider()` in `engine/self-host/sandbox-build-env.ts`, which finds the claude descriptor by `homeVariable === 'CLAUDE_CONFIG_DIR'`; this task rewrites that lookup to read the catalog's `selfHostShape` (Task 1).
 
-**Dependencies:** Tasks 2, 6, 7, 8
+**Files:** src/conductor/test/engine/provider-id-literals.test.ts; src/conductor/src/engine/self-host/sandbox-build-env.ts
+
+**Dependencies:** Tasks 1, 2, 6, 7, 8
 
 ## Task Dependency Graph
 
