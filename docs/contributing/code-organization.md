@@ -105,6 +105,7 @@ The only layer permitted to reach a third party in ordinary code paths.
 | `claude-provider.ts` | The `claude` host adapter plus its failure detectors. |
 | `codex-provider.ts` | The `codex` host adapter and JSONL parsing. |
 | `codex-self-host-auth.ts` | Codex credential handling for self-host builds. |
+| `pi-self-host-auth.ts` | Pi credential resolution into the isolated self-host home. |
 | `session.ts` | `SessionManager`. |
 | `subprocess.ts` | `runCommand`. |
 

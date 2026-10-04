@@ -107,7 +107,8 @@ chmod 600 ~/.ai-conductor/build-auth
 
 A daemon-token build with a missing or unreadable token writes `.pipeline/HALT` before dispatch —
 preserving any HALT already there — and does **not** consume the feature's retry budget. The
-build-auth preflight is skipped entirely when the preferred build provider is `codex`; see
+build-auth preflight, and the operator-credentials expiry preflight, run only when the preferred
+build provider is `claude`; they are skipped entirely for `codex` and `pi`. See
 [multiprovider](multiprovider.md).
 
 Point `harness_self_host.build_auth.token_path` elsewhere if you keep the token somewhere other than
@@ -233,7 +234,9 @@ Before a self-host build runs, the engine fingerprints two surfaces with a per-f
 (symlinks hashed via `readlink`), and re-verifies them when the candidate tears down:
 
 1. **The live checkout** — the harness checkout the daemon itself is running out of.
-2. **Unrelated provider state** — `~/.claude` or `~/.codex`, whichever the selected provider owns.
+2. **Unrelated provider state** — the selected provider's live home: `$CLAUDE_CONFIG_DIR`
+   (default `~/.claude`), `$CODEX_HOME` (default `~/.codex`), or `$PI_CODING_AGENT_DIR` (default
+   `~/.pi/agent`).
 
 A mismatch is fail-closed: the run halts, the engine writes `.pipeline/HALT` with kind `mechanical`,
 and no further work is dispatched. A verification that itself fails is coerced to a mismatch (`Live
@@ -296,9 +299,11 @@ power. The list is explicit and provider-specific, selected by the provider the 
 | --- | --- | --- |
 | `claude` | `history.jsonl`, `.last-cleanup`, `plugins/known_marketplaces.json`, `shell-snapshots`, `backups`, `sessions`, `session-env`, `projects`, `tasks`, `.last-update-result.json`, `stats-cache.json`, `mcp-needs-auth-cache.json`, `cache`, `file-history`, `paste-cache` | the selected auth file, `.credentials.json` |
 | `codex` | `history.jsonl`, `sessions`, `shell_snapshots`, `cache`, `plugins/cache`, `plugins/.remote-plugin-install-staging`, `mcp-oauth-locks`, `thread-writer-locks`, `.tmp`, `tmp`, `packages/standalone`, `models_cache.json`, and any root-level `*.sqlite`, `*.sqlite-shm`, `*.sqlite-wal`, `*.sqlite-journal` | the selected auth file, `auth.json` |
+| `pi` | `sessions`, `models-store.json` | the selected auth file, `auth.json` |
 
-Both providers additionally exclude any directory whose basename is `.in_use`, at any depth — the
-only basename-matched entry on this surface.
+Claude and Codex additionally exclude any directory whose basename is `.in_use`, at any depth — the
+only basename-matched entry on this surface. Pi excludes no basename, so a nested `.in_use` under
+the Pi home stays fingerprinted.
 
 Four entries carry extra caveats:
 
@@ -365,6 +370,26 @@ Every reclaim, retention, and failed cleanup emits a `scratch_cleanup_reclaimed`
 `scratch_cleanup_retained`, or `scratch_cleanup_failed` event (visible in the daemon log and
 `.pipeline/events.jsonl`) naming the path and the reason — see
 [`.pipeline/events.jsonl`](../reference/artifacts.md#pipelineeventsjsonl).
+
+### Pi self-host credential
+
+A `pi` self-host candidate gets a throwaway `PI_CODING_AGENT_DIR` holding one credential, not a copy
+of the operator's Pi home:
+
+1. The engine takes the provider segment of the candidate's `<provider>/<model>` id and runs
+   `pi auth print-api-key --provider <provider>` against the operator's live environment, with the
+   throwaway home as working directory and a 30-second timeout.
+2. It writes the printed key as a one-entry `auth.json` (mode `0600`) in the throwaway home.
+3. The harness skills are copied into the home's `skills/`, minus operator-only skills. Pi gets no
+   `.agents/skills` link; Codex does.
+4. The child environment drops every inherited provider home variable, `CLAUDE_CODE_OAUTH_TOKEN`,
+   and `PI_CODING_AGENT_SESSION_DIR` before setting the isolated `PI_CODING_AGENT_DIR`.
+
+A non-zero exit, a timeout, or empty output refuses the candidate as setup-unavailable: `pi` is never
+spawned, the scratch lease is released, and the step moves to the next configured candidate. The
+refusal names the Pi provider and asks you to configure an API key for it in your operator Pi home.
+Providers registered only by Pi extensions or packages are out of scope and are refused the same
+way.
 
 ## The engine republish loop
 

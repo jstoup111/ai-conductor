@@ -199,11 +199,11 @@ records the exhausted provider and deadline; see [artifacts](../reference/artifa
 | Explicit-only metadata | `disable-model-invocation: true` in `SKILL.md` | `policy.allow_implicit_invocation: false` in `agents/openai.yaml` | n/a |
 | Interactive steps | a real REPL | none — `codex exec` is one-shot, streamed as JSONL | none — one-shot JSONL output |
 | Readiness check | none; failures are classified from process signals and output | explicit `codex doctor --json --summary` before every dispatch, failing closed | none; boot probes `pi --version` |
-| Isolated-home variable | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` | unsupported |
+| Isolated-home variable | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` | `PI_CODING_AGENT_DIR` |
 | Model selection | harness model table | harness model table | required `llm_providers.pi` block; boot validates ids with `pi --list-models` |
 | Project-local `.pi` files | n/a | n/a | ignored (`-na`) unless `llm_providers.pi.trust_project_files: true` |
 | Cost reporting | provider-reported `total_cost_usd` | token counts only; priced from the [rate card](../reference/configuration.md#rate-card-ai-conductorrate-cardjson) | per-message provider cost, with rate-card fallback; see the [rate card](../reference/configuration.md#rate-card-ai-conductorrate-cardjson) |
-| Provider-specific features | self-host and custom build-review policies | self-host and custom build-review policies | unsupported; the engine refuses before spawning |
+| Provider-specific features | self-host and custom build-review policies | self-host (see [Pi self-host credential](self-hosting.md#pi-self-host-credential)); custom build-review policies are unsupported and the engine refuses before spawning |
 
 Codex and Pi share the `~/.agents/skills` catalog; Claude reads the same skills from
 `~/.claude/skills`. Before spawning `pi`, the engine checks two things:
