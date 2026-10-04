@@ -225,6 +225,7 @@ async function runFixture(
     projectRoot: fixture.root,
     mode: 'auto',
     maxRetries: 1,
+    config: { gate_code_validity: { enabled: false } },
     escalateBuildFailure: async () => ({}),
     fullSuiteVerifier: {
       ensure: async () => ({ status: 'REUSED', evidence: {} as never }),

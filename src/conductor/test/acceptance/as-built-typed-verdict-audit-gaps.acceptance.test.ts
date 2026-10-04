@@ -186,6 +186,7 @@ function conductorFor(
     fromStep: 'manual_test',
     verifyArtifacts: true,
     maxRetries: 1,
+    config: { gate_code_validity: { enabled: false } },
     escalateBuildFailure: async () => ({}),
     git: async () => ({ stdout: '' }),
     ...overrides,

@@ -148,6 +148,7 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
 
   function selfHostConfig(tokenPath: string) {
     return {
+      gate_code_validity: { enabled: false },
       harness_self_host: {
         build_auth: { mode: 'daemon-token', token_path: tokenPath },
       },

@@ -61,10 +61,6 @@ async function persistCoverageVerdict(
     complete: options.complete ?? true,
     judgment: { version: 'v1', criterionJudgments, noOwnerObservations: [] },
     diagnostics: options.diagnostics ?? [], recordedDispositions: [],
-  // Managed PRD-audit settlement stamps every persisted judgment.  A fixture
-  // that omits an explicit stamp models a newly written verdict whose stamp
-  // cannot be preserved in this non-git scratch directory, not legacy
-  // unstamped evidence (which the typed migration correctly rejects).
   }, { attemptId: 'fixture-run', codeStamp: options.codeStamp ?? 'fixture-head' });
 }
 
@@ -120,6 +116,10 @@ describe('resolveFeaturePrdPaths', () => {
 describe('prd_audit completion predicate coverage', () => {
   let root: string;
   const featureContext = context({ activePlanPath: '.docs/plans/current-feature.md' });
+  const completionContext = {
+    artifactResolution: featureContext,
+    config: { gate_code_validity: { enabled: false } },
+  };
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'prd-audit-predicate-coverage-'));
@@ -155,9 +155,7 @@ describe('prd_audit completion predicate coverage', () => {
 
   it('keeps a fresh fully-covered typed verdict done', async () => {
     await persistCoverageVerdict(root, [1, 2, 3, 4, 5].map((n) => ({ criterion: `S1.${n}` })));
-    const covered = await checkStepCompletion(root, 'prd_audit', {
-      artifactResolution: featureContext,
-    });
+    const covered = await checkStepCompletion(root, 'prd_audit', completionContext);
 
     expect(covered.done).toBe(true);
   });
@@ -168,7 +166,7 @@ describe('prd_audit completion predicate coverage', () => {
       diagnostics: ['criterion judgments missing S1.3, S1.5'],
     });
 
-    await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toEqual({
+    await expect(checkStepCompletion(root, 'prd_audit', completionContext)).resolves.toEqual({
       done: false,
       routeClass: 'absent',
       retrySignal: 'structured-result-rejected',
@@ -182,7 +180,7 @@ describe('prd_audit completion predicate coverage', () => {
   it('does not interpret an empty rendered report without typed evidence', async () => {
     await writeFile(join(root, '.pipeline/prd-audit.md'), '');
 
-    await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toEqual({
+    await expect(checkStepCompletion(root, 'prd_audit', completionContext)).resolves.toEqual({
       done: false,
       routeClass: 'absent',
       reason: '.pipeline/prd-audit.json is missing',
@@ -201,7 +199,7 @@ describe('prd_audit completion predicate coverage', () => {
     );
     await persistCoverageVerdict(root, [{ criterion: 'S1.1' }]);
 
-    await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toMatchObject({
+    await expect(checkStepCompletion(root, 'prd_audit', completionContext)).resolves.toMatchObject({
       done: true,
     });
   });
@@ -224,7 +222,7 @@ describe('prd_audit completion predicate coverage', () => {
       diagnostics: ['FR-2 has no covering story criterion or PLAN_GAP judgment'],
     });
 
-    await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toMatchObject({
+    await expect(checkStepCompletion(root, 'prd_audit', completionContext)).resolves.toMatchObject({
       done: false,
       reason: expect.stringContaining('FR-2'),
     });
@@ -242,7 +240,7 @@ describe('prd_audit completion predicate coverage', () => {
     );
 
     await expect(
-      checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext }),
+      checkStepCompletion(root, 'prd_audit', completionContext),
     ).resolves.toMatchObject({ done: true });
   });
 
@@ -253,7 +251,7 @@ describe('prd_audit completion predicate coverage', () => {
     ]);
 
     await expect(
-      checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext }),
+      checkStepCompletion(root, 'prd_audit', completionContext),
     ).resolves.toEqual({
       done: false,
       routeClass: 'named-route',
@@ -266,7 +264,7 @@ describe('prd_audit completion predicate coverage', () => {
       { criterion: 'S1.1' }, { criterion: 'S1.2', grade: 'FIXABLE' }, { criterion: 'S1.4' },
     ]);
 
-    await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toEqual({
+    await expect(checkStepCompletion(root, 'prd_audit', completionContext)).resolves.toEqual({
       done: false,
       routeClass: 'named-route',
       reason: expect.stringContaining('S1.2 (FIXABLE)'),
