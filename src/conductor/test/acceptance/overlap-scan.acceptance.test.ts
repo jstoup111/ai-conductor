@@ -1,8 +1,8 @@
 // overlap-scan.acceptance.test.ts — DECIDE-time unmerged-overlap scan (#523, Scope A).
 //
-// Covers: TR-1 (seam overlap named), TR-2 (open blocker surfaced), TR-3 (quiet clean
+// Covers: task:2, TR-1 (seam overlap named), TR-2 (open blocker surfaced), TR-3 (quiet clean
 // path), TR-4 (advisory degradation on a REAL git failure), TR-5 (exact-intersection,
-// no substring/prefix false match), task:2 (candidate checkout classification).
+// no substring/prefix false match), candidate checkout classification.
 //
 // This suite drives `runOverlapScan` + `renderReport` against a REAL git repo via the
 // REAL `makeGitRunner` (no fake GitRunner) — the per-task TDD specs in
