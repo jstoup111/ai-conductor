@@ -167,6 +167,7 @@ async function runTierSAdrAmendment(options: { enabled: boolean; inherited?: boo
   const gitRunner = vi.fn(async (args: string[]) => {
     if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: `${headSha}\n`, stderr: '' };
     if (args[0] === 'merge-base') return { exitCode: 0, stdout: `${baseSha}\n`, stderr: '' };
+    if (args[0] === 'cat-file') return { exitCode: 0, stdout: '', stderr: '' };
     if (args[0] === 'show') return { exitCode: 0, stdout: options.inherited ? `${baseAdr}\n${TIER_S_ADR_AMENDMENT}\n` : baseAdr, stderr: '' };
     return { exitCode: 1, stdout: '', stderr: `unexpected git command: ${args.join(' ')}` };
   });

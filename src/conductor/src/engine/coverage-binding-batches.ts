@@ -53,11 +53,8 @@ export interface PlanCoverageBindingBatchesInput {
 export interface CoverageBindingBatchPlan {
   readonly entries: CoverageBindingEnvelopeEntry[];
   readonly batches: readonly (readonly PendingClaim[])[];
-}
-
-export interface ConflictBatchPlan {
-  readonly entries: readonly CoverageBindingEnvelopeEntry[];
-  readonly batches: readonly (readonly PendingConflictClaim[])[];
+  readonly conflictEntries: readonly CoverageBindingEnvelopeEntry[];
+  readonly conflictBatches: readonly (readonly PendingConflictClaim[])[];
 }
 
 export interface PendingConflictClaim {
@@ -85,8 +82,7 @@ function conflictEntryFor(claim: CoverageBindingConflictClaim, digest: string, v
   } as unknown as CoverageBindingEnvelopeEntry;
 }
 
-/** Plans conflict work independently from coverage and amendment batches. */
-export function planConflictBatches({ claims, previous, batchSize }: PlanCoverageBindingBatchesInput): ConflictBatchPlan {
+function planConflictBatches({ claims, previous, batchSize }: PlanCoverageBindingBatchesInput) {
   const cached = new Map(previous?.entries.map((entry) => [entry.digest, entry]) ?? []);
   const entries: CoverageBindingEnvelopeEntry[] = [];
   const pending: PendingConflictClaim[] = [];
@@ -189,5 +185,6 @@ export function planCoverageBindingBatches({
       batches.push(pending.slice(offset, offset + batchSize));
     }
   }
-  return { entries, batches };
+  const conflict = planConflictBatches({ claims, previous, batchSize });
+  return { entries, batches, conflictEntries: conflict.entries, conflictBatches: conflict.batches };
 }

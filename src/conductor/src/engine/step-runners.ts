@@ -63,7 +63,6 @@ import { makeGitRunner, type GitRunner } from './rebase.js';
 import {
   parseAdrDecisions,
   resolveFeaturePlanPath,
-  resolveFeatureStoriesPath,
   selectFeaturePlan,
   BUILD_REVIEW_VERDICT,
 } from './artifacts.js';
@@ -98,7 +97,7 @@ import {
   type CoverageBindingAmendmentClaim,
 } from './coverage-binding-inputs.js';
 import { assembleConflictClaims, resolveConflictSubjectAdrs, type CoverageBindingConflictClaim } from './coverage-binding-conflict-inputs.js';
-import { planConflictBatches, planCoverageBindingBatches, renderConflictBatchPrompt } from './coverage-binding-batches.js';
+import { planCoverageBindingBatches, renderConflictBatchPrompt } from './coverage-binding-batches.js';
 import { REBASE_REGRADE_SKILL } from './rebase-regrade-judgement.js';
 import { admitAndRestageRepair } from './repair-restage.js';
 import { resolveTaskIds } from './task-progress.js';
@@ -4719,20 +4718,22 @@ export class DefaultStepRunner implements StepRunner {
         } else {
           // Amendments inherited from the default branch belong to the features
           // that landed them; only blocks this branch added are obligations.
-          const originRef = await resolveOriginRef(this.projectDir).catch(() => null);
-          const amendmentBase = originRef === null ? undefined : await this.gitRunner(['merge-base', originRef, 'HEAD'])
-            .then((result) => (result.exitCode === 0 && result.stdout.trim() ? result.stdout.trim() : undefined))
-            .catch(() => undefined);
+          const originRef = await resolveOriginRef(this.projectDir);
+          if (originRef === null) throw new Error('could not resolve origin ref for DECIDE amendment inputs');
+          const mergeBase = await this.gitRunner(['merge-base', originRef, 'HEAD']);
+          const amendmentBase = mergeBase.exitCode === 0 ? mergeBase.stdout.trim() : '';
+          if (!amendmentBase) throw new Error(`could not resolve merge base for ${originRef}`);
           const decideArtifacts = await Promise.all([...resolvedDecideSet.paths]
             .filter((path) => path.startsWith('.docs/specs/') || /^\.docs\/decisions\/architecture-review-/.test(path) ||
               /^\.docs\/decisions\/adr-/.test(path))
-            .map(async (path) => ({
-              path,
-              text: await readFile(join(this.projectDir, path), 'utf8'),
-              baseText: amendmentBase === undefined ? undefined : await this.gitRunner(['show', `${amendmentBase}:${path}`])
-                .then((result) => (result.exitCode === 0 ? result.stdout : undefined))
-                .catch(() => undefined),
-            })));
+            .map(async (path) => {
+              const text = await readFile(join(this.projectDir, path), 'utf8');
+              const existsAtBase = await this.gitRunner(['cat-file', '-e', `${amendmentBase}:${path}`]);
+              if (existsAtBase.exitCode !== 0) return { path, text, baseText: undefined };
+              const base = await this.gitRunner(['show', `${amendmentBase}:${path}`]);
+              if (base.exitCode !== 0) throw new Error(`could not read merge-base DECIDE input ${path}`);
+              return { path, text, baseText: base.stdout };
+            }));
           amendmentClaims = assembleAmendmentClaims({ planText, decideArtifacts });
         }
       } catch (error) {
@@ -4745,11 +4746,12 @@ export class DefaultStepRunner implements StepRunner {
 
     let conflictClaims: CoverageBindingConflictClaim[] = [];
     if (planText !== undefined) {
-      const storiesPath = await resolveFeatureStoriesPath(this.projectDir, this.featureDesc || undefined);
-      if (storiesPath !== undefined) {
-        const storiesText = await readFile(storiesPath, 'utf8').catch(() => '');
-        const decidePaths = (await resolveDecideSet())?.adrPaths ?? new Set<string>();
-        const subjectPaths = await resolveConflictSubjectAdrs({ projectRoot: this.projectDir, planText, decideSetAdrPaths: decidePaths });
+      const resolvedDecideSet = await resolveDecideSet();
+      if (resolvedDecideSet) {
+        const storiesText = resolvedDecideSet.storiesPath === null
+          ? ''
+          : await readFile(join(this.projectDir, resolvedDecideSet.storiesPath), 'utf8').catch(() => '');
+        const subjectPaths = await resolveConflictSubjectAdrs({ projectRoot: this.projectDir, planText, decideSetAdrPaths: resolvedDecideSet.adrPaths });
         const subjectAdrs = await Promise.all(subjectPaths.map(async (path) => ({ path, text: await readFile(join(this.projectDir, path), 'utf8') })));
         conflictClaims = assembleConflictClaims({ planText, storiesText, subjectAdrs, amendmentClaims });
       }
@@ -4879,8 +4881,8 @@ export class DefaultStepRunner implements StepRunner {
 
     if (planText === undefined) return { success: false, output: 'coverage_binding could not resolve the feature plan' };
 
-    const planned = planCoverageBindingBatches({ claims, previous, batchSize });
-    const entries: CoverageBindingEnvelopeEntry[] = [...planned.entries];
+    const planned = planCoverageBindingBatches({ claims: [...claims, ...conflictClaims], previous, batchSize });
+    const entries: CoverageBindingEnvelopeEntry[] = [...planned.entries, ...planned.conflictEntries];
     const refused: CoverageBindingEnvelopeEntry[] = [];
     const resolved = this.resolvedConfigFor('coverage_binding');
     const llmProvider = this.config?.steps?.coverage_binding?.llm_provider
@@ -5042,8 +5044,7 @@ export class DefaultStepRunner implements StepRunner {
       await writeEnvelope('partial', entries);
     }
 
-    const conflictPlan = planConflictBatches({ claims: conflictClaims, previous, batchSize });
-    entries.push(...conflictPlan.entries);
+    const conflictPlan = { entries: planned.conflictEntries, batches: planned.conflictBatches };
     for (const entry of conflictPlan.entries) {
       const conflict = entry as unknown as CoverageBindingConflictEnvelopeEntry;
       await this.events?.emit({ type: 'coverage_binding_conflict_judged', step: 'coverage_binding', claimKind: conflict.claimKind, claimId: conflict.claimId, verdict: conflict.verdict, taskIds: [...(conflict.taskIds ?? [])] });

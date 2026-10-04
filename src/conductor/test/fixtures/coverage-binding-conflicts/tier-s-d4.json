@@ -1,0 +1,1 @@
+{"adr":"adr-generated-values","decision":"4. Generated values must not be asserted through endpoint output.","tasks":[["7","Generate values","Generate values."],["8","Assert endpoints","Assert endpoint output."],["9","Publish values","Publish generated values."],["10","Verify values","Verify generated endpoint values."]],"conflictTaskIds":["7","8","9","10"]}
