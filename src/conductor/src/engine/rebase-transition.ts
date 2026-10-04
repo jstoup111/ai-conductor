@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { ConductState, StateMutation, StepName } from '../types/index.js';
 import type { ConductStateStore } from './conduct-state-store.js';
-import type { ReplayEvidence, RebaseOperationRecord, RebasePreservedCandidate } from './gate-verdicts.js';
+import type { GateVerdict, ReplayEvidence, RebaseOperationRecord, RebasePreservedCandidate } from './gate-verdicts.js';
 import { readVerdict, writeVerdict } from './gate-verdicts.js';
 import { readState } from './state.js';
 import { creditKickbackGateLaps, updateKickbackLedger } from './kickback-ledger.js';
@@ -10,6 +10,29 @@ import { reverifyOrInvalidateRebaseGate, type RebasePreVerifier } from './rebase
 
 function verdictDigest(verdict: unknown): string {
   return `sha256:${createHash('sha256').update(JSON.stringify(verdict)).digest('hex')}`;
+}
+
+/**
+ * The only verdict mutation that can precede an interrupted operation's
+ * `applied` marker is its own fully-bound preservation stamp. Compare that
+ * shape as the original verdict, but never erase a different operation's
+ * stamp or any other concurrent mutation.
+ */
+function matchesCandidateVerdict(
+  verdict: GateVerdict,
+  candidate: RebasePreservedCandidate,
+  operation: RebaseOperationRecord,
+): boolean {
+  if (verdictDigest(verdict) === candidate.originalVerdictDigest) return true;
+  const preservation = verdict.preservation;
+  if (!preservation || typeof preservation !== 'object') return false;
+  const stamp = preservation as Record<string, unknown>;
+  if (stamp.gate !== candidate.gate || stamp.operationId !== operation.id ||
+    JSON.stringify(stamp.original) !== JSON.stringify(candidate.original) ||
+    JSON.stringify(stamp.replay) !== JSON.stringify(operation.replay) ||
+    JSON.stringify(stamp.relevantInputIdentities) !== JSON.stringify(candidate.relevantInputIdentities)) return false;
+  const { preservation: _preservation, ...unpreserved } = verdict;
+  return verdictDigest(unpreserved) === candidate.originalVerdictDigest;
 }
 
 /** The durable result consumed by the conductor and the re-kick path. */
@@ -136,7 +159,7 @@ export async function completeInterruptedRebaseOperation(
   for (const candidate of candidates) {
     const verdict = await readVerdict(options.projectRoot, candidate.gate);
     const matchesOriginal = verdict?.satisfied === true && !verdict.kickback &&
-      verdictDigest(verdict) === candidate.originalVerdictDigest;
+      matchesCandidateVerdict(verdict, candidate, options.operation);
     if (matchesOriginal) {
       preserved.push(candidate.gate);
       usableCandidates.push(candidate);

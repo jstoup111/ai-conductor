@@ -350,6 +350,86 @@ describe('applyRebaseTransition', () => {
 });
 
 describe('completeInterruptedRebaseOperation', () => {
+  it('keeps a same-operation preservation stamped before the applying descriptor commits', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    const statePath = join(dir, '.pipeline/conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(statePath, JSON.stringify({ build_review: 'done', test_suite: 'done' }));
+    const candidate = preservedCandidate('build_review');
+    const replay = { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' };
+    // Model the only safe partial effect: the preservation stamp was written,
+    // then the process died before it could mark the descriptor applied.
+    await writeVerdict(dir, 'build_review', {
+      satisfied: true,
+      checkedAt: 2,
+      reason: 'approved',
+      preservation: {
+        gate: 'build_review',
+        original: candidate.original,
+        replay,
+        relevantInputIdentities: candidate.relevantInputIdentities,
+        operationId: 'stamped-before-applied',
+      },
+    });
+    await writeVerdict(dir, 'test_suite', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    await writeApplyingOperation(dir, {
+      id: 'stamped-before-applied',
+      preserved: ['build_review'],
+      invalidated: ['test_suite'],
+      evidence: [candidate],
+    });
+
+    const result = await completeInterruptedRebaseOperation({
+      projectRoot: dir,
+      stateStore: createFilesystemConductStateStore(statePath),
+      operation: (await readVerdict(dir, 'rebase'))!.rebaseOperation!,
+      downstreamSteps: [],
+    });
+
+    expect(result).toMatchObject({ stateResult: 'applied', operation: { id: 'stamped-before-applied', status: 'applied' } });
+    expect((await readVerdict(dir, 'build_review'))?.preservation?.operationId).toBe('stamped-before-applied');
+    await expect(classifyRebaseOperation(dir)).resolves.toEqual({ kind: 'clear' });
+  });
+
+  it('does not treat a different operation preservation stamp as its original verdict', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    const statePath = join(dir, '.pipeline/conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(statePath, JSON.stringify({ build_review: 'done' }));
+    const candidate = preservedCandidate('build_review');
+    const replay = { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' };
+    await writeVerdict(dir, 'build_review', {
+      satisfied: true,
+      checkedAt: 2,
+      reason: 'approved',
+      preservation: {
+        gate: 'build_review',
+        original: candidate.original,
+        replay,
+        relevantInputIdentities: candidate.relevantInputIdentities,
+        operationId: 'other-operation',
+      },
+    });
+    await writeApplyingOperation(dir, {
+      id: 'stamped-before-applied',
+      preserved: ['build_review'],
+      invalidated: [],
+      evidence: [candidate],
+    });
+
+    const result = await completeInterruptedRebaseOperation({
+      projectRoot: dir,
+      stateStore: createFilesystemConductStateStore(statePath),
+      operation: (await readVerdict(dir, 'rebase'))!.rebaseOperation!,
+      downstreamSteps: [],
+    });
+
+    expect(result.operation.transition).toMatchObject({ preserved: [], invalidated: ['build_review'] });
+    expect((await readVerdict(dir, 'build_review'))?.preservation).toBeUndefined();
+  });
+
   it('stamps matching persisted candidates, invalidates recorded gates, and commits the applying operation', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
     dirs.push(dir);
