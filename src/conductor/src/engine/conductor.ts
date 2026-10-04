@@ -397,7 +397,7 @@ import {
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
-import { rebaseOperationPublicationBlocker } from './gate-code-validity.js';
+import { classifyRebaseOperation } from './gate-code-validity.js';
 import {
   computeAndWriteVerdict,
   readAllVerdicts,
@@ -7042,8 +7042,13 @@ export class Conductor {
       // A restarted process has no `lastRebaseOutcome`, so the durable
       // operation descriptor is the only authority that can prevent it from
       // selecting finish across an interrupted/inconsistent rebase write.
-      const rebaseBlocker = await rebaseOperationPublicationBlocker(this.projectRoot);
-      if (rebaseBlocker) {
+      const rebaseClassification = await classifyRebaseOperation(this.projectRoot);
+      if (rebaseClassification.kind === 'integrity-fault') {
+        const rebaseBlocker = rebaseClassification.reason === 'malformed-record'
+          ? 'rebase transition record is malformed or inconsistent; reconcile it before publication'
+          : rebaseClassification.reason === 'missing-authority'
+            ? `rebase transition preserved ${rebaseClassification.gate} without its replay-bound authority`
+            : `rebase transition still has an outstanding ${rebaseClassification.gate} repair or re-verification`;
         await this.writeHaltMarker(`${rebaseBlocker}\n`, 'needs-human');
         return;
       }
