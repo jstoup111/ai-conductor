@@ -426,7 +426,7 @@ describe('remediation case graph validator', () => {
         )).toEqual({ ok: false, reason: 'unnecessary-distinct-declaration', caseIds: [RESOLVED_ACTION_CASE.id], sourceIds: [DISTINCT_SOURCE_ID] });
       });
 
-      it.each(['defer', 'reject', 'escalate'] as const)('rejects distinctFrom on an unbound non-act %s row', (disposition) => {
+      it.each(['defer', 'reject', 'escalate'] as const)('admits distinctFrom on an unbound non-act %s row (ADR D6.2)', (disposition) => {
         const effect = disposition === 'defer'
           ? { kind: 'deferral' as const, exclusionRationale: 'This does not belong in the current plan.' }
           : { kind: 'none' as const };
@@ -438,7 +438,7 @@ describe('remediation case graph validator', () => {
         } as RemediationCaseJudgement;
         expect(validateRemediationCaseGraph(
           [DISTINCT_SOURCE_ID], judgement, DISTINCT_REFERENCES,
-        )).toEqual({ ok: false, reason: 'invalid-distinct-case', caseIds: [RESOLVED_ACTION_CASE.id], sourceIds: [DISTINCT_SOURCE_ID] });
+        )).toMatchObject({ ok: true });
       });
 
       it.each([

@@ -201,8 +201,6 @@ function validateDistinctFrom(
     if (!priorCasesById.has(caseId)) return declarationFailure('unknown-distinct-case', [caseId]);
   }
 
-  if (caseRow.disposition !== 'act') return declarationFailure('invalid-distinct-case', caseRow.distinctFrom);
-
   const sourceIdSet = new Set(sourceIds);
   for (const caseId of caseRow.distinctFrom) {
     const record = priorCasesById.get(caseId)!;

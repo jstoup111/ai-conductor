@@ -975,7 +975,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       version: 'v1', feature,
       cases: [{
         id: 'case-resolved', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
-        rationale: 'Resolved anchor.', resolution: 'resolved',
+        rationale: 'Open anchor.', resolution: 'open',
         sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
         effect: { id: 'effect-resolved', kind: 'action', status: 'applied', workOrderId: 'order-resolved' },
       }],
