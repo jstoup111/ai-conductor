@@ -16284,6 +16284,13 @@ export function buildRetryHint(
         'Commit the uncommitted paths, then re-run the build step.'
       );
     }
+    if (/^unverified Done-when checks require one BUILD review pass:/i.test(r)) {
+      return (
+        `Previous attempt did not satisfy the completion check: ${r}. ` +
+        'Review each named check: add or cite its covering test when possible, or confirm the recorded unverified reason. ' +
+        'Then complete the BUILD step.'
+      );
+    }
     if (/tasks? not completed/i.test(r)) {
       return (
         `Previous attempt did not satisfy the completion check: ${r}. ` +
