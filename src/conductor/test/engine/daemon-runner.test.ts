@@ -75,7 +75,8 @@ import {
 } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem, FeatureOutcome } from '../../src/engine/daemon.js';
 import type { TriageOutcome } from '../../src/engine/setup-triage.js';
-import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
+import { prepareWorktree, SetupFailureError } from '../../src/engine/worktree-prepare.js';
+import { PRE_PUSH_HOOK, REFERENCE_TRANSACTION_HOOK } from '../../src/engine/git-hook-assets.js';
 import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
@@ -1649,25 +1650,47 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     it('a preventive-hook installation rejection errors the feature without a build or provider dispatch', async () => {
       const order: string[] = [];
       const rec: { teardownKeep?: boolean } = {};
-      const run = makeRunFeature({
-        ...depsWithOrder(order, {}, rec),
-        prepareWorktree: async () => {
-          order.push('prepareWorktree');
-          throw new Error('preventive git hook installation failed: EACCES: permission denied');
-        },
-        provider: {
-          invoke: async () => {
-            order.push('provider');
-            return { success: true, output: '', exitCode: 0 };
+      const worktree = await mkdtemp(join(tmpdir(), 'daemon-runner-hook-install-'));
+      try {
+        await mkdir(join(worktree, '.git'), { recursive: true });
+        await mkdir(join(worktree, '.pipeline'), { recursive: true });
+        // writeGitHooks reaches writeGitGuard after provisioning its hook assets.
+        // A file at this path makes the latter fail through the production seam.
+        await writeFile(join(worktree, '.pipeline', 'bin'), 'not a directory\n');
+
+        const run = makeRunFeature({
+          ...depsWithOrder(order, {}, rec),
+          createWorktree: async () => {
+            order.push('createWorktree');
+            return { path: worktree, branch: 'feat/feat-x' };
           },
-        },
-      });
+          prepareWorktree: async (preparedWorktree) => {
+            order.push('prepareWorktree');
+            await prepareWorktree(preparedWorktree.path);
+          },
+          runConductor: async () => {
+            order.push('build');
+          },
+          provider: {
+            invoke: async () => {
+              order.push('provider');
+              return { success: true, output: '', exitCode: 0 };
+            },
+          },
+        });
 
-      const out = await run(ITEM);
+        const out = await run(ITEM);
 
-      expect(out).toMatchObject({ status: 'error', reason: expect.stringMatching(/preventive git hook installation failed/) });
-      expect(order).toEqual(['createWorktree', 'prepareWorktree']);
-      expect(rec.teardownKeep).toBe(true);
+        expect(out).toMatchObject({ status: 'error', reason: expect.stringMatching(/preventive git hook installation failed/) });
+        await expect(readFile(join(worktree, '.pipeline', 'git-hooks', 'reference-transaction'), 'utf8'))
+          .resolves.toBe(REFERENCE_TRANSACTION_HOOK);
+        await expect(readFile(join(worktree, '.pipeline', 'git-hooks', 'pre-push'), 'utf8'))
+          .resolves.toBe(PRE_PUSH_HOOK);
+        expect(order).toEqual(['createWorktree', 'prepareWorktree']);
+        expect(rec.teardownKeep).toBe(true);
+      } finally {
+        await rm(worktree, { recursive: true, force: true });
+      }
     });
 
     // #446 conflict resolution (Task 16): supersedes the prior pin that a
