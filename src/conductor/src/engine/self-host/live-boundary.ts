@@ -11,6 +11,7 @@ import {
   type ProviderWith,
 } from '../../execution/provider-catalog.js';
 import { type ContainmentVerdict } from './live-containment.js';
+import type { SelfHostProviderId } from './provider-home.js';
 
 const execFile = promisify(execFileCb);
 
@@ -214,10 +215,14 @@ const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
  * excluding them buys no false-positive relief and would only cost
  * detection.
  */
+export const PROVIDER_STATE_VOLATILE: Readonly<Record<SelfHostProviderId, readonly string[]>> = {
+  claude: CLAUDE_PROVIDER_STATE_VOLATILE,
+  codex: CODEX_PROVIDER_STATE_VOLATILE,
+  pi: ['sessions', 'models-store.json'],
+};
+
 function providerStateVolatile(provider: ProviderWith<'selfHost'> | undefined): readonly string[] {
-  if (provider?.environmentPrefix === 'CODEX_') return CODEX_PROVIDER_STATE_VOLATILE;
-  if (provider?.environmentPrefix === 'CLAUDE_') return CLAUDE_PROVIDER_STATE_VOLATILE;
-  return [];
+  return provider ? PROVIDER_STATE_VOLATILE[provider.id] : [];
 }
 
 /**
@@ -333,7 +338,11 @@ export async function fingerprintLiveBoundary(args: {
   const provider = args.provider
     ? requireProviderCapability(args.provider, 'selfHost')
     : undefined;
-  const excluded = [...providerStateVolatile(provider), ...(args.selectedAuthPaths ?? [])];
+  const excluded = [
+    ...providerStateVolatile(provider),
+    ...(provider ? [provider.selfHostShape.selectedAuthPath] : []),
+    ...(args.selectedAuthPaths ?? []),
+  ];
   const liveCheckout = await manifest(
     args.liveCheckout,
     LIVE_CHECKOUT_VOLATILE,
