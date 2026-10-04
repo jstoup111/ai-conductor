@@ -35,6 +35,7 @@ import {
   resolveSelfHostConfig,
   resolveTeardownTimeoutSeconds,
   resolveBuildReviewConfig,
+  resolveFeatureApplicabilityConfig,
 } from './engine/resolved-config.js';
 import {
   probeReadOnlyReviewCapability,
@@ -116,6 +117,7 @@ import {
 } from './engine/daemon-log.js';
 import type { ConductorEvent, StepName, StepStatus } from './types/index.js';
 import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
+import { ALL_STEPS } from './engine/steps.js';
 import {
   createDaemonTeardown,
   type DaemonTeardown,
@@ -2024,7 +2026,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         () => fastForwardRoot(root, sourceLog),
         (reason) => log(`[daemon] root refresh deferred: ${reason}`),
       ),
-      discoverBacklog,
+      discoverBacklog: (root, processed, discoveryLog, discoveryOpts) => discoverBacklog(
+        root,
+        processed,
+        discoveryLog,
+        {
+          ...discoveryOpts,
+          featureApplicabilityEnabled: resolveFeatureApplicabilityConfig(config).enabled,
+          featureApplicabilityCustomStepNames: Object.keys(config?.steps ?? {})
+            .filter((name) => !ALL_STEPS.some((step) => step.name === name)),
+        },
+      ),
       resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
       readStamp: (slug) => readSpecOwnerStamp(ownerGit, baseBranch, slug),
       readMergeTime: (slug) =>

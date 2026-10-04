@@ -15,7 +15,7 @@
 
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import chalk from 'chalk';
-import type { ComplexityTier, Track } from '../types/index.js';
+import type { ComplexityTier, FeatureApplicabilityDeclaration, FeatureApplicabilityIgnored, Track } from '../types/index.js';
 import { Waker } from './waker.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
 import { InMemoryWorkClaims, type WorkClaims } from './work-claims.js';
@@ -74,6 +74,12 @@ export interface BacklogItem {
    *  (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location). `technical` features skip the `prd` step + `prd-audit` at
    *  SHIP. Absent → the daemon treats it as `product` (back-compat). */
   track?: Track;
+  /** Applicability declarations read from the claim-pinned base tree. */
+  applicabilityDeclarations?: FeatureApplicabilityDeclaration[];
+  /** SHA-256 of the base marker bytes used to produce the declarations. */
+  applicabilityBaseContentSha256?: string;
+  /** A base marker present but ineligible to be honored. */
+  applicabilityIgnored?: FeatureApplicabilityIgnored;
   /** Priority band assigned by the backlog-priority resolver (banded mode only).
    *  When present, indicates the item was reordered by priority. Absent when
    *  resolution was off or when the resolver threw (fallback mode). */

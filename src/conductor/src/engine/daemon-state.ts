@@ -7,7 +7,7 @@ import { applyStateChanges, requireStateMutation } from './state.js';
 /** Derive daemon-owned defaults without mutating the caller's observed snapshot. */
 export function deriveDaemonBaseState(
   observedState: ConductState,
-  item: Pick<BacklogItem, 'slug' | 'tier' | 'track'>,
+  item: Pick<BacklogItem, 'slug' | 'tier' | 'track' | 'applicabilityDeclarations' | 'applicabilityBaseContentSha256' | 'applicabilityIgnored'>,
   preseed: () => Record<string, StepStatus>,
 ): ConductState {
   const baseState: ConductState = Object.keys(observedState).length > 0
@@ -25,6 +25,20 @@ export function deriveDaemonBaseState(
     (baseState as Record<string, unknown>).prd = 'skipped';
   }
   if (!baseState.feature_desc) baseState.feature_desc = item.slug;
+  // A daemon dispatch is always seeded from its base-tree scan. Keeping an
+  // empty list is intentional: it distinguishes markerless daemon work from
+  // an interactive run, which receives no daemon seed at all.
+  baseState.applicability_declarations = item.applicabilityDeclarations ?? [];
+  if (item.applicabilityBaseContentSha256) {
+    baseState.applicability_base_content_sha256 = item.applicabilityBaseContentSha256;
+  } else {
+    delete baseState.applicability_base_content_sha256;
+  }
+  if (item.applicabilityIgnored) {
+    baseState.applicability_ignored = item.applicabilityIgnored;
+  } else {
+    delete baseState.applicability_ignored;
+  }
 
   return baseState;
 }
