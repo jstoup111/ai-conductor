@@ -117,7 +117,6 @@ import {
 } from './engine/daemon-log.js';
 import type { ConductorEvent, StepName, StepStatus } from './types/index.js';
 import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
-import { ALL_STEPS } from './engine/steps.js';
 import {
   createDaemonTeardown,
   type DaemonTeardown,

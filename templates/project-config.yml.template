@@ -301,6 +301,11 @@
 # Default: judge.enabled false.
 # Changing it: judge.enabled true adds a provider dispatch before BUILD and can stop a plan whose criteria are not bound to tasks.
 # Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: feature_applicability — whether merged DECIDE artifacts may declare selected feature steps inapplicable.
+# Allowed: an object with the single key enabled (true or false); any other key fails the load.
+# Default: enabled false.
+# Changing it: true permits only steps explicitly marked declarable to be skipped for an individual feature; user-level values are ignored.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
 # Controls: wiring — a retired key accepted only so older configs keep loading.
 # Allowed: any value; it is ignored.
 # Default: unset.
