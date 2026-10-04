@@ -350,10 +350,12 @@ export async function landSpec(
   const doneWhenViolations = validatePlanDoneWhen(planContent);
   if (doneWhenViolations.length > 0) {
     const violations = doneWhenViolations
-      .map(({ taskId, reason }) => {
+      .map(({ taskId, reason, check }) => {
         const description = reason === 'missing'
           ? 'no Done when: block'
-          : `an invalid Done when: block (${reason})`;
+          : reason === 'malformed-test-tag'
+            ? `an invalid Done when check (${check ?? '(missing check)'}; ${reason})`
+            : `an invalid Done when: block (${reason})`;
         const attribution = isEngineAppendedRemediationTaskId(taskId)
           ? ' (engine-appended: the engine wrote this remediation block; fix the engine rather than re-authoring the plan)'
           : '';

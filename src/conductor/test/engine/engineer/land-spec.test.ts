@@ -1910,7 +1910,7 @@ describe('landSpec Done-when validation', () => {
       '',
       '### Task one: First valid task',
       '**Done when:**',
-      '- The first observable result exists.',
+      '- [test] The first observable result exists.',
       '- The second observable result exists.',
       '',
       '### Task two: Second valid task',
@@ -1923,6 +1923,47 @@ describe('landSpec Done-when validation', () => {
     const result = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
 
     expect(result.branch).toBeTruthy();
+  });
+
+  it('refuses malformed test tags even when a waiver file is present', async () => {
+    const dir = await seedValidWorktree();
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+    await mkdir(join(dir, '.docs', 'release-waivers'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'release-waivers', 'irrelevant.md'), 'Waives: hook wiring\n\nRationale: unrelated\n');
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), `# Implementation Plan: dep bump
+
+**Stories:** .docs/stories/dep-bump.md
+
+### Task plural: Invalid plural tag
+**Done when:**
+- [tests] The focused test proves the result.
+- The documentation names the result.
+
+### Task case: Invalid case tag
+**Done when:**
+- [Test] The focused test proves the result.
+- The documentation names the result.
+`);
+
+    await expect(landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }))
+      .rejects.toThrow(/plan task plural.*\[tests\].*plan task case.*\[Test\]/i);
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+  });
+
+  it('refuses a bare test tag as a blank check', async () => {
+    const dir = await seedValidWorktree();
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), `# Implementation Plan: dep bump
+
+**Stories:** .docs/stories/dep-bump.md
+
+### Task empty-tag: Empty test tag
+**Done when:**
+- [test]
+- The documentation names the result.
+`);
+
+    await expect(landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }))
+      .rejects.toThrow(/plan task empty-tag has an invalid Done when: block \(blank\)/i);
   });
 });
 
