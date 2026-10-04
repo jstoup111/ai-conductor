@@ -1,11 +1,35 @@
 // Covers: task:6
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { wireDaemonOtel, wireInteractiveOtelMetrics } from '../../../src/engine/otel/wire.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
+
+// The production transport remains in use; these wrappers only count whether
+// the OTLP constructors are reached before refusal.
+const constructors = vi.hoisted(() => ({ httpTrace: 0, httpMetric: 0, grpcTrace: 0, grpcMetric: 0 }));
+vi.mock('@opentelemetry/exporter-trace-otlp-http', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@opentelemetry/exporter-trace-otlp-http')>();
+  class Counting extends actual.OTLPTraceExporter { constructor(...args: any[]) { constructors.httpTrace += 1; super(...args); } }
+  return { ...actual, OTLPTraceExporter: Counting };
+});
+vi.mock('@opentelemetry/exporter-metrics-otlp-http', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@opentelemetry/exporter-metrics-otlp-http')>();
+  class Counting extends actual.OTLPMetricExporter { constructor(...args: any[]) { constructors.httpMetric += 1; super(...args); } }
+  return { ...actual, OTLPMetricExporter: Counting };
+});
+vi.mock('@opentelemetry/exporter-trace-otlp-grpc', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@opentelemetry/exporter-trace-otlp-grpc')>();
+  class Counting extends actual.OTLPTraceExporter { constructor(...args: any[]) { constructors.grpcTrace += 1; super(...args); } }
+  return { ...actual, OTLPTraceExporter: Counting };
+});
+vi.mock('@opentelemetry/exporter-metrics-otlp-grpc', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@opentelemetry/exporter-metrics-otlp-grpc')>();
+  class Counting extends actual.OTLPMetricExporter { constructor(...args: any[]) { constructors.grpcMetric += 1; super(...args); } }
+  return { ...actual, OTLPMetricExporter: Counting };
+});
 
 const servers: Server[] = [];
 async function receiver(): Promise<{ endpoint: string; requests: () => number }> {
@@ -27,6 +51,7 @@ describe('OTLP metric wiring refusal', () => {
     const errors: string[] = [];
     events.on('renderer_error', (event) => { if ('error' in event) errors.push(event.error); });
     const config = { otel: { exporter: 'otlp' as const, endpoint: planted.endpoint, spool: { enabled: false } } };
+    const before = { ...constructors };
     try {
       const value = kind === 'daemon'
         ? wireDaemonOtel(config, { mainRoot: root, project: root, projectName: 'test', rootEvents: events, env: { AI_CONDUCTOR_NO_REAL_EXEC: '1' } })
@@ -37,6 +62,7 @@ describe('OTLP metric wiring refusal', () => {
       expect(errors).toHaveLength(1);
       expect(errors[0]).toContain('AI_CONDUCTOR_NO_REAL_EXEC');
       expect(errors[0]).toContain('AI_CONDUCTOR_OTEL_SMOKE');
+      expect(constructors).toEqual(before);
       expect(planted.requests()).toBe(0);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
