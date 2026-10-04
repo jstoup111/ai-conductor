@@ -145,7 +145,7 @@ const STATE_FILE = '.claude.json';
 
 function sandboxProvider() {
   const descriptor = BUILT_IN_PROVIDERS.find(
-    (candidate) => candidate.homeVariable === 'CLAUDE_CONFIG_DIR',
+    (candidate) => candidate.selfHostShape?.isolation === 'claude-config-sandbox',
   );
   if (!descriptor) throw new Error('The self-host sandbox provider is not registered.');
   return requireProviderCapability(descriptor.id, 'selfHost');

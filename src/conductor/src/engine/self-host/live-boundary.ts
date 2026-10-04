@@ -6,6 +6,9 @@ import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
 import { redactSafetyText } from '../safety-diagnostics.js';
 import {
+  CLAUDE_PROVIDER,
+  CODEX_PROVIDER,
+  PI_PROVIDER,
   requireProviderCapability,
   type BuiltInProviderId,
   type ProviderWith,
@@ -216,9 +219,9 @@ const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
  * detection.
  */
 export const PROVIDER_STATE_VOLATILE: Readonly<Record<SelfHostProviderId, readonly string[]>> = {
-  claude: CLAUDE_PROVIDER_STATE_VOLATILE,
-  codex: CODEX_PROVIDER_STATE_VOLATILE,
-  pi: ['sessions', 'models-store.json'],
+  [CLAUDE_PROVIDER]: CLAUDE_PROVIDER_STATE_VOLATILE,
+  [CODEX_PROVIDER]: CODEX_PROVIDER_STATE_VOLATILE,
+  [PI_PROVIDER]: ['sessions', 'models-store.json'],
 };
 
 function providerStateVolatile(provider: ProviderWith<'selfHost'> | undefined): readonly string[] {

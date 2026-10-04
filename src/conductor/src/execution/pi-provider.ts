@@ -376,7 +376,7 @@ export class PiProvider implements LLMProvider {
   }
 
   async prepareSelfHostAuth(context: SelfHostAuthContext): Promise<SelfHostAuthPreparation> {
-    if (!context.model) throw new TypeError('Pi self-host auth requires a candidate model.');
+    if (!context.model) throw new TypeError(`${piDisplayName()} self-host auth requires a candidate model.`);
     return preparePiSelfHostAuth({
       executable: this.executable,
       model: context.model,

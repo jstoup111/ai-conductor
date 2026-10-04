@@ -1,4 +1,4 @@
-// Covers: task:8, task:rem-as-built-rem-pg1-1, task:rem-as-built-rem-pg3-1
+// Covers: task:8, task:11, task:rem-as-built-rem-pg1-1, task:rem-as-built-rem-pg3-1
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +22,18 @@ interface ProviderLiteralFinding {
   readonly file: string;
   readonly line: number;
   readonly value: string;
+}
+
+interface ProviderShapeBranchFinding {
+  readonly file: string;
+  readonly line: number;
+  readonly property: 'homeVariable' | 'environmentPrefix';
+}
+
+interface ProviderConstantBranchFinding {
+  readonly file: string;
+  readonly line: number;
+  readonly constant: 'CLAUDE_PROVIDER' | 'CODEX_PROVIDER';
 }
 
 async function sourceFiles(directory: string): Promise<readonly string[]> {
@@ -124,6 +136,89 @@ async function productionProviderLiteralFindings(): Promise<readonly ProviderLit
   return findings.flat();
 }
 
+function findProviderShapeBranches(
+  module: string,
+  source: ts.SourceFile,
+): readonly ProviderShapeBranchFinding[] {
+  const findings: ProviderShapeBranchFinding[] = [];
+  const report = (node: ts.Node, property: ProviderShapeBranchFinding['property']): void => {
+    findings.push({
+      file: module,
+      line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+      property,
+    });
+  };
+  const shapeProperty = (node: ts.Expression): ProviderShapeBranchFinding['property'] | undefined =>
+    ts.isPropertyAccessExpression(node)
+      && (node.name.text === 'homeVariable' || node.name.text === 'environmentPrefix')
+      ? node.name.text
+      : undefined;
+  const visit = (node: ts.Node): void => {
+    if (ts.isBinaryExpression(node) && [
+      ts.SyntaxKind.EqualsEqualsToken,
+      ts.SyntaxKind.EqualsEqualsEqualsToken,
+      ts.SyntaxKind.ExclamationEqualsToken,
+      ts.SyntaxKind.ExclamationEqualsEqualsToken,
+    ].includes(node.operatorToken.kind)) {
+      const leftProperty = shapeProperty(node.left);
+      const rightProperty = shapeProperty(node.right);
+      if (leftProperty && ts.isStringLiteral(node.right)) report(node, leftProperty);
+      if (rightProperty && ts.isStringLiteral(node.left)) report(node, rightProperty);
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(source, visit);
+  return findings;
+}
+
+async function productionProviderShapeBranchFindings(): Promise<readonly ProviderShapeBranchFinding[]> {
+  const excluded = new Set([catalogModule, ...declaredAdapterModules()]);
+  const files = (await sourceFiles(sourceRoot)).filter((path) => !excluded.has(relative(sourceRoot, path)));
+  const findings = await Promise.all(files.map(async (path) => {
+    const source = ts.createSourceFile(path, await readFile(path, 'utf8'), ts.ScriptTarget.Latest, true);
+    return findProviderShapeBranches(relative(sourceRoot, path), source);
+  }));
+  return findings.flat();
+}
+
+function findSelfHostProviderConstantBranches(
+  module: string,
+  source: ts.SourceFile,
+): readonly ProviderConstantBranchFinding[] {
+  const findings: ProviderConstantBranchFinding[] = [];
+  const constant = (node: ts.Expression): ProviderConstantBranchFinding['constant'] | undefined =>
+    ts.isIdentifier(node) && (node.text === 'CLAUDE_PROVIDER' || node.text === 'CODEX_PROVIDER')
+      ? node.text
+      : undefined;
+  const visit = (node: ts.Node): void => {
+    if (ts.isBinaryExpression(node)) {
+      const found = constant(node.left) ?? constant(node.right);
+      if (found) findings.push({
+        file: module,
+        line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+        constant: found,
+      });
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(source, visit);
+  return findings;
+}
+
+async function productionSelfHostProviderConstantBranchFindings(): Promise<readonly ProviderConstantBranchFinding[]> {
+  const modules = [
+    'engine/conductor.ts',
+    'engine/self-host/provider-home.ts',
+    'engine/self-host/live-boundary.ts',
+  ];
+  const findings = await Promise.all(modules.map(async (module) => {
+    const path = join(sourceRoot, module);
+    const source = ts.createSourceFile(path, await readFile(path, 'utf8'), ts.ScriptTarget.Latest, true);
+    return findSelfHostProviderConstantBranches(module, source);
+  }));
+  return findings.flat();
+}
+
 describe('structural: built-in provider literals', () => {
   it('declares existing provider-owned modules for each built-in provider', async () => {
     const catalogIds = BUILT_IN_PROVIDERS.map(({ id }) => id);
@@ -215,5 +310,55 @@ describe('structural: built-in provider literals', () => {
 
   it('has no built-in provider ids or display names outside the catalog and declared adapters', async () => {
     expect(await productionProviderLiteralFindings()).toEqual([]);
+  });
+
+  it('reports provider-home shape comparisons in fixtures and none in production consumers', async () => {
+    const fixtures = [
+      [
+        'fixtures/provider-home-variable.ts',
+        "provider.homeVariable === 'CODEX_HOME';\nprovider.homeVariable === 'CLAUDE_CONFIG_DIR';\n'CODEX_HOME' !== provider.homeVariable;",
+      ],
+      [
+        'fixtures/provider-environment-prefix.ts',
+        "provider?.environmentPrefix === 'CODEX_';\nprovider.environmentPrefix === 'CLAUDE_';",
+      ],
+    ] as const;
+
+    expect({
+      fixtures: fixtures.flatMap(([path, text]) => findProviderShapeBranches(
+        path,
+        ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true),
+      )),
+      production: await productionProviderShapeBranchFindings(),
+    }).toEqual({
+      fixtures: [
+        { file: 'fixtures/provider-home-variable.ts', line: 1, property: 'homeVariable' },
+        { file: 'fixtures/provider-home-variable.ts', line: 2, property: 'homeVariable' },
+        { file: 'fixtures/provider-home-variable.ts', line: 3, property: 'homeVariable' },
+        { file: 'fixtures/provider-environment-prefix.ts', line: 1, property: 'environmentPrefix' },
+        { file: 'fixtures/provider-environment-prefix.ts', line: 2, property: 'environmentPrefix' },
+      ],
+      production: [],
+    });
+  });
+
+  it('reports self-host branches selected by provider constants', async () => {
+    const fixture = ts.createSourceFile(
+      'fixtures/self-host-provider-constant.ts',
+      'provider === CLAUDE_PROVIDER;\nCODEX_PROVIDER !== provider;',
+      ts.ScriptTarget.Latest,
+      true,
+    );
+
+    expect({
+      fixture: findSelfHostProviderConstantBranches('fixtures/self-host-provider-constant.ts', fixture),
+      production: await productionSelfHostProviderConstantBranchFindings(),
+    }).toEqual({
+      fixture: [
+        { file: 'fixtures/self-host-provider-constant.ts', line: 1, constant: 'CLAUDE_PROVIDER' },
+        { file: 'fixtures/self-host-provider-constant.ts', line: 2, constant: 'CODEX_PROVIDER' },
+      ],
+      production: [],
+    });
   });
 });

@@ -2,7 +2,7 @@ import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import { parsePiModelId } from './pi-provider.js';
-import { providerDescriptor } from './provider-catalog.js';
+import { PI_PROVIDER, providerDescriptor } from './provider-catalog.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { assertRealExecAllowed } from '../engine/tracker-client.js';
 import { ProviderSetupUnavailableError } from '../engine/provider-setup-failure.js';
@@ -42,6 +42,14 @@ const realPiSelfHostAuthRunner: PiSelfHostAuthRunner = async (executable, argv, 
   };
 };
 
+/**
+ * Catalog display name; diagnostics render it rather than restating the
+ * provider. Read lazily: the catalog and Pi adapter import each other.
+ */
+function piDisplayName(): string {
+  return providerDescriptor(PI_PROVIDER).displayName;
+}
+
 const UNKNOWN_PROVIDER_RE = /\bunknown provider\b/i;
 
 function isTimedOut(error: unknown): boolean {
@@ -54,10 +62,10 @@ function resolverOutputNamesUnknownProvider(result: { stdout?: unknown; stderr?:
 
 function setupUnavailable(providerSegment: string, reason: string): ProviderSetupUnavailableError {
   return new ProviderSetupUnavailableError({
-    provider: providerDescriptor('pi').id,
+    provider: PI_PROVIDER,
     capability: 'self-host-isolation',
     reason,
-    recoveryAction: `Configure an API key for Pi provider ${providerSegment} in the operator Pi home, then retry.`,
+    recoveryAction: `Configure an API key for ${piDisplayName()} provider ${providerSegment} in the operator ${piDisplayName()} home, then retry.`,
   });
 }
 
@@ -78,7 +86,7 @@ export async function preparePiSelfHostAuth({
   fs?: PiSelfHostAuthFs;
 }): Promise<SelfHostAuthPreparation> {
   const parsed = parsePiModelId(model);
-  if (!('provider' in parsed)) throw new TypeError(`Invalid Pi model id: ${parsed.reason}`);
+  if (!('provider' in parsed)) throw new TypeError(`Invalid ${piDisplayName()} model id: ${parsed.reason}`);
 
   let result: Awaited<ReturnType<PiSelfHostAuthRunner>>;
   try {
@@ -89,24 +97,24 @@ export async function preparePiSelfHostAuth({
     });
   } catch (error) {
     if (isTimedOut(error)) {
-      throw setupUnavailable(parsed.provider, `Pi self-host credential resolution for ${parsed.provider} timed out.`);
+      throw setupUnavailable(parsed.provider, `${piDisplayName()} self-host credential resolution for ${parsed.provider} timed out.`);
     }
-    throw setupUnavailable(parsed.provider, `Pi self-host credential resolution for ${parsed.provider} failed before reporting an exit status.`);
+    throw setupUnavailable(parsed.provider, `${piDisplayName()} self-host credential resolution for ${parsed.provider} failed before reporting an exit status.`);
   }
 
   if (result.timedOut === true) {
-    throw setupUnavailable(parsed.provider, `Pi self-host credential resolution for ${parsed.provider} timed out.`);
+    throw setupUnavailable(parsed.provider, `${piDisplayName()} self-host credential resolution for ${parsed.provider} timed out.`);
   }
 
   const exitCode = result.exitCode ?? 0;
   if (exitCode !== 0) {
     const classification = resolverOutputNamesUnknownProvider(result) ? ' reported an unknown provider' : '';
-    throw setupUnavailable(parsed.provider, `Pi self-host credential resolution for ${parsed.provider}${classification} with exit status ${exitCode}.`);
+    throw setupUnavailable(parsed.provider, `${piDisplayName()} self-host credential resolution for ${parsed.provider}${classification} with exit status ${exitCode}.`);
   }
 
   const key = result.stdout.trim();
   if (!key) {
-    throw setupUnavailable(parsed.provider, `Pi self-host credential resolution for ${parsed.provider} returned empty output with exit status ${exitCode}.`);
+    throw setupUnavailable(parsed.provider, `${piDisplayName()} self-host credential resolution for ${parsed.provider} returned empty output with exit status ${exitCode}.`);
   }
 
   const authPath = join(homeDir, 'auth.json');
