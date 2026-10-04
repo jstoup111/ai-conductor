@@ -213,12 +213,6 @@ function terminalAssistantText(content: unknown): string {
     .join('');
 }
 
-/** Pi may report a canonical provider/model id; rate cards are keyed by the bare model id. */
-function barePiModel(model: string): string {
-  const separator = model.indexOf('/');
-  return separator === -1 ? model : model.slice(separator + 1);
-}
-
 /** Extract Pi's authoritative terminal assistant message and sum its final per-message usage. */
 export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
   output: string;
@@ -260,10 +254,23 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
           ? event.message.errorMessage
           : undefined;
       }
-      if (event.type === 'message_end' && event.message?.usage) {
+      if (event.type === 'message_end' && event.message?.usage
+        && (event.message.role === 'assistant' || event.message.role === 'toolResult')) {
         const { input, output: outputTokens, cacheRead, cacheWrite, reasoning } = event.message.usage;
         if (typeof input === 'number' && Number.isFinite(input)
           && typeof outputTokens === 'number' && Number.isFinite(outputTokens)) {
+          const model = typeof event.message.responseModel === 'string'
+            ? event.message.responseModel
+            : typeof event.message.model === 'string'
+              ? event.message.model
+              : undefined;
+          const provider = typeof event.message.provider === 'string'
+            ? event.message.provider
+            : undefined;
+          const validMessageModel = provider !== undefined && model !== undefined;
+          if (event.message.role === 'assistant' && validMessageModel) {
+            attributedModel = `${provider}/${model}`;
+          }
           const hasNonZeroTokens = input !== 0
             || outputTokens !== 0
             || (typeof cacheRead === 'number' && Number.isFinite(cacheRead) && cacheRead !== 0)
@@ -277,18 +284,6 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
             } else {
               allTokenBearingMessagesPriced = false;
             }
-            const model = typeof event.message.responseModel === 'string'
-              ? event.message.responseModel
-              : typeof event.message.model === 'string'
-                ? event.message.model
-                : undefined;
-            const provider = typeof event.message.provider === 'string'
-              ? event.message.provider
-              : undefined;
-            const validMessageModel = provider !== undefined && model !== undefined;
-            if (event.message.role === 'assistant' && validMessageModel) {
-              attributedModel = `${provider}/${model}`;
-            }
             const messageUsage: TokenUsage = {
               input,
               output: outputTokens,
@@ -296,7 +291,7 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
               ...(typeof cacheWrite === 'number' && Number.isFinite(cacheWrite) ? { cacheCreation: cacheWrite } : {}),
             };
             const priced = event.message.role === 'assistant' && validMessageModel
-              ? applyRateCard(messageUsage, barePiModel(model), rateCard)
+              ? applyRateCard(messageUsage, model, rateCard)
               : undefined;
             if (priced?.costSource === 'rate-card' && priced.costUsd !== undefined) {
               rateCardCostUsd += priced.costUsd;
@@ -327,8 +322,8 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
 
   if (tokenUsage && (tokenUsage.input !== 0
     || tokenUsage.output !== 0
-    || tokenUsage.cacheRead !== 0
-    || tokenUsage.cacheCreation !== 0)) {
+    || (tokenUsage.cacheRead ?? 0) !== 0
+    || (tokenUsage.cacheCreation ?? 0) !== 0)) {
     tokenUsage = {
       ...tokenUsage,
       numTurns: assistantTurns,

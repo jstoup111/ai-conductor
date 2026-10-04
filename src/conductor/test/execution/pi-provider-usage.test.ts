@@ -154,6 +154,31 @@ describe('PiProvider usage', () => {
     expect(classifyMetering(result.tokenUsage)).toBe('cost-unmetered');
   });
 
+  it('rate-card-prices a Pi model whose bare model id contains a slash', async () => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const stdout = rewriteAssistantMessages(workedStream, (message) => {
+      message.provider = 'cline';
+      message.model = 'google/gemma-4-31b-it:free';
+      (message.usage as { cost?: { total?: unknown } }).cost = { total: 0 };
+    });
+    const rateCard: RateCard = {
+      ...RATE_CARD,
+      models: {
+        'google/gemma-4-31b-it:free': {
+          input_cost_per_token: 1e-6,
+          output_cost_per_token: 2e-6,
+        },
+      },
+    };
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => rateCard);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result.tokenUsage).toMatchObject({ costSource: 'rate-card' });
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.00108, 12);
+  });
+
   it('leaves cost absent when an unlisted assistant turn has no Pi cost', async () => {
     const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
     const stdout = rewriteAssistantMessages(workedStream, (message, turn) => {
@@ -234,6 +259,35 @@ describe('PiProvider usage', () => {
     const result = await provider.invoke(invokeOptions);
 
     expect(result.tokenUsage?.attributedModel).toBe('openai/gpt-5.6-luna');
+  });
+
+  it('attributes a trailing zero-token assistant turn without pricing it', async () => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const zeroTokenTurn = JSON.stringify({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        provider: 'openai',
+        model: 'gpt-5.6-terra',
+        content: 'No additional tokens.',
+        usage: { input: 0, output: 0 },
+        stopReason: 'stop',
+      },
+    });
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({
+      stdout: `${workedStream}\n${zeroTokenTurn}`,
+      stderr: '',
+      exitCode: 0,
+    });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result.tokenUsage).toMatchObject({
+      attributedModel: 'openai/gpt-5.6-terra',
+      costSource: 'provider',
+    });
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.0035, 12);
   });
 
   it('prices zero-cost usage by the model Pi ran rather than the requested model', async () => {
@@ -463,6 +517,28 @@ describe('PiProvider usage', () => {
     });
   });
 
+  it('ignores non-assistant, non-tool-result message usage', async () => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const ignoredMessages = ['user', 'system', undefined].map((role) => JSON.stringify({
+      type: 'message_end',
+      message: {
+        ...(role === undefined ? {} : { role }),
+        usage: { input: 100, output: 100, cacheRead: 100, cacheWrite: 100, cost: { total: 1 } },
+      },
+    }));
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({
+      stdout: `${workedStream}\n${ignoredMessages.join('\n')}`,
+      stderr: '',
+      exitCode: 0,
+    });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result.tokenUsage).toMatchObject({ input: 200, output: 65, costSource: 'provider' });
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.0035, 12);
+  });
+
   it('records finite Pi reasoning usage separately from output', async () => {
     const stdout = JSON.stringify({
       type: 'message_end',
@@ -509,6 +585,20 @@ describe('PiProvider usage', () => {
     },
   ])('returns no token usage for $name', async ({ stdout }) => {
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result).toMatchObject({ success: true });
+    expect(result).not.toHaveProperty('tokenUsage');
+  });
+
+  it('returns no token usage for zero input and output with omitted cache fields', async () => {
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({
+      stdout: terminalAssistantMessage({ input: 0, output: 0 }),
+      stderr: '',
+      exitCode: 0,
+    });
     const provider = new PiProvider('/resolved/pi', spawn, environment);
 
     const result = await provider.invoke(invokeOptions);
