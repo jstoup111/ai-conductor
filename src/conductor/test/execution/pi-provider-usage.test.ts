@@ -86,12 +86,16 @@ function rewriteAssistantMessages(
   }).join('\n');
 }
 
-async function providerAttemptFor(stdout: string, exitCode = 0): Promise<{
+async function providerAttemptFor(
+  stdout: string,
+  exitCode = 0,
+  loadRates: () => RateCard | undefined = () => undefined,
+): Promise<{
   readonly result: Awaited<ReturnType<DefaultStepRunner['run']>>;
   readonly event: ProviderAttemptEvent;
 }> {
   const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode });
-  const pi = new PiProvider('/resolved/pi', spawn, environment);
+  const pi = new PiProvider('/resolved/pi', spawn, environment, undefined, loadRates);
   const emitted: ProviderAttemptEvent[] = [];
   const config: HarnessConfig = {
     llm_provider: 'pi',
@@ -122,6 +126,88 @@ async function providerAttemptFor(stdout: string, exitCode = 0): Promise<{
 }
 
 describe('PiProvider usage', () => {
+  it('leaves cost absent for a zero-cost unlisted model while retaining its attribution', async () => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const stdout = rewriteAssistantMessages(workedStream, (message) => {
+      message.provider = 'cline';
+      message.model = 'google/gemma-4-31b-it:free';
+      (message.usage as { cost?: { total?: unknown } }).cost = { total: 0 };
+    });
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result.tokenUsage).toMatchObject({
+      input: 200,
+      output: 65,
+      attributedModel: 'cline/google/gemma-4-31b-it:free',
+    });
+    expect(result.tokenUsage).not.toHaveProperty('costUsd');
+    expect(result.tokenUsage).not.toHaveProperty('costSource');
+    expect(classifyMetering(result.tokenUsage)).toBe('cost-unmetered');
+  });
+
+  it('leaves cost absent when an unlisted assistant turn has no Pi cost', async () => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const stdout = rewriteAssistantMessages(workedStream, (message, turn) => {
+      if (turn === 1) {
+        delete (message.usage as { cost?: unknown }).cost;
+        message.model = 'unlisted-model';
+      }
+    });
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result.tokenUsage).not.toHaveProperty('costUsd');
+    expect(result.tokenUsage).not.toHaveProperty('costSource');
+  });
+
+  it('never rate-card-prices a token-bearing tool result', async () => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const toolResult = JSON.stringify({
+      type: 'message_end',
+      message: {
+        role: 'toolResult',
+        usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
+      },
+    });
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({
+      stdout: `${workedStream}\n${toolResult}`,
+      stderr: '',
+      exitCode: 0,
+    });
+    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result.tokenUsage).not.toHaveProperty('costUsd');
+    expect(result.tokenUsage).not.toHaveProperty('costSource');
+    expect(classifyMetering(result.tokenUsage)).toBe('cost-unmetered');
+  });
+
+  it('emits attributed but cost-unmetered usage for an unlisted Pi model', async () => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const stdout = rewriteAssistantMessages(workedStream, (message) => {
+      message.provider = 'cline';
+      message.model = 'google/gemma-4-31b-it:free';
+      (message.usage as { cost?: { total?: unknown } }).cost = { total: 0 };
+    });
+
+    const { result, event } = await providerAttemptFor(stdout, 0, () => RATE_CARD);
+
+    expect(result).toMatchObject({ success: true });
+    expect(event.tokenUsage).toMatchObject({
+      input: 200,
+      output: 65,
+      attributedModel: 'cline/google/gemma-4-31b-it:free',
+    });
+    expect(event.tokenUsage).not.toHaveProperty('costUsd');
+    expect(event.tokenUsage).not.toHaveProperty('costSource');
+  });
+
   it('uses Pi-reported cost when every token-bearing message is priced', async () => {
     const stdout = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
