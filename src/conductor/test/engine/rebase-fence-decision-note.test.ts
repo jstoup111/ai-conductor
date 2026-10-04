@@ -85,6 +85,28 @@ describe('renderRebaseFenceDecisionNote', () => {
     await expect(renderRebaseFenceDecisionNote(await projectRoot())).resolves.toBe('');
   });
 
+  it('reports orphaned HALT.cleared decisions without a remediation case store', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeClearedDecision(root, 'accept');
+
+    const note = await renderRebaseFenceDecisionNote(root);
+
+    expect(note).toContain('.pipeline/HALT.cleared');
+    expect(note).toContain('restore .pipeline/remediation-cases.json or remove the orphaned decision state');
+  });
+
+  it('reports an orphaned accepted-widenings store without a remediation case store', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), '{}');
+
+    const note = await renderRebaseFenceDecisionNote(root);
+
+    expect(note).toContain('.pipeline/accepted-widenings.json');
+    expect(note).toContain('restore .pipeline/remediation-cases.json or remove the orphaned decision state');
+  });
+
   it('reports an unreadable recorded-decision state without throwing', async () => {
     const root = await projectRoot();
     await writeOffer(root);
@@ -143,5 +165,27 @@ describe('renderRebaseFenceDecisionNote', () => {
     const note = await renderRebaseFenceDecisionNote(root);
     expect(note).toContain('malformed-block');
     expect(note).toContain('correct the over-scope-decisions block and re-run `ai-conductor halt clear`');
+  });
+
+  it('keeps unreadable decision-state recovery alongside valid and malformed cleared decisions', async () => {
+    const root = await projectRoot();
+    await writeOffer(root);
+    await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), '{not json');
+    await writeFile(join(root, '.pipeline', 'HALT.cleared'), [
+      'Operator decision',
+      '',
+      '```json over-scope-decisions',
+      JSON.stringify([
+        { criterion: 'NC.1', summary: 'Visible behavior outside the approved plan.', decision: 'accept', rationale: 'Accepted.' },
+        { criterion: 'NC.1', summary: 'Visible behavior outside the approved plan.', decision: 'refuse', rationale: '' },
+      ]),
+      '```',
+    ].join('\n'));
+
+    const note = await renderRebaseFenceDecisionNote(root);
+
+    expect(note).toContain('recorded decision state could not be read');
+    expect(note).toContain('NC.1 recorded as accept');
+    expect(note).toContain('for NC.1: missing-rationale');
   });
 });
