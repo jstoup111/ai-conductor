@@ -75,6 +75,28 @@ describe('buildExporters', () => {
   });
 
   describe('otlp exporter', () => {
+    it('refuses HTTP and gRPC OTLP construction under the test marker unless smoke opts in', () => {
+      for (const protocol of [undefined, 'grpc'] as const) {
+        const resolved = resolveOtelConfig(
+          { otel: { exporter: 'otlp', endpoint: 'http://127.0.0.1:4318', ...(protocol ? { protocol } : {}) } },
+          pipelineDir,
+        );
+        const refused = buildRawExporters(resolved as Extract<typeof resolved, { enabled: true }>, {
+          env: { AI_CONDUCTOR_NO_REAL_EXEC: '1' },
+        });
+        expect(refused).toMatchObject({ refused: true });
+        expect((refused as unknown as { message: string }).message).toContain('AI_CONDUCTOR_OTEL_SMOKE');
+      }
+
+      const resolved = resolveOtelConfig(
+        { otel: { exporter: 'otlp', endpoint: 'http://127.0.0.1:4318' } },
+        pipelineDir,
+      );
+      expect(buildRawExporters(resolved as Extract<typeof resolved, { enabled: true }>, {
+        env: { AI_CONDUCTOR_NO_REAL_EXEC: '1', AI_CONDUCTOR_OTEL_SMOKE: '1' },
+      }).spanExporter).toBeDefined();
+    });
+
     it('returns spanExporter and metricExporter for otlp config', () => {
       const resolved = resolveOtelConfig(
         { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
