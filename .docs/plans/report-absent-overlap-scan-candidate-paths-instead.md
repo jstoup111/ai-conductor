@@ -118,3 +118,12 @@ Every criterion is diff-local against controlled fixtures; nothing here depends 
 ## Task Dependency Graph
 
 Task 1 -> Task 2 -> Task 3
+
+### Task rem-prd-audit-rem-s1.2-1: src/conductor/src/engine/overlap-scan.ts:47 — make the classification listing repo-root-relative from any cwd: call git(['ls-files', '--cached', '--others', '--exclude-standard', '--full-name', '--', ':/']) so it lists the whole worktree with top-level-relative paths. In the same task, update the matched exact-argv assertion at src/conductor/test/engine/overlap-scan.test.ts:96 to the new argv. Add a RED-first unit case in overlap-scan.test.ts asserting the listing argv includes both '--full-name' and the ':/' pathspec. Keep every existing Task 1 Done-when 1-3 case (present/absent/mixed/empty, ./ and backslash spellings, non-zero exit → classification-failed) passing unchanged.
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/engine/overlap-scan.ts:47 runs `git ls-files --cached --others --exclude-standard` with no `--full-name` and no top-level pathspec. Run from a subdirectory, it lists only that subtree, relative to cwd, so present repo-root-relative candidates are classified absent and the clean line is withheld. Task 1 step 3 already requires a listing 'with repo-root-relative output', so this is conforming implementation drift that Task 1 admits, not a plan or architecture gap. The matched pair is the exact-argv assertion at src/conductor/test/engine/overlap-scan.test.ts:96, which must move in the same task. Sibling sweep: no other `ls-files` call site exists; the overlap-scan-cli.test.ts:217 shim keys only on `$1 = ls-files` and stays valid; the branch `diff --name-only` enumeration is already repo-root-relative. A real-git subdirectory case in overlap-scan.acceptance.test.ts (a Task 2 file) is excluded because Task 1 admits only the unit file. All delivered Task 1 Done-when 1-3 coverage (present, absent, mixed, empty, ./ and backslash spellings, non-zero exit) is preserved unchanged.
+**Criterion:** S1.2
+**Parent task:** 1
+**Done when:**
+- S1.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s1.2-1 is complete.
