@@ -943,10 +943,21 @@ ai-conductor overlap-scan [--files <a.ts,b.ts>] [--source-ref <owner/repo#N>] [-
 
 | Flag | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `--files <list>` | comma-separated paths | none | Candidate paths. Split on commas, trimmed, empties dropped. |
+| `--files <list>` | comma- or space-separated paths | none | Candidate paths. Consumes every following argument up to the next `-`-prefixed one; each is split on commas, trimmed, empties dropped. |
 | `--source-ref <ref>` | string | unset | Linked issue reference swept for open blockers. |
 | `--base <ref>` | string | the origin default branch, else `main` | Base ref used to find each sibling branch's merge base; the scan compares only paths that branch contributed after that point. |
 | `--cwd <dir>` | path | current directory | Repository to scan. |
+
+Candidate paths are matched repo-relative against the checkout's tracked and untracked, non-ignored
+files. The report adds one `Advisory:` line per case:
+
+| Case | Advisory line |
+| --- | --- |
+| No candidate paths supplied | `nothing was scanned for overlap: no candidate paths were supplied` |
+| Candidate not in the checkout | `candidate path is not present in the checkout: <path>` (once per distinct path) |
+| `git ls-files` fails | `candidate-path classification failed: git ls-files exited <code>` |
+
+Absent paths are still compared against sibling branches.
 
 Advisory by contract: it always exits 0. Even an unexpected error prints `overlap-scan: unable to
 complete scan (<msg>)` and still returns 0. Reads git and queries `gh`; writes nothing.
