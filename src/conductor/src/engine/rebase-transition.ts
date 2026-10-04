@@ -74,6 +74,8 @@ export interface CompleteInterruptedRebaseOperationOptions {
   stateFilePath?: string;
   stateStore: ConductStateStore<ConductState>;
   operation: RebaseOperationRecord;
+  /** The registry-derived gates after rebase, for a pre-transition recovery. */
+  downstreamSteps: readonly StepName[];
   preVerify?: RebasePreVerifier;
 }
 
@@ -86,6 +88,41 @@ export interface CompleteInterruptedRebaseOperationOptions {
 export async function completeInterruptedRebaseOperation(
   options: CompleteInterruptedRebaseOperationOptions,
 ): Promise<AppliedRebaseTransition> {
+  const provisional = options.operation.id.startsWith('preparing-') &&
+    options.operation.transition.preserved.length === 0 &&
+    options.operation.transition.invalidated.length === 0 &&
+    options.operation.transition.reverified.length === 0;
+  // A descriptor from before transition construction (or from before durable
+  // candidate evidence existed) cannot prove that any old PASS survived the
+  // replay.  Re-open every affected gate rather than reconstructing authority
+  // from the current tree.  The provisional form has no affected set yet, so
+  // its caller supplies the registry's complete downstream tail.
+  if (provisional || options.operation.preservationEvidence === undefined) {
+    const invalidated = [...new Set(provisional
+      ? options.downstreamSteps
+      : [...options.operation.transition.invalidated, ...options.operation.transition.preserved])];
+    for (const gate of invalidated) {
+      await reverifyOrInvalidateRebaseGate(
+        options.projectRoot,
+        gate,
+        undefined,
+        provisional
+          ? 'provisional rebase transition has no durable invalidation set'
+          : 'persisted rebase transition has no preservation evidence',
+      );
+    }
+    return applyRebaseTransition({
+      projectRoot: options.projectRoot,
+      ...(options.stateFilePath === undefined ? {} : { stateFilePath: options.stateFilePath }),
+      stateStore: options.stateStore,
+      replay: options.operation.replay,
+      invalidated,
+      preserved: [],
+      preservedCandidates: [],
+      reverified: [],
+      operationId: options.operation.id,
+    });
+  }
   const candidates = options.operation.preservationEvidence ?? [];
   const preserved: StepName[] = [];
   const invalidated = [...options.operation.transition.invalidated];
