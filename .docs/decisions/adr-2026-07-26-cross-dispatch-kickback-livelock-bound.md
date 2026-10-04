@@ -90,6 +90,16 @@ Conventions are taken verbatim from the two existing precedents:
 The four other run-local counters (`stuckGate`, `prdAuditSelfHeals`, `remediationRounds`,
 `manualTestSelfHeals`) are explicitly **out of scope** — see Non-goals.
 
+> **Amended 2026-10-03 by #2940:** (adr-2026-10-03-stacked-child-plans-identity-and-state decisions 8 and 9) For a stacked feature, the gate entries
+> of the region steps (`acceptance_specs`, `build`, `test_suite`, `build_review`) may live in a
+> per-child ledger at `.pipeline/children/<k>/kickback-ledger.json`. It has the same schema, parser,
+> lease and fail-closed rules as the feature ledger. The tolerant-read clause above is overridden by
+> `adr-2026-08-31-kickback-ledger-read-fails-closed` D1, so a corrupt or version-incompatible per-child
+> ledger fails closed, and a missing one reads as typed absent, exactly as the feature ledger does. Plan growth, receipts and pending repair stay in
+> the feature ledger. With no child, the ledger is exactly the file this decision names. The
+> fresh-session clear also removes each existing per-child ledger, by explicit enumeration. Per-child
+> cap scope is enabled and recorded by #2942.
+
 ### D2 — Tree-hash progress witness
 
 `classifyBuildProgress` compares tree hashes (`git rev-parse HEAD^{tree}`) rather than commit shas.

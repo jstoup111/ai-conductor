@@ -42,6 +42,13 @@ For an already-merged spec, committed default-branch provenance is authoritative
 
 A source issue is a separate mutation target: an owned feature does not authorize arbitrary issues merely because its body links them. Preserve existing issue assignees.
 
+> **Amended 2026-10-03 by #2940:** (adr-2026-10-03-stacked-child-plans-identity-and-state decisions 2 and 3) Exact branch identity is resolved by the
+> shared feature-branch identity module. A stacked child branch `feat/c<k>/<slug>` resolves to feature
+> `<slug>` only when the leaf `feat/daemon-<slug>` exists locally or on `origin`; otherwise the
+> operation is refused `invalid-target`. Every other branch resolves exactly as before. Push targets
+> and PR binding remain the checked-out branch's own. Committed-owner checks are unchanged, so a child
+> branch never gains authority a leaf branch lacks.
+
 ### D3 — Pre-spec intake and creation
 
 Approved policy: an existing intake issue without committed feature provenance is actionable when assigned exclusively to the resolved operator. Multiple distinct assignees, another assignee, or no assignment requires explicit operator authorization for that exact issue and operation. Never reassign an existing issue to manufacture permission.

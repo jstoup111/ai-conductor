@@ -83,6 +83,12 @@ and the pure budget view remain authoritative; and mechanical-fault state remain
 >    raise) keeps the staged, generation-bound authorization and daemon-side clear of D3 and D5.
 >    Operator-direct clearing is preferred over widening daemon-side clearing.
 
+> **Amended 2026-10-03 by #2940:** (adr-2026-10-03-stacked-child-plans-identity-and-state decision 13) The carried-forward single command family
+> (superseded ADR's D3) gains `kickback-budget inspect --child <k>`. It reads child k's per-child
+> ledger entries, and is accepted only when `.pipeline/children/<k>/` exists. `raise` and `reset` take
+> no `--child` until #2942 writes per-child cap evidence. Without the flag, every subcommand's output
+> and effects are unchanged.
+
 ### D5 — Raise grows the allowance the live evidence names, including plan growth
 
 > **Amended 2026-09-24 by #2185:** D4 carries forward the superseded ADR's D2 as amended by #2190,

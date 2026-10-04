@@ -96,7 +96,7 @@ bulk of the leak is reclaimed, while daemon feature worktrees still wait for the
 - Given the `origin/main:.docs/shipped` listing cannot be read, when the helper evaluates a `feat/daemon-*` candidate, then it refuses with `ancestry-check-failed` rather than treating the record as absent
 
 ### Done When
-- [ ] A unit test proves the record precondition gates `feat/daemon-*` candidates and does not gate other branch kinds
+- [ ] A unit test proves the record precondition gates daemon-owned candidates (`feat/daemon-*`, and stacked child branches `feat/c<k>/<slug>`, which park refuses before the precondition) and does not gate non-daemon-owned branch kinds such as `spec/` or `hotfix/`
 - [ ] A unit test proves a non-daemon candidate without merge proof is still refused
 - [ ] The existing parked-feature record-missing deferral tests pass unchanged
 

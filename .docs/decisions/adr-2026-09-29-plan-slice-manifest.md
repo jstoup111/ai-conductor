@@ -96,6 +96,16 @@ strict Dependencies grammar, and none that contradicts this design. The decision
 
    Slices are ordered by position value. Gaps between positions are allowed.
 
+> **Amended 2026-10-03 by #2940:** (adr-2026-10-03-stacked-child-plans-identity-and-state decision 5) The slice-count bound becomes the operator
+> config key `stacked_prs.max_slices`:
+> - the default is 1;
+> - values 1–9 are accepted, values above 5 log a warning, and 10 or more is a `validation_error`;
+> - it applies to stacked delivery, and #2941 implements it where land consumes it.
+>
+> This replaces "a code constant equal to 5, not a config key" for the stacking bound once #2941
+> lands. Until then the constant stands. Child identities are capped by the fixed engine ceiling
+> `MAX_CHILD_ID` = 9, which never depends on configuration.
+
 4. **Strict Dependencies grammar, for sliced plans only.** In a sliced plan, every non-exempt task
    carries exactly one `**Dependencies:**` line. The accepted forms are:
    - `none`; or
@@ -141,6 +151,13 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    - **Baseline:** a prior envelope with no recorded membership (legacy, first run, or a recreated
      worktree) is a baseline, per D19. It records membership and emits nothing.
    - **Unsliced plans:** the layer is inert for a plan that is unsliced both before and after.
+
+> **Amended 2026-10-03 by #2940:** (adr-2026-10-03-stacked-child-plans-identity-and-state decisions 5–7) The recorded membership is also the source
+> of a stacked feature's child identities: a child id is a declared slice position. The recovery
+> CLIs read it to validate `--child`, and later tickets read it to resolve the active child. It
+> remains non-completion evidence and still never enters the judge prompt. Once any child state or
+> child branch exists, declared positions must not change. #2942 implements the guard that halts a
+> reseal that would move them.
 
 7. **Event `plan_slices_changed` joins the persisted spine.** It is a new `ConductorEvent` member
    with an `EVENT_SINKS` row `{ render: false, persist: true, audit: false, otel: false }`. It is
