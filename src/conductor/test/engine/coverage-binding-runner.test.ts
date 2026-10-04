@@ -226,6 +226,70 @@ async function runConflictReplay(
   return { projectDir, runner, provider, envelope };
 }
 
+async function runConflictFixture(options: {
+  stories: string;
+  plan: string;
+  coherence?: string;
+  adrs?: Record<string, string>;
+  branchAdrs?: Record<string, string>;
+  batchSize?: number;
+  events?: { emit(event: unknown): Promise<void> };
+}) {
+  const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-conflict-fixture-'));
+  const featureDesc = 'conflict-fixture';
+  const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+  await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(projectDir, '.docs', 'stories'), { recursive: true });
+  await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+  await writeFile(planPath, options.plan);
+  await writeFile(join(projectDir, '.docs', 'stories', 'story.md'), options.stories);
+  if (options.coherence !== undefined) {
+    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), options.coherence);
+  }
+  for (const [name, text] of Object.entries(options.adrs ?? {})) {
+    await writeFile(join(projectDir, '.docs', 'decisions', name), text);
+  }
+  const git = (...args: string[]) => promisify(execFile)('git', ['-C', projectDir, ...args]);
+  await git('init', '-q', '-b', 'main');
+  await git('add', '.');
+  await git('-c', 'user.email=t@example.com', '-c', 'user.name=T', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'base');
+  await git('remote', 'add', 'origin', '.');
+  await git('fetch', '-q', 'origin', 'main:refs/remotes/origin/main');
+  await git('checkout', '-q', '-b', 'feature');
+  for (const [name, text] of Object.entries(options.branchAdrs ?? {})) {
+    await writeFile(join(projectDir, '.docs', 'decisions', name), text);
+  }
+  if (options.branchAdrs !== undefined && Object.keys(options.branchAdrs).length > 0) {
+    await git('add', '.');
+    await git('-c', 'user.email=t@example.com', '-c', 'user.name=T', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'change ADR');
+  }
+  const provider: LLMProvider = {
+    lifecycleCapability: { synchronousSpawnPermit: true },
+    invoke: vi.fn(async (invokeOptions: InvokeOptions): Promise<InvokeResult> => {
+      const claims = promptClaims(invokeOptions);
+      const conflict = invokeOptions.prompt.includes('complete plan task table');
+      const amendment = invokeOptions.prompt.includes('DECIDE amendment');
+      return {
+        success: true,
+        exitCode: 0,
+        output: JSON.stringify({ verdicts: claims.map(({ id }) => conflict
+          ? { id, verdict: 'consistent' }
+          : amendment ? { id, verdict: 'carried', taskIds: ['1'] } : { id, verdict: 'asserts' }) }),
+      };
+    }),
+  };
+  const envelope = memoryEnvelopeFilesystem();
+  const runner = new DefaultStepRunner(provider, 'coverage-conflict-fixture', projectDir, {
+    featureDesc,
+    planPath,
+    config: { coverage_binding: { judge: { enabled: true, batch_size: options.batchSize ?? 8 } } },
+    coverageBindingFilesystem: envelope.filesystem,
+    events: options.events as never,
+  });
+  return { projectDir, runner, provider, envelope };
+}
+
 describe('coverage-binding runner batches', () => {
   it('judges a branch-added tier-S ADR amendment, excludes its new decision from conflict claims, and preserves D17 not-applicable', async () => {
     const fixture = await runTierSAdrAmendment({ enabled: true, amendmentVerdict: 'not-carried' });
@@ -706,6 +770,161 @@ describe('coverage-binding runner batches', () => {
       await expect(replay.runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
       expect(replay.provider.invoke).toHaveBeenCalledTimes(1);
     } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
+  });
+
+  it('persists an unparseable stories conflict claim as not-applicable without dispatching it', async () => {
+    const fixture = await runConflictFixture({
+      stories: '# Stories\n\nThis file has no authoritative criteria.\n',
+      plan: '**Stories:** .docs/stories/story.md\n\n### Task 1: Preserve the outcome\n**Done when:**\n- Preserve the outcome.\n',
+    });
+    try {
+      const result = await fixture.runner.run('coverage_binding', { complexity_tier: 'M' });
+      const conflictPrompts = (fixture.provider.invoke as ReturnType<typeof vi.fn>).mock.calls
+        .map(([options]) => options as InvokeOptions)
+        .filter((options) => options.prompt.includes('complete plan task table'));
+
+      expect(result).toMatchObject({ success: true });
+      expect(result).not.toHaveProperty('refusal');
+      expect(result).not.toHaveProperty('infrastructureFailure');
+      expect(conflictPrompts).toEqual([]);
+      expect(fixture.envelope.writes.at(-1)).toMatchObject({
+        status: 'done',
+        entries: [expect.objectContaining({ kind: 'conflict', claimId: 'stories#unparseable', verdict: 'not-applicable' })],
+      });
+    } finally { await rm(fixture.projectDir, { recursive: true, force: true }); }
+  });
+
+  it('persists conflict claims for a plan without Done when checks as not-applicable without dispatching them', async () => {
+    const fixture = await runConflictFixture({
+      stories: '# Stories\n\n## Story 1\n\n### Happy Path\n- Given an input, when coverage binding runs, then the outcome is preserved.\n',
+      plan: '**Stories:** .docs/stories/story.md\n\n### Task 1: Preserve the outcome\nImplementation prose only.\n',
+    });
+    try {
+      const result = await fixture.runner.run('coverage_binding', { complexity_tier: 'M' });
+      const conflictPrompts = (fixture.provider.invoke as ReturnType<typeof vi.fn>).mock.calls
+        .map(([options]) => options as InvokeOptions)
+        .filter((options) => options.prompt.includes('complete plan task table'));
+
+      expect(result).toMatchObject({ success: true });
+      expect(result).not.toHaveProperty('refusal');
+      expect(result).not.toHaveProperty('infrastructureFailure');
+      expect(conflictPrompts).toEqual([]);
+      expect(fixture.envelope.writes.at(-1)).toMatchObject({
+        status: 'done',
+        entries: [expect.objectContaining({ kind: 'conflict', claimId: 'stories#criterion-1', verdict: 'not-applicable' })],
+      });
+    } finally { await rm(fixture.projectDir, { recursive: true, force: true }); }
+  });
+
+  it('persists a cited ADR without a Decision section as a not-applicable conflict without dispatching it', async () => {
+    const fixture = await runConflictFixture({
+      stories: '# Stories\n\nThis file has no authoritative criteria.\n',
+      plan: '**Stories:** .docs/stories/story.md\n\nCites adr-no-decision.\n\n### Task 1: Preserve the outcome\n**Done when:**\n- Preserve the outcome.\n',
+      adrs: { 'adr-no-decision.md': '# ADR\n\n**Status:** APPROVED\n\nNo decision heading is present.\n' },
+    });
+    try {
+      const result = await fixture.runner.run('coverage_binding', { complexity_tier: 'M' });
+      const conflictPrompts = (fixture.provider.invoke as ReturnType<typeof vi.fn>).mock.calls
+        .map(([options]) => options as InvokeOptions)
+        .filter((options) => options.prompt.includes('complete plan task table'));
+
+      expect(result).toMatchObject({ success: true });
+      expect(result).not.toHaveProperty('refusal');
+      expect(result).not.toHaveProperty('infrastructureFailure');
+      expect(conflictPrompts).toEqual([]);
+      expect(fixture.envelope.writes.at(-1)).toMatchObject({
+        status: 'done',
+        entries: expect.arrayContaining([
+          expect.objectContaining({ kind: 'conflict', claimId: 'adr-no-decision#Decision', verdict: 'not-applicable' }),
+        ]),
+      });
+    } finally { await rm(fixture.projectDir, { recursive: true, force: true }); }
+  });
+
+  it('checkpoints accepted conflict batches before a malformed later conflict batch fails', async () => {
+    const fixture = await runConflictFixture({
+      stories: '# Stories\n\n## Story 1\n\n### Happy Path\n- Given the first input, when coverage binding runs, then the first outcome is preserved.\n\n## Story 2\n\n### Happy Path\n- Given the second input, when coverage binding runs, then the second outcome is preserved.\n',
+      plan: '**Stories:** .docs/stories/story.md\n\n### Task 1: Preserve outcomes\n**Done when:**\n- Preserve both outcomes.\n',
+      batchSize: 1,
+    });
+    try {
+      (fixture.provider.invoke as ReturnType<typeof vi.fn>)
+        .mockImplementationOnce(async (options: InvokeOptions) => ({
+          success: true, exitCode: 0,
+          output: JSON.stringify({ verdicts: promptClaims(options).map(({ id }) => ({ id, verdict: 'consistent' })) }),
+        }))
+        .mockImplementationOnce(async () => ({
+          success: true, exitCode: 0, output: JSON.stringify({ verdicts: [] }),
+        }));
+
+      const result = await fixture.runner.run('coverage_binding', { complexity_tier: 'M' });
+      const conflictCalls = (fixture.provider.invoke as ReturnType<typeof vi.fn>).mock.calls
+        .map(([options]) => options as InvokeOptions)
+        .filter((options) => options.prompt.includes('complete plan task table'));
+      const acceptedCheckpoint = fixture.envelope.writes.find(({ status, entries }) =>
+        status === 'partial' && entries.some((entry) => (entry as { kind?: string }).kind === 'conflict'));
+      const final = fixture.envelope.writes.at(-1);
+
+      expect(result).toMatchObject({ success: false, infrastructureFailure: expect.any(CoverageBindingPayloadError) });
+      expect(result).not.toHaveProperty('refusal');
+      expect(conflictCalls).toHaveLength(2);
+      expect(acceptedCheckpoint).toMatchObject({
+        status: 'partial',
+        entries: [expect.objectContaining({ kind: 'conflict', verdict: 'consistent' })],
+      });
+      expect(fixture.envelope.writes.some(({ status }) => status === 'done')).toBe(false);
+      expect(final).toMatchObject({
+        status: 'failed',
+        entries: [expect.objectContaining({ kind: 'conflict', verdict: 'consistent' })],
+      });
+      expect(final?.entries.filter((entry) => (entry as { kind?: string }).kind === 'conflict')).toHaveLength(1);
+    } finally { await rm(fixture.projectDir, { recursive: true, force: true }); }
+  });
+
+  it('does not reopen completed tasks when only conflict digests are absent from an invalidated envelope', async () => {
+    const events: unknown[] = [];
+    const replay = await runConflictReplay(false, true, { events: { emit: async (event) => { events.push(event); } } });
+    try {
+      const criterion = 'Story 1 happy: Given the plan is evaluated, when coverage binding runs, then the sealed outcome is preserved.';
+      const doneWhen = [['The sealed outcome is preserved.']];
+      await writeCompletedTaskStatus(replay.projectDir, ['1']);
+      await writeCoverageBindingEnvelope(replay.projectDir, {
+        version: 1, slug: 'previous', runId: 'previous-run', status: 'invalidated',
+        entries: [{ digest: claimDigest({ criterion, doneWhen }), criterion, taskIds: ['1'], doneWhen, verdict: 'asserts' }],
+      }, replay.envelope.filesystem);
+
+      await expect(replay.runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(JSON.parse(await readFile(join(replay.projectDir, '.pipeline', 'task-status.json'), 'utf8'))).toMatchObject({
+        tasks: [{ id: '1', status: 'completed' }],
+      });
+      expect(events.map((event) => (event as { type?: string }).type)).not.toContain('coverage_binding_task_reopened');
+    } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
+  });
+
+  it('keeps criterion, amendment, and conflict event vocabularies distinct in one judged run', async () => {
+    const events: unknown[] = [];
+    const criterion = 'Story 1 happy: Given the plan is evaluated, when coverage binding runs, then the outcome is preserved.';
+    const fixture = await runConflictFixture({
+      stories: '# Stories\n\n## Story 1\n\n### Happy Path\n- Given the plan is evaluated, when coverage binding runs, then the outcome is preserved.\n',
+      plan: '**Stories:** .docs/stories/story.md\n\nCites adr-vocabulary.\n\n### Task 1: Preserve the outcome\n**Done when:**\n- The outcome is preserved.\n',
+      coherence: `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | ${criterion} | 1 | covered | "The outcome is preserved." | diff-local |\n`,
+      adrs: { 'adr-vocabulary.md': '# ADR\n\n**Status:** APPROVED\n\n## Decision\n\n1. The original decision remains citable.\n' },
+      branchAdrs: { 'adr-vocabulary.md': '# ADR\n\n**Status:** APPROVED\n\n## Decision\n\n1. The original decision remains citable.\n\n> **Amended 2026-10-04 by #2750:**\n> The branch adds an obligation to preserve vocabulary.\n' },
+      events: { emit: async (event) => { events.push(event); } },
+    });
+    try {
+      await expect(fixture.runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      const coverage = events.filter((event) => (event as { type?: string }).type === 'coverage_binding_judged') as Array<{ verdict: string }>;
+      const amendments = events.filter((event) => (event as { type?: string }).type === 'coverage_binding_amendment_judged') as Array<{ verdict: string }>;
+      const conflicts = events.filter((event) => (event as { type?: string }).type === 'coverage_binding_conflict_judged') as Array<{ verdict: string }>;
+
+      expect(coverage).not.toEqual([]);
+      expect(amendments).not.toEqual([]);
+      expect(conflicts).not.toEqual([]);
+      expect(coverage.every(({ verdict }) => ['asserts', 'does-not-assert', 'not-applicable'].includes(verdict))).toBe(true);
+      expect(amendments.every(({ verdict }) => ['carried', 'not-carried', 'no-plan-obligation', 'unjudged'].includes(verdict))).toBe(true);
+      expect(conflicts.every(({ verdict }) => ['consistent', 'conflicts', 'not-applicable', 'unjudged'].includes(verdict))).toBe(true);
+    } finally { await rm(fixture.projectDir, { recursive: true, force: true }); }
   });
 
   it('emits one conflict judgement per claim without introducing a conflict-specific halt event', async () => {
