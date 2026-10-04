@@ -33,6 +33,7 @@ import { createGuardedGithubOperationRunner, makeProductionGh } from '../../src/
 import { makeProductionGit } from '../../src/engine/pr-labels.js';
 
 const originalHome = process.env.HOME;
+const originalUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
 describe('GitHub bot CLI entry points', () => {
   let root: string;
   beforeEach(async () => {
@@ -40,9 +41,9 @@ describe('GitHub bot CLI entry points', () => {
     await mkdir(join(root, 'home', '.ai-conductor'), { recursive: true });
     await writeFile(join(root, 'token'), 'bot-entry-token\n');
     await writeFile(join(root, 'home', '.ai-conductor', 'config.yml'), `spec_owner: pr-labels\ngithub_bot:\n  token_file: ${join(root, 'token')}\n`);
-    process.env.HOME = join(root, 'home'); delete process.env.AI_CONDUCTOR_NO_REAL_EXEC; boundary.calls.length = 0; vi.mocked(execFileCb).mockClear();
+    process.env.HOME = join(root, 'home'); delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR; delete process.env.AI_CONDUCTOR_NO_REAL_EXEC; boundary.calls.length = 0; vi.mocked(execFileCb).mockClear();
   });
-  afterEach(async () => { if (originalHome === undefined) delete process.env.HOME; else process.env.HOME = originalHome; await rm(root, { recursive: true, force: true }); });
+  afterEach(async () => { if (originalHome === undefined) delete process.env.HOME; else process.env.HOME = originalHome; if (originalUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR; else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = originalUserConfigDir; await rm(root, { recursive: true, force: true }); });
   it('dispatchGithubOperationCommand writes issue comments through the bot child and shares the user config with owner resolution', async () => {
     await expect(readMachineOwnerConfig()).resolves.toEqual({ spec_owner: 'pr-labels' });
     await expect(readGithubBotCredential()).resolves.toEqual({ kind: 'configured', tokenFile: join(root, 'token') });

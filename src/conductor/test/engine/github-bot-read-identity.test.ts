@@ -66,10 +66,11 @@ describe('bot configuration does not affect identity or @me intake reads', () =>
     await writeFile(tokenFile, `${botToken}\n`);
     await writeFile(join(home, '.ai-conductor', 'config.yml'), `github_bot:\n  token_file: ${tokenFile}\n`);
 
-    for (const key of ['AI_CONDUCTOR_NO_REAL_EXEC', 'GH_TOKEN', 'HOME']) {
+    for (const key of ['AI_CONDUCTOR_NO_REAL_EXEC', 'AI_CONDUCTOR_USER_CONFIG_DIR', 'GH_TOKEN', 'HOME']) {
       savedEnvironment.set(key, process.env[key]);
     }
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
     process.env.GH_TOKEN = operatorToken;
     process.env.HOME = home;
     processBoundary.calls.length = 0;

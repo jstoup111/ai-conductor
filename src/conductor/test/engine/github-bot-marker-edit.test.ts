@@ -25,6 +25,7 @@ import { upsertComment } from '../../src/engine/pr-labels.js';
 import { createGuardedGithubOperationRunner, makeProductionGh } from '../../src/engine/tracker-client.js';
 
 const originalHome = process.env.HOME;
+const originalUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
 describe('configured bot marker edit fallback', () => {
   let root: string;
   beforeEach(async () => {
@@ -32,9 +33,9 @@ describe('configured bot marker edit fallback', () => {
     await mkdir(join(root, 'home', '.ai-conductor'), { recursive: true });
     await writeFile(join(root, 'token'), 'bot-token\n');
     await writeFile(join(root, 'home', '.ai-conductor', 'config.yml'), `github_bot:\n  token_file: ${join(root, 'token')}\n`);
-    process.env.HOME = join(root, 'home'); delete process.env.AI_CONDUCTOR_NO_REAL_EXEC; boundary.calls.length = 0; vi.mocked(execFileCb).mockClear();
+    process.env.HOME = join(root, 'home'); delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR; delete process.env.AI_CONDUCTOR_NO_REAL_EXEC; boundary.calls.length = 0; vi.mocked(execFileCb).mockClear();
   });
-  afterEach(async () => { if (originalHome === undefined) delete process.env.HOME; else process.env.HOME = originalHome; await rm(root, { recursive: true, force: true }); });
+  afterEach(async () => { if (originalHome === undefined) delete process.env.HOME; else process.env.HOME = originalHome; if (originalUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR; else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = originalUserConfigDir; await rm(root, { recursive: true, force: true }); });
 
   it('retries a refused marker edit once as operator and never creates a second comment', async () => {
     const logs: string[] = [];

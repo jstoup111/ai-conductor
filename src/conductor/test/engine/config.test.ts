@@ -5,6 +5,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 const originalHome = process.env.HOME;
+const originalUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
 
 import {
   loadConfig,
@@ -50,6 +51,8 @@ describe('config', () => {
   afterEach(async () => {
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
+    if (originalUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+    else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = originalUserConfigDir;
     await rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -1744,6 +1747,7 @@ steps:
       const home = await mkdtemp(join(tmpdir(), 'config-user-'));
       try {
         process.env.HOME = home;
+        delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
         await mkdir(join(home, '.ai-conductor'), { recursive: true });
         await writeFile(
           join(home, '.ai-conductor', 'config.yml'),
@@ -1772,6 +1776,7 @@ steps:
       const home = await mkdtemp(join(tmpdir(), 'config-user-'));
       try {
         process.env.HOME = home;
+        delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
         await mkdir(join(home, '.ai-conductor'), { recursive: true });
         await writeFile(
           join(home, '.ai-conductor', 'config.yml'),

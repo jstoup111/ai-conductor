@@ -46,8 +46,9 @@ describe('bot identity read transport', () => {
     await mkdir(join(home, '.ai-conductor'), { recursive: true });
     await writeFile(join(root, 'bot-token'), 'bot-token\n');
     await writeFile(join(home, '.ai-conductor', 'config.yml'), `github_bot:\n  token_file: ${join(root, 'bot-token')}\n`);
-    for (const key of ['AI_CONDUCTOR_NO_REAL_EXEC', 'GH_TOKEN', 'HOME']) savedEnvironment.set(key, process.env[key]);
+    for (const key of ['AI_CONDUCTOR_NO_REAL_EXEC', 'AI_CONDUCTOR_USER_CONFIG_DIR', 'GH_TOKEN', 'HOME']) savedEnvironment.set(key, process.env[key]);
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
     process.env.GH_TOKEN = 'operator-token';
     process.env.HOME = home;
     boundary.calls.length = 0;

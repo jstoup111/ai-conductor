@@ -56,6 +56,7 @@ import type { HarnessConfig } from '../../src/types/index.js';
 const registeredProviderRoots = vi.hoisted(() => [] as PluginRegistry[]);
 const daemonResolvedConfigs = vi.hoisted(() => [] as HarnessConfig[]);
 const originalHome = process.env.HOME;
+const originalUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
 
 vi.mock('../../src/engine/plugin-loader.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/plugin-loader.js')>();
@@ -85,6 +86,8 @@ afterEach(async () => {
   vi.restoreAllMocks();
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+  else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = originalUserConfigDir;
   registeredProviderRoots.splice(0);
   daemonResolvedConfigs.splice(0);
   await Promise.all(tempDirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
@@ -100,6 +103,7 @@ async function tempDir(prefix: string): Promise<string> {
 async function makeUserHome(yaml?: string): Promise<string> {
   const home = await tempDir('daemon-967-home-');
   process.env.HOME = home;
+  delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
   if (yaml !== undefined) {
     await mkdir(join(home, '.ai-conductor'), { recursive: true });
     await writeFile(join(home, '.ai-conductor', 'config.yml'), yaml, 'utf8');

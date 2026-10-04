@@ -61,8 +61,9 @@ describe('GitHub bot token confinement', () => {
     await mkdir(join(root, 'homes'), { recursive: true });
     await mkdir(join(root, 'builds'), { recursive: true });
 
-    for (const key of ['AI_CONDUCTOR_NO_REAL_EXEC', 'GH_TOKEN', 'HOME']) savedEnvironment.set(key, process.env[key]);
+    for (const key of ['AI_CONDUCTOR_NO_REAL_EXEC', 'AI_CONDUCTOR_USER_CONFIG_DIR', 'GH_TOKEN', 'HOME']) savedEnvironment.set(key, process.env[key]);
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
     process.env.GH_TOKEN = 'operator-token';
     process.env.HOME = join(root, 'home');
     boundary.calls.length = 0;

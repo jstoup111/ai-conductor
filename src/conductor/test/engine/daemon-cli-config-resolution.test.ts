@@ -33,6 +33,7 @@ vi.mock('../../src/engine/daemon-log.js', async (importOriginal) => {
 
 const workDirs: string[] = [];
 let savedHome: string | undefined;
+let savedUserConfigDir: string | undefined;
 let savedSelfGuard: string | undefined;
 let savedSelfVersion: string | undefined;
 const originalConsoleWarn = console.warn;
@@ -45,6 +46,9 @@ afterEach(async () => {
   if (savedHome === undefined) delete process.env.HOME;
   else process.env.HOME = savedHome;
   savedHome = undefined;
+  if (savedUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+  else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = savedUserConfigDir;
+  savedUserConfigDir = undefined;
   if (savedSelfGuard === undefined) delete process.env.CONDUCT_ENGINE_SELF_GUARD;
   else process.env.CONDUCT_ENGINE_SELF_GUARD = savedSelfGuard;
   if (savedSelfVersion === undefined) delete process.env.CONDUCT_ENGINE_SELF_VERSION;
@@ -72,9 +76,11 @@ describe('runDaemonMode configuration resolution', () => {
       'utf8',
     );
     savedHome = process.env.HOME;
+    savedUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
     savedSelfGuard = process.env.CONDUCT_ENGINE_SELF_GUARD;
     savedSelfVersion = process.env.CONDUCT_ENGINE_SELF_VERSION;
     process.env.HOME = home;
+    delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
     vi.spyOn(process, 'once').mockImplementation((() => process) as typeof process.once);
     vi.spyOn(process, 'on').mockImplementation((() => process) as typeof process.on);
     const discover = vi.fn(async () => []);
