@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { DeferralKey } from '../../../src/engine/monitor/deferrals.js';
 import type { ProjectHalt } from '../../../src/engine/monitor/halt-inventory.js';
-import { runGuidedMonitorQueue } from '../../../src/engine/monitor/loop.js';
+import { runGuidedMonitorQueue, type HaltIssueReconciliationOutcome } from '../../../src/engine/monitor/loop.js';
 
 type GuidedMonitorLoopDeps = {
   deriveMembership: () => Promise<readonly ProjectHalt[]>;
@@ -18,8 +18,12 @@ type GuidedMonitorLoopDeps = {
   writeHaltMarker?: (halt: ProjectHalt, contents: Uint8Array) => Promise<void>;
   recordDeferral?: (key: DeferralKey) => Promise<void>;
   report?: (message: string) => void;
-  reconcileHaltIssues?: () => Promise<number>;
+  reconcileHaltIssues?: () => Promise<HaltIssueReconciliationOutcome>;
 };
+
+function reconciliation(exitCode = 0, recordedErrorCount = 0, capturedLines: readonly string[] = []): HaltIssueReconciliationOutcome {
+  return { exitCode, recordedErrorCount, capturedLines };
+}
 
 async function advanceAfterGuidedSession(deps: GuidedMonitorLoopDeps): Promise<void> {
   let stop!: () => void;
@@ -267,22 +271,32 @@ describe('Task 15 — deferring a skipped guided session', () => {
     const choice = deferred<string | undefined>();
     const readOperatorInput = vi.fn(() => choice.promise);
     const recordDeferral = vi.fn(async (_key: DeferralKey) => {});
+    const emit = vi.fn(async () => {});
     const running = runGuidedMonitorQueue({
       deriveMembership: async () => [current],
       launch: async () => ({ kind: 'exited', exitCode: 0 }),
       offer: vi.fn(),
       readOperatorInput,
       recordDeferral,
+      events: { emit },
       untilStop: stop.promise,
     });
 
     await vi.waitFor(() => expect(readOperatorInput).toHaveBeenCalledTimes(1));
     stop.resolve();
-    await running;
+    const result = await running;
     choice.resolve('skip');
     await Promise.resolve();
 
-    expect(recordDeferral).not.toHaveBeenCalled();
+    expect({ result, deferrals: recordDeferral.mock.calls, events: emit.mock.calls }).toEqual({
+      result: { active: false },
+      deferrals: [],
+      events: [
+        [{ type: 'monitor_item_offered', project: current.project, feature: current.slug }],
+        [{ type: 'monitor_session_opened', project: current.project, feature: current.slug }],
+        [{ type: 'monitor_session_ended', project: current.project, feature: current.slug }],
+      ],
+    });
   });
 });
 
@@ -549,7 +563,7 @@ describe('Task 17 — staying ready and stopping cleanly', () => {
 
 describe('Task 19 — halt-issue reconciliation', () => {
   it('starts the injected reconciliation on a monitoring cycle', async () => {
-    const reconcileHaltIssues = vi.fn(async () => 0);
+    const reconcileHaltIssues = vi.fn(async () => reconciliation());
 
     const result = await runGuidedMonitorQueue({
       deriveMembership: async () => [],
@@ -577,7 +591,7 @@ describe('Task 19 — halt-issue reconciliation', () => {
       },
       offer,
       report,
-      reconcileHaltIssues: async () => 1,
+      reconcileHaltIssues: async () => reconciliation(1),
     });
 
     await vi.waitFor(() => expect(report).toHaveBeenCalledWith('Halt-issue reconciliation exited with code 1.'));
@@ -652,7 +666,7 @@ describe('Task 19 — halt-issue reconciliation', () => {
 
   it('suppresses overlapping slow reconciliations while queue work remains available', async () => {
     const queued = halt('slow-reconciliation');
-    const slowReconciliation = deferred<number>();
+    const slowReconciliation = deferred<HaltIssueReconciliationOutcome>();
     let membership: readonly ProjectHalt[] = [queued];
     const offer = vi.fn();
     const reconcileHaltIssues = vi.fn(() => slowReconciliation.promise);
@@ -665,7 +679,7 @@ describe('Task 19 — halt-issue reconciliation', () => {
       offer,
       reconcileHaltIssues,
     });
-    slowReconciliation.resolve(0);
+    slowReconciliation.resolve(reconciliation());
     await Promise.resolve();
 
     expect({
@@ -682,7 +696,7 @@ describe('Task 19 — halt-issue reconciliation', () => {
   it('reports a repeated non-zero reconciliation exit once until a successful sweep resets it', async () => {
     let membership: readonly ProjectHalt[] = [halt('first'), halt('second'), halt('third')];
     const report = vi.fn();
-    const exitCodes = [1, 1, 0, 1];
+    const outcomes = [reconciliation(1), reconciliation(1), reconciliation(), reconciliation(1)];
 
     const result = await runGuidedMonitorQueue({
       deriveMembership: async () => membership,
@@ -691,11 +705,37 @@ describe('Task 19 — halt-issue reconciliation', () => {
       },
       offer: vi.fn(),
       report,
-      reconcileHaltIssues: async () => exitCodes.shift()!,
+      reconcileHaltIssues: async () => outcomes.shift()!,
     });
 
     await vi.waitFor(() => expect(report.mock.calls.filter(([message]) =>
       message === 'Halt-issue reconciliation exited with code 1.',
+    )).toHaveLength(2));
+    expect(result).toEqual({ active: true });
+  });
+
+  it('reports repeated exit-zero recorded errors once until a clean sweep resets the outage', async () => {
+    let membership: readonly ProjectHalt[] = [halt('first'), halt('second'), halt('third')];
+    const report = vi.fn();
+    const outcomes = [
+      reconciliation(0, 1, ['  #123: network unavailable']),
+      reconciliation(0, 1, ['  #123: network unavailable']),
+      reconciliation(),
+      reconciliation(0, 1, ['  #123: network unavailable']),
+    ];
+
+    const result = await runGuidedMonitorQueue({
+      deriveMembership: async () => membership,
+      launch: async (item) => {
+        membership = membership.filter((halt) => halt.slug !== item.slug);
+      },
+      offer: vi.fn(),
+      report,
+      reconcileHaltIssues: async () => outcomes.shift()!,
+    });
+
+    await vi.waitFor(() => expect(report.mock.calls.filter(([message]) =>
+      message === 'Halt-issue reconciliation recorded 1 error:   #123: network unavailable',
     )).toHaveLength(2));
     expect(result).toEqual({ active: true });
   });

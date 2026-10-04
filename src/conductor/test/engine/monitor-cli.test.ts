@@ -11,8 +11,15 @@ import {
 } from '../../src/engine/monitor-cli.js';
 import { guardDaemonSessionInvocation } from '../../src/execution/daemon-session.js';
 import type { ProjectHalt } from '../../src/engine/monitor/halt-inventory.js';
+import type { HaltIssueReconciliationOutcome } from '../../src/engine/monitor/loop.js';
 
 const argv = (...args: string[]) => ['node', 'conduct', ...args];
+
+const cleanReconciliation = (): HaltIssueReconciliationOutcome => ({
+  exitCode: 0,
+  recordedErrorCount: 0,
+  capturedLines: [],
+});
 
 function halt(): ProjectHalt {
   return {
@@ -102,7 +109,7 @@ describe('Task 20 — monitor pre-boot command', () => {
     const code = await dispatchMonitorCommand({ kind: 'run' }, '/projects/operator', {
       resolveProvider: async () => ({ provider: 'codex' }),
       deriveQueueMembership: membership as never,
-      reconcileHaltIssues: async () => 0,
+      reconcileHaltIssues: async () => cleanReconciliation(),
       createInterrupt: () => ({ untilStop: new Promise<void>(() => {}), dispose: vi.fn() }),
       print: (line) => output.push(line),
     });
@@ -148,7 +155,7 @@ describe('Task 20 — monitor pre-boot command', () => {
         '/projects/operator',
         {
           resolveProvider: async () => ({ provider: 'codex' }),
-          reconcileHaltIssues: async () => 0,
+          reconcileHaltIssues: async () => cleanReconciliation(),
           createInterrupt: () => ({ untilStop: new Promise<void>(() => {}), dispose: vi.fn() }),
           startEventSpine: (() => ({ events: { emit: async () => {} }, stop: vi.fn() })) as never,
         },
@@ -192,7 +199,7 @@ describe('Task 20 — monitor pre-boot command', () => {
       resolveProvider: async () => ({ provider: 'codex' }),
       runGuidedMonitorQueue: run as never,
       startEventSpine: startEventSpine as never,
-      reconcileHaltIssues: async () => 0,
+      reconcileHaltIssues: async () => cleanReconciliation(),
       createInterrupt: () => ({ untilStop: new Promise<void>(() => {}), dispose: vi.fn() }),
     });
 
@@ -221,7 +228,7 @@ describe('Task 20 — monitor pre-boot command', () => {
       snapshotHaltMarker: async () => identity,
       priorityResolver,
       runGuidedMonitorQueue: run as never,
-      reconcileHaltIssues: async () => 0,
+      reconcileHaltIssues: async () => cleanReconciliation(),
       createInterrupt: () => ({ untilStop: new Promise<void>(() => {}), dispose: vi.fn() }),
     });
 
@@ -236,5 +243,40 @@ describe('Task 20 — monitor pre-boot command', () => {
       monitorBeforeDaemon: index.indexOf("await import('./engine/monitor-cli.js')") < index.indexOf('detectDaemonCommand(process.argv)'),
       hasVerbGuard: index.includes("if (process.argv[2] === 'monitor')"),
     }).toEqual({ monitorBeforeDaemon: true, hasVerbGuard: true });
+  });
+
+  it('captures halt-issue sweep output as a structured reconciliation outcome', async () => {
+    let outcome!: HaltIssueReconciliationOutcome;
+    const run = vi.fn(async (deps: { reconcileHaltIssues: () => Promise<HaltIssueReconciliationOutcome> }) => {
+      outcome = await deps.reconcileHaltIssues();
+      return { active: false };
+    });
+    const dispatchHaltIssuesSweep = vi.fn(async (
+      _command: unknown,
+      _cwd: string,
+      options: { output?: { log(line: string): void; error(line: string): void } },
+    ) => {
+      options.output?.log('Processed 1 halt issue.');
+      options.output?.error('  #123: network unavailable');
+      return 0;
+    });
+
+    await dispatchMonitorCommand({ kind: 'run' }, '/projects/operator', {
+      resolveProvider: async () => ({ provider: 'codex' }),
+      runGuidedMonitorQueue: run as never,
+      haltIssuesRepository: async () => 'owner/repo',
+      dispatchHaltIssuesSweep: dispatchHaltIssuesSweep as never,
+      createInterrupt: () => ({ untilStop: new Promise<void>(() => {}), dispose: vi.fn() }),
+      startEventSpine: (() => ({ events: { emit: async () => {} }, stop: vi.fn() })) as never,
+    });
+
+    expect({ outcome, sweepCalls: dispatchHaltIssuesSweep.mock.calls.length }).toEqual({
+      outcome: {
+        exitCode: 0,
+        recordedErrorCount: 1,
+        capturedLines: ['Processed 1 halt issue.', '  #123: network unavailable'],
+      },
+      sweepCalls: 1,
+    });
   });
 });

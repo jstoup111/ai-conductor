@@ -16,6 +16,13 @@ type MonitorTransitionType = Extract<ConductorEvent, {
 
 type MonitorEventEmitter = Pick<ConductorEventEmitter, 'emit'>;
 
+/** Result returned by the monitor's halt-issue reconciliation adapter. */
+export interface HaltIssueReconciliationOutcome {
+  readonly exitCode: number;
+  readonly recordedErrorCount: number;
+  readonly capturedLines: readonly string[];
+}
+
 /** Seams owned by the foreground monitor's queue-driving loop. */
 export interface GuidedMonitorLoopDeps {
   readonly deriveMembership: () => Promise<readonly ProjectHalt[]>;
@@ -32,7 +39,7 @@ export interface GuidedMonitorLoopDeps {
   readonly recordDeferral?: (key: DeferralKey) => Promise<void>;
   readonly report?: (message: string) => void;
   /** Existing halt-issue bookkeeping, started once for each monitor pass. */
-  readonly reconcileHaltIssues?: () => Promise<number>;
+  readonly reconcileHaltIssues?: () => Promise<HaltIssueReconciliationOutcome>;
   /** Existing event spine for durable queue-transition telemetry. */
   readonly events?: MonitorEventEmitter;
   /** A composition root can end the loop after a terminal inventory result. */
@@ -54,6 +61,7 @@ function waitForMonitorPass(untilStop: Promise<void>): Promise<void> {
 interface HaltIssueReconciliationState {
   networkFailureReported: boolean;
   nonZeroExitReported: boolean;
+  recordedErrorsReported: boolean;
   inFlight: boolean;
 }
 
@@ -68,6 +76,18 @@ function reportHaltIssueReconciliationFailure(deps: GuidedMonitorLoopDeps, messa
 function isNetworkFailure(error: unknown): boolean {
   const detail = error instanceof Error ? error.message : String(error);
   return /\b(?:network|offline|fetch failed|ENOTFOUND|EAI_AGAIN|ECONN\w*|ETIMEDOUT)\b/i.test(detail);
+}
+
+function reportRecordedHaltIssueErrors(
+  deps: GuidedMonitorLoopDeps,
+  outcome: HaltIssueReconciliationOutcome,
+): void {
+  const count = outcome.recordedErrorCount;
+  const details = outcome.capturedLines.join('\n');
+  reportHaltIssueReconciliationFailure(
+    deps,
+    `Halt-issue reconciliation recorded ${count} error${count === 1 ? '' : 's'}${details ? `: ${details}` : '.'}`,
+  );
 }
 
 function startHaltIssueReconciliation(
@@ -89,13 +109,18 @@ function startHaltIssueReconciliation(
 
   try {
     void reconcile().then(
-      (exitCode) => {
-        if (exitCode === 0) {
+      (outcome) => {
+        if (outcome.exitCode === 0 && outcome.recordedErrorCount === 0) {
           state.networkFailureReported = false;
           state.nonZeroExitReported = false;
+          state.recordedErrorsReported = false;
+        } else if (outcome.recordedErrorCount > 0) {
+          if (state.recordedErrorsReported) return;
+          state.recordedErrorsReported = true;
+          reportRecordedHaltIssueErrors(deps, outcome);
         } else if (!state.nonZeroExitReported) {
           state.nonZeroExitReported = true;
-          reportHaltIssueReconciliationFailure(deps, `Halt-issue reconciliation exited with code ${exitCode}.`);
+          reportHaltIssueReconciliationFailure(deps, `Halt-issue reconciliation exited with code ${outcome.exitCode}.`);
         }
       },
       reportFailure,
@@ -187,6 +212,7 @@ async function finishGuidedSession(
     ]);
     if (settled.stopped) {
       aborted.abort();
+      await emitMonitorTransition(deps, 'monitor_session_ended', halt);
       return false;
     }
     if (settled.selected) await emitMonitorTransition(deps, 'monitor_item_deferred', halt);
@@ -236,6 +262,7 @@ export async function runGuidedMonitorQueue(
   const reconciliationState: HaltIssueReconciliationState = {
     networkFailureReported: false,
     nonZeroExitReported: false,
+    recordedErrorsReported: false,
     inFlight: false,
   };
   const untilStop = deps.untilStop;

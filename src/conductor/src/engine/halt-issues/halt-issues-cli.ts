@@ -29,6 +29,12 @@ export type HaltIssuesSweepCommand =
   | { kind: 'help' }
   | { kind: 'guide' };
 
+/** Output boundary for the sweep's direct CLI presentation. */
+export interface HaltIssuesSweepOutput {
+  log(message: string): void;
+  error(message: string): void;
+}
+
 const KNOWN_FLAGS = new Set(['--dry-run', '--repo-dir', '--monitor-log', '--ledger', '--gh-repo', '--help', '-h']);
 
 function defaultMonitorLogPath(): string {
@@ -140,9 +146,10 @@ const productionClock = { now: () => new Date() };
 export async function dispatchHaltIssuesSweep(
   cmd: HaltIssuesSweepCommand,
   cwd: string,
-  opts: { readonly events?: GithubOperationEventEmitter } = {},
+  opts: { readonly events?: GithubOperationEventEmitter; readonly output?: HaltIssuesSweepOutput } = {},
 ): Promise<number> {
   void cwd;
+  const output = opts.output ?? console;
 
   const helpText =
     'Usage: ai-conductor halt-issues sweep [options]\n\n' +
@@ -160,12 +167,12 @@ export async function dispatchHaltIssuesSweep(
     '  --ledger <path>       Path to ledger.json (default: ~/.ai-conductor/halt-issues/ledger.json)';
 
   if (cmd.kind === 'help') {
-    console.log(helpText);
+    output.log(helpText);
     return 0;
   }
 
   if (cmd.kind === 'guide') {
-    console.error(helpText);
+    output.error(helpText);
     return 1;
   }
 
@@ -190,7 +197,7 @@ export async function dispatchHaltIssuesSweep(
       clock: productionClock,
     });
 
-    console.log(result.summary);
+    output.log(result.summary);
 
     if ((cmd.dryRun || result.errors > 0) && result.parsed > 0) {
       if (!cmd.dryRun) {
@@ -200,7 +207,7 @@ export async function dispatchHaltIssuesSweep(
           for (const [issue, entry] of Object.entries(ledgerSchema.entries)) {
             const e = entry as { lastError?: string };
             if (e.lastError) {
-              console.error(`  #${issue}: ${e.lastError}`);
+              output.error(`  #${issue}: ${e.lastError}`);
             }
           }
         } catch {
@@ -208,7 +215,7 @@ export async function dispatchHaltIssuesSweep(
         }
       } else {
         for (const entry of result.entries || []) {
-          console.log(`  #${entry.issue}: ${entry.slug}`);
+          output.log(`  #${entry.issue}: ${entry.slug}`);
         }
       }
     }
@@ -216,7 +223,7 @@ export async function dispatchHaltIssuesSweep(
     return result.exitCode;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`halt-issues sweep failed: ${msg}`);
+    output.error(`halt-issues sweep failed: ${msg}`);
     return 1;
   }
 }

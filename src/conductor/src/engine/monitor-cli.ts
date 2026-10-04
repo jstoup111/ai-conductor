@@ -6,7 +6,7 @@ import { makeProductionGh } from './tracker-client.js';
 import { startOperatorEventSpine } from './event-persister.js';
 import { dispatchHaltIssuesSweep } from './halt-issues/halt-issues-cli.js';
 import { deriveQueueMembership } from './monitor/queue.js';
-import { runGuidedMonitorQueue } from './monitor/loop.js';
+import { runGuidedMonitorQueue, type HaltIssueReconciliationOutcome } from './monitor/loop.js';
 import { openGuidedSession, displayHaltClassification } from './monitor/session.js';
 import { readDeferrals, isDeferred } from './monitor/deferrals.js';
 import { orderMonitorQueue, type MonitorPriorityResolver } from './monitor/ordering.js';
@@ -52,7 +52,9 @@ export interface MonitorCliDeps {
   readonly printError?: (message: string) => void;
   readonly createInterrupt?: () => { readonly untilStop: Promise<void>; readonly dispose: () => void };
   readonly priorityResolver?: MonitorPriorityResolver;
-  readonly reconcileHaltIssues?: () => Promise<number>;
+  readonly reconcileHaltIssues?: () => Promise<HaltIssueReconciliationOutcome>;
+  readonly haltIssuesRepository?: typeof haltIssuesRepository;
+  readonly dispatchHaltIssuesSweep?: typeof dispatchHaltIssuesSweep;
   readonly startEventSpine?: typeof startOperatorEventSpine;
   /** Filesystem seams keep the composed ordering boundary deterministic in tests. */
   readonly readDeferrals?: typeof readDeferrals;
@@ -124,17 +126,29 @@ export async function dispatchMonitorCommand(
   );
   const readStoredDeferrals = deps.readDeferrals ?? readDeferrals;
   const snapshot = deps.snapshotHaltMarker ?? snapshotHaltMarker;
-  const reconcileHaltIssues = deps.reconcileHaltIssues ?? (async () => {
-    const ghRepo = await haltIssuesRepository(projectRoot);
-    if (ghRepo === undefined) return 0;
-    return dispatchHaltIssuesSweep({
+  const reconcileHaltIssues = deps.reconcileHaltIssues ?? (async (): Promise<HaltIssueReconciliationOutcome> => {
+    const ghRepo = await (deps.haltIssuesRepository ?? haltIssuesRepository)(projectRoot);
+    if (ghRepo === undefined) return { exitCode: 0, recordedErrorCount: 0, capturedLines: [] };
+    const capturedLines: string[] = [];
+    let recordedErrorCount = 0;
+    const exitCode = await (deps.dispatchHaltIssuesSweep ?? dispatchHaltIssuesSweep)({
       kind: 'sweep',
       dryRun: false,
       repoDir: projectRoot,
       ghRepo,
       monitorLog: join(homedir(), '.ai-conductor', 'halt-monitor', 'monitor.log'),
       ledger: join(homedir(), '.ai-conductor', 'halt-issues', 'ledger.json'),
-    }, projectRoot, { events: spine.events });
+    }, projectRoot, {
+      events: spine.events,
+      output: {
+        log: (line) => capturedLines.push(line),
+        error: (line) => {
+          recordedErrorCount += 1;
+          capturedLines.push(line);
+        },
+      },
+    });
+    return { exitCode, recordedErrorCount, capturedLines };
   });
   let inventoryCode = 0;
   let terminalInventory = false;
