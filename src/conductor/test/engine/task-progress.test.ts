@@ -732,7 +732,7 @@ describe('task-progress', () => {
       return status.tasks.find((task) => task.id === id) ?? {};
     }
 
-    it('records all supplied Done when evidence and completes the task', async () => {
+    it('closes an untagged check with free-text evidence as reported', async () => {
       await prepareTaskClose(`### Task 1: evidence required
 
 **Done when:**
@@ -756,6 +756,95 @@ describe('task-progress', () => {
           { check: 'second observable outcome', evidence: 'proved second', source: 'reported' },
           { check: 'third observable outcome', evidence: 'proved third', source: 'reported' },
         ],
+      });
+    });
+
+    it('closes a mixed task with verified tagged evidence and reported untagged evidence', async () => {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(
+        join(dir, 'test', 'mixed-close.test.ts'),
+        '// Covers: task:1\n\nit(\'closes the tagged outcome\', () => {});\n',
+      );
+      await execa('git', ['add', 'test/mixed-close.test.ts'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed tagged test'], { cwd: dir });
+      await prepareTaskClose(`### Task 1: mixed evidence
+
+**Done when:**
+- [test] tagged observable outcome
+- untagged configuration outcome`);
+
+      const command = detectTaskCommand([
+        'node', 'conduct', 'task', 'done', '1',
+        '--done-when', '1=test:test/mixed-close.test.ts::closes the tagged outcome',
+        '--done-when', '2=configuration was applied',
+      ]);
+
+      expect(command).not.toBeNull();
+      expect(await dispatchTaskCommand(command!, dir)).toBe(0);
+      expect(await taskRow()).toMatchObject({
+        status: 'completed',
+        doneWhen: [
+          {
+            check: '[test] tagged observable outcome',
+            evidence: 'test:test/mixed-close.test.ts::closes the tagged outcome',
+            source: 'verified',
+          },
+          {
+            check: 'untagged configuration outcome',
+            evidence: 'configuration was applied',
+            source: 'reported',
+          },
+        ],
+      });
+    });
+
+    it('closes every task in a tag-free plan with the same free-text evidence', async () => {
+      await prepareTaskClose(`### Task 1: first legacy-compatible close
+
+**Done when:**
+- first untagged outcome
+
+### Task 2: second legacy-compatible close
+
+**Done when:**
+- second untagged outcome`);
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'in_progress' },
+            { id: '2', status: 'pending' },
+          ],
+        }),
+      );
+      for (const id of ['1', '2']) {
+        if (id === '2') expect(await runTaskStart(dir, id)).toBe(0);
+        const command = detectTaskCommand([
+          'node', 'conduct', 'task', 'done', id,
+          '--done-when', '1=the same free-text evidence',
+        ]);
+        expect(command).not.toBeNull();
+        expect(await dispatchTaskCommand(command!, dir)).toBe(0);
+      }
+
+      expect(await taskRow('1')).toMatchObject({
+        status: 'completed',
+        doneWhen: [{
+          check: 'first untagged outcome',
+          evidence: 'the same free-text evidence',
+          source: 'reported',
+        }],
+      });
+      expect(await taskRow('2')).toMatchObject({
+        status: 'completed',
+        doneWhen: [{
+          check: 'second untagged outcome',
+          evidence: 'the same free-text evidence',
+          source: 'reported',
+        }],
       });
     });
 
