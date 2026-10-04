@@ -1178,6 +1178,37 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
   });
 
+  it('attaches blocked consistency to a full-coverage escalation without writing a synthetic stop', async () => {
+    const root = await projectRoot();
+    const [firstSource, secondSource] = mixedSources.map(buildReviewAdjudicationSourceId);
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [
+        { sourceId: firstSource, outcome: 'escalate', caseRef: 'full-stop' },
+        { sourceId: secondSource, outcome: 'escalate', caseRef: 'full-stop' },
+      ],
+      cases: [{
+        caseRef: 'full-stop', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'Architecture must decide both sources.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: { verdict: 'blocked', sourceIds: [firstSource, secondSource], caseRefs: ['full-stop'], rationale: 'The two sources remain inconsistent.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: mixedAggregate, generateId: () => 'decision-stop-full-coverage',
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'halt' });
+    const persisted = new RemediationCaseStore(root, feature);
+    await expect(persisted.read()).resolves.toMatchObject({
+      ok: true,
+      state: { cases: [expect.objectContaining({
+        id: 'decision-stop-full-coverage', consistencyStop: expect.objectContaining({ sourceIds: [firstSource, secondSource] }),
+        sources: [expect.objectContaining({ sourceId: firstSource }), expect.objectContaining({ sourceId: secondSource })],
+      })] },
+    });
+  });
+
   it('replaces a bound escalation owner with a distinct decision-stop identity', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
