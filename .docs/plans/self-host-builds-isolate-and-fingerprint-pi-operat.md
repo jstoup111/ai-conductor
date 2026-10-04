@@ -261,12 +261,19 @@ Pi gains the `selfHost` capability. A Pi self-host candidate runs in a throwaway
 - provider-id-literals test: the new check reports a finding for in-test fixtures containing `provider.homeVariable === 'CLAUDE_CONFIG_DIR'`, `'CODEX_HOME' !== provider.homeVariable` and `provider.environmentPrefix === 'CLAUDE_'`
 - provider-id-literals test: the `homeVariable`/`environmentPrefix` string-literal rule scans every production `.ts` file under `src/conductor/src` except `execution/provider-catalog.ts` and the provider adapter modules (`execution/claude-provider.ts`, `execution/codex-provider.ts`, `execution/pi-provider.ts`), and reports zero findings
 - `engine/self-host/sandbox-build-env.ts` selects its sandbox provider by `selfHostShape.isolation === 'claude-config-sandbox'`, with no `homeVariable` comparison
+- provider-id-literals test: the complete structural test file passes with zero production provider-literal findings, including `execution/pi-self-host-auth.ts` and `engine/self-host/live-boundary.ts`, without weakening existing rules or adding adapter exemptions
+- pi-self-host-auth test: existing success, refusal, timeout and credential non-disclosure checks pass with catalog-derived provider identity and unchanged rendered diagnostics
+- live-boundary test: existing Claude, Codex and Pi volatile-path and protected-state checks pass with catalog-derived table keys and the exhaustive table type retained
 
 > **Amended 2026-10-04 by #1887 (coverage_binding refusal):** Story 4's criterion covers all production source outside the catalog and provider adapters and both `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. The `homeVariable`/`environmentPrefix` literal rule therefore scans that whole surface, not only the three modules in Step 1; the `CLAUDE_PROVIDER`/`CODEX_PROVIDER` constant rule keeps Step 1's three-module scope. The wider scan reaches `sandboxProvider()` in `engine/self-host/sandbox-build-env.ts`, which finds the claude descriptor by `homeVariable === 'CLAUDE_CONFIG_DIR'`; this task rewrites that lookup to read the catalog's `selfHostShape` (Task 1).
 
-**Files:** src/conductor/test/engine/provider-id-literals.test.ts; src/conductor/src/engine/self-host/sandbox-build-env.ts
+> **Amended 2026-10-04 by #1887 (operator-approved plan-gap recovery):** Task 11 also owns the feature-introduced provider-literal cleanup in `execution/pi-self-host-auth.ts` (Tasks 3 and 4) and `engine/self-host/live-boundary.ts` (Task 6). The structural suite reports violations there, but the original task scope did not authorize their repair. Retain every existing structural rule, fixture and Done when check; do not add adapter exemptions or reduce the scanned surface to obtain GREEN. In the Pi auth helper, derive the provider id and display name from the existing catalog (`PI_PROVIDER` and its descriptor), replacing literal provider identification and diagnostic text while preserving the rendered messages, refusal classification, credential handling and redaction behavior. In the volatile table, use computed keys derived from the existing catalog provider constants, preserving its exhaustive `Readonly<Record<SelfHostProviderId, readonly string[]>>` type and all three providers' existing arrays. This is catalog-conformance cleanup, not new auth or fingerprint behavior.
+>
+> Execution order: preserve and finish the existing task-11 structural-test and sandbox-selector edits, establish the scoped structural failure, apply the two production cleanups above, then run the scoped union of `provider-id-literals.test.ts`, `pi-self-host-auth.test.ts` and `live-boundary.test.ts` through `ai-conductor scoped-run`. Do not reset completed task evidence or change accepted stories.
 
-**Dependencies:** Tasks 1, 2, 6, 7, 8
+**Files:** src/conductor/test/engine/provider-id-literals.test.ts; src/conductor/src/engine/self-host/sandbox-build-env.ts; src/conductor/src/execution/pi-self-host-auth.ts; src/conductor/src/engine/self-host/live-boundary.ts
+
+**Dependencies:** Tasks 1, 2, 3, 4, 6, 7, 8
 
 ## Task Dependency Graph
 
@@ -277,7 +284,7 @@ Task 1 ──┬─> Task 2 ──┐
 Task 3 ──┼─> Task 4 ──┼──────────┐   │
          └─> Task 5 ──┴─> Task 7 ┼─> Task 9
                           Task 7 ──> Task 8
-Tasks 2, 6, 7, 8 ──> Task 11
+Tasks 1, 2, 3, 4, 6, 7, 8 ──> Task 11
 ```
 
 ## Integration Points
