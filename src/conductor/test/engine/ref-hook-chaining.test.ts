@@ -39,7 +39,9 @@ describe('ref hook chaining', () => {
   it('forwards allowed push arguments and stdin exactly once', async () => {
     const f = await fixture(); const log = join(f.dir, 'push.log'); await repositoryHook(f, 'pre-push', log);
     expect((await f.git(f.worktree, 'push', 'origin', 'HEAD:allowed')).exitCode).toBe(0);
-    const contents = await readFile(log, 'utf8'); expect(contents).toContain('origin'); expect(contents).toContain('refs/heads/allowed');
+    const localSha = (await f.git(f.worktree, 'rev-parse', 'HEAD')).stdout;
+    expect((await f.git(f.bare, 'rev-parse', 'refs/heads/allowed')).stdout).toBe(localSha);
+    expect(await readFile(log, 'utf8')).toBe(`origin ${f.bare}\nHEAD ${localSha.trim()} refs/heads/allowed ${'0'.repeat(40)}\n`);
   });
 
   it('forwards an allowed prepared branch transaction', async () => {
