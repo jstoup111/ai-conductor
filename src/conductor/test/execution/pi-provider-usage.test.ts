@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:6
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:8
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -70,6 +70,22 @@ function replaceTerminalCost(stdout: string, current: string, replacement: strin
   )).join('\n');
 }
 
+function rewriteAssistantMessages(
+  stdout: string,
+  rewrite: (message: Record<string, unknown>, turn: number) => void,
+): string {
+  let turn = 0;
+  return stdout.split('\n').map((line) => {
+    if (!line.trim()) return line;
+    const event = JSON.parse(line) as { type?: unknown; message?: Record<string, unknown> };
+    if (event.type === 'message_end' && event.message?.role === 'assistant') {
+      rewrite(event.message, turn);
+      turn += 1;
+    }
+    return JSON.stringify(event);
+  }).join('\n');
+}
+
 async function providerAttemptFor(stdout: string, exitCode = 0): Promise<{
   readonly result: Awaited<ReturnType<DefaultStepRunner['run']>>;
   readonly event: ProviderAttemptEvent;
@@ -116,6 +132,67 @@ describe('PiProvider usage', () => {
     expect(result.tokenUsage).toMatchObject({ costSource: 'provider' });
     expect(result.tokenUsage?.costUsd).toBeCloseTo(0.0035, 12);
     expect(classifyMetering(result.tokenUsage)).toBe('fully-metered');
+  });
+
+  it('attributes worked-stream usage to its last valid assistant model', async () => {
+    const stdout = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result.tokenUsage?.attributedModel).toBe('openai/gpt-5.6-luna');
+  });
+
+  it('attributes and prices zero-cost usage with each message response model', async () => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const stdout = rewriteAssistantMessages(workedStream, (message) => {
+      message.responseModel = 'gpt-5.6-terra';
+      (message.usage as { cost?: { total?: unknown } }).cost = { total: 0 };
+    });
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result.tokenUsage).toMatchObject({ attributedModel: 'openai/gpt-5.6-terra', costSource: 'rate-card' });
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.001445, 12);
+  });
+
+  it('attributes mixed-model usage to the last assistant model while pricing each turn by its own model', async () => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const stdout = rewriteAssistantMessages(workedStream, (message, turn) => {
+      if (turn === 1) message.responseModel = 'gpt-5.6-terra';
+      (message.usage as { cost?: { total?: unknown } }).cost = { total: 0 };
+    });
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result.tokenUsage).toMatchObject({ attributedModel: 'openai/gpt-5.6-terra', costSource: 'rate-card' });
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.0006305, 12);
+  });
+
+  it.each([
+    ['a missing provider', (message: Record<string, unknown>) => { delete message.provider; }],
+    ['a missing model', (message: Record<string, unknown>) => { delete message.model; }],
+    ['a numeric provider', (message: Record<string, unknown>) => { message.provider = 42; }],
+    ['a numeric model', (message: Record<string, unknown>) => { message.model = 42; }],
+  ])('does not attribute or price a second turn with %s', async (_name, invalidate) => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const stdout = rewriteAssistantMessages(workedStream, (message, turn) => {
+      (message.usage as { cost?: { total?: unknown } }).cost = { total: 0 };
+      if (turn === 1) invalidate(message);
+    });
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result.tokenUsage).not.toHaveProperty('costUsd');
+    expect(classifyMetering(result.tokenUsage)).toBe('cost-unmetered');
+    expect(result.tokenUsage?.attributedModel).toBe('openai/gpt-5.6-luna');
   });
 
   it.each([

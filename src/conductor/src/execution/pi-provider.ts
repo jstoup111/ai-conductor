@@ -160,6 +160,7 @@ type PiJsonEvent = {
   result?: { details?: unknown };
   message?: {
     role?: unknown;
+    provider?: unknown;
     model?: unknown;
     responseModel?: unknown;
     content?: unknown;
@@ -239,6 +240,7 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
   let hasTokenBearingMessage = false;
   let allTokenBearingMessagesPriced = true;
   let allTokenBearingMessagesRateCardPriced = true;
+  let attributedModel: string | undefined;
 
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -280,14 +282,21 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
               : typeof event.message.model === 'string'
                 ? event.message.model
                 : undefined;
+            const provider = typeof event.message.provider === 'string'
+              ? event.message.provider
+              : undefined;
+            const validMessageModel = provider !== undefined && model !== undefined;
+            if (event.message.role === 'assistant' && validMessageModel) {
+              attributedModel = `${provider}/${model}`;
+            }
             const messageUsage: TokenUsage = {
               input,
               output: outputTokens,
               ...(typeof cacheRead === 'number' && Number.isFinite(cacheRead) ? { cacheRead } : {}),
               ...(typeof cacheWrite === 'number' && Number.isFinite(cacheWrite) ? { cacheCreation: cacheWrite } : {}),
             };
-            const priced = event.message.role === 'assistant'
-              ? applyRateCard(messageUsage, model === undefined ? undefined : barePiModel(model), rateCard)
+            const priced = event.message.role === 'assistant' && validMessageModel
+              ? applyRateCard(messageUsage, barePiModel(model), rateCard)
               : undefined;
             if (priced?.costSource === 'rate-card' && priced.costUsd !== undefined) {
               rateCardCostUsd += priced.costUsd;
@@ -323,6 +332,7 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
     tokenUsage = {
       ...tokenUsage,
       numTurns: assistantTurns,
+      ...(attributedModel === undefined ? {} : { attributedModel }),
       ...(hasTokenBearingMessage && allTokenBearingMessagesPriced
         ? { costUsd: providerCostUsd, costSource: 'provider' as const }
         : hasTokenBearingMessage && allTokenBearingMessagesRateCardPriced
