@@ -4718,15 +4718,19 @@ export class DefaultStepRunner implements StepRunner {
         } else {
           // Amendments inherited from the default branch belong to the features
           // that landed them; only blocks this branch added are obligations.
-          const originRef = await resolveOriginRef(this.projectDir).catch(() => null);
-          if (originRef === null) throw new Error('could not resolve the origin reference for DECIDE amendment inputs');
-          const mergeBase = await this.gitRunner(['merge-base', originRef, 'HEAD']);
-          const amendmentBase = mergeBase.exitCode === 0 && mergeBase.stdout.trim()
-            ? mergeBase.stdout.trim()
-            : (() => { throw new Error(`could not resolve merge base for DECIDE amendment inputs: ${mergeBase.stderr || mergeBase.stdout || originRef}`); })();
-          const decideArtifacts = (await Promise.all([...resolvedDecideSet.paths]
+          const amendmentPaths = [...resolvedDecideSet.paths]
             .filter((path) => path.startsWith('.docs/specs/') || /^\.docs\/decisions\/architecture-review-/.test(path) ||
-              /^\.docs\/decisions\/adr-/.test(path))
+              /^\.docs\/decisions\/adr-/.test(path));
+          if (amendmentPaths.length === 0) {
+            amendmentClaims = [];
+          } else {
+            const originRef = await resolveOriginRef(this.projectDir).catch(() => null);
+            if (originRef === null) throw new Error('could not resolve the origin reference for DECIDE amendment inputs');
+            const mergeBase = await this.gitRunner(['merge-base', originRef, 'HEAD']);
+            const amendmentBase = mergeBase.exitCode === 0 && mergeBase.stdout.trim()
+              ? mergeBase.stdout.trim()
+              : (() => { throw new Error(`could not resolve merge base for DECIDE amendment inputs: ${mergeBase.stderr || mergeBase.stdout || originRef}`); })();
+            const decideArtifacts = (await Promise.all(amendmentPaths
             .map(async (path) => {
               let text: string;
               try {
@@ -4751,8 +4755,9 @@ export class DefaultStepRunner implements StepRunner {
                 text,
                 baseText,
               };
-            }))).flatMap((artifact) => artifact === undefined ? [] : [artifact]);
-          amendmentClaims = assembleAmendmentClaims({ planText, decideArtifacts });
+              }))).flatMap((artifact) => artifact === undefined ? [] : [artifact]);
+            amendmentClaims = assembleAmendmentClaims({ planText, decideArtifacts });
+          }
         }
       } catch (error) {
         const infrastructureFailure = new CoverageBindingPayloadError(

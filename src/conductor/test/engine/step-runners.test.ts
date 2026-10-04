@@ -143,7 +143,15 @@ function coverageBindingBatchOutput(options: InvokeOptions, verdict: 'asserts' |
   });
 }
 
+async function initializeAmendmentGitFixture(projectDir: string): Promise<void> {
+  await execa('git', ['init', '-q', '-b', 'main'], { cwd: projectDir });
+  await execa('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-q', '-m', 'base'], { cwd: projectDir });
+  await execa('git', ['remote', 'add', 'origin', '.'], { cwd: projectDir });
+  await execa('git', ['fetch', '-q', 'origin', 'main:refs/remotes/origin/main'], { cwd: projectDir });
+}
+
 async function writeAmendmentCoverageInputs(projectDir: string, featureDesc: string): Promise<string> {
+  await initializeAmendmentGitFixture(projectDir);
   const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
   await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
   await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
@@ -164,6 +172,7 @@ function criterionCoherence(criterion = 'The service writes the audit record.'):
 }
 
 async function writeReopenCoverageInputs(projectDir: string, featureDesc: string, amendment: boolean): Promise<string> {
+  if (amendment) await initializeAmendmentGitFixture(projectDir);
   const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
   await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
   await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
@@ -468,6 +477,7 @@ describe('DefaultStepRunner', () => {
 
   it('proceeds to judged claims when every DECIDE-set ADR decision has an obligation row', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-adr-obligations-pass-'));
+    await initializeAmendmentGitFixture(projectDir);
     const featureDesc = 'coverage-binding-adr-obligations-pass';
     const adrId = 'adr-coverage-binding-obligations';
     const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
@@ -577,6 +587,7 @@ describe('DefaultStepRunner', () => {
 
   it('tolerates the ADR layer at tier S without reading a cited ADR', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-tier-s-obligations-'));
+    await initializeAmendmentGitFixture(projectDir);
     const featureDesc = 'coverage-binding-tier-s-obligations';
     const adrId = 'adr-tier-s-unreadable';
     const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
@@ -605,6 +616,7 @@ describe('DefaultStepRunner', () => {
 
   it('tolerates a cited ADR with no citable decision', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-uncitable-adr-'));
+    await initializeAmendmentGitFixture(projectDir);
     const featureDesc = 'coverage-binding-uncitable-adr';
     const adrId = 'adr-uncitable';
     const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
