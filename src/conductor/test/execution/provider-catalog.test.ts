@@ -56,13 +56,12 @@ describe('built-in provider catalog', () => {
     expect(rateCardModelIds()).not.toContain('');
   });
 
-  it('declares Pi cost self-reporting while retaining its unsupported capabilities', () => {
+  it('declares Pi cost self-reporting and its remaining unsupported capabilities', () => {
     const pi = BUILT_IN_PROVIDERS.find((provider) => provider.id === 'pi')!;
 
     expect({
       costSelfReporting: supportsProviderCapability(pi, 'costSelfReporting'),
       unsupported: [
-        'selfHost',
         'reviewPolicyCatalog',
         'writeFence',
         'readiness',
@@ -75,14 +74,12 @@ describe('built-in provider catalog', () => {
     }).toEqual({
       costSelfReporting: true,
       unsupported: [
-        ['selfHost', false],
         ['reviewPolicyCatalog', false],
         ['writeFence', false],
         ['readiness', false],
         ['interactiveLaunch', false],
       ],
       capabilityOwners: {
-        selfHost: '#1887',
         interactiveLaunch: '#1007',
         readOnlyReview: '#1886',
         reviewPolicyCatalog: '#2852',
