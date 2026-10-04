@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.6.0] - 2026-10-03
+## [1.6.0] - 2026-10-04
 
 ### Added
 
@@ -39,6 +39,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators can opt Pi dispatches into project-local .pi files with llm_providers.pi.trust_project_files, which stays off by default. ([implementation PR #2896](https://github.com/jstoup111/ai-conductor/pull/2896)).
 - Operators review non-clean as-built architecture verdicts before an interactive run proceeds. ([implementation PR #2939](https://github.com/jstoup111/ai-conductor/pull/2939)).
 - Operators clear halted features through an audited command that records authorization before resuming dispatch. ([implementation PR #2951](https://github.com/jstoup111/ai-conductor/pull/2951)).
+- Operators receive a guided monitor that queues halted features and opens resolution sessions. ([implementation PR #2818](https://github.com/jstoup111/ai-conductor/pull/2818)).
+- Users see candidate file paths when overlap scanning finds no overlaps. ([implementation PR #2978](https://github.com/jstoup111/ai-conductor/pull/2978)).
 
 ### Changed
 
