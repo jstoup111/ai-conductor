@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:5
+// Covers: task:1, task:2
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   detectTaskCommand,
@@ -676,14 +676,17 @@ describe('runTaskDone', () => {
       });
     });
 
-    it('closes a tagged check as unverified with its per-check reason and no HALT', async () => {
+    // Covers: task:5
+    it('closes task 5 check 2 as unverified with its per-check reason and no HALT', async () => {
       await prepareTaggedTask({
-        testText: '// Covers: task:3\nit(\'closes the tagged task\', () => {});\n',
+        check: '[test] first committed outcome\n- [test] second committed outcome',
+        testText: '// Covers: task:3\nit(\'proves the first committed outcome\', () => {});\n',
       });
 
       const command = detectTaskCommand([
         'node', 'conduct', 'task', 'done', '3',
-        '--unverified', '1=the integration environment is unavailable',
+        '--done-when', '1=test:test/close.test.ts::proves the first committed outcome',
+        '--unverified', '2=the integration environment is unavailable',
       ]);
 
       expect(command).not.toBeNull();
@@ -691,15 +694,19 @@ describe('runTaskDone', () => {
       const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
       expect(status.tasks[0]).toMatchObject({
         status: 'completed',
-        doneWhen: [{
-          source: 'unverified',
-          reason: 'the integration environment is unavailable',
-        }],
+        doneWhen: [
+          { source: 'verified' },
+          {
+            source: 'unverified',
+            reason: 'the integration environment is unavailable',
+          },
+        ],
       });
       await expect(fsPromises.access(join(dir, '.pipeline', 'HALT'))).rejects.toThrow();
     });
 
-    it('refuses an empty unverified reason for the named tagged check', async () => {
+    // Covers: task:5
+    it('refuses an empty unverified reason for task 5 check 2', async () => {
       await prepareTaggedTask({
         check: '[test] first committed outcome\n- [test] second committed outcome',
         testText: '// Covers: task:3\nit(\'proves the first committed outcome\', () => {});\n',
@@ -760,6 +767,7 @@ describe('runTaskDone', () => {
       expect(status.tasks[0].doneWhen[0]).toMatchObject({ source: 'verified' });
     });
 
+    // Covers: task:5
     it.each([
       ['free text', 'a generic success sentence', 'not-a-test-reference'],
       ['absent path', 'test:test/missing.test.ts::missing test', 'test/missing.test.ts'],
@@ -793,6 +801,7 @@ describe('runTaskDone', () => {
       expect(status.tasks[0].status).toBe('in_progress');
     });
 
+    // Covers: task:5
     it('lists --unverified <n>=<reason> in task command usage', async () => {
       expect(await dispatchTaskCommand({ kind: 'guide' }, dir)).toBe(2);
       expect(stdErr.join('\n')).toContain('--unverified <n>=<reason>');
