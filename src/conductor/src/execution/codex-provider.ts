@@ -1025,7 +1025,7 @@ export class CodexProvider implements LLMProvider {
     if (unattended) {
       if (options.readOnlyReview) {
         args.push(
-          ...buildCodexReadOnlyProducerRootPolicyArgs(options.managedSessionContext?.producerRoot, 'exec'),
+          ...buildCodexReadOnlyProducerRootPolicyArgs(options.managedSessionContext?.producerRoot),
           '--config', 'approval_policy="never"',
           '--config', 'shell_environment_policy.ignore_default_excludes=false',
         );
