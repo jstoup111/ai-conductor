@@ -5,7 +5,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { landSpec } from '../../../src/engine/engineer/land-spec.js';
+import { LandGateError, landSpec } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import { validateApplicability } from '../../../src/engine/feature-applicability.js';
 
@@ -24,7 +24,7 @@ const renderDeps = {
   runMmdc: async () => ({ ok: true }),
 };
 
-async function seed(enabled: boolean, marker?: string): Promise<string> {
+async function seed(enabled: boolean, marker?: string, markerStem?: string): Promise<string> {
   await mkdir(join(repoPath, '.ai-conductor'), { recursive: true });
   await writeFile(
     join(repoPath, '.ai-conductor', 'config.yml'),
@@ -67,7 +67,7 @@ async function seed(enabled: boolean, marker?: string): Promise<string> {
   await writeFile(join(worktreePath, '.docs', 'decisions', `${stem}.md`), '# Architecture review\n\nApproved.\n');
   if (marker !== undefined) {
     await mkdir(join(worktreePath, '.docs', 'applicability'), { recursive: true });
-    await writeFile(join(worktreePath, '.docs', 'applicability', `${stem}.md`), marker);
+    await writeFile(join(worktreePath, '.docs', 'applicability', `${markerStem ?? stem}.md`), marker);
   }
   return worktreePath;
 }
@@ -88,6 +88,16 @@ afterEach(async () => {
 
 function options() {
   return { ownerConfig: { spec_owner: 'test-owner' }, renderDeps };
+}
+
+async function refusal(enabled: boolean, marker: string, markerStem?: string): Promise<LandGateError> {
+  const worktreePath = await seed(enabled, marker, markerStem);
+  const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options())
+    .catch((reason: unknown) => reason);
+
+  expect(error).toBeInstanceOf(LandGateError);
+  expect(await git(['log', '--format=%s'])).toBe('init');
+  return error as LandGateError;
 }
 
 describe('landSpec applicability marker', () => {
@@ -161,5 +171,42 @@ describe('landSpec applicability marker', () => {
     await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, disabledWorktree, undefined, options());
 
     expect(await git(['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'], disabledWorktree)).toBe(enabledFiles);
+  });
+
+  it.each([
+    ['unknown-step', 'Inapplicable: nonexistent_step — no matching step\n', ['nonexistent_step', 'line 1']],
+    ['not-declarable', 'Inapplicable: test_suite — suite must run\n', ['test_suite', 'line 1']],
+    ['empty-reason', 'Inapplicable: manual_test —   \n', ['line 1']],
+    ['duplicate-declaration', [
+      'Inapplicable: manual_test — no browser-facing behavior',
+      'Inapplicable: manual_test — still no browser-facing behavior',
+      '',
+    ].join('\n'), ['manual_test', 'line 2']],
+  ])('refuses an enabled marker with %s without creating a land commit', async (kind, marker, details) => {
+    const error = await refusal(true, marker);
+
+    expect(error).toMatchObject({ gate: 'applicability-invalid' });
+    expect(error.message).toContain(kind);
+    for (const detail of details) expect(error.message).toContain(detail);
+  });
+
+  it('refuses any marker while the capability is disabled without creating a land commit', async () => {
+    const error = await refusal(false, 'Inapplicable: manual_test — no browser-facing behavior\n');
+
+    expect(error).toMatchObject({ gate: 'applicability-invalid' });
+    expect(error.message).toContain('capability-disabled');
+    expect(error.message).toContain('.docs/applicability/applicability-landing.md');
+    expect(error.message).toContain('line 1');
+  });
+
+  it('refuses an applicability marker with a mismatched stem without creating a land commit', async () => {
+    const error = await refusal(
+      true,
+      'Inapplicable: manual_test — no browser-facing behavior\n',
+      'different-feature',
+    );
+
+    expect(error).toMatchObject({ gate: 'artifact-stem-mismatch' });
+    expect(error.message).toContain('.docs/applicability/different-feature.md');
   });
 });

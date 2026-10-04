@@ -130,6 +130,7 @@ export type LandGateIdentifier =
   | 'tier-artifacts-missing'
   | 'architecture-mermaid-missing'
   | 'artifact-stem-mismatch'
+  | 'applicability-invalid'
   | 'adr-not-approved'
   | 'adr-uncitable-decision'
   | 'adr-filename'
@@ -471,17 +472,28 @@ export async function landSpec(
   // only: user-level settings must never change a project's pipeline.
   const applicabilityFile = await pickIdeaFile(join(worktreePath, '.docs', 'applicability'), featureFiles);
   if (applicabilityFile) {
+    const applicabilityPath = relative(worktreePath, applicabilityFile).replaceAll('\\', '/');
+    if (basename(applicabilityFile, '.md') !== featureSlug) {
+      throw landGateError('artifact-stem-mismatch',
+        `landSpec: feature-scoped artifact stems do not match the feature: ${applicabilityPath}: ` +
+        `expected stem "${featureSlug}" (plan-stem)`,
+      );
+    }
     const configResult = await loadConfig(canonical);
     const config = configResult.ok ? configResult.config : undefined;
     const customStepNames = Object.keys(config?.steps ?? {})
       .filter((name) => !ALL_STEPS.some((step) => step.name === name));
-    // This task establishes the shared validation seam. A later task turns a
-    // failed result into the typed land-gate refusal, so preserve the result
-    // boundary here without adding that policy yet.
-    void validateApplicability(await readFile(applicabilityFile, 'utf-8'), {
+    const validation = validateApplicability(await readFile(applicabilityFile, 'utf-8'), {
       enabled: resolveFeatureApplicabilityConfig(config).enabled,
       customStepNames,
     });
+    if (!validation.ok) {
+      const { kind, line, step } = validation.error;
+      throw landGateError('applicability-invalid',
+        `landSpec: applicability marker "${applicabilityPath}" is invalid: ${kind}` +
+        `${step ? ` for step "${step}"` : ''} at line ${line}.`,
+      );
+    }
   }
 
   // The coherence gate below reads `.docs/coherence/<plan-stem>.md` BY NAME, so
