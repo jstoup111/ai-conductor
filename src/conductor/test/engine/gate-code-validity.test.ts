@@ -204,6 +204,47 @@ describe('classifyRebaseOperation', () => {
     await expect(classifyRebaseOperation(s.repo)).resolves.toEqual({ kind: 'applying' });
   });
 
+  it.each([
+    [
+      'an inconsistent transition',
+      { transition: { preserved: ['build_review'], invalidated: ['build_review'], reverified: [] } },
+    ],
+    [
+      'an incomplete replay',
+      { replay: { preRebaseHead: '', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' } },
+    ],
+    [
+      'preservation evidence that does not match the transition',
+      {
+        preservationEvidence: [{
+          gate: 'build_review',
+          original: { artifactDigest: 'digest', attemptId: 'attempt', runId: 'run', codeStamp: 'stamp' },
+          originalVerdictDigest: `sha256:${'a'.repeat(64)}`,
+          relevantInputIdentities: [],
+        }],
+      },
+    ],
+  ] as const)('classifies an applying operation with %s as an integrity fault', async (_name, malformed) => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 100,
+      rebaseOperation: {
+        id: 'malformed-applying',
+        status: 'applying',
+        transition: { preserved: [], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+        ...malformed,
+      },
+    });
+
+    await expect(classifyRebaseOperation(s.repo)).resolves.toEqual({
+      kind: 'integrity-fault',
+      reason: 'malformed-record',
+    });
+  });
+
   it('classifies a malformed persisted operation status as an integrity fault', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);
