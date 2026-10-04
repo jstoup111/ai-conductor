@@ -1407,6 +1407,28 @@ export type ConductorEvent =
         | 'fresh-evidence-required';
     }
   | {
+      /** A feature-declared applicability marker made this step inapplicable for the feature. */
+      type: 'step_inapplicable';
+      step: StepName;
+      reason: string;
+      decider: { author: string; committer: string } | 'unknown';
+      commit?: string;
+    }
+  | {
+      /** An applicability marker was present but not honored. */
+      type: 'step_inapplicable_ignored';
+      cause: 'branch-only' | 'toggle-off' | 'invalid' | 'interactive';
+      step?: string;
+      detail?: string;
+    }
+  | {
+      /** A late declaration was refused because the step already left pending. */
+      type: 'step_inapplicable_refused';
+      step: StepName;
+      reason: string;
+      priorStatus: StepStatus;
+    }
+  | {
       /** A downstream step re-opened an upstream gate (plan/stories). */
       type: 'kickback';
       from: StepName;

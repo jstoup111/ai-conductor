@@ -237,6 +237,9 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'worktree_reclaim_retained',
   'worktree_reclaim_failed',
   'halt_clear_authorized',
+  'step_inapplicable',
+  'step_inapplicable_ignored',
+  'step_inapplicable_refused',
 ] satisfies Array<ConductorEvent['type']>;
 
 const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
@@ -698,6 +701,9 @@ describe('event sink subscriptions', () => {
       'rebase_noop',
       'rebase_mergeable_skip',
       'rebase_changed',
+      'step_inapplicable',
+      'step_inapplicable_ignored',
+      'step_inapplicable_refused',
     ] satisfies Array<ConductorEvent['type']>;
     const otel = [
       'daemon_backlog_snapshot',
@@ -727,6 +733,9 @@ describe('event sink subscriptions', () => {
       'rebase_noop',
       'rebase_mergeable_skip',
       'rebase_changed',
+      'step_inapplicable',
+      'step_inapplicable_ignored',
+      'step_inapplicable_refused',
     ] satisfies Array<ConductorEvent['type']>;
 
     expect(otelEventTypes()).toEqual(otel);
@@ -1396,6 +1405,21 @@ describe('event sink subscriptions', () => {
       'halt_record_write_failed',
       'halt_record_push_failed',
       'shipment_evidence_refused',
+      'step_inapplicable',
+      'step_inapplicable_ignored',
+      'step_inapplicable_refused',
     ]));
+  });
+
+  it('declares rendered, persisted, unaudited OpenTelemetry rows for every applicability event', () => {
+    expect({
+      honored: EVENT_SINKS.step_inapplicable,
+      ignored: EVENT_SINKS.step_inapplicable_ignored,
+      refused: EVENT_SINKS.step_inapplicable_refused,
+    }).toEqual({
+      honored: { render: true, persist: true, audit: false, otel: true },
+      ignored: { render: true, persist: true, audit: false, otel: true },
+      refused: { render: true, persist: true, audit: false, otel: true },
+    });
   });
 });

@@ -866,3 +866,46 @@ describe('MetricsListener retry and refusal projection (Task 8)', () => {
     }
   });
 });
+
+describe('MetricsListener step applicability', () => {
+  it('counts each applicability event once with only event, step, and cause or prior-status labels', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const emitter = new ConductorEventEmitter();
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      undefined,
+      'feature',
+    );
+    listener.start(emitter);
+
+    try {
+      await emitter.emit({
+        type: 'step_inapplicable', step: 'manual_test', reason: 'secret reason text',
+        decider: { author: 'Author Name <author@example.com>', committer: 'Committer <c@example.com>' }, commit: 'abc1234def',
+      });
+      await emitter.emit({ type: 'step_inapplicable_ignored', cause: 'branch-only', step: 'manual_test', detail: 'detail text' });
+      await emitter.emit({ type: 'step_inapplicable_ignored', cause: 'toggle-off' });
+      await emitter.emit({ type: 'step_inapplicable_refused', step: 'manual_test', reason: 'late reason', priorStatus: 'done' });
+      await provider.forceFlush();
+
+      const points = pointsForInstrument(exporter, 'conductor.step.applicability');
+      expect(points.map((point) => ({ attributes: point.attributes, value: point.value }))).toEqual(expect.arrayContaining([
+        { attributes: { event: 'step_inapplicable', step: 'manual_test', project: 'project', worker: 'worker', feature: 'feature' }, value: 1 },
+        { attributes: { event: 'step_inapplicable_ignored', cause: 'branch-only', step: 'manual_test', project: 'project', worker: 'worker', feature: 'feature' }, value: 1 },
+        { attributes: { event: 'step_inapplicable_ignored', cause: 'toggle-off', project: 'project', worker: 'worker', feature: 'feature' }, value: 1 },
+        { attributes: { event: 'step_inapplicable_refused', step: 'manual_test', priorStatus: 'done', project: 'project', worker: 'worker', feature: 'feature' }, value: 1 },
+      ]));
+      expect(points).toHaveLength(4);
+      const labelValues = points.flatMap((point) => Object.values(point.attributes).map(String));
+      for (const forbidden of ['secret reason text', 'late reason', 'detail text', 'Author Name', 'Committer', 'abc1234def']) {
+        expect(labelValues.some((value) => value.includes(forbidden))).toBe(false);
+      }
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
+  });
+});
