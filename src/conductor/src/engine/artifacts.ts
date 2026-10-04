@@ -4198,6 +4198,51 @@ export function parseTrack(content: string | null): Track | undefined {
   return m[1].toLowerCase() as Track;
 }
 
+export interface ApplicabilityDeclaration {
+  step: string;
+  reason: string;
+  line: number;
+}
+
+export type ParseApplicabilityResult =
+  | { ok: true; declarations: ApplicabilityDeclaration[] }
+  | { ok: false; error: { kind: 'empty-reason' | 'malformed-line'; line: number } };
+
+/** Parse `Inapplicable:` declarations from a feature applicability marker. */
+export function parseApplicability(content: string): ParseApplicabilityResult {
+  const declarations: ApplicabilityDeclaration[] = [];
+
+  for (const [index, line] of content.split(/\r?\n/).entries()) {
+    if (!line.startsWith('Inapplicable:')) continue;
+
+    const body = line.slice('Inapplicable:'.length);
+    const emDashIndex = body.indexOf(' — ');
+    const hyphenIndex = body.indexOf(' - ');
+    const separatorIndex = [emDashIndex, hyphenIndex]
+      .filter((position) => position >= 0)
+      .reduce<number | undefined>((first, position) =>
+        first === undefined || position < first ? position : first, undefined);
+    const lineNumber = index + 1;
+
+    if (separatorIndex === undefined) {
+      return { ok: false, error: { kind: 'malformed-line', line: lineNumber } };
+    }
+
+    const reason = body.slice(separatorIndex + 3).trim();
+    if (!reason) {
+      return { ok: false, error: { kind: 'empty-reason', line: lineNumber } };
+    }
+
+    declarations.push({
+      step: body.slice(0, separatorIndex).trim(),
+      reason,
+      line: lineNumber,
+    });
+  }
+
+  return { ok: true, declarations };
+}
+
 /** A PRD-audit gap-class. `unknown` = a blocking row whose class cell we could
  * not read; the daemon treats it conservatively (like a product/plan gap). */
 /** The only grades a criterion-level PRD-audit finding may carry. */
