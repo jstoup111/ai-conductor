@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-04T21:40:49.219Z
 Slug: vitest-daemon-fixtures-leak-into-shared-operationa
 Class: needs-human
 Halting step: prd_audit
