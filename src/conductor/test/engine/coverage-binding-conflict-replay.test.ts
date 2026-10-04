@@ -7,6 +7,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { Conductor } from '../test-conductor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 type Fixture = { criterion?: string; adr?: string; decision?: string; adrs?: [string, string][]; tasks: [string, string, string][]; conflictTaskIds?: string[] };
 type ConflictPromptClaim = { id: string; kind: string; text: string; taskTable: Array<{ id: string; title: string; doneWhen: string[] }> };
@@ -73,6 +75,8 @@ describe('coverage-binding conflict evidence replays', () => {
       expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
       expect(result.output).toContain(replay.data.criterion!);
       expect(result.output).toContain(`Task ids: ${replay.data.conflictTaskIds![0]}`);
+      expect(result.output).toContain(replay.data.tasks.find(([id]) => id === replay.data.conflictTaskIds![0])![2]);
+      expect(result.output).toContain('Fixture contradiction.');
       const claim = replay.prompts.filter((prompt) => prompt.includes('complete plan task table')).flatMap(conflictPromptClaims)
         .find((candidate) => candidate.text.includes(replay.data.criterion!));
       expect(claim).toMatchObject({ kind: 'criterion' });
@@ -104,10 +108,34 @@ describe('coverage-binding conflict evidence replays', () => {
     } finally { await rm(replay.projectDir, { recursive: true, force: true }); }
   });
 
-  it('keeps a consistent plan done after judging its conflict claim', async () => {
+  it('keeps a consistent plan done and dispatches its first build task', async () => {
     const replay = await runReplay('consistent-plan', false);
     try {
+      const dispatched: string[] = [];
       await expect(replay.runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      await writeFile(join(replay.projectDir, 'conduct-state.json'), JSON.stringify({
+        feature_desc: 'replay', complexity_tier: 'M', plan: 'done', coverage_binding: 'done',
+      }));
+      const conductor = new Conductor({
+        projectRoot: replay.projectDir,
+        stateFilePath: join(replay.projectDir, 'conduct-state.json'),
+        events: new ConductorEventEmitter(),
+        fromStep: 'build',
+        mode: 'auto',
+        verifyArtifacts: false,
+        maxRetries: 1,
+        stepRunner: {
+          run: async (step, state) => {
+            dispatched.push(step);
+            if (step === 'coverage_binding') return replay.runner.run(step, state);
+            return step === 'build'
+              ? { success: false, output: 'stop after first build dispatch' }
+              : { success: true };
+          },
+        },
+      });
+      await conductor.run();
+      expect(dispatched).toContain('build');
       const envelope = JSON.parse(await readFile(join(replay.projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
       expect(envelope).toMatchObject({ status: 'done' });
       expect(replay.provider.invoke).toHaveBeenCalledTimes(1);
