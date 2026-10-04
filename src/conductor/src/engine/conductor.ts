@@ -8841,10 +8841,23 @@ export class Conductor {
                 state,
                 settledGroupRunIds.get('prd_audit'),
               );
+              // Re-score after reconciliation has published the current
+              // relation/decision projection. The initial objective verdict
+              // predates that publication, so retaining it would persist and
+              // emit an obsolete reason for this same audit lap.
+              const rescored = await computeAndWriteVerdict(
+                this.projectRoot,
+                'prd_audit',
+                dispatchCtx,
+                { retainReplayPreservation: false },
+              );
+              gateVerdicts.set('prd_audit', rescored);
               if (prdAuditRoute.kind === 'record') {
                 const verdict = gateVerdicts.get('prd_audit');
                 if (verdict) {
-                  gateVerdicts.set('prd_audit', { ...verdict, satisfied: true, reason: undefined });
+                  const accepted = { ...verdict, satisfied: true, reason: undefined };
+                  gateVerdicts.set('prd_audit', accepted);
+                  await writeVerdict(this.projectRoot, 'prd_audit', accepted);
                 }
               }
             }
@@ -11763,6 +11776,16 @@ export class Conductor {
             // forbidden class this ADR removes.
             if (step.name === 'prd_audit' && !handshake) {
               const prdAuditRoute = await this.routeCurrentPrdAudit(state, dispatchRunId);
+              // Reconciliation can publish a relation or decision projection
+              // while routing this very audit lap. Rewrite its objective gate
+              // verdict now, before the serial tail emits gate_verdict, so
+              // disk and telemetry describe the same post-route authority.
+              await computeAndWriteVerdict(
+                this.projectRoot,
+                'prd_audit',
+                await this.completionCtx(state),
+                { retainReplayPreservation: false },
+              );
               if (prdAuditRoute.kind === 'projection-halt') {
                 const reason = renderPrdAuditProjectionHalt(prdAuditRoute.reason);
                 await this.writeHaltMarker(reason + '\n', 'needs-human');
