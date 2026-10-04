@@ -682,7 +682,7 @@ export function detectOverlapScanCommand(argv: string[]): OverlapScanDispatch | 
   if (argv[2] !== 'overlap-scan') return null;
 
   const rest = argv.slice(3);
-  let filesRaw = '';
+  const filesRaw: string[] = [];
   let sourceRef: string | undefined;
   let base: string | undefined;
   let cwd: string | undefined;
@@ -690,7 +690,9 @@ export function detectOverlapScanCommand(argv: string[]): OverlapScanDispatch | 
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     if (arg === '--files') {
-      filesRaw = rest[++i] ?? '';
+      while (rest[i + 1] && !rest[i + 1].startsWith('-')) {
+        filesRaw.push(rest[++i]);
+      }
     } else if (arg === '--source-ref') {
       sourceRef = rest[++i];
     } else if (arg === '--base') {
@@ -701,7 +703,7 @@ export function detectOverlapScanCommand(argv: string[]): OverlapScanDispatch | 
   }
 
   const files = filesRaw
-    .split(',')
+    .flatMap((value) => value.split(','))
     .map((f) => f.trim())
     .filter((f) => f.length > 0);
 

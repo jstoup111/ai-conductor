@@ -76,6 +76,30 @@ describe('detectOverlapScanCommand — argv detection', () => {
     expect(result?.cwd).toBe('/tmp/some-repo');
   });
 
+  it('accumulates space-separated and repeated --files values, including comma-separated values', async () => {
+    const { detectOverlapScanCommand } = await import('../../src/index.js');
+    const result = detectOverlapScanCommand([
+      'node', 'conduct-ts', 'overlap-scan',
+      '--files', 'one.ts', 'two.ts,three.ts',
+      '--base', 'main',
+      '--files', 'four.ts,five.ts', 'six.ts',
+    ]);
+
+    expect(result?.files).toEqual(['one.ts', 'two.ts', 'three.ts', 'four.ts', 'five.ts', 'six.ts']);
+    expect(result?.base).toBe('main');
+  });
+
+  it('does not capture a following option or its value as candidate files', async () => {
+    const { detectOverlapScanCommand } = await import('../../src/index.js');
+    const result = detectOverlapScanCommand([
+      'node', 'conduct-ts', 'overlap-scan', '--files', '--base', 'main', '--cwd', '/tmp/repo',
+    ]);
+
+    expect(result?.files).toEqual([]);
+    expect(result?.base).toBe('main');
+    expect(result?.cwd).toBe('/tmp/repo');
+  });
+
   it('returns null for non-overlap-scan argv', async () => {
     const { detectOverlapScanCommand } = await import('../../src/index.js');
     expect(detectOverlapScanCommand(['node', 'conduct-ts', 'daemon'])).toBeNull();
@@ -86,6 +110,29 @@ describe('detectOverlapScanCommand — argv detection', () => {
 // ─── 3. Dispatch: real runners, exits 0 even with advisory skip notes ────────
 
 describe('overlapScanCommand — real dispatch', () => {
+  it('Task 3: reports both a sibling overlap and an absent path from space-separated files', async () => {
+    const { overlapScanCommand, detectOverlapScanCommand } = await import('../../src/index.js');
+    const dir = await makeScratchRepo();
+    try {
+      await git(dir, ['checkout', '-q', '-b', 'spec/sibling-feature']);
+      await writeFile(join(dir, 'base.txt'), 'base\nchanged by sibling\n');
+      await git(dir, ['add', '.']);
+      await git(dir, ['commit', '-q', '-m', 'sibling touches base.txt']);
+      await git(dir, ['checkout', '-q', 'main']);
+
+      const cmd = detectOverlapScanCommand([
+        'node', 'conduct-ts', 'overlap-scan', '--files', 'base.txt', 'absent.txt', '--base', 'main', '--cwd', dir,
+      ]);
+      const printed: string[] = [];
+      await expect(overlapScanCommand(cmd!, { print: (s: string) => printed.push(s) })).resolves.toBe(0);
+
+      expect(printed.join('\n')).toContain('Overlap with spec/sibling-feature: base.txt');
+      expect(printed.join('\n')).toMatch(/absent\.txt.*not present|not present.*absent\.txt/i);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('drives runOverlapScan with real git/gh runners, prints renderReport, exits 0', async () => {
     const { overlapScanCommand, detectOverlapScanCommand } = await import('../../src/index.js');
     const dir = await makeScratchRepo();
