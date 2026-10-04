@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-04T13:42:12.645Z
 Slug: step-applicability-is-fixed-repo-wide-decide-canno
 Class: needs-human
 Halting step: unknown
