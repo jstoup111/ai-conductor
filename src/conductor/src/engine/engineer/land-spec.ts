@@ -75,6 +75,10 @@ import { validatePlanSlices } from '../plan-slices.js';
 import { assessAcceptedStoryReadability } from '../story-criteria.js';
 import { composeSpecCommitMessage } from './spec-commit-message.js';
 import { isEngineAppendedRemediationTaskId } from '../remediation-append.js';
+import { loadConfig } from '../config.js';
+import { resolveFeatureApplicabilityConfig } from '../resolved-config.js';
+import { validateApplicability } from '../feature-applicability.js';
+import { ALL_STEPS } from '../steps.js';
 
 const execFile = promisify(execFileCb);
 
@@ -459,6 +463,25 @@ export async function landSpec(
           'Regenerate the diagram through /architecture-diagram before landing.',
       );
     }
+  }
+
+  // An applicability marker is an optional DECIDE artifact. Its declaration
+  // semantics are validated here, at the same seam that admits every other
+  // DECIDE artifact. A project config is deliberately loaded from the target
+  // only: user-level settings must never change a project's pipeline.
+  const applicabilityFile = await pickIdeaFile(join(worktreePath, '.docs', 'applicability'), featureFiles);
+  if (applicabilityFile) {
+    const configResult = await loadConfig(canonical);
+    const config = configResult.ok ? configResult.config : undefined;
+    const customStepNames = Object.keys(config?.steps ?? {})
+      .filter((name) => !ALL_STEPS.some((step) => step.name === name));
+    // This task establishes the shared validation seam. A later task turns a
+    // failed result into the typed land-gate refusal, so preserve the result
+    // boundary here without adding that policy yet.
+    void validateApplicability(await readFile(applicabilityFile, 'utf-8'), {
+      enabled: resolveFeatureApplicabilityConfig(config).enabled,
+      customStepNames,
+    });
   }
 
   // The coherence gate below reads `.docs/coherence/<plan-stem>.md` BY NAME, so
