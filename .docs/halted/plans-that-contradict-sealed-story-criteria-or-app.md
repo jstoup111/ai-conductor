@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-04T09:38:20.126Z
 Slug: plans-that-contradict-sealed-story-criteria-or-app
 Class: needs-human
 Halting step: prd_audit
