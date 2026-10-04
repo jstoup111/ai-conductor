@@ -663,9 +663,15 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // list so none bypasses D6.3 on its way to the consistency-stop writer.
   const isUnboundRecurrenceCandidate = (proposed: typeof admitted[number]) =>
     proposed.case.existingCaseId === undefined && !proposed.case.distinctFrom?.length;
+  const replayingBlockedConsistencyStop = blockedConsistency !== undefined && prior.state.cases.some((record) =>
+    record.id === consistencyStopId(input.aggregate.lapId) &&
+    record.consistencyStop?.rationale === blockedConsistency.rationale &&
+    record.consistencyStop.sourceIds.length === blockedConsistency.sourceIds.length &&
+    record.consistencyStop.sourceIds.every((sourceId, index) => sourceId === blockedConsistency.sourceIds[index]));
   const blockedOrdinaryRecurrenceCases = admitted.filter((proposed) =>
     proposed.case.disposition !== 'escalate' && proposed.case.disposition !== 'act' &&
     isUnboundRecurrenceCandidate(proposed) &&
+    !replayingBlockedConsistencyStop &&
     (blockedConsistency?.sourceIds.some((sourceId) => proposed.sources.some((source) => source.sourceId === sourceId)) ?? false));
   const withheldActionRecurrenceCases = liveGraphCases.filter((proposed) =>
     proposed.case.disposition === 'act' &&

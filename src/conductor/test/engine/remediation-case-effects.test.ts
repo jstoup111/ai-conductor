@@ -158,8 +158,15 @@ describe('remediation case effects', () => {
     };
 
     await persistBuildReviewDecisionStop({ store, record: stop });
-    await expect(persistBuildReviewDecisionStop({ store, record: { ...stop, escalation: { owner: 'product' } } }))
-      .resolves.toEqual({ ok: false, reason: 'conflicting-case-id' });
+    for (const changed of [
+      { ...stop, rationale: 'A different owner decision is required.' },
+      { ...stop, sources: [{ ...stop.sources[0]!, outcome: 'acted' as const }] },
+      { ...stop, sources: [{ ...stop.sources[0]!, sourceId: 'different-current-source' }] },
+      { ...stop, escalation: { owner: 'product' as const } },
+    ]) {
+      await expect(persistBuildReviewDecisionStop({ store, record: changed }))
+        .resolves.toEqual({ ok: false, reason: 'conflicting-case-id' });
+    }
   });
 
   it('supersedes an explicitly bound owner whose historic sources do not overlap the decision stop', async () => {

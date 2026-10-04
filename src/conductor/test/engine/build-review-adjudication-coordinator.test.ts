@@ -1157,7 +1157,10 @@ describe('coordinateBuildReviewAdjudication', () => {
       generateId: () => 'decision-stop-first-source', emit: async (event) => { events.push(event); },
     });
 
-    expect(result).toMatchObject({ ok: true, route: 'halt' });
+    expect(result).toMatchObject({
+      ok: true, route: 'halt',
+      detail: `build-review adjudication consistency is blocked for ${firstSource}, ${secondSource}: The two sources remain inconsistent.`,
+    });
     const persisted = await store.read();
     if (!persisted.ok) throw new Error(persisted.reason);
     const openCases = persisted.state.cases.filter((record) => record.resolution === 'open');
@@ -1232,7 +1235,10 @@ describe('coordinateBuildReviewAdjudication', () => {
       generateId: () => ids.shift()!, emit: async (event) => { events.push(event); },
     });
 
-    expect(result).toMatchObject({ ok: true, route: 'halt' });
+    expect(result).toMatchObject({
+      ok: true, route: 'halt',
+      detail: `build-review adjudication consistency is blocked for ${firstSource}, ${secondSource}: The two sources remain inconsistent.`,
+    });
     const persisted = await new RemediationCaseStore(root, feature).read();
     if (!persisted.ok) throw new Error(persisted.reason);
     expect(persisted.state.cases.map((record) => record.id).sort()).toEqual(['stop-first', 'stop-second']);
@@ -1287,6 +1293,50 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(persisted.state.cases.filter((record) => record.id === 'decision-stop-lap-1-case-bound-owner')).toEqual([
       expect.objectContaining({ resolution: 'open' }),
     ]);
+  });
+
+  it('replays a blocked-consistency stop without rewriting it or repeating its supersession events', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-consistency-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The current owner remains unresolved.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-consistency-owner', kind: 'action', status: 'reserved' },
+      }],
+    });
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'rejected', caseRef: 'rejected-case' }],
+      cases: [{
+        caseRef: 'rejected-case', disposition: 'reject', priority: 'low', confidence: 'high',
+        rationale: 'The proposed repair should not proceed.', effect: { kind: 'none' },
+      }],
+      consistency: {
+        verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['rejected-case'],
+        rationale: 'The rejected proposal leaves an unresolved consistency conflict.',
+      },
+    } as const satisfies RemediationCaseJudgement;
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-04T00:00:00.000Z'));
+      await expect(coordinateBuildReviewAdjudication({ ...input(root, async () => judgement), generateId: () => 'case-reject-owner' }))
+        .resolves.toMatchObject({ ok: true, route: 'halt' });
+      const before = await readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8');
+      vi.setSystemTime(new Date('2026-10-04T00:05:00.000Z'));
+      const events: RemediationCaseLifecycleEvent[] = [];
+      await expect(coordinateBuildReviewAdjudication({
+        ...input(root, async () => judgement), generateId: () => 'case-reject-owner', emit: async (event) => { events.push(event); },
+      })).resolves.toMatchObject({ ok: true, route: 'halt' });
+      await expect(readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8')).resolves.toBe(before);
+      expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
+      expect(events.filter((event) => event.type === 'remediation_case_reconciled' || event.type === 'remediation_effect_failed')).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('replaces a bound escalation owner with a distinct decision-stop identity', async () => {
