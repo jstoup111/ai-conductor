@@ -6526,7 +6526,7 @@ export class Conductor {
         if (!descriptor) return priorPreparation?.(candidate, runtime, identity);
         const provider = requireProviderCapability(descriptor.id, 'selfHost');
         const providerId = descriptor.id;
-        const usesProviderHome = provider.homeVariable === 'CODEX_HOME';
+        const usesProviderHome = provider.selfHostShape.isolation === 'provider-home';
         if (usesProviderHome) {
           const missing = !runtime.provider.prepareSelfHostAuth
             || !runtime.provider.resolveSelfHostExecutable
@@ -6553,7 +6553,7 @@ export class Conductor {
             liveCheckout,
             unrelatedProviderState: providerHome,
             provider: providerId,
-            selectedAuthPaths: usesProviderHome ? ['auth.json'] : ['.credentials.json'],
+            selectedAuthPaths: [provider.selfHostShape.selectedAuthPath],
           });
           await this.events.emit({
             type: 'self_host_boundary_fingerprint',
@@ -6637,6 +6637,7 @@ export class Conductor {
                   runtime.provider,
                   {
                     provider: candidate.providerKey as SelfHostAuthContext['provider'],
+                    model: candidate.model,
                     homeDir: context.homeDir,
                   },
                 ),
