@@ -260,15 +260,6 @@ sidecar log.
 > validation. With D7's key off they are recorded `unjudged` and do not block. Criterion-claim
 > prompts, verdicts, and events are unchanged.
 >
-> **Amended 2026-10-04 by #2750:** Operator DECIDE resolves the S2.12 halt: D18 includes
-> ADR amendment inputs at every complexity tier, including S. Only amendment blocks added by
-> this branch relative to its merge base become claims; inherited blocks remain excluded.
-> D17's structural ADR-obligation layer remains `not-applicable` at S. A new decision introduced
-> inside a branch amendment receives only its D18 amendment claim, never a D21 conflict claim.
-> D7 still controls dispatch: with the judge disabled the amendment is `unjudged`, with no
-> provider call or refusal. Task 14 owns the tier-S input correction and runner proof.
-> This correction was explicitly approved by the operator during daemon-triage recovery.
->
 > **D19 — On a D16 re-run, completed work the change contradicts is reopened, never re-planned.**
 > Only a run following a D16 void reopens. Then, (a) a criterion claim whose digest is absent from
 > the previous envelope's recorded digests and that cites a completed task, and (b) a completed task
@@ -285,6 +276,15 @@ sidecar log.
 > claims emit `coverage_binding_amendment_judged` (verdict in D18's values plus `unjudged`) so
 > `coverage_binding_judged`'s criterion vocabulary is untouched. Refusals ride the existing
 > `step_refused` and `loop_halt` events. No sidecar log.
+
+> **Amended 2026-10-04 by #2750:** Operator DECIDE resolves the S2.12 halt: D18 includes
+> ADR amendment inputs at every complexity tier, including S. Only amendment blocks added by
+> this branch relative to its merge base become claims; inherited blocks remain excluded.
+> D17's structural ADR-obligation layer remains `not-applicable` at S. A new decision introduced
+> inside a branch amendment receives only its D18 amendment claim, never a D21 conflict claim.
+> D7 still controls dispatch: with the judge disabled the amendment is `unjudged`, with no
+> provider call or refusal. Task 14 owns the tier-S input correction and runner proof.
+> This correction was explicitly approved by the operator during daemon-triage recovery.
 
 > **Amended 2026-10-03 by #2750:** A plan whose tasks cannot be satisfied together with a sealed
 > story criterion, or with an approved ADR decision the plan is subject to, must refuse here before
