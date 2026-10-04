@@ -1,5 +1,8 @@
-// Covers: task:7
+// Covers: task:7, task:8
 import { describe, expect, it, vi } from 'vitest';
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Conductor, type StepRunResult, type StepRunner } from '../../src/engine/conductor.js';
 import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
@@ -39,12 +42,14 @@ function conductor(
   providerExecution: ProviderExecutionContext,
   runner: StepRunner,
   selfHostGuardrails: SelfHostGuardrails,
+  options: { projectRoot?: string; config?: object } = {},
 ) {
   return new Conductor({
-    stateFilePath: '/worktree/conduct-state.json', projectRoot: '/worktree', featureSlug: 'catalog-shape',
+    stateFilePath: `${options.projectRoot ?? '/worktree'}/conduct-state.json`, projectRoot: options.projectRoot ?? '/worktree', featureSlug: 'catalog-shape',
     events: new ConductorEventEmitter(), stepRunner: runner, providerExecution, selfHostGuardrails,
     daemon: true, selfHost: true, config: {
       llm_provider: 'pi', harness_self_host: { live_containment: false, build_auth: { mode: 'api-key' } },
+      ...options.config,
     } as never,
   });
 }
@@ -119,5 +124,79 @@ describe('conductor self-host catalog shape', () => {
     });
     expect(fingerprint).not.toHaveBeenCalled();
     expect(provisionProviderHome).not.toHaveBeenCalled();
+  });
+
+  it('lets a Pi daemon-token dispatch with no token file reach candidate preparation', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-pi-daemon-token-'));
+    let candidatePrepared = false;
+    try {
+      const runtimes = new ProviderRuntimeSet([
+        { key: 'pi', provider: { invoke: vi.fn(), prepareSelfHostAuth: vi.fn(async () => undefined), resolveSelfHostExecutable: vi.fn(async () => 'pi') }, policy: {} },
+      ] as never);
+      const providerExecution = { runtimes, sessions: {} as never, configuredProviders: ['pi'] } as ProviderExecutionContext;
+      const runner: StepRunner = { run: async () => {
+        await providerExecution.prepareCandidateSelfHost!(candidate('pi', 'openrouter/m'), runtimes.get('pi') as never, { runId: 'catalog-shape', attempt: 1 });
+        candidatePrepared = true;
+        return { success: true };
+      } };
+      await dispatch(conductor(providerExecution, runner, guardrails(vi.fn(async () => ({ childEnv: () => ({}), childArgs: () => [], teardown: vi.fn(async () => {}) }))), {
+        projectRoot,
+        config: { harness_self_host: { live_containment: false, build_auth: { mode: 'daemon-token', token_path: join(projectRoot, 'missing-token') } } },
+      }));
+      let buildTokenHalt = false;
+      try {
+        await access(join(projectRoot, '.pipeline/HALT'));
+        buildTokenHalt = true;
+      } catch { /* absent halt is the expected Pi outcome */ }
+
+      expect({ candidatePrepared, buildTokenHalt }).toEqual({ candidatePrepared: true, buildTokenHalt: false });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not inspect expired Claude credentials for a Pi dispatch without build auth', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-pi-credentials-'));
+    const priorClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    try {
+      await writeFile(join(projectRoot, '.credentials.json'), JSON.stringify({ claudeAiOauth: { expiresAt: 0 } }));
+      process.env.CLAUDE_CONFIG_DIR = projectRoot;
+      const runtimes = new ProviderRuntimeSet([
+        { key: 'pi', provider: { invoke: vi.fn() }, policy: {} },
+      ] as never);
+      const providerExecution = { runtimes, sessions: {} as never, configuredProviders: ['pi'] } as ProviderExecutionContext;
+      const instance = conductor(providerExecution, { run: vi.fn(async () => ({ success: true })) }, guardrails(), {
+        projectRoot,
+        config: { harness_self_host: { live_containment: false } },
+      });
+      const preflight = vi.spyOn(instance as never, 'preflightCredentialsCheck');
+
+      await dispatch(instance);
+
+      expect(preflight).not.toHaveBeenCalled();
+    } finally {
+      if (priorClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = priorClaudeConfigDir;
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the daemon-token HALT for a Claude dispatch with no token file', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-claude-daemon-token-'));
+    try {
+      const runtimes = new ProviderRuntimeSet([
+        { key: 'claude', provider: { invoke: vi.fn() }, policy: {} },
+      ] as never);
+      const providerExecution = { runtimes, sessions: {} as never, configuredProviders: ['claude'] } as ProviderExecutionContext;
+      const result = await dispatch(conductor(providerExecution, { run: vi.fn(async () => ({ success: true })) }, guardrails(), {
+        projectRoot,
+        config: { llm_provider: 'claude', harness_self_host: { live_containment: false, build_auth: { mode: 'daemon-token', token_path: join(projectRoot, 'missing-token') } } },
+      }));
+
+      expect({ success: result.success, halt: await access(join(projectRoot, '.pipeline/HALT')).then(() => true, () => false) })
+        .toEqual({ success: false, halt: true });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 });
