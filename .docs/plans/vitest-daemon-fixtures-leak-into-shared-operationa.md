@@ -99,6 +99,7 @@ Ordinary test runs stop inheriting the operator's user config, and OTLP network 
 - `otlpExportRefusal` returns the refusal message, which names both `AI_CONDUCTOR_NO_REAL_EXEC` and `AI_CONDUCTOR_OTEL_SMOKE`, when the marker equals `1` and the opt-in is absent or any value other than `1` (`true`, `0`, empty, and ` 1 ` are asserted).
 - `otlpExportRefusal` returns `null` when the marker equals `1` and the opt-in equals `1`, and returns `null` whenever the marker is absent, including when the opt-in equals `1` without it.
 - `otlpExportRefusal` reads only the environment object it is given, as asserted by a case whose argument lacks the marker while `process.env` carries it.
+- `buildExporters` with `AI_CONDUCTOR_OTEL_SMOKE` set to any value and the marker absent (no `AI_CONDUCTOR_NO_REAL_EXEC`) builds the exact exporters it builds when the opt-in is unset, as asserted by a case comparing both construction results in export-refusal.test.ts.
 
 **Files:** src/conductor/src/engine/otel/export-refusal.ts; src/conductor/test/engine/otel/export-refusal.test.ts
 
