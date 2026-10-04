@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-04T09:21:39.553Z
 Slug: ref-moving-destructive-git-that-bypasses-the-build
 Class: needs-human
 Halting step: prd_audit
