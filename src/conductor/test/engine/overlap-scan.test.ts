@@ -93,8 +93,22 @@ describe('engine/overlap-scan — classifyCandidatePaths (Task 1)', () => {
 
     expect({ result, calls }).toEqual({
       result: expected,
-      calls: [['ls-files', '--cached', '--others', '--exclude-standard']],
+      calls: [[
+        'ls-files', '--cached', '--others', '--exclude-standard', '--full-name', '--', ':/',
+      ]],
     });
+  });
+
+  it('lists from the worktree root with repo-root-relative paths', async () => {
+    const { git, calls } = fakeGit([
+      { match: ['ls-files'], result: { stdout: 'src/present.ts\n' } },
+    ]);
+
+    await classifyCandidatePaths(git, ['src/present.ts']);
+
+    expect(calls).toEqual([[
+      'ls-files', '--cached', '--others', '--exclude-standard', '--full-name', '--', ':/',
+    ]]);
   });
 });
 

@@ -44,7 +44,9 @@ export async function classifyCandidatePaths(
   const normalize = (path: string): string => path.replace(/\\/g, '/').replace(/^\.\//, '');
 
   try {
-    const listing = await git(['ls-files', '--cached', '--others', '--exclude-standard']);
+    const listing = await git([
+      'ls-files', '--cached', '--others', '--exclude-standard', '--full-name', '--', ':/',
+    ]);
     if (listing.exitCode !== 0) {
       return { kind: 'classification-failed', exitCode: listing.exitCode };
     }
