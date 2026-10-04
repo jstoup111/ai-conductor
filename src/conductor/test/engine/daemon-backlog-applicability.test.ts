@@ -48,7 +48,7 @@ describe('daemon backlog applicability seeding', () => {
     const result = await discoverBacklog('/unused', undefined, undefined, {
       treeSource: tree({ ...featureFiles('2026-10-03-feature-a'), ...featureFiles('2026-10-03-feature-b'), '.docs/applicability/feature-a.md': 'Inapplicable: manual_test — reason\n' }),
       featureApplicabilityEnabled: true,
-      resolveMarkerDecider: vi.fn(async () => ({ decider: 'unknown' })),
+      resolveMarkerDecider: vi.fn(async () => ({ decider: 'unknown' as const })),
     });
     expect(result.items.find((item) => item.slug === '2026-10-03-feature-b')?.applicabilityDeclarations).toEqual([]);
   });

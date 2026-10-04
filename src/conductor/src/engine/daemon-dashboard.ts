@@ -94,6 +94,8 @@ export interface InProgressEntry {
   completionCondition?: string;
   /** Current provider preparation/running/recovery phase, if persisted. */
   lifecycle?: ProviderLifecycleDiagnostic;
+  /** Feature-declared skips, distinct from tier/config skips. */
+  inapplicable?: Array<{ step: string; reason: string }>;
 }
 
 /** A dashboard observation needs only a short current-activity window. */
@@ -694,6 +696,9 @@ export async function scanInheritedState(
         const { tier, prUrl } = stateExtras(state);
         if (tier) entry.tier = tier;
         if (prUrl) entry.prUrl = prUrl;
+        if (Array.isArray(state.feature_inapplicable)) {
+          entry.inapplicable = state.feature_inapplicable.map(({ step, reason }) => ({ step, reason }));
+        }
       }
       // Best-effort: a missing/malformed heartbeat file is "no heartbeat yet",
       // never a scan failure — same tolerance as every other worktree read here.
@@ -1001,6 +1006,9 @@ export function renderDashboard(
   lines.push(`IN-PROGRESS (${inProgress.length})`);
   for (const p of inProgress) {
     lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${elapsedStepTimeSuffix(p.elapsedStepTimeMs)}${lastTestOutcomeSuffix(p.lastTestOutcome)}${childWorkSuffix(p)}${tokenBurnSuffix(p)}${prSuffix(p.prUrl)}`);
+    for (const entry of p.inapplicable ?? []) {
+      lines.push(`    inapplicable: ${entry.step} — ${entry.reason}`);
+    }
   }
 
   const retainedWorktrees = (state.retainedWorktrees ?? []).filter(

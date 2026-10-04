@@ -33,6 +33,8 @@ export interface StepSnapshot {
   label: string;
   phase: Phase;
   status: StepStatus;
+  /** Reason when this feature explicitly declared the skipped step inapplicable. */
+  inapplicableReason?: string;
   artifacts?: ArtifactPatternStatus[];
 }
 

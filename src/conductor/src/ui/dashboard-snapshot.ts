@@ -24,6 +24,10 @@ export function buildDashboardSnapshot(
       phase: step.phase,
       status,
     };
+    const inapplicable = status === 'skipped'
+      ? state.feature_inapplicable?.find((entry) => entry.step === step.name)
+      : undefined;
+    if (inapplicable) snap.inapplicableReason = inapplicable.reason;
     if (stepArtifacts && hasAttempted(status)) {
       snap.artifacts = stepArtifacts;
     }

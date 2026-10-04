@@ -8,6 +8,9 @@ export interface FeatureApplicabilityDeclaration {
   commit?: string;
 }
 
+/** A declaration the conductor has honored for this feature. */
+export type FeatureInapplicableRecord = FeatureApplicabilityDeclaration;
+
 /** A base marker which is retained for reporting but cannot be honored. */
 export interface FeatureApplicabilityIgnored {
   cause: 'invalid' | 'toggle-off';
@@ -53,6 +56,8 @@ export type ConductState = {
   applicability_base_content_sha256?: string;
   /** A base marker which dispatch must report as ignored. */
   applicability_ignored?: FeatureApplicabilityIgnored;
+  /** Declarations honored by this feature's conductor dispatch. */
+  feature_inapplicable?: FeatureInapplicableRecord[];
   bootstrap_mode?: BootstrapMode;
   run_started_at?: number;
   /**
