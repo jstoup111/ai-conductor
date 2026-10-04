@@ -4725,7 +4725,7 @@ export class DefaultStepRunner implements StepRunner {
             .catch(() => undefined);
           const decideArtifacts = await Promise.all([...resolvedDecideSet.paths]
             .filter((path) => path.startsWith('.docs/specs/') || /^\.docs\/decisions\/architecture-review-/.test(path) ||
-              (state.complexity_tier !== 'S' && /^\.docs\/decisions\/adr-/.test(path)))
+              /^\.docs\/decisions\/adr-/.test(path))
             .map(async (path) => ({
               path,
               text: await readFile(join(this.projectDir, path), 'utf8'),

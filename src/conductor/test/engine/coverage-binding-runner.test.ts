@@ -1,4 +1,4 @@
-// Covers: task:5, task:6, task:7
+// Covers: task:5, task:6, task:7, task:14
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -114,7 +114,128 @@ async function runBatches(count: number, batchSize: number, options: {
   return { projectDir, provider, runner };
 }
 
+const TIER_S_ADR_AMENDMENT = '> **Amended 2026-10-04 by #2750:**\n> **D7 — The branch amendment introduces this citable decision.**';
+
+async function runTierSAdrAmendment(options: { enabled: boolean; inherited?: boolean; amendmentVerdict?: 'carried' | 'not-carried' }) {
+  const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-tier-s-amendment-'));
+  const planPath = join(projectDir, '.docs', 'plans', 'tier-s.md');
+  const adrPath = join(projectDir, '.docs', 'decisions', 'adr-tier-s.md');
+  const baseAdr = '# ADR\n\n**Status:** APPROVED\n\n## Decision\n\n1. The existing decision remains citable.\n';
+  const branchAdr = `${baseAdr}\n${TIER_S_ADR_AMENDMENT}\n`;
+  const git = (...args: string[]) => promisify(execFile)('git', ['-C', projectDir, ...args]);
+  const prompts: string[] = [];
+
+  await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(projectDir, '.docs', 'stories'), { recursive: true });
+  await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+  await writeFile(planPath, `**Stories:** .docs/stories/tier-s.md\n\n### Task 1: Carry the tier-S obligation\n**Done when:**\n- The tier-S obligation is carried.\n`);
+  await writeFile(join(projectDir, '.docs', 'stories', 'tier-s.md'), '# Stories\n');
+  await writeFile(adrPath, options.inherited ? `${baseAdr}\n${TIER_S_ADR_AMENDMENT}\n` : baseAdr);
+  await git('init', '-q', '-b', 'main');
+  await git('add', '.');
+  await git('-c', 'user.email=t@example.com', '-c', 'user.name=T', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'base');
+  const baseSha = (await git('rev-parse', 'HEAD')).stdout.trim();
+  await git('remote', 'add', 'origin', '.');
+  await git('fetch', '-q', 'origin', 'main:refs/remotes/origin/main');
+  await git('checkout', '-q', '-b', 'feature');
+  await writeFile(adrPath, options.inherited ? `${baseAdr}\n${TIER_S_ADR_AMENDMENT}\n\nBranch text changed.\n` : branchAdr);
+  await git('add', '.');
+  await git('-c', 'user.email=t@example.com', '-c', 'user.name=T', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'amend ADR');
+  const headSha = (await git('rev-parse', 'HEAD')).stdout.trim();
+
+  const provider: LLMProvider = {
+    lifecycleCapability: { synchronousSpawnPermit: true },
+    invoke: vi.fn(async (invokeOptions: InvokeOptions): Promise<InvokeResult> => {
+      prompts.push(invokeOptions.prompt);
+      const claims = promptClaims(invokeOptions);
+      if (invokeOptions.prompt.includes('DECIDE amendment')) {
+        return {
+          success: true,
+          output: JSON.stringify({ verdicts: claims.map(({ id }) => options.amendmentVerdict === 'not-carried'
+            ? { id, verdict: 'not-carried', missingObligation: 'Carry D7 in a plan task.' }
+            : { id, verdict: 'carried', taskIds: ['1'] }) }),
+          exitCode: 0,
+        };
+      }
+      return {
+        success: true,
+        output: JSON.stringify({ verdicts: claims.map(({ id }) => ({ id, verdict: 'consistent' })) }),
+        exitCode: 0,
+      };
+    }),
+  };
+  const gitRunner = vi.fn(async (args: string[]) => {
+    if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: `${headSha}\n`, stderr: '' };
+    if (args[0] === 'merge-base') return { exitCode: 0, stdout: `${baseSha}\n`, stderr: '' };
+    if (args[0] === 'show') return { exitCode: 0, stdout: options.inherited ? `${baseAdr}\n${TIER_S_ADR_AMENDMENT}\n` : baseAdr, stderr: '' };
+    return { exitCode: 1, stdout: '', stderr: `unexpected git command: ${args.join(' ')}` };
+  });
+  const runner = new DefaultStepRunner(provider, 'coverage-tier-s-amendment', projectDir, {
+    featureDesc: 'tier-s',
+    planPath,
+    config: { coverage_binding: { judge: { enabled: options.enabled, batch_size: 8 } } },
+    gitRunner,
+  });
+  return { projectDir, provider, prompts, runner, gitRunner };
+}
+
 describe('coverage-binding runner batches', () => {
+  it('judges a branch-added tier-S ADR amendment, excludes its new decision from conflict claims, and preserves D17 not-applicable', async () => {
+    const fixture = await runTierSAdrAmendment({ enabled: true, amendmentVerdict: 'not-carried' });
+    try {
+      const result = await fixture.runner.run('coverage_binding', { complexity_tier: 'S' });
+      const envelope = parseCoverageBindingEnvelope(JSON.parse(await readFile(coverageBindingEnvelopePath(fixture.projectDir), 'utf8')));
+      const amendmentPrompts = fixture.prompts.filter((prompt) => prompt.includes('DECIDE amendment'));
+      const conflictPrompts = fixture.prompts.filter((prompt) => prompt.includes('conflict claim'));
+
+      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+      expect(result.output).toContain(TIER_S_ADR_AMENDMENT);
+      expect(result.output).toContain('Missing obligation: Carry D7 in a plan task.');
+      expect(amendmentPrompts).toHaveLength(1);
+      expect(amendmentPrompts[0]).toContain('D7 — The branch amendment introduces this citable decision.');
+      expect(conflictPrompts.join('\n')).not.toContain('D7 — The branch amendment introduces this citable decision.');
+      expect(envelope).toMatchObject({
+        status: 'refused',
+        adrLayer: { disposition: 'not-applicable' },
+        entries: expect.arrayContaining([expect.objectContaining({ kind: 'amendment', artifactPath: '.docs/decisions/adr-tier-s.md', verdict: 'not-carried' })]),
+      });
+      expect(envelope?.entries.some((entry) => (entry as { kind?: string; claimId?: string }).kind === 'conflict' && (entry as { claimId?: string }).claimId?.includes('adr-tier-s#D7'))).toBe(false);
+      expect(fixture.gitRunner).toHaveBeenCalledWith(['merge-base', 'origin/main', 'HEAD']);
+      expect(fixture.gitRunner).toHaveBeenCalledWith(['show', expect.stringMatching(/:.docs\/decisions\/adr-tier-s\.md$/)]);
+    } finally {
+      await rm(fixture.projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not judge an ADR amendment already present at merge-base', async () => {
+    const fixture = await runTierSAdrAmendment({ enabled: true, inherited: true });
+    try {
+      await expect(fixture.runner.run('coverage_binding', { complexity_tier: 'S' })).resolves.toMatchObject({ success: true });
+      expect(fixture.prompts.filter((prompt) => prompt.includes('DECIDE amendment'))).toEqual([]);
+      const envelope = parseCoverageBindingEnvelope(JSON.parse(await readFile(coverageBindingEnvelopePath(fixture.projectDir), 'utf8')));
+      expect(envelope?.entries.filter((entry) => (entry as { kind?: string }).kind === 'amendment')).toEqual([]);
+    } finally {
+      await rm(fixture.projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('records a tier-S branch-added ADR amendment as unjudged without dispatching the provider', async () => {
+    const fixture = await runTierSAdrAmendment({ enabled: false });
+    try {
+      await expect(fixture.runner.run('coverage_binding', { complexity_tier: 'S' })).resolves.toMatchObject({ success: true, output: 'coverage_binding judge disabled' });
+      expect(fixture.provider.invoke).not.toHaveBeenCalled();
+      const envelope = parseCoverageBindingEnvelope(JSON.parse(await readFile(coverageBindingEnvelopePath(fixture.projectDir), 'utf8')));
+      expect(envelope).toMatchObject({
+        status: 'disabled',
+        adrLayer: { disposition: 'not-applicable' },
+        entries: expect.arrayContaining([expect.objectContaining({ kind: 'amendment', verdict: 'unjudged' })]),
+      });
+      expect(envelope?.entries.some((entry) => (entry as { kind?: string; claimId?: string }).kind === 'conflict' && (entry as { claimId?: string }).claimId?.includes('adr-tier-s#D7'))).toBe(false);
+    } finally {
+      await rm(fixture.projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('uses the selected Pi judge native model and ladder in a Claude run', async () => {
     const piModel = 'anthropic/claude-opus-4-5';
     const piFallback = 'openai/gpt-5.6-sol';
