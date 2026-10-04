@@ -165,10 +165,10 @@ describe('reduceBuildReviewAdjudication', () => {
 
     await expect(persistBuildReviewDecisionStop({
       store: new RemediationCaseStore(projectRoot, feature), record: stop,
-    })).resolves.toEqual({ ok: true, status: 'persisted', caseId: stop.id, supersededCaseIds: [] });
+    })).resolves.toEqual({ ok: true, status: 'persisted', caseId: stop.id, supersededCaseIds: [], supersededEffects: [] });
     await expect(persistBuildReviewDecisionStop({
       store: new RemediationCaseStore(projectRoot, feature), record: stop,
-    })).resolves.toEqual({ ok: true, status: 'already-persisted', caseId: stop.id, supersededCaseIds: [] });
+    })).resolves.toEqual({ ok: true, status: 'already-persisted', caseId: stop.id, supersededCaseIds: [], supersededEffects: [] });
 
     await expect(new RemediationCaseStore(projectRoot, feature).read()).resolves.toMatchObject({
       ok: true,
