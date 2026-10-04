@@ -1,7 +1,7 @@
-// Covers: task:2
+// Covers: task:1, task:2
 import { describe, it, expect } from 'vitest';
 
-import { enumerateUnmergedBranches, intersectFiles, blockerSweep, runOverlapScan, renderReport } from '../../src/engine/overlap-scan.js';
+import { classifyCandidatePaths, enumerateUnmergedBranches, intersectFiles, blockerSweep, runOverlapScan, renderReport } from '../../src/engine/overlap-scan.js';
 import type { OverlapReport } from '../../src/engine/overlap-scan.js';
 import type { GitRunner, GitResult } from '../../src/engine/rebase.js';
 import type { BlockerResolver, BlockerVerdict } from '../../src/engine/blocker-resolver.js';
@@ -38,6 +38,79 @@ function fakeGit(
   };
   return { git, calls };
 }
+
+describe('engine/overlap-scan — classifyCandidatePaths (Task 1)', () => {
+  it.each([
+    {
+      name: 'fully present candidates',
+      candidates: ['src/present.ts', 'README.md'],
+      listing: 'src/present.ts\nREADME.md\n',
+      expected: { kind: 'classified', absent: [] },
+    },
+    {
+      name: 'fully absent candidates',
+      candidates: ['src/missing.ts', 'docs/missing.md'],
+      listing: 'src/present.ts\n',
+      expected: { kind: 'classified', absent: ['src/missing.ts', 'docs/missing.md'] },
+    },
+    {
+      name: 'mixed candidates',
+      candidates: ['src/present.ts', 'src/missing.ts'],
+      listing: 'src/present.ts\n',
+      expected: { kind: 'classified', absent: ['src/missing.ts'] },
+    },
+    {
+      name: 'an empty candidate list',
+      candidates: [],
+      listing: 'src/present.ts\n',
+      expected: { kind: 'classified', absent: [] },
+    },
+    {
+      name: 'duplicate candidate spellings',
+      candidates: ['src/missing.ts', 'src/missing.ts', 'src/present.ts'],
+      listing: 'src/present.ts\n',
+      expected: { kind: 'classified', absent: ['src/missing.ts'] },
+    },
+    {
+      name: 'leading-dot-slash and backslash spellings',
+      candidates: ['./src/present.ts', 'src\\missing.ts', './src\\missing.ts'],
+      listing: 'src/present.ts\n',
+      expected: { kind: 'classified', absent: ['src\\missing.ts'] },
+    },
+    {
+      name: 'a failed listing command',
+      candidates: ['src/missing.ts'],
+      listing: '',
+      exitCode: 128,
+      expected: { kind: 'classification-failed', exitCode: 128 },
+    },
+  ])('classifies $name', async ({ candidates, listing, exitCode, expected }) => {
+    const { git, calls } = fakeGit([
+      { match: ['ls-files'], result: { exitCode, stdout: listing } },
+    ]);
+
+    const result = await classifyCandidatePaths(git, candidates);
+
+    expect({ result, calls }).toEqual({
+      result: expected,
+      calls: [[
+        'ls-files', '--cached', '--others', '--exclude-standard', '--full-name', '--', ':/',
+      ]],
+    });
+  });
+
+  it('lists from the worktree root with repo-root-relative paths', async () => {
+    const { git, calls } = fakeGit([
+      { match: ['ls-files'], result: { stdout: 'src/present.ts\n' } },
+    ]);
+
+    await classifyCandidatePaths(git, ['src/present.ts']);
+
+    expect(calls).toEqual([[
+      'ls-files', '--cached', '--others', '--exclude-standard', '--full-name', '--', ':/',
+    ]]);
+  });
+});
 
 describe('engine/overlap-scan — enumerateUnmergedBranches (Task 1)', () => {
   it('returns only branches NOT merged into base, excluding merged ones', async () => {
@@ -281,6 +354,71 @@ describe('engine/overlap-scan — runOverlapScan (Task 4)', () => {
   });
 });
 
+describe('engine/overlap-scan — earned clean verdict (Task 2)', () => {
+  it('adds one advisory note for each candidate path absent from the checkout', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: '' } },
+      { match: ['ls-files'], result: { stdout: 'src/present.ts\n' } },
+      { match: ['for-each-ref'], result: { stdout: '' } },
+    ]);
+    const { resolver } = fakeResolver({ kind: 'unblocked' });
+
+    const result = await runOverlapScan({
+      candidateFiles: ['src/present.ts', 'src/missing.ts', 'docs/missing.md'],
+      git,
+      resolver,
+      localBase: 'main',
+    });
+
+    expect(result.skipNotes).toEqual([
+      'candidate path is not present in the checkout: src/missing.ts',
+      'candidate path is not present in the checkout: docs/missing.md',
+    ]);
+    expect(renderReport(result).toLowerCase()).not.toContain('no overlap detected; no open blockers');
+  });
+
+  it('notes that nothing was scanned when no candidate paths are supplied', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: '' } },
+      { match: ['ls-files'], result: { stdout: 'src/present.ts\n' } },
+      { match: ['for-each-ref'], result: { stdout: '' } },
+    ]);
+    const { resolver } = fakeResolver({ kind: 'unblocked' });
+
+    const result = await runOverlapScan({ candidateFiles: [], git, resolver, localBase: 'main' });
+
+    expect(result.skipNotes).toEqual(expect.arrayContaining([
+      expect.stringMatching(/nothing.*scanned|no candidate/i),
+    ]));
+    expect(renderReport(result).toLowerCase()).not.toContain('no overlap detected; no open blockers');
+  });
+
+  it('reports classification failure without losing sibling-branch overlaps', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: '' } },
+      { match: ['ls-files'], result: { exitCode: 128, stderr: 'listing failed' } },
+      { match: ['for-each-ref'], result: { stdout: 'spec/sibling\n' } },
+      { match: ['rev-list', '--count', 'main..spec/sibling'], result: { stdout: '1\n' } },
+      { match: ['merge-base', 'main', 'spec/sibling'], result: { stdout: 'fork\n' } },
+      { match: ['diff', '--name-only', 'fork', 'spec/sibling'], result: { stdout: 'src/foo.ts\n' } },
+    ]);
+    const { resolver } = fakeResolver({ kind: 'unblocked' });
+
+    const result = await runOverlapScan({
+      candidateFiles: ['src/foo.ts'],
+      git,
+      resolver,
+      localBase: 'main',
+    });
+
+    expect(result.seamOverlaps).toEqual([{ branch: 'spec/sibling', files: ['src/foo.ts'] }]);
+    expect(result.skipNotes).toEqual(expect.arrayContaining([
+      expect.stringMatching(/classif|ls-files/i),
+      expect.stringContaining('128'),
+    ]));
+  });
+});
+
 describe('engine/overlap-scan — runOverlapScan advisory degradation (Task 5)', () => {
   it('never throws when enumeration fails — records an advisory skip note', async () => {
     const git: GitRunner = async (args) => {
@@ -306,6 +444,7 @@ describe('engine/overlap-scan — runOverlapScan advisory degradation (Task 5)',
 
   it.each(['throws', 'returns non-zero'] as const)('preserves results and reports an advisory when one branch diff %s', async (failure) => {
     const git: GitRunner = async (args) => {
+      if (args[0] === 'ls-files') return { exitCode: 0, stdout: 'src/foo.ts\n', stderr: '' };
       if (args[0] === 'remote') return { exitCode: 0, stdout: '', stderr: '' };
       if (args[0] === 'for-each-ref') {
         return { exitCode: 0, stdout: 'spec/feature-a\nspec/feature-b\n', stderr: '' };
@@ -343,6 +482,7 @@ describe('engine/overlap-scan — runOverlapScan advisory degradation (Task 5)',
   it('records one advisory note and no overlap when a branch has no merge base', async () => {
     const { git } = fakeGit([
       { match: ['remote'], result: { stdout: '' } },
+      { match: ['ls-files'], result: { stdout: 'src/foo.ts\n' } },
       { match: ['for-each-ref'], result: { stdout: 'spec/unrelated\n' } },
       { match: ['rev-list', '--count', 'main..spec/unrelated'], result: { stdout: '1\n' } },
       { match: ['merge-base', 'main', 'spec/unrelated'], result: { exitCode: 1 } },

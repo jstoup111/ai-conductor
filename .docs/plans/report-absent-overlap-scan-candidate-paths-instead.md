@@ -59,7 +59,7 @@ Follow the module's existing test conventions rather than inventing new ones. Th
 ### Task 2: Withhold the clean verdict unless the scan earned it
 **Story:** Story 1
 **Type:** negative-path
-**Files:** src/conductor/src/engine/overlap-scan.ts, src/conductor/test/engine/overlap-scan.test.ts, src/conductor/test/acceptance/overlap-scan.acceptance.test.ts, src/conductor/test/engine/engineer/coherence-validator.test.ts
+**Files:** src/conductor/src/engine/overlap-scan.ts, src/conductor/test/engine/overlap-scan.test.ts, src/conductor/test/acceptance/overlap-scan.acceptance.test.ts, src/conductor/test/engine/engineer/coherence-validator.test.ts, src/conductor/test/engine/overlap-scan-cli.test.ts
 **Dependencies:** 1
 
 **Steps:**
@@ -67,7 +67,8 @@ Follow the module's existing test conventions rather than inventing new ones. Th
 2. Write real-git acceptance cases on the suite's existing scratch-repository fixture: a mixed present/absent candidate list where a sibling branch changes the present path; an all-present, uncontended list; an all-absent list; and an absent path that a sibling branch creates.
 3. Establish RED, then call the Task 1 helper from the scan entry point after the base is resolved and append the notes to the existing advisory-note list. Do not remove absent candidates from the scanned set, do not add a report field, and leave the branch enumeration, intersection, and blocker sweep untouched.
 4. Update the existing scripted-git cases that assert an exact advisory-note list, in the engine unit suite and the coherence-validator suite, to script the listing call so their candidate paths classify as present; do not loosen those assertions.
-5. Run the focused unit, coherence-validator, and acceptance files through the repository's scoped test runner, confirm the typecheck target that includes test files passes, and commit the focused change.
+5. Add a command-entry case to the overlap-scan CLI suite: a real dispatch whose classification command fails prints the classification-failed note and every sibling-branch overlap found, and exits 0.
+6. Run the focused unit, CLI, coherence-validator, and acceptance files through the repository's scoped test runner, confirm the typecheck target that includes test files passes, and commit the focused change.
 
 **Done when:**
 1. The scan appends one advisory note per absent candidate path, one note when classification failed, and one note stating nothing was scanned when the candidate list is empty.
@@ -75,6 +76,8 @@ Follow the module's existing test conventions rather than inventing new ones. Th
 3. A real-git case whose candidate paths are all present and uncontended renders exactly the existing single clean line unchanged, and a real-git case whose candidate paths are all absent renders no clean line.
 4. A scripted-git case proves a failing classification command still returns every sibling-branch overlap found in that run and never throws.
 5. A real-git case proves a candidate path absent from the checkout but created by a sibling branch is still reported as an overlap on that branch.
+6. A real-git case with an empty candidate list renders the nothing-scanned note and does not contain the clean "no overlap detected" line.
+7. A real dispatch whose classification command fails prints the classification-failed note and every sibling-branch overlap found, and returns exit code 0.
 
 ### Task 3: Capture every path passed to the candidate-file option
 **Story:** Story 2
@@ -92,6 +95,7 @@ Follow the module's existing test conventions rather than inventing new ones. Th
 1. Parsing `--files` followed by several bare tokens yields every token as a candidate path, and a repeated `--files` yields the union of every occurrence's values in the order given.
 2. Parsing `--files` immediately followed by another recognized option and its value yields an empty candidate list and leaves that option's own parsed value correct.
 3. A real dispatch over a space-separated mixed candidate list prints the present path's sibling-branch overlap line and the absent path's notice and returns exit code 0.
+4. Parsing a repeated `--files` where some occurrences carry comma-separated values yields every value from every occurrence as a candidate path, in the order given.
 
 ## Coverage Check
 
@@ -114,3 +118,12 @@ Every criterion is diff-local against controlled fixtures; nothing here depends 
 ## Task Dependency Graph
 
 Task 1 -> Task 2 -> Task 3
+
+### Task rem-prd-audit-rem-s1.2-1: src/conductor/src/engine/overlap-scan.ts:47 — make the classification listing repo-root-relative from any cwd: call git(['ls-files', '--cached', '--others', '--exclude-standard', '--full-name', '--', ':/']) so it lists the whole worktree with top-level-relative paths. In the same task, update the matched exact-argv assertion at src/conductor/test/engine/overlap-scan.test.ts:96 to the new argv. Add a RED-first unit case in overlap-scan.test.ts asserting the listing argv includes both '--full-name' and the ':/' pathspec. Keep every existing Task 1 Done-when 1-3 case (present/absent/mixed/empty, ./ and backslash spellings, non-zero exit → classification-failed) passing unchanged.
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/engine/overlap-scan.ts:47 runs `git ls-files --cached --others --exclude-standard` with no `--full-name` and no top-level pathspec. Run from a subdirectory, it lists only that subtree, relative to cwd, so present repo-root-relative candidates are classified absent and the clean line is withheld. Task 1 step 3 already requires a listing 'with repo-root-relative output', so this is conforming implementation drift that Task 1 admits, not a plan or architecture gap. The matched pair is the exact-argv assertion at src/conductor/test/engine/overlap-scan.test.ts:96, which must move in the same task. Sibling sweep: no other `ls-files` call site exists; the overlap-scan-cli.test.ts:217 shim keys only on `$1 = ls-files` and stays valid; the branch `diff --name-only` enumeration is already repo-root-relative. A real-git subdirectory case in overlap-scan.acceptance.test.ts (a Task 2 file) is excluded because Task 1 admits only the unit file. All delivered Task 1 Done-when 1-3 coverage (present, absent, mixed, empty, ./ and backslash spellings, non-zero exit) is preserved unchanged.
+**Criterion:** S1.2
+**Parent task:** 1
+**Done when:**
+- S1.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s1.2-1 is complete.

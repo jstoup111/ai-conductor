@@ -1,10 +1,10 @@
-// Covers: task:3
+// Covers: task:2, task:3
 // Tests for the `conduct-ts overlap-scan` subcommand (Task 7).
 // Covers: CLI surface registration, argv detection, and real dispatch
 // (real makeGitRunner + real createBlockerResolver) against a scratch repo.
 
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -76,6 +76,30 @@ describe('detectOverlapScanCommand — argv detection', () => {
     expect(result?.cwd).toBe('/tmp/some-repo');
   });
 
+  it('accumulates space-separated and repeated --files values, including comma-separated values', async () => {
+    const { detectOverlapScanCommand } = await import('../../src/index.js');
+    const result = detectOverlapScanCommand([
+      'node', 'conduct-ts', 'overlap-scan',
+      '--files', 'one.ts', 'two.ts,three.ts',
+      '--base', 'main',
+      '--files', 'four.ts,five.ts', 'six.ts',
+    ]);
+
+    expect(result?.files).toEqual(['one.ts', 'two.ts', 'three.ts', 'four.ts', 'five.ts', 'six.ts']);
+    expect(result?.base).toBe('main');
+  });
+
+  it('does not capture a following option or its value as candidate files', async () => {
+    const { detectOverlapScanCommand } = await import('../../src/index.js');
+    const result = detectOverlapScanCommand([
+      'node', 'conduct-ts', 'overlap-scan', '--files', '--base', 'main', '--cwd', '/tmp/repo',
+    ]);
+
+    expect(result?.files).toEqual([]);
+    expect(result?.base).toBe('main');
+    expect(result?.cwd).toBe('/tmp/repo');
+  });
+
   it('returns null for non-overlap-scan argv', async () => {
     const { detectOverlapScanCommand } = await import('../../src/index.js');
     expect(detectOverlapScanCommand(['node', 'conduct-ts', 'daemon'])).toBeNull();
@@ -86,6 +110,29 @@ describe('detectOverlapScanCommand — argv detection', () => {
 // ─── 3. Dispatch: real runners, exits 0 even with advisory skip notes ────────
 
 describe('overlapScanCommand — real dispatch', () => {
+  it('Task 3: reports both a sibling overlap and an absent path from space-separated files', async () => {
+    const { overlapScanCommand, detectOverlapScanCommand } = await import('../../src/index.js');
+    const dir = await makeScratchRepo();
+    try {
+      await git(dir, ['checkout', '-q', '-b', 'spec/sibling-feature']);
+      await writeFile(join(dir, 'base.txt'), 'base\nchanged by sibling\n');
+      await git(dir, ['add', '.']);
+      await git(dir, ['commit', '-q', '-m', 'sibling touches base.txt']);
+      await git(dir, ['checkout', '-q', 'main']);
+
+      const cmd = detectOverlapScanCommand([
+        'node', 'conduct-ts', 'overlap-scan', '--files', 'base.txt', 'absent.txt', '--base', 'main', '--cwd', dir,
+      ]);
+      const printed: string[] = [];
+      await expect(overlapScanCommand(cmd!, { print: (s: string) => printed.push(s) })).resolves.toBe(0);
+
+      expect(printed.join('\n')).toContain('Overlap with spec/sibling-feature: base.txt');
+      expect(printed.join('\n')).toMatch(/absent\.txt.*not present|not present.*absent\.txt/i);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('drives runOverlapScan with real git/gh runners, prints renderReport, exits 0', async () => {
     const { overlapScanCommand, detectOverlapScanCommand } = await import('../../src/index.js');
     const dir = await makeScratchRepo();
@@ -147,6 +194,43 @@ describe('overlapScanCommand — real dispatch', () => {
       expect(code).toBe(0);
       expect(printed.length).toBeGreaterThan(0);
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('Task 2: prints classification failure and sibling overlaps while exiting 0', async () => {
+    const { overlapScanCommand, detectOverlapScanCommand } = await import('../../src/index.js');
+    const dir = await makeScratchRepo();
+    const binDir = join(dir, 'test-bin');
+    const originalPath = process.env.PATH;
+    try {
+      await git(dir, ['checkout', '-q', '-b', 'spec/sibling-feature']);
+      await writeFile(join(dir, 'base.txt'), 'base\nchanged by sibling\n');
+      await git(dir, ['add', '.']);
+      await git(dir, ['commit', '-q', '-m', 'sibling touches base.txt']);
+      await git(dir, ['checkout', '-q', 'main']);
+
+      // The real command dispatch uses the production GitRunner. Shadow only
+      // `ls-files` so the rest of the local-Git scan remains real.
+      await mkdir(binDir);
+      const shim = join(binDir, 'git');
+      await writeFile(shim, '#!/bin/sh\nif [ "$1" = "ls-files" ]; then exit 77; fi\nexec /usr/bin/git "$@"\n');
+      await chmod(shim, 0o755);
+      process.env.PATH = `${binDir}:${originalPath ?? ''}`;
+
+      const cmd = detectOverlapScanCommand([
+        'node', 'conduct-ts', 'overlap-scan', '--files', 'base.txt', '--base', 'main', '--cwd', dir,
+      ]);
+      expect(cmd).not.toBeNull();
+
+      const printed: string[] = [];
+      const code = await overlapScanCommand(cmd!, { print: (s: string) => printed.push(s) });
+
+      expect(code).toBe(0);
+      expect(printed.join('\n')).toMatch(/candidate-path classification failed.*77/i);
+      expect(printed.join('\n')).toContain('Overlap with spec/sibling-feature: base.txt');
+    } finally {
+      process.env.PATH = originalPath;
       await rm(dir, { recursive: true, force: true });
     }
   });
