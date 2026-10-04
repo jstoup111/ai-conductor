@@ -1,4 +1,3 @@
-// Covers: task:10
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -407,6 +406,7 @@ describe('provider scratch homes', () => {
     }
   });
 
+  // Covers: task:10
   it('acquires and releases a Pi scratch-home lease', async () => {
     const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-pi-release-'));
     const options = {
@@ -492,6 +492,7 @@ describe('provider scratch homes', () => {
     }
   });
 
+  // Covers: task:10
   it('reclaims an abandoned Pi home alongside an equivalent Codex lease', async () => {
     const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-pi-dead-sweep-'));
     const options = {
@@ -522,6 +523,7 @@ describe('provider scratch homes', () => {
     }
   });
 
+  // Covers: task:10
   it('keeps a live Pi lease and its home during a scratch sweep', async () => {
     const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-pi-live-sweep-'));
     const options = {

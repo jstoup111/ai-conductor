@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4, task:5, task:6, task:7, task:9, task:13, task:15, task:16, task:17, task:18
+// Covers: task:2, task:3, task:4, task:6, task:7, task:9, task:13, task:15, task:16, task:17, task:18
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -384,10 +384,12 @@ describe('PiProvider', () => {
     expect(Object.getOwnPropertyNames(PiProvider.prototype)).toEqual(['constructor', 'resolveSelfHostExecutable', 'prepareSelfHostAuth', 'invoke']);
   });
 
+  // Covers: task:5
   it('resolves its self-host executable from the constructed adapter', async () => {
     expect(await provider.resolveSelfHostExecutable()).toBe('/resolved/pi');
   });
 
+  // Covers: task:5
   it('resolves the candidate provider key into its isolated self-host auth file', async () => {
     const homeDir = await mkdtemp(join(tmpdir(), 'pi-provider-self-host-'));
     const runner = vi.fn(async () => ({ stdout: 'K' }));
