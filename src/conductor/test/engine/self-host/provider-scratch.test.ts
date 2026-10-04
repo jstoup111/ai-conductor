@@ -1,3 +1,4 @@
+// Covers: task:10
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -406,6 +407,32 @@ describe('provider scratch homes', () => {
     }
   });
 
+  it('acquires and releases a Pi scratch-home lease', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-pi-release-'));
+    const options = {
+      worktreeRoot,
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 2,
+      provider: 'pi' as const,
+      ownerPid: 1234,
+    };
+
+    try {
+      const home = await acquireScratchHome(options);
+
+      await expect(readScratchLease(home)).resolves.toMatchObject({
+        kind: 'present',
+        lease: { ownerPid: 1234 },
+      });
+      await expect(releaseScratchHome(options)).resolves.toStrictEqual({ kind: 'released' });
+      await expect(readdir(home)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
   it('releases a home after it is externally removed', async () => {
     const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-externally-removed-'));
     const options = {
@@ -460,6 +487,63 @@ describe('provider scratch homes', () => {
           { kind: 'retained', home: liveHome, reason: 'live-owner' },
         ],
       ]);
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reclaims an abandoned Pi home alongside an equivalent Codex lease', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-pi-dead-sweep-'));
+    const options = {
+      worktreeRoot,
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 1,
+      ownerPid: 1001,
+    };
+
+    try {
+      const [codexHome, piHome] = await Promise.all([
+        acquireScratchHome({ ...options, provider: 'codex' }),
+        acquireScratchHome({ ...options, attempt: 2, provider: 'pi' }),
+      ]);
+
+      await expect(sweepScratch({
+        worktreeRoot,
+        ownerLiveness: () => 'dead',
+      })).resolves.toStrictEqual([
+        { kind: 'reclaimed', home: codexHome },
+        { kind: 'reclaimed', home: piHome },
+      ]);
+      await expect(Promise.all([readdir(codexHome), readdir(piHome)])).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a live Pi lease and its home during a scratch sweep', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-pi-live-sweep-'));
+    const options = {
+      worktreeRoot,
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 1,
+      provider: 'pi' as const,
+      ownerPid: 1001,
+    };
+
+    try {
+      const home = await acquireScratchHome(options);
+
+      await expect(sweepScratch({
+        worktreeRoot,
+        ownerLiveness: () => 'live',
+      })).resolves.toStrictEqual([
+        { kind: 'retained', home, reason: 'live-owner' },
+      ]);
+      await expect(readFile(join(home, 'owner.json'), 'utf8')).resolves.toContain('"ownerPid":1001');
     } finally {
       await rm(worktreeRoot, { recursive: true, force: true });
     }
