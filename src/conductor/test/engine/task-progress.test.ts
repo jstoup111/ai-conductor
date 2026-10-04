@@ -1,4 +1,4 @@
-// Covers: task:4, task:5
+// Covers: task:4, task:5, task:6
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -928,6 +928,86 @@ describe('task-progress', () => {
         { check: 'first verified outcome', evidence: 'prove-closed', source: 'verify-only' },
         { check: 'second verified outcome', evidence: 'prove-closed', source: 'verify-only' },
       ]);
+    });
+
+    it('requires tagged verify-only checks to be verified or explicitly unverified while prove-closing untagged checks', async () => {
+      await prepareTaskClose(`### Task 1: verify existing behavior with a test
+
+**Verify-only:** yes
+
+**Done when:**
+- [test] tagged behavior remains covered
+- untagged behavior remains closed`);
+
+      const refusal = await completeTaskDoneWhen(dir, '1', []);
+      expect(refusal).toMatchObject({
+        kind: 'refused',
+        message: expect.stringContaining('check 1: [test] tagged behavior remains covered'),
+      });
+      expect(refusal.kind === 'refused' && refusal.message).not.toContain('untagged behavior remains closed');
+      expect(await taskRow()).toMatchObject({ status: 'in_progress' });
+
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(
+        join(dir, 'test', 'verify-only.test.ts'),
+        '// Covers: task:1\n\nit(\'keeps tagged behavior covered\', () => {});\n',
+      );
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed verify-only reference'], { cwd: dir });
+
+      await expect(completeTaskDoneWhen(dir, '1', [{
+        index: 1,
+        evidence: 'test:test/verify-only.test.ts::keeps tagged behavior covered',
+      }])).resolves.toEqual({ kind: 'completed' });
+      expect(await taskRow()).toMatchObject({
+        status: 'completed',
+        doneWhen: [
+          {
+            check: '[test] tagged behavior remains covered',
+            evidence: 'test:test/verify-only.test.ts::keeps tagged behavior covered',
+            source: 'verified',
+          },
+          {
+            check: 'untagged behavior remains closed',
+            evidence: 'prove-closed',
+            source: 'verify-only',
+          },
+        ],
+      });
+    });
+
+    it('allows an explicit unverified close for a tagged verify-only check', async () => {
+      await prepareTaskClose(`### Task 1: cannot verify existing behavior
+
+**Verify-only:** yes
+
+**Done when:**
+- [test] tagged behavior needs an explicit close
+- untagged behavior remains closed`);
+
+      await expect(completeTaskDoneWhen(dir, '1', [], [{
+        index: 1,
+        reason: 'the required dependency is unavailable',
+      }])).resolves.toEqual({ kind: 'completed' });
+      expect(await taskRow()).toMatchObject({
+        status: 'completed',
+        doneWhen: [
+          {
+            check: '[test] tagged behavior needs an explicit close',
+            evidence: 'the required dependency is unavailable',
+            source: 'unverified',
+            reason: 'the required dependency is unavailable',
+          },
+          {
+            check: 'untagged behavior remains closed',
+            evidence: 'prove-closed',
+            source: 'verify-only',
+          },
+        ],
+      });
     });
   });
 

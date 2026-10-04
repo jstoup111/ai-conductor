@@ -391,27 +391,26 @@ export async function completeTaskDoneWhen(
     unverifiedByIndex.set(entry.index, entry.reason);
   }
 
-  if (!verifyOnly) {
-    const missingIndex = checks.findIndex((_, index) =>
-      !evidenceByIndex.has(index + 1) && !unverifiedByIndex.has(index + 1));
-    if (missingIndex !== -1) {
-      const missingCheck = checks[missingIndex]!;
-      const recovery = missingCheck.trimStart().startsWith(TEST_DONE_WHEN_TAG)
-        ? `; write or cite the test, or use --unverified ${missingIndex + 1}=<reason>.`
-        : '';
-      return {
-        kind: 'refused',
-        message:
-          `[task-cli] cannot complete task ${id}: missing Done when evidence for ` +
-          `check ${missingIndex + 1}: ${missingCheck}${recovery}`,
-      };
-    }
+  const missingIndex = checks.findIndex((check, index) =>
+    (!verifyOnly || check.trimStart().startsWith(TEST_DONE_WHEN_TAG)) &&
+    !evidenceByIndex.has(index + 1) && !unverifiedByIndex.has(index + 1));
+  if (missingIndex !== -1) {
+    const missingCheck = checks[missingIndex]!;
+    const recovery = missingCheck.trimStart().startsWith(TEST_DONE_WHEN_TAG)
+      ? `; write or cite the test, or use --unverified ${missingIndex + 1}=<reason>.`
+      : '';
+    return {
+      kind: 'refused',
+      message:
+        `[task-cli] cannot complete task ${id}: missing Done when evidence for ` +
+        `check ${missingIndex + 1}: ${missingCheck}${recovery}`,
+    };
   }
 
   const taggedChecks = checks
     .map((check, index) => ({ check, index: index + 1 }))
     .filter(({ check }) => check.trimStart().startsWith(TEST_DONE_WHEN_TAG));
-  if (taggedChecks.length > 0 && !verifyOnly) {
+  if (taggedChecks.some(({ index }) => !unverifiedByIndex.has(index))) {
     let repositoryRoot: string;
     try {
       const root = await execa('git', ['rev-parse', '--show-toplevel'], {
@@ -524,10 +523,12 @@ export async function completeTaskDoneWhen(
     }
     return {
       check,
-      evidence: verifyOnly ? 'prove-closed' : evidenceByIndex.get(checkIndex)!,
-      source: verifyOnly
-        ? 'verify-only'
-        : check.trimStart().startsWith(TEST_DONE_WHEN_TAG) ? 'verified' : 'reported',
+      evidence: verifyOnly && !check.trimStart().startsWith(TEST_DONE_WHEN_TAG)
+        ? 'prove-closed'
+        : evidenceByIndex.get(checkIndex)!,
+      source: check.trimStart().startsWith(TEST_DONE_WHEN_TAG)
+        ? 'verified'
+        : verifyOnly ? 'verify-only' : 'reported',
     };
   });
 
