@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-04T21:30:06.195Z
 Slug: self-host-builds-isolate-and-fingerprint-pi-operat
 Class: plan-gap
 Halting step: build
