@@ -2,6 +2,13 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 import { PiProvider, type PiEnvironment, type PiSubprocessFactory } from '../../src/execution/pi-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { resolveProviderModelPolicy } from '../../src/engine/provider-model-policy.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import type { HarnessConfig } from '../../src/types/config.js';
+import type { ProviderAttemptEvent } from '../../src/types/index.js';
 
 const invokeOptions: InvokeOptions = {
   prompt: 'Implement the requested change.',
@@ -19,10 +26,54 @@ const environment: PiEnvironment = {
   cwd: () => '/workspace/project',
 };
 
+function terminalAssistantMessage(usage?: unknown): string {
+  return JSON.stringify({
+    type: 'message_end',
+    message: {
+      role: 'assistant',
+      content: 'Completed.',
+      ...(usage === undefined ? {} : { usage }),
+      stopReason: 'stop',
+    },
+  });
+}
+
+async function providerAttemptFor(stdout: string): Promise<ProviderAttemptEvent> {
+  const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+  const pi = new PiProvider('/resolved/pi', spawn, environment);
+  const emitted: ProviderAttemptEvent[] = [];
+  const config: HarnessConfig = {
+    llm_provider: 'pi',
+    steps: { explore: { llm_provider: 'pi' } },
+  };
+  const policy = resolveProviderModelPolicy('pi', { config });
+  const runner = new DefaultStepRunner(pi, 'pi-no-usage', '/workspace/project', {
+    mode: 'auto',
+    config,
+    configuredProviders: ['pi'],
+    providerRuntimes: new ProviderRuntimeSet([{
+      key: 'pi',
+      provider: pi,
+      lifecycleCapability: pi.lifecycleCapability,
+      nativeSchemaCapability: pi.nativeSchemaCapability,
+      policy,
+      builtIn: true,
+      availability: new ModelAvailability(policy.modelFallbackLadder),
+    }]),
+    sessionStore: new ProviderSessionStore(),
+    providerAttempt: (step, attempt) => { emitted.push({ type: 'provider_attempt', step, ...attempt }); },
+  });
+
+  await expect(runner.run('explore', {})).resolves.toMatchObject({ success: true });
+  const event = emitted.find((candidate) => candidate.provider === 'pi');
+  expect(event).toBeDefined();
+  return event!;
+}
+
 describe('PiProvider usage', () => {
   it('sums only terminal assistant message usage without counting partial or repeated events', async () => {
     const stdout = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
-    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0, kill: vi.fn() });
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
     const provider = new PiProvider('/resolved/pi', spawn, environment);
 
     await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({
@@ -51,7 +102,6 @@ describe('PiProvider usage', () => {
       stdout: `${workedStream}\n${toolResult}`,
       stderr: '',
       exitCode: 0,
-      kill: vi.fn(),
     });
     const provider = new PiProvider('/resolved/pi', spawn, environment);
 
@@ -71,12 +121,63 @@ describe('PiProvider usage', () => {
         stopReason: 'stop',
       },
     });
-    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0, kill: vi.fn() });
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
     const provider = new PiProvider('/resolved/pi', spawn, environment);
 
     await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({
       success: true,
       tokenUsage: { input: 20, output: 40, reasoningOutput: 30, numTurns: 1 },
     });
+  });
+
+  it.each([
+    {
+      name: 'terminal assistant message without message usage',
+      stdout: terminalAssistantMessage(),
+    },
+    {
+      name: 'message usage with a string input',
+      stdout: terminalAssistantMessage({ input: '20', output: 4, cacheRead: 0, cacheWrite: 0 }),
+    },
+    {
+      name: 'message usage with a missing input',
+      stdout: terminalAssistantMessage({ output: 4, cacheRead: 0, cacheWrite: 0 }),
+    },
+    {
+      name: 'top-level usage rather than message usage',
+      stdout: JSON.stringify({
+        type: 'message_end',
+        usage: { input: 20, output: 4, cacheRead: 0, cacheWrite: 0 },
+        message: { role: 'assistant', content: 'Completed.', stopReason: 'stop' },
+      }),
+    },
+    {
+      name: 'an all-zero message usage',
+      stdout: terminalAssistantMessage({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }),
+    },
+  ])('returns no token usage for $name', async ({ stdout }) => {
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result).toMatchObject({ success: true });
+    expect(result).not.toHaveProperty('tokenUsage');
+  });
+
+  it.each([
+    ['terminal assistant message without message usage', terminalAssistantMessage()],
+    ['message usage with a string input', terminalAssistantMessage({ input: '20', output: 4, cacheRead: 0, cacheWrite: 0 })],
+    ['message usage with a missing input', terminalAssistantMessage({ output: 4, cacheRead: 0, cacheWrite: 0 })],
+    ['top-level usage rather than message usage', JSON.stringify({
+      type: 'message_end',
+      usage: { input: 20, output: 4, cacheRead: 0, cacheWrite: 0 },
+      message: { role: 'assistant', content: 'Completed.', stopReason: 'stop' },
+    })],
+    ['all-zero message usage', terminalAssistantMessage({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })],
+  ])('emits no token usage in the conductor provider attempt for $0', async (_name, stdout) => {
+    const event = await providerAttemptFor(stdout);
+
+    expect(event).not.toHaveProperty('tokenUsage');
   });
 });

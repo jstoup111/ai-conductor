@@ -268,8 +268,13 @@ export function parsePiJsonl(stdout: string): {
     }
   }
 
-  if (assistantTurns > 0) {
-    tokenUsage = { ...(tokenUsage ?? { input: 0, output: 0 }), numTurns: assistantTurns };
+  if (tokenUsage && (tokenUsage.input !== 0
+    || tokenUsage.output !== 0
+    || tokenUsage.cacheRead !== 0
+    || tokenUsage.cacheCreation !== 0)) {
+    tokenUsage = { ...tokenUsage, numTurns: assistantTurns };
+  } else {
+    tokenUsage = undefined;
   }
 
   return {
@@ -455,7 +460,7 @@ export class PiProvider implements LLMProvider {
       output,
       exitCode,
       ...(modelUnavailable ? { modelUnavailable: true } : {}),
-      tokenUsage: exitCode === 0 ? parsed.tokenUsage : undefined,
+      ...(exitCode === 0 && parsed.tokenUsage !== undefined ? { tokenUsage: parsed.tokenUsage } : {}),
       ...(exitCode === 0 && parsed.finalStructuredResult !== undefined ? { finalStructuredResult: parsed.finalStructuredResult } : {}),
       ...(genericUnclassifiedFailure ? { exitFacts } : {}),
     };
