@@ -127,8 +127,11 @@ class ThrowawayProviderHome implements ProviderHome {
   ) {}
 
   childEnv(): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = { ...this.parentEnv, ...this.additions };
+    const env: NodeJS.ProcessEnv = { ...this.parentEnv };
     for (const variable of this.scrubVariables) delete env[variable];
+    // Scrub only inherited operator state. Provider-owned auth is prepared for
+    // this throwaway home and must remain available to its selected child.
+    Object.assign(env, this.additions);
     env[this.homeVariable] = this.homeDir;
     return scrubTmuxEnvironment(env);
   }

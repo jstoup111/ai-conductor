@@ -7,6 +7,9 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const boundary = vi.hoisted(() => ({ calls: [] as Array<{ file: string; args: string[]; options: Record<string, unknown> }> }));
+// setup.ts imports engine modules before this file's mock is registered.
+// Reset the cached graph so the production adapter reaches this fake boundary.
+vi.hoisted(() => { vi.resetModules(); });
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return { ...actual, execFile: vi.fn((file, args: string[], options: Record<string, unknown>, callback) => {
