@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:5
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -11,6 +11,7 @@ import {
   writeVerdict,
   validRebaseOperationRecord,
   type GateVerdict,
+  type RebaseOperationRecord,
 } from '../../src/engine/gate-verdicts.js';
 
 describe('engine/gate-verdicts', () => {
@@ -159,6 +160,42 @@ describe('engine/gate-verdicts', () => {
     expect(validRebaseOperationRecord({ ...operation, appliedAt: '123' } as never)).toBe(false);
   });
 
+  it('accepts legacy rebase operation records without preservation evidence', () => {
+    const operation = validRebaseOperationFixture();
+
+    expect(validRebaseOperationRecord(operation)).toBe(true);
+  });
+
+  it('accepts complete preservation evidence with a non-empty verdict digest', () => {
+    const operation = validRebaseOperationFixture({
+      preservationEvidence: [preservationEvidence('build_review')],
+    });
+
+    expect(validRebaseOperationRecord(operation)).toBe(true);
+  });
+
+  it('rejects preservation evidence whose gates differ from the preserved transition gates', () => {
+    const operation = validRebaseOperationFixture({
+      preservationEvidence: [preservationEvidence('prd_audit')],
+    });
+
+    expect(validRebaseOperationRecord(operation)).toBe(false);
+  });
+
+  it('rejects a non-array preservation evidence value', () => {
+    const operation = validRebaseOperationFixture({ preservationEvidence: {} as never });
+
+    expect(validRebaseOperationRecord(operation)).toBe(false);
+  });
+
+  it('rejects preservation evidence without a non-empty original verdict digest', () => {
+    const operation = validRebaseOperationFixture({
+      preservationEvidence: [{ ...preservationEvidence('build_review'), originalVerdictDigest: '' }],
+    });
+
+    expect(validRebaseOperationRecord(operation)).toBe(false);
+  });
+
   it('drops obsolete preservation metadata when an ordinary verdict replaces the record', async () => {
     await writeVerdict(dir, 'build_review', {
       satisfied: true,
@@ -200,3 +237,33 @@ describe('engine/gate-verdicts', () => {
     expect(await checkGateCompletion(dir, 'coverage_binding')).toMatchObject({ done: false });
   });
 });
+
+function validRebaseOperationFixture(overrides: Partial<RebaseOperationRecord> = {}): RebaseOperationRecord {
+  return {
+    id: 'rebase-operation-1',
+    status: 'applying' as const,
+    transition: { preserved: ['build_review'], invalidated: [], reverified: [] },
+    replay: {
+      preRebaseHead: 'a'.repeat(40),
+      mergeBase: 'b'.repeat(40),
+      target: 'c'.repeat(40),
+      completedHead: 'd'.repeat(40),
+      expectedTree: 'e'.repeat(40),
+    },
+    ...overrides,
+  };
+}
+
+function preservationEvidence(gate: 'build_review' | 'prd_audit') {
+  return {
+    gate,
+    original: {
+      artifactDigest: 'sha256:artifact',
+      attemptId: 'attempt-1',
+      runId: 'run-1',
+      codeStamp: 'a'.repeat(40),
+    },
+    originalVerdictDigest: 'persisted-verdict-digest',
+    relevantInputIdentities: ['.docs/plans/feature.md@sha256:plan'],
+  };
+}
