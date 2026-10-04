@@ -16,6 +16,10 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 const execFile = promisify(execFileCallback);
 const directories: string[] = [];
 const servers: Server[] = [];
+// These tests own their loopback receivers. Drive the OTel boundary through an
+// explicit marker-free environment instead of weakening the test process's
+// global export refusal.
+const loopbackOtelEnv: NodeJS.ProcessEnv = {};
 
 async function temporaryProject(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'spool-interactive-wiring-'));
@@ -70,7 +74,7 @@ async function eventually(predicate: () => boolean | Promise<boolean>): Promise<
 function start(config: { otel: { exporter: 'otlp'; endpoint: string; spool: { enabled: true } } }, project: string, events: ConductorEventEmitter) {
   const context = {
     pipelineDir: join(project, '.pipeline'), runId: 'run', feature: 'feature', project,
-    branch: 'feature', engineVersion: 'test', harnessVersion: 'test', metrics: false,
+    branch: 'feature', engineVersion: 'test', harnessVersion: 'test', metrics: false, env: loopbackOtelEnv,
   };
   return {
     visualizer: wireOtelVisualizer(config, context, events),
@@ -179,7 +183,7 @@ describe('interactive OTel spool wiring', () => {
     const config = { otel: { exporter: 'otlp' as const, endpoint: await endpoint(() => { received += 1; }), spool: { enabled: true } } };
     const context = {
       pipelineDir: join(project, '.pipeline'), runId: 'run', feature: 'feature', project,
-      branch: 'feature', engineVersion: 'test', harnessVersion: 'test', metrics: false,
+      branch: 'feature', engineVersion: 'test', harnessVersion: 'test', metrics: false, env: loopbackOtelEnv,
     };
     const failedRegistry = (): PluginRegistry => {
       const registry = new PluginRegistry();

@@ -13,6 +13,10 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const leaseUnlinkFailures = vi.hoisted(() => new Set<string>());
 const interactiveSpoolDirectories = vi.hoisted(() => new Map<string, string>());
+// This suite uses only fixture-owned loopback endpoints. Keep the process-wide
+// test export refusal intact and inject the deliberate test environment at the
+// wiring seam.
+const loopbackOtelEnv: NodeJS.ProcessEnv = {};
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const filesystem = await importOriginal<typeof import('node:fs/promises')>();
@@ -100,7 +104,7 @@ describe('daemon OTel spool wiring', () => {
       if (event.type === 'renderer_error') errors.push(event.error);
     });
     const daemon = wireDaemonOtel({ otel: { exporter: 'otlp', endpoint: 'http://127.0.0.1:1', spool: { enabled: true } } }, {
-      mainRoot: blockedRoot, project: blockedRoot, projectName: 'test', rootEvents: events,
+      mainRoot: blockedRoot, project: blockedRoot, projectName: 'test', rootEvents: events, env: loopbackOtelEnv,
     });
 
     await eventually(() => errors.length === 1);
@@ -117,7 +121,7 @@ describe('daemon OTel spool wiring', () => {
       if (event.type === 'renderer_error') failures.push(event);
     });
     const daemon = wireDaemonOtel({ otel: { exporter: 'otlp', endpoint: 'http://127.0.0.1:1', spool: { enabled: true } } }, {
-      mainRoot, project: mainRoot, projectName: 'test', rootEvents,
+      mainRoot, project: mainRoot, projectName: 'test', rootEvents, env: loopbackOtelEnv,
     });
     const leasePath = join(mainRoot, '.daemon', 'otel-spool', 'lease.json');
     await daemon?.spoolRuntime?.lease.acquire();
@@ -141,7 +145,7 @@ describe('daemon OTel spool wiring', () => {
     const config = { otel: { exporter: 'otlp' as const, endpoint: 'http://127.0.0.1:1', spool: { enabled: true } } };
     const context = {
       pipelineDir: join(project, '.pipeline'), runId: 'run', feature: 'feature', project,
-      branch: 'feature', engineVersion: 'test', harnessVersion: 'test', metrics: false,
+      branch: 'feature', engineVersion: 'test', harnessVersion: 'test', metrics: false, env: loopbackOtelEnv,
     };
     const visualizer = wireOtelVisualizer(config, context, events);
     const metrics = wireInteractiveOtelMetrics(config, context, events);
@@ -162,10 +166,10 @@ describe('daemon OTel spool wiring', () => {
     const rootEvents = new ConductorEventEmitter();
     const dispatchEvents = new ConductorEventEmitter();
     const config = { otel: { exporter: 'otlp' as const, endpoint, spool: { enabled: true, maxBytes: 1024 * 1024 } } };
-    const daemon = wireDaemonOtel(config, { mainRoot, project: mainRoot, projectName: 'test', rootEvents });
+    const daemon = wireDaemonOtel(config, { mainRoot, project: mainRoot, projectName: 'test', rootEvents, env: loopbackOtelEnv });
     const visualizer = wireOtelVisualizer(config, {
       pipelineDir: join(mainRoot, '.pipeline'), runId: 'run', feature: 'feature', project: mainRoot,
-      branch: 'feature', engineVersion: 'test', harnessVersion: 'test',
+      branch: 'feature', engineVersion: 'test', harnessVersion: 'test', env: loopbackOtelEnv,
     }, dispatchEvents, daemon?.spoolRuntime);
 
     await dispatchEvents.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
@@ -185,14 +189,14 @@ describe('daemon OTel spool wiring', () => {
     const closed = await closedEndpoint();
     const config = { otel: { exporter: 'otlp' as const, endpoint: closed, spool: { enabled: true, maxBytes: 1024 * 1024 } } };
     const firstEvents = new ConductorEventEmitter();
-    const first = wireDaemonOtel(config, { mainRoot, project: mainRoot, projectName: 'test', rootEvents: firstEvents });
+    const first = wireDaemonOtel(config, { mainRoot, project: mainRoot, projectName: 'test', rootEvents: firstEvents, env: loopbackOtelEnv });
     await firstEvents.emit({ type: 'memory_setup', before: 'absent', canonical: true });
     await first?.stop();
 
     const received: string[] = [];
     const listener = await listeningEndpoint((path) => received.push(path));
     const second = wireDaemonOtel({ otel: { ...config.otel, endpoint: listener.endpoint } }, {
-      mainRoot, project: mainRoot, projectName: 'test', rootEvents: new ConductorEventEmitter(),
+      mainRoot, project: mainRoot, projectName: 'test', rootEvents: new ConductorEventEmitter(), env: loopbackOtelEnv,
     });
     await listener.request;
     await second?.stop();
@@ -204,13 +208,13 @@ describe('daemon OTel spool wiring', () => {
     const mainRoot = await temporaryDirectory();
     const rootEvents = new ConductorEventEmitter();
     const daemon = wireDaemonOtel({ otel: { exporter: 'otlp', endpoint: await closedEndpoint(), spool: { enabled: true } } }, {
-      mainRoot, project: mainRoot, projectName: 'test', rootEvents,
+      mainRoot, project: mainRoot, projectName: 'test', rootEvents, env: loopbackOtelEnv,
     });
     const leasePath = join(mainRoot, '.daemon', 'otel-spool', 'lease.json');
     await daemon?.spoolRuntime?.lease.acquire();
     const visualizer = wireOtelVisualizer({ otel: { exporter: 'otlp', endpoint: 'http://127.0.0.1:1', spool: { enabled: true } } }, {
       pipelineDir: join(mainRoot, '.pipeline'), runId: 'run', feature: 'feature', project: mainRoot,
-      branch: 'feature', engineVersion: 'test', harnessVersion: 'test',
+      branch: 'feature', engineVersion: 'test', harnessVersion: 'test', env: loopbackOtelEnv,
     }, new ConductorEventEmitter(), daemon?.spoolRuntime);
     await visualizer?.stop();
 
@@ -250,7 +254,7 @@ describe('daemon OTel spool wiring', () => {
     const received: string[] = [];
     const listener = await listeningEndpoint((path) => received.push(path));
     const daemon = wireDaemonOtel({ otel: { exporter: 'otlp', endpoint: listener.endpoint, spool: { enabled: true } } }, {
-      mainRoot, project: mainRoot, projectName: 'test', rootEvents: new ConductorEventEmitter(),
+      mainRoot, project: mainRoot, projectName: 'test', rootEvents: new ConductorEventEmitter(), env: loopbackOtelEnv,
     });
     await listener.request;
     await daemon?.stop();

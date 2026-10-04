@@ -15,7 +15,7 @@ import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import { wireDaemonOtel, wireInteractiveOtelMetrics } from '../../src/engine/otel/wire.js';
 
 const buildExporters = vi.hoisted(() => vi.fn());
-vi.mock('../../src/engine/otel/transport.js', () => ({ buildExporters }));
+vi.mock('../../src/engine/otel/transport.js', () => ({ buildExporters, isExportRefused: () => false }));
 
 function makeVisualizer(feature: string, spanExporter: CapturingSpanExporter): OtelVisualizer {
   return new OtelVisualizer(

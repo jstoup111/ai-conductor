@@ -17,7 +17,7 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 
 const buildExporters = vi.hoisted(() => vi.fn());
-vi.mock('../../src/engine/otel/transport.js', () => ({ buildExporters }));
+vi.mock('../../src/engine/otel/transport.js', () => ({ buildExporters, isExportRefused: () => false }));
 
 import { runDaemonMode } from '../../src/daemon-cli.js';
 import { allInstalledProviderDiscoveryRunner } from '../engine/boot-test-helpers.js';

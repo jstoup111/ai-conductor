@@ -11,6 +11,7 @@ import { tmpdir } from 'os';
 import {
   buildExporters as buildRawExporters,
   buildHttpExporterOptions,
+  type ExporterBuildOptions,
 } from '../../../src/engine/otel/transport.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { OTLPTraceExporter as OTLPGrpcTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc';
@@ -23,7 +24,7 @@ import { AggregationTemporality, InstrumentType } from '@opentelemetry/sdk-metri
 // but must not inherit the suite-wide network-export refusal marker.
 const exportEnv = { ...process.env, AI_CONDUCTOR_NO_REAL_EXEC: undefined };
 const buildExporters: typeof buildRawExporters = (config, options = {}) =>
-  buildRawExporters(config, { ...options, env: options.env ?? exportEnv });
+  buildRawExporters(config, { ...options, env: (options as ExporterBuildOptions).env ?? exportEnv });
 
 describe('buildExporters', () => {
   let tempDir: string;

@@ -18,6 +18,9 @@ const execFile = promisify(execFileCallback);
 const temporaryDirectories: string[] = [];
 const servers: Server[] = [];
 const DEFAULT_PROVENANCE = { commit: true, pr: true, issue: true, feature: true };
+// The collector is fixture-owned; bypass the ambient test marker only for
+// this direct construction, never by mutating process.env.
+const loopbackOtelEnv: NodeJS.ProcessEnv = {};
 
 async function endpoint(server: Server): Promise<string> {
   servers.push(server);
@@ -103,7 +106,7 @@ describe("resolveSpoolDir", () => {
     const provider = new BasicTracerProvider();
     const span = provider.getTracer("spool-wiring-test").startSpan("survives-worktree-removal");
     span.end();
-    await exportSpan(buildExporters(config, { spoolStore: runtime.store }).spanExporter, span as unknown as ReadableSpan);
+    await exportSpan(buildExporters(config, { spoolStore: runtime.store, env: loopbackOtelEnv }).spanExporter, span as unknown as ReadableSpan);
     const [batch] = await runtime.store.list("traces");
     expect(batch).toBeDefined();
     if (!batch) throw new Error("expected spooled traces batch");
