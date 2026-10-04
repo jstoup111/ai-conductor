@@ -24,6 +24,12 @@ export interface TokenUsage {
    * that does not read it behaves exactly as before.
    */
   costSource?: 'provider' | 'rate-card';
+  /**
+   * Catalog D21: canonical `provider/model` identifier reported by the model
+   * that produced this usage. Optional because only providers that expose the
+   * executed model can attribute it without inference.
+   */
+  attributedModel?: string;
   numTurns?: number;
   durationMs?: number;
 }

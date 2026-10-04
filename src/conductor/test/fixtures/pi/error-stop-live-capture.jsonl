@@ -1,0 +1,11 @@
+{"type":"session","version":3,"id":"fixture-error-stop-session","timestamp":"2026-10-02T00:00:00.000Z","cwd":"/fixture"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":"Implement it."}}
+{"type":"message_end","message":{"role":"user","content":"Implement it."}}
+{"type":"message_start","message":{"role":"assistant","provider":"opencode","model":"gpt-5.6-luna:free","content":[{"type":"text","text":""}],"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}}
+{"type":"message_end","message":{"role":"assistant","provider":"opencode","model":"gpt-5.6-luna:free","content":[{"type":"text","text":""}],"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"stopReason":"error","errorMessage":"Free tier request failed."}}
+{"type":"turn_end","message":{"role":"assistant","provider":"opencode","model":"gpt-5.6-luna:free","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}}
+{"type":"turn_end"}
+{"type":"agent_end"}
+{"type":"agent_end"}

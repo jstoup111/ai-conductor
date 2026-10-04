@@ -431,7 +431,7 @@ describe('PiProvider', () => {
     await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({ success: true });
   });
 
-  it('returns the terminal assistant message and its cumulative usage as cost-unmetered', async () => {
+  it('returns the terminal assistant message and its message usage as cost-unmetered', async () => {
     spawn.mockResolvedValue({
       stdout: await readFixture('terminal-assistant.jsonl'),
       stderr: '',
@@ -453,8 +453,7 @@ describe('PiProvider', () => {
       stdout: [
         JSON.stringify({
           type: 'message_end',
-          message: { role: 'assistant', content: 'First turn.' },
-          usage: { input: 9, output: 4 },
+          message: { role: 'assistant', content: 'First turn.', usage: { input: 9, output: 4 } },
         }),
         JSON.stringify({
           type: 'message_end',

@@ -67,6 +67,19 @@ every dispatch, so its `TokenUsage.costUsd` is provider truth. Codex returns tok
 money — so without a rate card every codex dispatch classifies as *cost-unmetered*, contributes $0,
 and a mixed-provider feature reports all-provider token volume beside Claude-only dollars.
 
+Pi reports usage per message. The adapter sums the `usage` of every assistant and tool-result
+`message_end` event in a successful run (exit `0`) and prices the total in this order:
+
+1. Every token-bearing message carries a positive `usage.cost.total`: `costUsd` is their sum,
+   `costSource: provider`.
+2. Otherwise, every token-bearing message is an assistant message naming its `provider` and model,
+   and the card has an entry for the message's model id (`responseModel`, else `model`): `costUsd` is the
+   per-message card price summed, `costSource: rate-card`.
+3. Otherwise `costUsd` stays undefined and the dispatch is cost-unmetered.
+
+A Pi run that reports all-zero token counts records no usage. `TokenUsage.attributedModel` records
+the last assistant message's canonical `provider/model`.
+
 ```json
 {
   "as_of": "2026-08-24T23:13:15.091Z",

@@ -5,6 +5,7 @@ import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
   COST_SELF_REPORTING_PROVIDERS,
+  rateCardModelIds,
   resolveProviderModelPolicy,
 } from '../../src/engine/provider-model-policy.js';
 import { BUILT_IN_PROVIDERS } from '../../src/execution/provider-catalog.js';
@@ -222,6 +223,16 @@ it('derives built-in model and cost policies from catalog descriptors', () => {
         && provider.capabilities.costSelfReporting === true,
       )
       .map((provider) => provider.id),
+  });
+});
+
+it('keeps Pi self-reporting cost out of the rate-card model catalog', () => {
+  expect({
+    costSelfReportingProviders: [...COST_SELF_REPORTING_PROVIDERS].sort(),
+    rateCardModelIds: rateCardModelIds(),
+  }).toEqual({
+    costSelfReportingProviders: ['claude', 'pi'],
+    rateCardModelIds: ['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra'],
   });
 });
 

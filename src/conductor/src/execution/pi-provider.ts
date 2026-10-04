@@ -11,6 +11,7 @@ import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { scrubTmuxEnvironment } from './child-environment.js';
 import { materializePiHarnessExtension } from './pi-harness-extension.js';
+import { applyRateCard, loadRateCard, type RateCard, type RateCardLoader } from './rate-card.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 
 export type PiSubprocessFactory = (
@@ -159,15 +160,20 @@ type PiJsonEvent = {
   result?: { details?: unknown };
   message?: {
     role?: unknown;
+    provider?: unknown;
+    model?: unknown;
+    responseModel?: unknown;
     content?: unknown;
     stopReason?: unknown;
     errorMessage?: unknown;
-  };
-  usage?: {
-    input?: unknown;
-    output?: unknown;
-    cacheRead?: unknown;
-    cacheWrite?: unknown;
+    usage?: {
+      input?: unknown;
+      output?: unknown;
+      cacheRead?: unknown;
+      cacheWrite?: unknown;
+      reasoning?: unknown;
+      cost?: { total?: unknown };
+    };
   };
 };
 
@@ -207,8 +213,8 @@ function terminalAssistantText(content: unknown): string {
     .join('');
 }
 
-/** Extract Pi's authoritative terminal assistant message and latest cumulative usage. */
-export function parsePiJsonl(stdout: string): {
+/** Extract Pi's authoritative terminal assistant message and sum its final per-message usage. */
+export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
   output: string;
   tokenUsage?: TokenUsage;
   hasTerminalAssistantMessage: boolean;
@@ -223,6 +229,12 @@ export function parsePiJsonl(stdout: string): {
   let terminalAssistantErrorMessage: string | undefined;
   let assistantTurns = 0;
   let finalStructuredResult: unknown;
+  let providerCostUsd = 0;
+  let rateCardCostUsd = 0;
+  let hasTokenBearingMessage = false;
+  let allTokenBearingMessagesPriced = true;
+  let allTokenBearingMessagesRateCardPriced = true;
+  let attributedModel: string | undefined;
 
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -242,16 +254,64 @@ export function parsePiJsonl(stdout: string): {
           ? event.message.errorMessage
           : undefined;
       }
-      if ((event.type === 'message_update'
-        || (event.type === 'message_end' && event.message?.role === 'assistant')) && event.usage) {
-        const { input, output: outputTokens, cacheRead, cacheWrite } = event.usage;
+      if (event.type === 'message_end' && event.message?.usage
+        && (event.message.role === 'assistant' || event.message.role === 'toolResult')) {
+        const { input, output: outputTokens, cacheRead, cacheWrite, reasoning } = event.message.usage;
         if (typeof input === 'number' && Number.isFinite(input)
           && typeof outputTokens === 'number' && Number.isFinite(outputTokens)) {
+          const model = typeof event.message.responseModel === 'string'
+            ? event.message.responseModel
+            : typeof event.message.model === 'string'
+              ? event.message.model
+              : undefined;
+          const provider = typeof event.message.provider === 'string'
+            ? event.message.provider
+            : undefined;
+          const validMessageModel = provider !== undefined && model !== undefined;
+          if (event.message.role === 'assistant' && validMessageModel) {
+            attributedModel = `${provider}/${model}`;
+          }
+          const hasNonZeroTokens = input !== 0
+            || outputTokens !== 0
+            || (typeof cacheRead === 'number' && Number.isFinite(cacheRead) && cacheRead !== 0)
+            || (typeof cacheWrite === 'number' && Number.isFinite(cacheWrite) && cacheWrite !== 0)
+            || (typeof reasoning === 'number' && Number.isFinite(reasoning) && reasoning !== 0);
+          if (hasNonZeroTokens) {
+            hasTokenBearingMessage = true;
+            const cost = event.message.usage.cost?.total;
+            if (typeof cost === 'number' && Number.isFinite(cost) && cost > 0) {
+              providerCostUsd += cost;
+            } else {
+              allTokenBearingMessagesPriced = false;
+            }
+            const messageUsage: TokenUsage = {
+              input,
+              output: outputTokens,
+              ...(typeof cacheRead === 'number' && Number.isFinite(cacheRead) ? { cacheRead } : {}),
+              ...(typeof cacheWrite === 'number' && Number.isFinite(cacheWrite) ? { cacheCreation: cacheWrite } : {}),
+            };
+            const priced = event.message.role === 'assistant' && validMessageModel
+              ? applyRateCard(messageUsage, model, rateCard)
+              : undefined;
+            if (priced?.costSource === 'rate-card' && priced.costUsd !== undefined) {
+              rateCardCostUsd += priced.costUsd;
+            } else {
+              allTokenBearingMessagesRateCardPriced = false;
+            }
+          }
+          const previous = tokenUsage;
           tokenUsage = {
-            input,
-            output: outputTokens,
-            ...(typeof cacheRead === 'number' && Number.isFinite(cacheRead) ? { cacheRead } : {}),
-            ...(typeof cacheWrite === 'number' && Number.isFinite(cacheWrite) ? { cacheCreation: cacheWrite } : {}),
+            input: (previous?.input ?? 0) + input,
+            output: (previous?.output ?? 0) + outputTokens,
+            ...(typeof cacheRead === 'number' && Number.isFinite(cacheRead)
+              ? { cacheRead: (previous?.cacheRead ?? 0) + cacheRead }
+              : (previous?.cacheRead === undefined ? {} : { cacheRead: previous.cacheRead })),
+            ...(typeof cacheWrite === 'number' && Number.isFinite(cacheWrite)
+              ? { cacheCreation: (previous?.cacheCreation ?? 0) + cacheWrite }
+              : (previous?.cacheCreation === undefined ? {} : { cacheCreation: previous.cacheCreation })),
+            ...(typeof reasoning === 'number' && Number.isFinite(reasoning)
+              ? { reasoningOutput: (previous?.reasoningOutput ?? 0) + reasoning }
+              : (previous?.reasoningOutput === undefined ? {} : { reasoningOutput: previous.reasoningOutput })),
           };
         }
       }
@@ -260,8 +320,22 @@ export function parsePiJsonl(stdout: string): {
     }
   }
 
-  if (assistantTurns > 0) {
-    tokenUsage = { ...(tokenUsage ?? { input: 0, output: 0 }), numTurns: assistantTurns };
+  if (tokenUsage && (tokenUsage.input !== 0
+    || tokenUsage.output !== 0
+    || (tokenUsage.cacheRead ?? 0) !== 0
+    || (tokenUsage.cacheCreation ?? 0) !== 0)) {
+    tokenUsage = {
+      ...tokenUsage,
+      numTurns: assistantTurns,
+      ...(attributedModel === undefined ? {} : { attributedModel }),
+      ...(hasTokenBearingMessage && allTokenBearingMessagesPriced
+        ? { costUsd: providerCostUsd, costSource: 'provider' as const }
+        : hasTokenBearingMessage && allTokenBearingMessagesRateCardPriced
+          ? { costUsd: rateCardCostUsd, costSource: 'rate-card' as const }
+        : {}),
+    };
+  } else {
+    tokenUsage = undefined;
   }
 
   return {
@@ -285,6 +359,7 @@ export class PiProvider implements LLMProvider {
     private readonly subprocessFactory: PiSubprocessFactory = execa,
     private readonly environment: PiEnvironment = defaultPiEnvironment,
     private readonly materializeExtension: typeof materializePiHarnessExtension = materializePiHarnessExtension,
+    private readonly loadRates: RateCardLoader = loadRateCard,
   ) {}
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
@@ -398,7 +473,7 @@ export class PiProvider implements LLMProvider {
     const exitCode = result.exitCode ?? 1;
     const stdout = typeof result.stdout === 'string' ? result.stdout : '';
     const stderr = typeof result.stderr === 'string' ? result.stderr : '';
-    const parsed = parsePiJsonl(stdout);
+    const parsed = parsePiJsonl(stdout, this.loadRates(options.cwd ?? process.cwd()));
 
     // Missing-binary classification is anchored to structural process signals.
     // Never infer provider-wide unavailability from arbitrary stderr prose.
@@ -447,7 +522,7 @@ export class PiProvider implements LLMProvider {
       output,
       exitCode,
       ...(modelUnavailable ? { modelUnavailable: true } : {}),
-      tokenUsage: exitCode === 0 ? parsed.tokenUsage : undefined,
+      ...(exitCode === 0 && parsed.tokenUsage !== undefined ? { tokenUsage: parsed.tokenUsage } : {}),
       ...(exitCode === 0 && parsed.finalStructuredResult !== undefined ? { finalStructuredResult: parsed.finalStructuredResult } : {}),
       ...(genericUnclassifiedFailure ? { exitFacts } : {}),
     };

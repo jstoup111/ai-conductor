@@ -38,7 +38,6 @@ export const PROVIDER_CAPABILITY_OWNERS = {
   interactiveLaunch: '#1007',
   readOnlyReview: '#1886',
   reviewPolicyCatalog: '#2852',
-  costSelfReporting: '#1889',
 } as const satisfies Partial<Record<ProviderCapability, string>>;
 
 export interface ProviderFactoryOptions {
@@ -209,6 +208,7 @@ export const BUILT_IN_PROVIDERS = [
     projectFileTrust: true,
     capabilities: {
       readOnlyReview: true,
+      costSelfReporting: true,
       nativeSchema: true,
     } as const satisfies ProviderCapabilityFlags,
     diagnosticEnvelopes: [],

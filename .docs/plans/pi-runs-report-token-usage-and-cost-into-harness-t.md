@@ -80,6 +80,7 @@ Fix the Pi adapter so that a completed Pi dispatch records the tokens Pi actuall
 - A turn whose `message.usage.input` is a string or missing contributes no tokens, and when it is the only turn the result has no `tokenUsage` key, as asserted in pi-provider-usage.test.ts.
 - A stream with a top-level `usage` object and no `message.usage` returns no `tokenUsage` key, so the top-level object is ignored, as asserted in pi-provider-usage.test.ts.
 - An exit-0 stream whose only assistant turn reports all-zero input, output, cacheRead and cacheWrite returns no `tokenUsage` key, as asserted in pi-provider-usage.test.ts.
+- For each of the four no-usage variants (a terminal message without `message.usage`; `message.usage.input` a string or missing; a top-level `usage` with no `message.usage`; and all-zero usage), a conductor-level test asserts the emitted `provider_attempt` event carries no `tokenUsage` property (never input 0 / output 0), asserting the story's event-level claim end to end.
 
 **Files:** `src/conductor/src/execution/pi-provider.ts`, `src/conductor/test/execution/pi-provider-usage.test.ts`, `src/conductor/test/fixtures/pi/error-stop-live-capture.jsonl`
 
@@ -98,6 +99,7 @@ Fix the Pi adapter so that a completed Pi dispatch records the tokens Pi actuall
 **Done when:**
 - For the worked stream with exit code 1, `PiProvider.invoke` returns `success: false` and no `tokenUsage` key, as asserted in pi-provider-usage.test.ts.
 - For `error-stop-live-capture.jsonl` with exit 0, `PiProvider.invoke` returns `success: false` with the captured error message and no `tokenUsage` key, as asserted in pi-provider-usage.test.ts.
+- A conductor-level test asserts that for the exit-1 and `stopReason`-`error` dispatches the step fails and the `provider_attempt` event carries no `tokenUsage`.
 - For the worked stream with a malformed line between the assistant turns, the returned `tokenUsage` has input 200 and output 65, as asserted in pi-provider-usage.test.ts.
 
 **Files:** `src/conductor/src/execution/pi-provider.ts`, `src/conductor/test/execution/pi-provider-usage.test.ts`, `src/conductor/test/fixtures/pi/error-stop-live-capture.jsonl`
@@ -162,6 +164,7 @@ Fix the Pi adapter so that a completed Pi dispatch records the tokens Pi actuall
 - For the worked stream with turn two's `cost` object missing and turn two's model `unlisted-model` absent from the test card, the result has no `costUsd` key at all (not 0.0021), as asserted in pi-provider-usage.test.ts.
 - For the worked stream with its own reported costs (0.0021 and 0.0014) plus one `toolResult` `message_end` with input 10, output 5 and `cost.total` 0, and the test card carrying the committed rates, the result has no `costUsd` key and `classifyMetering` returns `cost-unmetered`, as asserted in pi-provider-usage.test.ts.
 - For case (a) `tokenUsage.attributedModel` is `cline/google/gemma-4-31b-it:free` although the dispatch is cost-unmetered, as asserted in pi-provider-usage.test.ts.
+- A conductor-level test asserts the `provider_attempt` event for the cost-unmetered case retains `tokenUsage` with `attributedModel` set despite `cost.total` 0 on an unlisted model.
 
 **Files:** `src/conductor/src/execution/pi-provider.ts`, `src/conductor/test/execution/pi-provider-usage.test.ts`
 
@@ -353,6 +356,10 @@ Task 10 (independent)
 | adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D20 | task | task-5, task-6, task-7 | `costSource` is `provider`, and `classifyMetering` returns `fully-metered` |
 | adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D21 | task | task-8 | `tokenUsage.attributedModel` is `openai/gpt-5.6-luna` |
 | adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D22 | task | task-10 | `[...COST_SELF_REPORTING_PROVIDERS].sort()` equals `['claude', 'pi']` |
+| adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D23 | no-change | none | Pi's selfHost declaration and owner-list drop (catalog ADR amendment landed via #2965 after this plan sealed) are delivered by the self-host-builds-isolate feature; no task here edits provider capability owners or the provider-home lifecycle. |
+| adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D24 | no-change | none | The catalog-declared self-host shape read by conductor.ts, provider-home.ts and live-boundary.ts is out of this feature's scope; no task edits those files. |
+| adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D25 | no-change | none | Pi self-host credential provisioning (`pi auth print-api-key` into the throwaway home) belongs to the self-host feature; no task here resolves or writes credentials. |
+| adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D26 | no-change | none | Pi's provider-state volatile list changes no telemetry or cost behavior; no task edits volatile-list handling. |
 
 ## Verification
 
@@ -361,3 +368,35 @@ Task 10 (independent)
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-ab-d19-role-1: src/conductor/src/execution/pi-provider.ts:263 — only treat a message_end as usage-bearing when message.role is 'assistant' or 'toolResult' (D19), so user/system/missing/unknown-role usage never enters tokenUsage, cost resolution, or hasTokenBearingMessage; add tests in src/conductor/test/execution/pi-provider-usage.test.ts that append a user, a system, and a role-less message_end with non-zero usage to worked-stream.jsonl and assert totals stay input 200 / output 65 and costUsd 0.0035 provider, keeping Task 1/Task 2 assertions intact
+**Gate:** as-built
+**Rationale:** Verified: src/conductor/src/execution/pi-provider.ts:263 gates usage summation on `event.type === 'message_end' && event.message?.usage` with no role check, contradicting APPROVED ADR D19 (assistant or toolResult only) and plan Task 1 step 4, which already admits this repair; conforming implementation drift, so build. Task 1/2 coverage (worked stream totals, toolResult usage joining sums) is preserved.
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 19
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 19 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab-d19-role-1 is complete.
+
+### Task rem-as-built-rem-ab-d19-zero-1: src/conductor/src/execution/pi-provider.ts:328-331 — compute the D19 all-zero suppression over (tokenUsage.cacheRead ?? 0) and (tokenUsage.cacheCreation ?? 0) so absent cache fields count as zero for the check (without zero-filling the emitted fields); add a Task 3 test in src/conductor/test/execution/pi-provider-usage.test.ts for an exit-0 assistant message_end whose usage is { input: 0, output: 0 } with no cacheRead/cacheWrite, asserting not.toHaveProperty('tokenUsage'); existing Task 3 all-zero and Task 1 cache-sum assertions stay unchanged
+**Gate:** as-built
+**Rationale:** Verified: pi-provider.ts:311-316 leaves cacheRead/cacheCreation undefined when Pi omits them, and the suppression check at :328-331 compares `undefined !== 0` (true), so input 0 / output 0 with omitted cache fields emits zero TokenUsage, violating D19's no-zero-fill rule that plan Task 3 already admits; build.
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 19
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 19 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab-d19-zero-1 is complete.
+
+### Task rem-as-built-rem-ab-d20-model-1: src/conductor/src/execution/pi-provider.ts:299 — pass the model that ran (responseModel ?? model) unchanged to applyRateCard and delete the now-orphaned barePiModel helper at :216-220; add a test in src/conductor/test/execution/pi-provider-usage.test.ts with provider 'cline', model 'google/gemma-4-31b-it:free', costs 0, and a test card pricing 'google/gemma-4-31b-it:free' but not 'gemma-4-31b-it:free', asserting costSource 'rate-card' and the card price; Task 6/8/9 rate-card assertions (luna/terra/sol) stay unchanged
+**Gate:** as-built
+**Rationale:** Verified: pi-provider.ts:216-220 barePiModel strips the first slash and :299 applies it to responseModel/model before applyRateCard, but D20 defines the model that ran as message.provider plus responseModel ?? model, whose bare part is message.model itself (e.g. cline + google/gemma-4-31b-it:free); plan Task 6 step 5 / Task 8 step 4 admit the fix; build. Only caller of barePiModel is :299, so the helper is removed with it; no fixture message.model carries a provider prefix (test line 23/247 are requested models, unaffected).
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 20
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 20 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab-d20-model-1 is complete.
+
+### Task rem-as-built-rem-ab-d21-last-model-1: src/conductor/src/execution/pi-provider.ts:267-290 — move the attributedModel assignment out of the hasNonZeroTokens branch so every assistant usage-bearing message naming string provider and model updates it, while pricing/hasTokenBearingMessage stay non-zero-only; add a test in src/conductor/test/execution/pi-provider-usage.test.ts for the worked stream plus a trailing zero-token assistant turn reporting openai/gpt-5.6-terra, asserting attributedModel 'openai/gpt-5.6-terra' and costUsd still 0.0035 provider (Task 5 zero-token assertion and Task 8 attribution assertions preserved)
+**Gate:** as-built
+**Rationale:** Verified: pi-provider.ts:267-290 assigns attributedModel only inside `if (hasNonZeroTokens)`, but D21 names the last assistant usage-bearing message (D19: finite numeric input/output, zero allowed) naming provider and model; plan Task 8 step 4 admits the fix; build. Non-zero-only pricing (D20, Task 5 zero-token-turn assertion) must be retained.
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 21
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 21 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab-d21-last-model-1 is complete.

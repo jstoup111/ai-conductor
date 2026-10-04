@@ -58,6 +58,7 @@ describe('ClaudeProvider tokenUsage parsing', () => {
     expect(result.tokenUsage?.costSource).toBe('provider');
     expect(result.tokenUsage?.numTurns).toBe(3);
     expect(result.tokenUsage?.durationMs).toBe(1200);
+    expect(result.tokenUsage).not.toHaveProperty('attributedModel');
   });
 
   it('returns tokenUsage as undefined and falls back to raw stdout when output is not JSON', async () => {
