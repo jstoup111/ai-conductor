@@ -1,4 +1,4 @@
-// Covers: task:7, task:19, task:35, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab4-1
+// Covers: task:7, task:19, task:35, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab4-1, task:rem-ar-ab-d9-3-2
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -130,6 +130,46 @@ describe('remediation case effects', () => {
       expect.objectContaining({ id: 'unrelated-open' }),
       expect.objectContaining({ id: 'decision-stop' }),
     ]);
+  });
+
+  it('supersedes an explicitly bound owner whose historic sources do not overlap the decision stop', async () => {
+    const store = await storeWith({ version: 'v1', feature, cases: [
+      record({ id: 'bound-effect', kind: 'action', status: 'reserved' }, {
+        id: 'bound-owner', disposition: 'act',
+        sources: [{ sourceId: 'historic-source', outcome: 'acted', recordedAt: '2026-10-03T00:00:00.000Z' }],
+      }),
+    ] });
+    const stop: RemediationCaseRecord = {
+      id: 'decision-stop-lap-1-bound-owner', domain: 'build_review', disposition: 'escalate', priority: 'high',
+      rationale: 'An owner decision is required.', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'current-source', outcome: 'escalate', recordedAt: '2026-10-03T00:00:00.000Z' }],
+      effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+    };
+
+    await expect(persistBuildReviewDecisionStop({
+      store, record: stop, supersedeCaseIds: ['bound-owner'],
+    })).resolves.toEqual({
+      ok: true, status: 'persisted', caseId: stop.id, supersededCaseIds: ['bound-owner'],
+      supersededEffects: [{
+        caseId: 'bound-owner', effectId: 'bound-effect', effectKind: 'action',
+        reason: 'superseded by decision stop decision-stop-lap-1-bound-owner',
+      }],
+    });
+    await expect(persistBuildReviewDecisionStop({
+      store, record: stop, supersedeCaseIds: ['bound-owner'],
+    })).resolves.toEqual({
+      ok: true, status: 'already-persisted', caseId: stop.id, supersededCaseIds: [], supersededEffects: [],
+    });
+    await expect(store.read()).resolves.toMatchObject({
+      ok: true,
+      state: { cases: expect.arrayContaining([
+        expect.objectContaining({ id: 'bound-owner', resolution: 'resolved', effect: {
+          id: 'bound-effect', kind: 'action', status: 'failed',
+          diagnostic: 'superseded by decision stop decision-stop-lap-1-bound-owner',
+        } }),
+        expect.objectContaining({ id: stop.id, resolution: 'open' }),
+      ]) },
+    });
   });
 
   it('publishes and charges a stable action order once', async () => {

@@ -750,13 +750,20 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const supersededDecisionStopEffects: Array<{
     caseId: string; effectId: string; effectKind: 'action' | 'deferral'; reason: string;
   }> = [];
-  let persistedConsistencyStop = false;
+  const blockedConsistencySourceIds = new Set(blockedConsistency?.sourceIds ?? []);
+  const escalationCoveredBlockedSourceIds = new Set<string>();
   for (const proposed of escalationCases) {
-    const caseId = proposed.case.existingCaseId ?? generateId();
-    const ownsBlockedConsistency: boolean = blockedConsistency !== undefined && !persistedConsistencyStop &&
-      proposed.sources.some((source) => blockedConsistency.sourceIds.includes(source.sourceId));
+    // A bound owner cannot also be the new decision stop: persistence must be
+    // able to resolve it atomically before opening its replacement.
+    const caseId = proposed.case.existingCaseId === undefined
+      ? generateId()
+      : `decision-stop-${input.aggregate.lapId}-${proposed.case.existingCaseId}`;
+    const proposedSourceIds = new Set(proposed.sources.map((source) => source.sourceId));
+    const ownsBlockedConsistency = blockedConsistency !== undefined &&
+      [...blockedConsistencySourceIds].every((sourceId) => proposedSourceIds.has(sourceId));
     const persistedStop = await persistBuildReviewDecisionStop({
       store,
+      ...(proposed.case.existingCaseId === undefined ? {} : { supersedeCaseIds: [proposed.case.existingCaseId] }),
       record: {
         id: caseId, domain: 'build_review', disposition: 'escalate', priority: proposed.case.priority,
         rationale: proposed.case.rationale, confidence: proposed.case.confidence, resolution: 'open',
@@ -770,30 +777,34 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       : persistedStop.reason === 'malformed-state'
         ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
         : undefined);
-    persistedConsistencyStop ||= ownsBlockedConsistency;
+    for (const sourceId of proposedSourceIds) {
+      if (blockedConsistencySourceIds.has(sourceId)) escalationCoveredBlockedSourceIds.add(sourceId);
+    }
     supersededDecisionStopCaseIds.push(...persistedStop.supersededCaseIds);
     supersededDecisionStopEffects.push(...persistedStop.supersededEffects);
     caseIdsByRef.set(proposed.case.caseRef, persistedStop.caseId);
   }
-  if (blockedConsistency && !persistedConsistencyStop) {
+  if (blockedConsistency) {
     const sources = graph.graph.sourceOutcomes
-      .filter((source) => blockedConsistency.sourceIds.includes(source.sourceId))
+      .filter((source) => blockedConsistency.sourceIds.includes(source.sourceId) && !escalationCoveredBlockedSourceIds.has(source.sourceId))
       .map((source) => ({ sourceId: source.sourceId, outcome: source.outcome, recordedAt }));
-    const persistedStop = await persistBuildReviewDecisionStop({
-      store,
-      record: {
-        id: `consistency-stop-${input.aggregate.lapId}`, domain: 'build_review', disposition: 'escalate', priority: 'high',
-        rationale: blockedConsistency.rationale, confidence: 'high', resolution: 'open', sources,
-        effect: { kind: 'none' }, consistencyStop: blockedConsistency,
-      },
-    });
-    if (!persistedStop.ok) return fail(`blocked consistency stop ${persistedStop.reason}`, persistedStop.reason === 'rejected-transition'
-      ? { failureKind: 'rejected-transition', caseIds: persistedStop.caseIds, sourceIds: persistedStop.sourceIds }
-      : persistedStop.reason === 'malformed-state'
-        ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
-        : undefined);
-    supersededDecisionStopCaseIds.push(...persistedStop.supersededCaseIds);
-    supersededDecisionStopEffects.push(...persistedStop.supersededEffects);
+    if (sources.length > 0) {
+      const persistedStop = await persistBuildReviewDecisionStop({
+        store,
+        record: {
+          id: `consistency-stop-${input.aggregate.lapId}`, domain: 'build_review', disposition: 'escalate', priority: 'high',
+          rationale: blockedConsistency.rationale, confidence: 'high', resolution: 'open', sources,
+          effect: { kind: 'none' }, consistencyStop: blockedConsistency,
+        },
+      });
+      if (!persistedStop.ok) return fail(`blocked consistency stop ${persistedStop.reason}`, persistedStop.reason === 'rejected-transition'
+        ? { failureKind: 'rejected-transition', caseIds: persistedStop.caseIds, sourceIds: persistedStop.sourceIds }
+        : persistedStop.reason === 'malformed-state'
+          ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
+          : undefined);
+      supersededDecisionStopCaseIds.push(...persistedStop.supersededCaseIds);
+      supersededDecisionStopEffects.push(...persistedStop.supersededEffects);
+    }
   }
   const durableState = await store.read();
   if (!durableState.ok) return fail(`case store ${durableState.reason}`);

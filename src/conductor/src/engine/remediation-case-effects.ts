@@ -99,6 +99,11 @@ function sameDecisionStop(left: RemediationCaseRecord, right: RemediationCaseRec
 export async function persistBuildReviewDecisionStop(input: {
   readonly store: RemediationCaseStore;
   readonly record: RemediationCaseRecord;
+  /**
+   * An explicitly bound escalation replaces this owner even when the new
+   * stop's current-lap sources do not overlap its historic sources.
+   */
+  readonly supersedeCaseIds?: readonly string[];
 }): Promise<PersistBuildReviewDecisionStopResult> {
   if (!isBuildReviewDecisionStop(input.record)) return { ok: false, reason: 'invalid-decision-stop' };
   const mutation = await input.store.mutate<PersistBuildReviewDecisionStopResult>(async (state) => {
@@ -111,8 +116,10 @@ export async function persistBuildReviewDecisionStop(input: {
       };
     }
     const stopSourceIds = new Set(input.record.sources.map((source) => source.sourceId));
+    const explicitlySupersededCaseIds = new Set(input.supersedeCaseIds ?? []);
     const superseded = state.cases.filter((record) => record.id !== input.record.id && record.domain === 'build_review' &&
-      isOpenRemediationCase(record) && record.sources.some((source) => stopSourceIds.has(source.sourceId)));
+      isOpenRemediationCase(record) && (explicitlySupersededCaseIds.has(record.id) ||
+        record.sources.some((source) => stopSourceIds.has(source.sourceId))));
     const supersededCaseIds = superseded.map((record) => record.id);
     const supersededEffects = superseded.flatMap((record) => {
       if (record.effect.kind === 'none' || record.effect.status !== 'reserved') return [];
