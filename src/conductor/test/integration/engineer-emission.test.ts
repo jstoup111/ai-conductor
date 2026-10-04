@@ -36,17 +36,13 @@ async function readSignalLines(engineerDir: string): Promise<string[]> {
 describe('integration/engineer-emission — makeRunFeature emits on daemon completion', () => {
   let engineerDir: string;
   let worktreePath: string;
-  const savedEnv = process.env.AI_CONDUCTOR_ENGINEER_DIR;
 
   beforeEach(async () => {
     engineerDir = await mkdtemp(join(tmpdir(), 'engineer-emit-test-'));
     worktreePath = await mkdtemp(join(tmpdir(), 'engineer-emit-wt-'));
-    process.env.AI_CONDUCTOR_ENGINEER_DIR = engineerDir;
   });
 
   afterEach(async () => {
-    if (savedEnv === undefined) delete process.env.AI_CONDUCTOR_ENGINEER_DIR;
-    else process.env.AI_CONDUCTOR_ENGINEER_DIR = savedEnv;
     await rm(engineerDir, { recursive: true, force: true });
     await rm(worktreePath, { recursive: true, force: true });
   });
@@ -66,11 +62,11 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
 
   // Build a runner deps object whose createWorktree returns a real on-disk
   // worktree (seeded with events) and whose readOutcome returns `outcome`. The
-  // emission-related deps (daemon flag) ride along in an extended
-  // object cast to the current type until the production type is widened.
+  // emission-related deps carry the fixture-owned engineer directory so this
+  // integration path never depends on process-global environment mutation.
   function deps(
     outcome: WorktreeOutcome,
-    extra: { daemon?: boolean; log?: (m: string) => void; wtPath?: string } = {},
+    extra: { daemon?: boolean; engineerDir?: string; log?: (m: string) => void; wtPath?: string } = {},
   ): FeatureRunnerDeps {
     const wt = extra.wtPath ?? worktreePath;
     const base: Omit<FeatureRunnerDeps, 'daemon' | 'project'> = {
@@ -94,13 +90,12 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     };
     return {
       ...base,
-      // Emission deps the production runner will consume. Cast keeps the
-      // pre-implementation FeatureRunnerDeps type satisfied.
       daemon: extra.daemon ?? true,
       // Project key for the store (production sets this to basename(projectRoot),
       // never the worktree path — FR-9).
       project: 'test-project',
-    } as unknown as FeatureRunnerDeps;
+      engineerDir: extra.engineerDir ?? engineerDir,
+    };
   }
 
   // ─── FR-1 (happy): daemon done → exactly one signal line ───────────────────
@@ -190,13 +185,11 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     const blocker = join(worktreePath, 'blocker');
     await mkdir(worktreePath, { recursive: true });
     await writeFile(blocker, 'x', 'utf-8');
-    process.env.AI_CONDUCTOR_ENGINEER_DIR = join(blocker, 'engineer');
-
     const logs: string[] = [];
     const run = makeRunFeature(
       deps(
         { done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' },
-        { daemon: true, log: (m) => logs.push(m) },
+        { daemon: true, engineerDir: join(blocker, 'engineer'), log: (m) => logs.push(m) },
       ),
     );
     const out = await run(ITEM);
@@ -214,12 +207,10 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     const blocker = join(worktreePath, 'feature-logger-blocker');
     await mkdir(worktreePath, { recursive: true });
     await writeFile(blocker, 'x', 'utf-8');
-    process.env.AI_CONDUCTOR_ENGINEER_DIR = join(blocker, 'engineer');
-
     const featureLogs: string[] = [];
     const featureDeps = deps(
       { done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' },
-      { daemon: true },
+      { daemon: true, engineerDir: join(blocker, 'engineer') },
     );
     featureDeps.beginFeatureRun = () => ({
       events: new ConductorEventEmitter(),

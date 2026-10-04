@@ -172,6 +172,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       prUrl: 'https://github.com/owner/repo/pull/1',
     });
     featureDeps.daemon = true;
+    featureDeps.deferTerminalEffects = true;
     featureDeps.beginFeatureRun = () => ({
       events: new ConductorEventEmitter(),
       rootEvents: events,
@@ -205,6 +206,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     events.on('feature_dispatch_ended', (event) => { emitted.push(event as Record<string, unknown>); });
     const featureDeps = deps({ done: false, halted: true, reason: 'needs human' });
     featureDeps.daemon = true;
+    featureDeps.deferTerminalEffects = true;
     featureDeps.beginFeatureRun = () => ({
       events: new ConductorEventEmitter(),
       rootEvents: events,
@@ -516,6 +518,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     };
     featureDeps.runConductor = async () => {};
     featureDeps.daemon = true;
+    featureDeps.deferTerminalEffects = true;
 
     await makeRunFeature(featureDeps)({ slug: 'feature-a' });
 
@@ -548,6 +551,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(receivedLog).toBe(featureLog);
     };
     featureDeps.daemon = true;
+    featureDeps.deferTerminalEffects = true;
 
     await makeRunFeature(featureDeps)({ slug: 'feature-a' });
 
