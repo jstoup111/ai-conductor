@@ -11,6 +11,7 @@ import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { scrubTmuxEnvironment } from './child-environment.js';
 import { materializePiHarnessExtension } from './pi-harness-extension.js';
+import { applyRateCard, loadRateCard, type RateCard, type RateCardLoader } from './rate-card.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 
 export type PiSubprocessFactory = (
@@ -159,6 +160,8 @@ type PiJsonEvent = {
   result?: { details?: unknown };
   message?: {
     role?: unknown;
+    model?: unknown;
+    responseModel?: unknown;
     content?: unknown;
     stopReason?: unknown;
     errorMessage?: unknown;
@@ -209,8 +212,14 @@ function terminalAssistantText(content: unknown): string {
     .join('');
 }
 
+/** Pi may report a canonical provider/model id; rate cards are keyed by the bare model id. */
+function barePiModel(model: string): string {
+  const separator = model.indexOf('/');
+  return separator === -1 ? model : model.slice(separator + 1);
+}
+
 /** Extract Pi's authoritative terminal assistant message and sum its final per-message usage. */
-export function parsePiJsonl(stdout: string): {
+export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
   output: string;
   tokenUsage?: TokenUsage;
   hasTerminalAssistantMessage: boolean;
@@ -226,8 +235,10 @@ export function parsePiJsonl(stdout: string): {
   let assistantTurns = 0;
   let finalStructuredResult: unknown;
   let providerCostUsd = 0;
+  let rateCardCostUsd = 0;
   let hasTokenBearingMessage = false;
   let allTokenBearingMessagesPriced = true;
+  let allTokenBearingMessagesRateCardPriced = true;
 
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -264,6 +275,25 @@ export function parsePiJsonl(stdout: string): {
             } else {
               allTokenBearingMessagesPriced = false;
             }
+            const model = typeof event.message.responseModel === 'string'
+              ? event.message.responseModel
+              : typeof event.message.model === 'string'
+                ? event.message.model
+                : undefined;
+            const messageUsage: TokenUsage = {
+              input,
+              output: outputTokens,
+              ...(typeof cacheRead === 'number' && Number.isFinite(cacheRead) ? { cacheRead } : {}),
+              ...(typeof cacheWrite === 'number' && Number.isFinite(cacheWrite) ? { cacheCreation: cacheWrite } : {}),
+            };
+            const priced = event.message.role === 'assistant'
+              ? applyRateCard(messageUsage, model === undefined ? undefined : barePiModel(model), rateCard)
+              : undefined;
+            if (priced?.costSource === 'rate-card' && priced.costUsd !== undefined) {
+              rateCardCostUsd += priced.costUsd;
+            } else {
+              allTokenBearingMessagesRateCardPriced = false;
+            }
           }
           const previous = tokenUsage;
           tokenUsage = {
@@ -295,6 +325,8 @@ export function parsePiJsonl(stdout: string): {
       numTurns: assistantTurns,
       ...(hasTokenBearingMessage && allTokenBearingMessagesPriced
         ? { costUsd: providerCostUsd, costSource: 'provider' as const }
+        : hasTokenBearingMessage && allTokenBearingMessagesRateCardPriced
+          ? { costUsd: rateCardCostUsd, costSource: 'rate-card' as const }
         : {}),
     };
   } else {
@@ -322,6 +354,7 @@ export class PiProvider implements LLMProvider {
     private readonly subprocessFactory: PiSubprocessFactory = execa,
     private readonly environment: PiEnvironment = defaultPiEnvironment,
     private readonly materializeExtension: typeof materializePiHarnessExtension = materializePiHarnessExtension,
+    private readonly loadRates: RateCardLoader = loadRateCard,
   ) {}
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
@@ -435,7 +468,7 @@ export class PiProvider implements LLMProvider {
     const exitCode = result.exitCode ?? 1;
     const stdout = typeof result.stdout === 'string' ? result.stdout : '';
     const stderr = typeof result.stderr === 'string' ? result.stderr : '';
-    const parsed = parsePiJsonl(stdout);
+    const parsed = parsePiJsonl(stdout, this.loadRates(options.cwd ?? process.cwd()));
 
     // Missing-binary classification is anchored to structural process signals.
     // Never infer provider-wide unavailability from arbitrary stderr prose.

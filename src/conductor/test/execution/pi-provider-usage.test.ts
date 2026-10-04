@@ -1,8 +1,11 @@
-// Covers: task:1, task:2, task:3, task:4
-import { readFile } from 'node:fs/promises';
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { PiProvider, type PiEnvironment, type PiSubprocessFactory } from '../../src/execution/pi-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import { clearRateCardCache, loadRateCard, type RateCard } from '../../src/execution/rate-card.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { resolveProviderModelPolicy } from '../../src/engine/provider-model-policy.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -28,6 +31,25 @@ const environment: PiEnvironment = {
   cwd: () => '/workspace/project',
 };
 
+const RATE_CARD: RateCard = {
+  as_of: '2026-09-12T11:36:56.747Z',
+  source: 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json',
+  models: {
+    'gpt-5.6-luna': {
+      input_cost_per_token: 2e-7,
+      output_cost_per_token: 1.2e-6,
+      cache_read_input_token_cost: 2e-8,
+      cache_creation_input_token_cost: 2.5e-7,
+    },
+    'gpt-5.6-terra': {
+      input_cost_per_token: 2e-6,
+      output_cost_per_token: 1.2e-5,
+      cache_read_input_token_cost: 2e-7,
+      cache_creation_input_token_cost: 2.5e-6,
+    },
+  },
+};
+
 function terminalAssistantMessage(usage?: unknown): string {
   return JSON.stringify({
     type: 'message_end',
@@ -38,6 +60,14 @@ function terminalAssistantMessage(usage?: unknown): string {
       stopReason: 'stop',
     },
   });
+}
+
+function replaceTerminalCost(stdout: string, current: string, replacement: string): string {
+  return stdout.split('\n').map((line) => (
+    line.includes('"type":"message_end"')
+      ? line.replaceAll(`"total":${current}`, `"total":${replacement}`)
+      : line
+  )).join('\n');
 }
 
 async function providerAttemptFor(stdout: string, exitCode = 0): Promise<{
@@ -93,9 +123,9 @@ describe('PiProvider usage', () => {
     ['a non-numeric cost', 'NaN'],
   ])('leaves cost absent when a token-bearing message has %s', async (_name, invalidCost) => {
     const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
-    const stdout = workedStream.replaceAll('"total":0.0021', `"total":${JSON.stringify(invalidCost)}`);
+    const stdout = replaceTerminalCost(workedStream, '0.0021', JSON.stringify(invalidCost));
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => undefined);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -123,6 +153,77 @@ describe('PiProvider usage', () => {
 
     expect(result.tokenUsage).toMatchObject({ costSource: 'provider' });
     expect(result.tokenUsage?.costUsd).toBeCloseTo(0.0035, 12);
+  });
+
+  it.each([
+    ['every Pi cost is zero', (stdout: string) => replaceTerminalCost(replaceTerminalCost(stdout, '0.0021', '0'), '0.0014', '0')],
+    ['only turn two Pi cost is zero', (stdout: string) => replaceTerminalCost(stdout, '0.0014', '0')],
+  ])('falls back to the message model rate card when %s', async (_name, rewrite) => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout: rewrite(workedStream), stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+
+    const result = await provider.invoke(invokeOptions);
+
+    // 120*2e-7 + 300*2e-8 + 50*2.5e-7 + 40*1.2e-6
+    // + 80*2e-7 + 400*2e-8 + 25*1.2e-6
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.0001445, 12);
+    expect(result.tokenUsage?.costSource).toBe('rate-card');
+    expect(classifyMetering(result.tokenUsage)).toBe('fully-metered');
+  });
+
+  it.each([
+    ['negative', '-1'],
+    ['infinite', '1e400'],
+    ['non-numeric', '"NaN"'],
+  ])('falls back to the rate card when turn one Pi cost is %s', async (_name, replacement) => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const stdout = replaceTerminalCost(
+      replaceTerminalCost(workedStream, '0.0021', replacement),
+      '0.0014',
+      '0',
+    );
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.0001445, 12);
+    expect(result.tokenUsage?.costSource).toBe('rate-card');
+  });
+
+  it.each([
+    ['no project card', undefined],
+    ['an unparseable project card', '{not json'],
+  ])('stays cost-unmetered with %s', async (_name, cardContents) => {
+    const project = await mkdtemp(join(tmpdir(), 'pi-rate-card-project-'));
+    const home = await mkdtemp(join(tmpdir(), 'pi-rate-card-home-'));
+    const previousHome = process.env.HOME;
+    try {
+      if (cardContents !== undefined) {
+        await mkdir(join(project, '.ai-conductor'), { recursive: true });
+        await writeFile(join(project, '.ai-conductor', 'rate-card.json'), cardContents, 'utf8');
+      }
+      process.env.HOME = home;
+      clearRateCardCache();
+      const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+      const stdout = replaceTerminalCost(replaceTerminalCost(workedStream, '0.0021', '0'), '0.0014', '0');
+      const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+      const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, loadRateCard);
+
+      const result = await provider.invoke({ ...invokeOptions, cwd: project });
+
+      expect(result).toMatchObject({ success: true });
+      expect(result.tokenUsage?.input).toBe(200);
+      expect(result.tokenUsage).not.toHaveProperty('costUsd');
+      expect(classifyMetering(result.tokenUsage)).toBe('cost-unmetered');
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      clearRateCardCache();
+      await rm(project, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   it('sums only terminal assistant message usage without counting partial or repeated events', async () => {
