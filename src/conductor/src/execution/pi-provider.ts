@@ -167,6 +167,7 @@ type PiJsonEvent = {
       output?: unknown;
       cacheRead?: unknown;
       cacheWrite?: unknown;
+      reasoning?: unknown;
     };
   };
 };
@@ -242,8 +243,8 @@ export function parsePiJsonl(stdout: string): {
           ? event.message.errorMessage
           : undefined;
       }
-      if (event.type === 'message_end' && event.message?.role === 'assistant' && event.message.usage) {
-        const { input, output: outputTokens, cacheRead, cacheWrite } = event.message.usage;
+      if (event.type === 'message_end' && event.message?.usage) {
+        const { input, output: outputTokens, cacheRead, cacheWrite, reasoning } = event.message.usage;
         if (typeof input === 'number' && Number.isFinite(input)
           && typeof outputTokens === 'number' && Number.isFinite(outputTokens)) {
           const previous = tokenUsage;
@@ -256,6 +257,9 @@ export function parsePiJsonl(stdout: string): {
             ...(typeof cacheWrite === 'number' && Number.isFinite(cacheWrite)
               ? { cacheCreation: (previous?.cacheCreation ?? 0) + cacheWrite }
               : (previous?.cacheCreation === undefined ? {} : { cacheCreation: previous.cacheCreation })),
+            ...(typeof reasoning === 'number' && Number.isFinite(reasoning)
+              ? { reasoningOutput: (previous?.reasoningOutput ?? 0) + reasoning }
+              : (previous?.reasoningOutput === undefined ? {} : { reasoningOutput: previous.reasoningOutput })),
           };
         }
       }
