@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-04T00:59:59.470Z
+Status: halted
 Slug: step-applicability-is-fixed-repo-wide-decide-canno
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-step-applicability-is-fixed-repo-wide-decide-canno
-Head SHA: 985e88ce9dcff07f1f5be77b0418465f498f17f8
-Halted at: 2026-10-03T22:57:29.170Z
+Head SHA: 6b27490797f645edb4928cbd9d021594dbbedc2a
+Halted at: 2026-10-04T01:06:19.359Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
