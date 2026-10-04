@@ -60,6 +60,38 @@ None beyond the above. `bin/install` auto-discovers skills: it walks `skills/*/`
 directory containing a `SKILL.md`, then symlinks each into the user-level skill directories for both
 supported hosts. A hardcoded list used to live there and drifted; do not reintroduce one.
 
+### Session-command contexts
+
+A daemon-managed session [refuses most `ai-conductor` commands](../reference/cli.md#daemon-session-refusal).
+`ai-conductor github-boundary-audit` checks that no instruction a managed session can receive tells it
+to run one. It scans every `skills/**/SKILL.md` and every `.ts` file under
+`src/conductor/src/engine/`, and evaluates each `ai-conductor <subcommand>` (or `conduct-ts`) occurrence
+against the same policy as the runtime guard. Mark command-bearing regions with a bounded context:
+
+```markdown
+<!-- ai-conductor:session-command-context=operator-only -->
+Run `ai-conductor config init` ...
+<!-- /ai-conductor:session-command-context -->
+```
+
+In TypeScript, use `// ai-conductor:session-command-context=<context>` and
+`// /ai-conductor:session-command-context`.
+
+| Context | Use for | Audit result |
+| --- | --- | --- |
+| `managed` | Text a managed session receives and executes | Refused subcommands fail |
+| `operator-only` | Steps only an operator terminal runs | Pass in skills; fail inside a registered engine prompt surface |
+| `prohibition` | Text telling a session *not* to run the command | Pass |
+
+Skill text is `managed` unless a region says otherwise. Every engine string carrying a command must sit
+inside a declared region, or it fails as `unclassified session-command context in engine instruction`.
+The registered prompt builders (`MANAGED_DISPATCH_PROMPT_SURFACES` in
+`src/conductor/src/engine/session-command-audit.ts`) declare `managed`. Regions do not nest, must close,
+and accept only those three names — an unclosed, stray, or misspelled marker fails at its line. In a
+`managed` region, a command assembled by concatenation or template is resolved and checked; one the
+audit cannot resolve fails as `unresolved command construction`. Fix a finding by moving the step into the engine or a
+sanctioned command, or by marking the region correctly — never by adding a permission to the guard.
+
 ### What catches a skill mistake
 
 | Mistake | Caught by |

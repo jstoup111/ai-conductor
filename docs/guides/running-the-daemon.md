@@ -793,7 +793,10 @@ Each of these encodes a failure that has already corrupted daemon state.
    `CONDUCT_DAEMON_SESSION=1`, and `ai-conductor` refuses to run under it (exit 1) except for the
    session-sanctioned worker commands its skills mandate — so a maker session can never park,
    unpark, restart, or reseal the daemon that dispatched it. See the
-   [CLI reference](../reference/cli.md#daemon-session-refusal).
+   [CLI reference](../reference/cli.md#daemon-session-refusal). Refusals and unguarded `gh` writes
+   from a session appear in the daemon log as `managed session command refused` and
+   `GitHub bypass attempt` lines; see
+   [managed-session occurrence events](../reference/artifacts.md#managed-session-occurrence-events).
 
 ## Record a manual finish
 
