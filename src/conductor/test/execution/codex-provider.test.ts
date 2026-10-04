@@ -1543,7 +1543,7 @@ describe('CodexProvider', () => {
     const policyStart = reviewArgs.indexOf('-P');
     const policyEnd = reviewArgs.indexOf('--config', policyStart);
     expect(reviewArgs.slice(policyStart, policyEnd)).toEqual(
-      buildCodexReadOnlyProducerRootPolicyArgs(producerRoot, 'sandbox'),
+      buildCodexReadOnlyProducerRootPolicyArgs(producerRoot, 'exec'),
     );
     expect(reviewConfigValues).toEqual(expect.arrayContaining([
       'approval_policy="never"',

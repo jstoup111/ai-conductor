@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import {
+  buildCodexReadOnlyProducerRootPolicyArgs,
   probeManagedObservationDestination,
   probeReadOnlyReviewCapability,
 } from '../../src/engine/build-review-read-only-capability.js';
@@ -256,7 +257,7 @@ describe('probeManagedObservationDestination', () => {
       provider: 'codex', producerRoot, protectedPaths, executable: '/isolated/codex', runProcess,
     })).resolves.toEqual({ producerWrite: 'allowed', protectedWrites: 'refused' });
     expect(runProcess).toHaveBeenCalledWith('/isolated/codex', [
-      'sandbox', '-P', ':read-only', '-P', `${producerRoot}:read-write`, '--',
+      'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(producerRoot, 'sandbox'), '--',
       '/bin/bash', '-c', expect.any(String), 'managed-observation-policy',
       producerRoot,
     ]);
