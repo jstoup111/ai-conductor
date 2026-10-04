@@ -98,8 +98,8 @@ export async function classifyRebaseOperation(projectRoot: string): Promise<Reba
   const rebase = await persistedVerdict(projectRoot, 'rebase');
   const operation = rebase?.rebaseOperation;
   if (!operation) return { kind: 'clear' };
-  if (operation.status !== 'applied') return { kind: 'applying' };
-  if (!validRebaseOperationRecord(operation)) {
+  if (operation.status === 'applying') return { kind: 'applying' };
+  if (operation.status !== 'applied' || !validRebaseOperationRecord(operation)) {
     return { kind: 'integrity-fault', reason: 'malformed-record' };
   }
 

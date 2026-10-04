@@ -204,6 +204,26 @@ describe('classifyRebaseOperation', () => {
     await expect(classifyRebaseOperation(s.repo)).resolves.toEqual({ kind: 'applying' });
   });
 
+  it('classifies a malformed persisted operation status as an integrity fault', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 100,
+      rebaseOperation: {
+        id: 'malformed-status',
+        status: 'appliyng' as unknown as 'applying',
+        transition: { preserved: [], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+
+    await expect(classifyRebaseOperation(s.repo)).resolves.toEqual({
+      kind: 'integrity-fault',
+      reason: 'malformed-record',
+    });
+  });
+
   it.each([
     ['missing preserved verdict', undefined, { kind: 'integrity-fault', gate: 'prd_audit', reason: 'missing-verdict' }],
     ['failed verdict at applied-at time', { satisfied: false, checkedAt: 100 }, { kind: 'integrity-fault', gate: 'prd_audit', reason: 'pre-applied-unsatisfied' }],
