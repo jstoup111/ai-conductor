@@ -1,9 +1,10 @@
-// Covers: task:3
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+// Covers: task:3, task:4
+import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { preparePiSelfHostAuth } from '../../src/execution/pi-self-host-auth.js';
+import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
 
 describe('preparePiSelfHostAuth', () => {
   const directories: string[] = [];
@@ -58,5 +59,57 @@ describe('preparePiSelfHostAuth', () => {
         },
       }],
     });
+  });
+
+  it('refuses unresolvable providers without persisting or exposing resolver output', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-self-host-auth-'));
+    directories.push(root);
+    const key = 'K_NOT_FOR_DIAGNOSTICS';
+    const cases = [
+      { name: 'failed exit', model: 'openrouter/m', result: { stdout: '', stderr: '', exitCode: 1 }, reason: 'openrouter' },
+      { name: 'unknown extension provider', model: 'qoder/m', result: { stdout: 'Error: Unknown provider "qoder".', stderr: '', exitCode: 1 }, reason: 'qoder.*unknown provider' },
+      { name: 'empty output', model: 'openrouter/m', result: { stdout: '', stderr: '', exitCode: 0 }, reason: 'openrouter' },
+      { name: 'whitespace output', model: 'openrouter/m', result: { stdout: ' \n\t ', stderr: '', exitCode: 0 }, reason: 'openrouter' },
+      { name: 'timeout', model: 'openrouter/m', result: { stdout: '', stderr: '', exitCode: 1, timedOut: true }, reason: 'openrouter.*timed out' },
+      { name: 'secret stderr', model: 'openrouter/m', result: { stdout: '', stderr: key, exitCode: 1 }, reason: 'openrouter' },
+    ] as const;
+
+    const observations = await Promise.all(cases.map(async ({ name, model, result, reason }) => {
+      const homeDir = join(root, name.replaceAll(' ', '-'));
+      let error: unknown;
+      try {
+        await preparePiSelfHostAuth({
+          executable: 'pi', model, homeDir, parentEnv: {}, run: async () => result,
+        });
+      } catch (caught) {
+        error = caught;
+      }
+      const refusal = error instanceof ProviderSetupUnavailableError ? error : undefined;
+      let authExists = true;
+      try {
+        await access(join(homeDir, 'auth.json'));
+      } catch {
+        authExists = false;
+      }
+      return {
+        authExists,
+        capability: refusal?.setupUnavailable.capability,
+        message: refusal?.message,
+        provider: refusal?.setupUnavailable.provider,
+        reason: refusal?.setupUnavailable.reason,
+        recoveryAction: refusal?.setupUnavailable.recoveryAction,
+        expectedReason: reason,
+      };
+    }));
+
+    expect(observations).toEqual(cases.map(({ reason }) => expect.objectContaining({
+      authExists: false,
+      capability: 'self-host-isolation',
+      provider: 'pi',
+      expectedReason: reason,
+      message: expect.not.stringContaining(key),
+      reason: expect.stringMatching(new RegExp(reason, 'i')),
+      recoveryAction: expect.not.stringContaining(key),
+    })));
   });
 });
