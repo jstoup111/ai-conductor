@@ -182,6 +182,8 @@ export interface SelfHostAuthPreparation {
 export interface SelfHostAuthContext {
   provider: ProviderWith<'selfHost'>['id'];
   homeDir: string;
+  /** Candidate model when a provider resolves selected auth from its model namespace. */
+  model?: string;
 }
 
 /** Declares that a provider validates lifecycle authority at its spawn boundary. */

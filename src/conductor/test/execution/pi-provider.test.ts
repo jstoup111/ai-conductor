@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4, task:6, task:7, task:9, task:13, task:15, task:16, task:17, task:18
+// Covers: task:2, task:3, task:4, task:5, task:6, task:7, task:9, task:13, task:15, task:16, task:17, task:18
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -381,7 +381,35 @@ describe('PiProvider', () => {
     ]);
     expect(provider.supportsSessionResume).toBe(false);
     expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
-    expect(Object.getOwnPropertyNames(PiProvider.prototype)).toEqual(['constructor', 'invoke']);
+    expect(Object.getOwnPropertyNames(PiProvider.prototype)).toEqual(['constructor', 'resolveSelfHostExecutable', 'prepareSelfHostAuth', 'invoke']);
+  });
+
+  it('resolves its self-host executable from the constructed adapter', async () => {
+    expect(await provider.resolveSelfHostExecutable()).toBe('/resolved/pi');
+  });
+
+  it('resolves the candidate provider key into its isolated self-host auth file', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'pi-provider-self-host-'));
+    const runner = vi.fn(async () => ({ stdout: 'K' }));
+    const selfHostProvider = new PiProvider('/resolved/pi', spawn, environment, undefined, undefined, runner);
+
+    try {
+      await selfHostProvider.prepareSelfHostAuth({ provider: 'pi', homeDir, model: 'deepseek/x' });
+
+      expect({
+        call: runner.mock.calls[0],
+        auth: JSON.parse(await readFile(join(homeDir, 'auth.json'), 'utf8')),
+      }).toEqual({
+        call: [
+          '/resolved/pi',
+          ['auth', 'print-api-key', '--provider', 'deepseek'],
+          expect.objectContaining({ cwd: homeDir, timeout: 30_000 }),
+        ],
+        auth: { deepseek: { type: 'api_key', key: 'K' } },
+      });
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
   });
 
   it('preserves a nested Pi model suffix and supplies exactly one separate thinking flag', async () => {

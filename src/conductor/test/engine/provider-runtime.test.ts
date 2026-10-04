@@ -1,4 +1,4 @@
-// Covers: task:7
+// Covers: task:5, task:7
 import { describe, expect, it, vi } from 'vitest';
 import type {
   InvokeOptions,
@@ -98,6 +98,23 @@ describe('ProviderRuntimeSet', () => {
     }]);
 
     expect(runtimes.nativeSchemaCapabilityFor('pi')).toEqual({ nativeOutputSchema: true });
+  });
+
+  it('exposes self-host auth for a registered Pi runtime with both adapter seams', () => {
+    const prepareSelfHostAuth = vi.fn(async () => ({ args: [] }));
+    const runtimes = new RuntimeSet([{
+      key: 'pi',
+      provider: {
+        ...provider(),
+        prepareSelfHostAuth,
+        resolveSelfHostExecutable: vi.fn(async () => '/resolved/pi'),
+      },
+      policy: CLAUDE_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+    }]);
+
+    expect(runtimes.selfHostAuthFor('pi')).toBeTypeOf('function');
   });
 
   it('treats a Pi descriptor without writeFence as unfenced', async () => {
