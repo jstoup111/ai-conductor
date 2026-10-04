@@ -10,11 +10,18 @@ vi.mock('../../src/engine/steps.js', async (importOriginal) => {
   return { ...actual, buildStepRegistry: vi.fn(actual.buildStepRegistry) };
 });
 
+vi.mock('../../src/engine/rebase-transition.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/rebase-transition.js')>();
+  return { ...actual, completeInterruptedRebaseOperation: vi.fn(actual.completeInterruptedRebaseOperation) };
+});
+
 import type { ConductState, StepDefinition, StepName } from '../../src/types/index.js';
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { readVerdict, writeVerdict, type RebasePreservedCandidate } from '../../src/engine/gate-verdicts.js';
 import { writeState } from '../../src/engine/state.js';
 import { buildStepRegistry } from '../../src/engine/steps.js';
+import { completeInterruptedRebaseOperation } from '../../src/engine/rebase-transition.js';
+import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const rebaseRecord = (transition: { preserved: StepName[]; invalidated: StepName[] }) => ({
@@ -46,6 +53,21 @@ const onlyBuildReview: StepDefinition[] = [{
   name: 'build_review', label: 'build review', phase: 'BUILD', enforcement: 'gating',
   prerequisites: [], skippableForTiers: [], isCheckpoint: false,
 }];
+
+const rebaseAndTail: StepDefinition[] = [
+  {
+    name: 'rebase', label: 'rebase', phase: 'SHIP', enforcement: 'gating',
+    prerequisites: [], skippableForTiers: [], isCheckpoint: false,
+  },
+  {
+    name: 'build_review', label: 'build review', phase: 'BUILD', enforcement: 'gating',
+    prerequisites: [], skippableForTiers: [], isCheckpoint: false,
+  },
+  {
+    name: 'prd_audit', label: 'prd audit', phase: 'SHIP', enforcement: 'gating',
+    prerequisites: [], skippableForTiers: [], isCheckpoint: false,
+  },
+];
 
 const wideningFeature = { version: 'v1' as const, repository: 'acme/conductor', feature: 'rebase-fence' };
 
@@ -98,6 +120,7 @@ describe('Conductor resume rebase-operation fence', () => {
 
   afterEach(async () => {
     vi.mocked(buildStepRegistry).mockReset();
+    vi.mocked(completeInterruptedRebaseOperation).mockClear();
     await rm(projectRoot, { recursive: true, force: true });
   });
 
@@ -127,7 +150,7 @@ describe('Conductor resume rebase-operation fence', () => {
 
   async function resume(
     runner: StepRunner,
-    options: { fullSuiteVerifier?: ConstructorParameters<typeof Conductor>[0]['fullSuiteVerifier'] } = {},
+    options: Omit<Partial<ConstructorParameters<typeof Conductor>[0]>, 'projectRoot' | 'stateFilePath' | 'stepRunner' | 'events' | 'resume'> = {},
   ): Promise<StepName[]> {
     const started: StepName[] = [];
     events.on('step_started', (event) => {
@@ -226,6 +249,117 @@ describe('Conductor resume rebase-operation fence', () => {
     });
     await expect(readVerdict(projectRoot, 'test_suite')).resolves.toMatchObject({ satisfied: true });
     expect(await readVerdict(projectRoot, 'test_suite')).not.toHaveProperty('preservation');
+  });
+
+  it.each([
+    ['with preservation evidence', async () => {
+      const suite = { satisfied: true as const, checkedAt: 10 };
+      await writeVerdict(projectRoot, 'test_suite', suite);
+      await writeVerdict(projectRoot, 'build_review', {
+        satisfied: false, checkedAt: 11, kickback: { from: 'rebase', evidence: 'changed replay' },
+      });
+      await writeApplyingRebase(
+        { preserved: ['test_suite'], invalidated: ['build_review'] },
+        [preservedCandidate('test_suite', suite)],
+      );
+    }],
+    ['without preservation evidence', async () => {
+      await writeVerdict(projectRoot, 'test_suite', { satisfied: true, checkedAt: 10 });
+      await writeVerdict(projectRoot, 'build_review', {
+        satisfied: false, checkedAt: 11, kickback: { from: 'rebase', evidence: 'changed replay' },
+      });
+      await writeApplyingRebase({ preserved: ['test_suite'], invalidated: ['build_review'] }, []);
+      const rebase = await readVerdict(projectRoot, 'rebase');
+      await writeVerdict(projectRoot, 'rebase', {
+        ...rebase!,
+        rebaseOperation: { ...rebase!.rebaseOperation!, preservationEvidence: undefined },
+      });
+    }],
+  ])('halts when applying-operation completion is refused %s', async (_name, seed) => {
+    await seed();
+    const stateStore = createFilesystemConductStateStore(stateFilePath);
+    const applyBatch = stateStore.applyBatch.bind(stateStore);
+    stateStore.applyBatch = async (batch) => batch.name.startsWith('apply rebase operation')
+      ? { kind: 'conflict', message: 'concurrent update' }
+      : applyBatch(batch);
+
+    await expect(resume(successfulRunner, { stateStore })).resolves.toEqual([]);
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'rebase continuation state transition was refused',
+    );
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
+  it('halts malformed applying records without invoking interrupted-operation completion', async () => {
+    await writeApplyingRebase({ preserved: ['test_suite'], invalidated: ['test_suite'] }, []);
+
+    await expect(resume(successfulRunner)).resolves.toEqual([]);
+    await expect(readVerdict(projectRoot, 'rebase')).resolves.toMatchObject({
+      rebaseOperation: { status: 'applying' },
+    });
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'rebase transition record is malformed',
+    );
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    expect(completeInterruptedRebaseOperation).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a full applying record without preservation evidence', async () => {
+      await writeState(stateFilePath, {
+        rebase: 'done', build_review: 'done', prd_audit: 'done',
+      } as ConductState);
+      await writeVerdict(projectRoot, 'build_review', { satisfied: true, checkedAt: 10 });
+      await writeVerdict(projectRoot, 'prd_audit', { satisfied: true, checkedAt: 10 });
+      await writeVerdict(projectRoot, 'rebase', {
+        satisfied: true,
+        checkedAt: 11,
+        rebaseOperation: {
+          ...rebaseRecord({ preserved: ['prd_audit'], invalidated: ['build_review'] }),
+          status: 'applying',
+          appliedAt: undefined,
+        },
+      });
+      return ['build_review', 'prd_audit'] as const;
+    }],
+    ['a provisional preparing record', async () => {
+      await writeState(stateFilePath, {
+        rebase: 'done', build_review: 'done', prd_audit: 'done',
+      } as ConductState);
+      await writeVerdict(projectRoot, 'build_review', { satisfied: true, checkedAt: 10 });
+      await writeVerdict(projectRoot, 'prd_audit', { satisfied: true, checkedAt: 10 });
+      await writeVerdict(projectRoot, 'rebase', {
+        satisfied: true,
+        checkedAt: 11,
+        rebaseOperation: {
+          ...rebaseRecord({ preserved: [], invalidated: [] }),
+          id: 'preparing-rebase-operation-1',
+          status: 'applying',
+          appliedAt: undefined,
+        },
+      });
+      return rebaseAndTail.slice(1).map((step) => step.name);
+    }],
+  ])('completes evidence-less interrupted operations from resume for %s', async (_name, seed) => {
+    vi.mocked(buildStepRegistry).mockReturnValue(rebaseAndTail);
+    const affected = await seed();
+
+    await expect(resume(successfulRunner, {
+      daemon: true,
+      featureSlug: 'resume-fixture',
+      operatorParkBoundary: async () => true,
+    })).resolves.toEqual([]);
+
+    await expect(readVerdict(projectRoot, 'rebase')).resolves.toMatchObject({
+      rebaseOperation: { status: 'applied', transition: { preserved: [] } },
+    });
+    for (const gate of affected) {
+      await expect(readVerdict(projectRoot, gate)).resolves.toMatchObject({ satisfied: false });
+      expect((await readVerdict(projectRoot, gate))?.preservation).toBeUndefined();
+    }
+    const state = JSON.parse(await readFile(stateFilePath, 'utf8')) as ConductState;
+    for (const gate of affected) expect(state[gate]).toBe('pending');
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it.each([
