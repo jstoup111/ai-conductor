@@ -263,34 +263,6 @@ Inline output includes every event the sink registry declares renderable. Halts,
 unsatisfied gate verdicts, and gate-loop convergence have dedicated lines; other renderable events
 are summarized by type.
 
-## `ai-conductor monitor`
-
-```bash
-ai-conductor monitor all
-ai-conductor monitor <project>
-```
-
-Runs the foreground guided-resolution queue for halted features. It does not start, attach to, or
-dispatch the daemon.
-
-| Selector | Effect |
-| --- | --- |
-| `all` | Monitor halted features across every registered project. |
-| `<project>` | Monitor halted features in one registered project by name. |
-
-The monitor remains active until interrupted. It offers one halted feature at a time in a guided
-session and re-derives the queue between passes, so resolved or parked work is not offered again.
-
-| Condition | Output and exit |
-| --- | --- |
-| Valid selector, then interrupt | Stops the foreground monitor; exits 0 unless an inventory error occurred during a pass. |
-| Unknown project, unreadable registry, or unreadable selected project | Reports the inventory error; exits 1 after the monitor stops. |
-| Missing selector, extra argument, or selector beginning with `-` | Prints `Usage: ai-conductor monitor all\|<project>` to stderr; exits 1. |
-| Invoked from a daemon-managed session | Refused by the daemon-session guard before queue enumeration; exits 1. |
-
-`monitor` is intentionally unavailable to daemon-managed provider sessions. Run it from an operator
-terminal, not from a dispatched build or review session.
-
 ### Auto-resume
 
 When a feature description is given and none of `--resume`, `--fresh`, or `--from` is
@@ -314,6 +286,53 @@ user config, reads or creates `.pipeline/conduct-session-id`, discovers plugins 
 `.pipeline/events.jsonl` and `.pipeline/audit-trail/events.jsonl`, may run the `/bootstrap` and
 `/assess` prelude, spawns `bin/update --auto` in the background with all failures swallowed, and
 creates or cleans git worktrees. OTel export is opt-in and off unless configured.
+
+## `ai-conductor monitor`
+
+```bash
+ai-conductor monitor all
+ai-conductor monitor <project>
+```
+
+Runs the foreground guided-resolution queue for halted features. It does not start, attach to, or
+dispatch the daemon.
+
+| Selector | Effect |
+| --- | --- |
+| `all` | Monitor halted features across every registered project. |
+| `<project>` | Monitor halted features in one registered project by name. |
+
+The monitor remains active until interrupted (`Ctrl-C`). It offers one halted feature at a time in a
+guided session and re-derives the queue between passes, so resolved or parked work is not offered
+again. An empty queue prints `Monitor queue is empty; staying active.` and rechecks every second.
+
+Each offer prints `<project>: <slug> — <reason> (<halt class>) [<band>; <basis>]`. Queue order:
+
+1. Undeferred halts before deferred halts.
+2. Within each group, the daemon backlog's priority bands (basis `priority-band`). When priority
+   labels cannot be read within 2 seconds, discovery order is kept and the basis is `fallback`.
+
+When a guided session returns, the monitor prompts `[skip/continue]` on a TTY. `skip` records a
+deferral in the project's `.daemon/deferrals.json`; any other answer, or no TTY, keeps the item in
+the queue. A deferral lasts only while the same `HALT` marker (same size and modification time)
+remains; a new or rewritten halt is offered as undeferred.
+
+Each pass also runs [`halt-issues sweep`](#ai-conductor-halt-issues-sweep) when the project's
+`origin` remote is on GitHub. Sweep failures are reported once per failure kind and do not stop the
+queue. Offers, session opens, deferrals, and session ends are recorded on the event spine as
+`monitor_item_offered`, `monitor_session_opened`, `monitor_item_deferred`, and
+`monitor_session_ended`.
+
+| Condition | Output and exit |
+| --- | --- |
+| Valid selector, then interrupt | Prints `Monitor stopped.`; exits 0 unless an inventory error occurred during a pass. |
+| Unknown project, unreadable registry, or unreadable selected project | Reports the inventory error; exits 1 after the monitor stops. |
+| Configured provider unresolvable or not built in | Prints `monitor: unable to resolve provider…` or `monitor: unregistered provider <name>.`; exits 1 before the queue starts. |
+| Missing selector, extra argument, or selector beginning with `-` | Prints `Usage: ai-conductor monitor all\|<project>` to stderr; exits 1. |
+| Invoked from a daemon-managed session | Refused by the [daemon-session guard](#daemon-session-refusal) before queue enumeration; exits 1. |
+
+`monitor` is intentionally unavailable to daemon-managed provider sessions. Run it from an operator
+terminal, not from a dispatched build or review session.
 
 ## `ai-conductor daemon`
 
