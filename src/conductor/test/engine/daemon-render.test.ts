@@ -72,6 +72,12 @@ describe('renderDaemonEvent', () => {
       requested: 'stale',
       intent: 'restage ship tail after build kickback',
     })).toEqual(['· ✋ manual_test status write refused: skipped → stale (restage ship tail after build kickback)']);
+    expect(lines({ type: 'step_inapplicable', step: 'manual_test', reason: 'no UI', decider: 'unknown' }))
+      .toEqual(['· ⊘ manual_test inapplicable: no UI']);
+    expect(lines({ type: 'step_inapplicable_ignored', cause: 'branch-only', step: 'manual_test' }))
+      .toEqual(['· ⊘ step applicability ignored (branch-only: manual_test)']);
+    expect(lines({ type: 'step_inapplicable_refused', step: 'manual_test', reason: 'late', priorStatus: 'done' }))
+      .toEqual(['· ✋ manual_test applicability refused (done): late']);
   });
 
   it('renders an ownership refusal with the same reason and remedy as the terminal', () => {
@@ -758,6 +764,9 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 },
       { type: 'step_refused', step: 'build', kind: 'seal', reason: 'protected artifact changed' },
       { type: 'step_status_write_refused', field: 'manual_test', expected: 'skipped', requested: 'stale', intent: 'restage ship tail after build kickback' },
+      { type: 'step_inapplicable', step: 'manual_test', reason: 'no UI', decider: 'unknown' },
+      { type: 'step_inapplicable_ignored', cause: 'branch-only', step: 'manual_test' },
+      { type: 'step_inapplicable_refused', step: 'manual_test', reason: 'late', priorStatus: 'done' },
       { type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'retry' },
       { type: 'checkpoint_reached', step: 'build' },
       { type: 'recovery_needed', step: 'build', options: ['retry'] },
@@ -847,6 +856,9 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'step_failed',
       'step_refused',
       'step_status_write_refused',
+      'step_inapplicable',
+      'step_inapplicable_ignored',
+      'step_inapplicable_refused',
       'step_retry',
       'gate_verdict',
       'kickback',

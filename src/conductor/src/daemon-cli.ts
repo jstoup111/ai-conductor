@@ -3084,6 +3084,15 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         `${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.field} status write refused: ${event.expected} → ${event.requested} (${event.intent})`)}`,
       );
       break;
+    case 'step_inapplicable':
+      log(`${dot} ${chalk.magenta('⊘')} ${chalk.magenta(`${event.step} inapplicable: ${event.reason}`)}`);
+      break;
+    case 'step_inapplicable_ignored':
+      log(`${dot} ${chalk.yellow('⊘')} ${chalk.yellow(`step applicability ignored (${event.cause}${event.step ? `: ${event.step}` : ''})`)}`);
+      break;
+    case 'step_inapplicable_refused':
+      log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.step} applicability refused (${event.priorStatus}): ${event.reason}`)}`);
+      break;
     case 'github_operation_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatGithubOperationRefusal(event))}`);
       break;
