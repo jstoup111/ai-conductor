@@ -77,6 +77,24 @@ describe('prd_audit current-output handshake', () => {
     expect(result?.reason).toContain('expected terminal typed output .pipeline/prd-audit.json');
   });
 
+  it('does not treat a well-formatted prose verdict as this dispatch output', async () => {
+    const dir = await fixtureDir();
+    const result = await handshakeFor(dir)(
+      'prd_audit',
+      'engine-attempt-16-prose',
+      Date.now(),
+      '# PRD Audit\n\nOverall: PASS\n\nAll criteria are aligned.\n',
+    );
+
+    expect(result).toMatchObject({
+      done: false,
+      routeClass: 'absent',
+      retrySignal: 'structured-result-missing',
+    });
+    expect(result?.reason).toContain('prd_audit dispatch engine-attempt-16-prose produced no verdict');
+    expect(result?.reason).toContain('expected terminal typed output .pipeline/prd-audit.json');
+  });
+
   it('keeps rejected judgment diagnostics distinct while still naming the absent current output', async () => {
     const dir = await fixtureDir();
     const result = await handshakeFor(dir)(

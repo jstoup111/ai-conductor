@@ -1,5 +1,5 @@
 /**
- * Covers: task:27, Story 8 c56 c57 c60
+ * Covers: task:27, task:28, Story 8 c56 c57 c59 c60 c61
  *
  * The PRD report is intentionally never used as authority in these fixtures.
  * Each case writes the typed verdict, then drives the same completion and
@@ -103,6 +103,40 @@ function completionContext(
 }
 
 describe('typed PRD-audit preservation', () => {
+  it('requires a fresh typed audit for a fresh legacy report without rewriting durable widening inputs', async () => {
+    const fixture = await repository();
+    await commit(fixture, { 'src/feature.ts': 'export const feature = true;\n' }, 'feat: reviewed feature');
+    const decisionPath = join(fixture.root, '.pipeline', 'accepted-widenings.json');
+    const clearedHaltPath = join(fixture.root, '.pipeline', 'HALT.cleared');
+    const decisions = '{"version":1,"legacy":"preserve these exact decision bytes"}\n';
+    const clearedHalt = [
+      '```json over-scope-decisions',
+      '[{"criterion":"NC.1","summary":"Legacy scope observation.","decision":"accept","rationale":"Operator accepted the original scope."}]',
+      '```',
+      '',
+    ].join('\n');
+    await writeFile(join(fixture.root, '.pipeline', 'prd-audit.md'), '# PRD Audit\n\nOverall: PASS\n', 'utf8');
+    await writeFile(decisionPath, decisions, 'utf8');
+    await writeFile(clearedHaltPath, clearedHalt, 'utf8');
+
+    await expect(checkStepCompletion(
+      fixture.root,
+      'prd_audit',
+      completionContext(fixture.root, fixture.git, 'current-review-run', { gate_code_validity: { enabled: false } }),
+    )).resolves.toMatchObject({ done: false, routeClass: 'absent' });
+    await expect(classifyPrdAuditGaps(
+      fixture.root,
+      undefined,
+      'current-review-run',
+      { gate_code_validity: { enabled: false } },
+      undefined,
+      fixture.git,
+    )).resolves.toMatchObject({ kind: 'invalid-evidence' });
+
+    await expect(readFile(decisionPath, 'utf8')).resolves.toBe(decisions);
+    await expect(readFile(clearedHaltPath, 'utf8')).resolves.toBe(clearedHalt);
+  });
+
   it('reuses complete, code-valid typed evidence on resume without treating the derived report as authority', async () => {
     const fixture = await repository();
     const reviewed = await commit(fixture, { 'src/feature.ts': 'export const feature = true;\n' }, 'feat: reviewed feature');
