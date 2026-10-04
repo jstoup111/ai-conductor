@@ -12,6 +12,7 @@ import type { ResolvedOtelConfig } from './otel-config.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import { SpoolStore } from './spool-store.js';
 import { SpoolingMetricExporter, SpoolingSpanExporter } from './spooling-exporter.js';
+import { otlpExportRefusal } from './export-refusal.js';
 
 export interface Exporters {
   spanExporter: SpanExporter;
@@ -21,6 +22,25 @@ export interface Exporters {
 export interface ExporterBuildOptions {
   spoolStore?: SpoolStore;
   events?: ConductorEventEmitter;
+  env?: NodeJS.ProcessEnv;
+}
+
+type ExporterBuildEnvironment = NodeJS.ProcessEnv;
+
+function exporterBuildOptions(options: ExporterBuildOptions | ExporterBuildEnvironment): ExporterBuildOptions {
+  if ('env' in options || 'spoolStore' in options || 'events' in options) {
+    return options as ExporterBuildOptions;
+  }
+  return { env: options as ExporterBuildEnvironment };
+}
+
+export interface OtlpExportRefused {
+  refused: true;
+  message: string;
+}
+
+export function isExportRefused(value: Exporters | OtlpExportRefused): value is OtlpExportRefused {
+  return 'refused' in value && value.refused === true;
 }
 
 /**
@@ -63,9 +83,12 @@ export function buildHttpExporterOptions(
  */
 export function buildExporters(
   config: Extract<ResolvedOtelConfig, { enabled: true }>,
-  options: ExporterBuildOptions = {},
+  suppliedOptions: ExporterBuildOptions | ExporterBuildEnvironment = {},
 ): Exporters {
+  const options = exporterBuildOptions(suppliedOptions);
   if (config.exporter === 'otlp') {
+    const message = otlpExportRefusal(options.env ?? process.env);
+    if (message) return { refused: true, message } as unknown as Exporters;
     const url = config.endpoint;
     if (config.protocol === 'grpc') {
       return {

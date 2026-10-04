@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,7 +17,13 @@ import {
 let home: string | undefined;
 let projectRoot: string | undefined;
 const originalHome = process.env.HOME;
+const originalUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
 const originalCwd = process.cwd();
+
+beforeEach(() => {
+  // This legacy suite explicitly exercises HOME-based production defaults.
+  delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+});
 
 afterEach(async () => {
   process.chdir(originalCwd);
@@ -31,6 +37,8 @@ afterEach(async () => {
   }
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+  else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = originalUserConfigDir;
 });
 
 describe('conduct config read', () => {

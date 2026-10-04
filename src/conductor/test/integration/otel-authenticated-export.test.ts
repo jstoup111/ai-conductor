@@ -47,7 +47,9 @@ describe('authenticated OTLP HTTP export', () => {
         '/tmp/otel-authenticated-export',
       );
       expect(resolved.enabled).toBe(true);
-      const exporters = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>);
+      const exporters = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>, {
+        env: { ...process.env, AI_CONDUCTOR_NO_REAL_EXEC: undefined },
+      });
 
       const provider = new BasicTracerProvider();
       const span = provider.getTracer('otel-authenticated-export-test').startSpan('authenticated-export');

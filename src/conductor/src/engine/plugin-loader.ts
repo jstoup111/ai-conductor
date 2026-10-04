@@ -255,6 +255,7 @@ export function registerBuiltins(
         project: ctx.startContext.project ?? 'unknown',
         metrics: ctx.startContext.metrics,
         spanExporter: ctx.otelSpanExporter,
+        env: (ctx.startContext as import('../types/plugin.js').VisualizerStartContext & { env?: NodeJS.ProcessEnv }).env,
         resolvedWarningsHandled: ctx.resolvedWarningsHandled,
       },
       ctx.emitter,

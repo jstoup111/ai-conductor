@@ -9,7 +9,7 @@ import { mkdtemp, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
-  buildExporters,
+  buildExporters as buildRawExporters,
   buildHttpExporterOptions,
 } from '../../../src/engine/otel/transport.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
@@ -18,6 +18,12 @@ import { OTLPMetricExporter as OTLPGrpcMetricExporter } from '@opentelemetry/exp
 import { OTLPTraceExporter as OTLPHttpTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { OTLPMetricExporter as OTLPHttpMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
 import { AggregationTemporality, InstrumentType } from '@opentelemetry/sdk-metrics';
+
+// Existing construction coverage exercises the production path deliberately,
+// but must not inherit the suite-wide network-export refusal marker.
+const exportEnv = { ...process.env, AI_CONDUCTOR_NO_REAL_EXEC: undefined };
+const buildExporters: typeof buildRawExporters = (config, options = {}) =>
+  buildRawExporters(config, { ...options, env: options.env ?? exportEnv });
 
 describe('buildExporters', () => {
   let tempDir: string;
