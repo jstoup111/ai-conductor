@@ -121,6 +121,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
         mode: 'auto',
         daemon: true,
         verifyArtifacts: true,
+        config: { gate_code_validity: { enabled: false } },
         maxRetries: 2,
         fromStep: 'manual_test',
       });
@@ -373,7 +374,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       });
       const conductor = new Conductor({
         stateFilePath: statePath, events, projectRoot: dir, mode: 'auto', daemon: true,
-        verifyArtifacts: true, maxRetries: 2, fromStep: 'manual_test',
+        verifyArtifacts: true, config: { gate_code_validity: { enabled: false } }, maxRetries: 2, fromStep: 'manual_test',
         stepRunner: { run: vi.fn(async (step: StepName, _state, _options) => {
           calls.push(step);
           if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
@@ -400,7 +401,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       } as ConductState);
       await new Conductor({
         stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
-        verifyArtifacts: true, fromStep: 'manual_test',
+        verifyArtifacts: true, config: { gate_code_validity: { enabled: false } }, fromStep: 'manual_test',
         stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           if (step === 'prd_audit') await writePrdAuditPass(dir, options);

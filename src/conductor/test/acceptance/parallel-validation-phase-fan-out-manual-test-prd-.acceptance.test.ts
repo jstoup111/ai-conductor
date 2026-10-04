@@ -9,13 +9,8 @@ import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import {
-  ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
-  MANUAL_TEST_CODE_STAMP,
-  PRD_AUDIT_CODE_STAMP,
-} from '../../src/engine/artifacts.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
-import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { PRD_AUDIT_VERDICT_PATH, persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 
@@ -172,6 +167,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     events: ConductorEventEmitter,
     extra: Partial<ConstructorParameters<typeof Conductor>[0]> = {},
   ): Conductor {
+    const { config: extraConfig, ...conductorExtra } = extra;
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -181,11 +177,14 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       daemon: true,
       verifyArtifacts: true,
       maxRetries: 1,
+      // This concurrency fixture owns no code-validity scenario and its
+      // scratch directories are intentionally not Git repositories.
+      config: { gate_code_validity: { enabled: false }, ...extraConfig },
       // This fixture observes the SHIP validation join. Start at its first
       // member so the test does not re-verify the unrelated tree-attesting
       // BUILD test_suite proof that precedes it.
       fromStep: 'manual_test',
-      ...extra,
+      ...conductorExtra,
     });
   }
 
@@ -310,7 +309,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       });
 
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           timeline.push({ step, phase: 'start', order: ++order });
           if (step === 'manual_test') {
             await delay(3 * t);
@@ -318,8 +317,10 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
           } else if (step === 'prd_audit') {
             await delay(2 * t);
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_PASS);
+            await writePrdAuditPass(dir, options?.runId);
           } else if (step === 'architecture_review_as_built') {
             await delay(t);
+            await writeApprovedAsBuiltVerdict(dir, options?.runId);
           }
           timeline.push({ step, phase: 'end', order: ++order });
           return { success: true } as StepRunResult;
@@ -331,19 +332,13 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       await conductor.run();
 
-      // Covers: task:3 — runGroupBranch awaits its result callback, so these
-      // engine-authored sidecars must already exist before this test can
-      // observe the group after its join.
-      const runIds = await Promise.all([
-        PRD_AUDIT_CODE_STAMP,
-        ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
-        MANUAL_TEST_CODE_STAMP,
-      ].map(async (path) => JSON.parse(await readFile(join(dir, path), 'utf8')) as { runId?: string }));
-      expect(runIds.map(({ runId }) => runId)).toEqual([
-        expect.stringMatching(/\S/),
-        expect.stringMatching(/\S/),
-        expect.stringMatching(/\S/),
-      ]);
+      // Covers: task:3 — runGroupBranch awaits its result callback, so the
+      // typed PRD verdict must exist before this test can observe the group
+      // after its join.
+      const prdAudit = JSON.parse(
+        await readFile(join(dir, PRD_AUDIT_VERDICT_PATH), 'utf8'),
+      ) as { attemptId?: string };
+      expect(prdAudit.attemptId).toMatch(/\S/);
 
       // With cap 2, manual_test (3t) and prd_audit (2t) start together;
       // architecture_review_as_built is then admitted after prd_audit ends,

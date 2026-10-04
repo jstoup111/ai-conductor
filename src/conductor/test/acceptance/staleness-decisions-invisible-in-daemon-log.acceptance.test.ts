@@ -343,11 +343,17 @@ describe('Story 1: a preserve is reported as preserved_surface_miss, never as a 
   it('a genuinely fresh prd_audit ALIGNED report reports rewritten', async () => {
     const s = await makeRepo();
     await commit(s, { 'src/a.ts': 'a\n' }, 'init');
-    const artifact = await writePrdAuditVerdict(s.repo);
+    const reviewedHead = await currentCommitSha(s.repo);
+    if (reviewedHead === null) throw new Error('scratch repository has no reviewed HEAD');
+    const artifact = await writePrdAuditVerdict(s.repo, reviewedHead);
     const freshMtime = new Date(Date.now() + 5000);
     await utimes(artifact, freshMtime, freshMtime);
 
-    const result = await checkStepCompletion(s.repo, 'prd_audit', ctxFor(s.repo));
+    const result = await checkStepCompletion(
+      s.repo,
+      'prd_audit',
+      ctxFor(s.repo, { config: { gate_code_validity: { enabled: false } } }),
+    );
 
     expect({ done: result.done, outcome: outcomeOf(result) }).toEqual({
       done: true,

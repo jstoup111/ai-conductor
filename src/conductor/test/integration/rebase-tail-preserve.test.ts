@@ -191,7 +191,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
       mode: 'auto',
       fromStep,
       maxRetries: 1,
-      config: config as never,
+      config: { gate_code_validity: { enabled: false }, ...config } as never,
       git: fakeGit,
       shipmentEvidence: async (input) => ({
         kind: 'valid',
@@ -246,7 +246,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
         },
         diagnostics: [],
         recordedDispositions: [],
-      }, { attemptId: options?.runId ?? 'test-run', codeStamp: 'fixture-head' });
+      }, { attemptId: options?.runId ?? 'test-run', codeStamp: await git('rev-parse', 'HEAD') });
     } else if (step === 'architecture_review_as_built') {
       await persistAsBuiltVerdict(dir, {
         version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],

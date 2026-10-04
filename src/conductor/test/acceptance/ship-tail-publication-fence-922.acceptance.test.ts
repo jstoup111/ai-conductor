@@ -171,6 +171,7 @@ describe('SHIP-tail publication fence (#922)', () => {
         fromStep: 'finish',
         maxRetries: 1,
         verifyArtifacts: true,
+        config: { gate_code_validity: { enabled: false } },
       });
 
       await conductor.run();
@@ -230,6 +231,7 @@ describe('SHIP-tail publication fence (#922)', () => {
         fromStep: 'finish',
         maxRetries: 1,
         verifyArtifacts: true,
+        config: { gate_code_validity: { enabled: false } },
       });
 
       await conductor.run();
