@@ -7,6 +7,7 @@
 
 import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { execa } from 'execa';
 import {
   completeTaskDoneWhen,
   openRepairForTask,
@@ -117,16 +118,29 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
     return 2;
   }
 
+  const projectRoot = await resolveTaskProjectRoot(cwd);
+
   if (cmd.kind === 'start') {
-    return runTaskStart(cwd, cmd.id);
+    return runTaskStart(projectRoot, cmd.id);
   }
 
   if (cmd.kind === 'done') {
-    return runTaskDone(cwd, cmd.id, cmd.doneWhen ?? [], cmd.planGap);
+    return runTaskDone(projectRoot, cmd.id, cmd.doneWhen ?? [], cmd.planGap);
   }
 
   // Should never reach here
   return 2;
+}
+
+/** CLI commands may begin in a nested worktree directory; non-Git fixtures
+ * retain their supplied directory so the existing direct-file contract stays intact. */
+async function resolveTaskProjectRoot(cwd: string): Promise<string> {
+  try {
+    const result = await execa('git', ['rev-parse', '--show-toplevel'], { cwd, reject: false });
+    return result.exitCode === 0 && result.stdout.trim() ? result.stdout.trim() : cwd;
+  } catch {
+    return cwd;
+  }
 }
 
 /**

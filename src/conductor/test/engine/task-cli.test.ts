@@ -613,6 +613,126 @@ describe('runTaskDone', () => {
     expect(await resolveTaskIds(dir, ['7'])).toEqual(new Set(['7']));
   });
 
+  describe('tagged Done when evidence from HEAD', () => {
+    async function prepareTaggedTask(options: {
+      testText: string;
+      check?: string;
+      storyText?: string;
+    }): Promise<void> {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@example.test'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Task CLI Test'], { cwd: dir });
+      await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.mkdir(join(dir, 'test'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+        '# Plan',
+        '',
+        '**Stories:** .docs/stories/feature.md',
+        '',
+        '### Task 3: Verify the close',
+        '**Story:** 2',
+        '**Done when:**',
+        `- ${options.check ?? '[test] the committed test proves the close.'}`,
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(dir, '.docs', 'stories', 'feature.md'), options.storyText ?? [
+        '## Story 2: Test evidence',
+        '### Happy Path',
+        '- Given a task, when it closes, then it records evidence.',
+        '### Negative Paths',
+        '- Given invalid evidence, when it closes, then it refuses.',
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '3', status: 'pending' }],
+      }));
+      await fsPromises.writeFile(join(dir, 'test', 'close.test.ts'), options.testText);
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed committed test'], { cwd: dir });
+      await expect(runTaskStart(dir, '3')).resolves.toBe(0);
+    }
+
+    async function close(evidence: string, cwd = dir): Promise<number> {
+      return dispatchTaskCommand(detectTaskCommand([
+        'node', 'conduct', 'task', 'done', '3', '--done-when', `1=${evidence}`,
+      ])!, cwd);
+    }
+
+    it('closes a tagged check from a committed task-marked test and records verified', async () => {
+      await prepareTaggedTask({
+        testText: '// Covers: task:3\nit(\'closes the tagged task\', () => {});\n',
+      });
+
+      expect(await close("test:test/close.test.ts::closes the tagged task")).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0]).toMatchObject({
+        status: 'completed',
+        doneWhen: [{ source: 'verified' }],
+      });
+    });
+
+    it('closes from a criterion marker and a test committed before the feature branch', async () => {
+      await prepareTaggedTask({
+        testText: '// Covers: S2.1\nit(\'proves the criterion\', () => {});\n',
+      });
+      await execa('git', ['branch', 'feature'], { cwd: dir });
+      await execa('git', ['checkout', 'feature'], { cwd: dir });
+
+      expect(await close('test:test/close.test.ts::proves the criterion')).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0].doneWhen).toEqual(expect.arrayContaining([
+        expect.objectContaining({ source: 'verified' }),
+      ]));
+    });
+
+    it('resolves the repository root when the CLI runs from a worktree subdirectory', async () => {
+      await prepareTaggedTask({
+        testText: '// Covers: task:3\nit(\'proves from a subdirectory\', () => {});\n',
+      });
+      await fsPromises.mkdir(join(dir, 'nested', 'work'), { recursive: true });
+
+      expect(await close('test:test/close.test.ts::proves from a subdirectory', join(dir, 'nested', 'work'))).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0].doneWhen[0]).toMatchObject({ source: 'verified' });
+    });
+
+    it.each([
+      ['free text', 'a generic success sentence', 'not-a-test-reference'],
+      ['absent path', 'test:test/missing.test.ts::missing test', 'test/missing.test.ts'],
+      ['missing title', 'test:test/close.test.ts::a title not in the blob', 'a title not in the blob'],
+      ['missing marker', 'test:test/close.test.ts::closes without a marker', 'Covers:'],
+    ])('refuses %s and names the check and failed part', async (_name, evidence, expected) => {
+      await prepareTaggedTask({
+        testText: '// no marker\nit(\'closes without a marker\', () => {});\n',
+      });
+
+      expect(await close(evidence)).toBe(1);
+      expect(stdErr.join('\n')).toContain('check 1');
+      expect(stdErr.join('\n')).toContain('[test] the committed test proves the close.');
+      expect(stdErr.join('\n')).toContain(expected);
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0].status).toBe('in_progress');
+    });
+
+    it('refuses a test file that is present only in the working tree', async () => {
+      await prepareTaggedTask({ testText: '// Covers: task:3\n' });
+      await fsPromises.writeFile(join(dir, 'test', 'uncommitted.test.ts'),
+        '// Covers: task:3\nit(\'uncommitted proof\', () => {});\n');
+
+      expect(await close('test:test/uncommitted.test.ts::uncommitted proof')).toBe(1);
+      expect(stdErr.join('\n')).toContain('check 1');
+      expect(stdErr.join('\n')).toContain('test/uncommitted.test.ts');
+      expect(stdErr.join('\n')).toContain('absent at HEAD');
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0].status).toBe('in_progress');
+    });
+  });
+
   describe('happy path — done 7 after start 7', () => {
     it('removes current-task stamp and exits 0', async () => {
       // Setup: seed task-status.json and stamp

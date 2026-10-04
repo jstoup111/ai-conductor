@@ -1,5 +1,6 @@
 import { readFile, unlink, mkdir, writeFile, rename, rm } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
+import { execa } from 'execa';
 import {
   listCommitsWithTrailers,
   listCommitsWithTrailersAfterRepairBoundary,
@@ -9,7 +10,13 @@ import {
 import { readEngineState } from './engine-state-store.js';
 import { createRepairObligationStore, repairPlanIdentity, type RepairObligation } from './repair-obligations.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
-import { parsePlanTaskDoneWhen } from './plan-task-parse.js';
+import { parsePlanTaskBodies, parsePlanTaskDoneWhen, TEST_DONE_WHEN_TAG } from './plan-task-parse.js';
+import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { readGitBlobs } from './git-blob-batch.js';
+import {
+  parseDoneWhenTestReference,
+  verifyDoneWhenTestReference,
+} from './done-when-test-reference.js';
 import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
@@ -259,7 +266,7 @@ export interface DoneWhenEvidenceInput {
 export interface DoneWhenEvidenceRecord {
   check: string;
   evidence: string;
-  source: 'reported' | 'verify-only';
+  source: 'verified' | 'reported' | 'verify-only' | 'unverified';
 }
 
 export type TaskDoneWhenCloseResult =
@@ -369,6 +376,74 @@ export async function completeTaskDoneWhen(
     }
   }
 
+  const taggedChecks = checks
+    .map((check, index) => ({ check, index: index + 1 }))
+    .filter(({ check }) => check.trimStart().startsWith(TEST_DONE_WHEN_TAG));
+  if (taggedChecks.length > 0 && !verifyOnly) {
+    let repositoryRoot: string;
+    try {
+      const root = await execa('git', ['rev-parse', '--show-toplevel'], {
+        cwd: projectRoot,
+        reject: false,
+      });
+      if (root.exitCode !== 0 || !root.stdout.trim()) {
+        return {
+          kind: 'refused',
+          message: `[task-cli] cannot complete task ${id}: cannot resolve repository root for tagged Done when evidence`,
+        };
+      }
+      repositoryRoot = root.stdout.trim();
+    } catch {
+      return {
+        kind: 'refused',
+        message: `[task-cli] cannot complete task ${id}: cannot resolve repository root for tagged Done when evidence`,
+      };
+    }
+
+    const references = taggedChecks.map(({ index }) => parseDoneWhenTestReference(evidenceByIndex.get(index)!));
+    const paths = references.flatMap((reference) => reference ? [reference.path] : []);
+    let blobs: Map<string, Buffer>;
+    try {
+      blobs = await readGitBlobs(repositoryRoot, 'HEAD', paths);
+    } catch {
+      return {
+        kind: 'refused',
+        message: `[task-cli] cannot complete task ${id}: cannot read HEAD test blobs for tagged Done when evidence`,
+      };
+    }
+
+    const planRepoPath = relative(repositoryRoot, isAbsolute(activePlanPath)
+      ? activePlanPath
+      : join(projectRoot, activePlanPath)).replaceAll('\\', '/');
+    const storiesPath = resolvePlanStoriesPath(planRepoPath, planText);
+    const storiesText = storiesPath
+      ? await readFile(join(repositoryRoot, storiesPath), 'utf8').catch(() => '')
+      : '';
+    const taskText = parsePlanTaskBodies(planText).get(id) ?? '';
+
+    for (const { check, index } of taggedChecks) {
+      const verification = verifyDoneWhenTestReference({
+        evidence: evidenceByIndex.get(index)!,
+        taskId: id,
+        taskText,
+        storiesText,
+        blobs,
+      });
+      if (verification.kind === 'verified') continue;
+      const detail = verification.part === 'missing-file'
+        ? `${verification.path} is absent at HEAD`
+        : verification.part === 'missing-title'
+          ? `missing title ${verification.title} in ${verification.path}`
+          : verification.part === 'missing-covers-marker'
+            ? `missing Covers: marker in ${verification.path}`
+            : 'not-a-test-reference: evidence is not a test:<path>::<title> reference';
+      return {
+        kind: 'refused',
+        message: `[task-cli] cannot complete task ${id}: Done when check ${index}: ${check}; ${detail}`,
+      };
+    }
+  }
+
   const statusPath = join(pipelineDir, 'task-status.json');
   let status: Record<string, unknown>;
   try {
@@ -402,7 +477,9 @@ export async function completeTaskDoneWhen(
   const doneWhenRecords: DoneWhenEvidenceRecord[] = checks.map((check, index) => ({
     check,
     evidence: verifyOnly ? 'prove-closed' : evidenceByIndex.get(index + 1)!,
-    source: verifyOnly ? 'verify-only' : 'reported',
+    source: verifyOnly
+      ? 'verify-only'
+      : check.trimStart().startsWith(TEST_DONE_WHEN_TAG) ? 'verified' : 'reported',
   }));
 
   for (const obligationId of openObligationIds) {
