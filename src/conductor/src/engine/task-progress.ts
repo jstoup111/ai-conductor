@@ -262,11 +262,18 @@ export interface DoneWhenEvidenceInput {
   evidence: string;
 }
 
+/** A reason supplied for explicitly closing a tagged check without test evidence. */
+export interface DoneWhenUnverifiedInput {
+  index: number;
+  reason: string;
+}
+
 /** The engine-owned task-status entry recorded for each satisfied check. */
 export interface DoneWhenEvidenceRecord {
   check: string;
   evidence: string;
   source: 'verified' | 'reported' | 'verify-only' | 'unverified';
+  reason?: string;
 }
 
 export type TaskDoneWhenCloseResult =
@@ -292,6 +299,7 @@ export async function completeTaskDoneWhen(
   projectRoot: string,
   id: string,
   suppliedEvidence: DoneWhenEvidenceInput[],
+  suppliedUnverified: DoneWhenUnverifiedInput[] = [],
 ): Promise<TaskDoneWhenCloseResult> {
   const pipelineDir = join(projectRoot, '.pipeline');
   // A missing engine state is the legacy close path. A present but unreadable
@@ -363,15 +371,39 @@ export async function completeTaskDoneWhen(
       evidenceByIndex.set(entry.index, entry.evidence);
     }
   }
+  const unverifiedByIndex = new Map<number, string>();
+  for (const entry of suppliedUnverified) {
+    const check = checks[entry.index - 1];
+    if (!check || !check.trimStart().startsWith(TEST_DONE_WHEN_TAG)) {
+      return {
+        kind: 'refused',
+        message: `[task-cli] cannot complete task ${id}: --unverified check ${entry.index} is not a tagged Done when check`,
+      };
+    }
+    if (!entry.reason.trim()) {
+      return {
+        kind: 'refused',
+        message:
+          `[task-cli] cannot complete task ${id}: unverified close for Done when check ${entry.index} requires a non-empty reason; ` +
+          `write or cite the test, or use --unverified ${entry.index}=<reason>.`,
+      };
+    }
+    unverifiedByIndex.set(entry.index, entry.reason);
+  }
 
   if (!verifyOnly) {
-    const missingIndex = checks.findIndex((_, index) => !evidenceByIndex.has(index + 1));
+    const missingIndex = checks.findIndex((_, index) =>
+      !evidenceByIndex.has(index + 1) && !unverifiedByIndex.has(index + 1));
     if (missingIndex !== -1) {
+      const missingCheck = checks[missingIndex]!;
+      const recovery = missingCheck.trimStart().startsWith(TEST_DONE_WHEN_TAG)
+        ? `; write or cite the test, or use --unverified ${missingIndex + 1}=<reason>.`
+        : '';
       return {
         kind: 'refused',
         message:
           `[task-cli] cannot complete task ${id}: missing Done when evidence for ` +
-          `check ${missingIndex + 1}: ${checks[missingIndex]}`,
+          `check ${missingIndex + 1}: ${missingCheck}${recovery}`,
       };
     }
   }
@@ -400,7 +432,9 @@ export async function completeTaskDoneWhen(
       };
     }
 
-    const references = taggedChecks.map(({ index }) => parseDoneWhenTestReference(evidenceByIndex.get(index)!));
+    const references = taggedChecks
+      .filter(({ index }) => !unverifiedByIndex.has(index))
+      .map(({ index }) => parseDoneWhenTestReference(evidenceByIndex.get(index)!));
     const paths = references.flatMap((reference) => reference ? [reference.path] : []);
     let blobs: Map<string, Buffer>;
     try {
@@ -422,6 +456,7 @@ export async function completeTaskDoneWhen(
     const taskText = parsePlanTaskBodies(planText).get(id) ?? '';
 
     for (const { check, index } of taggedChecks) {
+      if (unverifiedByIndex.has(index)) continue;
       const verification = verifyDoneWhenTestReference({
         evidence: evidenceByIndex.get(index)!,
         taskId: id,
@@ -439,7 +474,9 @@ export async function completeTaskDoneWhen(
             : 'not-a-test-reference: evidence is not a test:<path>::<title> reference';
       return {
         kind: 'refused',
-        message: `[task-cli] cannot complete task ${id}: Done when check ${index}: ${check}; ${detail}`,
+        message:
+          `[task-cli] cannot complete task ${id}: Done when check ${index}: ${check}; ${detail}. ` +
+          `write or cite the test, or use --unverified ${index}=<reason>.`,
       };
     }
   }
@@ -474,13 +511,25 @@ export async function completeTaskDoneWhen(
     };
   }
 
-  const doneWhenRecords: DoneWhenEvidenceRecord[] = checks.map((check, index) => ({
-    check,
-    evidence: verifyOnly ? 'prove-closed' : evidenceByIndex.get(index + 1)!,
-    source: verifyOnly
-      ? 'verify-only'
-      : check.trimStart().startsWith(TEST_DONE_WHEN_TAG) ? 'verified' : 'reported',
-  }));
+  const doneWhenRecords: DoneWhenEvidenceRecord[] = checks.map((check, index) => {
+    const checkIndex = index + 1;
+    const unverifiedReason = unverifiedByIndex.get(checkIndex);
+    if (unverifiedReason !== undefined) {
+      return {
+        check,
+        evidence: unverifiedReason,
+        source: 'unverified',
+        reason: unverifiedReason,
+      };
+    }
+    return {
+      check,
+      evidence: verifyOnly ? 'prove-closed' : evidenceByIndex.get(checkIndex)!,
+      source: verifyOnly
+        ? 'verify-only'
+        : check.trimStart().startsWith(TEST_DONE_WHEN_TAG) ? 'verified' : 'reported',
+    };
+  });
 
   for (const obligationId of openObligationIds) {
     const closure = await repairs.close({

@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:5
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import {
   countResolvedTasks,
   resolveTaskIds,
   resolveTaskIdsWithDiagnostics,
+  completeTaskDoneWhen,
   haltMarkerExists,
   clearHaltMarker,
   haltMarkerPath,
@@ -799,6 +800,33 @@ describe('task-progress', () => {
           },
         ],
       });
+    });
+
+    it('records the per-check reason when the engine closes a tagged check as unverified', async () => {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await prepareTaskClose(`### Task 1: unverified test evidence
+
+**Done when:**
+- [test] a test must prove this outcome`);
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed task state'], { cwd: dir });
+
+      await expect(completeTaskDoneWhen(dir, '1', [], [{
+        index: 1,
+        reason: 'the required service is unavailable in this environment',
+      }])).resolves.toEqual({ kind: 'completed' });
+      expect(await taskRow()).toMatchObject({
+        status: 'completed',
+        doneWhen: [{
+          check: '[test] a test must prove this outcome',
+          evidence: 'the required service is unavailable in this environment',
+          source: 'unverified',
+          reason: 'the required service is unavailable in this environment',
+        }],
+      });
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).rejects.toThrow();
     });
 
     it('closes every task in a tag-free plan with the same free-text evidence', async () => {
