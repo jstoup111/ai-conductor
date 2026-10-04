@@ -41,6 +41,12 @@ const RATE_CARD: RateCard = {
       cache_read_input_token_cost: 2e-8,
       cache_creation_input_token_cost: 2.5e-7,
     },
+    'gpt-5.6-sol': {
+      input_cost_per_token: 4e-6,
+      output_cost_per_token: 2e-5,
+      cache_read_input_token_cost: 4e-7,
+      cache_creation_input_token_cost: 5e-6,
+    },
     'gpt-5.6-terra': {
       input_cost_per_token: 2e-6,
       output_cost_per_token: 1.2e-5,
@@ -228,6 +234,34 @@ describe('PiProvider usage', () => {
     const result = await provider.invoke(invokeOptions);
 
     expect(result.tokenUsage?.attributedModel).toBe('openai/gpt-5.6-luna');
+  });
+
+  it('prices zero-cost usage by the model Pi ran rather than the requested model', async () => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const stdout = rewriteAssistantMessages(workedStream, (message) => {
+      (message.usage as { cost?: { total?: unknown } }).cost = { total: 0 };
+    });
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+
+    const result = await provider.invoke({ ...invokeOptions, model: 'openai/gpt-5.6-sol' });
+
+    expect(result.tokenUsage).toMatchObject({
+      attributedModel: 'openai/gpt-5.6-luna',
+      costSource: 'rate-card',
+    });
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.0001445, 12);
+  });
+
+  it('does not report usage or attribution for an unsuccessful worked-stream dispatch', async () => {
+    const stdout = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 1 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result).toMatchObject({ success: false });
+    expect(result).not.toHaveProperty('tokenUsage');
   });
 
   it('attributes and prices zero-cost usage with each message response model', async () => {

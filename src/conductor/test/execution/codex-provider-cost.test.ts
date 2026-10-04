@@ -73,6 +73,7 @@ describe('CodexProvider dispatch-time cost accounting', () => {
     expect(result.tokenUsage?.costUsd).toBeCloseTo(0.002 + 0.002 + 0.006, 12);
     expect(result.tokenUsage?.costSource).toBe('rate-card');
     expect(classifyMetering(result.tokenUsage)).toBe('fully-metered');
+    expect(result.tokenUsage).not.toHaveProperty('attributedModel');
     // The card is looked up under the dispatch's own worktree.
     expect(seen).toContain('/repo/.worktrees/feature');
   });
