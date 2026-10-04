@@ -13,7 +13,7 @@ import { provisionProviderHome } from '../../src/engine/self-host/provider-home.
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import type { ConductState } from '../../src/types/index.js';
+import type { ConductState, ConductorEvent } from '../../src/types/index.js';
 
 const STATE = { feature_desc: 'pi-lifecycle' } as ConductState;
 
@@ -131,9 +131,13 @@ describe('Pi self-host conductor lifecycle', () => {
         await prepared!.teardown();
         return { success: true };
       } };
-      const events: unknown[] = [];
+      const events: ConductorEvent[] = [];
       const emitter = new ConductorEventEmitter();
-      emitter.on((event) => events.push(event));
+      const emit = emitter.emit.bind(emitter);
+      vi.spyOn(emitter, 'emit').mockImplementation(async (event) => {
+        events.push(event);
+        await emit(event);
+      });
       const conductor = new Conductor({
         stateFilePath: join(projectRoot, 'conduct-state.json'), projectRoot, featureSlug: 'pi-lifecycle', events: emitter,
         stepRunner: runner, providerExecution, selfHostGuardrails: guardrails(), daemon: true, selfHost: true,
