@@ -65,6 +65,7 @@ import {
   PROTECTED_ARTIFACT_HALT_CLASS,
   readHaltClass,
 } from '../../src/engine/halt-marker.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
 
 const execFile = promisify(execFileCb);
 const indeterminateMergeTreeRepos = vi.hoisted(() => new Set<string>());
@@ -148,9 +149,10 @@ async function makeFeatureRepo(): Promise<Scratch> {
   scratches.push(repo);
   const g = (args: string[]) => execFile('git', args, { cwd: repo });
 
-  await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-  await g(['config', 'user.email', 't@t.com']);
-  await g(['config', 'user.name', 'T']);
+  // The fixture commits repeatedly and is removed immediately after each
+  // case. Use the shared initializer so Git cannot detach automatic
+  // maintenance that races recursive cleanup of `.git/objects`.
+  await initTestRepo(repo);
   await g(['config', 'commit.gpgsign', 'false']);
   await g(['remote', 'add', 'origin', origin]);
 
