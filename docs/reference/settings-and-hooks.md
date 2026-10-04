@@ -12,7 +12,8 @@ blocked, and for anyone auditing what the harness installed on their machine.
 
 Three unrelated things are called "hooks" in this repo. This page covers two of them: **host event
 hooks** (`hooks/claude/*.sh` and the engine's per-worktree scripts, fired by the Claude host) and **git
-hooks** (`prepare-commit-msg` / `commit-msg`, generated per worktree). The third — **config step
+hooks** (`pre-commit`, `prepare-commit-msg`, `commit-msg`, `reference-transaction`, `pre-push`, generated
+per worktree). The third — **config step
 hooks**, `steps.<name>.hooks.before` / `.after` — is a `.ai-conductor/config.yml` key and is documented
 in [configuration](configuration.md). Config step hooks are not connected to any host event.
 
@@ -208,10 +209,11 @@ git -C <worktree> config --worktree core.hooksPath <worktree>/.pipeline/git-hook
 | `reference-transaction` | every reference transaction | At the `prepared` stage, refuses deleting a local branch whose commits would become unreachable; all other stages and ref changes pass. After an allow it chains to the repository hook. | **Yes — exit 1** on refusal or a chained-hook veto. |
 | `pre-push` | before a push updates its remote | Refuses overwriting remote history that the worktree has not fetched; remote deletions, new refs, fast-forwards, and lease-equivalent updates pass. After an allow it chains to the repository hook. | **Yes — exit 1** on refusal or a chained-hook veto. |
 
-All three hooks chain to `$(git rev-parse --git-common-dir)/hooks/<name>` when one exists and is
-executable. `pre-commit` and `prepare-commit-msg` are pure bash plus `git` and POSIX tools (`pre-commit`
-also uses `sed`; `prepare-commit-msg` uses `node -e`). `commit-msg` additionally invokes the installed
-`ai-conductor scope-check <commit-message>` command; none of the three hooks references `dist/`.
+All five hooks chain to `$(git rev-parse --git-common-dir)/hooks/<name>` when one exists and is
+executable. `pre-commit`, `prepare-commit-msg`, `reference-transaction`, and `pre-push` are pure bash plus
+`git` and POSIX tools (`pre-commit` also uses `sed`; `prepare-commit-msg` uses `node -e`). `commit-msg`
+additionally invokes the installed `ai-conductor scope-check <commit-message>` command; none of the five
+hooks references `dist/`.
 
 `pre-commit` and `commit-msg` both exit 0 immediately for any commit made with `CONDUCT_ENGINE_COMMIT=1`
 — the environment the engine sets for its own bookkeeping commits (rebase mechanics, quarantine, shipped
@@ -231,8 +233,8 @@ it is subject to the dormant-`tdd-phase` limitation above. It is unrelated to th
 `pre-commit` hook above, which is generated fresh per worktree from `PRE_COMMIT_HOOK` in
 `git-hook-assets.ts` rather than copied from that file.
 
-Hook installation itself is fail-closed for `pre-commit`/`prepare-commit-msg`/`commit-msg`: a worktree
-with a `.git` present but not writable, or any other failure while writing or wiring the three scripts,
+Hook installation itself is fail-closed for all five hooks: a worktree
+with a `.git` present but not writable, or any other failure while writing or wiring the scripts,
 raises rather than silently continuing, so a worktree can never enter BUILD/SHIP without the preventive
 gate installed. A worktree with no `.git` at all (a plain temporary directory, as some unit-level setup
 tests use) has no commit surface to protect and is skipped as a no-op, not an error. This is a change
@@ -257,8 +259,9 @@ the enforcing control for destructive git; the operator hook above is Claude-onl
 
 A worktree counts as engine-prepared when its worktree-scoped `core.hooksPath` is its own
 `.pipeline/git-hooks`. Worktree preparation writes the three files fail-closed. Before each dispatch the
-engine re-verifies them and rewrites any that differ. If it cannot, the dispatch does not launch and
-fails naming the guard path. The daemon's own `process.env` is never changed, so engine git (rebase,
+engine re-verifies them, plus the `reference-transaction` and `pre-push` hooks, and rewrites any that
+differ in content, mode 0755, or regular-file type. If it cannot, the dispatch does not launch and fails
+naming the guard or hook path. The daemon's own `process.env` is never changed, so engine git (rebase,
 quarantine, shipped-record, spec landing, setup triage) runs the real `git`. There is no bypass
 variable. Runtime values live only in the `.pipeline/git-guard` sidecars; they are never baked into
 the static shim. `build_review` dispatches are read-only and intentionally exempt from the guard.

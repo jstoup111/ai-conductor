@@ -528,7 +528,7 @@ To clear a halt safely, use the procedure in
 | Path | Contents | Notes |
 | --- | --- | --- |
 | `session-hooks/` | `pre-dispatch.sh`, `docs-guard.sh` | Written mode 0755 during worktree preparation; retired no-op assets are removed; see [settings and hooks](settings-and-hooks.md) |
-| `git-hooks/` | `prepare-commit-msg`, `commit-msg` | Wired via the worktree-local `core.hooksPath` |
+| `git-hooks/` | `pre-commit`, `prepare-commit-msg`, `commit-msg`, `reference-transaction`, `pre-push` | Wired via the worktree-local `core.hooksPath` |
 | `events.jsonl` | The run event log | Append-only, no rotation — see below |
 | `pipeline-events.jsonl` | Pipeline-owned closeout timing events | Separate single-writer ledger — see below |
 | `composer-events.jsonl` | Compose-loop-owned events (`land_gate_rejected`), written at the target repository root | Separate single-writer ledger, same schema as `events.jsonl`; merged by the run report |
