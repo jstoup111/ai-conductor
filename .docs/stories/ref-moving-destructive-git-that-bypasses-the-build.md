@@ -79,7 +79,7 @@ As the harness operator, I want a push that would overwrite remote commits this 
 - Given a prepared worktree whose remote-tracking ref equals the remote branch tip, when unguarded git runs `git push --force-with-lease origin HEAD:«branch»` with a rewritten local branch, then the remote branch moves to the local tip and the command exits zero.
 - Given a prepared worktree whose remote-tracking ref equals the remote branch tip, when unguarded git runs `git push --force origin HEAD:«branch»` with a rewritten local branch, then the remote branch moves to the local tip and the command exits zero.
 - Given a prepared worktree, when unguarded git runs a plain fast-forward `git push origin HEAD:«branch»` or pushes a branch the remote does not have, then the remote branch moves to the local tip and the command exits zero.
-- Given a prepared worktree whose remote branch has advanced past its remote-tracking ref, when unguarded git runs a plain `git push origin HEAD:«branch»` with a rewritten local branch, then git rejects it as non-fast-forward with its own message and the hook's refusal text does not appear.
+- Given a prepared worktree whose remote-tracking ref equals the remote branch tip, when unguarded git runs a plain `git push origin HEAD:«branch»` with a rewritten local branch, then git rejects it as non-fast-forward with its own message and the hook's refusal text does not appear.
 - Given a prepared worktree, when unguarded git runs `git push origin --delete «branch»`, then the hook does not refuse the deletion.
 
 ### Done When
