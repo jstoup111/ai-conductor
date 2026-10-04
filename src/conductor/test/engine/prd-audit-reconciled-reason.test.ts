@@ -201,4 +201,38 @@ describe('prd_audit reconciled verdict reasons', () => {
       reason: persisted?.reason,
     }));
   });
+
+  it('emits one prd_audit gate verdict for a passing lap that reaches the serial tail', async () => {
+    const state = { feature_desc: feature.feature } as ConductState;
+    for (const step of ALL_STEPS) {
+      state[step.name] = step.name === 'prd_audit' ? 'pending' : 'done';
+      if (step.name === 'prd_audit') break;
+    }
+    await writeState(join(projectRoot, 'conduct-state.json'), state);
+
+    const events = new ConductorEventEmitter();
+    const emitted: ConductorEvent[] = [];
+    events.on('gate_verdict', (event) => { emitted.push(event); });
+    const runner: StepRunner = {
+      run: async (step) => {
+        // End the run at the first later step: only prd_audit's lap is observed.
+        if (step !== 'prd_audit') return { success: false, error: 'sentinel: stop after prd_audit' };
+        await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), auditReport(''));
+        return { success: true };
+      },
+    };
+
+    await new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, 'conduct-state.json'),
+      stepRunner: runner,
+      events,
+      fromStep: 'prd_audit',
+      verifyArtifacts: true,
+      maxRetries: 1,
+    }).run();
+
+    const prdAuditVerdicts = emitted.filter((event) => event.type === 'gate_verdict' && event.step === 'prd_audit');
+    expect(prdAuditVerdicts).toEqual([expect.objectContaining({ type: 'gate_verdict', satisfied: true })]);
+  });
 });

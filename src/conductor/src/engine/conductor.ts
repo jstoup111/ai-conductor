@@ -11778,7 +11778,12 @@ export class Conductor {
               // A routed PRD-audit halt exits before the ordinary tail emits
               // its gate event. Publish the re-scored durable verdict here so
               // the event spine and gate file describe this same audit lap.
-              if (prdAuditRoute.kind !== 'record') {
+              // `none` and `record` continue to the tail, which emits it once.
+              if (
+                prdAuditRoute.kind === 'plan-gap-halt'
+                || prdAuditRoute.kind === 'over-scope-halt'
+                || prdAuditRoute.kind === 'projection-halt'
+              ) {
                 const verdict = await readVerdict(this.projectRoot, 'prd_audit');
                 if (verdict) {
                   await emitTracked({
