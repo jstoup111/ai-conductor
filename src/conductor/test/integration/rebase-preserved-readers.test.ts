@@ -102,13 +102,19 @@ describe('integration/rebase-preserved-readers (Task 8)', () => {
     await expect(readFile(reportPath, 'utf8')).resolves.toContain('PASS');
   });
 
-  it('refuses finish and a restarted conductor while the durable transition is applying', async () => {
+  it('refuses finish while applying, then resumes by re-checking an unproven transition', async () => {
     const { dir } = await preservedReaderFixture();
     const rebase = JSON.parse(await readFile(join(dir, '.pipeline/gates/rebase.json'), 'utf8'));
     rebase.rebaseOperation.status = 'applying';
     await writeVerdict(dir, 'rebase', rebase);
     await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
-    await writeState(join(dir, '.pipeline/conduct-state.json'), { pr_url: 'https://example.test/pr/1' });
+    await writeState(join(dir, '.pipeline/conduct-state.json'), {
+      memory: 'done', explore: 'done', complexity: 'done', prd: 'done', architecture_diagram: 'done',
+      architecture_review: 'done', stories: 'done', conflict_check: 'done', plan: 'done', coherence_check: 'skipped',
+      acceptance_specs: 'done', build: 'done', coverage_binding: 'done', test_suite: 'done', build_review: 'done',
+      manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done', rebase: 'done',
+      pr_url: 'https://example.test/pr/1',
+    });
 
     await expect(checkStepCompletion(dir, 'finish', { sessionStartedAt: 0, isHeadPushed: async () => true }))
       .resolves.toMatchObject({ done: false, reason: expect.stringMatching(/rebase transition is still applying/) });
@@ -123,7 +129,11 @@ describe('integration/rebase-preserved-readers (Task 8)', () => {
       mode: 'auto',
     });
     await conductor.run();
-    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toMatch(/rebase transition is still applying/);
+    expect(JSON.parse(await readFile(join(dir, '.pipeline/gates/rebase.json'), 'utf8'))).toMatchObject({
+      rebaseOperation: { status: 'applied', transition: { preserved: [], invalidated: ['prd_audit'] } },
+    });
+    expect(JSON.parse(await readFile(join(dir, '.pipeline/gates/prd_audit.json'), 'utf8'))).toMatchObject({ satisfied: false });
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.not.toMatch(/rebase transition is still applying/);
   });
 
 });
