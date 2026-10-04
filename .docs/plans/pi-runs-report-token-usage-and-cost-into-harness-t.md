@@ -356,6 +356,10 @@ Task 10 (independent)
 | adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D20 | task | task-5, task-6, task-7 | `costSource` is `provider`, and `classifyMetering` returns `fully-metered` |
 | adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D21 | task | task-8 | `tokenUsage.attributedModel` is `openai/gpt-5.6-luna` |
 | adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D22 | task | task-10 | `[...COST_SELF_REPORTING_PROVIDERS].sort()` equals `['claude', 'pi']` |
+| adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D23 | no-change | none | Pi's selfHost declaration and owner-list drop (catalog ADR amendment landed via #2965 after this plan sealed) are delivered by the self-host-builds-isolate feature; no task here edits provider capability owners or the provider-home lifecycle. |
+| adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D24 | no-change | none | The catalog-declared self-host shape read by conductor.ts, provider-home.ts and live-boundary.ts is out of this feature's scope; no task edits those files. |
+| adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D25 | no-change | none | Pi self-host credential provisioning (`pi auth print-api-key` into the throwaway home) belongs to the self-host feature; no task here resolves or writes credentials. |
+| adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D26 | no-change | none | Pi's provider-state volatile list changes no telemetry or cost behavior; no task edits volatile-list handling. |
 
 ## Verification
 
