@@ -34,7 +34,7 @@ export interface SessionCommandInstruction {
 export const MANAGED_DISPATCH_PROMPT_SURFACES = [
   { file: 'step-runners.ts', symbols: ['buildSystemPrompt'] },
   { file: 'conductor.ts', symbols: ['buildRetryHint', 'buildRemediationHint'] },
-  { file: 'project-prelude.ts', symbols: ['buildProjectPreludePrompt'] },
+  { file: 'project-prelude.ts', symbols: ['runProjectPrelude', 'invokePreludeSkill'] },
 ] as const;
 
 export function isManagedDispatchPromptSurface(input: Pick<SessionCommandSource, 'file' | 'source'>, line?: number): boolean {
@@ -77,14 +77,15 @@ export function auditManagedSessionInstructionSource(input: SessionCommandSource
     // turn a broken declaration into an interactive escape. Engine strings
     // additionally require a bounded declaration; a source-family baseline
     // cannot distinguish provider prompt text from operator documentation.
-    const malformed = contexts.problems.some((problem) => problem.line <= instruction.line);
+    const malformed = contexts.problems.length > 0;
     if (input.family === 'engine' && !declared && !malformed) {
       return [{ ...instruction, reason: 'unclassified session-command context in engine instruction' }];
     }
+    if (instruction.reason) return [instruction];
     if (instruction.context !== 'managed') {
       return [{ ...instruction, reason: 'managed dispatch cannot execute an operator-only instruction' }];
     }
-    return instruction.reason ? [instruction] : [];
+    return [];
   });
 }
 
@@ -110,6 +111,7 @@ export function auditShippedManagedSessionInstructionSource(input: SessionComman
   // blocked command that a marked prompt can actually render.
   return auditManagedSessionInstructionSource(input).filter((instruction) =>
     /session-command context/i.test(instruction.reason ?? '')
+    || instruction.reason === 'unresolved command construction'
     || (
       instruction.reason === 'managed dispatch cannot execute an operator-only instruction'
       // A skill's operator-only region is documentation by design. The
@@ -310,7 +312,7 @@ export function auditSessionCommandSource(input: SessionCommandSource): SessionC
   const contexts = parseSessionCommandContexts(input.source, input.family);
   return commandLocations(input).map((command) => {
     const { unresolved, ...location } = command;
-    const problem = contexts.problems.find((item) => item.line <= command.line);
+    const problem = contexts.problems[0];
     const classification = problem
       ? { reason: problem.reason }
       : sessionCommandContextAt(contexts, command.line);

@@ -99,8 +99,10 @@ describe('custom build-review compatibility routing', () => {
       },
     } as HarnessConfig;
     const invocations: Array<{ prompt: string; readOnlyReview?: boolean }> = [];
+    const observationOrder: string[] = [];
     const provider: LLMProvider = {
       invoke: vi.fn(async (options: { prompt: string; readOnlyReview?: boolean }) => {
+        observationOrder.push('invoke');
         invocations.push(options);
         const payload = options.prompt.includes('Build Review Security rubric.') ? { findings: [] } : { kind: 'custom-findings', version: 'v1', findings: [] };
         return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
@@ -114,6 +116,12 @@ describe('custom build-review compatibility routing', () => {
       baselinePath: join(root, '.pipeline', 'frozen', 'baseline'), headPath: join(root, '.pipeline', 'frozen', 'head'),
     };
     await Promise.all([mkdir(source.baselinePath, { recursive: true }), mkdir(source.headPath, { recursive: true })]);
+    const producerRoot = join(root, '.pipeline', 'session-events', 'dispatch-1');
+    await mkdir(producerRoot, { recursive: true });
+    const prepareManagedSessionObservation = vi.fn(async ({ executable }) => {
+      observationOrder.push(`prepare:${executable}`);
+      return { producerRoot };
+    });
     const runner = new DefaultStepRunner(provider, 'unthreaded-peer-routing', root, {
       featureDesc: 'feature', config,
       providerRuntimes: new ProviderRuntimeSet([
@@ -124,6 +132,11 @@ describe('custom build-review compatibility routing', () => {
       buildReviewEffectiveResolver: async () => ({ ok: true, feature: { version: 'v1', repository: root, feature: 'feature' }, effective: { rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] } }) as never,
       buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`, declaredDependencies: [], availability: 'available' as const }],
       buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+      providerExecution: {
+        managedSessionContext: { projectRoot: root, worktreeRoot: root, producerRoot, dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'feature', featureSlug: 'feature' } },
+        prepareCandidateSelfHost: async () => ({ executable: '/selected/codex', env: {}, args: [], teardown: async () => {} }),
+        prepareManagedSessionObservation,
+      } as never,
     });
     const inputs = {
       diff: 'diff', planBody: '# Plan', mergeBase: 'base', baseRef: 'origin/main', baseKind: 'remote', trackingRefSha: 'base', remoteHeadSha: 'base', fresh: true,
@@ -136,6 +149,9 @@ describe('custom build-review compatibility routing', () => {
 
     await expect((await import('node:fs/promises')).readFile(probeLog, 'utf8')).resolves.toBe('--help\n');
     expect(invocations).toEqual(expect.arrayContaining([expect.objectContaining({ prompt: expect.stringContaining('Build Review Security rubric.'), readOnlyReview: true })]));
+    expect(prepareManagedSessionObservation).toHaveBeenCalled();
+    expect(observationOrder).toEqual(expect.arrayContaining(['prepare:/selected/codex']));
+    expect(observationOrder.indexOf('prepare:/selected/codex')).toBeLessThan(observationOrder.indexOf('invoke'));
     expect(result.output).not.toContain('read-only-review-unavailable');
   });
 

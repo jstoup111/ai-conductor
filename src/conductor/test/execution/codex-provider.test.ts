@@ -29,6 +29,7 @@ import { ProviderSessionScope } from '../../src/engine/provider-session.js';
 import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { BUILD_REVIEW_RUBRIC_REGISTRY } from '../../src/engine/build-review-registry.js';
+import { buildCodexReadOnlyProducerRootPolicyArgs } from '../../src/engine/build-review-read-only-capability.js';
 import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-config.js';
 
 const execFileAsync = promisify(execFile);
@@ -1539,12 +1540,15 @@ describe('CodexProvider', () => {
       argument === '--config' ? [reviewArgs[index + 1]] : [],
     );
 
+    const policyStart = reviewArgs.indexOf('-P');
+    const policyEnd = reviewArgs.indexOf('--config', policyStart);
+    expect(reviewArgs.slice(policyStart, policyEnd)).toEqual(
+      buildCodexReadOnlyProducerRootPolicyArgs(producerRoot, 'sandbox'),
+    );
     expect(reviewConfigValues).toEqual(expect.arrayContaining([
-      'sandbox_mode="read-only"',
       'approval_policy="never"',
       'shell_environment_policy.ignore_default_excludes=false',
     ]));
-    expect(reviewArgs).toEqual(expect.arrayContaining(['--add-dir', producerRoot]));
     expect(reviewConfigValues).not.toEqual(expect.arrayContaining([
       'sandbox_mode="workspace-write"',
       'sandbox_workspace_write.network_access=true',

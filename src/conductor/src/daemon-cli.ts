@@ -95,6 +95,7 @@ import {
   isForwardedFromFeature,
   startDaemonEventPersistence,
   startFeatureEventPersistence,
+  withFeatureEventPersistence,
   withSessionEventTail,
 } from './engine/event-persister.js';
 import { heapDumpOptionsFromConfig, startDaemonMemorySampler } from './engine/daemon-memory.js';
@@ -2773,18 +2774,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 // the daemon's aggregate ledger. The forwarding emitter keeps
                 // daemon observers live while persisting the canonical copy in
                 // this feature worktree.
-                const featureScope = startFeatureEventPersistence(
-                  join(projectRoot, '.worktrees', entry.slug), events, entry.slug,
-                );
+                return await withFeatureEventPersistence({
+                  worktreePath: join(projectRoot, '.worktrees', entry.slug), globalEvents: events, featureSlug: entry.slug,
+                  run: async (featureEvents) => {
                 subscribeRecoverySessionOccurrences(
-                  featureScope.events,
+                  featureEvents,
                   createFeatureDaemonLogger(
                     entry.slug,
                     (message) => log(message, true),
                     formatDaemonFeatureTag(entry.slug),
                   ),
                 );
-                try {
                   // Create a real Tier-2 resolver that dispatches to the /rebase skill
                   // FR-7: wire stepRunner and events for rebase resolution dispatch
                   let attempt = 0;
@@ -2792,7 +2792,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                   const resolver: RebaseResolver = async (ctx) => {
                   attempt += 1;
                   try {
-                    await featureScope.events.emit({ type: 'rebase_resolution_attempt', index: attempt, cap: attemptCap });
+                    await featureEvents.emit({ type: 'rebase_resolution_attempt', index: attempt, cap: attemptCap });
                   } catch {
                     /* best-effort: event emission must not block resolution */
                   }
@@ -2802,7 +2802,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                       // its producer root, while featureScope retains the
                       // canonical ledger and feature-scoped renderer.
                       projectRoot: ctx.projectRoot,
-                      events: featureScope.events,
+                      events: featureEvents,
                       featureSlug: entry.slug,
                       run: async () => {
                         const sessionId = uuidv4();
@@ -2853,14 +2853,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     cooldownMinutes: config?.mergeable_autoresolve?.cooldownMinutes ?? 60,
                     attemptCap,
                   },
-                    { runGh: ghRunner, runSuite, resolver, log, isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, events: featureScope.events },
+                    { runGh: ghRunner, runSuite, resolver, log, isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, events: featureEvents },
                   );
 
                   log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
                   return { kind: outcome.kind };
-                } finally {
-                  await featureScope.drain();
-                }
+                  },
+                });
               } catch (err: any) {
                 log(`[autoresolve] error resolving ${entry.prUrl}: ${err?.message || err}`);
                 return { kind: 'escalated' };
@@ -2882,18 +2881,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             },
             dispatch: async (entry, state) => {
               if (!ciFixEnabled) return;
-              const featureScope = startFeatureEventPersistence(
-                join(projectRoot, '.worktrees', entry.slug), events, entry.slug,
-              );
+              return await withFeatureEventPersistence({
+                worktreePath: join(projectRoot, '.worktrees', entry.slug), globalEvents: events, featureSlug: entry.slug,
+                run: async (featureEvents) => {
               subscribeRecoverySessionOccurrences(
-                featureScope.events,
+                featureEvents,
                 createFeatureDaemonLogger(
                   entry.slug,
                   (message) => log(message, true),
                   formatDaemonFeatureTag(entry.slug),
                 ),
               );
-              try {
               const dispatchCiFix = createDaemonCiFixDispatch({
                 tracker: createGithubTrackerClient(makeProductionGh()),
                 // Feature-scoped transport: pin gh to the entry's repo so the remote
@@ -2918,7 +2916,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                       // CI repair owns a transient checkout just like rebase;
                       // delivery still belongs to the retained feature scope.
                       projectRoot: ctx.worktreePath,
-                      events: featureScope.events,
+                      events: featureEvents,
                       featureSlug: ctx.entry.slug,
                       run: async () => {
                         const sessionId = uuidv4();
@@ -2967,9 +2965,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 await events.emit(ciRepairOutcomeDiagnostic(entry, outcome));
               }
               return outcome;
-              } finally {
-                await featureScope.drain();
-              }
+                },
+              });
             },
           },
           operations: (entry) => {

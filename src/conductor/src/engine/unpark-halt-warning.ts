@@ -55,7 +55,9 @@ function recoveryLine({
   }
 
   if (haltClass === OVER_SCOPE_HALT_CLASS) {
+    // ai-conductor:session-command-context=operator-only
     return `To resume: record each decision in ${haltPath}, then ai-conductor halt clear --feature ${slug} --rationale "<why>" (do not rm the HALT — that discards the decisions)`;
+    // /ai-conductor:session-command-context
   }
 
   if (haltClass === KICKBACK_CAP_HALT_CLASS) {

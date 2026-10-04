@@ -589,7 +589,9 @@ function isPersistedOffer(value: OverScopeRenderableFinding | OverScopePersisted
 }
 
 /** Names the sanctioned clear: `halt clear` renames HALT to HALT.cleared, the only file the next lap harvests. */
+// ai-conductor:session-command-context=operator-only
 const OVER_SCOPE_CLEAR_INSTRUCTION = 'run `ai-conductor halt clear --feature <slug> --rationale "<why>"`, which preserves this block for the next audit lap. Do not delete this file: deleting it discards every decision recorded here.';
+// /ai-conductor:session-command-context
 
 export function renderOverScopeDecisionBlock(undecided: readonly (OverScopeRenderableFinding | OverScopePersistedOffer)[], refused: readonly OverScopeRenderableFinding[] = [], defects: readonly { kind: string; criterion?: string; message?: string }[] = []): string {
   const parts: string[] = [];

@@ -50,22 +50,18 @@ export type ManagedObservationDestinationProof = {
 };
 
 /**
- * The two Codex entrypoints spell the same policy differently. Keep their
- * read-only base and the sole producer-root exception in one builder so the
- * launch contract and its admission proof change together.
+ * Both Codex entrypoints use this permission profile. Keep the read-only
+ * base and sole producer-root exception in one builder so admission proves
+ * the exact policy the provider launch receives.
  */
 export function buildCodexReadOnlyProducerRootPolicyArgs(
   producerRoot: string | undefined,
   entrypoint: 'exec' | 'sandbox',
 ): readonly string[] {
-  if (entrypoint === 'sandbox') {
-    return producerRoot === undefined
-      ? ['-P', ':read-only']
-      : ['-P', ':read-only', '-P', `${producerRoot}:read-write`];
-  }
+  void entrypoint;
   return producerRoot === undefined
-    ? ['--config', 'sandbox_mode="read-only"']
-    : ['--config', 'sandbox_mode="read-only"', '--add-dir', producerRoot];
+    ? ['-P', ':read-only']
+    : ['-P', ':read-only', '-P', `${producerRoot}:read-write`];
 }
 
 const CODEX_PROBE_OBSERVATIONS = new Set([

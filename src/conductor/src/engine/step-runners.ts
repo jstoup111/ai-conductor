@@ -3441,6 +3441,7 @@ export class DefaultStepRunner implements StepRunner {
       providerAvailability: this.providerExecutionContext?.providerAvailability,
       withCandidateSafety: this.candidateSafetyFor('build_review')?.wrapper ?? this.withCandidateSafety,
       prepareCandidateSelfHost: this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+      prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
       onAttempt: this.providerAttempt, warn: this.providerWarn, options,
       abortSignal: controller.signal, deadlineAt,
       ...(Array.isArray(entry.policy.llm_provider) && entry.policy.llm_provider.length > 1 ? { prepareCandidateBaseline: async ({ candidate, prepared }) => {
@@ -4204,6 +4205,7 @@ export class DefaultStepRunner implements StepRunner {
             withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
             prepareCandidateSelfHost:
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+            prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
             onAttempt: this.providerAttempt,
             warn: this.providerWarn,
             abortSignal: controller.signal,
@@ -4215,10 +4217,12 @@ export class DefaultStepRunner implements StepRunner {
               // inheriting the enclosing conductor mode.
               interactive: false,
               nativeSchema: getBuildReviewRubricDescriptor(branch.rubric).contract.output.jsonSchema,
+              ...(customPolicyLap ? { readOnlyReview: true } : {}),
             },
             optionsForCandidate: (providerKey) => ({
               ...options,
               nativeSchema: getBuildReviewRubricDescriptor(branch.rubric).contract.output.jsonSchema,
+              ...(customPolicyLap ? { readOnlyReview: true } : {}),
               prompt: `${renderAuxiliarySkillInvocation(branch.skillName, providerKey)}\n\n${prompt}`,
             }),
             ...(customPolicyLap ? { prepareCandidateBaseline: async ({ candidate, prepared }) => {

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import {
   auditManagedSessionInstructionSource,
   auditShippedManagedSessionInstructionSource,
@@ -62,6 +63,30 @@ describe('managed session instruction contexts', () => {
     ]));
   });
 
+  it('retains unresolved managed command construction through the shipped entry', () => {
+    const source = [
+      '// ai-conductor:session-command-context=managed',
+      'const subcommand = process.env.SUBCOMMAND;',
+      "const prompt = `Run ai-conductor ${subcommand}`;",
+      '// /ai-conductor:session-command-context',
+    ].join('\n');
+
+    expect(auditShippedManagedSessionInstructionSource({ file: 'engine/step-runners.ts', source, family: 'engine' }))
+      .toContainEqual(expect.objectContaining({ reason: 'unresolved command construction' }));
+  });
+
+  it('retains a trailing stale endpoint through the shipped entry', () => {
+    const source = [
+      '// ai-conductor:session-command-context=managed',
+      "const prompt = 'Run ai-conductor daemon status';",
+      '// /ai-conductor:session-command-context',
+      '// /ai-conductor:session-command-context',
+    ].join('\n');
+
+    expect(auditShippedManagedSessionInstructionSource({ file: 'engine/step-runners.ts', source, family: 'engine' }))
+      .toContainEqual(expect.objectContaining({ reason: 'stale session-command context endpoint without an open region' }));
+  });
+
   it('carries a conductor retry/recovery contradiction from the registered production surface', () => {
     const productionSource = readFileSync(join(__dirname, '../../src/engine/conductor.ts'), 'utf8');
     const retrySurface = MANAGED_DISPATCH_PROMPT_SURFACES.find((surface) => surface.file === 'conductor.ts');
@@ -74,6 +99,42 @@ describe('managed session instruction contexts', () => {
       .toContainEqual(expect.objectContaining({
         reason: 'managed dispatch cannot execute an operator-only instruction',
       }));
+  });
+
+  it('carries a project-prelude contradiction from its registered managed surface', () => {
+    const productionSource = readFileSync(join(__dirname, '../../src/engine/project-prelude.ts'), 'utf8');
+    const source = productionSource.replace(
+      'const execution = options.providerExecution;',
+      [
+        '// ai-conductor:session-command-context=operator-only',
+        "const injectedPreludeInstruction = 'Run ai-conductor daemon park feature-a';",
+        '// /ai-conductor:session-command-context',
+        'const execution = options.providerExecution;',
+      ].join('\n'),
+    );
+    expect(auditShippedManagedSessionInstructionSource({ file: 'engine/project-prelude.ts', source, family: 'engine' }))
+      .toContainEqual(expect.objectContaining({
+        reason: 'managed dispatch cannot execute an operator-only instruction',
+      }));
+  });
+
+  it('registers only declarations that exist in each managed prompt producer', () => {
+    for (const surface of MANAGED_DISPATCH_PROMPT_SURFACES) {
+      const source = readFileSync(join(__dirname, '../../src/engine', surface.file), 'utf8');
+      const parsed = ts.createSourceFile(surface.file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+      for (const symbol of surface.symbols) {
+        let found = false;
+        const visit = (node: ts.Node): void => {
+          const name = (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isFunctionExpression(node))
+            ? node.name?.getText(parsed)
+            : ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) ? node.name.text : undefined;
+          if (name === symbol) found = true;
+          ts.forEachChild(node, visit);
+        };
+        visit(parsed);
+        expect(found, `${surface.file} must declare ${symbol}`).toBe(true);
+      }
+    }
   });
 
   it('allows a managed instruction and excludes an unmarked operator instruction', () => {
