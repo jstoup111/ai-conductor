@@ -253,7 +253,7 @@ necessarily the repo default.
   The `(<n> cost-metered dispatches)` clause appears only when `<cost>` covers fewer recorded
   dispatches than the feature total. A non-zero `cost-unmetered` count means `<cost>` is a PARTIAL
   figure: those dispatches reported token counts that ARE in the token totals, but no dollars. That
-  happens when a provider reports no cost of its own (codex) and the model it ran has no entry in the committed
+  happens when a provider reports no cost of its own (codex, or a Pi message without a cost) and the model it ran has no entry in the committed
   `.ai-conductor/rate-card.json` — see the rate-card section of the configuration reference, and run
   `ai-conductor rate-card refresh` to close the gap. The clause is omitted when every metered dispatch
   also carried a cost.
