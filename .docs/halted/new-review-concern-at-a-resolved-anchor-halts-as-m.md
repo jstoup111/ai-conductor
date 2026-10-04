@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-04T09:53:22.663Z
 Slug: new-review-concern-at-a-resolved-anchor-halts-as-m
 Class: needs-human
 Halting step: unknown
