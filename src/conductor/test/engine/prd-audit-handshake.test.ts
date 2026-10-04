@@ -95,6 +95,23 @@ describe('prd_audit current-output handshake', () => {
     expect(result?.reason).toContain('expected terminal typed output .pipeline/prd-audit.json');
   });
 
+  it('retains the current-output observation after an error dispatch produces no typed verdict', async () => {
+    const dir = await fixtureDir();
+    const result = await handshakeFor(dir)(
+      'prd_audit',
+      'engine-attempt-16-error',
+      Date.now(),
+      'provider process exited unsuccessfully',
+    );
+
+    expect(result).toMatchObject({
+      done: false,
+      routeClass: 'absent',
+      retrySignal: 'structured-result-missing',
+    });
+    expect(result?.reason).toContain('prd_audit dispatch engine-attempt-16-error produced no verdict');
+  });
+
   it('keeps rejected judgment diagnostics distinct while still naming the absent current output', async () => {
     const dir = await fixtureDir();
     const result = await handshakeFor(dir)(
