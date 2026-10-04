@@ -1,6 +1,6 @@
 // Covers: task:3
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { userConfigReadCommand, userConfigSetCommand } from '../src/cli.js';
@@ -28,12 +28,22 @@ describe.sequential('CLI user-config run isolation', () => {
   });
 
   it('writes and reads through the run-scoped location without touching HOME', async () => {
+    const homeConfig = join(home, '.ai-conductor', 'config.yml');
+    const before = await stat(homeConfig);
+    await chmod(homeConfig, 0o000);
+
     expect(await userConfigSetCommand({ kind: 'user-config-set', path: 'spec_owner', value: 'run-owner' })).toBe(0);
     let output = '';
     expect(await userConfigReadCommand({ kind: 'user-config-read', path: 'spec_owner' }, (value) => { output += value; })).toBe(0);
 
     expect(output).toBe('run-owner\n');
-    expect(await readFile(join(scoped, 'config.yml'), 'utf8')).toContain('run-owner');
-    expect(await readFile(join(home, '.ai-conductor', 'config.yml'), 'utf8')).toBe('spec_owner: home-owner\n');
+    const scopedConfig = join(scoped, 'config.yml');
+    expect(scopedConfig.startsWith(tmpdir())).toBe(true);
+    expect(await readFile(scopedConfig, 'utf8')).toContain('run-owner');
+
+    await chmod(homeConfig, 0o600);
+    const after = await stat(homeConfig);
+    expect(await readFile(homeConfig, 'utf8')).toBe('spec_owner: home-owner\n');
+    expect(after.mtimeMs).toBe(before.mtimeMs);
   });
 });

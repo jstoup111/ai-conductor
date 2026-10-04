@@ -4,6 +4,7 @@ import { createServer, type Server } from 'node:http';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadMergedConfig } from '../../src/engine/config.js';
 import { wireDaemonOtel, wireOtelVisualizer } from '../../src/engine/otel/wire.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -28,7 +29,7 @@ describe.sequential('OTel test-run isolation', () => {
   it('refuses the live-root OTLP configuration before it can contact a planted receiver', async () => {
     const root = await mkdtemp(join(tmpdir(), 'otel-live-root-'));
     const receiver = await plantedReceiver();
-    const loaded = await loadMergedConfig(process.cwd());
+    const loaded = await loadMergedConfig(fileURLToPath(new URL('../../../../', import.meta.url)));
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) throw new Error(loaded.error.message);
     expect(loaded.config.otel?.exporter).toBe('otlp');
@@ -67,12 +68,10 @@ describe.sequential('OTel test-run isolation', () => {
     const home = await mkdtemp(join(tmpdir(), 'otel-planted-home-'));
     const receiver = await plantedReceiver();
     const previousHome = process.env.HOME;
-    const previousOverride = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
     await fixtureConfig(root, receiver.endpoint);
     await mkdir(join(home, '.ai-conductor'), { recursive: true });
     await writeFile(join(home, '.ai-conductor', 'config.yml'), `otel:\n  exporter: otlp\n  endpoint: ${receiver.endpoint}\n`, 'utf8');
     process.env.HOME = home;
-    delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
     try {
       const loaded = await loadMergedConfig(root);
       expect(loaded.ok).toBe(true);
@@ -87,7 +86,6 @@ describe.sequential('OTel test-run isolation', () => {
       expect(receiver.requests()).toBe(0);
     } finally {
       if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
-      if (previousOverride === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR; else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = previousOverride;
       await Promise.all([rm(root, { recursive: true, force: true }), rm(home, { recursive: true, force: true })]);
     }
   });
