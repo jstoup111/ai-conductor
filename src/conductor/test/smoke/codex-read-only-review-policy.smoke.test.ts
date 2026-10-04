@@ -7,6 +7,8 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import { buildCodexReadOnlyProducerRootPolicyArgs } from '../../src/engine/build-review-read-only-capability.js';
 
+const smokeCapability = 'toolchain';
+
 const available = (() => {
   try {
     execFileSync('which', ['codex'], { stdio: 'pipe' });
