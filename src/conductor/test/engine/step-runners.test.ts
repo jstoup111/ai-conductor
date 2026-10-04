@@ -914,7 +914,9 @@ describe('DefaultStepRunner', () => {
     try {
       await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
       expect(observed).toMatchObject([{ type: 'coverage_binding_amendment_judged', verdict }]);
-      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'done', entries: [{ kind: 'amendment', verdict }] });
+      const envelope = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
+      expect(envelope.status).toBe('done');
+      expect(envelope.entries.find((entry: { kind?: string }) => entry.kind === 'amendment')).toMatchObject({ kind: 'amendment', verdict });
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
@@ -940,9 +942,9 @@ describe('DefaultStepRunner', () => {
       const { claims } = JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n{') + 2)) as { claims: Array<Record<string, unknown>> };
       expect(claims.map(({ id }) => id)).toEqual(['a1']);
       expect(prompt).not.toContain('sha256:');
-      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
-        status: 'done', entries: [{ kind: 'amendment', digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/), verdict: 'no-plan-obligation' }],
-      });
+      const envelope = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
+      expect(envelope.status).toBe('done');
+      expect(envelope.entries.find((entry: { kind?: string }) => entry.kind === 'amendment')).toMatchObject({ kind: 'amendment', digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/), verdict: 'no-plan-obligation' });
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
@@ -1021,9 +1023,9 @@ describe('DefaultStepRunner', () => {
       });
       await expect(disabled.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
       expect(disabledProvider.invoke).not.toHaveBeenCalled();
-      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
-        status: 'disabled', entries: [{ kind: 'amendment', verdict: 'unjudged' }],
-      });
+      const envelope = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
+      expect(envelope.status).toBe('disabled');
+      expect(envelope.entries.find((entry: { kind?: string }) => entry.kind === 'amendment')).toMatchObject({ kind: 'amendment', verdict: 'unjudged' });
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
@@ -1200,6 +1202,7 @@ describe('DefaultStepRunner', () => {
         entries: [
           { digest: expect.stringMatching(/^sha256:/), criterion: 'The service writes the audit record.' },
           { kind: 'amendment', digest: expect.stringMatching(/^sha256:/), verdict: 'unjudged' },
+          { kind: 'conflict', verdict: 'unjudged' },
         ],
       });
     } finally {
@@ -1266,6 +1269,7 @@ describe('DefaultStepRunner', () => {
       expect(envelope).toMatchObject({ status: 'disabled', entries: [
         { digest: expect.stringMatching(/^sha256:/), criterion: 'The service writes the audit record.' },
         { kind: 'amendment', digest: expect.stringMatching(/^sha256:/), verdict: 'unjudged' },
+        { kind: 'conflict', verdict: 'unjudged' },
       ] });
       expect(amendmentEvents).toMatchObject([{ type: 'coverage_binding_amendment_judged', verdict: 'unjudged' }]);
       expect(criterionEvents).toEqual([]);
