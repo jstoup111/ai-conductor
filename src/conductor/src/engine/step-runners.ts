@@ -92,6 +92,7 @@ import {
   type CoverageBindingSliceMembership,
 } from './coverage-binding-envelope.js';
 import {
+  amendmentBlocks,
   assembleAmendmentClaims,
   assembleCoverageBindingClaims,
   type CoverageBindingAmendmentClaim,
@@ -4724,39 +4725,44 @@ export class DefaultStepRunner implements StepRunner {
           if (amendmentPaths.length === 0) {
             amendmentClaims = [];
           } else {
-            const originRef = await resolveOriginRef(this.projectDir).catch(() => null);
-            if (originRef === null) throw new Error('could not resolve the origin reference for DECIDE amendment inputs');
-            const mergeBase = await this.gitRunner(['merge-base', originRef, 'HEAD']);
-            const amendmentBase = mergeBase.exitCode === 0 && mergeBase.stdout.trim()
-              ? mergeBase.stdout.trim()
-              : (() => { throw new Error(`could not resolve merge base for DECIDE amendment inputs: ${mergeBase.stderr || mergeBase.stdout || originRef}`); })();
-            const decideArtifacts = (await Promise.all(amendmentPaths
-            .map(async (path) => {
-              let text: string;
+            const amendmentArtifacts = (await Promise.all(amendmentPaths.map(async (path) => {
               try {
-                text = await readFile(join(this.projectDir, path), 'utf8');
+                return { path, text: await readFile(join(this.projectDir, path), 'utf8') };
               } catch (error) {
                 if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
                 throw error;
               }
-              const basePath = `${amendmentBase}:${path}`;
-              const baseResult = await this.gitRunner(['show', basePath]);
-              let baseText: string | undefined;
-              if (baseResult.exitCode === 0) {
-                baseText = baseResult.stdout;
-              } else {
-                const existsAtBase = await this.gitRunner(['cat-file', '-e', basePath]);
-                if (existsAtBase.exitCode === 0) {
-                  throw new Error(`could not read DECIDE amendment base input ${path}: ${baseResult.stderr || baseResult.stdout || 'git show failed'}`);
+            }))).flatMap((artifact) => artifact === undefined ? [] : [artifact])
+              .filter(({ text }) => amendmentBlocks(text).length > 0);
+            if (amendmentArtifacts.length === 0) {
+              amendmentClaims = [];
+            } else {
+              const originRef = await resolveOriginRef(this.projectDir).catch(() => null);
+              if (originRef === null) throw new Error('could not resolve the origin reference for DECIDE amendment inputs');
+              const mergeBase = await this.gitRunner(['merge-base', originRef, 'HEAD']);
+              const amendmentBase = mergeBase.exitCode === 0 && mergeBase.stdout.trim()
+                ? mergeBase.stdout.trim()
+                : (() => { throw new Error(`could not resolve merge base for DECIDE amendment inputs: ${mergeBase.stderr || mergeBase.stdout || originRef}`); })();
+              const decideArtifacts = await Promise.all(amendmentArtifacts.map(async ({ path, text }) => {
+                const basePath = `${amendmentBase}:${path}`;
+                const baseResult = await this.gitRunner(['show', basePath]);
+                let baseText: string | undefined;
+                if (baseResult.exitCode === 0) {
+                  baseText = baseResult.stdout;
+                } else {
+                  const existsAtBase = await this.gitRunner(['cat-file', '-e', basePath]);
+                  if (existsAtBase.exitCode === 0) {
+                    throw new Error(`could not read DECIDE amendment base input ${path}: ${baseResult.stderr || baseResult.stdout || 'git show failed'}`);
+                  }
                 }
-              }
-              return {
-                path,
-                text,
-                baseText,
-              };
-              }))).flatMap((artifact) => artifact === undefined ? [] : [artifact]);
-            amendmentClaims = assembleAmendmentClaims({ planText, decideArtifacts });
+                return {
+                  path,
+                  text,
+                  baseText,
+                };
+              }));
+              amendmentClaims = assembleAmendmentClaims({ planText, decideArtifacts });
+            }
           }
         }
       } catch (error) {

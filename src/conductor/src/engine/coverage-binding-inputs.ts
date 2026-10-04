@@ -56,7 +56,7 @@ function isAmendmentSource(path: string): boolean {
     /^\.docs\/decisions\/(?:architecture-review-|adr-)/.test(path);
 }
 
-function amendmentBlocks(text: string): string[] {
+export function amendmentBlocks(text: string): string[] {
   const lines = text.split('\n');
   const blocks: string[] = [];
 
