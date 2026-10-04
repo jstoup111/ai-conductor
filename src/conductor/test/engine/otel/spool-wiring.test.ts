@@ -205,7 +205,7 @@ describe("resolveSpoolDir", () => {
     const span = provider.getTracer("spool-wiring-test").startSpan("direct-disabled-spool");
     span.end();
 
-    const exporters = buildExporters(config);
+    const exporters = buildExporters(config, { env: loopbackOtelEnv });
     await exportSpan(exporters.spanExporter, span as unknown as ReadableSpan);
 
     expect(received).toBe(1);

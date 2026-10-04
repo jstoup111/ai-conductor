@@ -10,6 +10,8 @@ const optIn = 'AI_CONDUCTOR_OTEL_' + 'SMOKE';
 const exemptions = new Set([
   'test/engine/otel/export-refusal.test.ts',
   'test/engine/otel/transport.test.ts',
+  'test/engine/otel/visualizer-export-refusal.test.ts',
+  'test/engine/otel/wire-export-refusal.test.ts',
 ]);
 
 async function files(root: string): Promise<string[]> {
@@ -36,6 +38,8 @@ describe('OTel smoke opt-in guard', () => {
     expect(exemptions).toEqual(new Set([
       'test/engine/otel/export-refusal.test.ts',
       'test/engine/otel/transport.test.ts',
+      'test/engine/otel/visualizer-export-refusal.test.ts',
+      'test/engine/otel/wire-export-refusal.test.ts',
     ]));
   });
 

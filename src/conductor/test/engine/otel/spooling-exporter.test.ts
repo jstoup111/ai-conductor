@@ -447,7 +447,7 @@ describe('spooling exporters', () => {
     const directory = await temporaryDirectory();
     const resolved = resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, directory);
     if (!resolved.enabled || resolved.exporter !== 'otlp') throw new Error('expected OTLP configuration to be enabled');
-    const direct = buildExporters(resolved).metricExporter;
+    const direct = buildExporters(resolved, { env: {} }).metricExporter;
     const exporter = new SpoolingMetricExporter(new SpoolStore(directory), direct);
     const instruments = [InstrumentType.COUNTER, InstrumentType.HISTOGRAM, InstrumentType.GAUGE, InstrumentType.UP_DOWN_COUNTER];
 
