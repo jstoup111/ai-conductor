@@ -1,6 +1,6 @@
 // Covers: task:17
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -75,11 +75,13 @@ function conductor(root: string, statePath: string, stepRunner: StepRunner, maxR
 describe('prd_audit absent-result retries', () => {
   it('re-invokes within the resolved allowance and accepts only the fresh typed verdict', async () => {
     const { root, statePath } = await fixture();
+    let calls = 0;
     const run = vi.fn<StepRunner['run']>(async (_step, _state, options) => {
-      if (run.mock.calls.length === 2) {
+      calls += 1;
+      if (calls === 2) {
         await writeCurrentPass(root, options?.runId ?? 'missing-run-id');
       }
-      return run.mock.calls.length === 1
+      return calls === 1
         ? { success: true, output: 'structured-result-missing' }
         : { success: true };
     });
