@@ -234,6 +234,22 @@ describe('Conductor feature applicability dispatch', () => {
     expect(ignored).toEqual([expect.objectContaining({ cause: 'interactive' })]);
   });
 
+  it('detects an undated branch-only marker for a dated feature slug', async () => {
+    await mkdir(join(projectRoot, '.docs', 'applicability'), { recursive: true });
+    await writeFile(join(projectRoot, '.docs', 'applicability', 'feature-a.md'), 'Inapplicable: acceptance_specs — local only\n');
+    await writeState(statePath, allDoneExcept('acceptance_specs', {
+      feature_desc: '2026-10-04-feature-a', applicability_declarations: [FEATURE_A_DECLARATION],
+    }));
+    const ignored: unknown[] = [];
+    events.on('step_inapplicable_ignored', (event) => { ignored.push(event); });
+    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+
+    await conductor(runner, 'acceptance_specs').run();
+
+    expect(runner.run).toHaveBeenCalledWith('acceptance_specs', expect.any(Object), expect.any(Object));
+    expect(ignored).toEqual([expect.objectContaining({ cause: 'branch-only' })]);
+  });
+
   it('rejects a persisted non-declarable declaration but still dispatches it', async () => {
     const declaration = { step: 'prd_audit' as const, reason: 'must run', decider: 'unknown' as const };
     await writeState(statePath, allDoneExcept('prd_audit', { applicability_declarations: [declaration] }));

@@ -10,16 +10,26 @@ describe('parseApplicability', () => {
     });
   });
 
-  it('rejects an ASCII-hyphen declaration', () => {
+  it('preserves declarations in file order while ignoring surrounding prose', () => {
     expect(parseApplicability([
       '# Applicability',
       'This feature has no manual surface.',
-      'Inapplicable: manual_test - no UI to exercise',
+      'Inapplicable: manual_test — no UI to exercise',
       'The implementation still has acceptance coverage.',
       'Inapplicable: acceptance_specs — no new behavior to specify',
     ].join('\n'))).toEqual({
+      ok: true,
+      declarations: [
+        { step: 'manual_test', reason: 'no UI to exercise', line: 3 },
+        { step: 'acceptance_specs', reason: 'no new behavior to specify', line: 5 },
+      ],
+    });
+  });
+
+  it('rejects an ASCII-hyphen declaration', () => {
+    expect(parseApplicability('Inapplicable: manual_test - no UI to exercise')).toEqual({
       ok: false,
-      error: { kind: 'malformed-line', line: 3 },
+      error: { kind: 'malformed-line', line: 1 },
     });
   });
 

@@ -209,4 +209,19 @@ describe('landSpec applicability marker', () => {
     expect(error).toMatchObject({ gate: 'artifact-stem-mismatch' });
     expect(error.message).toContain('.docs/applicability/different-feature.md');
   });
+
+  it('refuses a mismatched sibling marker that would otherwise be staged with the valid marker', async () => {
+    const worktreePath = await seed(true, 'Inapplicable: manual_test — no browser-facing behavior\n');
+    await writeFile(
+      join(worktreePath, '.docs', 'applicability', 'different-feature.md'),
+      'Inapplicable: manual_test — sibling marker\n',
+    );
+
+    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options())
+      .catch((reason: unknown) => reason);
+
+    expect(error).toMatchObject({ gate: 'artifact-stem-mismatch' });
+    expect((error as Error).message).toContain('.docs/applicability/different-feature.md');
+    expect(await git(['log', '--format=%s'])).toBe('init');
+  });
 });

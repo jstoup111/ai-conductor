@@ -470,29 +470,31 @@ export async function landSpec(
   // semantics are validated here, at the same seam that admits every other
   // DECIDE artifact. A project config is deliberately loaded from the target
   // only: user-level settings must never change a project's pipeline.
-  const applicabilityFile = await pickIdeaFile(join(worktreePath, '.docs', 'applicability'), featureFiles);
-  if (applicabilityFile) {
-    const applicabilityPath = relative(worktreePath, applicabilityFile).replaceAll('\\', '/');
-    if (basename(applicabilityFile, '.md') !== featureSlug) {
-      throw landGateError('artifact-stem-mismatch',
-        `landSpec: feature-scoped artifact stems do not match the feature: ${applicabilityPath}: ` +
-        `expected stem "${featureSlug}" (plan-stem)`,
-      );
-    }
+  const applicabilityFiles = await listIdeaFiles(join(worktreePath, '.docs', 'applicability'), featureFiles);
+  if (applicabilityFiles.length > 0) {
     const configResult = await loadConfig(canonical);
     const config = configResult.ok ? configResult.config : undefined;
     const customStepNames = Object.keys(config?.steps ?? {})
       .filter((name) => !ALL_STEPS.some((step) => step.name === name));
-    const validation = validateApplicability(await readFile(applicabilityFile, 'utf-8'), {
-      enabled: resolveFeatureApplicabilityConfig(config).enabled,
-      customStepNames,
-    });
-    if (!validation.ok) {
-      const { kind, line, step } = validation.error;
-      throw landGateError('applicability-invalid',
-        `landSpec: applicability marker "${applicabilityPath}" is invalid: ${kind}` +
-        `${step ? ` for step "${step}"` : ''} at line ${line}.`,
-      );
+    for (const applicabilityFile of applicabilityFiles) {
+      const applicabilityPath = relative(worktreePath, applicabilityFile).replaceAll('\\', '/');
+      if (basename(applicabilityFile, '.md') !== featureSlug) {
+        throw landGateError('artifact-stem-mismatch',
+          `landSpec: feature-scoped artifact stems do not match the feature: ${applicabilityPath}: ` +
+          `expected stem "${featureSlug}" (plan-stem)`,
+        );
+      }
+      const validation = validateApplicability(await readFile(applicabilityFile, 'utf-8'), {
+        enabled: resolveFeatureApplicabilityConfig(config).enabled,
+        customStepNames,
+      });
+      if (!validation.ok) {
+        const { kind, line, step } = validation.error;
+        throw landGateError('applicability-invalid',
+          `landSpec: applicability marker "${applicabilityPath}" is invalid: ${kind}` +
+          `${step ? ` for step "${step}"` : ''} at line ${line}.`,
+        );
+      }
     }
   }
 

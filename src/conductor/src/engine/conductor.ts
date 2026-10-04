@@ -7693,10 +7693,16 @@ export class Conductor {
       const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
       if (!slug) return 'base';
       let content: string | undefined;
+      const undatedSlug = slug.replace(/^\d{4}-\d{2}-\d{2}-/, '');
       try {
         content = await readFile(join(this.projectRoot, '.docs', 'applicability', `${slug}.md`), 'utf8');
       } catch {
-        return 'base';
+        if (undatedSlug === slug) return 'base';
+        try {
+          content = await readFile(join(this.projectRoot, '.docs', 'applicability', `${undatedSlug}.md`), 'utf8');
+        } catch {
+          return 'base';
+        }
       }
       if (state.applicability_declarations === undefined) return 'interactive';
       const digest = `sha256:${createHash('sha256').update(content, 'utf8').digest('hex')}`;

@@ -623,6 +623,20 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
   }
 }
 
+/** Reuse the dashboard's state scan so status has no separate applicability parser. */
+async function renderInapplicableSection(repoPath: string, out: (line: string) => void): Promise<void> {
+  const state = await scanInheritedState({
+    worktreeBase: join(repoPath, '.worktrees'),
+    processedDir: join(repoPath, '.daemon', 'processed'),
+    discover: async () => [],
+  });
+  for (const feature of state.inProgress) {
+    for (const entry of feature.inapplicable ?? []) {
+      out(`  inapplicable [${feature.slug}]: ${entry.step} — ${entry.reason}`);
+    }
+  }
+}
+
 /**
  * `conduct daemon status` — read-only sweep of the registry. Always exits 0
  * (stale/missing entries are reported, not errors). Returns the rows for testing.
@@ -670,6 +684,7 @@ export async function runDaemonStatus(
       await renderGatedSection(record.path, out, clock);
       await renderBlockedSection(record.path, out, clock);
       await renderAgreementLine(record.path, out);
+      await renderInapplicableSection(record.path, out);
       await renderPlanGrowthSection(record.path, out);
     }
   }
