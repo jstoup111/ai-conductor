@@ -164,9 +164,29 @@ describe('remediation case effects', () => {
       { ...stop, sources: [{ ...stop.sources[0]!, sourceId: 'different-current-source' }] },
       { ...stop, escalation: { owner: 'product' as const } },
     ]) {
-      await expect(persistBuildReviewDecisionStop({ store, record: changed }))
-        .resolves.toEqual({ ok: false, reason: 'conflicting-case-id' });
+      await expect(persistBuildReviewDecisionStop({ store, record: changed })).resolves.toEqual({
+        ok: false, reason: 'conflicting-case-id', caseIds: ['decision-stop-lap-1-bound-owner'],
+        sourceIds: [...new Set(['current-source', ...changed.sources.map((source) => source.sourceId)])],
+      });
     }
+  });
+
+  it('converges a replayed unbound stop proposed under a fresh generated id', async () => {
+    const store = await storeWith({ version: 'v1', feature, cases: [] });
+    const stopWithId = (id: string): RemediationCaseRecord => ({
+      id, domain: 'build_review', disposition: 'escalate', priority: 'high',
+      rationale: 'An owner decision is required.', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'current-source', outcome: 'escalate', recordedAt: '2026-10-03T00:00:00.000Z' }],
+      effect: { kind: 'none' }, escalation: { owner: 'architecture' }, distinctFrom: ['resolved-owner'],
+    });
+
+    await persistBuildReviewDecisionStop({ store, record: stopWithId('generated-1') });
+    await expect(persistBuildReviewDecisionStop({ store, record: stopWithId('generated-2') })).resolves.toEqual({
+      ok: true, status: 'already-persisted', caseId: 'generated-1', supersededCaseIds: [], supersededEffects: [],
+    });
+    const read = await store.read();
+    if (!read.ok) throw new Error(read.reason);
+    expect(read.state.cases.map((record) => record.id)).toEqual(['generated-1']);
   });
 
   it('supersedes an explicitly bound owner whose historic sources do not overlap the decision stop', async () => {

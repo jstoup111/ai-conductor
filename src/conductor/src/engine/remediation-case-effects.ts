@@ -62,7 +62,9 @@ export type PersistBuildReviewDecisionStopResult =
       reason: string;
     }>[];
   }
-  | { readonly ok: false; readonly reason: 'invalid-decision-stop' | 'conflicting-case-id' | `case store ${string}` }
+  | { readonly ok: false; readonly reason: 'invalid-decision-stop' | `case store ${string}` }
+  /** A different stop already holds this deterministic id (ADR D6.6 evidence). */
+  | { readonly ok: false; readonly reason: 'conflicting-case-id'; readonly caseIds: readonly string[]; readonly sourceIds: readonly string[] }
   | { readonly ok: false; readonly reason: 'rejected-transition'; readonly caseIds: readonly string[]; readonly sourceIds: readonly string[] }
   | { readonly ok: false; readonly reason: 'malformed-state' };
 
@@ -80,12 +82,22 @@ export function isBuildReviewDecisionStop(record: RemediationCaseRecord): boolea
 }
 
 function sameDecisionStop(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
-  return left.id === right.id && left.domain === right.domain && left.disposition === 'escalate' &&
+  return left.id === right.id && sameDecisionStopContent(left, right);
+}
+
+/**
+ * Everything a stop asserts, apart from its id and write timestamps. A replay
+ * of the same judgement re-proposes this content; for an unbound escalation
+ * it does so under a fresh generated id, so content is the replay identity.
+ */
+export function sameDecisionStopContent(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
+  return left.domain === right.domain && left.disposition === 'escalate' &&
     right.disposition === 'escalate' && left.priority === right.priority && left.rationale === right.rationale &&
     left.confidence === right.confidence && left.resolution === right.resolution &&
     left.effect.kind === 'none' && right.effect.kind === 'none' &&
     left.escalation?.owner === right.escalation?.owner &&
-    JSON.stringify(left.consistencyStop) === JSON.stringify(right.consistencyStop) && left.sources.length === right.sources.length &&
+    JSON.stringify(left.consistencyStop) === JSON.stringify(right.consistencyStop) &&
+    JSON.stringify(left.distinctFrom) === JSON.stringify(right.distinctFrom) && left.sources.length === right.sources.length &&
     left.sources.every((source, index) => {
       const other = right.sources[index];
       // recordedAt is when this attempt wrote the stop, not what the stop is:
@@ -115,7 +127,17 @@ export async function persistBuildReviewDecisionStop(input: {
       return {
         value: sameDecisionStop(existing, input.record)
           ? { ok: true as const, status: 'already-persisted' as const, caseId: existing.id, supersededCaseIds: [], supersededEffects: [] }
-          : { ok: false as const, reason: 'conflicting-case-id' as const },
+          : {
+            ok: false as const, reason: 'conflicting-case-id' as const, caseIds: [existing.id],
+            sourceIds: [...new Set([...existing.sources, ...input.record.sources].map((source) => source.sourceId))],
+          },
+      };
+    }
+    const replayed = state.cases.find((record) =>
+      isBuildReviewDecisionStop(record) && sameDecisionStopContent(record, input.record));
+    if (replayed) {
+      return {
+        value: { ok: true as const, status: 'already-persisted' as const, caseId: replayed.id, supersededCaseIds: [], supersededEffects: [] },
       };
     }
     const stopSourceIds = new Set(input.record.sources.map((source) => source.sourceId));

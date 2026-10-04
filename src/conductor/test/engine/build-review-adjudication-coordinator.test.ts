@@ -1178,6 +1178,9 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events.filter((event) => event.type === 'remediation_effect_failed')).toEqual([
       expect.objectContaining({ caseId: 'case-second-owner', reason: 'superseded by decision stop consistency-stop-lap-2' }),
     ]);
+    expect(events.filter((event) => event.type === 'remediation_case_reconciled' && event.caseId === 'consistency-stop-lap-2')).toEqual([
+      expect.objectContaining({ resolution: 'open' }),
+    ]);
     expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
   });
 
@@ -1293,6 +1296,169 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(persisted.state.cases.filter((record) => record.id === 'decision-stop-lap-1-case-bound-owner')).toEqual([
       expect.objectContaining({ resolution: 'open' }),
     ]);
+  });
+
+  it('emits no second reconciled occurrence when a bound decision stop is replayed', async () => {
+    const root = await projectRoot();
+    await seedCases(new RemediationCaseStore(root, feature), {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-bound-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The current owner remains unresolved.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-bound-owner', kind: 'action', status: 'reserved' },
+      }],
+    });
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'bound-stop' }],
+      cases: [{
+        caseRef: 'bound-stop', existingCaseId: 'case-bound-owner', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'Architecture must decide this source.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['bound-stop'], rationale: 'The escalation is consistent.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    await coordinateBuildReviewAdjudication(input(root, async () => judgement));
+    const events: RemediationCaseLifecycleEvent[] = [];
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), emit: async (event) => { events.push(event); },
+    })).resolves.toMatchObject({ ok: true, route: 'halt' });
+
+    expect(events).not.toContainEqual(expect.objectContaining({
+      type: 'remediation_case_reconciled', caseId: 'decision-stop-lap-1-case-bound-owner',
+    }));
+  });
+
+  it('replays an unbound escalation under a fresh generated id without a false regression', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-open-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The current owner remains unresolved.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-open-owner', kind: 'action', status: 'reserved' },
+      }],
+    });
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'unbound-stop' }],
+      cases: [{
+        caseRef: 'unbound-stop', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'Architecture must decide this source.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['unbound-stop'], rationale: 'The escalation is consistent.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    await expect(coordinateBuildReviewAdjudication({ ...input(root, async () => judgement), generateId: () => 'stop-first' }))
+      .resolves.toMatchObject({ ok: true, route: 'halt' });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), generateId: () => 'stop-replay', emit: async (event) => { events.push(event); },
+    })).resolves.toMatchObject({ ok: true, route: 'halt' });
+
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_semantic_repeat_halt' }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_case_reconciled', caseId: 'stop-first' }));
+    const persisted = await store.read();
+    if (!persisted.ok) throw new Error(persisted.reason);
+    expect(persisted.state.cases.filter((record) => record.resolution === 'open').map((record) => record.id)).toEqual(['stop-first']);
+  });
+
+  it('replays a blocked unbound action without a false regression', async () => {
+    const root = await projectRoot();
+    await seedCases(new RemediationCaseStore(root, feature), {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-open-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The current owner remains unresolved.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-open-owner', kind: 'action', status: 'reserved' },
+      }],
+    });
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'blocked-action' }],
+      cases: [{
+        caseRef: 'blocked-action', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'The test needs a focused assertion.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Add the missing assertion', admittedTaskIds: ['34'], admissionRationale: 'Task 34 owns this repair.' }] },
+      }],
+      consistency: { verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['blocked-action'], rationale: 'The repair contradicts the approved baseline.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    const lap = {
+      ...input(root, async () => judgement),
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '34', contract: 'coordinator integration' }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+    };
+    await expect(coordinateBuildReviewAdjudication(lap)).resolves.toMatchObject({ ok: true, route: 'halt' });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    await expect(coordinateBuildReviewAdjudication({ ...lap, emit: async (event) => { events.push(event); } }))
+      .resolves.toMatchObject({ ok: true, route: 'halt' });
+
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_semantic_repeat_halt' }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
+  });
+
+  it('persists declared distinct lineage on an unbound escalation stop', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The earlier repair was applied.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-r', kind: 'action', status: 'applied', workOrderId: 'order-r' },
+      }],
+    });
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'distinct-stop' }],
+      cases: [{
+        caseRef: 'distinct-stop', distinctFrom: ['case-r'], disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'A distinct concern needs an architecture decision.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['distinct-stop'], rationale: 'One row.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    await expect(coordinateBuildReviewAdjudication({ ...input(root, async () => judgement), generateId: () => 'stop-distinct' }))
+      .resolves.toMatchObject({ ok: true, route: 'halt' });
+
+    const persisted = await store.read();
+    if (!persisted.ok) throw new Error(persisted.reason);
+    expect(persisted.state.cases.find((record) => record.id === 'stop-distinct')).toMatchObject({ distinctFrom: ['case-r'] });
+  });
+
+  it('persists declared distinct lineage on a synthetic blocked-consistency stop', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The earlier repair was applied.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-r', kind: 'action', status: 'applied', workOrderId: 'order-r' },
+      }],
+    });
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'rejected', caseRef: 'distinct-reject' }],
+      cases: [{
+        caseRef: 'distinct-reject', distinctFrom: ['case-r'], disposition: 'reject', priority: 'low', confidence: 'high',
+        rationale: 'A distinct proposal should not proceed.', effect: { kind: 'none' },
+      }],
+      consistency: { verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['distinct-reject'], rationale: 'The rejection leaves a conflict.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    await expect(coordinateBuildReviewAdjudication(input(root, async () => judgement)))
+      .resolves.toMatchObject({ ok: true, route: 'halt' });
+
+    const persisted = await store.read();
+    if (!persisted.ok) throw new Error(persisted.reason);
+    expect(persisted.state.cases.find((record) => record.id === 'consistency-stop-lap-1')).toMatchObject({ distinctFrom: ['case-r'] });
   });
 
   it('replays a blocked-consistency stop without rewriting it or repeating its supersession events', async () => {

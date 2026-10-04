@@ -16,7 +16,7 @@ import { parsePlanTaskBodies } from './plan-task-parse.js';
 import { authorizeBuildReviewRemediationActionEffects, orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop } from './remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop, type PersistBuildReviewDecisionStopResult } from './remediation-case-effects.js';
 import { RemediationCaseJudgementRejectedError, type RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
@@ -148,6 +148,16 @@ export interface BuildReviewAdjudicationCoordinatorInput {
   readonly readTaskStatus?: () => Promise<BuildReviewAdjudicationTaskStatus>;
   readonly generateId?: () => string;
   readonly emit?: (event: RemediationCaseLifecycleEvent) => void | Promise<void>;
+}
+
+/** D6.6: a refused stop write carries typed evidence; a corrupt store says so. */
+function decisionStopFailureEvidence(result: Extract<PersistBuildReviewDecisionStopResult, { ok: false }>) {
+  if (result.reason === 'rejected-transition' || result.reason === 'conflicting-case-id') {
+    return { failureKind: 'rejected-transition' as const, caseIds: result.caseIds, sourceIds: result.sourceIds };
+  }
+  return result.reason === 'malformed-state'
+    ? { failureKind: 'persisted-malformed' as const, caseIds: [], sourceIds: [] }
+    : undefined;
 }
 
 /** Deterministic id of the stop replacing a bound owner, so a same-lap replay converges. */
@@ -663,11 +673,26 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // list so none bypasses D6.3 on its way to the consistency-stop writer.
   const isUnboundRecurrenceCandidate = (proposed: typeof admitted[number]) =>
     proposed.case.existingCaseId === undefined && !proposed.case.distinctFrom?.length;
-  const replayingBlockedConsistencyStop = blockedConsistency !== undefined && prior.state.cases.some((record) =>
-    record.id === consistencyStopId(input.aggregate.lapId) &&
+  // A same-lap replay re-proposes stops this lap already wrote. Its rows then
+  // reuse sources whose prior action owner that stop resolved (D9.2), which is
+  // not a recurrence of that owner (D11). Replay is recognised by content: the
+  // blocked verdict may be carried by an escalation stop or the synthetic
+  // stop, and an unbound escalation's stop has a generated id.
+  const priorOpenStops = prior.state.cases.filter(isBuildReviewDecisionStop);
+  const sameSourceIds = (record: RemediationCaseRecord, proposed: typeof admitted[number]) =>
+    record.sources.length === proposed.sources.length &&
+    proposed.sources.every((source) => record.sources.some((link) => link.sourceId === source.sourceId));
+  const replaysPriorEscalationStop = (proposed: typeof admitted[number]) =>
+    proposed.case.disposition === 'escalate' && priorOpenStops.some((record) =>
+      record.escalation?.owner === proposed.case.escalation?.owner &&
+      record.rationale === proposed.case.rationale && sameSourceIds(record, proposed));
+  const replayingBlockedConsistencyStop = blockedConsistency !== undefined && priorOpenStops.some((record) =>
     record.consistencyStop?.rationale === blockedConsistency.rationale &&
     record.consistencyStop.sourceIds.length === blockedConsistency.sourceIds.length &&
     record.consistencyStop.sourceIds.every((sourceId, index) => sourceId === blockedConsistency.sourceIds[index]));
+  const coveredByReplayedConsistencyStop = (proposed: typeof admitted[number]) =>
+    replayingBlockedConsistencyStop &&
+    proposed.sources.some((source) => blockedConsistency!.sourceIds.includes(source.sourceId));
   const blockedOrdinaryRecurrenceCases = admitted.filter((proposed) =>
     proposed.case.disposition !== 'escalate' && proposed.case.disposition !== 'act' &&
     isUnboundRecurrenceCandidate(proposed) &&
@@ -676,9 +701,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const withheldActionRecurrenceCases = liveGraphCases.filter((proposed) =>
     proposed.case.disposition === 'act' &&
     isUnboundRecurrenceCandidate(proposed) &&
-    !authorizedActionRefs.has(proposed.case.caseRef));
+    !authorizedActionRefs.has(proposed.case.caseRef) &&
+    !coveredByReplayedConsistencyStop(proposed));
   const recurrenceOnlyCases = [
-    ...escalationCases.filter(isUnboundRecurrenceCandidate),
+    ...escalationCases.filter((proposed) => isUnboundRecurrenceCandidate(proposed) && !replaysPriorEscalationStop(proposed)),
     ...blockedOrdinaryRecurrenceCases,
     ...withheldActionRecurrenceCases,
   ];
@@ -688,10 +714,19 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     graph: { ...graph.graph, cases: [...ordinaryCases, ...recurrenceOnlyCases] }, recordedAt, generateId,
     attemptedCaseIds,
     recurrenceOnlyCaseRefs: new Set(recurrenceOnlyCases.map((proposed) => proposed.case.caseRef)),
+    // This lap's own stops are re-written below, so absence from the graph is
+    // no evidence against them: deterministic ids, plus prior stops a replay
+    // re-proposes by content (an unbound stop's id is generated).
     retainOpenCaseIds: new Set([
       ...escalationCases.flatMap((proposed) => proposed.case.existingCaseId === undefined ? []
         : [boundDecisionStopId(input.aggregate.lapId, proposed.case.existingCaseId)]),
       ...(blockedConsistency === undefined ? [] : [consistencyStopId(input.aggregate.lapId)]),
+      ...priorOpenStops.filter((record) =>
+        escalationCases.some((proposed) => proposed.case.disposition === 'escalate' &&
+          record.escalation?.owner === proposed.case.escalation?.owner &&
+          record.rationale === proposed.case.rationale && sameSourceIds(record, proposed)) ||
+        replayingBlockedConsistencyStop && record.consistencyStop?.rationale === blockedConsistency?.rationale)
+        .map((record) => record.id),
     ]),
     // A mechanically complete lap saw every finding this join could report, so a
     // prior open non-action case absent from it is decided by that absence — the
@@ -786,6 +821,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         proposed.sources.some((source) => source.sourceId === sourceId)))
         ? escalationCases.find(coversBlockedSource)
         : undefined);
+  // A replayed stop is no transition, so it gets no lifecycle occurrence; a
+  // newly written synthetic stop is one, though no caseRef names it (D12).
+  const replayedStopIds = new Set<string>();
+  const newSyntheticStopIds: string[] = [];
   for (const proposed of escalationCases) {
     // A bound owner cannot also be the new decision stop: persistence must be
     // able to resolve it atomically before opening its replacement.
@@ -803,13 +842,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         sources: proposed.sources.map((source) => ({ sourceId: source.sourceId, outcome: source.outcome, recordedAt })),
         effect: { kind: 'none' }, escalation: proposed.case.escalation!,
         ...(ownsBlockedConsistency ? { consistencyStop: blockedConsistency } : {}),
+        ...(proposed.case.distinctFrom?.length ? { distinctFrom: proposed.case.distinctFrom } : {}),
       },
     });
-    if (!persistedStop.ok) return fail(`decision stop ${persistedStop.reason}`, persistedStop.reason === 'rejected-transition'
-      ? { failureKind: 'rejected-transition', caseIds: persistedStop.caseIds, sourceIds: persistedStop.sourceIds }
-      : persistedStop.reason === 'malformed-state'
-        ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
-        : undefined);
+    if (!persistedStop.ok) return fail(`decision stop ${persistedStop.reason}`, decisionStopFailureEvidence(persistedStop));
+    if (persistedStop.status === 'already-persisted') replayedStopIds.add(persistedStop.caseId);
     for (const sourceId of proposedSourceIds) {
       if (blockedConsistencySourceIds.has(sourceId)) escalationCoveredBlockedSourceIds.add(sourceId);
     }
@@ -821,6 +858,12 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     const sources = graph.graph.sourceOutcomes
       .filter((source) => blockedConsistency.sourceIds.includes(source.sourceId) && !escalationCoveredBlockedSourceIds.has(source.sourceId))
       .map((source) => ({ sourceId: source.sourceId, outcome: source.outcome, recordedAt }));
+    // The synthetic stop is the new case for the rows it absorbs, so it
+    // persists their declared lineage (D6.2).
+    const syntheticSourceIds = new Set(sources.map((source) => source.sourceId));
+    const syntheticDistinctFrom = [...new Set(admitted
+      .filter((proposed) => proposed.sources.some((source) => syntheticSourceIds.has(source.sourceId)))
+      .flatMap((proposed) => proposed.case.distinctFrom ?? []))];
     if (sources.length > 0) {
       const persistedStop = await persistBuildReviewDecisionStop({
         store,
@@ -828,13 +871,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
           id: consistencyStopId(input.aggregate.lapId), domain: 'build_review', disposition: 'escalate', priority: 'high',
           rationale: blockedConsistency.rationale, confidence: 'high', resolution: 'open', sources,
           effect: { kind: 'none' }, consistencyStop: blockedConsistency,
+          ...(syntheticDistinctFrom.length === 0 ? {} : { distinctFrom: syntheticDistinctFrom }),
         },
       });
-      if (!persistedStop.ok) return fail(`blocked consistency stop ${persistedStop.reason}`, persistedStop.reason === 'rejected-transition'
-        ? { failureKind: 'rejected-transition', caseIds: persistedStop.caseIds, sourceIds: persistedStop.sourceIds }
-        : persistedStop.reason === 'malformed-state'
-          ? { failureKind: 'persisted-malformed', caseIds: [], sourceIds: [] }
-          : undefined);
+      if (!persistedStop.ok) return fail(`blocked consistency stop ${persistedStop.reason}`, decisionStopFailureEvidence(persistedStop));
+      if (persistedStop.status === 'persisted') newSyntheticStopIds.push(persistedStop.caseId);
       supersededDecisionStopCaseIds.push(...persistedStop.supersededCaseIds);
       supersededDecisionStopEffects.push(...persistedStop.supersededEffects);
     }
@@ -848,8 +889,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // case absent from this lap's admitted graph is resolved by reconciliation
   // and named by no `caseRef`, so iterating the ref map alone changed durable
   // state with nothing on the event spine.
-  for (const caseId of [...caseIdsByRef.values(), ...reconciled.resolvedAbsentCaseIds, ...supersededDecisionStopCaseIds]) {
-    if (emittedCaseIds.has(caseId)) continue;
+  for (const caseId of [...caseIdsByRef.values(), ...reconciled.resolvedAbsentCaseIds, ...supersededDecisionStopCaseIds, ...newSyntheticStopIds]) {
+    if (emittedCaseIds.has(caseId) || replayedStopIds.has(caseId)) continue;
     emittedCaseIds.add(caseId);
     const record = reconciledCasesById.get(caseId);
     if (!record) return fail(`reconciled case ${caseId} is unavailable`);
