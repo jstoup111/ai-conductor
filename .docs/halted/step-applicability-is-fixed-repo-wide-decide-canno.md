@@ -1,22 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-04T21:49:30.893Z
+Status: halted
 Slug: step-applicability-is-fixed-repo-wide-decide-canno
-Class: plan-gap
-Halting step: build
-Phase: BUILD
+Class: needs-human
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-step-applicability-is-fixed-repo-wide-decide-canno
-Head SHA: 4eb45cdd78241c60c5c6064fc333d4f2bd95e8bf
-Halted at: 2026-10-04T14:29:42.286Z
+Head SHA: 6e442b3312f9568ce5286d1cbd933b03bfddea64
+Halted at: 2026-10-04T23:51:40.014Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Plan gap: task 6, Done when check 2 cannot be satisfied under the approved plan.
-Check: The metrics listener increments one counter per applicability event whose labels are limited to event type, step, and cause or prior status, as asserted in `test/engine/otel/metrics-listener.test.ts`.
-Reason: Task 6 requires a new applicability counter and recorder projection in src/conductor/src/engine/otel/metrics.ts to emit the specified event-type/step/cause-or-priorStatus labels. That production file is not declared in Task 6, and no existing MetricsRecorder instrument can represent those labels.
+Validation group "prd_audit" halted: needs human DECIDE — AB-A9 (architectural-clarity: The approved artifacts contradict each other, and the two gates are now cycling. ADR D7 says the 'prior outcome stands', and as-built reads that as forbidding dispatch of a refused failed/in_progress/stale step (conductor.ts:7755-7851, 7970-7976). Task 12 step 3 says refusal 'continues the normal dispatch path', and prd-audit grades S8.4 PASS on exactly that fall-through (runner re-entered, test :171). The prior lap removed the `continue` to satisfy prd-audit, and re-adding it would re-fail S8.4. A human must decide whether a refused non-pending step is frozen at its prior status or retried by normal dispatch with only the skip suppressed. Then ADR D7 or Task 12 must be amended to agree.)
 ```
