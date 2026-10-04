@@ -1,7 +1,7 @@
-// Covers: task:2
+// Covers: task:2, task:10
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -46,6 +46,42 @@ const onlyBuildReview: StepDefinition[] = [{
   name: 'build_review', label: 'build review', phase: 'BUILD', enforcement: 'gating',
   prerequisites: [], skippableForTiers: [], isCheckpoint: false,
 }];
+
+const wideningFeature = { version: 'v1' as const, repository: 'acme/conductor', feature: 'rebase-fence' };
+
+async function writeOverScopeOffer(projectRoot: string): Promise<void> {
+  await writeFile(join(projectRoot, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+    version: 'v2',
+    feature: wideningFeature,
+    cases: [],
+    prdWideningCases: [{
+      id: 'case-nc-1',
+      domain: 'prd_widening',
+      offeredCriterion: 'NC.1',
+      originalSources: [{ sourceId: 'prd-audit:NC.1', snapshot: 'Visible behavior outside the approved plan.' }],
+      currentSources: [{ sourceId: 'prd-audit:NC.1', snapshot: 'Visible behavior outside the approved plan.', recordedAt: '2026-10-04T00:00:00.000Z' }],
+      relationships: [],
+    }],
+    suppressions: [],
+  }));
+}
+
+async function writeClearedAccept(projectRoot: string): Promise<string> {
+  const cleared = [
+    'Operator decision',
+    '',
+    '```json over-scope-decisions',
+    JSON.stringify([{
+      criterion: 'NC.1',
+      summary: 'Visible behavior outside the approved plan.',
+      decision: 'accept',
+      rationale: 'Operator decision.',
+    }]),
+    '```',
+  ].join('\n');
+  await writeFile(join(projectRoot, '.pipeline', 'HALT.cleared'), cleared);
+  return cleared;
+}
 
 describe('Conductor resume rebase-operation fence', () => {
   let projectRoot: string;
@@ -216,5 +252,39 @@ describe('Conductor resume rebase-operation fence', () => {
       /outstanding prd_audit repair|preserved build_review without its replay-bound authority|rebase transition record is malformed/,
     );
     await expect(readFile(join(projectRoot, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
+  it.each([
+    ['a recorded accept', async () => {
+      await writeOverScopeOffer(projectRoot);
+      return writeClearedAccept(projectRoot);
+    }, ['NC.1', 'recorded as accept', 'reconcile it before publication']],
+    ['a pending offer', async () => {
+      await writeOverScopeOffer(projectRoot);
+      return undefined;
+    }, ['NC.1', 'awaiting a decision', 'ai-conductor halt clear']],
+    ['no offer or decision', async () => undefined, []],
+    ['an unreadable decision store', async () => {
+      await writeOverScopeOffer(projectRoot);
+      await writeFile(join(projectRoot, '.pipeline', 'accepted-widenings.json'), '{not json');
+      return undefined;
+    }, ['recorded decision state could not be read']],
+  ])('adds decision context to an integrity halt with %s without changing HALT.cleared', async (_name, arrange, expected) => {
+    await writeAppliedRebase({ preserved: ['build_review'], invalidated: ['build_review'] });
+    await writeVerdict(projectRoot, 'build_review', { satisfied: true, checkedAt: 100 });
+    const clearedBefore = await arrange();
+
+    await expect(resume(successfulRunner)).resolves.toEqual([]);
+
+    const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('rebase transition record is malformed or inconsistent; reconcile it before publication');
+    for (const fragment of expected) expect(halt).toContain(fragment);
+    if (expected.length === 0) {
+      expect(halt).toBe('rebase transition record is malformed or inconsistent; reconcile it before publication\n');
+    }
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    if (clearedBefore !== undefined) {
+      await expect(readFile(join(projectRoot, '.pipeline', 'HALT.cleared'), 'utf8')).resolves.toBe(clearedBefore);
+    }
   });
 });

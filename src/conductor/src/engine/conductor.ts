@@ -25,6 +25,7 @@ import {
   writeHaltMarker,
 } from './halt-marker.js';
 import { findDocumentationDelivery } from './documentation-delivery.js';
+import { renderRebaseFenceDecisionNote } from './rebase-fence-decision-note.js';
 import type { BuildReviewRepairProvenance } from './build-review-inputs.js';
 import {
   buildReviewConfidenceFloors,
@@ -7116,7 +7117,11 @@ export class Conductor {
           : rebaseClassification.reason === 'missing-authority'
             ? `rebase transition preserved ${rebaseClassification.gate} without its replay-bound authority`
             : `rebase transition still has an outstanding ${rebaseClassification.gate} repair or re-verification`;
-        await this.writeHaltMarker(`${rebaseBlocker}\n`, 'needs-human');
+        const decisionNote = await renderRebaseFenceDecisionNote(this.projectRoot);
+        await this.writeHaltMarker(
+          `${rebaseBlocker}${decisionNote === '' ? '' : `\n${decisionNote}`}\n`,
+          'needs-human',
+        );
         return;
       }
       startIndex = this.findResumeIndex(state, steps);
