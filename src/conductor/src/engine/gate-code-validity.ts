@@ -323,9 +323,10 @@ function verdictRunIdentitySidecar(gate: StepName): string | undefined {
  * Answers whether a SHIP-tail gate's verdict was produced by `expectedRunId`.
  *
  * A valid engine stamp is authoritative: a matching stamp is current and a
- * different stamp is a typed stale identity. Missing, malformed, or legacy
- * sidecars deliberately remain `unstamped`, so callers retain their existing
- * mtime fallback unchanged.
+ * different stamp is a typed stale identity. PRD audit identity is retained
+ * even with code-validity preservation disabled; missing, malformed, or
+ * legacy sidecars for other gates deliberately remain `unstamped`, so callers
+ * retain their existing mtime fallback unchanged.
  */
 export async function verdictProducedByRun(
   dir: string,
@@ -333,13 +334,12 @@ export async function verdictProducedByRun(
   expectedRunId: string | undefined,
   config?: Pick<HarnessConfig, 'gate_code_validity'>,
 ): Promise<VerdictRunIdentity> {
-  if (!resolveGateCodeValidityConfig(config).enabled) return { state: 'unstamped' };
   if (!expectedRunId) return { state: 'unstamped' };
 
   if (gate === 'prd_audit') {
     const stored = await readPrdAuditVerdict(dir);
     if (stored.kind !== 'present') return { state: 'unstamped' };
-    if (stored.value.codeStamp !== null) {
+    if (resolveGateCodeValidityConfig(config).enabled && stored.value.codeStamp !== null) {
       const validity = await gateVerdictStillValid(
         { projectRoot: dir, git: makeGitRunner(dir) },
         'prd_audit',
@@ -357,6 +357,8 @@ export async function verdictProducedByRun(
       ? { state: 'match', runId: stored.value.attemptId }
       : { state: 'stale-run-identity', expectedRunId, foundRunId: stored.value.attemptId };
   }
+
+  if (!resolveGateCodeValidityConfig(config).enabled) return { state: 'unstamped' };
 
   const sidecar = verdictRunIdentitySidecar(gate);
   if (!sidecar) return { state: 'unstamped' };

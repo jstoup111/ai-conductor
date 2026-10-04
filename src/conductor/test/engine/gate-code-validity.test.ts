@@ -266,7 +266,7 @@ describe('verdictProducedByRun', () => {
     });
   });
 
-  it('returns unstamped when gate-code-validity is disabled, even for a matching sidecar', async () => {
+  it('keeps typed PRD attempt identity when gate-code-validity is disabled', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'verdict-run-identity-'));
     scratches.push(dir);
     await writePrdAuditIdentity(dir, 'run-current');
@@ -275,7 +275,7 @@ describe('verdictProducedByRun', () => {
       verdictProducedByRun(dir, 'prd_audit', 'run-current', {
         gate_code_validity: { enabled: false },
       }),
-    ).resolves.toEqual({ state: 'unstamped' });
+    ).resolves.toEqual({ state: 'match', runId: 'run-current' });
   });
 });
 

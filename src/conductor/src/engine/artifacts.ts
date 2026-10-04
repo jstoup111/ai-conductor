@@ -2523,15 +2523,15 @@ async function writeGateCodeStamp(
 
 /**
  * Engine-stamped run identity takes precedence over the mtime floor for the
- * three SHIP-tail verdict predicates. Legacy and kill-switched callers retain
- * their existing mtime-only behavior.
+ * three SHIP-tail verdict predicates. The PRD audit keeps attempt identity
+ * even when code-validity preservation is disabled; other kill-switched
+ * callers retain their existing mtime-only behavior.
  */
 async function completionVerdictRunIdentity(
   dir: string,
   step: StepName,
   ctx: CompletionContext,
 ): Promise<VerdictRunIdentity> {
-  if (!resolveGateCodeValidityConfig(ctx.config).enabled) return { state: 'unstamped' };
   return verdictProducedByRun(dir, step, ctx.attemptRunId, ctx.config);
 }
 
@@ -2565,16 +2565,16 @@ export interface PrdAuditVerdictIdentity {
   codeStampInvalidated: boolean;
   /** The code-validity decision that invalidated the stamp, when one was checked. */
   codeStampValidity?: 'preserve' | 'rerun';
-  /** A non-preservable verdict belongs to another dispatch. */
+  /** A verdict from another dispatch was not preserved by a checked stamp. */
   staleRunIdentity: boolean;
 }
 
 /**
  * The sole current-evidence decision for typed PRD verdict consumers.
  *
- * A non-null stamp is evaluated once before attempt identity.  This preserves
- * a surface miss across attempts, while making every non-preservable stamp
- * unavailable to completion and routing readers alike.
+ * A non-null stamp checked during reuse can preserve a surface miss across
+ * attempts. A dispatch handshake never consults that reuse decision: its
+ * result must belong to the dispatch that just settled.
  */
 export type ReadCurrentPrdAuditVerdictResult =
   | { kind: 'absent'; reason: string }
@@ -2589,10 +2589,10 @@ export async function prdAuditVerdictIdentity(
 ): Promise<PrdAuditVerdictIdentity> {
   let codeStampStillValid = false;
   let codeStampValidity: 'preserve' | 'rerun' | undefined;
-  const staleRunIdentity =
+  const attemptMismatch =
     input.attemptRunId !== undefined && verdict.attemptId !== input.attemptRunId;
   if (
-    (!input.skipCodeValidity || staleRunIdentity) &&
+    !input.skipCodeValidity &&
     verdict.codeStamp !== null &&
     resolveGateCodeValidityConfig(input.config).enabled
   ) {
@@ -2609,7 +2609,7 @@ export async function prdAuditVerdictIdentity(
     codeStampStillValid,
     codeStampInvalidated,
     ...(codeStampValidity === undefined ? {} : { codeStampValidity }),
-    staleRunIdentity: codeStampInvalidated && staleRunIdentity,
+    staleRunIdentity: attemptMismatch && !codeStampStillValid,
   };
 }
 

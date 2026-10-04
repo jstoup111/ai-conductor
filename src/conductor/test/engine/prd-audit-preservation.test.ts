@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { checkStepCompletion, classifyPrdAuditGaps } from '../../src/engine/artifacts.js';
-import { gateVerdictStillValid } from '../../src/engine/gate-code-validity.js';
+import { gateVerdictStillValid, verdictProducedByRun } from '../../src/engine/gate-code-validity.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import {
@@ -90,11 +90,12 @@ function completionContext(
   root: string,
   git: ReturnType<typeof makeGitRunner>,
   attemptRunId = 'resume-run',
+  config = { gate_code_validity: { enabled: true } },
 ) {
   return {
     attemptRunId,
     sessionStartedAt: Date.now(),
-    config: { gate_code_validity: { enabled: true } },
+    config,
     git,
     getHeadSha: async () => (await git(['rev-parse', 'HEAD'])).stdout.trim(),
     projectRoot: root,
@@ -119,6 +120,45 @@ describe('typed PRD-audit preservation', () => {
     expect(completion).toMatchObject({ done: true });
     expect(completion.verdictFreshness).toMatchObject({ outcome: 'preserved_surface_miss' });
     expect(await readFile(join(fixture.root, PRD_AUDIT_VERDICT_PATH), 'utf8')).toBe(originalArtifact);
+  });
+
+  it('rejects a fresh prior-attempt PASS when code-validity preservation is disabled', async () => {
+    const fixture = await repository();
+    const reviewed = await commit(fixture, { 'src/feature.ts': 'export const feature = true;\n' }, 'feat: reviewed feature');
+    const disabled = { gate_code_validity: { enabled: false } };
+    const sessionStartedAt = Date.now() - 1_000;
+    await writeTypedPass(fixture.root, reviewed, 'prior-review-run');
+
+    await expect(checkStepCompletion(
+      fixture.root,
+      'prd_audit',
+      { ...completionContext(fixture.root, fixture.git, 'current-review-run', disabled), sessionStartedAt },
+    )).resolves.toMatchObject({ done: false, retrySignal: 'stale-run-identity' });
+    await expect(classifyPrdAuditGaps(
+      fixture.root, sessionStartedAt, 'current-review-run', disabled, undefined, fixture.git,
+    )).resolves.toMatchObject({ kind: 'invalid-evidence' });
+    await expect(verdictProducedByRun(
+      fixture.root, 'prd_audit', 'current-review-run', disabled,
+    )).resolves.toMatchObject({
+      state: 'stale-run-identity',
+      expectedRunId: 'current-review-run',
+      foundRunId: 'prior-review-run',
+    });
+  });
+
+  it('rejects a prior-attempt null-stamp verdict with code validity enabled', async () => {
+    const fixture = await repository();
+    await commit(fixture, { 'src/feature.ts': 'export const feature = true;\n' }, 'feat: reviewed feature');
+    await writeTypedPass(fixture.root, null, 'prior-review-run');
+
+    await expect(checkStepCompletion(
+      fixture.root,
+      'prd_audit',
+      completionContext(fixture.root, fixture.git, 'current-review-run'),
+    )).resolves.toMatchObject({ done: false, retrySignal: 'stale-run-identity' });
+    await expect(classifyPrdAuditGaps(
+      fixture.root, undefined, 'current-review-run', { gate_code_validity: { enabled: true } }, undefined, fixture.git,
+    )).resolves.toMatchObject({ kind: 'invalid-evidence' });
   });
 
   it.each(['.docs/stories/active.md', '.docs/specs/active.md'])(
