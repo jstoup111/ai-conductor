@@ -200,6 +200,7 @@ Ordinary test runs stop inheriting the operator's user config, and OTLP network 
 - The guard derives the smoke tier from the `include` globs exported by `vitest.smoke.config.ts`, not from a hand-kept list, and passes on the current tree.
 - The guard's scanner, run over a temp tree containing a non-smoke test file that references the opt-in variable, fails naming that file's path.
 - The guard's exemption list is an explicit in-file array containing exactly `test/engine/otel/export-refusal.test.ts` and `test/engine/otel/transport.test.ts`; both files reference the opt-in variable without assigning it, and the scanner passes on the current tree with the list in place, as asserted by the guard's self-check case.
+- When the default test suite runs, the guard itself runs: the path `test/otel-smoke-opt-in-guard.test.ts` matches `vitest.config.ts`'s `test.include` globs (`test/**/*.test.ts`) and matches none of its `test.exclude` patterns, and a guard case that fails on the current tree fails the whole default suite run, as asserted by a case that evaluates the default config's include and exclude against the guard's own path.
 - No file loaded by the default, e2e, or acceptance tiers, including `test/setup.ts`, assigns the opt-in variable, as asserted by the guard passing on the current tree.
 
 **Files:** src/conductor/test/otel-smoke-opt-in-guard.test.ts
