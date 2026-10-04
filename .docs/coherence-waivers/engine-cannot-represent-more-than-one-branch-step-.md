@@ -31,5 +31,12 @@ never be set. Each waived gap is deferred work with a named home, and none is dr
   base exists. The contract is fixed in ADR decision 11: one producer, the parent is the previous
   declared position, each site keeps its own failure policy, and a missing parent fails closed.
 
-Follow-up for the operator: add the deferred items to the outcomes of #2942 and #2945 so each is
-tracked there.
+Tracking: each deferred item is recorded under a "Carried from #2940" heading in the Desired
+outcome section of its destination ticket:
+- #2942: active-child default, base override, per-child evidence and remediation cases, halt records
+  at the leaf;
+- #2945: leaf-owned records, child-branch teardown;
+- #2941: the configurable slice bound.
+
+Two follow-up intakes from this DECIDE pass are #2981 (a land dry run) and #2982 (amendment headers
+that `coverage_binding` cannot read).
