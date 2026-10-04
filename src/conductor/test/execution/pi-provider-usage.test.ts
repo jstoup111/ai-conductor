@@ -10,6 +10,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { ProviderAttemptEvent } from '../../src/types/index.js';
+import { classifyMetering } from '../../src/engine/metering.js';
 
 const invokeOptions: InvokeOptions = {
   prompt: 'Implement the requested change.',
@@ -75,6 +76,55 @@ async function providerAttemptFor(stdout: string, exitCode = 0): Promise<{
 }
 
 describe('PiProvider usage', () => {
+  it('uses Pi-reported cost when every token-bearing message is priced', async () => {
+    const stdout = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result.tokenUsage).toMatchObject({ costSource: 'provider' });
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.0035, 12);
+    expect(classifyMetering(result.tokenUsage)).toBe('fully-metered');
+  });
+
+  it.each([
+    ['a negative cost', -1],
+    ['a non-numeric cost', 'NaN'],
+  ])('leaves cost absent when a token-bearing message has %s', async (_name, invalidCost) => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const stdout = workedStream.replaceAll('"total":0.0021', `"total":${JSON.stringify(invalidCost)}`);
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result.tokenUsage).not.toHaveProperty('costUsd');
+    expect(result.tokenUsage).not.toHaveProperty('costSource');
+  });
+
+  it('skips a zero-token message when summing Pi-reported cost', async () => {
+    const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
+    const zeroTokenTurn = terminalAssistantMessage({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: { total: 0 },
+    });
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({
+      stdout: `${workedStream}\n${zeroTokenTurn}`,
+      stderr: '',
+      exitCode: 0,
+    });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result.tokenUsage).toMatchObject({ costSource: 'provider' });
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.0035, 12);
+  });
+
   it('sums only terminal assistant message usage without counting partial or repeated events', async () => {
     const stdout = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });

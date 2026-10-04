@@ -168,6 +168,7 @@ type PiJsonEvent = {
       cacheRead?: unknown;
       cacheWrite?: unknown;
       reasoning?: unknown;
+      cost?: { total?: unknown };
     };
   };
 };
@@ -224,6 +225,9 @@ export function parsePiJsonl(stdout: string): {
   let terminalAssistantErrorMessage: string | undefined;
   let assistantTurns = 0;
   let finalStructuredResult: unknown;
+  let providerCostUsd = 0;
+  let hasTokenBearingMessage = false;
+  let allTokenBearingMessagesPriced = true;
 
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -247,6 +251,20 @@ export function parsePiJsonl(stdout: string): {
         const { input, output: outputTokens, cacheRead, cacheWrite, reasoning } = event.message.usage;
         if (typeof input === 'number' && Number.isFinite(input)
           && typeof outputTokens === 'number' && Number.isFinite(outputTokens)) {
+          const hasNonZeroTokens = input !== 0
+            || outputTokens !== 0
+            || (typeof cacheRead === 'number' && Number.isFinite(cacheRead) && cacheRead !== 0)
+            || (typeof cacheWrite === 'number' && Number.isFinite(cacheWrite) && cacheWrite !== 0)
+            || (typeof reasoning === 'number' && Number.isFinite(reasoning) && reasoning !== 0);
+          if (hasNonZeroTokens) {
+            hasTokenBearingMessage = true;
+            const cost = event.message.usage.cost?.total;
+            if (typeof cost === 'number' && Number.isFinite(cost) && cost > 0) {
+              providerCostUsd += cost;
+            } else {
+              allTokenBearingMessagesPriced = false;
+            }
+          }
           const previous = tokenUsage;
           tokenUsage = {
             input: (previous?.input ?? 0) + input,
@@ -272,7 +290,13 @@ export function parsePiJsonl(stdout: string): {
     || tokenUsage.output !== 0
     || tokenUsage.cacheRead !== 0
     || tokenUsage.cacheCreation !== 0)) {
-    tokenUsage = { ...tokenUsage, numTurns: assistantTurns };
+    tokenUsage = {
+      ...tokenUsage,
+      numTurns: assistantTurns,
+      ...(hasTokenBearingMessage && allTokenBearingMessagesPriced
+        ? { costUsd: providerCostUsd, costSource: 'provider' as const }
+        : {}),
+    };
   } else {
     tokenUsage = undefined;
   }
