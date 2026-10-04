@@ -4,12 +4,6 @@ spec_hash: fba05815fcf22a9d09e4a468e86800641f675d1925cddaec46b5827afa30ebd2
 pr: https://github.com/jstoup111/ai-conductor/pull/2984
 shipped: 2026-10-04
 engine_version: 20261004T174827Z-4925f7bb7cbf
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.1
-    summary: "src/conductor/test/integration/engineer-emission.test.ts:44 and src/conductor/test/engine/daemon-runner.test.ts:173 — test fixtures isolate engineer-store state, which lies outside the user-config/OTLP boundary; test-only"
-    accepted: true
 ---
 
 ## Cost
@@ -29,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","3fedc2c5-4162-4b60-9c85-a982702ec40f","lifecycle-step","architecture_review_as_built"],step:execution\u0000["timing-rollup","persisted-ledger","7c149664-4462-47b4-87f2-6a030216d226","lifecycle-step","prd_audit"],step:execution\u0000["timing-rollup","persisted-ledger","97df56af-5104-44d9-9f1d-ff32afdc5eed","lifecycle-step","finish"]
+reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","3fedc2c5-4162-4b60-9c85-a982702ec40f","lifecycle-step","architecture_review_as_built"],step:execution\u0000["timing-rollup","persisted-ledger","7c149664-4462-47b4-87f2-6a030216d226","lifecycle-step","prd_audit"]
 
 ## Build Review
 laps_to_pass: 1
