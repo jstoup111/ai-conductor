@@ -85,9 +85,9 @@ describe('Pi cost rollup integration', () => {
       step: 'build',
       configuredProviders: ['pi'],
       preferredProvider: 'pi',
-      modelOverride: options.model,
+      ...(options.model === undefined ? {} : { modelOverride: options.model }),
       runtimes: new ProviderRuntimeSet([runtime('pi', pi)]),
-      sessions: new ProviderSessionScope(() => undefined),
+      sessions: new ProviderSessionScope(() => 'pi-cost-rollup-session'),
       options: {
         prompt: 'Build the feature.',
         cwd: worktreeDir,
