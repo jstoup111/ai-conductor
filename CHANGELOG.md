@@ -41,6 +41,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators clear halted features through an audited command that records authorization before resuming dispatch. ([implementation PR #2951](https://github.com/jstoup111/ai-conductor/pull/2951)).
 - Operators receive a guided monitor that queues halted features and opens resolution sessions. ([implementation PR #2818](https://github.com/jstoup111/ai-conductor/pull/2818)).
 - Users see candidate file paths when overlap scanning finds no overlaps. ([implementation PR #2978](https://github.com/jstoup111/ai-conductor/pull/2978)).
+- Pi runs report token usage and costs in harness telemetry. ([implementation PR #2979](https://github.com/jstoup111/ai-conductor/pull/2979)).
 
 ### Changed
 
