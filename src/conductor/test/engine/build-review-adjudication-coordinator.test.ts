@@ -1209,6 +1209,86 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
   });
 
+  it('carries blocked consistency on exactly one stop when partial escalations collectively cover it', async () => {
+    const root = await projectRoot();
+    const [firstSource, secondSource] = mixedSources.map(buildReviewAdjudicationSourceId);
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [
+        { sourceId: firstSource, outcome: 'escalate', caseRef: 'first-stop' },
+        { sourceId: secondSource, outcome: 'escalate', caseRef: 'second-stop' },
+      ],
+      cases: [
+        { caseRef: 'first-stop', disposition: 'escalate', priority: 'high', confidence: 'high', rationale: 'Architecture must decide the first source.', effect: { kind: 'none' }, escalation: { owner: 'architecture' } },
+        { caseRef: 'second-stop', disposition: 'escalate', priority: 'high', confidence: 'high', rationale: 'Product must decide the second source.', effect: { kind: 'none' }, escalation: { owner: 'product' } },
+      ],
+      consistency: { verdict: 'blocked', sourceIds: [firstSource, secondSource], caseRefs: ['first-stop', 'second-stop'], rationale: 'The two sources remain inconsistent.' },
+    } as const satisfies RemediationCaseJudgement;
+    const ids = ['stop-first', 'stop-second'];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: mixedAggregate,
+      generateId: () => ids.shift()!, emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'halt' });
+    const persisted = await new RemediationCaseStore(root, feature).read();
+    if (!persisted.ok) throw new Error(persisted.reason);
+    expect(persisted.state.cases.map((record) => record.id).sort()).toEqual(['stop-first', 'stop-second']);
+    expect(persisted.state.cases.filter((record) => record.consistencyStop !== undefined)).toEqual([
+      expect.objectContaining({ id: 'stop-first', consistencyStop: { sourceIds: [firstSource, secondSource], rationale: 'The two sources remain inconsistent.' } }),
+    ]);
+    const completed = events.find((event) => event.type === 'remediation_adjudication_completed');
+    expect(completed).toMatchObject({ decisionStops: expect.arrayContaining([
+      expect.objectContaining({ caseId: 'stop-first', rationale: 'The two sources remain inconsistent.' }),
+    ]) });
+  });
+
+  it('replays a bound escalation in the same lap without conflicting on its deterministic stop id', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-bound-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The current owner remains unresolved.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-bound-owner', kind: 'action', status: 'reserved' },
+      }],
+    });
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'bound-stop' }],
+      cases: [{
+        caseRef: 'bound-stop', existingCaseId: 'case-bound-owner', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'Architecture must decide this source.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['bound-stop'], rationale: 'The escalation is consistent.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-04T00:00:00.000Z'));
+      await expect(coordinateBuildReviewAdjudication(input(root, async () => judgement)))
+        .resolves.toMatchObject({ ok: true, route: 'halt' });
+      vi.setSystemTime(new Date('2026-10-04T00:05:00.000Z'));
+      const events: RemediationCaseLifecycleEvent[] = [];
+      const replay = await coordinateBuildReviewAdjudication({
+        ...input(root, async () => judgement), emit: async (event) => { events.push(event); },
+      });
+      expect(replay).toMatchObject({ ok: true, route: 'halt' });
+      expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
+    } finally {
+      vi.useRealTimers();
+    }
+    const persisted = await store.read();
+    if (!persisted.ok) throw new Error(persisted.reason);
+    expect(persisted.state.cases.filter((record) => record.id === 'decision-stop-lap-1-case-bound-owner')).toEqual([
+      expect.objectContaining({ resolution: 'open' }),
+    ]);
+  });
+
   it('replaces a bound escalation owner with a distinct decision-stop identity', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);

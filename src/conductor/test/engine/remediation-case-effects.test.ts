@@ -132,6 +132,36 @@ describe('remediation case effects', () => {
     ]);
   });
 
+  it('converges a same-lap replay of a deterministic stop written at a later time', async () => {
+    const store = await storeWith({ version: 'v1', feature, cases: [] });
+    const stopAt = (recordedAt: string): RemediationCaseRecord => ({
+      id: 'decision-stop-lap-1-bound-owner', domain: 'build_review', disposition: 'escalate', priority: 'high',
+      rationale: 'An owner decision is required.', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'current-source', outcome: 'escalate', recordedAt }],
+      effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+    });
+
+    await expect(persistBuildReviewDecisionStop({ store, record: stopAt('2026-10-03T00:00:00.000Z') }))
+      .resolves.toMatchObject({ ok: true, status: 'persisted' });
+    await expect(persistBuildReviewDecisionStop({ store, record: stopAt('2026-10-03T00:05:00.000Z') })).resolves.toEqual({
+      ok: true, status: 'already-persisted', caseId: 'decision-stop-lap-1-bound-owner', supersededCaseIds: [], supersededEffects: [],
+    });
+  });
+
+  it('still refuses a different stop under a persisted deterministic id', async () => {
+    const store = await storeWith({ version: 'v1', feature, cases: [] });
+    const stop: RemediationCaseRecord = {
+      id: 'decision-stop-lap-1-bound-owner', domain: 'build_review', disposition: 'escalate', priority: 'high',
+      rationale: 'An owner decision is required.', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'current-source', outcome: 'escalate', recordedAt: '2026-10-03T00:00:00.000Z' }],
+      effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+    };
+
+    await persistBuildReviewDecisionStop({ store, record: stop });
+    await expect(persistBuildReviewDecisionStop({ store, record: { ...stop, escalation: { owner: 'product' } } }))
+      .resolves.toEqual({ ok: false, reason: 'conflicting-case-id' });
+  });
+
   it('supersedes an explicitly bound owner whose historic sources do not overlap the decision stop', async () => {
     const store = await storeWith({ version: 'v1', feature, cases: [
       record({ id: 'bound-effect', kind: 'action', status: 'reserved' }, {

@@ -150,6 +150,15 @@ export interface BuildReviewAdjudicationCoordinatorInput {
   readonly emit?: (event: RemediationCaseLifecycleEvent) => void | Promise<void>;
 }
 
+/** Deterministic id of the stop replacing a bound owner, so a same-lap replay converges. */
+function boundDecisionStopId(lapId: string, existingCaseId: string): string {
+  return `decision-stop-${lapId}-${existingCaseId}`;
+}
+
+function consistencyStopId(lapId: string): string {
+  return `consistency-stop-${lapId}`;
+}
+
 export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudicationCoordinatorInput): Promise<BuildReviewAdjudicationCoordinatorResult> {
   const sources = projectBuildReviewAggregateSources(input.aggregate);
   if (!sources) return { ok: false, detail: 'invalid raw aggregate source projection' };
@@ -673,6 +682,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     graph: { ...graph.graph, cases: [...ordinaryCases, ...recurrenceOnlyCases] }, recordedAt, generateId,
     attemptedCaseIds,
     recurrenceOnlyCaseRefs: new Set(recurrenceOnlyCases.map((proposed) => proposed.case.caseRef)),
+    retainOpenCaseIds: new Set([
+      ...escalationCases.flatMap((proposed) => proposed.case.existingCaseId === undefined ? []
+        : [boundDecisionStopId(input.aggregate.lapId, proposed.case.existingCaseId)]),
+      ...(blockedConsistency === undefined ? [] : [consistencyStopId(input.aggregate.lapId)]),
+    ]),
     // A mechanically complete lap saw every finding this join could report, so a
     // prior open non-action case absent from it is decided by that absence — the
     // same evidence the exit paths settle on. Leaving it open let stale history
@@ -752,15 +766,28 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   }> = [];
   const blockedConsistencySourceIds = new Set(blockedConsistency?.sourceIds ?? []);
   const escalationCoveredBlockedSourceIds = new Set<string>();
+  // Exactly one escalation stop carries the blocked consistency verdict when
+  // the escalations cover its sources: one that covers them all, else the
+  // first contributor to a collective cover. Without an owner here the
+  // synthetic stop below has no uncovered sources left and the verdict would
+  // never reach durable state or the completion projection (ADR D12).
+  const coversBlockedSource = (proposed: typeof escalationCases[number]) =>
+    proposed.sources.some((source) => blockedConsistencySourceIds.has(source.sourceId));
+  const blockedConsistencyOwner = blockedConsistency === undefined ? undefined
+    : escalationCases.find((proposed) => blockedConsistency.sourceIds.every((sourceId) =>
+      proposed.sources.some((source) => source.sourceId === sourceId)))
+      ?? (blockedConsistency.sourceIds.every((sourceId) => escalationCases.some((proposed) =>
+        proposed.sources.some((source) => source.sourceId === sourceId)))
+        ? escalationCases.find(coversBlockedSource)
+        : undefined);
   for (const proposed of escalationCases) {
     // A bound owner cannot also be the new decision stop: persistence must be
     // able to resolve it atomically before opening its replacement.
     const caseId = proposed.case.existingCaseId === undefined
       ? generateId()
-      : `decision-stop-${input.aggregate.lapId}-${proposed.case.existingCaseId}`;
+      : boundDecisionStopId(input.aggregate.lapId, proposed.case.existingCaseId);
     const proposedSourceIds = new Set(proposed.sources.map((source) => source.sourceId));
-    const ownsBlockedConsistency = blockedConsistency !== undefined &&
-      [...blockedConsistencySourceIds].every((sourceId) => proposedSourceIds.has(sourceId));
+    const ownsBlockedConsistency = proposed === blockedConsistencyOwner;
     const persistedStop = await persistBuildReviewDecisionStop({
       store,
       ...(proposed.case.existingCaseId === undefined ? {} : { supersedeCaseIds: [proposed.case.existingCaseId] }),
@@ -792,7 +819,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       const persistedStop = await persistBuildReviewDecisionStop({
         store,
         record: {
-          id: `consistency-stop-${input.aggregate.lapId}`, domain: 'build_review', disposition: 'escalate', priority: 'high',
+          id: consistencyStopId(input.aggregate.lapId), domain: 'build_review', disposition: 'escalate', priority: 'high',
           rationale: blockedConsistency.rationale, confidence: 'high', resolution: 'open', sources,
           effect: { kind: 'none' }, consistencyStop: blockedConsistency,
         },

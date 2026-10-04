@@ -24,6 +24,12 @@ export interface ReconcileRemediationCasesInput {
   readonly foreignCaseIds?: readonly string[];
   /** Rows that need recurrence detection but remain owned by a separate writer. */
   readonly recurrenceOnlyCaseRefs?: ReadonlySet<string>;
+  /**
+   * Open cases this lap's own decision-stop writer re-produces under a
+   * deterministic id. Absence from the graph is not evidence against them: a
+   * same-lap replay must find them open and converge (ADR D11).
+   */
+  readonly retainOpenCaseIds?: ReadonlySet<string>;
 }
 
 export type RemediationCaseReconciliationRejection =
@@ -392,6 +398,7 @@ function reconcileState(
       && replacement.disposition !== 'act'
       && !referencedExisting.has(replacement.id)
       && input.resolveAbsentOpenNonActionCases
+      && !input.retainOpenCaseIds?.has(replacement.id)
       // Shared effect-status test (remediation-case-effects.ts): a reserved or
       // failed effect is durable unfinished evidence, never benign absence, so
       // it must not resolve into a terminal PASS.

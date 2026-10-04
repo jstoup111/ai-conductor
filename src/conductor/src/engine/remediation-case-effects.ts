@@ -88,7 +88,10 @@ function sameDecisionStop(left: RemediationCaseRecord, right: RemediationCaseRec
     JSON.stringify(left.consistencyStop) === JSON.stringify(right.consistencyStop) && left.sources.length === right.sources.length &&
     left.sources.every((source, index) => {
       const other = right.sources[index];
-      return other !== undefined && source.sourceId === other.sourceId && source.outcome === other.outcome && source.recordedAt === other.recordedAt;
+      // recordedAt is when this attempt wrote the stop, not what the stop is:
+      // a same-lap replay rebuilds the deterministic id with a fresh timestamp
+      // and must converge on the persisted stop (ADR D11).
+      return other !== undefined && source.sourceId === other.sourceId && source.outcome === other.outcome;
     });
 }
 
