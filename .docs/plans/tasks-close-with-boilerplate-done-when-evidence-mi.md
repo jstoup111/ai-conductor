@@ -131,7 +131,7 @@ Thirteen tasks make a `[test]`-tagged Done-when check close only on a verified t
 **Dependencies:** Task 5
 
 **Steps:**
-1. Write failing tests on a `Verify-only: yes` task with one tagged and one untagged check: unverified close completes; no evidence for the tagged check is refused; a verified tagged check lets the untagged check close by the prove-closed path.
+1. Write failing tests on a `Verify-only: yes` task with one tagged and one untagged check: unverified close completes; no evidence for the tagged check is refused naming only that check, and the untagged check still closes by the prove-closed path once the tagged check has evidence; a verified tagged check lets the untagged check close by the prove-closed path.
 2. Verify they fail (RED).
 3. Implement in `completeTaskDoneWhen`: under `verifyOnly`, still require a verified reference or an unverified close for `[test]` checks, and stamp untagged checks `verify-only` as today.
 4. Verify they pass (GREEN).
@@ -139,7 +139,7 @@ Thirteen tasks make a `[test]`-tagged Done-when check close only on a verified t
 
 **Done when:**
 - On a `Verify-only: yes` task, `conduct task done --unverified 1=<reason>` for its tagged check completes the task and records that check with source `unverified`, as asserted by the verify-only unverified test.
-- On a `Verify-only: yes` task, `conduct task done` with no evidence for its tagged check exits non-zero naming the check and leaves the task not completed, as asserted by the verify-only refusal test.
+- On a `Verify-only: yes` task with one tagged and one untagged check, `conduct task done` with no evidence for its tagged check exits non-zero naming the check and leaves the task not completed, and its refusal neither names the untagged check nor requires evidence for it; re-running the close with evidence for only the tagged check completes the task with the untagged check recorded with evidence `prove-closed` and source `verify-only`, as asserted by the verify-only refusal test.
 - On a `Verify-only: yes` task whose tagged check is closed with a verified reference, its untagged check is recorded with source `verify-only` without supplied evidence, as asserted by the verify-only prove-closed test.
 
 **Files:** `src/conductor/src/engine/task-progress.ts`, `src/conductor/test/engine/task-progress.test.ts`
