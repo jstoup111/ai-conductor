@@ -1,0 +1,16 @@
+{"type":"session","version":3,"id":"fixture-session","timestamp":"2026-10-02T00:00:00.000Z","cwd":"/fixture"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":"Implement it."}}
+{"type":"message_end","message":{"role":"user","content":"Implement it."}}
+{"type":"message_start","message":{"role":"assistant","provider":"openai","model":"gpt-5.6-luna","content":[{"type":"text","text":"First "}],"usage":{"input":120,"output":40,"cacheRead":300,"cacheWrite":50,"cost":{"total":0.0021}}}}
+{"type":"message_update","message":{"role":"assistant","provider":"openai","model":"gpt-5.6-luna","content":[{"type":"text","text":"First "}],"usage":{"input":60,"output":20,"cacheRead":150,"cacheWrite":25}}}
+{"type":"message_end","message":{"role":"assistant","provider":"openai","model":"gpt-5.6-luna","content":[{"type":"text","text":"First turn."}],"usage":{"input":120,"output":40,"cacheRead":300,"cacheWrite":50,"cost":{"total":0.0021}},"stopReason":"stop"}}
+{"type":"turn_end","message":{"role":"assistant","provider":"openai","model":"gpt-5.6-luna","content":[{"type":"text","text":"First turn."}],"usage":{"input":120,"output":40,"cacheRead":300,"cacheWrite":50}}}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"assistant","provider":"openai","model":"gpt-5.6-luna","content":[{"type":"text","text":"Second "}],"usage":{"input":80,"output":25,"cacheRead":400,"cacheWrite":0,"cost":{"total":0.0014}}}}
+{"type":"message_update","message":{"role":"assistant","provider":"openai","model":"gpt-5.6-luna","content":[{"type":"text","text":"Second "}],"usage":{"input":40,"output":12,"cacheRead":200,"cacheWrite":0}}}
+{"type":"message_end","message":{"role":"assistant","provider":"openai","model":"gpt-5.6-luna","content":[{"type":"text","text":"Second turn."}],"usage":{"input":80,"output":25,"cacheRead":400,"cacheWrite":0,"cost":{"total":0.0014}},"stopReason":"stop"}}
+{"type":"turn_end","message":{"role":"assistant","provider":"openai","model":"gpt-5.6-luna","content":[{"type":"text","text":"Second turn."}],"usage":{"input":80,"output":25,"cacheRead":400,"cacheWrite":0}}}
+{"type":"agent_end","messages":[{"role":"assistant","provider":"openai","model":"gpt-5.6-luna","content":[{"type":"text","text":"First turn."}],"usage":{"input":120,"output":40,"cacheRead":300,"cacheWrite":50}},{"role":"assistant","provider":"openai","model":"gpt-5.6-luna","content":[{"type":"text","text":"Second turn."}],"usage":{"input":80,"output":25,"cacheRead":400,"cacheWrite":0}}]}
+{"type":"agent_settled"}

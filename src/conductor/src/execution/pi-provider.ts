@@ -162,12 +162,12 @@ type PiJsonEvent = {
     content?: unknown;
     stopReason?: unknown;
     errorMessage?: unknown;
-  };
-  usage?: {
-    input?: unknown;
-    output?: unknown;
-    cacheRead?: unknown;
-    cacheWrite?: unknown;
+    usage?: {
+      input?: unknown;
+      output?: unknown;
+      cacheRead?: unknown;
+      cacheWrite?: unknown;
+    };
   };
 };
 
@@ -207,7 +207,7 @@ function terminalAssistantText(content: unknown): string {
     .join('');
 }
 
-/** Extract Pi's authoritative terminal assistant message and latest cumulative usage. */
+/** Extract Pi's authoritative terminal assistant message and sum its final per-message usage. */
 export function parsePiJsonl(stdout: string): {
   output: string;
   tokenUsage?: TokenUsage;
@@ -242,16 +242,20 @@ export function parsePiJsonl(stdout: string): {
           ? event.message.errorMessage
           : undefined;
       }
-      if ((event.type === 'message_update'
-        || (event.type === 'message_end' && event.message?.role === 'assistant')) && event.usage) {
-        const { input, output: outputTokens, cacheRead, cacheWrite } = event.usage;
+      if (event.type === 'message_end' && event.message?.role === 'assistant' && event.message.usage) {
+        const { input, output: outputTokens, cacheRead, cacheWrite } = event.message.usage;
         if (typeof input === 'number' && Number.isFinite(input)
           && typeof outputTokens === 'number' && Number.isFinite(outputTokens)) {
+          const previous = tokenUsage;
           tokenUsage = {
-            input,
-            output: outputTokens,
-            ...(typeof cacheRead === 'number' && Number.isFinite(cacheRead) ? { cacheRead } : {}),
-            ...(typeof cacheWrite === 'number' && Number.isFinite(cacheWrite) ? { cacheCreation: cacheWrite } : {}),
+            input: (previous?.input ?? 0) + input,
+            output: (previous?.output ?? 0) + outputTokens,
+            ...(typeof cacheRead === 'number' && Number.isFinite(cacheRead)
+              ? { cacheRead: (previous?.cacheRead ?? 0) + cacheRead }
+              : (previous?.cacheRead === undefined ? {} : { cacheRead: previous.cacheRead })),
+            ...(typeof cacheWrite === 'number' && Number.isFinite(cacheWrite)
+              ? { cacheCreation: (previous?.cacheCreation ?? 0) + cacheWrite }
+              : (previous?.cacheCreation === undefined ? {} : { cacheCreation: previous.cacheCreation })),
           };
         }
       }
