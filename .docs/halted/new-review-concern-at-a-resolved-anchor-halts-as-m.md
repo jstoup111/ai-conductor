@@ -1,20 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-10-04T13:40:36.953Z
+Status: halted
 Slug: new-review-concern-at-a-resolved-anchor-halts-as-m
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-new-review-concern-at-a-resolved-anchor-halts-as-m
-Head SHA: a2591a32fdb7387292825d60a20b6eecfe202a1b
-Halted at: 2026-10-04T10:11:18.494Z
+Head SHA: bb7c429e88b66026d43c4e81ac89d130fad0760a
+Halted at: 2026-10-05T10:12:57.911Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-rebase transition still has an outstanding prd_audit repair or re-verification
+build_review mechanical fault allowance exhausted: 3 of 3 shared faults consumed.
+Current lap lap-bb7c429e88b66026d43c4e81ac89d130fad0760a: testQuality closed cause malformed-artifact (invalid-provider-result: build_review grader invocation ended without a result.).
+1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap lap-bb7c429e88b66026d43c4e81ac89d130fad0760a --rubric testQuality --rationale "<rationale>".
+2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.
 ```
