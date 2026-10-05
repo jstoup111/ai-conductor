@@ -99,6 +99,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The daemon again finds merged specs once the committed `.docs` corpus grows past 32 MiB. Batched blob reads are now split to stay under the buffer cap. ([implementation PR #2961](https://github.com/jstoup111/ai-conductor/pull/2961)).
 - Daemon redispatch restores committed task progress and safely retries stale in-progress work. ([implementation PR #2964](https://github.com/jstoup111/ai-conductor/pull/2964)).
 - Over-scope halts now name `ai-conductor halt clear` as the clear operation, which preserves the operator's recorded decisions instead of leaving `rm` as the obvious (and destructive) choice. ([implementation PR #2970](https://github.com/jstoup111/ai-conductor/pull/2970)).
+- Parallel build-review graders no longer delete each other's provider scratch home, which caused spurious "grader ended without a result" failures and SandboxProvisionError halts. ([implementation PR #2996](https://github.com/jstoup111/ai-conductor/pull/2996)).
 
 ## Migration
 
