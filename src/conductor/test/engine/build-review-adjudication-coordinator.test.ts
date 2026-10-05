@@ -1,4 +1,4 @@
-// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-ar-ab-d9-3-1, task:rem-ar-ab-d9-3-2
+// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-ar-ab-d9-3-1, task:rem-ar-ab-d9-3-2, task:rem-as-built-rem-ar-ab-d6-9-1
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

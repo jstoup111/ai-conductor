@@ -1,4 +1,4 @@
-// Covers: task:7, task:19, task:35, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab4-1, task:rem-ar-ab-d9-3-2
+// Covers: task:7, task:19, task:35, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab4-1, task:rem-ar-ab-d9-3-2, task:rem-as-built-rem-ar-ab-d6-9-1
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -163,6 +163,7 @@ describe('remediation case effects', () => {
       { ...stop, sources: [{ ...stop.sources[0]!, outcome: 'acted' as const }] },
       { ...stop, sources: [{ ...stop.sources[0]!, sourceId: 'different-current-source' }] },
       { ...stop, escalation: { owner: 'product' as const } },
+      { ...stop, distinctFrom: ['resolved-owner'] },
     ]) {
       await expect(persistBuildReviewDecisionStop({ store, record: changed })).resolves.toEqual({
         ok: false, reason: 'conflicting-case-id', caseIds: ['decision-stop-lap-1-bound-owner'],
