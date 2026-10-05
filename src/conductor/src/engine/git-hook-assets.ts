@@ -67,6 +67,7 @@ resolve_long_option() {
 canon=()
 operands=()
 options_ended=false
+normalization_error=''
 add_metadata() {
   local metadata="$1" negated="$2" canonical arity negatable expands
   IFS='|' read -r canonical arity negatable expands <<< "$metadata"
@@ -96,9 +97,13 @@ normalize_options() {
       metadata="$(resolve_long_option "$command" "$base")"
       if [[ -n "$metadata" ]]; then
         IFS='|' read -r canonical arity negatable expands <<< "$metadata"
-        add_metadata "$metadata" "$negated"
+        if [[ "$negated" == true && "$negatable" != true ]]; then
+          [[ -n "$normalization_error" ]] || normalization_error="$token"
+        else
+          add_metadata "$metadata" "$negated"
+        fi
         if [[ "$arity" == required && -z "$value" && $((j + 1)) -lt \${#args[@]} ]]; then ((j+=1)); fi
-      fi
+      else [[ -n "$normalization_error" ]] || normalization_error="$token"; fi
       ((j+=1)); continue
     fi
     if [[ "$token" == -?* ]]; then
@@ -106,7 +111,7 @@ normalize_options() {
       for ((k=0; k<\${#letters}; k++)); do
         letter="\${letters:k:1}"
         metadata="$(short_option_metadata "$command" "$letter")"
-        [[ -n "$metadata" ]] || break
+        if [[ -z "$metadata" ]]; then [[ -n "$normalization_error" ]] || normalization_error="-$letter"; break; fi
         IFS='|' read -r canonical arity negatable expands <<< "$metadata"
         add_metadata "$metadata" false
         [[ "$arity" == none ]] && continue
@@ -192,6 +197,10 @@ fi
 ${guardedOptionNormalizer}
 if [[ "$command" =~ ^(reset|branch|clean|push|checkout|restore)$ ]]; then
   normalize_options "$command" "$i"
+fi
+if [[ -n "$normalization_error" ]]; then
+  common="$("$real_git" "\${args[@]:0:$i}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  [[ "$common" == "$feature_common" ]] && refuse "$command" "unrecognized option «$normalization_error» for git «$command»" 'spell the option in full'
 fi
 
 destructive=false

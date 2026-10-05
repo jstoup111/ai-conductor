@@ -237,6 +237,41 @@ esac
     expect((await recordedArgv()).at(-1)).toEqual(args);
   });
 
+  it.each([
+    ['unknown reset option', ['reset', '--bogus', 'HEAD'], '--bogus'],
+    ['ambiguous push option', ['push', '--forc', 'origin', 'main'], '--forc'],
+    ['unknown branch short option', ['branch', '-Z', 'unreachable'], '-Z'],
+  ])('refuses an unresolvable %s before it reaches real git', async (_name, args, token) => {
+    const result = invoke(args);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`unrecognized option «${token}» for git «${args[0]}»`);
+    expect(result.stderr).toContain('spell the option in full');
+    expect((await recordedCommands()).every((command) => SAFE_CLASSIFICATION_COMMANDS.has(command))).toBe(true);
+  });
+
+  it.each([
+    ['status unknown option', ['status', '--bogus']],
+    ['log unknown option', ['log', '--ha']],
+    ['push short upstream', ['push', '-u', 'origin', 'feature']],
+    ['branch verbose bundle', ['branch', '-vv']],
+    ['checkout branch', ['checkout', '-b', 'feature']],
+    ['restore staged', ['restore', '--staged', 'file']],
+    ['reset soft', ['reset', '--soft', 'HEAD~1']],
+  ])('passes a resolvable or unguarded %s through unchanged', async (_name, args) => {
+    const result = invoke(args);
+    expect(result.status).toBe(args[0] === 'push' ? 17 : 0);
+    expect((await recordedArgv()).at(-1)).toEqual(args);
+  });
+
+  it('does not refuse an unresolvable guarded option outside the feature repository', async () => {
+    await writeFile(join(fixtureDir, '.pipeline', 'git-guard', 'common-dir'), '/other/common-dir\n');
+    const args = ['reset', '--bogus'];
+
+    expect(invoke(args).status).toBe(0);
+    expect((await recordedArgv()).at(-1)).toEqual(args);
+  });
+
 });
 
 // These cases deliberately use local Git rather than the classification stub:
