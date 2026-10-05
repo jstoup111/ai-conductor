@@ -421,3 +421,59 @@ describe('FINISH authors PR prose before it judges it', () => {
     ).toEqual({ kind: 'progress_finish', transition: 'author_pr_prose' });
   });
 });
+
+describe('production FINISH authoring dispatch failure', () => {
+  it('retries a failed authoring run instead of halting it as an unmoved transition', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-prose-authoring-failure-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const body = '<!-- conductor:pr-body-floor -->\n## Why\n\nTBD\n';
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'refs/remotes/origin/feat/prose-failure\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return { stdout: '' };
+          if (args[0] === 'pr' && args[1] === 'view') {
+            return { stdout: JSON.stringify({ url: PR_URL, title: 'feat: prose-failure', body, isDraft: true, labels: [] }) };
+          }
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        },
+        observeReleaseReadiness: async () => 'present',
+      });
+      // The provider aborted: it returned a failed result and wrote nothing.
+      const dispatchAuthoring = vi.fn(async () => ({ success: false }));
+
+      const result = await coordinator.advance({
+        state: {
+          feature_desc: 'prose-failure',
+          worktree_branch: 'feat/prose-failure',
+          pr_url: PR_URL,
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto',
+        daemon: true,
+        dispatchJudgment: vi.fn(async () => ({ success: true })),
+        dispatchAuthoring,
+        emit: async () => {},
+      });
+
+      expect(dispatchAuthoring).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason: 'authoring_dispatch_failed',
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
