@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-05T03:26:52.238Z
+Status: halted
 Slug: engine-prompts-direct-daemon-sessions-to-ai-conduc
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-engine-prompts-direct-daemon-sessions-to-ai-conduc
-Head SHA: c2a062fc9f4c5459056c3c09f42e307a558842de
-Halted at: 2026-10-05T01:36:35.522Z
+Head SHA: c13be7fa5d616ff42b97a3ca95e7f78995fdd2f6
+Halted at: 2026-10-05T03:30:59.271Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
