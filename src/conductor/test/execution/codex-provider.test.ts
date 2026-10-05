@@ -496,10 +496,10 @@ describe('CodexProvider', () => {
         options: { prompt: 'Judge the security rubric.', cwd: worktree, nativeSchema },
       });
 
-      expect(schemaPath).toBe(join(worktree, '.daemon', 'scratch', 'security-schema-run', '1-codex', 'output-schema.json'));
+      expect(schemaPath).toBe(join(worktree, '.daemon', 'scratch', 'security-schema-run', '1-codex-security', 'output-schema.json'));
       expect(JSON.parse(schemaContents!)).toEqual(toCodexStrictSchema(nativeSchema));
       expect(result).toMatchObject({ success: true, output: '{"findings":[]}', finalStructuredResult: { findings: [] } });
-      await expect(access(join(worktree, '.daemon', 'scratch', 'security-schema-run', '1-codex'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(access(join(worktree, '.daemon', 'scratch', 'security-schema-run', '1-codex-security'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(worktree, { recursive: true, force: true });
     }
