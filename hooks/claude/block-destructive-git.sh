@@ -89,7 +89,7 @@ def verdict(a):
  if c=="push" and ("force" in o or any(v.startswith("+") for v in args)):return "deny force-push"
  if c=="reset" and "hard" in o:return "deny reset-hard"
  if c=="clean" and "force" in o:return "deny clean-force"
- if c=="branch" and "delete" in o and "force" in o:return "branch-delete "+" ".join(args)
+ if c=="branch" and "delete" in o and "force" in o:return "branch-delete "+json.dumps(args)
  if c=="checkout" and args==["."]:return "deny checkout"
  if c=="restore" and args==["."]:return "deny restore"
 for words in commands(scan(os.environ.get("COMMAND",""))):
@@ -106,6 +106,6 @@ case "$VERDICT" in
  'deny clean-force') echo "BLOCKED: git clean -f permanently removes untracked files. Ask the user before cleaning." >&2;exit 2;;
  'deny checkout'|'deny restore') echo "BLOCKED: This discards all unstaged changes. Ask the user before reverting." >&2;exit 2;;
  rebase-note) echo "NOTE: 'git rebase' is allowed but should be rare — only the daemon finish-time rebase-on-latest and the /rebase resolver rebase feature branches; never rebase mid-build (HARNESS.md → Rebase Policy). Proceeding." >&2;;
- branch-delete\ *) branches=${VERDICT#branch-delete };default=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed -E 's@^refs/remotes/origin/@@' || true);[ -z "$default" ]&&default=$(git rev-parse --abbrev-ref HEAD 2>/dev/null||echo main);unsafe="";for b in $branches;do git merge-base --is-ancestor "$b" "$default" 2>/dev/null&&continue;command -v gh >/dev/null 2>&1&&[ -n "$(gh pr list --head "$b" --state merged --json number --jq '.[0].number' 2>/dev/null||true)" ]&&continue;unsafe="$unsafe $b";done;if [ -n "$unsafe" ];then echo "BLOCKED: git branch -D would force-delete UNMERGED branch(es):$unsafe. Use -d for a safe delete, or ask the user. (Merged or squash/rebase-merged branches are allowed for cleanup.)" >&2;exit 2;fi;;
+ branch-delete\ *) branches=${VERDICT#branch-delete };default=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed -E 's@^refs/remotes/origin/@@' || true);[ -z "$default" ]&&default=$(git rev-parse --abbrev-ref HEAD 2>/dev/null||echo main);unsafe="";while IFS= read -r b;do git merge-base --is-ancestor "$b" "$default" 2>/dev/null&&continue;command -v gh >/dev/null 2>&1&&[ -n "$(gh pr list --head "$b" --state merged --json number --jq '.[0].number' 2>/dev/null||true)" ]&&continue;unsafe="$unsafe $b";done < <(BRANCHES="$branches" python3 -c 'import json, os; print(*json.loads(os.environ["BRANCHES"]), sep="\\n")');if [ -n "$unsafe" ];then echo "BLOCKED: git branch -D would force-delete UNMERGED branch(es):$unsafe. Use -d for a safe delete, or ask the user. (Merged or squash/rebase-merged branches are allowed for cleanup.)" >&2;exit 2;fi;;
 esac
 exit 0

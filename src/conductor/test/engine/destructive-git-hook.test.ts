@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:7, task:14, task:rem-as-built-rem-as-built-adr-d8-quote-removal-1
+// Covers: task:1, task:2, task:7, task:8, task:14, task:rem-as-built-rem-as-built-adr-d8-quote-removal-1
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -29,7 +29,7 @@ describe('block-destructive-git hook force-push protection', () => {
     }
   });
 
-  function invoke(command: string): HookResult {
+  function invoke(command: string, stubs: Partial<Record<'git' | 'gh', string>> = {}): HookResult {
     const fixtureDir = mkdtempSync(join(tmpdir(), 'destructive-git-hook-'));
     fixtureDirs.push(fixtureDir);
     const binDir = join(fixtureDir, 'bin');
@@ -38,7 +38,7 @@ describe('block-destructive-git hook force-push protection', () => {
 
     for (const executable of ['git', 'gh'] as const) {
       const stubPath = join(binDir, executable);
-      writeFileSync(stubPath, denyIfCalledStub(executable, markerPath), 'utf-8');
+      writeFileSync(stubPath, stubs[executable] ?? denyIfCalledStub(executable, markerPath), 'utf-8');
       chmodSync(stubPath, 0o755);
     }
 
@@ -70,6 +70,15 @@ describe('block-destructive-git hook force-push protection', () => {
     };
     expect(denial.hookSpecificOutput?.permissionDecision).toBe('deny');
     expect(denial.hookSpecificOutput?.permissionDecisionReason).toMatch(/force.*push/i);
+  }
+
+  function branchCheckStub(mergedBranch: string): string {
+    return `#!/usr/bin/env bash
+if [[ "$1" == "symbolic-ref" ]]; then exit 1; fi
+if [[ "$1" == "rev-parse" ]]; then printf '%s\\n' main; exit 0; fi
+if [[ "$1" == "merge-base" && "$3" == ${JSON.stringify(mergedBranch)} ]]; then exit 0; fi
+exit 1
+`;
   }
 
   it('drops every heredoc body on a multi-heredoc command but scans later commands', () => {
@@ -301,6 +310,22 @@ describe('block-destructive-git hook force-push protection', () => {
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(2);
     expect(result.stderr).toMatch(refusal);
+  });
+
+  it.each([
+    'git branch -df b',
+    'git -C . branch --delete --force b',
+  ])('routes normalized force-delete spelling through the unmerged branch check: %s', (command) => {
+    const result = invoke(command, { git: branchCheckStub('m'), gh: '#!/usr/bin/env bash\nexit 0\n' });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/force-delete UNMERGED branch\(es\): b/i);
+  });
+
+  it('allows a normalized force-delete spelling when the branch is merged', () => {
+    const result = invoke('git branch -df m', { git: branchCheckStub('m'), gh: '#!/usr/bin/env bash\nexit 0\n' });
+
+    expect(result.status).toBe(0);
   });
 
   it.each([
