@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-05T23:00:04.376Z
 Slug: new-review-concern-at-a-resolved-anchor-halts-as-m
 Class: needs-human
 Halting step: unknown
