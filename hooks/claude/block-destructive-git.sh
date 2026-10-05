@@ -1,193 +1,111 @@
 #!/bin/bash
 # Block destructive git operations: force push, hard reset, branch delete.
-#
-# Detection runs against a "scannable" copy of the command with quoted spans
-# removed, so a pattern that merely appears INSIDE a quoted argument (a commit
-# message, an `echo`, a comment) does not trigger a false block — only the real,
-# unquoted operation does. Trade-off: a destructive command fully wrapped in
-# quotes (e.g. `bash -c "git reset --hard"`) is not caught; the agent runs git
-# directly, so this is acceptable.
 set -e
-
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
-
-# Scannable copy: first drop quoted spans while finding heredoc openers, then
-# drop heredoc bodies and finally drop remaining single- and double-quoted
-# spans (content and quotes). A heredoc delimiter may be quoted, but its body is
-# command data rather than shell syntax and must never be interpreted as a git
-# operation by this hook.
-SCAN=$(COMMAND="$COMMAND" python3 - <<'PY'
-import os
-import re
-
-heredoc_start = re.compile(
-    r"(?<!<)<<(?P<strip>-?)(?!<)[ \t]*(?P<word>(?:\\.|'[^']*'|\"[^\"]*\"|[^\s;|&])+)"
-)
-
-def comment_start(line):
-    quote = None
-    escaped = False
-    for i, char in enumerate(line):
-        if escaped:
-            escaped = False
-        elif char == "\\" and quote != "'":
-            escaped = True
-        elif quote:
-            if char == quote:
-                quote = None
-        elif char in "'\"":
-            quote = char
-        elif char == "#" and (i == 0 or line[i - 1].isspace() or line[i - 1] in ";|&"):
-            return i
-    return len(line)
-
-def shell_quote_removal(word):
-    return re.sub(r"\\(.)|['\"]", lambda match: match.group(1) or "", word)
-
-def arithmetic_expansion_spans(line, depth):
-    spans = []
-    start = 0 if depth else None
-    i = 0
-    while i < len(line):
-        if start is None:
-            if line.startswith("$((", i):
-                start = i
-                depth = 1
-                i += 3
-                continue
-            if line.startswith("((", i):
-                start = i
-                depth = 1
-                i += 2
-                continue
-        elif line[i] == "(":
-            depth += 1
-        elif line[i] == ")":
-            if depth == 1 and line.startswith(")", i + 1):
-                spans.append((start, i + 2))
-                start = None
-                i += 2
-                continue
-            depth -= 1
-        i += 1
-    if start is not None:
-        spans.append((start, len(line)))
-    return spans, depth
-
-delimiters = []
-arithmetic_depth = 0
-
-for line in os.environ["COMMAND"].splitlines(keepends=True):
-    if delimiters:
-        candidate = line.rstrip("\n")
-        delimiter, strip_tabs = delimiters[0]
-        if strip_tabs:
-            candidate = candidate.lstrip("\t")
-        if candidate == delimiter:
-            delimiters.pop(0)
-        continue
-
-    # A quoted literal such as echo '<<EOF' is not a heredoc opener.  Preserve
-    # its shape for later quote stripping but mask it before opener detection.
-    # Preserve quoted delimiter tokens after << or <<- with arbitrary shell
-    # whitespace; all other quoted literals stay masked before opener parsing.
-    comment = comment_start(line)
-    visible_line = line[:comment] + " " * (len(line) - comment)
-    opener_spans = [(m.start(), m.end()) for m in heredoc_start.finditer(visible_line)]
-    def mask_quote(match):
-        if any(start <= match.start() and match.end() <= end for start, end in opener_spans):
-            return match.group()
-        return " " * len(match.group())
-    opener_line = re.sub(r"'[^']*'|\"[^\"]*\"", mask_quote, visible_line)
-    print(line, end="")
-    arithmetic_spans, arithmetic_depth = arithmetic_expansion_spans(line, arithmetic_depth)
-    for match in heredoc_start.finditer(opener_line):
-        if not any(start <= match.start() < end for start, end in arithmetic_spans):
-            delimiters.append((shell_quote_removal(match.group("word").rstrip()), match.group("strip") == "-"))
+VERDICT=$(COMMAND="$COMMAND" python3 - <<'PY'
+import json, os, re, shlex
+# BEGIN GIT_OPTION_SPEC
+SPEC = json.loads(r'''{"global":[{"name":"version","short":"v","arity":"none","acceptsEquals":false},{"name":"help","short":"h","arity":"none","acceptsEquals":false},{"short":"C","arity":"required","acceptsEquals":false},{"short":"c","arity":"required","acceptsEquals":false},{"name":"exec-path","arity":"none","acceptsEquals":true},{"name":"html-path","arity":"none","acceptsEquals":false},{"name":"man-path","arity":"none","acceptsEquals":false},{"name":"info-path","arity":"none","acceptsEquals":false},{"name":"paginate","short":"p","arity":"none","acceptsEquals":false},{"name":"no-pager","short":"P","arity":"none","acceptsEquals":false},{"name":"no-replace-objects","arity":"none","acceptsEquals":false},{"name":"no-lazy-fetch","arity":"none","acceptsEquals":false},{"name":"no-optional-locks","arity":"none","acceptsEquals":false},{"name":"no-advice","arity":"none","acceptsEquals":false},{"name":"bare","arity":"none","acceptsEquals":false},{"name":"git-dir","arity":"required","acceptsEquals":true},{"name":"work-tree","arity":"required","acceptsEquals":true},{"name":"namespace","arity":"required","acceptsEquals":true},{"name":"config-env","arity":"required","acceptsEquals":true}],"subcommands":{"reset":[{"name":"quiet","short":"q","arity":"none","negatable":true},{"name":"no-refresh","arity":"none","negatable":false},{"name":"refresh","arity":"none","negatable":false},{"name":"mixed","arity":"none","negatable":false},{"name":"soft","arity":"none","negatable":false},{"name":"hard","arity":"none","negatable":false},{"name":"merge","arity":"none","negatable":false},{"name":"keep","arity":"none","negatable":false},{"name":"recurse-submodules","arity":"optional","negatable":true},{"name":"patch","short":"p","arity":"none","negatable":true},{"name":"unified","short":"U","arity":"required","negatable":true},{"name":"inter-hunk-context","arity":"required","negatable":true},{"name":"intent-to-add","short":"N","arity":"none","negatable":true},{"name":"pathspec-from-file","arity":"required","negatable":true},{"name":"pathspec-file-nul","arity":"none","negatable":true}],"branch":[{"name":"verbose","short":"v","arity":"none","negatable":true},{"name":"quiet","short":"q","arity":"none","negatable":true},{"name":"track","short":"t","arity":"optional","negatable":true},{"name":"set-upstream-to","short":"u","arity":"required","negatable":true},{"name":"unset-upstream","arity":"none","negatable":true},{"name":"color","arity":"optional","negatable":true},{"name":"remotes","short":"r","arity":"none","negatable":true},{"name":"contains","arity":"required","negatable":true},{"name":"abbrev","arity":"optional","negatable":true},{"name":"all","short":"a","arity":"none","negatable":true},{"name":"delete","short":"d","arity":"none","negatable":true},{"short":"D","arity":"none","negatable":false,"expandsTo":["delete","force"]},{"name":"move","short":"m","arity":"none","negatable":true},{"short":"M","arity":"none","negatable":false,"expandsTo":["move","force"]},{"name":"omit-empty","arity":"none","negatable":true},{"name":"copy","short":"c","arity":"none","negatable":true},{"short":"C","arity":"none","negatable":false,"expandsTo":["copy","force"]},{"name":"list","short":"l","arity":"none","negatable":true},{"name":"show-current","arity":"none","negatable":true},{"name":"create-reflog","arity":"none","negatable":true},{"name":"edit-description","arity":"none","negatable":true},{"name":"force","short":"f","arity":"none","negatable":true},{"name":"merged","arity":"required","negatable":true},{"name":"column","arity":"optional","negatable":true},{"name":"sort","arity":"required","negatable":true},{"name":"points-at","arity":"required","negatable":true},{"name":"ignore-case","short":"i","arity":"none","negatable":true},{"name":"recurse-submodules","arity":"none","negatable":true},{"name":"format","arity":"required","negatable":true}],"clean":[{"name":"quiet","short":"q","arity":"none","negatable":true},{"name":"dry-run","short":"n","arity":"none","negatable":true},{"name":"interactive","short":"i","arity":"none","negatable":true},{"name":"exclude","short":"e","arity":"required","negatable":true},{"name":"force","short":"f","arity":"none","negatable":true},{"short":"d","arity":"none","negatable":false},{"short":"x","arity":"none","negatable":false},{"short":"X","arity":"none","negatable":false}],"push":[{"name":"verbose","short":"v","arity":"none","negatable":true},{"name":"quiet","short":"q","arity":"none","negatable":true},{"name":"repo","arity":"required","negatable":true},{"name":"all","arity":"none","negatable":true},{"name":"branches","arity":"none","negatable":false},{"name":"mirror","arity":"none","negatable":true},{"name":"delete","short":"d","arity":"none","negatable":true},{"name":"tags","arity":"none","negatable":true},{"name":"dry-run","short":"n","arity":"none","negatable":true},{"name":"porcelain","arity":"none","negatable":true},{"name":"force","short":"f","arity":"none","negatable":true},{"name":"force-with-lease","arity":"optional","negatable":true},{"name":"force-if-includes","arity":"none","negatable":true},{"name":"recurse-submodules","arity":"optional","negatable":true},{"name":"thin","arity":"none","negatable":true},{"name":"receive-pack","arity":"required","negatable":true},{"name":"exec","arity":"required","negatable":true},{"name":"set-upstream","short":"u","arity":"none","negatable":true},{"name":"progress","arity":"none","negatable":true},{"name":"prune","arity":"none","negatable":true},{"name":"verify","arity":"none","negatable":true},{"name":"follow-tags","arity":"none","negatable":true},{"name":"signed","arity":"optional","negatable":true},{"name":"atomic","arity":"none","negatable":true},{"name":"push-option","short":"o","arity":"required","negatable":true},{"name":"ipv4","short":"4","arity":"none","negatable":true},{"name":"ipv6","short":"6","arity":"none","negatable":true}],"checkout":[{"name":"branch","short":"b","arity":"required","negatable":true},{"name":"orphan","arity":"required","negatable":true},{"name":"guess","arity":"none","negatable":true},{"name":"overlay","arity":"none","negatable":true},{"name":"quiet","short":"q","arity":"none","negatable":true},{"name":"recurse-submodules","arity":"optional","negatable":true},{"name":"progress","arity":"none","negatable":true},{"name":"merge","short":"m","arity":"none","negatable":true},{"name":"conflict","arity":"required","negatable":true},{"name":"detach","short":"d","arity":"none","negatable":true},{"name":"track","short":"t","arity":"optional","negatable":true},{"name":"force","short":"f","arity":"none","negatable":true},{"name":"overwrite-ignore","arity":"none","negatable":true},{"name":"ignore-other-worktrees","arity":"none","negatable":true},{"name":"ours","short":"2","arity":"none","negatable":true},{"name":"theirs","short":"3","arity":"none","negatable":true},{"name":"patch","short":"p","arity":"none","negatable":true},{"name":"unified","short":"U","arity":"required","negatable":true},{"name":"inter-hunk-context","arity":"required","negatable":true},{"name":"ignore-skip-worktree-bits","arity":"none","negatable":true},{"name":"pathspec-from-file","arity":"required","negatable":true},{"name":"pathspec-file-nul","arity":"none","negatable":true},{"short":"B","arity":"required","negatable":false},{"short":"l","arity":"none","negatable":false}],"restore":[{"name":"source","short":"s","arity":"required","negatable":true},{"name":"staged","short":"S","arity":"none","negatable":true},{"name":"worktree","short":"W","arity":"none","negatable":true},{"name":"ignore-unmerged","arity":"none","negatable":true},{"name":"overlay","arity":"none","negatable":true},{"name":"quiet","short":"q","arity":"none","negatable":true},{"name":"recurse-submodules","arity":"optional","negatable":true},{"name":"progress","arity":"none","negatable":true},{"name":"merge","short":"m","arity":"none","negatable":true},{"name":"conflict","arity":"required","negatable":true},{"name":"ours","short":"2","arity":"none","negatable":true},{"name":"theirs","short":"3","arity":"none","negatable":true},{"name":"patch","short":"p","arity":"none","negatable":true},{"name":"unified","short":"U","arity":"required","negatable":true},{"name":"inter-hunk-context","arity":"required","negatable":true},{"name":"ignore-skip-worktree-bits","arity":"none","negatable":true},{"name":"pathspec-from-file","arity":"required","negatable":true},{"name":"pathspec-file-nul","arity":"none","negatable":true}]}}''')
+# END GIT_OPTION_SPEC
+HEREDOC=re.compile(r'(?<!<)<<(?P<s>-?)(?!<)[ \t]*(?P<w>(?:\\.|\'[^\']*\'|"[^"]*"|[^\s;|&<])+)' )
+def comment(line):
+ q=None; esc=False
+ for i,c in enumerate(line):
+  if esc: esc=False
+  elif c=="\\" and q!="'": esc=True
+  elif q:
+   if c==q:q=None
+  elif c in "'\"":q=c
+  elif c=="#" and (i==0 or line[i-1].isspace() or line[i-1] in ";|&"):return i
+ return len(line)
+def scan(text):
+ out=[]; ds=[]; arithmetic=0
+ for line in text.splitlines(keepends=True):
+  if ds:
+   x=line.rstrip("\n"); d,t=ds[0]; x=x.lstrip("\t") if t else x
+   if x==d:ds.pop(0)
+   continue
+  n=comment(line); visible=line[:n]+" "*(len(line)-n)
+  for m in HEREDOC.finditer(visible):
+   if arithmetic or visible[:m.start()].count("'") % 2 or visible[:m.start()].count('"') % 2 or visible[:m.start()].count('((') > visible[:m.start()].count('))'): continue
+   d=re.sub(r'''\\(.)|['"]''',lambda x:x.group(1) or "",m.group("w")).rstrip()
+   ds.append((d,m.group("s")=="-"))
+  arithmetic += visible.count('((') - visible.count('))')
+  out.append(visible.rstrip("\n")+";\n")
+ return "".join(out)
+def commands(text):
+ l=shlex.shlex(text,posix=True,punctuation_chars=True);l.whitespace_split=True;l.commenters=""
+ a=[]
+ for x in l:
+  if x in (";","|","&","&&","||"):
+   if a:yield a
+   a=[]
+  else:a.append(x)
+ if a:yield a
+def find(opts,t):
+ if t.startswith("--"):
+  x=t[2:].split("=",1)[0]; z=[o for o in opts if o.get("name")==x] or [o for o in opts if o.get("name","").startswith(x)]
+  return z[0] if len(z)==1 else None
+ return next((o for o in opts if o.get("short")==t[1:]),None)
+def norm(a):
+ i=1
+ while i<len(a) and a[i].startswith("-"):
+  o=find(SPEC["global"],a[i])
+  if not o:break
+  if o["arity"]=="required" and "=" not in a[i]:
+   i+=1
+   if i==len(a):return None
+  i+=1
+ if i==len(a):return None
+ c=a[i]
+ if c not in SPEC["subcommands"]:return c,[],[]
+ op=[]; args=[];i+=1
+ while i<len(a):
+  x=a[i]
+  if x=="--":args+=a[i+1:];break
+  if x.startswith("-") and x!="-":
+   if x.startswith("--"):
+    o=find(SPEC["subcommands"][c],x)
+    if not o:return None
+    op+=o.get("expandsTo",[o.get("name")])
+    if o["arity"]=="required" and "=" not in x:
+     i+=1
+     if i==len(a):return None
+    elif o["arity"]=="optional" and "=" not in x and i+1<len(a) and not a[i+1].startswith("-"):i+=1
+   else:
+    for s in x[1:]:
+     o=find(SPEC["subcommands"][c],"-"+s)
+     if not o or o["arity"]!="none":return None
+     op+=o.get("expandsTo",[o.get("name")])
+  else:args.append(x)
+  i+=1
+ return c,op,args
+def verdict(a):
+ if len(a)>1 and a[1]=="rebase" and not any(v in ("--continue","--abort","--skip","--edit-todo","--quit") for v in a[2:]):return "rebase-note"
+ x=norm(a)
+ if not x:return None
+ c,o,args=x
+ if c=="push" and ("force" in o or any(v.startswith("+") for v in args)):return "deny force-push"
+ if c=="reset" and "hard" in o:return "deny reset-hard"
+ if c=="clean" and "force" in o:return "deny clean-force"
+ if c=="branch" and "delete" in o and "force" in o:return "branch-delete "+" ".join(args)
+ if c=="checkout" and args==["."]:return "deny checkout"
+ if c=="restore" and args==["."]:return "deny restore"
+for words in commands(scan(os.environ.get("COMMAND",""))):
+ for i,w in enumerate(words):
+  if w=="git" or w.endswith("/git"):
+   v=verdict(words[i:])
+   if v:print(v);raise SystemExit
+print("allow")
 PY
 )
-SCAN=$(printf '%s' "$SCAN" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")
-
-# Patterns that are destructive and hard to reverse
-# Allow --force-with-lease (safe) but block exact bare --force/-f tokens.
-# A lease option never suppresses detection of a later bare force option.
-# Split unquoted compound commands before looking for a direct `git push`, so
-# an option belonging to a neighbouring command cannot be mistaken for push.
-if printf '%s' "$SCAN" | tr ';|&' '\n' | grep -qE 'git[[:space:]]+push([[:space:]]+[^[:space:]]+)*[[:space:]]+(--force|-f)([[:space:]]|$)'; then
-  echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Force push blocked by harness. Use --force-with-lease instead, or ask the user for explicit confirmation."}}' >&2
-  exit 2
-fi
-
-if echo "$SCAN" | grep -qE 'git\s+reset\s+--hard'; then
-  echo "BLOCKED: git reset --hard is destructive and irreversible. Investigate the issue or ask the user before discarding work." >&2
-  exit 2
-fi
-
-# Block ad-hoc rebases of a feature branch onto a base. A mid-build rebase onto an
-# advanced `main` rewrites history under active work and triggers surprise
-# conflicts (it bit two feature branches during Phase 9). That discipline now
-# lives in the skill prompts (build/tdd/pipeline) and HARNESS.md → Rebase Policy,
-# NOT in a hard block: a hard block also rejected the legitimate operator rebase
-# (refreshing a stale PR) and the /rebase resolver. So ad-hoc `git rebase` is
-# ALLOWED here; we emit a NON-blocking reminder so a manual rebase stays a
-# conscious choice. The daemon's finish-time rebase runs via execa (not this
-# hook). --continue/--abort/--skip/--edit-todo pass silently (no reminder).
-if echo "$SCAN" | grep -qE 'git\s+rebase\b'; then
-  if echo "$SCAN" | grep -qE 'git\s+rebase\s+(--continue|--abort|--skip|--edit-todo|--quit)\b'; then
-    : # advancing/aborting an in-progress rebase — always fine, no note
-  else
-    echo "NOTE: 'git rebase' is allowed but should be rare — only the daemon finish-time rebase-on-latest and the /rebase resolver rebase feature branches; never rebase mid-build (HARNESS.md → Rebase Policy). Proceeding." >&2
-  fi
-fi
-
-if echo "$SCAN" | grep -qE 'git\s+branch\s+-D\b'; then
-  # Force-delete is dangerous only for UNMERGED branches. A squash- or
-  # rebase-merged branch (the GitHub default) is NOT an ancestor of the default
-  # branch, so plain `git branch -d` refuses it — forcing -D for routine
-  # post-merge cleanup. Allow -D ONLY when every named branch is provably
-  # merged; still block genuinely unmerged force-deletes.
-  default=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed -E 's@^refs/remotes/origin/@@' || true)
-  [ -z "$default" ] && default=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
-
-  # Branch operands: tokens after `git branch` that are not options. Use the
-  # original command (quote chars stripped) so quoted branch names still resolve.
-  branches=$(printf '%s' "$COMMAND" \
-    | tr -d "\"'" \
-    | sed -E 's/.*git[[:space:]]+branch[[:space:]]+//' \
-    | tr ' ' '\n' \
-    | grep -vE '^-' || true)
-
-  unsafe=""
-  for b in $branches; do
-    [ -z "$b" ] && continue
-    # (1) Ancestor of the default branch → a normal merge → safe.
-    if git merge-base --is-ancestor "$b" "$default" 2>/dev/null; then
-      continue
-    fi
-    # (2) Has a merged PR → squash/rebase-merged upstream → safe.
-    if command -v gh >/dev/null 2>&1 \
-      && [ -n "$(gh pr list --head "$b" --state merged --json number --jq '.[0].number' 2>/dev/null || true)" ]; then
-      continue
-    fi
-    unsafe="$unsafe $b"
-  done
-
-  if [ -n "$unsafe" ]; then
-    echo "BLOCKED: git branch -D would force-delete UNMERGED branch(es):$unsafe. Use -d for a safe delete, or ask the user. (Merged or squash/rebase-merged branches are allowed for cleanup.)" >&2
-    exit 2
-  fi
-  # All named branches are merged → fall through and allow the cleanup.
-fi
-
-if echo "$SCAN" | grep -qE 'git\s+clean\s+-f'; then
-  echo "BLOCKED: git clean -f permanently removes untracked files. Ask the user before cleaning." >&2
-  exit 2
-fi
-
-if echo "$SCAN" | grep -qE 'git\s+checkout\s+--\s+\.|git\s+restore\s+\.'; then
-  echo "BLOCKED: This discards all unstaged changes. Ask the user before reverting." >&2
-  exit 2
-fi
-
+case "$VERDICT" in
+ 'deny force-push') echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Force push blocked by harness. Use --force-with-lease instead, or ask the user for explicit confirmation."}}' >&2;exit 2;;
+ 'deny reset-hard') echo "BLOCKED: git reset --hard is destructive and irreversible. Investigate the issue or ask the user before discarding work." >&2;exit 2;;
+ 'deny clean-force') echo "BLOCKED: git clean -f permanently removes untracked files. Ask the user before cleaning." >&2;exit 2;;
+ 'deny checkout'|'deny restore') echo "BLOCKED: This discards all unstaged changes. Ask the user before reverting." >&2;exit 2;;
+ rebase-note) echo "NOTE: 'git rebase' is allowed but should be rare — only the daemon finish-time rebase-on-latest and the /rebase resolver rebase feature branches; never rebase mid-build (HARNESS.md → Rebase Policy). Proceeding." >&2;;
+ branch-delete\ *) branches=${VERDICT#branch-delete };default=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed -E 's@^refs/remotes/origin/@@' || true);[ -z "$default" ]&&default=$(git rev-parse --abbrev-ref HEAD 2>/dev/null||echo main);unsafe="";for b in $branches;do git merge-base --is-ancestor "$b" "$default" 2>/dev/null&&continue;command -v gh >/dev/null 2>&1&&[ -n "$(gh pr list --head "$b" --state merged --json number --jq '.[0].number' 2>/dev/null||true)" ]&&continue;unsafe="$unsafe $b";done;if [ -n "$unsafe" ];then echo "BLOCKED: git branch -D would force-delete UNMERGED branch(es):$unsafe. Use -d for a safe delete, or ask the user. (Merged or squash/rebase-merged branches are allowed for cleanup.)" >&2;exit 2;fi;;
+esac
 exit 0

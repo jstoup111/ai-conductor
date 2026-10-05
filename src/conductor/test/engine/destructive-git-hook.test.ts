@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:14, task:rem-as-built-rem-as-built-adr-d8-quote-removal-1
+// Covers: task:1, task:2, task:7, task:14, task:rem-as-built-rem-as-built-adr-d8-quote-removal-1
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -301,5 +301,45 @@ describe('block-destructive-git hook force-push protection', () => {
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(2);
     expect(result.stderr).toMatch(refusal);
+  });
+
+  it.each([
+    'make build | git clean -fd',
+    'git -C /tmp/x reset --hard',
+    'git -C "my dir" reset --hard',
+    'git -c a=b push --force',
+    'git --config-env=a.b=C reset --hard',
+    'git --git-dir=.git reset --hard',
+    'git reset --har',
+    'git clean -xdf',
+    'git clean --fo',
+    'git push origin +main',
+    'cd repo && git -C . reset --hard',
+    'make build; git clean -fd & wait',
+    'GIT_TRACE=1 git reset --hard',
+    'sudo git reset --hard',
+    'xargs git clean -f',
+    'cat <<\\EOF\nignored\nEOF\ngit reset --hard',
+    'cat <<E"OF"\nignored\nEOF\ngit reset --hard',
+    '# <<EOF\ngit reset --hard',
+  ])('denies normalized destructive invocation: %s', (command) => {
+    const result = invoke(command);
+    expect(result.status).toBe(2);
+    expect(result.calledGitOrGh).toBe(false);
+  });
+
+  it.each([
+    'git commit -m "undo reset --hard"',
+    "cat <<'EOF'\ngit reset --hard\nEOF",
+    '# git reset --hard',
+    'git push --force-with-lease origin main',
+    'git -C . push --force-with origin main',
+    'git status',
+    'git -C . log --oneline',
+    'git reset --soft HEAD~1',
+  ])('allows non-destructive normalized invocation without git or gh calls: %s', (command) => {
+    const result = invoke(command);
+    expect(result.status).toBe(0);
+    expect(result.calledGitOrGh).toBe(false);
   });
 });
