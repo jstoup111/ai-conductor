@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.6.0] - 2026-10-04
+## [1.6.0] - 2026-10-05
 
 ### Added
 
@@ -42,6 +42,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators receive a guided monitor that queues halted features and opens resolution sessions. ([implementation PR #2818](https://github.com/jstoup111/ai-conductor/pull/2818)).
 - Users see candidate file paths when overlap scanning finds no overlaps. ([implementation PR #2978](https://github.com/jstoup111/ai-conductor/pull/2978)).
 - Pi runs report token usage and costs in harness telemetry. ([implementation PR #2979](https://github.com/jstoup111/ai-conductor/pull/2979)).
+- Pi users can run self-host builds with isolated credentials and live-boundary protection. ([implementation PR #2991](https://github.com/jstoup111/ai-conductor/pull/2991)).
 
 ### Changed
 
