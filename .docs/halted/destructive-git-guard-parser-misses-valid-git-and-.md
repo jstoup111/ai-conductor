@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-05T12:26:03.009Z
 Slug: destructive-git-guard-parser-misses-valid-git-and-
 Class: needs-human
 Halting step: unknown
