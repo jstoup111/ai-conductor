@@ -3696,8 +3696,10 @@ describe('DefaultStepRunner', () => {
 
     const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('FINISH PR PROSE AUTHORING');
-    expect(opts.systemPrompt).toContain('full diff');
-    expect(opts.systemPrompt).toContain('base branch');
+    // Bounded diff reading: the shape of the change, never the whole diff.
+    expect(opts.systemPrompt).toContain('git diff --stat <base>..HEAD');
+    expect(opts.systemPrompt).toContain('Do not print the whole branch diff');
+    expect(opts.systemPrompt).not.toContain('Read the full diff');
     expect(opts.systemPrompt).toContain('`/pr`');
     expect(opts.systemPrompt).toContain('`$pr`');
     expect(opts.systemPrompt).toContain('leave every `ai-conductor:step` region and its markers unchanged');
@@ -3724,6 +3726,7 @@ describe('DefaultStepRunner', () => {
     const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('FINISH PR PROSE REVISION');
     expect(opts.systemPrompt).toContain(guidance);
+    expect(opts.systemPrompt).toContain('Do not print the whole branch diff');
     expect(opts.systemPrompt).not.toContain('still carries the engine-seeded placeholder body');
     expect(opts.systemPrompt).not.toContain('no prose to judge yet');
     expect(opts.systemPrompt).toContain('do not create, push, merge, or ready a pull request');
