@@ -35,24 +35,30 @@ def scan(text):
   out.append(visible.rstrip("\n")+";\n")
  return "".join(out)
 def commands(text):
- l=shlex.shlex(text,posix=True,punctuation_chars=True);l.whitespace_split=True;l.commenters=""
- a=[]
- for x in l:
-  if x in (";","|","&","&&","||"):
-   if a:yield a
-   a=[]
-  else:a.append(x)
- if a:yield a
-def find(opts,t):
+ try:
+  l=shlex.shlex(text,posix=True,punctuation_chars=True);l.whitespace_split=True;l.commenters=""
+  a=[]
+  for x in l:
+   if x in (";","|","&","&&","||"):
+    if a:yield a
+    a=[]
+   else:a.append(x)
+  if a:yield a
+ except ValueError:
+  if re.search(r'(^|[\s;|&])(?:\S*/)?git(?:\s|$)',text):yield ["__unparseable_git__"]
+def find(opts,t,allow_prefix=True):
  if t.startswith("--"):
-  x=t[2:].split("=",1)[0]; z=[o for o in opts if o.get("name")==x] or [o for o in opts if o.get("name","").startswith(x)]
+  x=t[2:].split("=",1)[0]; z=[o for o in opts if o.get("name")==x] or ([o for o in opts if o.get("name","").startswith(x)] if allow_prefix else [])
   return z[0] if len(z)==1 else None
  return next((o for o in opts if o.get("short")==t[1:]),None)
 def norm(a):
  i=1
  while i<len(a) and a[i].startswith("-"):
-  o=find(SPEC["global"],a[i])
-  if not o:break
+  o=find(SPEC["global"],a[i],False)
+  if not o:
+   guarded=next((v for v in a[i+1:] if v in SPEC["subcommands"]),None)
+   if guarded:return None,f"unrecognized git option {a[i]} before {guarded}; spell the option in full"
+   break
   if o["arity"]=="required" and "=" not in a[i]:
    i+=1
    if i==len(a):return None
@@ -67,7 +73,7 @@ def norm(a):
   if x.startswith("-") and x!="-":
    if x.startswith("--"):
     o=find(SPEC["subcommands"][c],x)
-    if not o:return None
+    if not o:return None,f"unrecognized option {x} for git {c}; spell the option in full"
     op+=o.get("expandsTo",[o.get("name")])
     if o["arity"]=="required" and "=" not in x:
      i+=1
@@ -76,7 +82,7 @@ def norm(a):
    else:
     for s in x[1:]:
      o=find(SPEC["subcommands"][c],"-"+s)
-     if not o or o["arity"]!="none":return None
+     if not o or o["arity"]!="none":return None,f"unrecognized option -{s} for git {c}; spell the option in full"
      op+=o.get("expandsTo",[o.get("name")])
   else:args.append(x)
   i+=1
@@ -85,6 +91,7 @@ def verdict(a):
  if len(a)>1 and a[1]=="rebase" and not any(v in ("--continue","--abort","--skip","--edit-todo","--quit") for v in a[2:]):return "rebase-note"
  x=norm(a)
  if not x:return None
+ if x[0] is None:return "deny "+x[1]
  c,o,args=x
  if c=="push" and ("force" in o or any(v.startswith("+") for v in args)):return "deny force-push"
  if c=="reset" and "hard" in o:return "deny reset-hard"
@@ -93,6 +100,7 @@ def verdict(a):
  if c=="checkout" and args==["."]:return "deny checkout"
  if c=="restore" and args==["."]:return "deny restore"
 for words in commands(scan(os.environ.get("COMMAND",""))):
+ if words==["__unparseable_git__"]:print("deny git command could not be parsed");raise SystemExit
  for i,w in enumerate(words):
   if w=="git" or w.endswith("/git"):
    v=verdict(words[i:])
@@ -107,5 +115,6 @@ case "$VERDICT" in
  'deny checkout'|'deny restore') echo "BLOCKED: This discards all unstaged changes. Ask the user before reverting." >&2;exit 2;;
  rebase-note) echo "NOTE: 'git rebase' is allowed but should be rare — only the daemon finish-time rebase-on-latest and the /rebase resolver rebase feature branches; never rebase mid-build (HARNESS.md → Rebase Policy). Proceeding." >&2;;
  branch-delete\ *) branches=${VERDICT#branch-delete };default=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed -E 's@^refs/remotes/origin/@@' || true);[ -z "$default" ]&&default=$(git rev-parse --abbrev-ref HEAD 2>/dev/null||echo main);unsafe="";while IFS= read -r b;do git merge-base --is-ancestor "$b" "$default" 2>/dev/null&&continue;command -v gh >/dev/null 2>&1&&[ -n "$(gh pr list --head "$b" --state merged --json number --jq '.[0].number' 2>/dev/null||true)" ]&&continue;unsafe="$unsafe $b";done < <(BRANCHES="$branches" python3 -c 'import json, os; print(*json.loads(os.environ["BRANCHES"]), sep="\\n")');if [ -n "$unsafe" ];then echo "BLOCKED: git branch -D would force-delete UNMERGED branch(es):$unsafe. Use -d for a safe delete, or ask the user. (Merged or squash/rebase-merged branches are allowed for cleanup.)" >&2;exit 2;fi;;
+ deny\ *) echo "BLOCKED: ${VERDICT#deny }" >&2;exit 2;;
 esac
 exit 0

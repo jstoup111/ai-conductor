@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:7, task:8, task:14, task:rem-as-built-rem-as-built-adr-d8-quote-removal-1
+// Covers: task:1, task:2, task:7, task:8, task:9, task:14, task:rem-as-built-rem-as-built-adr-d8-quote-removal-1
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -326,6 +326,38 @@ exit 1
     const result = invoke('git branch -df m', { git: branchCheckStub('m'), gh: '#!/usr/bin/env bash\nexit 0\n' });
 
     expect(result.status).toBe(0);
+  });
+
+  it.each([
+    ['git reset --bogus', '--bogus'],
+    ['git push --forc origin main', '--forc'],
+    ['git --unknown-global reset HEAD', '--unknown-global'],
+  ])('refuses an unresolvable git option without invoking git or gh: %s', (command, option) => {
+    const result = invoke(command);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(option);
+    expect(result.stderr).toMatch(/spell the option in full/i);
+    expect(result.calledGitOrGh).toBe(false);
+  });
+
+  it('refuses an unparseable git command without invoking git or gh', () => {
+    const result = invoke('git reset "--hard');
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/git command could not be parsed/i);
+    expect(result.calledGitOrGh).toBe(false);
+  });
+
+  it.each([
+    'git status --bogus',
+    'git --unknown-global status',
+    'echo "unterminated',
+  ])('allows unresolvable or unparseable text without a guarded git command: %s', (command) => {
+    const result = invoke(command);
+
+    expect(result.status).toBe(0);
+    expect(result.calledGitOrGh).toBe(false);
   });
 
   it.each([
