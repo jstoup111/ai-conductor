@@ -94,6 +94,9 @@ const EXPECTED_POLICIES = {
       conflict_check: {
         L: { model: 'opus' },
       },
+      coherence_check: {
+        L: { model: 'opus' },
+      },
     },
     effortOrder: ['low', 'medium', 'high', 'xhigh', 'max'],
     modelEscalationOrder: ['haiku', 'sonnet', 'opus', 'fable'],
@@ -149,6 +152,9 @@ const EXPECTED_POLICIES = {
         L: { effort: 'high' },
       },
       conflict_check: {
+        L: { model: 'gpt-5.6-sol' },
+      },
+      coherence_check: {
         L: { model: 'gpt-5.6-sol' },
       },
     },

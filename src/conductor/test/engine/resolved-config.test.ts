@@ -28,6 +28,7 @@ import {
   CODEX_MODEL_POLICY,
   resolveProviderModelPolicy,
 } from '../../src/engine/provider-model-policy.js';
+import { providerDescriptor } from '../../src/execution/provider-catalog.js';
 
 type TeardownTimeoutConfig = HarnessConfig & { teardown_timeout_seconds?: unknown };
 type DispatchStartTimeoutConfig = HarnessConfig & { dispatch_start_timeout_seconds?: unknown };
@@ -1028,6 +1029,34 @@ describe('engine/resolved-config', () => {
       expect(resolveStepConfig('conflict_check', 'DECIDE', CLAUDE_MODEL_POLICY, undefined, { tier: 'L' }).model).toBe(
         'opus',
       );
+    });
+
+    it('pins coherence_check to the deepest provider model only at L tier', () => {
+      const claudePolicy = providerDescriptor('claude').modelPolicy;
+      const codexPolicy = providerDescriptor('codex').modelPolicy;
+
+      expect(resolveStepConfig('coherence_check', 'DECIDE', claudePolicy, undefined, { tier: 'L' }))
+        .toMatchObject({ model: 'opus', effort: 'medium' });
+      expect(resolveStepConfig('coherence_check', 'DECIDE', codexPolicy, undefined, { tier: 'L' }))
+        .toMatchObject({ model: 'gpt-5.6-sol', effort: 'medium' });
+
+      for (const [policy, model] of [[claudePolicy, 'sonnet'], [codexPolicy, 'gpt-5.6-terra']] as const) {
+        expect(resolveStepConfig('coherence_check', 'DECIDE', policy, undefined, { tier: 'M' }))
+          .toMatchObject({ model, effort: 'medium' });
+        expect(resolveStepConfig('coherence_check', 'DECIDE', policy, undefined, { tier: 'S' }))
+          .toMatchObject({ model, effort: 'medium' });
+        expect(resolveStepConfig('coherence_check', 'DECIDE', policy))
+          .toMatchObject({ model, effort: 'medium' });
+      }
+    });
+
+    it('lets operator coherence_check configuration override the L-tier policy pin', () => {
+      const config: HarnessConfig = {
+        steps: { coherence_check: { model: 'sonnet' } },
+      };
+
+      expect(resolveStepConfig('coherence_check', 'DECIDE', providerDescriptor('claude').modelPolicy, config, { tier: 'L' }))
+        .toMatchObject({ model: 'sonnet', effort: 'medium' });
     });
 
     it('front-of-funnel discovery steps use reasoning-capable defaults', () => {
