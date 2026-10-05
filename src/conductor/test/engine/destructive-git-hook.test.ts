@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:7, task:8, task:9, task:14, task:rem-as-built-rem-as-built-adr-d8-quote-removal-1
+// Covers: task:1, task:2, task:7, task:8, task:9, task:10, task:14, task:rem-as-built-rem-as-built-adr-d8-quote-removal-1
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -358,6 +358,35 @@ exit 1
 
     expect(result.status).toBe(0);
     expect(result.calledGitOrGh).toBe(false);
+  });
+
+  it.each([
+    ['git push --force origin main', '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Force push blocked by harness. Use --force-with-lease instead, or ask the user for explicit confirmation."}}\n'],
+    ['git push -f', '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Force push blocked by harness. Use --force-with-lease instead, or ask the user for explicit confirmation."}}\n'],
+    ['git reset --hard', 'BLOCKED: git reset --hard is destructive and irreversible. Investigate the issue or ask the user before discarding work.\n'],
+    ['git branch -D unmerged', 'BLOCKED: git branch -D would force-delete UNMERGED branch(es): unmerged. Use -d for a safe delete, or ask the user. (Merged or squash/rebase-merged branches are allowed for cleanup.)\n'],
+    ['git clean -f', 'BLOCKED: git clean -f permanently removes untracked files. Ask the user before cleaning.\n'],
+    ['git checkout -- .', 'BLOCKED: This discards all unstaged changes. Ask the user before reverting.\n'],
+    ['git restore .', 'BLOCKED: This discards all unstaged changes. Ask the user before reverting.\n'],
+  ])('keeps the canonical refusal message for %s', (command, message) => {
+    const result = invoke(command);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toBe(message);
+  });
+
+  it('keeps rebase continuation silent', () => {
+    const result = invoke('git rebase --continue');
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+
+  it('keeps the ordinary rebase reminder', () => {
+    const result = invoke('git rebase main');
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("NOTE: 'git rebase' is allowed");
   });
 
   it.each([
