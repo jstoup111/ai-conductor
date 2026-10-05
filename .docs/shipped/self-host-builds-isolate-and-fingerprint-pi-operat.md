@@ -4,6 +4,12 @@ spec_hash: a557dce7f28834b16fec6d71dc404cb72a1a7d295bf579347234e516375b358b
 pr: https://github.com/jstoup111/ai-conductor/pull/2991
 shipped: 2026-10-05
 engine_version: 20261004T174827Z-4925f7bb7cbf
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "test/engine/github-bot-cli-entry.test.ts:10-12, test/engine/github-bot-read-identity.test.ts:19-21, test/engine/github-bot-token-confinement.test.ts:17-19: each adds a hoisted `vi.resetModules()` ahead of its `node:child_process` mock. No plan task lists these files (commit 8732a0972)."
+    accepted: true
 ---
 
 ## Cost
