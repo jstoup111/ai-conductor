@@ -80,7 +80,7 @@ argv=("$@")
 command_index=0
 while [[ $command_index -lt $# ]]; do
   case "\${argv[$command_index]}" in
-    -C|-c|--git-dir|--work-tree|--namespace|--config-env) ((command_index+=2)); continue ;;
+    -C|-c|--git-dir|--work-tree|--namespace|--config-env|--attr-source) ((command_index+=2)); continue ;;
     --config-env=*|--git-dir=*|--work-tree=*|--namespace=*|--exec-path=*|--attr-source=*) ((command_index++)); continue ;;
     --exec-path|--no-pager|--paginate|-P|--no-optional-locks|--no-replace-objects|--no-lazy-fetch|--no-advice|--bare|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs) ((command_index++)); continue ;;
   esac
@@ -178,6 +178,30 @@ esac
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('unrecognized git option «--no-pag» before «reset»');
     expect((await recordedArgv()).some((argv) => argv.includes('reset'))).toBe(false);
+  });
+
+  it('refuses an unknown global option before a later guarded command without reaching real git', async () => {
+    const result = invoke(['--no-pag', 'HEAD', 'reset', '--hard']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unrecognized git option «--no-pag» before «reset»');
+    expect((await recordedArgv()).some((argv) => argv.includes('reset'))).toBe(false);
+  });
+
+  it('consumes a spaced attr-source value before refusing a hard reset', async () => {
+    const result = invoke(['--attr-source', 'HEAD', 'reset', '--hard']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('hard reset');
+    expect((await recordedArgv()).some((argv) => argv.includes('reset'))).toBe(false);
+  });
+
+  it('passes reachable bundled forced branch deletion unchanged to the stub real git', async () => {
+    await writeFile(branchStatePath, 'reachable-unmerged', 'utf8');
+    const args = ['branch', '-df', 'reachable'];
+
+    expect(invoke(args).status).toBe(0);
+    expect((await recordedArgv()).at(-1)).toEqual(args);
   });
 
   it('refuses an attached -C global option before reset without reaching real git', async () => {
@@ -295,6 +319,8 @@ esac
     ['checkout branch', ['checkout', '-b', 'feature']],
     ['restore staged', ['restore', '--staged', 'file']],
     ['reset soft', ['reset', '--soft', 'HEAD~1']],
+    ['exact no-refresh reset', ['reset', '--no-refresh', 'HEAD~1']],
+    ['checkout end-of-options branch', ['checkout', '--end-of-options', 'branch']],
   ])('passes a resolvable or unguarded %s through unchanged', async (_name, args) => {
     const result = invoke(args);
     expect(result.status).toBe(args[0] === 'push' ? 17 : 0);
@@ -304,6 +330,14 @@ esac
   it('does not refuse an unresolvable guarded option outside the feature repository', async () => {
     await writeFile(join(fixtureDir, '.pipeline', 'git-guard', 'common-dir'), '/other/common-dir\n');
     const args = ['reset', '--bogus'];
+
+    expect(invoke(args).status).toBe(0);
+    expect((await recordedArgv()).at(-1)).toEqual(args);
+  });
+
+  it('does not refuse an abbreviated hard reset outside the feature repository', async () => {
+    await writeFile(join(fixtureDir, '.pipeline', 'git-guard', 'common-dir'), '/other/common-dir\n');
+    const args = ['reset', '--har'];
 
     expect(invoke(args).status).toBe(0);
     expect((await recordedArgv()).at(-1)).toEqual(args);

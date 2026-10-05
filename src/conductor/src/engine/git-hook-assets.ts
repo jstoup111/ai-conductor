@@ -52,21 +52,26 @@ ${guardedOptionNamesCase}
 }
 
 resolve_long_option() {
-  local command="$1" token="$2" candidate metadata match='' matches=0
+  local command="$1" token="$2" candidate metadata match='' match_negated=false matches=0 negatable
   metadata="$(option_metadata "$command" "$token")"
-  if [[ -n "$metadata" ]]; then printf '%s' "$metadata"; return; fi
+  if [[ -n "$metadata" ]]; then printf '%s|false' "$metadata"; return; fi
   while IFS= read -r candidate; do
-    [[ "$candidate" == "$token"* ]] || continue
     metadata="$(option_metadata "$command" "$candidate")"
-    match="$metadata"
-    ((matches+=1))
+    if [[ "$candidate" == "$token"* ]]; then
+      match="$metadata"; match_negated=false; ((matches+=1))
+    fi
+    IFS='|' read -r _ _ negatable _ <<< "$metadata"
+    if [[ "$negatable" == true && "no-$candidate" == "$token"* ]]; then
+      match="$metadata"; match_negated=true; ((matches+=1))
+    fi
   done < <(option_names "$command")
-  [[ $matches -eq 1 ]] && printf '%s' "$match"
+  [[ $matches -eq 1 ]] && printf '%s|%s' "$match" "$match_negated"
 }
 
 canon=()
 operands=()
 options_ended=false
+pathspec_separator=false
 normalization_error=''
 add_metadata() {
   local metadata="$1" negated="$2" canonical arity negatable expands
@@ -83,18 +88,22 @@ add_metadata() {
 }
 
 normalize_options() {
-  local command="$1" start="$2" token base value metadata canonical arity negatable expands letters letter rest j
+  local command="$1" start="$2" token base value metadata resolved canonical arity negatable expands letters letter rest j
   j=$((start + 1))
   while [[ $j -lt \${#args[@]} ]]; do
     token="\${args[$j]}"
     if [[ "$options_ended" == true ]]; then operands+=("$token"); ((j+=1)); continue; fi
-    if [[ "$token" == -- || "$token" == --end-of-options ]]; then options_ended=true; ((j+=1)); continue; fi
+    if [[ "$token" == -- || "$token" == --end-of-options ]]; then
+      options_ended=true
+      [[ "$token" == -- ]] && pathspec_separator=true
+      ((j+=1)); continue
+    fi
     if [[ "$token" == --* ]]; then
       base="\${token#--}"; value=''
       [[ "$base" == *=* ]] && { value="\${base#*=}"; base="\${base%%=*}"; }
-      negated=false
-      if [[ "$base" == no-* ]]; then negated=true; base="\${base#no-}"; fi
-      metadata="$(resolve_long_option "$command" "$base")"
+      resolved="$(resolve_long_option "$command" "$base")"
+      negated="\${resolved##*|}"
+      metadata="\${resolved%|*}"
       if [[ -n "$metadata" ]]; then
         IFS='|' read -r canonical arity negatable expands <<< "$metadata"
         if [[ "$negated" == true && "$negatable" != true ]]; then
@@ -163,7 +172,13 @@ ${globalOptionCase}
   break
 done
 command="\${args[$i]:-}"
-if [[ -n "$unknown_global" ]] && [[ "$command" =~ ^(reset|branch|clean|push|checkout|restore)$ ]]; then
+if [[ -n "$unknown_global" ]]; then
+  command=''
+  for candidate in "\${args[@]:$((unknown_prefix_end + 1))}"; do
+    if [[ "$candidate" =~ ^(reset|branch|clean|push|checkout|restore)$ ]]; then command="$candidate"; break; fi
+  done
+fi
+if [[ -n "$unknown_global" && -n "$command" ]]; then
   common="$("$real_git" "\${args[@]:0:$unknown_prefix_end}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
   [[ "$common" == "$feature_common" ]] && refuse "$command" "unrecognized git option «$unknown_global» before «$command»" 'spell the option in full'
 fi
@@ -218,7 +233,7 @@ case "$command" in
   clean)
     has_canon force && { destructive=true; reason='forced clean deletes untracked files'; alternative='git clean -n then remove named paths'; } ;;
   checkout)
-    has_paths="$options_ended"; safe_side=false
+    has_paths="$pathspec_separator"; safe_side=false
     has_canon ours || has_canon theirs || has_canon merge && safe_side=true
     [[ "$has_paths" == true && "$safe_side" == false ]] && { destructive=true; reason='path checkout discards working-tree changes'; alternative='commit a WIP first or use a temporary worktree'; } ;;
   restore)

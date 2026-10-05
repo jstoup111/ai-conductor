@@ -58,8 +58,8 @@ export const GIT_OPTION_SPEC: GitOptionSpec = {
     { name: 'glob-pathspecs', arity: 'none', acceptsEquals: false },
     { name: 'noglob-pathspecs', arity: 'none', acceptsEquals: false },
     { name: 'icase-pathspecs', arity: 'none', acceptsEquals: false },
-    // git.c takes only `--attr-source=<tree>`; the bare spelling is unknown to git.
-    { name: 'attr-source', arity: 'none', acceptsEquals: true },
+    // Git consumes the following argv as the tree when this is not an equals form.
+    { name: 'attr-source', arity: 'required', acceptsEquals: true },
   ],
   subcommands: {
     reset: [

@@ -31,5 +31,6 @@
   {"name":"restore short staged repository path","argv":["restore","-S","."],"command":"git restore -S .","pathGuard":"allow","hook":"allow"},
   {"name":"literal-pathspecs global prefix","argv":["--literal-pathspecs","checkout","-b","feat"],"command":"git --literal-pathspecs checkout -b feat","pathGuard":"allow","hook":"allow"},
   {"name":"attr-source global prefix","argv":["--attr-source=HEAD","reset","--soft","HEAD~1"],"command":"git --attr-source=HEAD reset --soft HEAD~1","pathGuard":"allow","hook":"allow"},
+  {"name":"attr-source spaced global prefix hard reset","argv":["--attr-source","HEAD","reset","--hard"],"command":"git --attr-source HEAD reset --hard","pathGuard":"refuse","hook":"refuse","spellingOnly":true},
   {"name":"pathspec global prefix hard reset","argv":["--icase-pathspecs","reset","--hard"],"command":"git --icase-pathspecs reset --hard","pathGuard":"refuse","hook":"refuse"}
 ]

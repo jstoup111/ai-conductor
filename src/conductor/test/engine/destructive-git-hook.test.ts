@@ -217,6 +217,20 @@ exit 1
     expect(result.stderr).toMatch(/git reset --hard is destructive and irreversible/i);
   });
 
+  it('blocks a hard reset after an ordinary rebase', () => {
+    const result = invoke('git rebase main && git reset --hard');
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('git reset --hard is destructive and irreversible');
+  });
+
+  it('blocks a spaced attr-source hard reset', () => {
+    const result = invoke('git --attr-source HEAD reset --hard');
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('git reset --hard is destructive and irreversible');
+  });
+
   it('keeps the existing reminder for an ordinary rebase beside a lease push', () => {
     const result = invoke('git push --force-with-lease origin a && git rebase main');
 
@@ -224,6 +238,20 @@ exit 1
     expect(result.status).toBe(0);
     expect(result.calledGitOrGh).toBe(false);
     expect(result.stderr).toMatch(/git rebase.*allowed.*rare/i);
+  });
+
+  it('keeps the ordinary rebase reminder when followed by a safe command', () => {
+    const result = invoke('git rebase main && git status');
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("NOTE: 'git rebase' is allowed");
+  });
+
+  it('blocks a forced clean after an ordinary rebase', () => {
+    const result = invoke('git rebase main && git clean -fd');
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('git clean -f permanently removes untracked files');
   });
 
   it('does not remind for a rebase continuation beside a lease push', () => {
@@ -329,6 +357,26 @@ exit 1
     const result = invoke('git branch -df m', { git: branchCheckStub('m'), gh: '#!/usr/bin/env bash\nexit 0\n' });
 
     expect(result.status).toBe(0);
+  });
+
+  it('aggregates branch deletions and blocks the unmerged operand', () => {
+    const result = invoke('git branch -D merged && git branch -D unmerged', {
+      git: branchCheckStub('merged'),
+      gh: '#!/usr/bin/env bash\nexit 0\n',
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('unmerged');
+  });
+
+  it('continues past an allowed branch deletion to block a force push', () => {
+    const result = invoke('git branch -D merged; git push --force', {
+      git: branchCheckStub('merged'),
+      gh: '#!/usr/bin/env bash\nexit 0\n',
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/force.*push/i);
   });
 
   it.each([
