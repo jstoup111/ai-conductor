@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
@@ -898,11 +899,19 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     emittedCaseIds.add(caseId);
     const record = reconciledCasesById.get(caseId);
     if (!record) return fail(`reconciled case ${caseId} is unavailable`);
+    const priorRecord = priorCasesById.get(caseId);
+    // A caseRef is an identity lookup, not proof of a new lifecycle
+    // transition.  Reconciliation intentionally returns its durable identity
+    // for converged replays, including a decision stop already stamped by an
+    // earlier attempt.  Emit the case and effect occurrences only when this
+    // lap actually changed the durable record; otherwise a replay duplicates
+    // its audit trail despite making no state transition.
+    if (priorRecord && isDeepStrictEqual(record, priorRecord)) continue;
     await input.emit?.({
       type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
       caseId, resolution: record.resolution,
     });
-    const priorEffect = priorCasesById.get(caseId)?.effect;
+    const priorEffect = priorRecord?.effect;
     const wasReserved = priorEffect?.kind !== 'none' && priorEffect?.status === 'reserved';
     if (record.effect.kind !== 'none' && record.effect.status === 'reserved' && !wasReserved) {
       await input.emit?.({

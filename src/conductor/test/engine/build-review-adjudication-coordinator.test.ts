@@ -1,4 +1,4 @@
-// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-ar-ab-d9-3-1, task:rem-ar-ab-d9-3-2, task:rem-as-built-rem-ar-ab-d6-9-1, task:rem-as-built-rem-ar-ab-d6-10-1, task:rem-as-built-rem-ar-ab-d11-2-1
+// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-ar-ab-d9-3-1, task:rem-ar-ab-d9-3-2, task:rem-as-built-rem-ar-ab-d6-9-1, task:rem-as-built-rem-ar-ab-d6-10-1, task:rem-as-built-rem-ar-ab-d11-2-1, task:rem-as-built-rem-ar-ab-d12-3-1
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1416,6 +1416,47 @@ describe('coordinateBuildReviewAdjudication', () => {
     }));
   });
 
+  it('does not replay lifecycle events for a persisted bound decision stop at a resolved anchor', async () => {
+    const root = await projectRoot();
+    await seedCases(new RemediationCaseStore(root, feature), {
+      version: 'v1', feature,
+      cases: [
+        {
+          id: 'case-bound-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The current owner was superseded.', resolution: 'resolved',
+          sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+          effect: { id: 'effect-bound-owner', kind: 'action', status: 'applied', workOrderId: 'order-bound-owner' },
+        },
+        {
+          id: 'decision-stop-lap-1-case-bound-owner', domain: 'build_review', disposition: 'escalate', priority: 'high', confidence: 'high',
+          rationale: 'Architecture must decide this source.', resolution: 'open',
+          sources: [{ sourceId, outcome: 'escalate', recordedAt: '2026-10-02T00:00:00.000Z' }],
+          effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+        },
+      ],
+    });
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'bound-stop' }],
+      cases: [{
+        caseRef: 'bound-stop', existingCaseId: 'case-bound-owner', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'Architecture must decide this source.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['bound-stop'], rationale: 'The escalation is consistent.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    const events: RemediationCaseLifecycleEvent[] = [];
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), emit: async (event) => { events.push(event); },
+    })).resolves.toMatchObject({ ok: true, route: 'halt' });
+
+    expect(events.filter((event) =>
+      event.type === 'remediation_case_reconciled'
+      || event.type === 'remediation_effect_reserved'
+      || event.type === 'remediation_effect_failed',
+    )).toEqual([]);
+  });
+
   it('replays an unbound escalation under a fresh generated id without a false regression', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
@@ -2472,8 +2513,7 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-durable' });
     expect(events.map((event) => event.type)).toEqual([
-      'remediation_adjudication_started', 'remediation_case_reconciled',
-      'remediation_semantic_repeat_halt', 'remediation_adjudication_failed',
+      'remediation_adjudication_started', 'remediation_semantic_repeat_halt', 'remediation_adjudication_failed',
     ]);
     expect(events).toContainEqual(expect.objectContaining({
       type: 'remediation_semantic_repeat_halt', caseId: 'case-durable', effectId: 'effect-durable', reason: 'regressed',
@@ -3362,6 +3402,12 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case repeat case-durable' });
     expect(events).toContainEqual(expect.objectContaining({
       type: 'remediation_semantic_repeat_halt', caseId: 'case-durable', effectId: 'effect-durable', reason: 'already-attempted',
+    }));
+    expect(events).not.toContainEqual(expect.objectContaining({
+      type: 'remediation_case_reconciled', caseId: 'case-durable',
+    }));
+    expect(events).not.toContainEqual(expect.objectContaining({
+      type: 'remediation_effect_reserved', caseId: 'case-durable',
     }));
     expect(events.map((event) => event.type)).not.toContain('remediation_effect_applied');
   });
