@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:5
+// Covers: task:2, task:3, task:4, task:5
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -57,8 +57,19 @@ describe('GIT_GUARD_SCRIPT refusal messages', () => {
     await writeFile(join(guardDataDir, 'common-dir'), `${FEATURE_COMMON_DIR}\n`, 'utf8');
     await writeFile(join(guardDataDir, 'real-git'), `${realGitPath}\n`, 'utf8');
     await writeFile(realGitPath, `#!/usr/bin/env bash
-printf '%s\\n' "$1" >> ${JSON.stringify(callsPath)}
-case "$1" in
+printf '%s\\0' "$@" >> ${JSON.stringify(callsPath)}
+printf '\\n' >> ${JSON.stringify(callsPath)}
+argv=("$@")
+command_index=0
+while [[ $command_index -lt $# ]]; do
+  case "\${argv[$command_index]}" in
+    -C|-c|--git-dir|--work-tree|--namespace|--config-env) ((command_index+=2)); continue ;;
+    --config-env=*|--git-dir=*|--work-tree=*|--namespace=*|--exec-path=*) ((command_index++)); continue ;;
+    --exec-path|--no-pager|--paginate|-P|--no-optional-locks|--no-replace-objects|--no-lazy-fetch|--no-advice|--bare) ((command_index++)); continue ;;
+  esac
+  break
+done
+case "\${argv[$command_index]}" in
   rev-parse) printf '%s\\n' ${JSON.stringify(FEATURE_COMMON_DIR)} ;;
   config) cat ${JSON.stringify(aliasPath)} 2>/dev/null || true ;;
   push) printf '%s\\n' 'non-fast-forward: remote rejected update' >&2; exit 17 ;;
@@ -77,8 +88,15 @@ esac
   }
 
   async function recordedCommands(): Promise<string[]> {
+    return (await recordedArgv()).map(([command]) => command);
+  }
+
+  async function recordedArgv(): Promise<string[][]> {
     try {
-      return (await readFile(callsPath, 'utf8')).trim().split('\n').filter(Boolean);
+      return (await readFile(callsPath, 'utf8'))
+        .split('\n')
+        .filter(Boolean)
+        .map((call) => call.split('\0').slice(0, -1));
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw error;
@@ -111,6 +129,44 @@ esac
 
     expect(result.status).toBe(0);
     expect(await recordedCommands()).toEqual(['status']);
+  });
+
+  it.each([
+    ['--config-env equals form', ['--config-env=core.pager=PAGER', 'reset', '--hard']],
+    ['-C and --no-pager', ['-C', 'fixture', '--no-pager', 'reset', '--hard']],
+  ])('refuses hard reset after global options in the %s without reaching real git', async (_name, args) => {
+    await mkdir(join(fixtureDir, 'fixture'));
+
+    const result = invoke(args);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('ai-conductor git guard: refused reset');
+    expect(result.stderr).toContain('hard reset');
+    expect(result.stderr).toContain('reset --keep');
+    expect((await recordedArgv()).some((argv) => argv.includes('reset'))).toBe(false);
+  });
+
+  it('passes an unknown global option before a safe command through with exact argv', async () => {
+    const args = ['--no-pag', 'status'];
+
+    expect(invoke(args).status).toBe(0);
+    expect(await recordedArgv()).toEqual([args]);
+  });
+
+  it('refuses an unknown global option before reset without reaching real git', async () => {
+    const result = invoke(['--no-pag', 'reset', '--hard']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unrecognized git option «--no-pag» before «reset»');
+    expect((await recordedArgv()).some((argv) => argv.includes('reset'))).toBe(false);
+  });
+
+  it('refuses an attached -C global option before reset without reaching real git', async () => {
+    const result = invoke(['-Cfixture', 'reset', '--hard']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unrecognized git option «-Cfixture» before «reset»');
+    expect((await recordedArgv()).some((argv) => argv.includes('reset'))).toBe(false);
   });
 
   it.each([

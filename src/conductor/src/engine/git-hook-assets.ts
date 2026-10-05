@@ -1,5 +1,20 @@
 import { PROTECTED_ARTIFACT_DIRECTORIES } from './protected-artifact-seal.js';
 import { resolveCanonicalLauncher, shellQuote } from './canonical-launcher.js';
+import { GIT_OPTION_SPEC } from './git-option-spec.js';
+
+const globalOptionCase = GIT_OPTION_SPEC.global.flatMap((option) => {
+  const spellings = [
+    option.name === undefined ? undefined : `--${option.name}`,
+    option.short === undefined ? undefined : `-${option.short}`,
+  ].filter((spelling): spelling is string => spelling !== undefined);
+  const consume = option.arity === 'required' ? '((i+=2))' : '((i++))';
+  return [
+    `    ${spellings.join('|')}) ${consume}; continue ;;`,
+    ...(option.name === undefined || !option.acceptsEquals
+      ? []
+      : [`    --${option.name}=*) ((i++)); continue ;;`]),
+  ];
+}).join('\n');
 
 /**
  * A PATH-shadowing git wrapper for agent processes. Runtime values are data
@@ -19,16 +34,25 @@ refuse() {
 # Keep the original argv for exec; classify after one safe non-shell alias expansion.
 args=("$@")
 i=0
+unknown_global=''
+unknown_prefix_end=-1
 while [[ $i -lt \${#args[@]} ]]; do
   case "\${args[$i]}" in
-    -C|--git-dir|--work-tree|-c|--namespace|--config-env|--attr-source|--super-prefix) ((i+=2)); continue ;;
-    --config-env=*|--attr-source=*|--super-prefix=*) ((i++)); continue ;;
-    -C*|-c*|--git-dir=*|--work-tree=*|--namespace=*|--exec-path=*) ((i++)); continue ;;
-    --exec-path|--no-pager|--paginate|-P|--no-optional-locks|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-replace-objects|--no-lazy-fetch|--no-advice|--bare) ((i++)); continue ;;
+${globalOptionCase}
+    -*)
+      if [[ -z "$unknown_global" ]]; then
+        unknown_global="\${args[$i]}"
+        unknown_prefix_end=$i
+      fi
+      ((i++)); continue ;;
   esac
   break
 done
 command="\${args[$i]:-}"
+if [[ -n "$unknown_global" ]] && [[ "$command" =~ ^(reset|branch|clean|push|checkout|restore)$ ]]; then
+  common="$("$real_git" "\${args[@]:0:$unknown_prefix_end}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  [[ "$common" == "$feature_common" ]] && refuse "$command" "unrecognized git option «$unknown_global» before «$command»" 'spell the option in full'
+fi
 # These are Git's own non-destructive query commands.  Keep this a static
 # built-in-only set: consulting config for one of these commands both adds an
 # observable real-git call and incorrectly treats a built-in as an alias.
