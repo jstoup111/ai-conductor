@@ -291,6 +291,27 @@ esac
     expect((await recordedArgv()).at(-1)).toEqual(args);
   });
 
+  it.each([
+    ['lease and includes push', ['push', '--force-with-lease', '--force-if-includes', 'origin', 'main']],
+    ['keep reset', ['reset', '--keep', 'HEAD~1']],
+    ['ordinary branch delete', ['branch', '-d', 'unreachable']],
+    ['dry-run clean', ['clean', '-n']],
+    ['checkout conflict side', ['checkout', '--ours', '--', 'file']],
+    ['staged restore', ['restore', '--staged', 'file']],
+  ])('preserves canonical safe %s argv', async (_name, args) => {
+    const result = invoke(args);
+    expect(result.status).toBe(args[0] === 'push' ? 17 : 0);
+    expect((await recordedArgv()).at(-1)).toEqual(args);
+  });
+
+  it('keeps a hard reset refusal when a later option selects another mode', async () => {
+    const result = invoke(['reset', '--hard', '--soft']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('hard reset discards working-tree changes');
+    expect((await recordedCommands()).some((command) => command === 'reset')).toBe(false);
+  });
+
 });
 
 // These cases deliberately use local Git rather than the classification stub:
