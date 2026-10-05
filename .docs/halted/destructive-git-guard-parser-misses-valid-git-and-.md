@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-05T10:30:47.978Z
+Status: halted
 Slug: destructive-git-guard-parser-misses-valid-git-and-
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-destructive-git-guard-parser-misses-valid-git-and-
-Head SHA: fda6a705b36c13726a7c46b6c701916b64086367
-Halted at: 2026-10-05T10:13:40.978Z
+Head SHA: e3a81ed4d627c31f2b1263ad7426dae149373c01
+Halted at: 2026-10-05T10:31:10.052Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
