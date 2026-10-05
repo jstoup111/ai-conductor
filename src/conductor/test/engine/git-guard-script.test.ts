@@ -81,8 +81,8 @@ command_index=0
 while [[ $command_index -lt $# ]]; do
   case "\${argv[$command_index]}" in
     -C|-c|--git-dir|--work-tree|--namespace|--config-env) ((command_index+=2)); continue ;;
-    --config-env=*|--git-dir=*|--work-tree=*|--namespace=*|--exec-path=*) ((command_index++)); continue ;;
-    --exec-path|--no-pager|--paginate|-P|--no-optional-locks|--no-replace-objects|--no-lazy-fetch|--no-advice|--bare) ((command_index++)); continue ;;
+    --config-env=*|--git-dir=*|--work-tree=*|--namespace=*|--exec-path=*|--attr-source=*) ((command_index++)); continue ;;
+    --exec-path|--no-pager|--paginate|-P|--no-optional-locks|--no-replace-objects|--no-lazy-fetch|--no-advice|--bare|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs) ((command_index++)); continue ;;
   esac
   break
 done
@@ -337,7 +337,9 @@ esac
       await writeFile(aliasPath, corpusCase.alias ?? '', 'utf8');
       await writeFile(branchStatePath, corpusCase.branch ?? '', 'utf8');
       const result = invoke(corpusCase.argv);
-      expect(result.status, corpusCase.name).toBe(corpusCase.pathGuard === 'refuse' ? 1 : 0);
+      // An allowed push reaches the stub real git, which rejects every push with 17.
+      const allowedStatus = corpusCase.argv[0] === 'push' ? 17 : 0;
+      expect(result.status, corpusCase.name).toBe(corpusCase.pathGuard === 'refuse' ? 1 : allowedStatus);
       ran += 1;
     }
     expect(ran).toBe(applicable.length);

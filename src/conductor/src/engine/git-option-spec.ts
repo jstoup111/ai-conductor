@@ -54,6 +54,12 @@ export const GIT_OPTION_SPEC: GitOptionSpec = {
     { name: 'work-tree', arity: 'required', acceptsEquals: true },
     { name: 'namespace', arity: 'required', acceptsEquals: true },
     { name: 'config-env', arity: 'required', acceptsEquals: true },
+    { name: 'literal-pathspecs', arity: 'none', acceptsEquals: false },
+    { name: 'glob-pathspecs', arity: 'none', acceptsEquals: false },
+    { name: 'noglob-pathspecs', arity: 'none', acceptsEquals: false },
+    { name: 'icase-pathspecs', arity: 'none', acceptsEquals: false },
+    // git.c takes only `--attr-source=<tree>`; the bare spelling is unknown to git.
+    { name: 'attr-source', arity: 'none', acceptsEquals: true },
   ],
   subcommands: {
     reset: [

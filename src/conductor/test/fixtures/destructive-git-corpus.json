@@ -17,5 +17,19 @@
   {"name":"checkout arbitrary path","argv":["checkout","--","file"],"command":"git checkout -- file","pathGuard":"refuse","hook":"allow","policyDifference":"checkout-paths"},
   {"name":"checkout repository path","argv":["checkout","--","."],"command":"git checkout -- .","pathGuard":"refuse","hook":"refuse"},
   {"name":"restore repository path","argv":["restore","."],"command":"git restore .","pathGuard":"refuse","hook":"refuse"},
-  {"name":"reachable unmerged branch delete","argv":["branch","-D","reachable"],"command":"git branch -D reachable","pathGuard":"allow","hook":"refuse","branch":"reachable-unmerged","policyDifference":"branch-merged-rule"}
+  {"name":"reachable unmerged branch delete","argv":["branch","-D","reachable"],"command":"git branch -D reachable","pathGuard":"allow","hook":"refuse","branch":"reachable-unmerged","policyDifference":"branch-merged-rule"},
+  {"name":"checkout bundled branch argument","argv":["checkout","-b","feat"],"command":"git checkout -b feat","pathGuard":"allow","hook":"allow"},
+  {"name":"restore bundled staged with attached short source","argv":["restore","-SsHEAD","file"],"command":"git restore -SsHEAD file","pathGuard":"allow","hook":"allow"},
+  {"name":"restore staged with separate short source","argv":["restore","--staged","-s","HEAD","file"],"command":"git restore --staged -s HEAD file","pathGuard":"allow","hook":"allow"},
+  {"name":"branch short upstream argument","argv":["branch","-u","origin/x"],"command":"git branch -u origin/x","pathGuard":"allow","hook":"allow"},
+  {"name":"push short push-option argument","argv":["push","-o","ci.skip","origin","feat"],"command":"git push -o ci.skip origin feat","pathGuard":"allow","hook":"allow"},
+  {"name":"push negated verify","argv":["push","--no-verify","origin","feat"],"command":"git push --no-verify origin feat","pathGuard":"allow","hook":"allow"},
+  {"name":"branch negated merged","argv":["branch","--no-merged","main"],"command":"git branch --no-merged main","pathGuard":"allow","hook":"allow"},
+  {"name":"checkout negated track","argv":["checkout","--no-track","-b","x","origin/x"],"command":"git checkout --no-track -b x origin/x","pathGuard":"allow","hook":"allow"},
+  {"name":"checkout repository path without separator","argv":["checkout","."],"command":"git checkout .","pathGuard":"allow","hook":"allow"},
+  {"name":"restore staged repository path","argv":["restore","--staged","."],"command":"git restore --staged .","pathGuard":"allow","hook":"allow"},
+  {"name":"restore short staged repository path","argv":["restore","-S","."],"command":"git restore -S .","pathGuard":"allow","hook":"allow"},
+  {"name":"literal-pathspecs global prefix","argv":["--literal-pathspecs","checkout","-b","feat"],"command":"git --literal-pathspecs checkout -b feat","pathGuard":"allow","hook":"allow"},
+  {"name":"attr-source global prefix","argv":["--attr-source=HEAD","reset","--soft","HEAD~1"],"command":"git --attr-source=HEAD reset --soft HEAD~1","pathGuard":"allow","hook":"allow"},
+  {"name":"pathspec global prefix hard reset","argv":["--icase-pathspecs","reset","--hard"],"command":"git --icase-pathspecs reset --hard","pathGuard":"refuse","hook":"refuse"}
 ]
