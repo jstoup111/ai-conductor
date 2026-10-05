@@ -81,3 +81,16 @@ has no table row, and `architecture_review_as_built` exists only as prose inside
   weakens compile-time typing or adds a build step; larger blast radius for equal payoff.
 - **Running the generator from built `dist/`** — rejected outright: requires a rebuild, which is
   the shared-dist daemon-crash hazard.
+
+## Amendment
+
+**Amended by:** operator-authorized hotfix (2026-10-05) — D3's **location** is updated, not its
+mechanism: the generated region lives in `ARCHITECTURE.md`, not `HARNESS.md`.
+
+#2446 (2026-09-08) split execution rules from the architecture reference and moved the Model
+Selection table, with its `<!-- BEGIN GENERATED: model-selection-table -->` /
+`<!-- END GENERATED: model-selection-table -->` markers, into `ARCHITECTURE.md`; `HARNESS.md` now
+links to it. `bin/generate-model-table` was retargeted in the same change. Everything else in D3
+stands unchanged — region-only rewrites, `--check` drift detection, and the hard error on missing or
+malformed markers — and applies to the `ARCHITECTURE.md` region. Read every other mention of the
+"HARNESS.md model table" in this ADR (title, Context, D1) as that same `ARCHITECTURE.md` region.
