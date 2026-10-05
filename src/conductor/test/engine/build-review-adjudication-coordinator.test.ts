@@ -1,4 +1,4 @@
-// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-ar-ab-d9-3-1, task:rem-ar-ab-d9-3-2, task:rem-as-built-rem-ar-ab-d6-9-1
+// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-ar-ab-d9-3-1, task:rem-ar-ab-d9-3-2, task:rem-as-built-rem-ar-ab-d6-9-1, task:rem-as-built-rem-ar-ab-d6-10-1
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1296,6 +1296,92 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(persisted.state.cases.filter((record) => record.id === 'decision-stop-lap-1-case-bound-owner')).toEqual([
       expect.objectContaining({ resolution: 'open' }),
     ]);
+  });
+
+  it('types a conflicting bound escalation stop without mutating its durable store', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [
+        {
+          id: 'case-bound-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The current owner remains unresolved.', resolution: 'open',
+          sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+          effect: { id: 'effect-bound-owner', kind: 'action', status: 'reserved' },
+        },
+        {
+          id: 'decision-stop-lap-1-case-bound-owner', domain: 'build_review', disposition: 'escalate', priority: 'high', confidence: 'high',
+          rationale: 'A different owner decision was recorded.', resolution: 'open',
+          sources: [{ sourceId: 'historic-source', outcome: 'escalate', recordedAt: '2026-10-02T00:00:00.000Z' }],
+          effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+        },
+      ],
+    });
+    const before = await readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8');
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'bound-stop' }],
+      cases: [{
+        caseRef: 'bound-stop', existingCaseId: 'case-bound-owner', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'Architecture must decide this source.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['bound-stop'], rationale: 'The escalation is consistent.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      detail: expect.stringMatching(/^decision stop conflicting-case-id; persisted case history is valid; failure kind: rejected-transition$/),
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'rejected-transition',
+      caseIds: ['decision-stop-lap-1-case-bound-owner'], sourceIds: ['historic-source', sourceId],
+    }));
+    expect(await readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8')).toBe(before);
+  });
+
+  it('types a conflicting blocked consistency stop without mutating its durable store', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'consistency-stop-lap-1', domain: 'build_review', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'A different consistency conflict was recorded.', resolution: 'open',
+        sources: [{ sourceId: 'historic-source', outcome: 'rejected', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { kind: 'none' }, consistencyStop: { sourceIds: ['historic-source'], rationale: 'A different consistency conflict was recorded.' },
+      }],
+    });
+    const before = await readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8');
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'rejected', caseRef: 'rejected-case' }],
+      cases: [{
+        caseRef: 'rejected-case', disposition: 'reject', priority: 'low', confidence: 'high',
+        rationale: 'Do not proceed.', effect: { kind: 'none' },
+      }],
+      consistency: { verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['rejected-case'], rationale: 'The sources remain inconsistent.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      detail: expect.stringMatching(/^blocked consistency stop conflicting-case-id; persisted case history is valid; failure kind: rejected-transition$/),
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'rejected-transition',
+      caseIds: ['consistency-stop-lap-1'], sourceIds: ['historic-source', sourceId],
+    }));
+    expect(await readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8')).toBe(before);
   });
 
   it('emits no second reconciled occurrence when a bound decision stop is replayed', async () => {
