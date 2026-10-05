@@ -437,7 +437,7 @@ and a drift test keep the two guards in agreement.
    - The #2904 spellings: `-C`/`--git-dir` prefix with `branch -D`, `--config-env=`, `<<\EOF`, `<<E"OF"`, `# <<EOF`.
    - The #1354 lap spellings: `--git-dir=` equals form, quoted alias text, multiple and spaced quoted heredocs, quoted heredoc openers.
    - The review's residual bypasses: `reset --har`, `branch -df`, `branch --delete --forc`, global-option prefixes, `clean -xdf`, `push origin +main`.
-   - Spelling-only cases carry `refuse` for both guards. Policy-differing cases declare their difference: `checkout -- file` (PATH guard `refuse`, hook `allow`), and `branch -D` of a branch reachable from another ref but unmerged (PATH guard `allow`, hook `refuse`). Shell-only cases carry PATH guard `not-applicable`. Alias cases carry hook `not-applicable` (the hook does not expand aliases) and are not `spellingOnly`.
+   - Spelling-only cases carry `refuse` for both guards. Policy-differing cases declare their difference: `checkout -- file` (PATH guard `refuse`, hook `allow`); `checkout -- .` and `restore .` are the only checkout/restore path forms the hook refuses (hook `refuse`); and `branch -D` of a branch reachable from another ref but unmerged (PATH guard `allow`, hook `refuse`). Shell-only cases carry PATH guard `not-applicable`. Alias cases carry hook `not-applicable` (the hook does not expand aliases) and are not `spellingOnly`.
 2. Write failing tests:
    - `git-guard-script.test.ts` iterates every corpus case whose `pathGuard` is not `not-applicable` and asserts the outcome.
    - `destructive-git-hook.test.ts` iterates every case whose `hook` is not `not-applicable`.
@@ -451,6 +451,7 @@ and a drift test keep the two guards in agreement.
 - `git-guard-script.test.ts` runs every corpus case whose `pathGuard` is `refuse` or `allow` and asserts `GIT_GUARD_SCRIPT` refuses or reaches the stub real `git` accordingly, and fails if the count of cases it ran differs from the count of such cases.
 - `destructive-git-hook.test.ts` runs every corpus case whose `hook` is `refuse` or `allow` and asserts the real hook exits 2 or 0 accordingly, and fails if the count of cases it ran differs from the count of such cases.
 - A schema test fails when any `spellingOnly` corpus case does not carry `refuse` for both `pathGuard` and `hook`, and fails when any case whose `pathGuard` and `hook` are both non-`not-applicable` and unequal lacks a `policyDifference` of `checkout-paths` or `branch-merged-rule`; the corpus holds `checkout -- file` (`pathGuard` `refuse`, `hook` `allow`, `checkout-paths`) and an unmerged `branch -D` reachable from another ref (`pathGuard` `allow`, `hook` `refuse`, `branch-merged-rule`).
+- The corpus holds `checkout -- .` and `restore .` with `hook` `refuse`, and a schema test fails when any other `checkout` or `restore` path case carries `hook` `refuse`, so the hook's refusal of only `checkout -- .` and `restore .` is asserted.
 - Every corpus case with `pathGuard` `not-applicable` is a heredoc- or comment-only shell form, and no suite skips a case by any mechanism other than its `not-applicable` expectation, as asserted by the count checks.
 
 **Files likely touched:**
