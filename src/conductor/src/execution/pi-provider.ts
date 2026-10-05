@@ -2,7 +2,14 @@ import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type Options as ExecaOptions } from 'execa';
-import type { InvokeOptions, InvokeResult, LLMProvider, TokenUsage } from './llm-provider.js';
+import type {
+  InvokeOptions,
+  InvokeResult,
+  LLMProvider,
+  SelfHostAuthContext,
+  SelfHostAuthPreparation,
+  TokenUsage,
+} from './llm-provider.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { deriveProviderExitFacts, formatProviderExitFacts } from './provider-diagnostics.js';
 import { validateSpawnPermit } from './spawn-permit.js';
@@ -11,6 +18,7 @@ import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { scrubTmuxEnvironment } from './child-environment.js';
 import { materializePiHarnessExtension } from './pi-harness-extension.js';
+import { preparePiSelfHostAuth, type PiSelfHostAuthRunner } from './pi-self-host-auth.js';
 import { applyRateCard, loadRateCard, type RateCard, type RateCardLoader } from './rate-card.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 
@@ -360,7 +368,23 @@ export class PiProvider implements LLMProvider {
     private readonly environment: PiEnvironment = defaultPiEnvironment,
     private readonly materializeExtension: typeof materializePiHarnessExtension = materializePiHarnessExtension,
     private readonly loadRates: RateCardLoader = loadRateCard,
+    private readonly selfHostAuthRunner?: PiSelfHostAuthRunner,
   ) {}
+
+  async resolveSelfHostExecutable(): Promise<string> {
+    return this.executable;
+  }
+
+  async prepareSelfHostAuth(context: SelfHostAuthContext): Promise<SelfHostAuthPreparation> {
+    if (!context.model) throw new TypeError(`${piDisplayName()} self-host auth requires a candidate model.`);
+    return preparePiSelfHostAuth({
+      executable: this.executable,
+      model: context.model,
+      homeDir: context.homeDir,
+      parentEnv: this.environment.env,
+      ...(this.selfHostAuthRunner ? { run: this.selfHostAuthRunner } : {}),
+    });
+  }
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     options = enforceFreshSessionOptions(options, 'pi');

@@ -108,7 +108,6 @@ import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
 import {
   BUILT_IN_PROVIDERS,
   CODEX_DISPLAY_NAME,
-  CODEX_PROVIDER,
   findBuiltInProviderDescriptor,
   providerDisplayName,
   requireProviderCapability,
@@ -6364,6 +6363,11 @@ export class Conductor {
     const stepSelection =
       this.config.steps?.[name]?.llm_provider ?? this.config.llm_provider;
     const preferredBuildProvider = normalizeProviderSelection(stepSelection)[0];
+    const preferredSelfHostShape = preferredBuildProvider === undefined
+      ? undefined
+      : findBuiltInProviderDescriptor(preferredBuildProvider)?.selfHostShape;
+    const usesProviderHome = preferredSelfHostShape?.isolation === 'provider-home';
+    const usesClaudeBuildPreflights = preferredSelfHostShape?.claudeBuildPreflights === true;
     const sh = selfHostConfig;
 
     // Compatibility runners do not have ProviderExecutionContext and therefore
@@ -6372,7 +6376,7 @@ export class Conductor {
     // candidate-local invocation env instead and remain eligible for a pool.
     if (
       !this.providerExecution &&
-      preferredBuildProvider !== CODEX_PROVIDER &&
+      !usesProviderHome &&
       this.effectiveDaemonConcurrency > 1
     ) {
       return {
@@ -6395,7 +6399,7 @@ export class Conductor {
     // check if daemon-token mode is configured and the token file is readable.
     // If missing or unreadable, HALT with mint instructions. For api-key mode, skip.
     // Never consumes the retry budget.
-    if (preferredBuildProvider !== CODEX_PROVIDER) {
+    if (usesClaudeBuildPreflights) {
       const buildAuthPreflight = await checkBuildAuth(
         sh.buildAuthMode,
         sh.buildAuthTokenPath,
@@ -6414,7 +6418,8 @@ export class Conductor {
     // (only applies when build_auth is explicitly configured; undefined/absent
     // build_auth means backward-compat operator-credentials mode).
     const buildAuthBlock = this.config?.harness_self_host?.build_auth;
-    if (!buildAuthBlock || (buildAuthBlock.mode !== 'daemon-token' && buildAuthBlock.mode !== 'api-key')) {
+    if (usesClaudeBuildPreflights &&
+      (!buildAuthBlock || (buildAuthBlock.mode !== 'daemon-token' && buildAuthBlock.mode !== 'api-key'))) {
       const operatorConfigDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
       const preflight = await this.preflightCredentialsCheck(operatorConfigDir);
       if (preflight !== undefined) {
@@ -6434,7 +6439,7 @@ export class Conductor {
     // is available after the buildAuthPreflight check above (which validates it
     // exists and is readable). Extract it so we can inject it into the step runner env.
     let daemonToken: string | undefined;
-    if (sh.buildAuthMode === 'daemon-token') {
+    if (usesClaudeBuildPreflights && sh.buildAuthMode === 'daemon-token') {
       const tokenResult = await readDaemonBuildToken(sh.buildAuthTokenPath);
       if (tokenResult.state === 'ok') {
         daemonToken = tokenResult.token;
@@ -6449,7 +6454,7 @@ export class Conductor {
     // again, so every seam below discards at the provider-invocation boundary,
     // after all self-host preflights have passed.
     if (!this.providerExecution) {
-      if (preferredBuildProvider === CODEX_PROVIDER) {
+      if (usesProviderHome) {
         await this.discardOwnedStepRegionCapture(state, name);
         return this.stepRunner.run(name, state, {
           retryReason: retryHint,
@@ -6526,7 +6531,7 @@ export class Conductor {
         if (!descriptor) return priorPreparation?.(candidate, runtime, identity);
         const provider = requireProviderCapability(descriptor.id, 'selfHost');
         const providerId = descriptor.id;
-        const usesProviderHome = provider.homeVariable === 'CODEX_HOME';
+        const usesProviderHome = provider.selfHostShape.isolation === 'provider-home';
         if (usesProviderHome) {
           const missing = !runtime.provider.prepareSelfHostAuth
             || !runtime.provider.resolveSelfHostExecutable
@@ -6553,7 +6558,7 @@ export class Conductor {
             liveCheckout,
             unrelatedProviderState: providerHome,
             provider: providerId,
-            selectedAuthPaths: usesProviderHome ? ['auth.json'] : ['.credentials.json'],
+            selectedAuthPaths: [provider.selfHostShape.selectedAuthPath],
           });
           await this.events.emit({
             type: 'self_host_boundary_fingerprint',
@@ -6637,6 +6642,7 @@ export class Conductor {
                   runtime.provider,
                   {
                     provider: candidate.providerKey as SelfHostAuthContext['provider'],
+                    model: candidate.model,
                     homeDir: context.homeDir,
                   },
                 ),

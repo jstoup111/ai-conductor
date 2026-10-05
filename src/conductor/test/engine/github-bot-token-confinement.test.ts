@@ -14,6 +14,9 @@ const boundary = vi.hoisted(() => ({
   failure: undefined as (Error & { stderr?: string }) | undefined,
 }));
 
+// setup.ts imports engine modules before this file's mock is registered.
+// Reset the cached graph so the production adapter reaches this fake boundary.
+vi.hoisted(() => { vi.resetModules(); });
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return {

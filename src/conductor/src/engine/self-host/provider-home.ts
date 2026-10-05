@@ -6,10 +6,12 @@ import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { scrubTmuxEnvironment } from '../../execution/child-environment.js';
 import {
+  BUILT_IN_PROVIDERS,
   requireProviderCapability,
   type BuiltInProviderId,
   type ProviderWith,
 } from '../../execution/provider-catalog.js';
+import { isProviderSetupUnavailableError } from '../provider-setup-failure.js';
 import { redactSafetyText } from '../safety-diagnostics.js';
 import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
@@ -104,6 +106,11 @@ export class ProviderHomeProvisionError extends Error {
 
 const DEFAULT_WORKTREE_ASSETS = ['skills'] as const;
 
+const ISOLATED_HOME_SCRUB_VARIABLES = BUILT_IN_PROVIDERS.flatMap((descriptor) => [
+  descriptor.homeVariable,
+  ...(descriptor.selfHostShape?.scrubVariables ?? []),
+]);
+
 class ThrowawayProviderHome implements ProviderHome {
   private tornDown = false;
 
@@ -112,6 +119,7 @@ class ThrowawayProviderHome implements ProviderHome {
     private readonly homeVariable: string,
     readonly homeDir: string,
     private readonly parentEnv: NodeJS.ProcessEnv,
+    private readonly scrubVariables: readonly string[],
     private readonly additions: NodeJS.ProcessEnv,
     private readonly args: readonly string[],
     private readonly fs: ProviderHomeFs,
@@ -120,12 +128,12 @@ class ThrowawayProviderHome implements ProviderHome {
 
   childEnv(): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = { ...this.parentEnv };
-    // Never inherit a live provider home or Claude's ambient credential token.
-    delete env.CLAUDE_CONFIG_DIR;
-    delete env.CODEX_HOME;
-    delete env.CLAUDE_CODE_OAUTH_TOKEN;
+    for (const variable of this.scrubVariables) delete env[variable];
+    // Scrub only inherited operator state. Provider-owned auth is prepared for
+    // this throwaway home and must remain available to its selected child.
+    Object.assign(env, this.additions);
     env[this.homeVariable] = this.homeDir;
-    return scrubTmuxEnvironment({ ...env, ...this.additions });
+    return scrubTmuxEnvironment(env);
   }
 
   childArgs(): readonly string[] {
@@ -198,7 +206,7 @@ export async function provisionProviderHome(
         }
       }
     }
-    if (provider.homeVariable === 'CODEX_HOME') {
+    if (provider.selfHostShape.agentsSkillsLink) {
       await fs.mkdir(join(homeDir, '.agents'));
       // Link into the already-copied throwaway skills, not the worktree, so
       // this view can't become a second write-through path into the worktree.
@@ -212,6 +220,7 @@ export async function provisionProviderHome(
       provider.homeVariable,
       homeDir,
       parentEnv,
+      ISOLATED_HOME_SCRUB_VARIABLES,
       { ...auth?.env, ...controls?.env },
       [...(auth?.args ?? []), ...(controls?.args ?? [])],
       fs,
@@ -235,7 +244,10 @@ export async function provisionProviderHome(
     } else if (homeDir) {
         await fs.rm(homeDir, { recursive: true, force: true }).catch(() => {});
     }
-    if (error instanceof ProviderHomeProvisionError) throw error;
+    if (
+      error instanceof ProviderHomeProvisionError
+      || isProviderSetupUnavailableError(error)
+    ) throw error;
     const reason = redactSafetyText(error instanceof Error ? error.message : String(error));
     throw new ProviderHomeProvisionError(
       `Failed to provision isolated ${provider.id} self-host home: ${reason}`,

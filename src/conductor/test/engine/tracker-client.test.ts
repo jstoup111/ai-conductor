@@ -9,6 +9,9 @@ const productionGh = vi.hoisted(() => ({
 
 // The production adapter is the subject of the credential tests below. Keep
 // its only process boundary fake even if the real-exec guard is rolled back.
+// setup.ts imports engine modules before this file's mock is registered.
+// Reset the cached graph so the production adapter reaches this fake boundary.
+vi.hoisted(() => { vi.resetModules(); });
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return {

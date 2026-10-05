@@ -6,11 +6,15 @@ import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
 import { redactSafetyText } from '../safety-diagnostics.js';
 import {
+  CLAUDE_PROVIDER,
+  CODEX_PROVIDER,
+  PI_PROVIDER,
   requireProviderCapability,
   type BuiltInProviderId,
   type ProviderWith,
 } from '../../execution/provider-catalog.js';
 import { type ContainmentVerdict } from './live-containment.js';
+import type { SelfHostProviderId } from './provider-home.js';
 
 const execFile = promisify(execFileCb);
 
@@ -151,25 +155,6 @@ const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
                                        // policy config and stays fingerprinted.
 ];
 
-/**
- * Lock-marker directories the provider CLI writes ANYWHERE under its home, one
- * file per live process (`plugins/cache/<marketplace>/<plugin>/<version>/.in_use/<pid>`).
- * Excluded by BASENAME rather than by path because the exclusion matcher is
- * deliberately root-level only, and these markers sit several levels deep.
- *
- * This is the narrow form on purpose. Codex's list excludes all of
- * `plugins/cache`; the Claude surface keeps every byte of installed plugin
- * content fingerprinted, because a self-host process rewriting a plugin's
- * skills or hooks in the operator home is exactly what this surface exists to
- * catch. Verified 2026-08-18 behind a false halt (`added
- * plugins/cache/claude-plugins-official/skill-creator/unknown/.in_use/1001617`):
- * of 348 files under a live `plugins/cache`, the ONLY paths that changed in the
- * preceding day were `.in_use` markers, each written by a concurrent Claude
- * process that no longer exists. Widen this only with the same kind of
- * observed-churn evidence.
- */
-const PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES: readonly string[] = ['.in_use'];
-
 /** Codex counterpart of `CLAUDE_PROVIDER_STATE_VOLATILE` — same leak-detector caveat applies. */
 const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'history.jsonl',        // append-only prompt/response log for every session on the machine
@@ -214,10 +199,41 @@ const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
  * excluding them buys no false-positive relief and would only cost
  * detection.
  */
+export const PROVIDER_STATE_VOLATILE: Readonly<Record<SelfHostProviderId, readonly string[]>> = {
+  [CLAUDE_PROVIDER]: CLAUDE_PROVIDER_STATE_VOLATILE,
+  [CODEX_PROVIDER]: CODEX_PROVIDER_STATE_VOLATILE,
+  [PI_PROVIDER]: ['sessions', 'models-store.json'],
+};
+
+const PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES: Readonly<Record<SelfHostProviderId, readonly string[]>> = {
+  /**
+   * Lock-marker directories the provider CLI writes ANYWHERE under its home, one
+   * file per live process (`plugins/cache/<marketplace>/<plugin>/<version>/.in_use/<pid>`).
+   * Excluded by BASENAME rather than by path because the exclusion matcher is
+   * deliberately root-level only, and these markers sit several levels deep.
+   *
+   * This is the narrow form on purpose. Codex's list excludes all of
+   * `plugins/cache`; the Claude surface keeps every byte of installed plugin
+   * content fingerprinted, because a self-host process rewriting a plugin's
+   * skills or hooks in the operator home is exactly what this surface exists to
+   * catch. Verified 2026-08-18 behind a false halt (`added
+   * plugins/cache/claude-plugins-official/skill-creator/unknown/.in_use/1001617`):
+   * of 348 files under a live `plugins/cache`, the ONLY paths that changed in the
+   * preceding day were `.in_use` markers, each written by a concurrent Claude
+   * process that no longer exists. Widen this only with the same kind of
+   * observed-churn evidence.
+   */
+  [CLAUDE_PROVIDER]: ['.in_use'],
+  [CODEX_PROVIDER]: ['.in_use'],
+  [PI_PROVIDER]: [],
+};
+
 function providerStateVolatile(provider: ProviderWith<'selfHost'> | undefined): readonly string[] {
-  if (provider?.environmentPrefix === 'CODEX_') return CODEX_PROVIDER_STATE_VOLATILE;
-  if (provider?.environmentPrefix === 'CLAUDE_') return CLAUDE_PROVIDER_STATE_VOLATILE;
-  return [];
+  return provider ? PROVIDER_STATE_VOLATILE[provider.id] : [];
+}
+
+function providerStateVolatileDirectoryBasenames(provider: ProviderWith<'selfHost'> | undefined): readonly string[] {
+  return provider ? PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES[provider.id] : ['.in_use'];
 }
 
 /**
@@ -333,7 +349,12 @@ export async function fingerprintLiveBoundary(args: {
   const provider = args.provider
     ? requireProviderCapability(args.provider, 'selfHost')
     : undefined;
-  const excluded = [...providerStateVolatile(provider), ...(args.selectedAuthPaths ?? [])];
+  const excluded = [
+    ...providerStateVolatile(provider),
+    ...(provider ? [provider.selfHostShape.selectedAuthPath] : []),
+    ...(args.selectedAuthPaths ?? []),
+  ];
+  const excludeDirectoryBasenames = providerStateVolatileDirectoryBasenames(provider);
   const liveCheckout = await manifest(
     args.liveCheckout,
     LIVE_CHECKOUT_VOLATILE,
@@ -342,7 +363,7 @@ export async function fingerprintLiveBoundary(args: {
   const providerState = await manifest(
     args.unrelatedProviderState,
     excluded,
-    PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES,
+    excludeDirectoryBasenames,
   );
   return { surfaces: [
     {
@@ -356,7 +377,7 @@ export async function fingerprintLiveBoundary(args: {
       root: args.unrelatedProviderState,
       label: 'provider state',
       exclude: excluded,
-      excludeDirectoryBasenames: PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES,
+      excludeDirectoryBasenames,
       manifest: providerState.entries,
     },
   ], measurements: [

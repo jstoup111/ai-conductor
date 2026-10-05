@@ -147,6 +147,9 @@ Pi gains the `selfHost` capability. A Pi self-host candidate runs in a throwaway
 - live-boundary test: for provider pi, a change to `settings.json` or `trust.json`, or an added `extensions/x.ts`, makes `verifyLiveBoundary` return not ok with a reason containing `provider state` and the changed path, under both an uncontained and a contained verdict
 - live-boundary test: for provider pi, an added root-level `sessions.json` makes `verifyLiveBoundary` return not ok
 - `PROVIDER_STATE_VOLATILE` is typed `Readonly<Record<SelfHostProviderId, readonly string[]>>`, so deleting its pi key fails `tsc`, and the claude and codex entries deep-equal the pre-change arrays
+- live-boundary test: under a contained verdict, a `settings.json` edit in the provider home makes `verifyLiveBoundary` return not ok for provider pi and for provider claude alike, and the two reasons are equal once each provider-home path is replaced by the same placeholder, each containing `provider state` and `settings.json`
+
+> **Amended 2026-10-04 by #1887 (coverage_binding refusal):** The last Done when check above was added so Story 2's contained-dispatch criterion is asserted as parity with a contained claude dispatch, not only as a pi failure.
 
 **Files:** src/conductor/src/engine/self-host/live-boundary.ts; src/conductor/test/engine/self-host/live-boundary.test.ts
 
@@ -213,6 +216,10 @@ Pi gains the `selfHost` capability. A Pi self-host candidate runs in a throwaway
 - conductor pi test: a successful pi dispatch's invocation argv and env contain no `K`, and after teardown its home directory and `auth.json` no longer exist and its lease is released
 - conductor pi test: a pi dispatch whose invoke fails, and one that is aborted, each still remove the home directory and its `auth.json`
 - conductor pi test: when the live Pi home's `settings.json` changes during a dispatch, `pendingLiveBoundaryHalt` is a reason containing `provider state` and `settings.json` and the next dispatch boundary writes the HALT marker, while a dispatch that changes only `sessions/` sets no pending halt
+- conductor pi test: with a failing resolver whose stderr contains `K`, the refusal diagnostic (the `ProviderSetupUnavailableError` message and the settled candidate's reason), every emitted event payload, and the written HALT text each do not contain `K`
+- conductor pi test: when the live Pi home's `settings.json` changes before verification, the live-boundary verification result is not ok with a reason containing `provider state` and `settings.json`, and the next dispatch boundary writes the HALT marker carrying that reason
+
+> **Amended 2026-10-04 by #1887 (coverage_binding refusal):** The last two Done when checks were added so Story 1's no-`K` criterion covers the refusal diagnostic as well as events and HALT text, and Story 2's pre-verification criterion asserts the verification failure itself, not only the pending halt.
 
 **Files:** src/conductor/test/engine/conductor-pi-self-host.test.ts; src/conductor/src/engine/conductor.ts
 
@@ -251,10 +258,22 @@ Pi gains the `selfHost` capability. A Pi self-host candidate runs in a throwaway
 **Done when:**
 - provider-id-literals test: the new check reports a finding for an in-test fixture containing `provider.homeVariable === 'CODEX_HOME'` and one for `provider?.environmentPrefix === 'CODEX_'`
 - provider-id-literals test: the new check reports zero findings for `engine/conductor.ts`, `engine/self-host/provider-home.ts` and `engine/self-host/live-boundary.ts`
+- provider-id-literals test: the new check reports a finding for in-test fixtures containing `provider.homeVariable === 'CLAUDE_CONFIG_DIR'`, `'CODEX_HOME' !== provider.homeVariable` and `provider.environmentPrefix === 'CLAUDE_'`
+- provider-id-literals test: the `homeVariable`/`environmentPrefix` string-literal rule scans every production `.ts` file under `src/conductor/src` except `execution/provider-catalog.ts` and the provider adapter modules (`execution/claude-provider.ts`, `execution/codex-provider.ts`, `execution/pi-provider.ts`), and reports zero findings
+- `engine/self-host/sandbox-build-env.ts` selects its sandbox provider by `selfHostShape.isolation === 'claude-config-sandbox'`, with no `homeVariable` comparison
+- provider-id-literals test: the complete structural test file passes with zero production provider-literal findings, including `execution/pi-self-host-auth.ts` and `engine/self-host/live-boundary.ts`, without weakening existing rules or adding adapter exemptions
+- pi-self-host-auth test: existing success, refusal, timeout and credential non-disclosure checks pass with catalog-derived provider identity and unchanged rendered diagnostics
+- live-boundary test: existing Claude, Codex and Pi volatile-path and protected-state checks pass with catalog-derived table keys and the exhaustive table type retained
 
-**Files:** src/conductor/test/engine/provider-id-literals.test.ts
+> **Amended 2026-10-04 by #1887 (coverage_binding refusal):** Story 4's criterion covers all production source outside the catalog and provider adapters and both `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. The `homeVariable`/`environmentPrefix` literal rule therefore scans that whole surface, not only the three modules in Step 1; the `CLAUDE_PROVIDER`/`CODEX_PROVIDER` constant rule keeps Step 1's three-module scope. The wider scan reaches `sandboxProvider()` in `engine/self-host/sandbox-build-env.ts`, which finds the claude descriptor by `homeVariable === 'CLAUDE_CONFIG_DIR'`; this task rewrites that lookup to read the catalog's `selfHostShape` (Task 1).
 
-**Dependencies:** Tasks 2, 6, 7, 8
+> **Amended 2026-10-04 by #1887 (operator-approved plan-gap recovery):** Task 11 also owns the feature-introduced provider-literal cleanup in `execution/pi-self-host-auth.ts` (Tasks 3 and 4), the Pi adapter's self-host auth guard in `execution/pi-provider.ts` (Task 4), and `engine/self-host/live-boundary.ts` (Task 6). The structural suite reports violations there, but the original task scope did not authorize their repair. Retain every existing structural rule, fixture and Done when check; do not add adapter exemptions or reduce the scanned surface to obtain GREEN. In the Pi auth helper, derive the provider id and display name from the existing catalog (`PI_PROVIDER` and its descriptor), replacing literal provider identification and diagnostic text while preserving the rendered messages, refusal classification, credential handling and redaction behavior. In the volatile table, use computed keys derived from the existing catalog provider constants, preserving its exhaustive `Readonly<Record<SelfHostProviderId, readonly string[]>>` type and all three providers' existing arrays. This is catalog-conformance cleanup, not new auth or fingerprint behavior.
+>
+> Execution order: preserve and finish the existing task-11 structural-test and sandbox-selector edits, establish the scoped structural failure, apply the two production cleanups above, then run the scoped union of `provider-id-literals.test.ts`, `pi-self-host-auth.test.ts` and `live-boundary.test.ts` through `ai-conductor scoped-run`. Do not reset completed task evidence or change accepted stories.
+
+**Files:** src/conductor/test/engine/provider-id-literals.test.ts; src/conductor/src/engine/self-host/sandbox-build-env.ts; src/conductor/src/execution/pi-self-host-auth.ts; src/conductor/src/engine/self-host/live-boundary.ts; src/conductor/src/execution/pi-provider.ts
+
+**Dependencies:** Tasks 1, 2, 3, 4, 6, 7, 8
 
 ## Task Dependency Graph
 
@@ -265,7 +284,7 @@ Task 1 ──┬─> Task 2 ──┐
 Task 3 ──┼─> Task 4 ──┼──────────┐   │
          └─> Task 5 ──┴─> Task 7 ┼─> Task 9
                           Task 7 ──> Task 8
-Tasks 2, 6, 7, 8 ──> Task 11
+Tasks 1, 2, 3, 4, 6, 7, 8 ──> Task 11
 ```
 
 ## Integration Points
@@ -346,3 +365,19 @@ Tasks 2, 6, 7, 8 ──> Task 11
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-adr-d26-1: src/conductor/test/engine/self-host/live-boundary.test.ts — add RED tests: for provider pi, a file added or changed under a nested `.in_use/` directory (e.g. `extensions/x/.in_use/123`) makes verifyLiveBoundary return not ok with a reason containing `provider state` and the `.in_use` path, under both an uncontained and a contained verdict, and the pi snapshot's provider-state surface has `excludeDirectoryBasenames: []`; for provider claude and provider codex, the same nested `.in_use` marker still verifies ok (preserving the existing Claude lock-marker behavior covered at :282-310 and the no-provider snapshot expectation at :193, both left unchanged)
+**Gate:** as-built
+**Rationale:** Conforming implementation drift against approved ADR D26 (no architecture change needed): live-boundary.ts:175 defines the provider-global PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES=['.in_use'], which fingerprintLiveBoundary (:354-357) applies to every provider including pi, persists into the snapshot (:367-372), and verifyLiveBoundary reuses (:465-470), so Pi drift beneath any nested `.in_use/` is invisible although D26 limits Pi exclusions to `sessions`, `models-store.json` and the selected `auth.json`. Fix is admitted by Task 6's scope (live-boundary.ts + live-boundary.test.ts, exhaustive per-provider volatile table) and keeps Task 6's Done when checks plus the existing Claude `.in_use` tests (live-boundary.test.ts:282-310, :193) intact. Matched pair: the directory-basename list is persisted in the snapshot surface and reused by verify, so it must be selected once in fingerprintLiveBoundary and never recomputed in verifyLiveBoundary. Sweep: LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES is the live-checkout surface, not provider state, and is excluded (out of finding scope); the four diagram-drift notes and the unexercised live-run note are non-blocking and excluded.
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 26
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 26 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-d26-1 is complete.
+
+### Task rem-as-built-rem-adr-d26-2: src/conductor/src/engine/self-host/live-boundary.ts:175 — replace the provider-global PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES with an exhaustive `Readonly<Record<SelfHostProviderId, readonly string[]>>` keyed by the catalog constants (CLAUDE_PROVIDER: ['.in_use'], CODEX_PROVIDER: ['.in_use'], PI_PROVIDER: []) beside PROVIDER_STATE_VOLATILE, add a providerStateVolatileDirectoryBasenames(provider) selector mirroring providerStateVolatile (undefined provider keeps ['.in_use'] so existing no-provider behavior is unchanged), and use it in fingerprintLiveBoundary for both the manifest call (:354-357) and the persisted surface field (:367-372) so verifyLiveBoundary (:465-470) reuses the same per-provider value; no provider-literal branching (Task 11 structural rule), keep the existing doc comment's rationale attached to the Claude entry; run the scoped live-boundary and Task 11 structural tests GREEN
+**Gate:** as-built
+**Rationale:** Conforming implementation drift against approved ADR D26 (no architecture change needed): live-boundary.ts:175 defines the provider-global PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES=['.in_use'], which fingerprintLiveBoundary (:354-357) applies to every provider including pi, persists into the snapshot (:367-372), and verifyLiveBoundary reuses (:465-470), so Pi drift beneath any nested `.in_use/` is invisible although D26 limits Pi exclusions to `sessions`, `models-store.json` and the selected `auth.json`. Fix is admitted by Task 6's scope (live-boundary.ts + live-boundary.test.ts, exhaustive per-provider volatile table) and keeps Task 6's Done when checks plus the existing Claude `.in_use` tests (live-boundary.test.ts:282-310, :193) intact. Matched pair: the directory-basename list is persisted in the snapshot surface and reused by verify, so it must be selected once in fingerprintLiveBoundary and never recomputed in verifyLiveBoundary. Sweep: LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES is the live-checkout surface, not provider state, and is excluded (out of finding scope); the four diagram-drift notes and the unexercised live-run note are non-blocking and excluded.
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 26
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 26 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-d26-2 is complete.

@@ -1,9 +1,10 @@
-// Covers: task:7
+// Covers: task:5, task:7
 import { describe, expect, it, vi } from 'vitest';
 import type {
   InvokeOptions,
   InvokeResult,
   LLMProvider,
+  SelfHostAuthContext,
   SpawnPermit,
   SpawnPermitPurpose,
 } from '../../src/execution/llm-provider.js';
@@ -98,6 +99,34 @@ describe('ProviderRuntimeSet', () => {
     }]);
 
     expect(runtimes.nativeSchemaCapabilityFor('pi')).toEqual({ nativeOutputSchema: true });
+  });
+
+  it('exposes self-host auth for a registered Pi runtime with both adapter seams', async () => {
+    const sentinel = { args: ['--sentinel'] };
+    const prepareSelfHostAuth = vi.fn(async () => sentinel);
+    const runtimes = new RuntimeSet([{
+      key: 'pi',
+      provider: {
+        ...provider(),
+        prepareSelfHostAuth,
+        resolveSelfHostExecutable: vi.fn(async () => '/resolved/pi'),
+      },
+      policy: CLAUDE_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+    }]);
+
+    const selfHostAuth = runtimes.selfHostAuthFor('pi');
+    const context: SelfHostAuthContext = {
+      provider: 'pi',
+      homeDir: '/tmp/pi-home',
+      model: 'deepseek/x',
+    };
+
+    expect(selfHostAuth).toBeTypeOf('function');
+    await expect(selfHostAuth!(context)).resolves.toBe(sentinel);
+    expect(prepareSelfHostAuth).toHaveBeenCalledTimes(1);
+    expect(prepareSelfHostAuth).toHaveBeenCalledWith(context);
   });
 
   it('treats a Pi descriptor without writeFence as unfenced', async () => {

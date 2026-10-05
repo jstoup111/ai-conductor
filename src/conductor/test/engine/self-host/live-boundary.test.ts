@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:6
 import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
@@ -6,7 +6,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { fingerprintLiveBoundary, verifyLiveBoundary } from '../../../src/engine/self-host/live-boundary.js';
+import {
+  PROVIDER_STATE_VOLATILE,
+  fingerprintLiveBoundary,
+  verifyLiveBoundary,
+} from '../../../src/engine/self-host/live-boundary.js';
 
 const readdirMock = vi.hoisted(() => vi.fn());
 const readFileMock = vi.hoisted(() => vi.fn());
@@ -24,6 +28,148 @@ const execFileAsync = promisify(execFile);
 const digest = (text: string): string => createHash('sha256').update(text).digest('hex');
 
 describe('live self-host boundary', () => {
+  it('ignores Pi session and model-cache churn plus its catalog-selected auth file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-pi-volatile-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(join(provider, 'sessions'), { recursive: true })]);
+    await Promise.all([
+      writeFile(join(provider, 'sessions', 'prior.jsonl'), 'before'),
+      writeFile(join(provider, 'models-store.json'), 'before'),
+      writeFile(join(provider, 'auth.json'), 'before'),
+    ]);
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'pi' });
+    await Promise.all([
+      writeFile(join(provider, 'sessions', 'prior.jsonl'), 'after'),
+      writeFile(join(provider, 'sessions', 'new.jsonl'), 'new'),
+      writeFile(join(provider, 'models-store.json'), 'after'),
+      writeFile(join(provider, 'auth.json'), 'after'),
+    ]);
+    try {
+      expect(await verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' })).toEqual({ ok: true });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('keeps Pi configuration, extensions, and root sessions.json fingerprinted with or without containment', async () => {
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ['settings', 'settings.json'],
+      ['trust', 'trust.json'],
+      ['extension', join('extensions', 'x.ts')],
+      ['root sessions', 'sessions.json'],
+    ];
+    for (const [label, changedPath] of cases) {
+      for (const containment of [
+        { contained: false, reason: 'per-step verification' },
+        { contained: true, evidence: 'probe evidence', reason: 'probe passed' },
+      ] as const) {
+        const root = await mkdtemp(join(tmpdir(), `live-boundary-pi-${label}-`));
+        const live = join(root, 'live'); const provider = join(root, 'provider');
+        await Promise.all([mkdir(live), mkdir(join(provider, ...changedPath.split('/').slice(0, -1)), { recursive: true })]);
+        const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'pi' });
+        await writeFile(join(provider, changedPath), 'changed');
+        try {
+          await expect(verifyLiveBoundary(baseline, containment)).resolves.toMatchObject({
+            ok: false,
+            reason: expect.stringContaining(`provider state changed during self-host execution — 1 added, 0 removed, 0 changed: added ${changedPath}`),
+          });
+        } finally { await rm(root, { recursive: true, force: true }); }
+      }
+    }
+  });
+
+  it('fingerprints nested Pi .in_use markers when they are added or changed, with or without containment', async () => {
+    const markerPath = join('extensions', 'x', '.in_use', '123');
+    for (const [change, initialContent, nextContent] of [
+      ['added', undefined, 'added'],
+      ['changed', 'before', 'after'],
+    ] as const) {
+      for (const containment of [
+        { contained: false, reason: 'per-step verification' },
+        { contained: true, evidence: 'probe evidence', reason: 'probe passed' },
+      ] as const) {
+        const root = await mkdtemp(join(tmpdir(), `live-boundary-pi-in-use-${change}-`));
+        const live = join(root, 'live'); const provider = join(root, 'provider');
+        const marker = join(provider, markerPath);
+        await Promise.all([mkdir(live), mkdir(join(provider, 'extensions', 'x', '.in_use'), { recursive: true })]);
+        if (initialContent) await writeFile(marker, initialContent);
+        const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'pi' });
+        await writeFile(marker, nextContent);
+        try {
+          expect(baseline.surfaces[1]?.excludeDirectoryBasenames).toEqual([]);
+          const result = await verifyLiveBoundary(baseline, containment);
+          expect(result.ok).toBe(false);
+          expect(result.reason).toContain('provider state');
+          expect(result.reason).toContain(markerPath);
+        } finally { await rm(root, { recursive: true, force: true }); }
+      }
+    }
+  });
+
+  it('continues to ignore nested .in_use markers for Claude and Codex', async () => {
+    const markerPath = join('extensions', 'x', '.in_use', '123');
+    for (const providerId of ['claude', 'codex'] as const) {
+      const root = await mkdtemp(join(tmpdir(), `live-boundary-${providerId}-in-use-`));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(join(provider, 'extensions', 'x', '.in_use'), { recursive: true })]);
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: providerId });
+      await writeFile(join(provider, markerPath), 'marker');
+      try {
+        expect(await verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' })).toEqual({ ok: true });
+      } finally { await rm(root, { recursive: true, force: true }); }
+    }
+  });
+
+  it('pins the exhaustive provider volatile table to Pi plus the unchanged Claude and Codex lists', () => {
+    expect(PROVIDER_STATE_VOLATILE).toEqual({
+      claude: [
+        'history.jsonl', '.last-cleanup', 'plugins/known_marketplaces.json',
+        'plugins/marketplaces', 'shell-snapshots', 'backups', 'sessions',
+        'session-env', 'projects', 'tasks', '.last-update-result.json',
+        'stats-cache.json', 'mcp-needs-auth-cache.json', 'cache', 'file-history',
+        'paste-cache', 'skills/synced/**/.last-complete-round',
+        'policy-limits.json.stamp.json',
+      ],
+      codex: [
+        'history.jsonl', 'sessions', 'shell_snapshots', 'cache', 'plugins/cache',
+        'plugins/.remote-plugin-install-staging', 'mcp-oauth-locks',
+        'thread-writer-locks', '.tmp', 'tmp', 'packages/standalone',
+        'models_cache.json', '*.sqlite', '*.sqlite-shm', '*.sqlite-wal',
+        '*.sqlite-journal',
+      ],
+      pi: ['sessions', 'models-store.json'],
+    });
+  });
+
+  it('halts contained Pi and Claude settings changes with the same provider-state diagnosis', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-contained-provider-parity-'));
+    const live = join(root, 'live'); const pi = join(root, 'pi'); const claude = join(root, 'claude');
+    await Promise.all([mkdir(live), mkdir(pi), mkdir(claude)]);
+    const contained = { contained: true as const, evidence: 'probe evidence', reason: 'probe passed' };
+    const [piBaseline, claudeBaseline] = await Promise.all([
+      fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: pi, provider: 'pi' }),
+      fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: claude, provider: 'claude' }),
+    ]);
+    await Promise.all([writeFile(join(pi, 'settings.json'), 'changed'), writeFile(join(claude, 'settings.json'), 'changed')]);
+    try {
+      const [piResult, claudeResult] = await Promise.all([
+        verifyLiveBoundary(piBaseline, contained),
+        verifyLiveBoundary(claudeBaseline, contained),
+      ]);
+      expect(piResult).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('provider state changed during self-host execution'),
+      });
+      expect(piResult.reason).toContain('settings.json');
+      expect(claudeResult).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('provider state changed during self-host execution'),
+      });
+      expect(claudeResult.reason).toContain('settings.json');
+      expect((piResult.reason ?? '').replace(pi, '<provider-home>')).toBe(
+        (claudeResult.reason ?? '').replace(claude, '<provider-home>'),
+      );
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('reports per-surface fingerprint measurements without counting excluded files', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-measurements-'));
     const live = join(root, 'live'); const provider = join(root, 'provider');
