@@ -199,4 +199,33 @@ describe('conductor self-host catalog shape', () => {
       await rm(projectRoot, { recursive: true, force: true });
     }
   });
+
+  it('authenticates a Claude candidate sandbox when the step prefers a provider-home provider', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-mixed-daemon-token-'));
+    try {
+      const tokenPath = join(projectRoot, 'daemon-token');
+      await writeFile(tokenPath, 'tok-claude-rubric');
+      const runtimes = new ProviderRuntimeSet([
+        { key: 'codex', provider: { invoke: vi.fn(), prepareSelfHostAuth: vi.fn(async () => undefined), resolveSelfHostExecutable: vi.fn(async () => 'codex') }, policy: {} },
+        { key: 'claude', provider: { invoke: vi.fn() }, policy: {} },
+      ] as never);
+      const providerExecution = { runtimes, sessions: {} as never, configuredProviders: ['codex', 'claude'] } as ProviderExecutionContext;
+      let claudeEnv: NodeJS.ProcessEnv | undefined;
+      const runner: StepRunner = { run: async () => {
+        const prepared = await providerExecution.prepareCandidateSelfHost!(candidate('claude', 'opus'), runtimes.get('claude') as never, { runId: 'catalog-shape', attempt: 0, member: 'testQuality' });
+        claudeEnv = prepared!.env;
+        await prepared!.teardown();
+        return { success: true };
+      } };
+
+      await dispatch(conductor(providerExecution, runner, guardrails(), {
+        projectRoot,
+        config: { llm_provider: ['codex', 'claude'], harness_self_host: { live_containment: false, build_auth: { mode: 'daemon-token', token_path: tokenPath } } },
+      }));
+
+      expect(claudeEnv).toMatchObject({ CLAUDE_CONFIG_DIR: '/scratch/claude', CLAUDE_CODE_OAUTH_TOKEN: 'tok-claude-rubric' });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
 });

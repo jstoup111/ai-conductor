@@ -6438,8 +6438,11 @@ export class Conductor {
     // Task 9 (TR-2): Read the daemon build token in daemon-token mode. The token
     // is available after the buildAuthPreflight check above (which validates it
     // exists and is readable). Extract it so we can inject it into the step runner env.
+    // Not gated on the step's preferred provider: a step that prefers a
+    // provider-home provider can still dispatch Claude candidates (e.g.
+    // build_review rubrics routed to claude), and their sandbox needs it.
     let daemonToken: string | undefined;
-    if (usesClaudeBuildPreflights && sh.buildAuthMode === 'daemon-token') {
+    if (sh.buildAuthMode === 'daemon-token') {
       const tokenResult = await readDaemonBuildToken(sh.buildAuthTokenPath);
       if (tokenResult.state === 'ok') {
         daemonToken = tokenResult.token;
