@@ -679,20 +679,26 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // blocked verdict may be carried by an escalation stop or the synthetic
   // stop, and an unbound escalation's stop has a generated id.
   const priorOpenStops = prior.state.cases.filter(isBuildReviewDecisionStop);
-  const sameSourceIds = (record: RemediationCaseRecord, proposed: typeof admitted[number]) =>
-    record.sources.length === proposed.sources.length &&
-    proposed.sources.every((source) => record.sources.some((link) => link.sourceId === source.sourceId));
-  const replaysPriorEscalationStop = (proposed: typeof admitted[number]) =>
-    proposed.case.disposition === 'escalate' && priorOpenStops.some((record) =>
+  const sameEscalationStopSources = (record: RemediationCaseRecord, proposed: typeof admitted[number]) =>
+    record.sources.length === proposed.sources.length && record.sources.every((source, index) => {
+      const candidate = proposed.sources[index];
+      return candidate !== undefined && source.sourceId === candidate.sourceId && source.outcome === candidate.outcome;
+    });
+  const matchingPriorEscalationStop = (proposed: typeof admitted[number]) =>
+    proposed.case.disposition !== 'escalate' ? undefined : priorOpenStops.find((record) =>
       record.escalation?.owner === proposed.case.escalation?.owner &&
-      record.rationale === proposed.case.rationale && sameSourceIds(record, proposed));
-  const replayingBlockedConsistencyStop = blockedConsistency !== undefined && priorOpenStops.some((record) =>
+      record.rationale === proposed.case.rationale &&
+      record.priority === proposed.case.priority && record.confidence === proposed.case.confidence &&
+      JSON.stringify(record.distinctFrom) === JSON.stringify(proposed.case.distinctFrom) &&
+      sameEscalationStopSources(record, proposed));
+  const replayedBlockedConsistencyStops = blockedConsistency === undefined ? [] : priorOpenStops.filter((record) =>
     record.consistencyStop?.rationale === blockedConsistency.rationale &&
     record.consistencyStop.sourceIds.length === blockedConsistency.sourceIds.length &&
     record.consistencyStop.sourceIds.every((sourceId, index) => sourceId === blockedConsistency.sourceIds[index]));
+  const replayingBlockedConsistencyStop = replayedBlockedConsistencyStops.length > 0;
   const coveredByReplayedConsistencyStop = (proposed: typeof admitted[number]) =>
-    replayingBlockedConsistencyStop &&
-    proposed.sources.some((source) => blockedConsistency!.sourceIds.includes(source.sourceId));
+    replayedBlockedConsistencyStops.some((record) =>
+      proposed.sources.every((source) => record.sources.some((link) => link.sourceId === source.sourceId)));
   const blockedOrdinaryRecurrenceCases = admitted.filter((proposed) =>
     proposed.case.disposition !== 'escalate' && proposed.case.disposition !== 'act' &&
     isUnboundRecurrenceCandidate(proposed) &&
@@ -704,7 +710,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     !authorizedActionRefs.has(proposed.case.caseRef) &&
     !coveredByReplayedConsistencyStop(proposed));
   const recurrenceOnlyCases = [
-    ...escalationCases.filter((proposed) => isUnboundRecurrenceCandidate(proposed) && !replaysPriorEscalationStop(proposed)),
+    ...escalationCases.filter((proposed) => isUnboundRecurrenceCandidate(proposed) && matchingPriorEscalationStop(proposed) === undefined),
     ...blockedOrdinaryRecurrenceCases,
     ...withheldActionRecurrenceCases,
   ];
@@ -722,9 +728,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         : [boundDecisionStopId(input.aggregate.lapId, proposed.case.existingCaseId)]),
       ...(blockedConsistency === undefined ? [] : [consistencyStopId(input.aggregate.lapId)]),
       ...priorOpenStops.filter((record) =>
-        escalationCases.some((proposed) => proposed.case.disposition === 'escalate' &&
-          record.escalation?.owner === proposed.case.escalation?.owner &&
-          record.rationale === proposed.case.rationale && sameSourceIds(record, proposed)) ||
+        escalationCases.some((proposed) => matchingPriorEscalationStop(proposed)?.id === record.id) ||
         replayingBlockedConsistencyStop && record.consistencyStop?.rationale === blockedConsistency?.rationale)
         .map((record) => record.id),
     ]),
@@ -829,7 +833,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     // A bound owner cannot also be the new decision stop: persistence must be
     // able to resolve it atomically before opening its replacement.
     const caseId = proposed.case.existingCaseId === undefined
-      ? generateId()
+      ? matchingPriorEscalationStop(proposed)?.id ?? generateId()
       : boundDecisionStopId(input.aggregate.lapId, proposed.case.existingCaseId);
     const proposedSourceIds = new Set(proposed.sources.map((source) => source.sourceId));
     const ownsBlockedConsistency = proposed === blockedConsistencyOwner;

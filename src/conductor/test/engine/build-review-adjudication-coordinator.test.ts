@@ -1,4 +1,4 @@
-// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-ar-ab-d9-3-1, task:rem-ar-ab-d9-3-2, task:rem-as-built-rem-ar-ab-d6-9-1, task:rem-as-built-rem-ar-ab-d6-10-1
+// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-ar-ab-d9-3-1, task:rem-ar-ab-d9-3-2, task:rem-as-built-rem-ar-ab-d6-9-1, task:rem-as-built-rem-ar-ab-d6-10-1, task:rem-as-built-rem-ar-ab-d11-2-1
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -2505,19 +2505,18 @@ describe('coordinateBuildReviewAdjudication', () => {
       .some((event) => event.reason.includes('malformed-state'))).toBe(false);
   });
 
-  it('halts an unbound escalation from v1 history that reuses a resolved action source without persisting a stop', async () => {
+  it('replays an unbound escalation over its now-resolved action owner without a semantic halt or another stop', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
     await seedCases(store, {
       version: 'v1', feature,
       cases: [{
         id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
-        rationale: 'The prior repair was applied.', resolution: 'resolved',
+        rationale: 'The prior repair is awaiting implementation.', resolution: 'open',
         sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
-        effect: { id: 'effect-r', kind: 'action', status: 'applied', workOrderId: 'order-r' },
+        effect: { id: 'effect-r', kind: 'action', status: 'reserved' },
       }],
     });
-    const events: RemediationCaseLifecycleEvent[] = [];
     const judgement: RemediationCaseJudgement = {
       mode: 'case-v2', domain: 'build_review',
       sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'stop-r' }],
@@ -2528,15 +2527,158 @@ describe('coordinateBuildReviewAdjudication', () => {
       consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['stop-r'], rationale: 'The stop is internally consistent.' },
     };
 
-    const result = await coordinateBuildReviewAdjudication({
-      ...input(root, async () => judgement), emit: async (event) => { events.push(event); },
-    });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-04T00:00:00.000Z'));
+      await expect(coordinateBuildReviewAdjudication({ ...input(root, async () => judgement), generateId: () => 'stop-r' }))
+        .resolves.toMatchObject({ ok: true, route: 'halt' });
+      const before = await readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8');
+      vi.setSystemTime(new Date('2026-10-04T00:05:00.000Z'));
+      const events: RemediationCaseLifecycleEvent[] = [];
+      await expect(coordinateBuildReviewAdjudication({
+        ...input(root, async () => judgement),
+        generateId: () => { throw new Error('same-lap escalation replay must reuse its existing stop id'); },
+        emit: async (event) => { events.push(event); },
+      })).resolves.toMatchObject({ ok: true, route: 'halt' });
 
-    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-r' });
+      await expect(readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8')).resolves.toBe(before);
+      expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_semantic_repeat_halt' }));
+      expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
+      expect(events.filter((event) => event.type === 'remediation_case_reconciled')).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('halts a changed-rationale unbound escalation over the resolved action source as regressed', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-rationale-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The prior repair is awaiting implementation.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-rationale-owner', kind: 'action', status: 'reserved' },
+      }],
+    });
+    const original = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'rationale-stop' }],
+      cases: [{
+        caseRef: 'rationale-stop', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'Architecture must decide the original concern.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['rationale-stop'], rationale: 'The original stop is internally consistent.' },
+    } as const satisfies RemediationCaseJudgement;
+    const changed = {
+      ...original,
+      cases: [{ ...original.cases[0]!, rationale: 'Architecture must decide a materially different concern.' }],
+    } as const satisfies RemediationCaseJudgement;
+
+    await expect(coordinateBuildReviewAdjudication({ ...input(root, async () => original), generateId: () => 'rationale-stop' }))
+      .resolves.toMatchObject({ ok: true, route: 'halt' });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => changed), generateId: () => { throw new Error('changed escalation must not create another stop'); },
+      emit: async (event) => { events.push(event); },
+    })).resolves.toMatchObject({ ok: false, detail: 'semantic remediation case regression case-rationale-owner' });
+
     expect(events).toContainEqual(expect.objectContaining({
-      type: 'remediation_semantic_repeat_halt', caseId: 'case-r', reason: 'regressed',
+      type: 'remediation_semantic_repeat_halt', caseId: 'case-rationale-owner', reason: 'regressed',
     }));
-    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({ id: 'case-r' })] } });
+  });
+
+  it('replays a blocked lap with a withheld action row without a semantic halt or another stop', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-blocked-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The current repair is awaiting implementation.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-blocked-owner', kind: 'action', status: 'reserved' },
+      }],
+    });
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'withheld-action' }],
+      cases: [{
+        caseRef: 'withheld-action', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The test needs a focused assertion.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Add the missing assertion', admittedTaskIds: ['34'], admissionRationale: 'Task 34 owns this repair.' }] },
+      }],
+      consistency: { verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['withheld-action'], rationale: 'The repair contradicts the approved baseline.' },
+    } as const satisfies RemediationCaseJudgement;
+    const lap = {
+      ...input(root, async () => judgement),
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '34', contract: 'coordinator integration' }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+    };
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-04T00:00:00.000Z'));
+      await expect(coordinateBuildReviewAdjudication(lap)).resolves.toMatchObject({ ok: true, route: 'halt' });
+      const before = await readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8');
+      vi.setSystemTime(new Date('2026-10-04T00:05:00.000Z'));
+      const events: RemediationCaseLifecycleEvent[] = [];
+      await expect(coordinateBuildReviewAdjudication({ ...lap, emit: async (event) => { events.push(event); } }))
+        .resolves.toMatchObject({ ok: true, route: 'halt' });
+
+      await expect(readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8')).resolves.toBe(before);
+      expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_semantic_repeat_halt' }));
+      expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
+      expect(events.filter((event) => event.type === 'remediation_case_reconciled')).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('replays a blocked consistency carried by an escalation without a semantic halt or another stop', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-escalated-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The current repair is awaiting implementation.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-escalated-owner', kind: 'action', status: 'reserved' },
+      }],
+    });
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'carried-stop' }],
+      cases: [{
+        caseRef: 'carried-stop', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'Architecture must decide this source.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: { verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['carried-stop'], rationale: 'The proposed repair remains inconsistent.' },
+    } as const satisfies RemediationCaseJudgement;
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-04T00:00:00.000Z'));
+      await expect(coordinateBuildReviewAdjudication({ ...input(root, async () => judgement), generateId: () => 'carried-stop' }))
+        .resolves.toMatchObject({ ok: true, route: 'halt' });
+      const before = await readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8');
+      vi.setSystemTime(new Date('2026-10-04T00:05:00.000Z'));
+      const events: RemediationCaseLifecycleEvent[] = [];
+      await expect(coordinateBuildReviewAdjudication({
+        ...input(root, async () => judgement),
+        generateId: () => { throw new Error('same-lap carried-consistency replay must reuse its existing stop id'); },
+        emit: async (event) => { events.push(event); },
+      })).resolves.toMatchObject({ ok: true, route: 'halt' });
+
+      await expect(readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8')).resolves.toBe(before);
+      expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_semantic_repeat_halt' }));
+      expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
+      expect(events.filter((event) => event.type === 'remediation_case_reconciled')).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('halts an undeclared resolved-source reuse in case-v2 without a malformed-state diagnostic', async () => {
