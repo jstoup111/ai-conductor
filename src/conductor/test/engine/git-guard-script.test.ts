@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { GIT_GUARD_SCRIPT } from '../../src/engine/git-hook-assets.js';
+import { writeGitGuard } from '../../src/engine/git-guard.js';
 
 const FEATURE_COMMON_DIR = '/fixture/feature-common';
 const SAFE_CLASSIFICATION_COMMANDS = new Set(['config', 'rev-parse', 'for-each-ref', 'merge-base']);
@@ -201,6 +202,41 @@ esac
     expect(await recordedCommands()).toEqual(['config', 'log']);
   });
 
+  it.each([
+    ['abbreviated hard reset', ['reset', '--har'], /hard reset/],
+    ['shortened hard reset', ['reset', '--ha', 'HEAD~1'], /hard reset/],
+    ['abbreviated forced clean', ['clean', '--fo'], /forced clean/],
+    ['shortened forced clean', ['clean', '--forc', '-d'], /forced clean/],
+    ['bundled forced clean', ['clean', '-dxf'], /forced clean/],
+    ['global-prefixed abbreviated reset', ['-C', 'fixture', '--no-pager', 'reset', '--har'], /hard reset/],
+    ['config-prefixed abbreviated reset', ['--config-env=core.pager=PAGER', 'reset', '--ha'], /hard reset/],
+    ['bundled force branch deletion', ['branch', '-df', 'unreachable'], /commits unreachable/],
+    ['reversed bundled force branch deletion', ['branch', '-fd', 'unreachable'], /commits unreachable/],
+    ['expanded force branch deletion', ['branch', '-Dq', 'unreachable'], /commits unreachable/],
+    ['abbreviated branch deletion', ['branch', '--del', '--force', 'unreachable'], /commits unreachable/],
+    ['path checkout after option terminator', ['checkout', '--', '--har'], /path checkout/],
+  ])('normalizes %s before classifying it', async (_name, args, reason) => {
+    await mkdir(join(fixtureDir, 'fixture'));
+    const result = invoke(args);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(reason);
+    expect((await recordedArgv()).some((argv) => argv.includes(args.includes('branch') ? 'branch' : args.includes('clean') ? 'clean' : args.includes('checkout') ? 'checkout' : 'reset'))).toBe(false);
+  });
+
+  it.each([
+    ['reset keep abbreviation', ['reset', '--ke', 'HEAD~1']],
+    ['reset soft abbreviation', ['reset', '--so', 'HEAD~1']],
+    ['reset mixed', ['reset', '--mix']],
+    ['push force-with-lease abbreviation', ['push', '--force-with', 'origin', 'main']],
+    ['non-forced clean bundle', ['clean', '-nd']],
+    ['dry-run clean abbreviation', ['clean', '--dry']],
+  ])('passes normalized safe %s through unchanged', async (_name, args) => {
+    const result = invoke(args);
+    expect(result.status).toBe(args[0] === 'push' ? 17 : 0);
+    expect((await recordedArgv()).at(-1)).toEqual(args);
+  });
+
 });
 
 // These cases deliberately use local Git rather than the classification stub:
@@ -245,6 +281,17 @@ describe('GIT_GUARD_SCRIPT in a scratch repository', () => {
     expect(invoke(['clean', '-f']).status).toBe(1);
     expect(git(['rev-parse', 'unreachable'])).toBe(tip);
     expect(await readFile(join(repository, 'untracked'), 'utf8')).toBe('survive exactly\n');
+  });
+
+  it('normalizes abbreviated resets in a guard provisioned by writeGitGuard', async () => {
+    const provisioned = await writeGitGuard(repository);
+    await writeFile(join(repository, 'tracked'), 'edited\n');
+
+    const result = spawnSync(join(provisioned, 'git'), ['reset', '--har'], { cwd: repository, encoding: 'utf8' });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('hard reset discards working-tree changes');
+    expect(await readFile(join(repository, 'tracked'), 'utf8')).toBe('edited\n');
   });
 
   it('passes reachable forced and ordinary branch deletion to real Git, including remote-only reachability', async () => {

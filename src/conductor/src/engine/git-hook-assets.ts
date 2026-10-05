@@ -16,6 +16,114 @@ const globalOptionCase = GIT_OPTION_SPEC.global.flatMap((option) => {
   ];
 }).join('\n');
 
+const guardedOptionMetadataCase = (kind: 'name' | 'short') => Object.entries(GIT_OPTION_SPEC.subcommands).flatMap(([command, options]) => options
+  .filter((option) => option[kind] !== undefined)
+  .map((option) => {
+    const key = option[kind]!;
+    const canonical = option.name ?? key;
+    return `    ${command}:${key}) printf '%s' '${canonical}|${option.arity}|${option.negatable}|${option.expandsTo?.join(',') ?? ''}' ;;`;
+  })).join('\n');
+
+const guardedOptionNamesCase = Object.entries(GIT_OPTION_SPEC.subcommands).map(([command, options]) => {
+  const names = options.flatMap((option) => option.name === undefined ? [] : [option.name]);
+  return `    ${command}) printf '%s\\n' ${names.map((name) => `'${name}'`).join(' ')} ;;`;
+}).join('\n');
+
+// These fragments are deliberately assembled from the data-only option spec at
+// module load.  The resulting guard is static shell source, not an interpreter
+// template populated from runtime argv.
+const guardedOptionNormalizer = `
+option_metadata() {
+  case "$1:$2" in
+${guardedOptionMetadataCase('name')}
+  esac
+}
+
+short_option_metadata() {
+  case "$1:$2" in
+${guardedOptionMetadataCase('short')}
+  esac
+}
+
+option_names() {
+  case "$1" in
+${guardedOptionNamesCase}
+  esac
+}
+
+resolve_long_option() {
+  local command="$1" token="$2" candidate metadata match='' matches=0
+  metadata="$(option_metadata "$command" "$token")"
+  if [[ -n "$metadata" ]]; then printf '%s' "$metadata"; return; fi
+  while IFS= read -r candidate; do
+    [[ "$candidate" == "$token"* ]] || continue
+    metadata="$(option_metadata "$command" "$candidate")"
+    match="$metadata"
+    ((matches+=1))
+  done < <(option_names "$command")
+  [[ $matches -eq 1 ]] && printf '%s' "$match"
+}
+
+canon=()
+operands=()
+options_ended=false
+add_metadata() {
+  local metadata="$1" negated="$2" canonical arity negatable expands
+  IFS='|' read -r canonical arity negatable expands <<< "$metadata"
+  if [[ "$negated" == true ]]; then
+    [[ "$negatable" == true ]] || return
+    canon+=("no-$canonical")
+  elif [[ -n "$expands" ]]; then
+    IFS=',' read -r -a expanded <<< "$expands"
+    canon+=("\${expanded[@]}")
+  else
+    canon+=("$canonical")
+  fi
+}
+
+normalize_options() {
+  local command="$1" start="$2" token base value metadata canonical arity negatable expands letters letter rest j
+  j=$((start + 1))
+  while [[ $j -lt \${#args[@]} ]]; do
+    token="\${args[$j]}"
+    if [[ "$options_ended" == true ]]; then operands+=("$token"); ((j+=1)); continue; fi
+    if [[ "$token" == -- || "$token" == --end-of-options ]]; then options_ended=true; ((j+=1)); continue; fi
+    if [[ "$token" == --* ]]; then
+      base="\${token#--}"; value=''
+      [[ "$base" == *=* ]] && { value="\${base#*=}"; base="\${base%%=*}"; }
+      negated=false
+      if [[ "$base" == no-* ]]; then negated=true; base="\${base#no-}"; fi
+      metadata="$(resolve_long_option "$command" "$base")"
+      if [[ -n "$metadata" ]]; then
+        IFS='|' read -r canonical arity negatable expands <<< "$metadata"
+        add_metadata "$metadata" "$negated"
+        if [[ "$arity" == required && -z "$value" && $((j + 1)) -lt \${#args[@]} ]]; then ((j+=1)); fi
+      fi
+      ((j+=1)); continue
+    fi
+    if [[ "$token" == -?* ]]; then
+      letters="\${token#-}"
+      for ((k=0; k<\${#letters}; k++)); do
+        letter="\${letters:k:1}"
+        metadata="$(short_option_metadata "$command" "$letter")"
+        [[ -n "$metadata" ]] || break
+        IFS='|' read -r canonical arity negatable expands <<< "$metadata"
+        add_metadata "$metadata" false
+        [[ "$arity" == none ]] && continue
+        rest="\${letters:$((k + 1))}"
+        [[ -n "$rest" || "$arity" != required || $((j + 1)) -ge \${#args[@]} ]] || ((j+=1))
+        break
+      done
+      ((j+=1)); continue
+    fi
+    operands+=("$token")
+    ((j+=1))
+  done
+}
+
+has_canon() { local wanted="$1" value; for value in "\${canon[@]}"; do [[ "$value" == "$wanted" ]] && return 0; done; return 1; }
+`;
+
 /**
  * A PATH-shadowing git wrapper for agent processes. Runtime values are data
  * files beside the wrapper so this source remains deterministic and auditable.
@@ -81,35 +189,39 @@ if [[ -n "$command" ]] && [[ ! "$command" =~ ^(add|annotate|blame|bugreport|cat-
   fi
 fi
 
+${guardedOptionNormalizer}
+if [[ "$command" =~ ^(reset|branch|clean|push|checkout|restore)$ ]]; then
+  normalize_options "$command" "$i"
+fi
+
 destructive=false
 reason=''
 alternative=''
 case "$command" in
   push)
-    for a in "\${args[@]:$((i+1))}"; do
-      [[ "$a" == --force || "$a" == -f || "$a" == +* ]] && { destructive=true; reason='bare force push can rewrite remote history'; alternative='git push --force-with-lease'; break; }
-    done ;;
+    for a in "\${operands[@]}"; do
+      [[ "$a" == +* ]] && { destructive=true; reason='bare force push can rewrite remote history'; alternative='git push --force-with-lease'; break; }
+    done
+    has_canon force && { destructive=true; reason='bare force push can rewrite remote history'; alternative='git push --force-with-lease'; } ;;
   reset)
-    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --hard ]] && { destructive=true; reason='hard reset discards working-tree changes'; alternative='git reset --keep <target>'; break; }; done ;;
+    has_canon hard && { destructive=true; reason='hard reset discards working-tree changes'; alternative='git reset --keep <target>'; } ;;
   clean)
-    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --force || ( "$a" == -?* && "$a" != --* && "$a" == *f* ) ]] && { destructive=true; reason='forced clean deletes untracked files'; alternative='git clean -n then remove named paths'; break; }; done ;;
+    has_canon force && { destructive=true; reason='forced clean deletes untracked files'; alternative='git clean -n then remove named paths'; } ;;
   checkout)
-    has_paths=false; safe_side=false
-    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == -- ]] && has_paths=true; [[ "$a" == --ours || "$a" == --theirs || "$a" == --merge || "$a" == -m ]] && safe_side=true; done
+    has_paths="$options_ended"; safe_side=false
+    has_canon ours || has_canon theirs || has_canon merge && safe_side=true
     [[ "$has_paths" == true && "$safe_side" == false ]] && { destructive=true; reason='path checkout discards working-tree changes'; alternative='commit a WIP first or use a temporary worktree'; } ;;
   restore)
     safe_side=false; staged=false; worktree=false
-    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --ours || "$a" == --theirs || "$a" == --merge ]] && safe_side=true; [[ "$a" == --staged || "$a" == -S ]] && staged=true; [[ "$a" == --worktree || "$a" == -W ]] && worktree=true; done
+    has_canon ours || has_canon theirs || has_canon merge && safe_side=true
+    has_canon staged && staged=true
+    has_canon worktree && worktree=true
     [[ "$safe_side" == false && ( "$staged" == false || "$worktree" == true ) ]] && { destructive=true; reason='restore discards working-tree changes'; alternative='commit a WIP first or use a temporary worktree'; } ;;
   branch)
-    force=false; force_delete=false; delete=false; names=()
-    for a in "\${args[@]:$((i+1))}"; do
-      [[ "$a" == -D ]] && force_delete=true
-      [[ "$a" == --force ]] && force=true
-      [[ "$a" == -d || "$a" == --delete ]] && delete=true
-      [[ "$a" != -* ]] && names+=("$a")
-    done
-    if [[ "$force_delete" == true || ( "$force" == true && "$delete" == true ) ]] && (( \${#names[@]} > 0 )); then
+    force=false; delete=false; names=("\${operands[@]}")
+    has_canon force && force=true
+    has_canon delete && delete=true
+    if [[ "$force" == true && "$delete" == true ]] && (( \${#names[@]} > 0 )); then
       for name in "\${names[@]}"; do
         reachable=false
         while IFS= read -r ref; do
