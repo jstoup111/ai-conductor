@@ -247,7 +247,7 @@ export function createCandidateSafetyBoundary(options: {
 export type PrepareCandidateSelfHost = (
   candidate: ProviderCandidate,
   runtime: ProviderRuntime,
-  identity?: { readonly runId: string | undefined; readonly attempt: number },
+  identity?: { readonly runId: string | undefined; readonly attempt: number; readonly member?: string },
 ) => Promise<SelfHostInvocation | undefined>;
 
 export interface ExecuteProviderCandidatesInput {
@@ -828,7 +828,7 @@ export async function executeProviderCandidates({
       const candidate: ProviderCandidate = { step, providerKey, model: resolved.model, effort: resolved.effort };
       let prepared: SelfHostInvocation | undefined;
       try {
-        prepared = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index });
+        prepared = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index, member: auxiliaryMember });
         await prepareCandidateBaseline({ candidate, prepared });
       } catch (error) {
         // Normal setup-unavailable candidates will be represented by the real
@@ -940,6 +940,7 @@ export async function executeProviderCandidates({
                     repository: nativeSchemaScratch.repository,
                     featureSlug: nativeSchemaScratch.featureSlug || basename(nativeSchemaScratch.worktreeRoot),
                     runId: schemaScratchRunId, attempt, provider: providerKey as SelfHostProviderId,
+                    member: auxiliaryMember,
                   });
                 } catch (error) {
                   nativeSchemaScratchFailure = error;
@@ -976,7 +977,7 @@ export async function executeProviderCandidates({
           ? undefined
           : candidateOptions.providerStreamObserverForCandidate?.(providerKey);
         try {
-          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index });
+          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index, member: auxiliaryMember });
         } catch (error) {
           setupUnavailable = normalizeProviderSetupUnavailable(error, providerKey);
           if (!setupUnavailable) throw error;
@@ -1016,6 +1017,7 @@ export async function executeProviderCandidates({
                 const released = await releaseScratchHome({
                   worktreeRoot: nativeSchemaScratch!.worktreeRoot,
                   runId: schemaScratchRunId!, attempt, provider: providerKey as SelfHostProviderId,
+                  member: auxiliaryMember,
                 });
                 if (released.kind === 'failed') {
                   nativeSchemaScratchFailure = new Error(`native schema scratch teardown failed: ${released.error}`);

@@ -89,12 +89,14 @@ type ScratchLeaseIdentity = {
   readonly featureSlug: string;
   readonly runId: string;
   readonly attempt: number;
+  /** Concurrent auxiliary member sharing this run/attempt; keys its own scratch home. */
+  readonly member?: string;
 };
 
 /** Explicit baseDir is test injection; default provisioning always owns a complete lease. */
 export type ProvisionProviderHomeOptions = ProvisionProviderHomeBaseOptions & (
   | (ScratchLeaseIdentity & { readonly baseDir?: undefined })
-  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number }
+  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number; readonly member?: string }
 );
 
 export class ProviderHomeProvisionError extends Error {
@@ -166,6 +168,7 @@ export async function provisionProviderHome(
     featureSlug: options.featureSlug,
     runId: options.runId,
     attempt: options.attempt,
+    member: options.member,
     provider: provider.id,
   });
   const parentEnv = options.parentEnv ?? process.env;
@@ -229,6 +232,7 @@ export async function provisionProviderHome(
           worktreeRoot: options.worktreeRoot,
           runId: options.runId!,
           attempt: options.attempt!,
+          member: options.member,
           provider: provider.id,
         }).then(() => {})
         : undefined,
@@ -239,6 +243,7 @@ export async function provisionProviderHome(
           worktreeRoot: options.worktreeRoot,
           runId: options.runId!,
           attempt: options.attempt!,
+          member: options.member,
           provider: provider.id,
         });
     } else if (homeDir) {

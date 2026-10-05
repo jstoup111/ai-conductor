@@ -129,12 +129,14 @@ type SandboxScratchLeaseIdentity = {
   readonly featureSlug: string;
   readonly runId: string;
   readonly attempt: number;
+  /** Concurrent auxiliary member sharing this run/attempt; keys its own scratch home. */
+  readonly member?: string;
 };
 
 /** Explicit baseDir is test injection; default provisioning always owns a complete lease. */
 export type ProvisionOptions = ProvisionOptionsBase & (
   | (SandboxScratchLeaseIdentity & { readonly baseDir?: undefined })
-  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number }
+  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number; readonly member?: string }
 );
 
 /** Only edited harness skills are exposed from the worktree. */
@@ -200,6 +202,7 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
     featureSlug: opts.featureSlug,
     runId: opts.runId,
     attempt: opts.attempt,
+    member: opts.member,
     provider: provider.id,
   });
   const parentEnv = opts.parentEnv ?? process.env;
@@ -251,6 +254,7 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
           worktreeRoot: opts.worktreeRoot,
           runId: opts.runId!,
           attempt: opts.attempt!,
+          member: opts.member,
           provider: provider.id,
         });
     } else if (configDir) {
@@ -273,6 +277,7 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
         worktreeRoot: opts.worktreeRoot,
         runId: opts.runId!,
         attempt: opts.attempt!,
+        member: opts.member,
         provider: provider.id,
       }).then(() => {})
       : undefined,

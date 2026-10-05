@@ -14,6 +14,12 @@ export interface ResolveScratchHomeOptions {
   readonly runId: string;
   readonly attempt: number;
   readonly provider: SelfHostProviderId;
+  /**
+   * Concurrent auxiliary member (e.g. a build_review rubric) sharing this run
+   * and attempt. Members fan out in parallel, so each needs its own home: one
+   * member's release must never remove a sibling's live home.
+   */
+  readonly member?: string;
 }
 
 /**
@@ -525,7 +531,7 @@ function isNoSuchProcessError(error: unknown): boolean {
 }
 
 export function resolveScratchHome(options: ResolveScratchHomeOptions): string {
-  const { worktreeRoot, runId, attempt, provider } = options;
+  const { worktreeRoot, runId, attempt, provider, member } = options;
 
   if (worktreeRoot === undefined) {
     throw new Error('worktree root is required');
@@ -540,5 +546,8 @@ export function resolveScratchHome(options: ResolveScratchHomeOptions): string {
     throw new Error('provider is required');
   }
 
-  return join(normalize(worktreeRoot), '.daemon', 'scratch', runId, `${attempt}-${provider}`);
+  const leaf = member === undefined
+    ? `${attempt}-${provider}`
+    : `${attempt}-${provider}-${member.replace(/[^A-Za-z0-9._-]/g, '_')}`;
+  return join(normalize(worktreeRoot), '.daemon', 'scratch', runId, leaf);
 }

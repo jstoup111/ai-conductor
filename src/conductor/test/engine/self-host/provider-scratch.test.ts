@@ -380,6 +380,41 @@ describe('provider scratch homes', () => {
     }
   });
 
+  it('gives concurrent auxiliary members of one run and attempt separate homes', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-members-'));
+    const shared = {
+      worktreeRoot,
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 0,
+      provider: 'claude' as const,
+    };
+
+    try {
+      const [testQualityHome, securityHome] = await Promise.all([
+        acquireScratchHome({ ...shared, member: 'testQuality' }),
+        acquireScratchHome({ ...shared, member: 'security' }),
+      ]);
+      expect(testQualityHome).not.toBe(securityHome);
+
+      await releaseScratchHome({ ...shared, member: 'testQuality' });
+
+      await expect(readdir(testQualityHome)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(securityHome, 'owner.json'), 'utf8')).resolves.toBeTypeOf('string');
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a member-keyed home a single leaf beneath its run directory', () => {
+    const home = resolveScratchHome({
+      worktreeRoot: '/worktree', runId: 'R', attempt: 0, provider: 'claude', member: '../escape/x:y',
+    });
+
+    expect(relative(join('/worktree', '.daemon', 'scratch', 'R'), home)).toBe('0-claude-.._escape_x_y');
+  });
+
   it('releases an already released home idempotently', async () => {
     const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-idempotent-release-'));
     const options = {

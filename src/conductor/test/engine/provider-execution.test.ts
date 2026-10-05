@@ -494,6 +494,26 @@ describe('executeProviderCandidates', () => {
     expect(claudeInvoke).toHaveBeenCalledTimes(1);
   });
 
+  it('keys self-host preparation by the auxiliary member so concurrent members never share scratch', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'ok', exitCode: 0 }));
+    const prepare = vi.fn(async () => ({ executable: '/resolved/codex', env: {}, args: [], teardown: async () => {} }));
+
+    await executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'security', runId: 'R',
+      policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0 },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'review', cwd: '/workspace' },
+      prepareCandidateSelfHost: prepare,
+    });
+
+    expect(prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ providerKey: 'codex' }),
+      expect.anything(),
+      { runId: 'R', attempt: 0, member: 'security' },
+    );
+  });
+
   it('records a custom member setup skip and launches nothing when its provider has no read-only review mode', async () => {
     const invoke = vi.fn();
     const result = await executeAuxiliaryProviderCandidates({

@@ -6652,6 +6652,7 @@ export class Conductor {
               featureSlug,
               runId: identity.runId,
               attempt: identity.attempt,
+              member: identity.member,
             });
             ownershipTransferred = true;
             return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), originalCatalogHome: providerHome, teardown: async () => { try { await verify(); } finally { await home.teardown(); } } });
@@ -6663,6 +6664,7 @@ export class Conductor {
             featureSlug,
             runId: identity.runId,
             attempt: identity.attempt,
+            member: identity.member,
           });
           ownershipTransferred = true;
           return prepareInvocation({
