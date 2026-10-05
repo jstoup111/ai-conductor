@@ -863,10 +863,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     const sources = graph.graph.sourceOutcomes
       .filter((source) => blockedConsistency.sourceIds.includes(source.sourceId) && !escalationCoveredBlockedSourceIds.has(source.sourceId))
       .map((source) => ({ sourceId: source.sourceId, outcome: source.outcome, recordedAt }));
-    // The synthetic stop is the new case for the rows it absorbs, so it
-    // persists their declared lineage (D6.2).
+    // The synthetic stop is the new case for the validated live rows it
+    // absorbs, including effect-withheld actions, so it persists their
+    // declared lineage (D6.2).
     const syntheticSourceIds = new Set(sources.map((source) => source.sourceId));
-    const syntheticDistinctFrom = [...new Set(admitted
+    const syntheticDistinctFrom = [...new Set(liveGraphCases
       .filter((proposed) => proposed.sources.some((source) => syntheticSourceIds.has(source.sourceId)))
       .flatMap((proposed) => proposed.case.distinctFrom ?? []))];
     if (sources.length > 0) {

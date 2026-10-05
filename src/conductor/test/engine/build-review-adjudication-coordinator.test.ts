@@ -1,4 +1,4 @@
-// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-ar-ab-d9-3-1, task:rem-ar-ab-d9-3-2, task:rem-as-built-rem-ar-ab-d6-9-1, task:rem-as-built-rem-ar-ab-d6-10-1, task:rem-as-built-rem-ar-ab-d11-2-1, task:rem-as-built-rem-ar-ab-d12-3-1
+// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-ar-ab-d9-3-1, task:rem-ar-ab-d9-3-2, task:rem-as-built-rem-ar-ab-d6-9-1, task:rem-as-built-rem-ar-ab-d6-10-1, task:rem-as-built-rem-ar-ab-d6-11-1, task:rem-as-built-rem-ar-ab-d11-2-1, task:rem-as-built-rem-ar-ab-d12-3-1
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -2671,6 +2671,55 @@ describe('coordinateBuildReviewAdjudication', () => {
       expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_semantic_repeat_halt' }));
       expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
       expect(events.filter((event) => event.type === 'remediation_case_reconciled')).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('persists declared distinctness from a withheld action on a blocked consistency stop and replays it unchanged', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The prior repair was applied.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-r', kind: 'action', status: 'applied', workOrderId: 'order-r' },
+      }],
+    });
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'withheld-distinct-action' }],
+      cases: [{
+        caseRef: 'withheld-distinct-action', distinctFrom: ['case-r'], disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The later concern is distinct from the resolved repair.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the distinct concern', admittedTaskIds: ['34'], admissionRationale: 'Task 34 owns this repair.' }] },
+      }],
+      consistency: { verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['withheld-distinct-action'], rationale: 'The repair contradicts the approved baseline.' },
+    } as const satisfies RemediationCaseJudgement;
+    const lap = {
+      ...input(root, async () => judgement),
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '34', contract: 'coordinator integration' }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+    };
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-04T00:00:00.000Z'));
+      await expect(coordinateBuildReviewAdjudication(lap)).resolves.toMatchObject({ ok: true, route: 'halt' });
+      const before = await readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8');
+      expect(JSON.parse(before)).toMatchObject({ cases: expect.arrayContaining([
+        expect.objectContaining({ id: 'consistency-stop-lap-1', distinctFrom: ['case-r'] }),
+      ]) });
+
+      vi.setSystemTime(new Date('2026-10-04T00:05:00.000Z'));
+      const events: RemediationCaseLifecycleEvent[] = [];
+      await expect(coordinateBuildReviewAdjudication({ ...lap, emit: async (event) => { events.push(event); } }))
+        .resolves.toMatchObject({ ok: true, route: 'halt' });
+
+      await expect(readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8')).resolves.toBe(before);
+      expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_semantic_repeat_halt' }));
     } finally {
       vi.useRealTimers();
     }
