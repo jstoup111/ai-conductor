@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4, task:5
+// Covers: task:2, task:3, task:4, task:5, task:12
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,6 +7,20 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { GIT_GUARD_SCRIPT } from '../../src/engine/git-hook-assets.js';
 import { writeGitGuard } from '../../src/engine/git-guard.js';
+
+type Expectation = 'refuse' | 'allow' | 'not-applicable';
+interface CorpusCase {
+  name: string;
+  argv: string[];
+  command: string;
+  pathGuard: Expectation;
+  hook: Expectation;
+  branch?: 'unreachable' | 'reachable-unmerged' | 'merged';
+  spellingOnly?: boolean;
+  policyDifference?: 'checkout-paths' | 'branch-merged-rule';
+  alias?: string;
+}
+const destructiveGitCorpus = JSON.parse(await readFile(new URL('../fixtures/destructive-git-corpus.json', import.meta.url), 'utf8')) as CorpusCase[];
 
 const FEATURE_COMMON_DIR = '/fixture/feature-common';
 const SAFE_CLASSIFICATION_COMMANDS = new Set(['config', 'rev-parse', 'for-each-ref', 'merge-base']);
@@ -42,6 +56,7 @@ describe('GIT_GUARD_SCRIPT refusal messages', () => {
   let guardPath: string;
   let callsPath: string;
   let aliasPath: string;
+  let branchStatePath: string;
 
   beforeEach(async () => {
     fixtureDir = await mkdtemp(join(tmpdir(), 'git-guard-script-'));
@@ -49,6 +64,7 @@ describe('GIT_GUARD_SCRIPT refusal messages', () => {
     const guardDataDir = join(fixtureDir, '.pipeline', 'git-guard');
     callsPath = join(fixtureDir, 'calls');
     aliasPath = join(fixtureDir, 'alias');
+    branchStatePath = join(fixtureDir, 'branch-state');
     guardPath = join(binDir, 'git');
     const realGitPath = join(fixtureDir, 'real-git');
 
@@ -73,6 +89,8 @@ done
 case "\${argv[$command_index]}" in
   rev-parse) printf '%s\\n' ${JSON.stringify(FEATURE_COMMON_DIR)} ;;
   config) cat ${JSON.stringify(aliasPath)} 2>/dev/null || true ;;
+  for-each-ref) [[ "$(cat ${JSON.stringify(branchStatePath)} 2>/dev/null)" == reachable-unmerged ]] && printf '%s\\n' refs/heads/other ;;
+  merge-base) [[ "$(cat ${JSON.stringify(branchStatePath)} 2>/dev/null)" == reachable-unmerged ]] && exit 0; exit 1 ;;
   push) printf '%s\\n' 'non-fast-forward: remote rejected update' >&2; exit 17 ;;
 esac
 `, 'utf8');
@@ -310,6 +328,30 @@ esac
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('hard reset discards working-tree changes');
     expect((await recordedCommands()).some((command) => command === 'reset')).toBe(false);
+  });
+
+  it('drives every applicable shared corpus case and no excluded case', async () => {
+    const applicable = destructiveGitCorpus.filter(({ pathGuard }) => pathGuard !== 'not-applicable');
+    let ran = 0;
+    for (const corpusCase of applicable) {
+      await writeFile(aliasPath, corpusCase.alias ?? '', 'utf8');
+      await writeFile(branchStatePath, corpusCase.branch ?? '', 'utf8');
+      const result = invoke(corpusCase.argv);
+      expect(result.status, corpusCase.name).toBe(corpusCase.pathGuard === 'refuse' ? 1 : 0);
+      ran += 1;
+    }
+    expect(ran).toBe(applicable.length);
+  });
+
+  it('enforces the shared corpus schema and policy boundaries', () => {
+    const names = new Set(destructiveGitCorpus.map(({ name }) => name));
+    for (const name of ['C prefix branch delete', 'git-dir prefix branch delete', 'config-env global prefix', 'escaped heredoc only', 'quoted heredoc opener only', 'comment heredoc marker', 'git-dir equals reset', 'quoted alias hard reset', 'multiple quoted heredocs only', 'spaced quoted heredoc only', 'reset abbreviated hard', 'branch bundled delete force', 'branch abbreviated delete force', 'clean bundled force', 'push plus refspec']) expect(names).toContain(name);
+    for (const corpusCase of destructiveGitCorpus) {
+      if (corpusCase.spellingOnly) expect([corpusCase.pathGuard, corpusCase.hook]).toEqual(['refuse', 'refuse']);
+      if (corpusCase.pathGuard !== 'not-applicable' && corpusCase.hook !== 'not-applicable' && corpusCase.pathGuard !== corpusCase.hook) expect(corpusCase.policyDifference).toMatch(/^(checkout-paths|branch-merged-rule)$/);
+      if (corpusCase.pathGuard === 'not-applicable') expect(corpusCase.command).toMatch(/^(?:#|cat <<)/);
+      if (/^git (checkout|restore) /.test(corpusCase.command) && corpusCase.hook === 'refuse') expect(corpusCase.command).toMatch(/^git (?:checkout -- \.|restore \.)$/);
+    }
   });
 
 });

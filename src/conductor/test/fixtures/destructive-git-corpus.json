@@ -1,0 +1,21 @@
+[
+  {"name":"reset abbreviated hard","argv":["reset","--har"],"command":"git reset --har","pathGuard":"refuse","hook":"refuse","spellingOnly":true},
+  {"name":"branch bundled delete force","argv":["branch","-df","unreachable"],"command":"git branch -df unreachable","pathGuard":"refuse","hook":"refuse","branch":"unreachable","spellingOnly":true},
+  {"name":"branch abbreviated delete force","argv":["branch","--delete","--forc","unreachable"],"command":"git branch --delete --forc unreachable","pathGuard":"refuse","hook":"refuse","branch":"unreachable","spellingOnly":true},
+  {"name":"config-env global prefix","argv":["--config-env=core.pager=PAGER","reset","--hard"],"command":"git --config-env=core.pager=PAGER reset --hard","pathGuard":"refuse","hook":"refuse","spellingOnly":true},
+  {"name":"clean bundled force","argv":["clean","-xdf"],"command":"git clean -xdf","pathGuard":"refuse","hook":"refuse","spellingOnly":true},
+  {"name":"push plus refspec","argv":["push","origin","+main"],"command":"git push origin +main","pathGuard":"refuse","hook":"refuse","spellingOnly":true},
+  {"name":"C prefix branch delete","argv":["-C","fixture","branch","-D","unreachable"],"command":"git -C fixture branch -D unreachable","pathGuard":"refuse","hook":"refuse","branch":"unreachable","spellingOnly":true},
+  {"name":"git-dir prefix branch delete","argv":["--git-dir",".git","branch","-D","unreachable"],"command":"git --git-dir .git branch -D unreachable","pathGuard":"refuse","hook":"refuse","branch":"unreachable","spellingOnly":true},
+  {"name":"git-dir equals reset","argv":["--git-dir=.git","reset","--har"],"command":"git --git-dir=.git reset --har","pathGuard":"refuse","hook":"refuse","spellingOnly":true},
+  {"name":"quoted alias hard reset","argv":["nuke"],"command":"git nuke","pathGuard":"refuse","hook":"not-applicable","alias":"reset '--har'"},
+  {"name":"escaped heredoc only","argv":[],"command":"cat <<\\EOF\ngit reset --hard\nEOF","pathGuard":"not-applicable","hook":"allow"},
+  {"name":"quoted heredoc opener only","argv":[],"command":"cat <<E\"OF\"\ngit reset --hard\nEOF","pathGuard":"not-applicable","hook":"allow"},
+  {"name":"multiple quoted heredocs only","argv":[],"command":"cat <<A <<'B'\ngit reset --hard\nA\ngit push --force\nB","pathGuard":"not-applicable","hook":"allow"},
+  {"name":"spaced quoted heredoc only","argv":[],"command":"cat <<  'EOF'\ngit reset --hard\nEOF","pathGuard":"not-applicable","hook":"allow"},
+  {"name":"comment heredoc marker","argv":[],"command":"# <<EOF\ngit reset --hard","pathGuard":"not-applicable","hook":"refuse"},
+  {"name":"checkout arbitrary path","argv":["checkout","--","file"],"command":"git checkout -- file","pathGuard":"refuse","hook":"allow","policyDifference":"checkout-paths"},
+  {"name":"checkout repository path","argv":["checkout","--","."],"command":"git checkout -- .","pathGuard":"refuse","hook":"refuse"},
+  {"name":"restore repository path","argv":["restore","."],"command":"git restore .","pathGuard":"refuse","hook":"refuse"},
+  {"name":"reachable unmerged branch delete","argv":["branch","-D","reachable"],"command":"git branch -D reachable","pathGuard":"allow","hook":"refuse","branch":"reachable-unmerged","policyDifference":"branch-merged-rule"}
+]

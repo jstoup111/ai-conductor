@@ -1,6 +1,6 @@
-// Covers: task:1, task:2, task:7, task:8, task:9, task:10, task:14, task:rem-as-built-rem-as-built-adr-d8-quote-removal-1
+// Covers: task:1, task:2, task:7, task:8, task:9, task:10, task:12, task:14, task:rem-as-built-rem-as-built-adr-d8-quote-removal-1
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOOK_PATH = join(__dirname, '..', '..', '..', '..', 'hooks', 'claude', 'block-destructive-git.sh');
+type Expectation = 'refuse' | 'allow' | 'not-applicable';
+interface CorpusCase { name: string; argv: string[]; command: string; pathGuard: Expectation; hook: Expectation; branch?: 'unreachable' | 'reachable-unmerged' | 'merged'; spellingOnly?: boolean; policyDifference?: 'checkout-paths' | 'branch-merged-rule'; }
+const destructiveGitCorpus = JSON.parse(readFileSync(join(__dirname, '..', 'fixtures', 'destructive-git-corpus.json'), 'utf8')) as CorpusCase[];
 
 interface HookResult {
   status: number | null;
@@ -427,5 +430,17 @@ exit 1
     const result = invoke(command);
     expect(result.status).toBe(0);
     expect(result.calledGitOrGh).toBe(false);
+  });
+
+  it('drives every applicable shared corpus case and no excluded case', () => {
+    const applicable = destructiveGitCorpus.filter(({ hook }) => hook !== 'not-applicable');
+    let ran = 0;
+    for (const corpusCase of applicable) {
+      const stubs = corpusCase.branch === undefined ? {} : { git: branchCheckStub(corpusCase.branch === 'merged' ? 'reachable' : 'merged'), gh: '#!/usr/bin/env bash\nexit 0\n' };
+      const result = invoke(corpusCase.command, stubs);
+      expect(result.status, corpusCase.name).toBe(corpusCase.hook === 'refuse' ? 2 : 0);
+      ran += 1;
+    }
+    expect(ran).toBe(applicable.length);
   });
 });
