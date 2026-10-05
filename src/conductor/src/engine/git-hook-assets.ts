@@ -146,6 +146,7 @@ refuse() {
 
 # Keep the original argv for exec; classify after one safe non-shell alias expansion.
 args=("$@")
+original_args=("$@")
 i=0
 unknown_global=''
 unknown_prefix_end=-1
@@ -249,7 +250,7 @@ if [[ "$destructive" == true ]]; then
   common="$($real_git "\${args[@]:0:$i}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
   [[ "$common" == "$feature_common" ]] && refuse "$command" "$reason" "$alternative"
 fi
-exec "$real_git" "\${args[@]}"
+exec "$real_git" "\${original_args[@]}"
 `;
 
 /**

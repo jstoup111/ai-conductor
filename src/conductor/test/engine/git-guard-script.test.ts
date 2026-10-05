@@ -195,11 +195,30 @@ esac
     expect(await recordedCommands()).not.toContain('clean');
   });
 
-  it('expands a quoted non-destructive alias before invoking real git', async () => {
+  it('classifies a quoted non-destructive alias but preserves it for real git', async () => {
     await writeFile(aliasPath, "log '-1'", 'utf8');
     const result = invoke(['guarded']);
     expect(result.status).toBe(0);
-    expect(await recordedCommands()).toEqual(['config', 'log']);
+    expect(await recordedCommands()).toEqual(['config', 'guarded']);
+  });
+
+  it('normalizes destructive options after expanding a nuke alias', async () => {
+    await writeFile(aliasPath, 'reset --har', 'utf8');
+
+    const result = invoke(['nuke']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('hard reset discards working-tree changes');
+    expect(result.stderr).toContain('git reset --keep');
+    expect(await recordedCommands()).not.toContain('nuke');
+    expect(await recordedCommands()).not.toContain('reset');
+  });
+
+  it('preserves the original argv after expanding a safe nuke alias', async () => {
+    await writeFile(aliasPath, 'reset --keep HEAD~1', 'utf8');
+
+    expect(invoke(['nuke']).status).toBe(0);
+    expect((await recordedArgv()).at(-1)).toEqual(['nuke']);
   });
 
   it.each([
