@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-04T22:34:23.149Z
+Status: halted
 Slug: engine-prompts-direct-daemon-sessions-to-ai-conduc
-Class: plan-gap
-Halting step: prd_audit
-Phase: SHIP
+Class: needs-human
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-engine-prompts-direct-daemon-sessions-to-ai-conduc
-Head SHA: 39766bc784e2f0ca7dc36b047bc71d8ac552ad60
-Halted at: 2026-10-04T21:55:01.197Z
+Head SHA: c2a062fc9f4c5459056c3c09f42e307a558842de
+Halted at: 2026-10-05T01:36:35.522Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-prd-audit halted: needs human DECIDE — PLAN_GAP on S4.3.
+A FINISH publication transition did not change the state it owns. Next action: Inspect the listed transition and state, resolve why it is unchanged, then retry FINISH. Detail: The author_pr_prose transition left pr.prose unchanged at placeholder.
 ```
