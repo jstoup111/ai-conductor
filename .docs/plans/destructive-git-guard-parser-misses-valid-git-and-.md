@@ -567,3 +567,80 @@ Task 1 ─┬─▶ Task 2 ─▶ Task 3 ─▶ Task 4 ─▶ Task 5 ─▶ Task
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-s1-4-1: src/conductor/src/engine/git-option-spec.ts:61-62 — set global `attr-source` to arity `required` (acceptsEquals true) and replace the false comment (git consumes the next argv as the tree); add a GIT_GUARD_SCRIPT refusal test in src/conductor/test/engine/git-guard-script.test.ts for `--attr-source HEAD reset --hard` (hard-reset reason, no reset argv recorded) and add the spaced form to src/conductor/test/fixtures/destructive-git-corpus.json with pathGuard `refuse` and hook `refuse` (spellingOnly), keeping the existing `--attr-source=` case at :33
+**Gate:** prd-audit
+**Rationale:** git-option-spec.ts:61-62 declares global `attr-source` with arity `none`, so the generated case at git-hook-assets.ts:5-17 emits `--attr-source) ((i++))` and `git --attr-source HEAD reset --hard` takes `HEAD` as the subcommand and execs the hard reset; git 2.53 consumes the spaced value (audit probe) and the base guard skipped two argv. Task 2 (global options consumed exactly from the spec) owns the fix. Matched pair: the hook's embedded spec copy (block-destructive-git.sh:8-10) is repaired in the S3.1 task so Task 11 parity holds. Sweep: no other global entry was found misdeclared by the audit; the `=` form corpus case (destructive-git-corpus.json:33) is kept and the spaced form added beside it.
+**Criterion:** S1.4
+**Parent task:** 2
+**Done when:**
+- S1.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s1-4-1 is complete.
+
+### Task rem-prd-audit-rem-s3-1-1: hooks/claude/block-destructive-git.sh:8-10 — regenerate the embedded GIT_OPTION_SPEC JSON from git-option-spec.ts after rem-s1-4-1 so `attr-source` is arity `required` (destructive-git-hook-spec-parity.test.ts must stay []); add a destructive-git-hook.test.ts case asserting exit 2 for `git --attr-source HEAD reset --hard`
+**Gate:** prd-audit
+**Rationale:** The hook's embedded spec (block-destructive-git.sh:8-10) carries `attr-source` arity `none`, so norm() at :60-70 takes `HEAD` in `git --attr-source HEAD reset --hard` as the subcommand and exits 0. Task 7 owns the hook's global-option consumption; the repair is the S1.4 spec change propagated to the embedded copy (counterpart of git-option-spec.ts, kept equal by the Task 11 parity test).
+**Criterion:** S3.1
+**Parent task:** 7
+**Done when:**
+- S3.1 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s3-1-1 is complete.
+
+### Task rem-prd-audit-rem-s1-8-1: src/conductor/test/engine/git-guard-script.test.ts — add a test beside :416-422 that, with the stub reporting «b» reachable, drives GIT_GUARD_SCRIPT with `branch -df «b»` and asserts the exact original argv reaches the stub real git and its exit status is returned
+**Gate:** prd-audit
+**Rationale:** Test gap: no test drives `branch -df «b»` against a reachable branch; git-guard-script.test.ts:416-422 and the corpus reachable case use only `-D`. Task 3's Done-when explicitly requires `branch -df «b»` to reach the stub unchanged when `«b»` is reachable.
+**Criterion:** S1.8
+**Parent task:** 3
+**Done when:**
+- S1.8 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s1-8-1 is complete.
+
+### Task rem-prd-audit-rem-s1-11-1: src/conductor/test/engine/git-guard-script.test.ts — next to the foreign-common-dir `reset --bogus` test at :304-310, add `reset --har` with the stub's `rev-parse --git-common-dir` reporting a non-feature common dir, asserting the exact original argv reaches the stub real git
+**Gate:** prd-audit
+**Rationale:** Test gap: git-guard-script.test.ts:304-310 drives only `reset --bogus` with a foreign common dir; Task 3's Done-when requires `reset --har` to pass unchanged when `rev-parse --git-common-dir` reports a non-feature common dir.
+**Criterion:** S1.11
+**Parent task:** 3
+**Done when:**
+- S1.11 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s1-11-1 is complete.
+
+### Task rem-prd-audit-rem-s3-3-1: hooks/claude/block-destructive-git.sh:115-132 — evaluate every git invocation instead of exiting on the first verdict: any `deny` wins (first deny reported), `branch-delete` operands are aggregated across all invocations into one list, and the rebase note is emitted (unchanged text) whenever any invocation yields `rebase-note`, without stopping the scan; update the bash `case "$VERDICT"` to the new verdict output in the same change. Add destructive-git-hook.test.ts cases asserting exit 2 for `git rebase main && git reset --hard` and for `git branch -D «merged»; git push --force`
+**Gate:** prd-audit
+**Rationale:** block-destructive-git.sh:117-120 prints the first truthy verdict and raises SystemExit, so `git rebase main && git reset --hard` exits 0 with only the note and `git branch -D merged; git push --force` exits 0 once the merged check passes; the base hook judged the whole command. Task 7 owns the per-invocation loop. Matched pair: the python verdict vocabulary and the bash `case "$VERDICT"` at :122-132 change together; message texts stay byte-equal (Task 10, S6.2/S6.4 coverage preserved).
+**Criterion:** S3.3
+**Parent task:** 7
+**Done when:**
+- S3.3 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s3-3-1 is complete.
+
+### Task rem-as-built-rem-ab4-1: src/conductor/test/engine/destructive-git-hook.test.ts — add compound-command cases: `git branch -D «merged» && git branch -D «unmerged»` exits 2 naming «unmerged» (operands aggregated across invocations); `git rebase main && git status` exits 0 and still prints the unchanged rebase NOTE; `git rebase main && git clean -fd` exits 2 with the clean-force message
+**Gate:** as-built
+**Rationale:** Same defect as S3.3 (hooks/claude/block-destructive-git.sh:115-120 stops at the first truthy verdict, violating ADR D6); the implementation lands in rem-s3-3-1, and this task pins the conditional and non-blocking paths so the aggregation is covered. Approved architecture is unchanged, so this is conforming implementation drift routed to build.
+**Governing clause:** adr-2026-10-03-fail-closed-git-option-normalization decision 6
+**Done when:**
+- adr-2026-10-03-fail-closed-git-option-normalization decision 6 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab4-1 is complete.
+
+### Task rem-as-built-rem-ab2-1: src/conductor/src/engine/git-hook-assets.ts:93-103 — resolve the full long name (exact, then unique prefix) against option names plus `no-<name>` forms of negatable options before treating `no-` as a negation, mirroring hook find() at block-destructive-git.sh:51-56; and at :91/:221 make the checkout path predicate key only on a literal `--` (not `--end-of-options`). Add git-guard-script.test.ts cases: `reset --no-refresh HEAD~1` and `checkout --end-of-options «branch»` pass exact argv to the stub; existing `checkout -- --har` path refusal and negation refusals stay green
+**Gate:** as-built
+**Rationale:** git-hook-assets.ts:96 strips `no-` before resolving, so `reset --no-refresh` (declared at git-option-spec.ts:66) resolves to non-negatable `refresh` and is refused, contrary to ADR D2 exact-name-first resolution; Task 3 owns long-name resolution and negation. Matched pair: the hook's find() (block-destructive-git.sh:51-56) already resolves exact names plus `no-<name>` for negatable options, and the PATH guard is aligned to that rule. Sibling (NC.5, Task 3 admits `--end-of-options` handling): git-hook-assets.ts:91 sets options_ended for `--end-of-options` and :221 then refuses `checkout --end-of-options «branch»` as a path checkout; D4 keys the path rule to `--`, matching the hook (:75-76).
+**Governing clause:** adr-2026-10-03-fail-closed-git-option-normalization decision 2
+**Done when:**
+- adr-2026-10-03-fail-closed-git-option-normalization decision 2 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-1 is complete.
+
+### Task rem-as-built-rem-ab3-1: src/conductor/src/engine/git-hook-assets.ts:153-169 — when `unknown_global` is set, scan every argv after the unknown token for a guarded subcommand name and, subject to the existing feature-common-dir check, refuse with `unrecognized git option «token» before «cmd»`; add git-guard-script.test.ts cases: `--no-pag HEAD reset --hard` refused naming `--no-pag` with no reset argv recorded, while `--no-pag status` still passes exact argv
+**Gate:** as-built
+**Rationale:** git-hook-assets.ts:153-169 refuses an unknown global option only when the first non-option is guarded, but ADR D3 and Task 2 Step 3 require refusal when any later argv equals a guarded subcommand name (e.g. `--no-pag HEAD reset --hard`). Matched pair: the hook already implements this at block-destructive-git.sh:61-63 over the same guarded set; the PATH guard's guarded-name regex `^(reset|branch|clean|push|checkout|restore)$` is reused for the scan. S2.7 coverage (`--no-pag status` passes exact argv) is preserved.
+**Governing clause:** adr-2026-10-03-fail-closed-git-option-normalization decision 3
+**Done when:**
+- adr-2026-10-03-fail-closed-git-option-normalization decision 3 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab3-1 is complete.
+
+### Task rem-as-built-rem-ab5-1: docs/reference/settings-and-hooks.md:136 — describe the hook as splitting the command into simple commands and normalizing each git argv against the embedded shared option spec, refusing unresolvable options; :288-290 — remove the non-canonical-spellings limit, stating that git's global and per-subcommand option grammars are normalized from the shared spec and unknown/ambiguous options on guarded subcommands are refused; hooks/claude/block-destructive-git.sh:1-2 — add the header line documenting the shell-indirection exclusion (eval, bash -c, variables) named in the feature diagram
+**Gate:** as-built
+**Rationale:** ADR D8 requires the control inventory to shrink, but docs/reference/settings-and-hooks.md:136 still says the hook strips quoted spans and pattern-matches, and :288-290 still says non-canonical spellings pass until #2904 ships; the plan assigned this to the documentation step (plan lines 107-108) and it was not delivered. Documentation drift preserving approved architecture routes to build. Sibling from the as-built drift notes: the feature diagram says the hook header documents the shell-indirection exclusion, but block-destructive-git.sh:1-2 does not.
+**Governing clause:** adr-2026-10-03-fail-closed-git-option-normalization decision 8
+**Done when:**
+- adr-2026-10-03-fail-closed-git-option-normalization decision 8 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab5-1 is complete.
