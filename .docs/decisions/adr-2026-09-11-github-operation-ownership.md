@@ -62,6 +62,11 @@ Resolve actual push destination and all affected refs before authorization. Refu
 
 Local reads, commits, and worktree actions remain on their existing paths. Owned publication may proceed when all affected remote targets are authorized; there is no requirement to centralize every local Git command.
 
+**Clarified 2026-10-06 (operator decision, #2709):** the bot-auth credential fallback of D9 item 5
+belongs to the guarded GitHub runner and remote Git adapter only. The observation wrapper of
+adr-2026-10-01-daemon-session-command-contracts D7–D8 is not an authorized operation: it forwards an
+agent's raw `gh` command exactly once and never falls back to another credential or re-runs it.
+
 ### D6 — Refusal is a first-class result
 
 Return typed reasons for other-owner, unresolved actor, missing/ambiguous provenance, unsupported operation, and explicit authorization required. A refused sweep item must not prevent processing authorized items. A refused publication cannot be recorded as successfully pushed, handed off, or healed. No mutation fallback runs after refusal, including an escalation comment on the same unauthorized resource.
@@ -131,12 +136,6 @@ Supersede adr-2026-07-03-gated-writeback-announcements. Operator approved this s
 >    because this fallback is loud (a spine event), changes no authorization, and only changes
 >    the displayed author. The bot token is not part of the daemon-level missing-credential
 >    gate.
->
-> **Clarified 2026-10-06 (operator decision, #2709):** the item 5 fallback belongs to the guarded
-> GitHub runner and remote Git adapter only. The observation wrapper of
-> adr-2026-10-01-daemon-session-command-contracts D7–D8 is not an authorized operation: it forwards
-> an agent's raw `gh` command exactly once and never falls back to another credential or re-runs it.
->
 > 6. *Warning event.* The fallback event is a closed, structured `ConductorEvent` variant. It
 >    carries the operation, the target, and a closed reason (`token-unavailable`,
 >    `auth-refused`, `unsupported-remote-transport`). It carries no raw stderr, no token, and
