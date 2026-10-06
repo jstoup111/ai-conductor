@@ -402,6 +402,7 @@ export interface KickbackBudgetDispatch {
   kind: 'kickback-budget';
   action: 'inspect' | 'raise' | 'reset';
   feature: string;
+  child?: string;
   gate?: string;
   by?: number;
   rationale?: string;
@@ -436,13 +437,18 @@ export function detectKickbackBudgetCommand(argv: string[]): KickbackBudgetDispa
   const values = new Map<string, string>();
   for (let i = 4; i < argv.length; i += 2) {
     const flag = argv[i]; const value = argv[i + 1];
-    if (!flag || value === undefined || !['--feature', '--gate', '--by', '--rationale', '--format'].includes(flag) || values.has(flag)) return null;
+    if (!flag || value === undefined || !['--feature', '--child', '--gate', '--by', '--rationale', '--format'].includes(flag) || values.has(flag)) return null;
     values.set(flag, value);
   }
   const feature = values.get('--feature');
   const format = values.get('--format') ?? 'human';
   if (!feature || feature.includes('/') || feature === '.' || feature === '..' || (format !== 'human' && format !== 'json')) return null;
-  if (action === 'inspect') return values.size <= 2 && !values.has('--gate') ? { kind: 'kickback-budget', action, feature, format } : null;
+  if (action === 'inspect') {
+    if (values.size > (values.has('--child') ? 3 : 2) || values.has('--gate')) return null;
+    const child = values.get('--child');
+    return { kind: 'kickback-budget', action, feature, format, ...(child === undefined ? {} : { child }) };
+  }
+  if (values.has('--child')) return null;
   const gate = values.get('--gate'); const rationale = values.get('--rationale');
   if (!gate || !rationale?.trim()) return null;
   if (action === 'raise') {

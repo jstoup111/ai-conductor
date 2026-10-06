@@ -1,4 +1,4 @@
-// Covers: task:11
+// Covers: task:11, task:27
 import { describe, expect, it } from 'vitest';
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -59,6 +59,17 @@ describe('detectKickbackBudgetCommand', () => {
   ])('rejects %s', (_name, argv) => {
     expect(detectKickbackBudgetCommand(argv)).toBeNull();
   });
+
+  it('accepts --child only on inspect and rejects repeated or mutation forms', () => {
+    expect(detectKickbackBudgetCommand(['node', 'conduct', 'kickback-budget', 'inspect', '--feature', 'f', '--child', '2']))
+      .toEqual({ kind: 'kickback-budget', action: 'inspect', feature: 'f', format: 'human', child: '2' });
+    expect(detectKickbackBudgetCommand(['node', 'conduct', 'kickback-budget', 'inspect', '--feature', 'f', '--child', '2', '--child', '2']))
+      .toBeNull();
+    expect(detectKickbackBudgetCommand(['node', 'conduct', 'kickback-budget', 'raise', '--feature', 'f', '--gate', 'build_review', '--by', '1', '--rationale', 'r', '--child', '2']))
+      .toBeNull();
+    expect(detectKickbackBudgetCommand(['node', 'conduct', 'kickback-budget', 'reset', '--feature', 'f', '--gate', 'build_review', '--rationale', 'r', '--child', '2']))
+      .toBeNull();
+  });
 });
 
 describe('kickback-budget refusal ladder', () => {
@@ -117,6 +128,23 @@ describe('kickback-budget refusal ladder', () => {
       await expect(access(join(root, '.daemon'))).rejects.toThrow();
       await expect(access(join(root, 'conduct-state.json'))).rejects.toThrow();
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    ['raise', ['raise', '--feature', 'feature', '--gate', 'build_review', '--by', '1', '--rationale', 'evidence', '--child', '2']],
+    ['reset', ['reset', '--feature', 'feature', '--gate', 'build_review', '--rationale', 'evidence', '--child', '2']],
+  ])('falls through %s with --child before ledger access', async (_action, args) => {
+    const fixture = await makeFeature({ version: 1, gates: { build_review: baseEntry } });
+    try {
+      const ledgerPath = join(fixture.worktree, '.pipeline', 'kickback-ledger.json');
+      const before = await readFile(ledgerPath);
+      const conductorRoot = resolve(import.meta.dirname, '../..');
+      const entry = join(conductorRoot, 'src', 'index.ts');
+      const tsxLoader = join(conductorRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
+      await expect(execFileP(process.execPath, ['--import', tsxLoader, entry, 'kickback-budget', ...args], { cwd: fixture.root }))
+        .rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("error: unknown command 'kickback-budget'") });
+      expect(await readFile(ledgerPath)).toEqual(before);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 });
 
