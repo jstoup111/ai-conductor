@@ -1570,10 +1570,12 @@ export class DefaultStepRunner implements StepRunner {
       : this.createProviderStreamConsumer(step, this.providerKey);
 
     try {
-      const managedGhObservationCoverage = await prepareNativeManagedGhObservation(
-        this.provider,
-        this.providerExecutionContext?.managedSessionContext,
-      );
+      const managedGhObservationCoverage = this.providerExecutionContext?.managedSessionContext
+        ? await prepareNativeManagedGhObservation(
+            this.provider,
+            this.providerExecutionContext.managedSessionContext,
+          )
+        : undefined;
       const result = await this.provider.invoke({
         prompt,
         sessionId: branchSessionId ?? this.sessionId,
@@ -1618,7 +1620,10 @@ export class DefaultStepRunner implements StepRunner {
         }
       }
 
-      return { success: true, managedGhObservationCoverage };
+      return {
+        success: true,
+        ...(managedGhObservationCoverage ? { managedGhObservationCoverage } : {}),
+      };
     } catch (error) {
       this.callCount++;
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -2101,10 +2106,15 @@ export class DefaultStepRunner implements StepRunner {
     // when provided, and never mutate this.sessionId/this.sessionStarted —
     // those belong exclusively to the shared main conductor session.
     const dispatchSessionId = branchSessionId ?? this.sessionId;
-    const managedGhObservationCoverage = await prepareNativeManagedGhObservation(
-      this.provider,
-      this.providerExecutionContext?.managedSessionContext,
-    );
+    const managedGhObservationCoverage = this.providerExecutionContext?.managedSessionContext
+      ? await prepareNativeManagedGhObservation(
+          this.provider,
+          this.providerExecutionContext.managedSessionContext,
+        )
+      : undefined;
+    const managedGhObservation = managedGhObservationCoverage
+      ? { managedGhObservationCoverage }
+      : {};
 
     const result = await this.modelAvailability.invokeWithLadder(trackingProvider, {
       prompt,
@@ -2145,7 +2155,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),
-        managedGhObservationCoverage,
+        ...managedGhObservation,
         ...observedIntervals,
       };
     }
@@ -2158,7 +2168,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.commandUnresolvedName
           ? { commandUnresolvedName: result.commandUnresolvedName }
           : {}),
-        managedGhObservationCoverage,
+        ...managedGhObservation,
         ...observedIntervals,
       };
     }
@@ -2171,7 +2181,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),
-        managedGhObservationCoverage,
+        ...managedGhObservation,
         ...observedIntervals,
       };
     }
@@ -2190,7 +2200,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),
-        managedGhObservationCoverage,
+        ...managedGhObservation,
         ...observedIntervals,
       };
     }
@@ -2217,7 +2227,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),
-        managedGhObservationCoverage,
+        ...managedGhObservation,
         ...observedIntervals,
       };
     }
@@ -2230,7 +2240,7 @@ export class DefaultStepRunner implements StepRunner {
         success: false,
         output: `${result.output} (model fallback ladder exhausted, tried: ${attemptedModels.join(', ')})`,
         model: effectiveModel,
-        managedGhObservationCoverage,
+        ...managedGhObservation,
         ...observedIntervals,
       };
     }
@@ -2242,7 +2252,7 @@ export class DefaultStepRunner implements StepRunner {
       ...(result.authentication
         ? { authentication: result.authentication }
         : {}),
-      managedGhObservationCoverage,
+      ...managedGhObservation,
       ...observedIntervals,
     };
   }
