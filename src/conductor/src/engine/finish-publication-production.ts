@@ -732,7 +732,15 @@ export function createProductionFinishPublicationCoordinator(
           ...(dispatchAuthoring
             ? {
                 authorProse: async (request: PrProseAuthoringRequest) => {
-                  await dispatchAuthoring(request);
+                  const dispatched = await dispatchAuthoring(request);
+                  // A failed provider run returns, it does not throw. Passing
+                  // it through as a completed pass made the coordinator's
+                  // fixed-point guard read an aborted attempt as "authoring
+                  // left the placeholder unchanged" and halt needs-human.
+                  // Raise it so the transient-dispatch retry path owns it.
+                  if (!dispatched.success) {
+                    throw new Error('PR prose authoring dispatch did not complete successfully');
+                  }
                   if (authoringOriginByPr.get(request.pullRequestUrl) === 'placeholder') {
                     authoredPlaceholderProsePendingByPr.add(request.pullRequestUrl);
                   }

@@ -1,7 +1,7 @@
 ---
 name: pr
 disable-model-invocation: true
-description: "Use when creating or updating a pull request. Analyzes the full diff against the base branch, writes a concise title and structured body, and returns them to the guarded publication engine."
+description: "Use when creating or updating a pull request. Analyzes the change against the base branch, writes a concise title and structured body, and returns them to the guarded publication engine."
 enforcement: advisory
 phase: ship
 standalone: true
@@ -29,9 +29,13 @@ git log --oneline <base>..HEAD
 # Stat summary of all changes
 git diff --stat <base>..HEAD
 
-# Full diff for analysis (use Agent if very large)
-git diff <base>..HEAD
+# Targeted hunks for the files whose behavior the PR must explain
+git diff <base>..HEAD -- <path>
 ```
+
+Do not print the whole branch diff when the stat shows a large change: a PR body needs the shape of the
+change, and a multi-thousand-line diff costs far more context than the prose it informs. Read the full
+diff only when it is small.
 
 Also check for harness artifacts that provide motivation context:
 - `.docs/specs/*.md` — design docs (the "why")

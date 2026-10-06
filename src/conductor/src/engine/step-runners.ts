@@ -897,6 +897,18 @@ function unavailableReviewCapabilityResult(
   }
 }
 
+/**
+ * PR prose needs the shape of the change, not every line of it. Telling the
+ * FINISH author to read the whole branch diff cost hundreds of KB per tool call
+ * on a large feature (one authoring session logged 3 MB) for a few paragraphs
+ * of reader-facing text.
+ */
+const FINISH_PROSE_DIFF_BUDGET =
+  'Ground the prose in the feature specification, plan, and story artifacts, plus ' +
+  '`git log --oneline <base>..HEAD` and `git diff --stat <base>..HEAD` for this feature branch. ' +
+  'Do not print the whole branch diff: read only targeted hunks (`git diff <base>..HEAD -- <path>`) ' +
+  'for the few files whose behavior the prose must describe, and keep each read small. ';
+
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
   private sessionStartedInitialized = false;
@@ -5442,9 +5454,9 @@ export class DefaultStepRunner implements StepRunner {
         prompt +=
           '\n\nFINISH PR PROSE REVISION — the retained pull request needs a focused reader-facing prose revision. ' +
           `The prior prose judge's objection is:\n> ${revisionGuidance}\n\n` +
-          'Revise the retained PR title and body in place to address that objection. Read the full diff of this ' +
-          'feature branch against its base branch, plus the feature specification, plan, and story artifacts, then ' +
-          `follow this repository's PR authoring contract — the \`pr\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/pr\`; ${CODEX_DISPLAY_NAME} ` +
+          'Revise the retained PR title and body in place to address that objection. ' +
+          FINISH_PROSE_DIFF_BUDGET +
+          `Then follow this repository's PR authoring contract — the \`pr\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/pr\`; ${CODEX_DISPLAY_NAME} ` +
           'invokes it as `$pr`). Keep the template section shape (`## Why`, `## What Changed`, `## Testing`, and the ' +
           '`Closes` reference), leave every `ai-conductor:step` region and its markers unchanged, and make the prose specific to the ' +
           'delivered behavior. Change nothing else: do not create, push, merge, or ready a pull request, do not alter ' +
@@ -5456,9 +5468,9 @@ export class DefaultStepRunner implements StepRunner {
       }
       prompt +=
         '\n\nFINISH PR PROSE AUTHORING — the retained pull request still carries the engine-seeded ' +
-        'placeholder body, so there is no prose to judge yet. Write it. Read the full diff of this ' +
-        'feature branch against its base branch, plus the feature specification, plan, and story ' +
-        'artifacts, then rewrite the retained PR title and body in place following this repository\'s ' +
+        'placeholder body, so there is no prose to judge yet. Write it. ' +
+        FINISH_PROSE_DIFF_BUDGET +
+        'Then rewrite the retained PR title and body in place following this repository\'s ' +
           `PR authoring contract — the \`pr\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/pr\`; ${CODEX_DISPLAY_NAME} invokes it as ` +
         '`$pr`). Keep the template section shape (`## Why`, `## What Changed`, `## Testing`, and the ' +
         '`Closes` reference), replace every "not yet authored" marker and the body-floor marker with ' +
