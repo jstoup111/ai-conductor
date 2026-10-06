@@ -209,11 +209,17 @@ that the production adapter reaches the mock before exercising destructive argum
 assert that refused calls never reach that boundary. A configured mock alone is not
 proof of isolation: imports cached by test setup can retain the real implementation.
 
-New or changed real-tmux fixtures MUST use a fixture-owned private socket for every
-command, including discovery and teardown. Never rely on session names, the ambient
-`TMUX` environment, or a production kill-switch to isolate a test from operator sessions.
-Use a mocked adapter until private-socket isolation is available. This is repository-local
-test-authoring policy; consumer projects do not inherit this repository's fixture machinery.
+Real-tmux tests MUST obtain their server from the shared private-server fixture
+(`createPrivateTmux` in `src/conductor/test/tmux-fixture.ts`) and pass its runner to the
+production tmux helpers. The fixture owns a private socket for every command, including
+discovery and teardown, and stops only its own server. Never spawn `tmux` directly, pass
+`defaultTmuxRunner`, pass `-S`/`-L`, or set or delete `TMUX`, `TMUX_PANE`, or `TMUX_TMPDIR`
+in a test, and never rely on session names or the `AI_CONDUCTOR_NO_REAL_EXEC` kill-switch
+for isolation. Vitest setup confines every tmux client in a run to a run-owned server as a
+backstop, not a substitute. The default-tier tmux-access audit rejects violations; an
+exemption needs a written reason in its allowlist. This is repository-local test-authoring
+policy; consumer projects do not inherit this repository's fixture machinery. (Machinery
+lands with #2476, spec #2972; until it merges, use a mocked adapter.)
 
 The integrity check catalog and troubleshooting belong in
 [validation reference](docs/contributing/validation.md).
