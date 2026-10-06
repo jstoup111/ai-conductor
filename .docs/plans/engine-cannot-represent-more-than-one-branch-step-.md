@@ -363,18 +363,18 @@ base override, caps, teardown, `max_slices`) stays out.
 
 **Dependencies:** Task 11
 
-### Task 13: Park refuses a child candidate before the record precondition and never record-gates it
+### Task 13: Park treats children as daemon-owned and refuses a child candidate before the record precondition
 **Story:** Story 4 criteria 36, 39, 40 (branch-listed half)
 **Type:** negative-path
 
 **Steps:**
 1. Write failing tests in `src/conductor/test/engine/park-reconciliation.test.ts` using the existing `makeGit` world: `requiresShippedRecord` table; a parked `x` whose worktree lists `feat/c1/x` run through `reconcileParkedFeatures` with `onEvent`, `requestRecordRepair` and `runGh` spies.
 2. Verify RED.
-3. Implement in `src/conductor/src/engine/park-reconciliation.ts`: `requiresShippedRecord(branch)` returns true when `branch` is undefined, or when `isDaemonOwnedBranchName(branch)` is true and `parseFeatureBranch(branch).kind` is not `child` (replacing the `startsWith('feat/daemon-')` test with identical results, so a child branch is never record-gated, per adr-2026-08-01-multi-proof-park-deletion-authority D8); add `'child-branch'` to `RefusalReason`; in `reconcileMergedPark`, immediately after the in-flight and live-phase-marker checks and before `gatherMergeEvidence`, `if (opts.branch !== undefined && parseFeatureBranch(opts.branch).kind === 'child') return { slug: opts.slug, steps: [], refusal: 'child-branch' }`. The sweep loop already counts non-`record-missing` refusals and emits `worktree_reclaim_failed`.
-4. Verify GREEN. Commit with message: "feat(park): a child candidate is refused before the record precondition and is never record-gated (#2940 task 13)".
+3. Implement in `src/conductor/src/engine/park-reconciliation.ts`: `requiresShippedRecord(branch)` returns true when `branch` is undefined or `isDaemonOwnedBranchName(branch)` is true (replacing the `startsWith('feat/daemon-')` test); add `'child-branch'` to `RefusalReason`; in `reconcileMergedPark`, immediately after the in-flight and live-phase-marker checks and before `gatherMergeEvidence`, `if (opts.branch !== undefined && parseFeatureBranch(opts.branch).kind === 'child') return { slug: opts.slug, steps: [], refusal: 'child-branch' }`. The sweep loop already counts non-`record-missing` refusals and emits `worktree_reclaim_failed`.
+4. Verify GREEN. Commit with message: "feat(park): children are daemon-owned and a child candidate is refused before the record precondition (#2940 task 13)".
 
 **Done when:**
-- `requiresShippedRecord(branch)` returns true for `feat/daemon-x`, `feat/daemon-` and `undefined` and false for `feat/c1/x` and `spec/x`, so no shipped record is required or consulted for a child branch, and a `feat/c1/x` candidate is attributed to feature `x` as a child and refused, never reclaimed on its deletion proofs alone, as asserted in `test/engine/park-reconciliation.test.ts`.
+- `requiresShippedRecord(branch)` returns true when `branch` is undefined or `isDaemonOwnedBranchName(branch)` is true, so it is true for `feat/c1/x`, `feat/daemon-x`, `feat/daemon-` and `undefined` and false for `spec/x`, and the sweep's `hasRecordGatedCandidate` prefetch treats a `feat/c1/x` worktree as record-gated, never as a non-daemon branch reclaimable on its deletion proofs alone, as asserted in `test/engine/park-reconciliation.test.ts`.
 - `RefusalReason` gains `child-branch`, and `reconcileMergedPark` returns `{ refusal: 'child-branch', steps: [] }` for a listed `feat/c1/x` branch immediately after the in-flight checks and before `gatherMergeEvidence`, the shipped-record precondition and any `gh pr list` lookup, so the injected `git` records no `ls-tree`, `merge-base`, `worktree remove` or `branch -d` call and the injected `gh` records zero calls.
 - `reconcileParkedFeatures` counts that outcome in `counts.refused` and `refusedByReason['child-branch']`, and emits `{ type: 'worktree_reclaim_failed', slug: 'x', branch: 'feat/c1/x', refusal: 'child-branch' }`, while `.worktrees/x` and branch `feat/c1/x` remain.
 - With a merged PR whose head is `feat/c1/x` and no `.docs/shipped/x.md` on `origin/main`, `requestRecordRepair` is never called and no `gh pr list --head` argv names `feat/c1/x`.
