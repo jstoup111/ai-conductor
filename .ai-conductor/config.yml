@@ -180,15 +180,17 @@ test_suite:
 # an OLDER engine rejects this key as "Cannot disable gating step".
 llm_provider: [codex, claude, pi]
 
-# Pi routes the build step to GLM via OpenRouter (operator order, 2026-10-06).
-# Pi requires all three keys once any step selects it. Retries escalate from
-# GLM Flash to DeepSeek V4.1 Flash; a model-unavailable failure falls back to
-# DeepSeek V4.1 Flash, then V4 Flash. All via OpenRouter (single billing).
+# Pi routes the build step to DeepSeek Pro via OpenRouter (operator order,
+# 2026-10-06), replacing GLM 5.3 Flash: on the `/skill:pipeline` build prompt
+# GLM and DeepSeek V4 Flash end their first turn without a tool call, so every
+# build stalled at 0 tasks. Pi requires all three keys once any step selects
+# it. A model-unavailable failure falls back to DeepSeek V4 Flash. All via
+# OpenRouter (single billing).
 llm_providers:
   pi:
-    model: openrouter/z-ai/glm-5.3-flash
-    model_escalation_order: [openrouter/z-ai/glm-5.3-flash, openrouter/deepseek/deepseek-v4.1-flash]
-    model_fallback_ladder: [openrouter/deepseek/deepseek-v4.1-flash, openrouter/deepseek/deepseek-v4-flash]
+    model: openrouter/~deepseek/deepseek-pro-latest
+    model_escalation_order: [openrouter/~deepseek/deepseek-pro-latest]
+    model_fallback_ladder: [openrouter/deepseek/deepseek-v4-flash]
 
 conflict_check:
   adr_corpus: repo_wide
@@ -283,11 +285,11 @@ steps:
     llm_provider: codex
   manual_test:
     disable: true
-  # build routed to GLM 5.3 Flash via OpenRouter through the Pi provider
+  # build routed to DeepSeek Pro via OpenRouter through the Pi provider
   # (operator order, 2026-10-06), replacing the codex `terra` default.
   build:
     llm_provider: pi
-    model: openrouter/z-ai/glm-5.3-flash
+    model: openrouter/~deepseek/deepseek-pro-latest
   # Remediate decides what work a failing lap actually gets, across laps. That
   # is a judgement call over plan contract + prior-lap findings, so pin it to
   # claude rather than letting the run-level codex entry resolve first.
