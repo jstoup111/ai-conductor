@@ -240,6 +240,11 @@ steps:
     llm_provider: claude
   conflict_check:
     llm_provider: claude
+  # Pinned to claude (operator order, 2026-10-06). On the codex default
+  # (gpt-5.6-terra, low) the judge invented claim ids and refused plans that
+  # matched the ADR amendments it was given.
+  coverage_binding:
+    llm_provider: claude
   coherence_check:
     llm_provider: codex
   prd_audit:

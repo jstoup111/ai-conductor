@@ -72,6 +72,26 @@ function withoutBranchAmendments(
       remaining.split(`${amendment}\n\n`).join('').split(amendment).join(''), text);
 }
 
+const AMENDMENT_PARAGRAPH_RE = /^\*\*Amended \d{4}-\d{2}-\d{2}\b/;
+
+/**
+ * Inherited amendment paragraphs anywhere in a Decision section. An amendment
+ * names the decisions it changes in prose ("Amendment items 8 and 9 ..."), and
+ * ADRs append them at the end of the section, so positional parsing files each
+ * one under whichever decision happens to precede it. Which decisions an
+ * amendment governs is the judge's call, so every decision claim carries all
+ * of them rather than being judged as first written.
+ */
+function amendmentParagraphs(section: string): string[] {
+  return section
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s{0,3}>\s?/, ''))
+    .join('\n')
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => AMENDMENT_PARAGRAPH_RE.test(paragraph));
+}
+
 /**
  * Assemble the full-plan satisfiability claims defined by D21.
  *
@@ -128,14 +148,17 @@ export function assembleConflictClaims({
       continue;
     }
 
+    const amendments = amendmentParagraphs(parsed.section);
     for (const id of parsed.ids) {
       const claimPassages = (parsed.passages.get(id) ?? [])
         .map((passage) => passage.trim())
         .filter((passage) => passage.length > 0);
+      const own = claimPassages.join('\n\n');
+      const elsewhere = amendments.filter((amendment) => !own.includes(amendment));
       claims.push({
         id: `${stem}#D${id}`,
         kind: 'adr-decision',
-        text: claimPassages.join('\n\n'),
+        text: [own, ...elsewhere].join('\n\n'),
         taskTable,
         applicability,
       });

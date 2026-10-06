@@ -52,6 +52,17 @@ describe('planCoverageBindingBatches', () => {
     expect(prompt).toContain('Credential-only assertions');
   });
 
+  it('re-judges a cached conflicts verdict instead of reusing it', () => {
+    const conflict = {
+      id: 'adr-x#D8', kind: 'adr-decision' as const, text: 'Only leaf branches are record-gated.', applicability: 'applicable' as const,
+      taskTable: [{ id: '13', title: 'Park', doneWhen: ['Child branches are record-gated.'] }],
+    };
+    const digest = conflictClaimDigest(conflict);
+    const planned = planCoverageBindingBatches({ claims: [conflict], previous: { version: 1, slug: 'x', runId: 'x', status: 'refused', entries: [{ kind: 'conflict', digest, claimKind: 'adr-decision', claimId: conflict.id, verdict: 'conflicts', taskIds: ['13'], conflict: 'Task 13 record-gates children.' } as unknown as CoverageBindingEnvelopeEntry] }, batchSize: 8 });
+    expect(planned.conflictEntries).toEqual([]);
+    expect(planned.conflictBatches).toEqual([[{ claim: conflict, claimDigest: digest }]]);
+  });
+
   it('keeps an oversize conflict claim intact in its own byte-bounded batch', () => {
     const claim = { id: 'stories#criterion-1', kind: 'criterion' as const, text: 'x'.repeat(CONFLICT_BATCH_PROMPT_BYTE_BUDGET + 1), applicability: 'applicable' as const, taskTable: [{ id: '1', title: 'T', doneWhen: ['C'] }] };
     const planned = planCoverageBindingBatches({ claims: [claim], previous: null, batchSize: 1 });
