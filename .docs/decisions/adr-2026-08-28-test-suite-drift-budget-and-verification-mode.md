@@ -269,6 +269,8 @@ byte copy, still deterministic and refuse-to-clobber.
 
 > **Amended 2026-10-01 by #2709:** The previously excluded managed auto-mode initialization path is now governed by adr-2026-10-01-daemon-session-command-contracts D2 (operator-approved in composer chat). Managed prelude refresh requires initialized configuration; absent or unsafe setup returns an operator-bootstrap requirement before provider dispatch. Neither the provider nor the engine initializes configuration on that managed path. The unmarked operator bootstrap retains initialization, and D8.1–D8.3's refusal of marked config calls remains in force.
 
+> **Clarified 2026-10-06 (operator decision, #2709):** the amendment above supersedes D8.3's final sentence. The managed prelude no longer makes its pre-existing auto-mode `config init` call; missing or unsafe required configuration reports the operator-bootstrap requirement instead, with no project or machine configuration write.
+
 > **Amended 2026-10-03 (operator-approved test-suite hotfix):** D2's `verification.mode` vocabulary
 > gains a third value, `changed`, with a sibling key `test_suite.changed_command` (must contain
 > `{base}`). In `changed` mode a BUILD-lap run executes `changed_command` against the merge-base with
