@@ -26,6 +26,9 @@
 
 import type { RemediationGap } from './artifacts.js';
 
+/** Canonical source label for remediation admitted by the PRD-audit gate. */
+export const PRD_AUDIT_REMEDIATION_GATE_SOURCE = 'prd-audit';
+
 /** A PRD-audit FIXABLE gap retains the criterion ownership the planner found. */
 export type CriterionBoundRemediationGap = RemediationGap & {
   criterion?: string;
@@ -102,7 +105,7 @@ export function buildRemediationDoneWhenChecks(
     ?? collapseToOneLine(rationale)
     ?? collapseToOneLine(title)
     ?? `Remediation task ${id}`;
-  const criterionNeedsTest = gateSource === 'prd_audit' && normalizedCriterion !== undefined;
+  const criterionNeedsTest = gateSource === PRD_AUDIT_REMEDIATION_GATE_SOURCE && normalizedCriterion !== undefined;
   const checks = [`${criterionNeedsTest ? '[test] ' : ''}${primary} is satisfied by this task.`];
 
   if (normalizedCriterion !== undefined && normalizedClause !== undefined) {

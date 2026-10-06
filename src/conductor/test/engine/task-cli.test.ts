@@ -1005,6 +1005,35 @@ describe('runTaskDone', () => {
       expect(status.tasks[0].status).not.toBe('completed');
     });
 
+    it('refuses a plan gap for a tagged check without writing a HALT or completing the row', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, 'plan.md'), [
+        '### Task 7: Repair the sweep',
+        '**Done when:**',
+        '- [test] the focused test proves the repair',
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: 'plan.md',
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '7', status: 'in_progress' }],
+      }));
+
+      expect(await runTaskDone(
+        dir,
+        '7',
+        [],
+        { index: 1, reason: 'The approved plan cannot satisfy this check.' },
+      )).toBe(1);
+
+      expect(stdErr.join('\n')).toContain('check 1');
+      expect(stdErr.join('\n')).toContain('write or cite the test, or use --unverified 1=<reason>.');
+      await expect(fsPromises.access(join(dir, '.pipeline', 'HALT'))).rejects.toThrow();
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'));
+      expect(status.tasks[0].status).toBe('in_progress');
+    });
+
     it('leaves a row byte-identical when its plan task has no Done when checks', async () => {
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
       await fsPromises.writeFile(join(dir, 'plan.md'), '### Task 7: Legacy task\n');

@@ -15,7 +15,7 @@ import {
   type DoneWhenUnverifiedInput,
 } from './task-progress.js';
 import { writeHaltMarker } from './halt-marker.js';
-import { parsePlanTaskDoneWhen } from './plan-task-parse.js';
+import { parsePlanTaskDoneWhen, TEST_DONE_WHEN_TAG } from './plan-task-parse.js';
 import { startOperatorEventSpine } from './event-persister.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
 
@@ -387,6 +387,13 @@ async function runTaskPlanGap(
   if (!check) {
     console.error(
       `[task-cli] cannot report a plan gap for task ${id}: Done when check ${planGap.index} is not declared`,
+    );
+    return 1;
+  }
+  if (check.startsWith(TEST_DONE_WHEN_TAG)) {
+    console.error(
+      `[task-cli] cannot report a plan gap for task ${id}: Done when check ${planGap.index} requires a test; ` +
+        `write or cite the test, or use --unverified ${planGap.index}=<reason>.`,
     );
     return 1;
   }

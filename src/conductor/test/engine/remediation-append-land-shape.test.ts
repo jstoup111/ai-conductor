@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import { appendRemediationTasks } from '../../src/engine/conductor.js';
 import { validatePlanDoneWhen } from '../../src/engine/plan-done-when.js';
+import { PRD_AUDIT_REMEDIATION_GATE_SOURCE } from '../../src/engine/remediation-append.js';
 
 describe('remediation append land shape', () => {
   it('keeps both engine-appended branches valid while retaining hand-authored violations', async () => {
@@ -48,7 +49,7 @@ describe('remediation append land shape', () => {
         planPath,
         [{ id: 'rem-criterion', title: 'Repair the criterion-bound finding' }],
         {
-          gateSource: 'prd-audit',
+          gateSource: PRD_AUDIT_REMEDIATION_GATE_SOURCE,
           criterionBoundGaps: [{
             id: 'criterion-gap',
             disposition: 'build',
@@ -73,6 +74,7 @@ describe('remediation append land shape', () => {
       expect(bare).toEqual({ success: true, appendedIds: ['rem-bare'] });
 
       const plan = await readFile(planPath, 'utf-8');
+      expect(plan).toContain('- [test] Story 1 criterion is satisfied by this task.');
       const violations = validatePlanDoneWhen(plan);
 
       expect(violations).toEqual([
