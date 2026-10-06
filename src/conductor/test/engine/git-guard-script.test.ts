@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:5
+// Covers: task:2, task:3, task:4, task:5, task:12
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,6 +6,21 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { GIT_GUARD_SCRIPT } from '../../src/engine/git-hook-assets.js';
+import { writeGitGuard } from '../../src/engine/git-guard.js';
+
+type Expectation = 'refuse' | 'allow' | 'not-applicable';
+interface CorpusCase {
+  name: string;
+  argv: string[];
+  command: string;
+  pathGuard: Expectation;
+  hook: Expectation;
+  branch?: 'unreachable' | 'reachable-unmerged' | 'merged';
+  spellingOnly?: boolean;
+  policyDifference?: 'checkout-paths' | 'branch-merged-rule';
+  alias?: string;
+}
+const destructiveGitCorpus = JSON.parse(await readFile(new URL('../fixtures/destructive-git-corpus.json', import.meta.url), 'utf8')) as CorpusCase[];
 
 const FEATURE_COMMON_DIR = '/fixture/feature-common';
 const SAFE_CLASSIFICATION_COMMANDS = new Set(['config', 'rev-parse', 'for-each-ref', 'merge-base']);
@@ -41,6 +56,7 @@ describe('GIT_GUARD_SCRIPT refusal messages', () => {
   let guardPath: string;
   let callsPath: string;
   let aliasPath: string;
+  let branchStatePath: string;
 
   beforeEach(async () => {
     fixtureDir = await mkdtemp(join(tmpdir(), 'git-guard-script-'));
@@ -48,6 +64,7 @@ describe('GIT_GUARD_SCRIPT refusal messages', () => {
     const guardDataDir = join(fixtureDir, '.pipeline', 'git-guard');
     callsPath = join(fixtureDir, 'calls');
     aliasPath = join(fixtureDir, 'alias');
+    branchStatePath = join(fixtureDir, 'branch-state');
     guardPath = join(binDir, 'git');
     const realGitPath = join(fixtureDir, 'real-git');
 
@@ -57,10 +74,36 @@ describe('GIT_GUARD_SCRIPT refusal messages', () => {
     await writeFile(join(guardDataDir, 'common-dir'), `${FEATURE_COMMON_DIR}\n`, 'utf8');
     await writeFile(join(guardDataDir, 'real-git'), `${realGitPath}\n`, 'utf8');
     await writeFile(realGitPath, `#!/usr/bin/env bash
-printf '%s\\n' "$1" >> ${JSON.stringify(callsPath)}
-case "$1" in
-  rev-parse) printf '%s\\n' ${JSON.stringify(FEATURE_COMMON_DIR)} ;;
+printf '%s\\0' "$@" >> ${JSON.stringify(callsPath)}
+printf '\\n' >> ${JSON.stringify(callsPath)}
+argv=("$@")
+command_index=0
+while [[ $command_index -lt $# ]]; do
+  case "\${argv[$command_index]}" in
+    -C|-c|--git-dir|--work-tree|--namespace|--config-env|--attr-source) ((command_index+=2)); continue ;;
+    --config-env=*|--git-dir=*|--work-tree=*|--namespace=*|--exec-path=*|--attr-source=*) ((command_index++)); continue ;;
+    --exec-path|--no-pager|--paginate|-P|--no-optional-locks|--no-replace-objects|--no-lazy-fetch|--no-advice|--bare|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs) ((command_index++)); continue ;;
+  esac
+  break
+done
+case "\${argv[$command_index]}" in
+  rev-parse)
+    common_dir=${JSON.stringify(FEATURE_COMMON_DIR)}
+    for ((arg_index=0; arg_index < $#; arg_index++)); do
+      case "\${argv[$arg_index]}" in
+        -C)
+          if [[ "\${argv[$((arg_index + 1))]:-}" == outside ]]; then
+            common_dir=/outside/common-dir
+          else
+            common_dir=${JSON.stringify(FEATURE_COMMON_DIR)}
+          fi ;;
+        --git-dir=outside/.git) common_dir=/outside/common-dir ;;
+      esac
+    done
+    printf '%s\\n' "$common_dir" ;;
   config) cat ${JSON.stringify(aliasPath)} 2>/dev/null || true ;;
+  for-each-ref) [[ "$(cat ${JSON.stringify(branchStatePath)} 2>/dev/null)" == reachable-unmerged ]] && printf '%s\\n' refs/heads/other ;;
+  merge-base) [[ "$(cat ${JSON.stringify(branchStatePath)} 2>/dev/null)" == reachable-unmerged ]] && exit 0; exit 1 ;;
   push) printf '%s\\n' 'non-fast-forward: remote rejected update' >&2; exit 17 ;;
 esac
 `, 'utf8');
@@ -77,8 +120,15 @@ esac
   }
 
   async function recordedCommands(): Promise<string[]> {
+    return (await recordedArgv()).map(([command]) => command);
+  }
+
+  async function recordedArgv(): Promise<string[][]> {
     try {
-      return (await readFile(callsPath, 'utf8')).trim().split('\n').filter(Boolean);
+      return (await readFile(callsPath, 'utf8'))
+        .split('\n')
+        .filter(Boolean)
+        .map((call) => call.split('\0').slice(0, -1));
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw error;
@@ -114,6 +164,95 @@ esac
   });
 
   it.each([
+    ['--config-env equals form', ['--config-env=core.pager=PAGER', 'reset', '--hard']],
+    ['-C and --no-pager', ['-C', 'fixture', '--no-pager', 'reset', '--hard']],
+  ])('refuses hard reset after global options in the %s without reaching real git', async (_name, args) => {
+    await mkdir(join(fixtureDir, 'fixture'));
+
+    const result = invoke(args);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('ai-conductor git guard: refused reset');
+    expect(result.stderr).toContain('hard reset');
+    expect(result.stderr).toContain('reset --keep');
+    expect((await recordedArgv()).some((argv) => argv.includes('reset'))).toBe(false);
+  });
+
+  it('passes an unknown global option before a safe command through with exact argv', async () => {
+    const args = ['--no-pag', 'status'];
+
+    expect(invoke(args).status).toBe(0);
+    expect(await recordedArgv()).toEqual([args]);
+  });
+
+  it('refuses an unknown global option before reset without reaching real git', async () => {
+    const result = invoke(['--no-pag', 'reset', '--hard']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unrecognized git option «--no-pag» before «reset»');
+    expect((await recordedArgv()).some((argv) => argv.includes('reset'))).toBe(false);
+  });
+
+  it('refuses an unknown global option before a later guarded command without reaching real git', async () => {
+    const result = invoke(['--no-pag', 'HEAD', 'reset', '--hard']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unrecognized git option «--no-pag» before «reset»');
+    expect((await recordedArgv()).some((argv) => argv.includes('reset'))).toBe(false);
+  });
+
+  it.each([
+    ['-C form', ['--no-pag', '-C', 'outside', 'reset', '--hard']],
+    ['git-dir equals form', ['--no-pag', '--git-dir=outside/.git', 'reset', '--hard']],
+  ])('passes unknown global then an outside selector in the %s through unchanged and excludes the unknown option from classification', async (_name, args) => {
+    expect(invoke(args).status).toBe(0);
+
+    const calls = await recordedArgv();
+    expect(calls.at(-1)).toEqual(args);
+    const classificationArgv = _name === '-C form'
+      ? ['-C', 'outside', 'rev-parse', '--path-format=absolute', '--git-common-dir']
+      : ['--git-dir=outside/.git', 'rev-parse', '--path-format=absolute', '--git-common-dir'];
+    expect(calls.filter((argv) => argv.includes('rev-parse'))).toEqual([classificationArgv, classificationArgv]);
+    expect(calls.filter((argv) => argv.includes('rev-parse')).every((argv) => !argv.includes('--no-pag'))).toBe(true);
+  });
+
+  it('refuses when a feature selector follows an unknown global option, excluding the unknown option from classification', async () => {
+    const args = ['-C', 'outside', '--no-pag', '-C', 'fixture', 'reset', '--hard'];
+
+    const result = invoke(args);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unrecognized git option «--no-pag» before «reset»');
+    const calls = await recordedArgv();
+    expect(calls).toEqual([['-C', 'outside', '-C', 'fixture', 'rev-parse', '--path-format=absolute', '--git-common-dir']]);
+    expect(calls.every((argv) => !argv.includes('--no-pag'))).toBe(true);
+  });
+
+  it('consumes a spaced attr-source value before refusing a hard reset', async () => {
+    const result = invoke(['--attr-source', 'HEAD', 'reset', '--hard']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('hard reset');
+    expect((await recordedArgv()).some((argv) => argv.includes('reset'))).toBe(false);
+  });
+
+  it('passes reachable bundled forced branch deletion unchanged to the stub real git', async () => {
+    await writeFile(branchStatePath, 'reachable-unmerged', 'utf8');
+    const args = ['branch', '-df', 'reachable'];
+
+    expect(invoke(args).status).toBe(0);
+    expect((await recordedArgv()).at(-1)).toEqual(args);
+  });
+
+  it('refuses an attached -C global option before reset without reaching real git', async () => {
+    const result = invoke(['-Cfixture', 'reset', '--hard']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unrecognized git option «-Cfixture» before «reset»');
+    expect((await recordedArgv()).some((argv) => argv.includes('reset'))).toBe(false);
+  });
+
+  it.each([
     ['lease force push', ['push', '--force-with-lease', '--force-if-includes', 'origin', 'main']],
     ['non-hard reset', ['reset', '--keep', 'HEAD']],
     ['soft reset', ['reset', '--soft', 'HEAD']],
@@ -138,11 +277,159 @@ esac
     expect(await recordedCommands()).not.toContain('clean');
   });
 
-  it('expands a quoted non-destructive alias before invoking real git', async () => {
+  it('classifies a quoted non-destructive alias but preserves it for real git', async () => {
     await writeFile(aliasPath, "log '-1'", 'utf8');
     const result = invoke(['guarded']);
     expect(result.status).toBe(0);
-    expect(await recordedCommands()).toEqual(['config', 'log']);
+    expect(await recordedCommands()).toEqual(['config', 'guarded']);
+  });
+
+  it('normalizes destructive options after expanding a nuke alias', async () => {
+    await writeFile(aliasPath, 'reset --har', 'utf8');
+
+    const result = invoke(['nuke']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('hard reset discards working-tree changes');
+    expect(result.stderr).toContain('git reset --keep');
+    expect(await recordedCommands()).not.toContain('nuke');
+    expect(await recordedCommands()).not.toContain('reset');
+  });
+
+  it('preserves the original argv after expanding a safe nuke alias', async () => {
+    await writeFile(aliasPath, 'reset --keep HEAD~1', 'utf8');
+
+    expect(invoke(['nuke']).status).toBe(0);
+    expect((await recordedArgv()).at(-1)).toEqual(['nuke']);
+  });
+
+  it.each([
+    ['abbreviated hard reset', ['reset', '--har'], /hard reset/],
+    ['shortened hard reset', ['reset', '--ha', 'HEAD~1'], /hard reset/],
+    ['abbreviated forced clean', ['clean', '--fo'], /forced clean/],
+    ['shortened forced clean', ['clean', '--forc', '-d'], /forced clean/],
+    ['bundled forced clean', ['clean', '-dxf'], /forced clean/],
+    ['global-prefixed abbreviated reset', ['-C', 'fixture', '--no-pager', 'reset', '--har'], /hard reset/],
+    ['config-prefixed abbreviated reset', ['--config-env=core.pager=PAGER', 'reset', '--ha'], /hard reset/],
+    ['bundled force branch deletion', ['branch', '-df', 'unreachable'], /commits unreachable/],
+    ['reversed bundled force branch deletion', ['branch', '-fd', 'unreachable'], /commits unreachable/],
+    ['expanded force branch deletion', ['branch', '-Dq', 'unreachable'], /commits unreachable/],
+    ['abbreviated branch deletion', ['branch', '--del', '--force', 'unreachable'], /commits unreachable/],
+    ['path checkout after option terminator', ['checkout', '--', '--har'], /path checkout/],
+  ])('normalizes %s before classifying it', async (_name, args, reason) => {
+    await mkdir(join(fixtureDir, 'fixture'));
+    const result = invoke(args);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(reason);
+    expect((await recordedArgv()).some((argv) => argv.includes(args.includes('branch') ? 'branch' : args.includes('clean') ? 'clean' : args.includes('checkout') ? 'checkout' : 'reset'))).toBe(false);
+  });
+
+  it.each([
+    ['reset keep abbreviation', ['reset', '--ke', 'HEAD~1']],
+    ['reset soft abbreviation', ['reset', '--so', 'HEAD~1']],
+    ['reset mixed', ['reset', '--mix']],
+    ['push force-with-lease abbreviation', ['push', '--force-with', 'origin', 'main']],
+    ['non-forced clean bundle', ['clean', '-nd']],
+    ['dry-run clean abbreviation', ['clean', '--dry']],
+  ])('passes normalized safe %s through unchanged', async (_name, args) => {
+    const result = invoke(args);
+    expect(result.status).toBe(args[0] === 'push' ? 17 : 0);
+    expect((await recordedArgv()).at(-1)).toEqual(args);
+  });
+
+  it.each([
+    ['unknown reset option', ['reset', '--bogus', 'HEAD'], '--bogus'],
+    ['ambiguous push option', ['push', '--forc', 'origin', 'main'], '--forc'],
+    ['ambiguous negated push option', ['push', '--no-forc', 'origin', 'main'], '--no-forc'],
+    ['unknown branch short option', ['branch', '-Z', 'unreachable'], '-Z'],
+  ])('refuses an unresolvable %s before it reaches real git', async (_name, args, token) => {
+    const result = invoke(args);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`unrecognized option «${token}» for git «${args[0]}»`);
+    expect(result.stderr).toContain('spell the option in full');
+    expect((await recordedCommands()).every((command) => SAFE_CLASSIFICATION_COMMANDS.has(command))).toBe(true);
+  });
+
+  it.each([
+    ['status unknown option', ['status', '--bogus']],
+    ['log unknown option', ['log', '--ha']],
+    ['push short upstream', ['push', '-u', 'origin', 'feature']],
+    ['branch verbose bundle', ['branch', '-vv']],
+    ['checkout branch', ['checkout', '-b', 'feature']],
+    ['restore staged', ['restore', '--staged', 'file']],
+    ['reset soft', ['reset', '--soft', 'HEAD~1']],
+    ['exact no-refresh reset', ['reset', '--no-refresh', 'HEAD~1']],
+    ['exact negated push force', ['push', '--no-force', 'origin', 'main']],
+    ['checkout end-of-options branch', ['checkout', '--end-of-options', 'branch']],
+  ])('passes a resolvable or unguarded %s through unchanged', async (_name, args) => {
+    const result = invoke(args);
+    expect(result.status).toBe(args[0] === 'push' ? 17 : 0);
+    expect((await recordedArgv()).at(-1)).toEqual(args);
+  });
+
+  it('does not refuse an unresolvable guarded option outside the feature repository', async () => {
+    await writeFile(join(fixtureDir, '.pipeline', 'git-guard', 'common-dir'), '/other/common-dir\n');
+    const args = ['reset', '--bogus'];
+
+    expect(invoke(args).status).toBe(0);
+    expect((await recordedArgv()).at(-1)).toEqual(args);
+  });
+
+  it('does not refuse an abbreviated hard reset outside the feature repository', async () => {
+    await writeFile(join(fixtureDir, '.pipeline', 'git-guard', 'common-dir'), '/other/common-dir\n');
+    const args = ['reset', '--har'];
+
+    expect(invoke(args).status).toBe(0);
+    expect((await recordedArgv()).at(-1)).toEqual(args);
+  });
+
+  it.each([
+    ['lease and includes push', ['push', '--force-with-lease', '--force-if-includes', 'origin', 'main']],
+    ['keep reset', ['reset', '--keep', 'HEAD~1']],
+    ['ordinary branch delete', ['branch', '-d', 'unreachable']],
+    ['dry-run clean', ['clean', '-n']],
+    ['checkout conflict side', ['checkout', '--ours', '--', 'file']],
+    ['staged restore', ['restore', '--staged', 'file']],
+  ])('preserves canonical safe %s argv', async (_name, args) => {
+    const result = invoke(args);
+    expect(result.status).toBe(args[0] === 'push' ? 17 : 0);
+    expect((await recordedArgv()).at(-1)).toEqual(args);
+  });
+
+  it('keeps a hard reset refusal when a later option selects another mode', async () => {
+    const result = invoke(['reset', '--hard', '--soft']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('hard reset discards working-tree changes');
+    expect((await recordedCommands()).some((command) => command === 'reset')).toBe(false);
+  });
+
+  it('drives every applicable shared corpus case and no excluded case', async () => {
+    const applicable = destructiveGitCorpus.filter(({ pathGuard }) => pathGuard !== 'not-applicable');
+    let ran = 0;
+    for (const corpusCase of applicable) {
+      await writeFile(aliasPath, corpusCase.alias ?? '', 'utf8');
+      await writeFile(branchStatePath, corpusCase.branch ?? '', 'utf8');
+      const result = invoke(corpusCase.argv);
+      // An allowed push reaches the stub real git, which rejects every push with 17.
+      const allowedStatus = corpusCase.argv[0] === 'push' ? 17 : 0;
+      expect(result.status, corpusCase.name).toBe(corpusCase.pathGuard === 'refuse' ? 1 : allowedStatus);
+      ran += 1;
+    }
+    expect(ran).toBe(applicable.length);
+  });
+
+  it('enforces the shared corpus schema and policy boundaries', () => {
+    const names = new Set(destructiveGitCorpus.map(({ name }) => name));
+    for (const name of ['C prefix branch delete', 'git-dir prefix branch delete', 'config-env global prefix', 'escaped heredoc only', 'quoted heredoc opener only', 'comment heredoc marker', 'git-dir equals reset', 'quoted alias hard reset', 'multiple quoted heredocs only', 'spaced quoted heredoc only', 'reset abbreviated hard', 'branch bundled delete force', 'branch abbreviated delete force', 'clean bundled force', 'push plus refspec']) expect(names).toContain(name);
+    for (const corpusCase of destructiveGitCorpus) {
+      if (corpusCase.spellingOnly) expect([corpusCase.pathGuard, corpusCase.hook]).toEqual(['refuse', 'refuse']);
+      if (corpusCase.pathGuard !== 'not-applicable' && corpusCase.hook !== 'not-applicable' && corpusCase.pathGuard !== corpusCase.hook) expect(corpusCase.policyDifference).toMatch(/^(checkout-paths|branch-merged-rule)$/);
+      if (corpusCase.pathGuard === 'not-applicable') expect(corpusCase.command).toMatch(/^(?:#|cat <<)/);
+      if (/^git (checkout|restore) /.test(corpusCase.command) && corpusCase.hook === 'refuse') expect(corpusCase.command).toMatch(/^git (?:checkout -- \.|restore \.)$/);
+    }
   });
 
 });
@@ -189,6 +476,17 @@ describe('GIT_GUARD_SCRIPT in a scratch repository', () => {
     expect(invoke(['clean', '-f']).status).toBe(1);
     expect(git(['rev-parse', 'unreachable'])).toBe(tip);
     expect(await readFile(join(repository, 'untracked'), 'utf8')).toBe('survive exactly\n');
+  });
+
+  it('normalizes abbreviated resets in a guard provisioned by writeGitGuard', async () => {
+    const provisioned = await writeGitGuard(repository);
+    await writeFile(join(repository, 'tracked'), 'edited\n');
+
+    const result = spawnSync(join(provisioned, 'git'), ['reset', '--har'], { cwd: repository, encoding: 'utf8' });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('hard reset discards working-tree changes');
+    expect(await readFile(join(repository, 'tracked'), 'utf8')).toBe('edited\n');
   });
 
   it('passes reachable forced and ordinary branch deletion to real Git, including remote-only reachability', async () => {

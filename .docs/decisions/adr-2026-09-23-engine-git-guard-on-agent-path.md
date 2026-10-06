@@ -188,6 +188,11 @@ Option A.
     > review-dispatch and non-canonical-spelling limits are backstopped by the git-side hooks of
     > D11 to D15. Those limits still apply to every other refused form.
 
+    > **Amended 2026-10-06 by #2904 (operator decision):** adr-2026-10-03-fail-closed-git-option-normalization
+    > D8 removes the non-canonical-spelling limit: a spelling the shared option spec cannot resolve is
+    > refused by both guards, and the control inventory records that fail-closed refusal instead. The
+    > absolute-path `git`, `PATH`-shadowing, shell-alias, review-dispatch and Pi limits are unchanged.
+
 > **Amended 2026-10-03 by #2693 (operator decision): git-side backstop for ref-moving destructive
 > git.** Option B, rejected above as the primary control, is adopted as a backstop behind Option A.
 > It vetoes two ref-moving classes in git itself, so it holds when a `git` is reached without the

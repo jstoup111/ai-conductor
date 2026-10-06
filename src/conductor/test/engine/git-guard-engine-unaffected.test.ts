@@ -98,7 +98,7 @@ case " $* " in *" --git-common-dir "*) printf '%s\\n' ${JSON.stringify(featureCo
   });
 
   it('keeps the materialized script’s safe lease pass-through contract', () => {
-    expect(GIT_GUARD_SCRIPT).toContain('exec "$real_git" "${args[@]}"');
+    expect(GIT_GUARD_SCRIPT).toContain('exec "$real_git" "${original_args[@]}"');
     expect(GIT_GUARD_SCRIPT).toContain('git push --force-with-lease');
   });
 });

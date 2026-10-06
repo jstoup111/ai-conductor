@@ -1,5 +1,151 @@
 import { PROTECTED_ARTIFACT_DIRECTORIES } from './protected-artifact-seal.js';
 import { resolveCanonicalLauncher, shellQuote } from './canonical-launcher.js';
+import { GIT_OPTION_SPEC } from './git-option-spec.js';
+
+const globalOptionCase = GIT_OPTION_SPEC.global.flatMap((option) => {
+  const spellings = [
+    option.name === undefined ? undefined : `--${option.name}`,
+    option.short === undefined ? undefined : `-${option.short}`,
+  ].filter((spelling): spelling is string => spelling !== undefined);
+  const consume = option.arity === 'required'
+    ? 'classification_prefix+=("${args[$i]}" "${args[$((i + 1))]:-}"); ((i+=2))'
+    : 'classification_prefix+=("${args[$i]}"); ((i++))';
+  return [
+    `    ${spellings.join('|')}) ${consume}; continue ;;`,
+    ...(option.name === undefined || !option.acceptsEquals
+      ? []
+      : [`    --${option.name}=*) classification_prefix+=("\${args[$i]}"); ((i++)); continue ;;`]),
+  ];
+}).join('\n');
+
+const guardedOptionMetadataCase = (kind: 'name' | 'short') => Object.entries(GIT_OPTION_SPEC.subcommands).flatMap(([command, options]) => options
+  .filter((option) => option[kind] !== undefined)
+  .map((option) => {
+    const key = option[kind]!;
+    const canonical = option.name ?? key;
+    return `    ${command}:${key}) printf '%s' '${canonical}|${option.arity}|${option.negatable}|${option.expandsTo?.join(',') ?? ''}' ;;`;
+  })).join('\n');
+
+const guardedOptionNamesCase = Object.entries(GIT_OPTION_SPEC.subcommands).map(([command, options]) => {
+  const names = options.flatMap((option) => option.name === undefined ? [] : [option.name]);
+  return `    ${command}) printf '%s\\n' ${names.map((name) => `'${name}'`).join(' ')} ;;`;
+}).join('\n');
+
+// These fragments are deliberately assembled from the data-only option spec at
+// module load.  The resulting guard is static shell source, not an interpreter
+// template populated from runtime argv.
+const guardedOptionNormalizer = `
+option_metadata() {
+  case "$1:$2" in
+${guardedOptionMetadataCase('name')}
+  esac
+}
+
+short_option_metadata() {
+  case "$1:$2" in
+${guardedOptionMetadataCase('short')}
+  esac
+}
+
+option_names() {
+  case "$1" in
+${guardedOptionNamesCase}
+  esac
+}
+
+resolve_long_option() {
+  local command="$1" token="$2" candidate metadata match='' match_negated=false matches=0 negatable
+  metadata="$(option_metadata "$command" "$token")"
+  if [[ -n "$metadata" ]]; then printf '%s|false' "$metadata"; return; fi
+  # Like git, an exact negated name wins before prefix matching: --no-force
+  # must not be ambiguous with --no-force-with-lease.
+  if [[ "$token" == no-* ]]; then
+    metadata="$(option_metadata "$command" "\${token#no-}")"
+    IFS='|' read -r _ _ negatable _ <<< "$metadata"
+    if [[ -n "$metadata" && "$negatable" == true ]]; then printf '%s|true' "$metadata"; return; fi
+  fi
+  while IFS= read -r candidate; do
+    metadata="$(option_metadata "$command" "$candidate")"
+    if [[ "$candidate" == "$token"* ]]; then
+      match="$metadata"; match_negated=false; ((matches+=1))
+    fi
+    IFS='|' read -r _ _ negatable _ <<< "$metadata"
+    if [[ "$negatable" == true && "no-$candidate" == "$token"* ]]; then
+      match="$metadata"; match_negated=true; ((matches+=1))
+    fi
+  done < <(option_names "$command")
+  [[ $matches -eq 1 ]] && printf '%s|%s' "$match" "$match_negated"
+}
+
+canon=()
+operands=()
+options_ended=false
+pathspec_separator=false
+normalization_error=''
+add_metadata() {
+  local metadata="$1" negated="$2" canonical arity negatable expands
+  IFS='|' read -r canonical arity negatable expands <<< "$metadata"
+  if [[ "$negated" == true ]]; then
+    [[ "$negatable" == true ]] || return
+    canon+=("no-$canonical")
+  elif [[ -n "$expands" ]]; then
+    IFS=',' read -r -a expanded <<< "$expands"
+    canon+=("\${expanded[@]}")
+  else
+    canon+=("$canonical")
+  fi
+}
+
+normalize_options() {
+  local command="$1" start="$2" token base value metadata resolved canonical arity negatable expands letters letter rest j
+  j=$((start + 1))
+  while [[ $j -lt \${#args[@]} ]]; do
+    token="\${args[$j]}"
+    if [[ "$options_ended" == true ]]; then operands+=("$token"); ((j+=1)); continue; fi
+    if [[ "$token" == -- || "$token" == --end-of-options ]]; then
+      options_ended=true
+      [[ "$token" == -- ]] && pathspec_separator=true
+      ((j+=1)); continue
+    fi
+    if [[ "$token" == --* ]]; then
+      base="\${token#--}"; value=''
+      [[ "$base" == *=* ]] && { value="\${base#*=}"; base="\${base%%=*}"; }
+      resolved="$(resolve_long_option "$command" "$base")"
+      negated="\${resolved##*|}"
+      metadata="\${resolved%|*}"
+      if [[ -n "$metadata" ]]; then
+        IFS='|' read -r canonical arity negatable expands <<< "$metadata"
+        if [[ "$negated" == true && "$negatable" != true ]]; then
+          [[ -n "$normalization_error" ]] || normalization_error="$token"
+        else
+          add_metadata "$metadata" "$negated"
+        fi
+        if [[ "$arity" == required && -z "$value" && $((j + 1)) -lt \${#args[@]} ]]; then ((j+=1)); fi
+      else [[ -n "$normalization_error" ]] || normalization_error="$token"; fi
+      ((j+=1)); continue
+    fi
+    if [[ "$token" == -?* ]]; then
+      letters="\${token#-}"
+      for ((k=0; k<\${#letters}; k++)); do
+        letter="\${letters:k:1}"
+        metadata="$(short_option_metadata "$command" "$letter")"
+        if [[ -z "$metadata" ]]; then [[ -n "$normalization_error" ]] || normalization_error="-$letter"; break; fi
+        IFS='|' read -r canonical arity negatable expands <<< "$metadata"
+        add_metadata "$metadata" false
+        [[ "$arity" == none ]] && continue
+        rest="\${letters:$((k + 1))}"
+        [[ -n "$rest" || "$arity" != required || $((j + 1)) -ge \${#args[@]} ]] || ((j+=1))
+        break
+      done
+      ((j+=1)); continue
+    fi
+    operands+=("$token")
+    ((j+=1))
+  done
+}
+
+has_canon() { local wanted="$1" value; for value in "\${canon[@]}"; do [[ "$value" == "$wanted" ]] && return 0; done; return 1; }
+`;
 
 /**
  * A PATH-shadowing git wrapper for agent processes. Runtime values are data
@@ -18,22 +164,39 @@ refuse() {
 
 # Keep the original argv for exec; classify after one safe non-shell alias expansion.
 args=("$@")
+original_args=("$@")
 i=0
+classification_prefix=()
+unknown_global=''
+unknown_prefix_end=-1
 while [[ $i -lt \${#args[@]} ]]; do
   case "\${args[$i]}" in
-    -C|--git-dir|--work-tree|-c|--namespace|--config-env|--attr-source|--super-prefix) ((i+=2)); continue ;;
-    --config-env=*|--attr-source=*|--super-prefix=*) ((i++)); continue ;;
-    -C*|-c*|--git-dir=*|--work-tree=*|--namespace=*|--exec-path=*) ((i++)); continue ;;
-    --exec-path|--no-pager|--paginate|-P|--no-optional-locks|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-replace-objects|--no-lazy-fetch|--no-advice|--bare) ((i++)); continue ;;
+${globalOptionCase}
+    -*)
+      if [[ -z "$unknown_global" ]]; then
+        unknown_global="\${args[$i]}"
+        unknown_prefix_end=$i
+      fi
+      ((i++)); continue ;;
   esac
   break
 done
 command="\${args[$i]:-}"
+if [[ -n "$unknown_global" ]]; then
+  command=''
+  for candidate in "\${args[@]:$((unknown_prefix_end + 1))}"; do
+    if [[ "$candidate" =~ ^(reset|branch|clean|push|checkout|restore)$ ]]; then command="$candidate"; break; fi
+  done
+fi
+if [[ -n "$unknown_global" && -n "$command" ]]; then
+  common="$("$real_git" "\${classification_prefix[@]}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  [[ "$common" == "$feature_common" ]] && refuse "$command" "unrecognized git option «$unknown_global» before «$command»" 'spell the option in full'
+fi
 # These are Git's own non-destructive query commands.  Keep this a static
 # built-in-only set: consulting config for one of these commands both adds an
 # observable real-git call and incorrectly treats a built-in as an alias.
 if [[ -n "$command" ]] && [[ ! "$command" =~ ^(add|annotate|blame|bugreport|cat-file|check-attr|check-ignore|check-mailmap|check-ref-format|column|config|count-objects|describe|diff|diff-files|diff-index|diff-tree|fetch|for-each-ref|fsck|get-tar-commit-id|grep|help|ls-files|ls-remote|ls-tree|log|merge-base|name-rev|range-diff|rev-list|rev-parse|show|show-branch|show-index|show-ref|status|var|verify-commit|verify-pack|verify-tag|whatchanged|worktree)$ ]]; then
-  alias_value="$($real_git "\${args[@]:0:$i}" config --get "alias.$command" 2>/dev/null || true)"
+  alias_value="$($real_git "\${classification_prefix[@]}" config --get "alias.$command" 2>/dev/null || true)"
   if [[ -n "$alias_value" && "$alias_value" != '!'* ]]; then
     # Git aliases use quote-aware split_cmdline semantics, not bash's plain
     # word splitting.  Keep shell bang aliases above out of this path.
@@ -57,54 +220,62 @@ if [[ -n "$command" ]] && [[ ! "$command" =~ ^(add|annotate|blame|bugreport|cat-
   fi
 fi
 
+${guardedOptionNormalizer}
+if [[ "$command" =~ ^(reset|branch|clean|push|checkout|restore)$ ]]; then
+  normalize_options "$command" "$i"
+fi
+if [[ -n "$normalization_error" ]]; then
+  common="$("$real_git" "\${classification_prefix[@]}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  [[ "$common" == "$feature_common" ]] && refuse "$command" "unrecognized option «$normalization_error» for git «$command»" 'spell the option in full'
+fi
+
 destructive=false
 reason=''
 alternative=''
 case "$command" in
   push)
-    for a in "\${args[@]:$((i+1))}"; do
-      [[ "$a" == --force || "$a" == -f || "$a" == +* ]] && { destructive=true; reason='bare force push can rewrite remote history'; alternative='git push --force-with-lease'; break; }
-    done ;;
+    for a in "\${operands[@]}"; do
+      [[ "$a" == +* ]] && { destructive=true; reason='bare force push can rewrite remote history'; alternative='git push --force-with-lease'; break; }
+    done
+    has_canon force && { destructive=true; reason='bare force push can rewrite remote history'; alternative='git push --force-with-lease'; } ;;
   reset)
-    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --hard ]] && { destructive=true; reason='hard reset discards working-tree changes'; alternative='git reset --keep <target>'; break; }; done ;;
+    has_canon hard && { destructive=true; reason='hard reset discards working-tree changes'; alternative='git reset --keep <target>'; } ;;
   clean)
-    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --force || ( "$a" == -?* && "$a" != --* && "$a" == *f* ) ]] && { destructive=true; reason='forced clean deletes untracked files'; alternative='git clean -n then remove named paths'; break; }; done ;;
+    has_canon force && { destructive=true; reason='forced clean deletes untracked files'; alternative='git clean -n then remove named paths'; } ;;
   checkout)
-    has_paths=false; safe_side=false
-    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == -- ]] && has_paths=true; [[ "$a" == --ours || "$a" == --theirs || "$a" == --merge || "$a" == -m ]] && safe_side=true; done
+    has_paths="$pathspec_separator"; safe_side=false
+    has_canon ours || has_canon theirs || has_canon merge && safe_side=true
     [[ "$has_paths" == true && "$safe_side" == false ]] && { destructive=true; reason='path checkout discards working-tree changes'; alternative='commit a WIP first or use a temporary worktree'; } ;;
   restore)
     safe_side=false; staged=false; worktree=false
-    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --ours || "$a" == --theirs || "$a" == --merge ]] && safe_side=true; [[ "$a" == --staged || "$a" == -S ]] && staged=true; [[ "$a" == --worktree || "$a" == -W ]] && worktree=true; done
+    has_canon ours || has_canon theirs || has_canon merge && safe_side=true
+    has_canon staged && staged=true
+    has_canon worktree && worktree=true
     [[ "$safe_side" == false && ( "$staged" == false || "$worktree" == true ) ]] && { destructive=true; reason='restore discards working-tree changes'; alternative='commit a WIP first or use a temporary worktree'; } ;;
   branch)
-    force=false; force_delete=false; delete=false; names=()
-    for a in "\${args[@]:$((i+1))}"; do
-      [[ "$a" == -D ]] && force_delete=true
-      [[ "$a" == --force ]] && force=true
-      [[ "$a" == -d || "$a" == --delete ]] && delete=true
-      [[ "$a" != -* ]] && names+=("$a")
-    done
-    if [[ "$force_delete" == true || ( "$force" == true && "$delete" == true ) ]] && (( \${#names[@]} > 0 )); then
+    force=false; delete=false; names=("\${operands[@]}")
+    has_canon force && force=true
+    has_canon delete && delete=true
+    if [[ "$force" == true && "$delete" == true ]] && (( \${#names[@]} > 0 )); then
       for name in "\${names[@]}"; do
         reachable=false
         while IFS= read -r ref; do
           [[ "$ref" == "refs/heads/$name" ]] && continue
-          if "$real_git" "\${args[@]:0:$i}" merge-base --is-ancestor "refs/heads/$name" "$ref" >/dev/null 2>&1; then
+          if "$real_git" "\${classification_prefix[@]}" merge-base --is-ancestor "refs/heads/$name" "$ref" >/dev/null 2>&1; then
             reachable=true
             break
           fi
-        done < <("$real_git" "\${args[@]:0:$i}" for-each-ref --format='%(refname)' refs/heads refs/remotes)
+        done < <("$real_git" "\${classification_prefix[@]}" for-each-ref --format='%(refname)' refs/heads refs/remotes)
         [[ "$reachable" == false ]] && { destructive=true; reason='force deletion would make commits unreachable'; alternative='git branch -d <branch>'; break; }
       done
     fi ;;
 esac
 
 if [[ "$destructive" == true ]]; then
-  common="$($real_git "\${args[@]:0:$i}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  common="$($real_git "\${classification_prefix[@]}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
   [[ "$common" == "$feature_common" ]] && refuse "$command" "$reason" "$alternative"
 fi
-exec "$real_git" "\${args[@]}"
+exec "$real_git" "\${original_args[@]}"
 `;
 
 /**

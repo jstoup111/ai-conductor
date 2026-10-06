@@ -1,6 +1,6 @@
-// Covers: task:1, task:2, task:14, task:rem-as-built-rem-as-built-adr-d8-quote-removal-1
+// Covers: task:1, task:2, task:7, task:8, task:9, task:10, task:12, task:14, task:rem-as-built-rem-as-built-adr-d8-quote-removal-1
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOOK_PATH = join(__dirname, '..', '..', '..', '..', 'hooks', 'claude', 'block-destructive-git.sh');
+type Expectation = 'refuse' | 'allow' | 'not-applicable';
+interface CorpusCase { name: string; argv: string[]; command: string; pathGuard: Expectation; hook: Expectation; branch?: 'unreachable' | 'reachable-unmerged' | 'merged'; spellingOnly?: boolean; policyDifference?: 'checkout-paths' | 'branch-merged-rule'; }
+const destructiveGitCorpus = JSON.parse(readFileSync(join(__dirname, '..', 'fixtures', 'destructive-git-corpus.json'), 'utf8')) as CorpusCase[];
 
 interface HookResult {
   status: number | null;
@@ -29,7 +32,7 @@ describe('block-destructive-git hook force-push protection', () => {
     }
   });
 
-  function invoke(command: string): HookResult {
+  function invoke(command: string, stubs: Partial<Record<'git' | 'gh', string>> = {}): HookResult {
     const fixtureDir = mkdtempSync(join(tmpdir(), 'destructive-git-hook-'));
     fixtureDirs.push(fixtureDir);
     const binDir = join(fixtureDir, 'bin');
@@ -38,7 +41,7 @@ describe('block-destructive-git hook force-push protection', () => {
 
     for (const executable of ['git', 'gh'] as const) {
       const stubPath = join(binDir, executable);
-      writeFileSync(stubPath, denyIfCalledStub(executable, markerPath), 'utf-8');
+      writeFileSync(stubPath, stubs[executable] ?? denyIfCalledStub(executable, markerPath), 'utf-8');
       chmodSync(stubPath, 0o755);
     }
 
@@ -70,6 +73,16 @@ describe('block-destructive-git hook force-push protection', () => {
     };
     expect(denial.hookSpecificOutput?.permissionDecision).toBe('deny');
     expect(denial.hookSpecificOutput?.permissionDecisionReason).toMatch(/force.*push/i);
+  }
+
+  function branchCheckStub(...mergedBranches: string[]): string {
+    const mergedBranchCondition = mergedBranches.map((branch) => `"$3" == ${JSON.stringify(branch)}`).join(' || ');
+    return `#!/usr/bin/env bash
+if [[ "$1" == "symbolic-ref" ]]; then exit 1; fi
+if [[ "$1" == "rev-parse" ]]; then printf '%s\\n' main; exit 0; fi
+if [[ "$1" == "merge-base" && ( ${mergedBranchCondition} ) ]]; then exit 0; fi
+exit 1
+`;
   }
 
   it('drops every heredoc body on a multi-heredoc command but scans later commands', () => {
@@ -205,6 +218,20 @@ describe('block-destructive-git hook force-push protection', () => {
     expect(result.stderr).toMatch(/git reset --hard is destructive and irreversible/i);
   });
 
+  it('blocks a hard reset after an ordinary rebase', () => {
+    const result = invoke('git rebase main && git reset --hard');
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('git reset --hard is destructive and irreversible');
+  });
+
+  it('blocks a spaced attr-source hard reset', () => {
+    const result = invoke('git --attr-source HEAD reset --hard');
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('git reset --hard is destructive and irreversible');
+  });
+
   it('keeps the existing reminder for an ordinary rebase beside a lease push', () => {
     const result = invoke('git push --force-with-lease origin a && git rebase main');
 
@@ -212,6 +239,20 @@ describe('block-destructive-git hook force-push protection', () => {
     expect(result.status).toBe(0);
     expect(result.calledGitOrGh).toBe(false);
     expect(result.stderr).toMatch(/git rebase.*allowed.*rare/i);
+  });
+
+  it('keeps the ordinary rebase reminder when followed by a safe command', () => {
+    const result = invoke('git rebase main && git status');
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("NOTE: 'git rebase' is allowed");
+  });
+
+  it('blocks a forced clean after an ordinary rebase', () => {
+    const result = invoke('git rebase main && git clean -fd');
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('git clean -f permanently removes untracked files');
   });
 
   it('does not remind for a rebase continuation beside a lease push', () => {
@@ -301,5 +342,167 @@ describe('block-destructive-git hook force-push protection', () => {
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(2);
     expect(result.stderr).toMatch(refusal);
+  });
+
+  it.each([
+    'git branch -df b',
+    'git -C . branch --delete --force b',
+  ])('routes normalized force-delete spelling through the unmerged branch check: %s', (command) => {
+    const result = invoke(command, { git: branchCheckStub('m'), gh: '#!/usr/bin/env bash\nexit 0\n' });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/force-delete UNMERGED branch\(es\): b/i);
+  });
+
+  it('allows a normalized force-delete spelling when the branch is merged', () => {
+    const result = invoke('git branch -df m', { git: branchCheckStub('m'), gh: '#!/usr/bin/env bash\nexit 0\n' });
+
+    expect(result.status).toBe(0);
+  });
+
+  it.each([
+    'git branch -D m1 m2',
+    'git branch -D m1 && git branch -D m2',
+  ])('allows all merged branch-delete operands: %s', (command) => {
+    const result = invoke(command, {
+      git: branchCheckStub('m1', 'm2'),
+      gh: '#!/usr/bin/env bash\nexit 0\n',
+    });
+
+    expect(result.status).toBe(0);
+  });
+
+  it('aggregates branch deletions and blocks the unmerged operand', () => {
+    const result = invoke('git branch -D merged && git branch -D unmerged', {
+      git: branchCheckStub('merged'),
+      gh: '#!/usr/bin/env bash\nexit 0\n',
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('unmerged');
+    expect(result.stderr).not.toMatch(/branch\(es\):[^.]*\bmerged\b/);
+  });
+
+  it('continues past an allowed branch deletion to block a force push', () => {
+    const result = invoke('git branch -D merged; git push --force', {
+      git: branchCheckStub('merged'),
+      gh: '#!/usr/bin/env bash\nexit 0\n',
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/force.*push/i);
+  });
+
+  it.each([
+    ['git reset --bogus', '--bogus'],
+    ['git push --forc origin main', '--forc'],
+    ['git --unknown-global reset HEAD', '--unknown-global'],
+  ])('refuses an unresolvable git option without invoking git or gh: %s', (command, option) => {
+    const result = invoke(command);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(option);
+    expect(result.stderr).toMatch(/spell the option in full/i);
+    expect(result.calledGitOrGh).toBe(false);
+  });
+
+  it('refuses an unparseable git command without invoking git or gh', () => {
+    const result = invoke('git reset "--hard');
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/git command could not be parsed/i);
+    expect(result.calledGitOrGh).toBe(false);
+  });
+
+  it.each([
+    'git status --bogus',
+    'git --unknown-global status',
+    'echo "unterminated',
+  ])('allows unresolvable or unparseable text without a guarded git command: %s', (command) => {
+    const result = invoke(command);
+
+    expect(result.status).toBe(0);
+    expect(result.calledGitOrGh).toBe(false);
+  });
+
+  it.each([
+    ['git push --force origin main', '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Force push blocked by harness. Use --force-with-lease instead, or ask the user for explicit confirmation."}}\n'],
+    ['git push -f', '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Force push blocked by harness. Use --force-with-lease instead, or ask the user for explicit confirmation."}}\n'],
+    ['git reset --hard', 'BLOCKED: git reset --hard is destructive and irreversible. Investigate the issue or ask the user before discarding work.\n'],
+    ['git branch -D unmerged', 'BLOCKED: git branch -D would force-delete UNMERGED branch(es): unmerged. Use -d for a safe delete, or ask the user. (Merged or squash/rebase-merged branches are allowed for cleanup.)\n'],
+    ['git clean -f', 'BLOCKED: git clean -f permanently removes untracked files. Ask the user before cleaning.\n'],
+    ['git checkout -- .', 'BLOCKED: This discards all unstaged changes. Ask the user before reverting.\n'],
+    ['git restore .', 'BLOCKED: This discards all unstaged changes. Ask the user before reverting.\n'],
+  ])('keeps the canonical refusal message for %s', (command, message) => {
+    const result = invoke(command);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toBe(message);
+  });
+
+  it('keeps rebase continuation silent', () => {
+    const result = invoke('git rebase --continue');
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+
+  it('keeps the ordinary rebase reminder', () => {
+    const result = invoke('git rebase main');
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("NOTE: 'git rebase' is allowed");
+  });
+
+  it.each([
+    'make build | git clean -fd',
+    'git -C /tmp/x reset --hard',
+    'git -C "my dir" reset --hard',
+    'git -c a=b push --force',
+    'git --config-env=a.b=C reset --hard',
+    'git --git-dir=.git reset --hard',
+    'git reset --har',
+    'git clean -xdf',
+    'git clean --fo',
+    'git push origin +main',
+    'cd repo && git -C . reset --hard',
+    'make build; git clean -fd & wait',
+    'GIT_TRACE=1 git reset --hard',
+    'sudo git reset --hard',
+    'xargs git clean -f',
+    'cat <<\\EOF\nignored\nEOF\ngit reset --hard',
+    'cat <<E"OF"\nignored\nEOF\ngit reset --hard',
+    '# <<EOF\ngit reset --hard',
+  ])('denies normalized destructive invocation: %s', (command) => {
+    const result = invoke(command);
+    expect(result.status).toBe(2);
+    expect(result.calledGitOrGh).toBe(false);
+  });
+
+  it.each([
+    'git commit -m "undo reset --hard"',
+    "cat <<'EOF'\ngit reset --hard\nEOF",
+    '# git reset --hard',
+    'git push --force-with-lease origin main',
+    'git -C . push --force-with origin main',
+    'git status',
+    'git -C . log --oneline',
+    'git reset --soft HEAD~1',
+  ])('allows non-destructive normalized invocation without git or gh calls: %s', (command) => {
+    const result = invoke(command);
+    expect(result.status).toBe(0);
+    expect(result.calledGitOrGh).toBe(false);
+  });
+
+  it('drives every applicable shared corpus case and no excluded case', () => {
+    const applicable = destructiveGitCorpus.filter(({ hook }) => hook !== 'not-applicable');
+    let ran = 0;
+    for (const corpusCase of applicable) {
+      const stubs = corpusCase.branch === undefined ? {} : { git: branchCheckStub(corpusCase.branch === 'merged' ? 'reachable' : 'merged'), gh: '#!/usr/bin/env bash\nexit 0\n' };
+      const result = invoke(corpusCase.command, stubs);
+      expect(result.status, corpusCase.name).toBe(corpusCase.hook === 'refuse' ? 2 : 0);
+      ran += 1;
+    }
+    expect(ran).toBe(applicable.length);
   });
 });
