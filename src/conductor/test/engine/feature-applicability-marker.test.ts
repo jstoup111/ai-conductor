@@ -33,7 +33,7 @@ describe('parseApplicability', () => {
     });
   });
 
-  it.each(['Inapplicable: manual_test — '])(
+  it.each(['Inapplicable: manual_test — ', 'Inapplicable: manual_test —'])(
     'reports an empty reason',
     (content) => {
       expect(parseApplicability(content)).toEqual({

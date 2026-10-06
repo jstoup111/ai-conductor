@@ -75,7 +75,7 @@ export function gitTreeSource(
   baseBranch: string,
   options: GitTreeSourceOptions = {},
 ): BacklogTreeSource {
-  let prefetchedDocs: Promise<Map<string, string>> | undefined;
+  let prefetchedDocs: Promise<{ docs?: Map<string, string>; error?: unknown }> | undefined;
   const runGit = options.gitRunner ?? (async (args: string[]) => {
     const { stdout } = await execFile('git', args, { cwd: projectRoot });
     return { stdout: stdout.toString() };
@@ -87,9 +87,11 @@ export function gitTreeSource(
         const { stdout } = await runGit(['ls-tree', '-r', '-z', '--name-only', baseBranch, '--', '.docs']);
         const paths = stdout.split('\0').filter(Boolean);
         const blobs = await readGitBlobs(projectRoot, baseBranch, paths, { runner: options.blobRunner });
-        return new Map([...blobs].map(([path, content]) => [path, content.toString('utf8')]));
-      } catch {
-        return new Map<string, string>();
+        return { docs: new Map([...blobs].map(([path, content]) => [path, content.toString('utf8')])) };
+      } catch (error) {
+        // Applicability has an explicit fail-soft diagnostic at its caller.
+        // Retain the failure so that diagnostic remains reachable in production.
+        return { error };
       }
     })();
     return prefetchedDocs;
@@ -135,8 +137,14 @@ export function gitTreeSource(
       }
     },
     async readFile(relPath) {
-      const docs = await prefetchDocs();
-      if (relPath.startsWith('.docs/')) return docs.get(relPath) ?? null;
+      const prefetched = await prefetchDocs();
+      if (relPath.startsWith('.docs/')) {
+        if (prefetched.docs) return prefetched.docs.get(relPath) ?? null;
+        if (relPath.startsWith('.docs/applicability/')) throw prefetched.error;
+        // A failed batch must not make unrelated eligibility reads look absent.
+        // Preserve their historical direct-read behavior while applicability
+        // reports the original batch failure through discoverBacklog.
+      }
 
       try {
         const { stdout } = await runGit(['show', `${baseBranch}:${relPath}`]);
@@ -491,6 +499,8 @@ export async function fastForwardRoot(
 export interface DiscoverBacklogOpts {
   /** Branch whose committed tree is the build-ready source of truth (default 'main'). */
   baseBranch?: string;
+  /** Immutable commit resolved for this scan and carried into its work orders. */
+  baseSha?: string;
   /** Inject a tree source (tests); defaults to the git base-branch reader. */
   treeSource?: BacklogTreeSource;
   /** Project-only resolved applicability toggle, supplied by daemon-cli. */
@@ -1233,6 +1243,7 @@ export async function discoverBacklog(
     // carry the slug (+ tier + sourceRef + track); no working-tree paths to copy.
     items.push({
       slug,
+      ...(opts.baseSha ? { baseSha: opts.baseSha } : {}),
       planPath: planRel,
       storiesPath: storiesRel,
       tier,

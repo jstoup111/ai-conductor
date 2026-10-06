@@ -1817,7 +1817,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     worktreeLifecycle,
   });
   const createWorkOrder = async (item: BacklogItem) => {
-    const baseSha = await resolveDaemonBaseSha(projectRoot, baseBranch);
+    const baseSha = item.baseSha ?? await resolveDaemonBaseSha(projectRoot, baseBranch);
     if (!baseSha) {
       throw new Error(`daemon work claim ${item.slug} could not resolve pinned base SHA`);
     }
@@ -2031,17 +2031,26 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         () => fastForwardRoot(root, sourceLog),
         (reason) => log(`[daemon] root refresh deferred: ${reason}`),
       ),
-      discoverBacklog: (root, processed, discoveryLog, discoveryOpts) => discoverBacklog(
-        root,
-        processed,
-        discoveryLog,
-        {
-          ...discoveryOpts,
-          featureApplicabilityEnabled: resolveFeatureApplicabilityConfig(config).enabled,
-          featureApplicabilityCustomStepNames: Object.keys(config?.steps ?? {})
-            .filter((name) => !ALL_STEPS.some((step) => step.name === name)),
-        },
-      ),
+      discoverBacklog: async (root, processed, discoveryLog, discoveryOpts) => {
+        const scanBaseBranch = discoveryOpts.baseBranch ?? baseBranch;
+        const baseSha = await resolveDaemonBaseSha(root, scanBaseBranch);
+        if (!baseSha) throw new Error('daemon backlog scan could not resolve pinned base SHA');
+        return discoverBacklog(
+          root,
+          processed,
+          discoveryLog,
+          {
+            ...discoveryOpts,
+            // The entire scan, including marker bytes and decider attribution,
+            // reads the immutable claim base rather than a moving branch name.
+            baseBranch: baseSha,
+            baseSha,
+            featureApplicabilityEnabled: resolveFeatureApplicabilityConfig(config).enabled,
+            featureApplicabilityCustomStepNames: Object.keys(config?.steps ?? {})
+              .filter((name) => !ALL_STEPS.some((step) => step.name === name)),
+          },
+        );
+      },
       resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
       readStamp: (slug) => readSpecOwnerStamp(ownerGit, baseBranch, slug),
       readMergeTime: (slug) =>

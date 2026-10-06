@@ -4217,14 +4217,24 @@ export function parseApplicability(content: string): ParseApplicabilityResult {
 
     const body = line.slice('Inapplicable:'.length);
     const emDashIndex = body.indexOf(' — ');
-    const separatorIndex = emDashIndex >= 0 ? emDashIndex : undefined;
+    // The ordinary separator includes a space after the dash. A declaration
+    // ending in ` —` is the same separator with an empty (or whitespace-only)
+    // reason, and must retain the more useful empty-reason diagnostic.
+    const terminalEmDashIndex = body.trimEnd().endsWith(' —')
+      ? body.trimEnd().length - 2
+      : -1;
+    const separatorIndex = emDashIndex >= 0
+      ? emDashIndex
+      : terminalEmDashIndex >= 0
+        ? terminalEmDashIndex
+        : undefined;
     const lineNumber = index + 1;
 
     if (separatorIndex === undefined) {
       return { ok: false, error: { kind: 'malformed-line', line: lineNumber } };
     }
 
-    const reason = body.slice(separatorIndex + 3).trim();
+    const reason = body.slice(separatorIndex + (emDashIndex >= 0 ? 3 : 2)).trim();
     if (!reason) {
       return { ok: false, error: { kind: 'empty-reason', line: lineNumber } };
     }

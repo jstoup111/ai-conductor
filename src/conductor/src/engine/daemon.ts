@@ -60,6 +60,8 @@ export interface BacklogItem {
    *  stories + plan live on the default branch each worktree is cut from, so the
    *  item carries no paths — a fresh worktree already contains them. */
   slug: string;
+  /** Immutable base commit whose marker bytes and attribution seeded this item. */
+  baseSha?: string;
   /** Engineer-assessed complexity tier, parsed from `.docs/complexity/<slug>.md`
    *  on the base branch (FR: tier propagation). Drives BUILD-phase step skipping
    *  in the conductor (Small skips acceptance_specs). Absent for legacy or
