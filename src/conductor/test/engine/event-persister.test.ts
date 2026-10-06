@@ -13,6 +13,7 @@ import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
 import type { MetricsRecorder } from '../../src/engine/otel/metrics.js';
+import type { ChildId } from '../../src/engine/child-context.js';
 import type { ConductorEvent, ExecutionContext, ProviderAttemptEvent, RunPrDisposition } from '../../src/types/index.js';
 
 describe('EventPersister', () => {
@@ -138,6 +139,37 @@ describe('EventPersister', () => {
     const line = JSON.parse(content.trim());
     expect(line.type).toBe('rate_limit');
     expect(line.waitSeconds).toBe(30);
+  });
+
+  it('persists child only when an event carries one', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    const noChildEvents = [
+      { type: 'step_started', step: 'bootstrap', index: 0 },
+      { type: 'step_completed', step: 'bootstrap', status: 'done' },
+      { type: 'operator_rewind', operator: 'operator', target: 'build', demoted: ['build'] },
+    ] satisfies ConductorEvent[];
+    persister.start();
+
+    for (const event of noChildEvents) await emitter.emit(event);
+
+    const initialLines = (await readFile(eventsPath, 'utf-8')).trim().split('\n');
+    const initialRecords = initialLines.map((line) => JSON.parse(line) as ConductorEvent & { ts: string });
+    for (const [index, record] of initialRecords.entries()) {
+      expect(Object.hasOwn(record, 'child')).toBe(false);
+      expect(initialLines[index]).not.toContain('child');
+    }
+
+    const persistedNoChild = initialRecords[2]!;
+    await emitter.emit({ ...persistedNoChild } satisfies ConductorEvent);
+    await emitter.emit({ ...persistedNoChild, child: 2 as ChildId } satisfies ConductorEvent);
+    persister.stop();
+
+    const records = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(Object.hasOwn(records[3], 'child')).toBe(false);
+    expect(records[4].child).toBe(2);
   });
 
   it('persists a coverage-binding judgement to the shared pipeline ledger', async () => {
