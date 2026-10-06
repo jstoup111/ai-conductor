@@ -1,58 +1,89 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-06T12:10:03.620Z
+Status: halted
 Slug: engine-prompts-direct-daemon-sessions-to-ai-conduc
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-engine-prompts-direct-daemon-sessions-to-ai-conduc
-Head SHA: af6da4190a25f02569a2ae7770b42fd201583010
-Halted at: 2026-10-06T11:17:28.587Z
+Head SHA: fc7e870427e4290aa89644c0121a00c41b97ddec
+Halted at: 2026-10-06T12:33:32.723Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-coverage_binding refused: plan tasks conflict with sealed criteria or ADR decisions.
+coverage_binding refused: cited Done when checks do not assert the required claim.
 
-Claim: adr-2026-08-28-test-suite-drift-budget-and-verification-mode#D8
-Text: ### D8 — Bootstrap asks; `conduct-ts config init` writes
-
-`conduct-ts config init` gains optional flags (`--test-suite-mode`,
-`--test-suite-drift-budget <preset>`, presets: `strict` = today, `tolerant` = the budgetable
-categories at a documented bound) that substitute the answers into the generated
-`test_suite.verification` block. The bootstrap skill asks the operator both questions
-(auto-mode: `strict` without prompting) and records the answers **through the CLI** — the
-hand-authoring prohibition stands. This amends
-`adr-2026-07-27-project-config-scaffolder`'s bare-copy decision: the template remains the
-sole source shape; `config init` becomes a parameterized instantiation of it rather than a
-byte copy, still deterministic and refuse-to-clobber.
-
-**Amended 2026-09-14 by #2218 (guided bootstrap setup):** D8's ask-then-record pattern is
-extended from the two `test_suite.verification` answers to every project-config setting the
-bootstrap walkthrough asks about. The hand-authoring prohibition, the template as sole source
-shape, idempotence, and refuse-to-clobber are all unchanged.
-
-**D8.1** — Read ruling. The interview's `config read` calls, including the `spec_owner`
-identity read, run only from the operator's unmarked shell session. The daemon-session guard's
-allowlist stays closed to `config`; a marked session's `config read` is refused, and that
-refusal is the approved behavior, not a reachability defect.
-
-**D8.2** — Write ruling. The interview's `config init` flag answers and its
-`config set spec_owner` call run only from the operator's unmarked shell session. No `config`
-write is sanctioned from a daemon-managed session, and no guard exemption is added for bootstrap.
-
-**D8.3** — Re-run ruling. A re-run of the interview is the same operator-invoked path: its
-per-key `config read` inspection and its refuse-to-clobber `config init` run from the operator's
-shell. Declaring the engine-managed prelude an unsupported path for the guided interview is the
-chosen resolution: the allowlist in `src/conductor/src/execution/daemon-session.ts` is not
-widened, and no step-scoped exemption or engine-performed write is introduced. The managed
-prelude's pre-existing auto-mode `config init` call predates this feature (the merge-base skill
-already invoked it), is unchanged by this amendment, and is out of its scope.
-Task ids: 6
-Done when checks: Initialized-project runProjectPrelude fixtures reach supported refresh with no provider direction to execute config reads, initialization or writes; the managed refresh branch never runs the operator configuration interview. | An unmarked operator bootstrap fixture reaches the existing runConfigInit writer on an uninitialized project and retains successful guided initialization through the same validated CLI options. | Missing required configuration makes runProjectPrelude report operator bootstrap required before launching any provider and writes no replacement project or machine configuration. | Unreadable or invalid required configuration produces a named setup problem, zero provider launches and no ready result; before/after project and machine configuration snapshots remain unchanged. | Initialized configuration with non-default operator choices remains byte-identical after managed refresh and after an unmarked operator re-run; existing runConfigInit no-clobber fixtures retain their behavior.
-Conflict: Task 6 requires missing required configuration to report operator bootstrap required before provider launch and make no project or machine configuration writes; the claim retains an engine-managed prelude auto-mode `config init` call.
+Artifact: .docs/decisions/adr-2026-09-11-github-operation-ownership.md
+Amendment: > **Amended 2026-09-23 by #158:** adds D9. An operator may configure an optional bot identity,
+> and this decision separates the credential that performs an authorized write from the actor
+> that D1–D5 authorize. Operator decisions for #158, confirmed in chat on 2026-09-23: the bot is
+> optional; it uses a machine-user token; every remote write, including pushes, uses it; reads
+> stay on the operator's credential; the rule covers daemon and operator-run CLIs; an
+> unambiguous bot auth failure falls back to the operator's credential with a warning.
+>
+> **D9 — Write credential is a transport property, distinct from the authorization actor.**
+> 1. *Actor unchanged.* The actor for D1–D5 is still the machine-resolved operator. A bot
+>    credential performs an already-authorized write on the operator's behalf. It is never a
+>    second owner, never an authorization input, and never widens what D2–D5 permit.
+> 2. *Machine-scoped, optional credential.* The bot is declared only in user config
+>    (`~/.ai-conductor/config.yml`) as a reference to a token file, never as an inline token
+>    value. `validateConfig` rejects the block in a committed project config, using the same
+>    fail-closed guard as `spec_owner` (adr-2026-07-01-machine-scoped-operator-identity D2). It
+>    is not the reserved per-project `tracker.credentials` reference of
+>    adr-2026-07-22-canonical-tracker-client-seam item 3. With no bot declared, every call keeps
+>    today's ambient `gh` and git credential, byte for byte.
+> 3. *Selection by access class, inside the private transport.* The guarded GitHub runner asks
+>    for the write credential on every non-`read` access class (`feature-write`,
+>    `intake-write`, `create`, `shared-write`). The remote Git adapter asks for it on every
+>    authorized `remote-ref-write`. Reads, including `gh api user` identity resolution and
+>    `--assignee @me` intake capture, always use the operator's ambient credential. The token
+>    goes only into the environment of that one `gh` or `git` child. It is never set on
+>    `process.env`, never passed to provider, reviewer, or build children, never embedded in a
+>    remote URL, and never printed in logs, events, or errors. A request with no operation
+>    context resolves to neither credential and fails closed (D7).
+> 4. *Pushes use the gh credential helper explicitly.* A bot push injects the token and, through
+>    child-only environment git config, the `gh auth git-credential` helper for github.com. The
+>    operator's configured helper therefore cannot silently substitute its own credential. A
+>    non-HTTPS destination (such as SSH) cannot carry the token. It pushes with the operator's
+>    credential and emits the D9.5 warning.
+> 5. *Loud credential fallback, not a retry.* A typed bot-auth refusal is raised at the runner
+>    boundary as a result kind, never matched downstream on text (adr-2026-09-05 D5,
+>    adr-2026-08-18 D1). Its triggers are: the token file is missing or unreadable, `gh`
+>    reports 401, 403, or bad credentials, or git reports an authentication or permission
+>    denial. Each trigger uses conservative patterns backed by verbatim fixtures
+>    (adr-2026-07-22-auth-failure-classification-observed-401-patterns D1). On that refusal,
+>    and only then, the same authorized invocation runs once more with the operator's
+>    credential, and a warning event is emitted on the ConductorEvent spine. Because the
+>    operation, target, actor, and payload do not change, this is a substitution within one
+>    authorized call, not a D1 retry. It uses no retry budget and triggers no escalation
+>    (adr-2026-07-04 D2). Ambiguous failures, such as timeouts and transport errors, never fall
+>    back, so an external effect is never repeated (adr-2026-08-01-engine-owned-resumable-finish-publication
+>    D3). An ownership-policy refusal (D6) is a different type and never reaches this path. A
+>    failed marker edit falls back only as an edit, never as a create (D8). This departs on
+>    purpose from the fail-closed rule of adr-2026-07-07-daemon-owned-build-credential D3,
+>    because this fallback is loud (a spine event), changes no authorization, and only changes
+>    the displayed author. The bot token is not part of the daemon-level missing-credential
+>    gate.
+>
+> **Clarified 2026-10-06 (operator decision, #2709):** the item 5 fallback belongs to the guarded
+> GitHub runner and remote Git adapter only. The observation wrapper of
+> adr-2026-10-01-daemon-session-command-contracts D7–D8 is not an authorized operation: it forwards
+> an agent's raw `gh` command exactly once and never falls back to another credential or re-runs it.
+>
+> 6. *Warning event.* The fallback event is a closed, structured `ConductorEvent` variant. It
+>    carries the operation, the target, and a closed reason (`token-unavailable`,
+>    `auth-refused`, `unsupported-remote-transport`). It carries no raw stderr, no token, and
+>    no token path. It is emitted through the same emitter that carries
+>    `github_operation_refused` for that call, and it declares its `EVENT_SINKS` routing
+>    exactly as that variant does.
+> 7. *Real-binary proof.* The claims that `GH_TOKEN` in a child environment takes precedence
+>    in `gh`, and that `gh auth git-credential` returns it during a git push, are proven
+>    against the installed binaries by a smoke test (adr-2026-09-05 D8,
+>    adr-2026-07-07-daemon-owned-build-credential D5).
+Task ids: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+Done when checks: Table-driven guard tests and the audit-policy adapter call the same production evaluator: every currently admitted managed command passes, while daemon-control, config, test-suite and operator build-review requests fail; changing a fixture policy decision changes both evaluations without adding a permission exemption. | Marked finish-record returns refusal at the guard and invokes no recorder; marked config read, init and set return refusal before dispatch and before any project or machine configuration mutation, as asserted with handler spies and byte snapshots. | Pure guard fixtures return the bounded subcommand on refusal, retain unmarked command admission and existing marker precedence, and introduce no production config or environment switch that grants authority. | Audit discovery fixtures add a new engine source and a new shipped skill containing blocked managed instructions without registering either occurrence; evaluating them returns their file, line and blocked subcommand. | Context-parser fixtures classify explicitly operator-only instructions and non-executable prohibitions without managed violations, and exclude historical design material from executable instruction discovery. | Command-bearing fixtures with missing, malformed, stale or ambiguous region classification fail at the originating source instead of receiving an interactive default; declaration endpoints and discovered regions must agree. | Retry/remediation fixtures with a blocked command assembled through supported concatenation or template interpolation produce a finding naming the originating instruction and blocked subcommand. | Dynamic construction fixtures that cannot be resolved sufficiently for managed policy evaluation fail with an unresolved-command finding at the source, without a compatibility pass or permission change. | The production validation entry point, exercised with injected repository inputs, returns nonzero for a newly introduced blocked engine or skill instruction and identifies its file, line and subcommand without manual occurrence registration; the shell gate invokes that entry point and propagates its failure. | Production prompt/dispatch fixtures intentionally label an executed marked-session region operator-only and assert the instruction-context integration check fails that contradictory path; correctly excluded unmarked operator instructions remain compatible. | The shipped instruction discovery set evaluates clean after owner-correcting blocked directions; checks use execution-context and audit verdicts rather than matching incidental prose, and the runtime sanctioned set is unchanged. | FINISH entry fixtures with coherent evidence and an unrecorded authorized outcome observe the engine recorder followed by verification, with no provider recording action or instruction. | Presentation-repair fixtures finish the bounded provider prose task and then assert the engine performs subsequent completion recording and verification. | A missing or unusable coordinator produces an explicit unsupported/refused FINISH result, no provider recording instruction, and no fabricated completion marker. | Missing, stale and inconsistent publication-evidence fixtures leave completion unrecorded and return the existing typed FINISH disposition naming the failed condition. | A failed recorder write followed by recovery observes prior effects before acting, replays no already verified publication effect, dispatches no BUILD solely for recording failure, and remains within existing publication retry/exhaustion accounting. | Initialized-project runProjectPrelude fixtures reach supported refresh with no provider direction to execute config reads, initialization or writes; the managed refresh branch never runs the operator configuration interview. | An unmarked operator bootstrap fixture reaches the existing runConfigInit writer on an uninitialized project and retains successful guided initialization through the same validated CLI options. | Missing required configuration makes runProjectPrelude report operator bootstrap required before launching any provider and writes no replacement project or machine configuration. | Unreadable or invalid required configuration produces a named setup problem, zero provider launches and no ready result; before/after project and machine configuration snapshots remain unchanged. | Initialized configuration with non-default operator choices remains byte-identical after managed refresh and after an unmarked operator re-run; existing runConfigInit no-clobber fixtures retain their behavior. | Managed-context preparation fixtures missing required daemon-feature attribution fail naming the missing context before the launch callback is invoked. | Context composition fixtures attempt candidate-specific ownership overrides and assert the engine-owned feature, dispatch and project attribution remains authoritative. | Preparation and ingestion path-validation fixtures using traversal or symlink escapes write no event and attribute no event outside the feature provisioned root. | Project-prelude context fixtures without a feature produce explicit project scope and no invented feature slug; child cwd is never used to recover missing feature identity. | Catalog-driven real-adapter launch fixtures for Claude, Codex and Pi assert the daemon-session guard marker plus originating feature and dispatch in the environment delivered to the fake process; an overlay cannot unset the marker. | Candidate-fallback, changed-child-cwd and nested inheriting-subprocess fixtures assert a covered command observation retains the original feature attribution and correct engine-issued dispatch identity. | Adapter fixtures assert managed context is added without changing native auth selection, tmux masking, cancellation handling or fresh-session arguments, and the engine process environment is not mutated. | A supported read-only invocation fixture through candidate preparation records an occurrence only inside its provisioned per-dispatch destination while writes to source, sealed artifacts, unrelated pipeline state and operator configuration remain refused. | An unsupported or unprovable selected-provider policy fixture launches zero provider processes and reports the provider, observation capability and concrete recovery action; native read-only availability alone cannot satisfy observation readiness. | The preparation/fence diff preserves the exact existing native review profiles and live-checkout exclusion policy; no broad workspace-write fallback, general shell-write permission, copied credential store or new protection bypass is introduced. | Producer fixtures for malformed or unsafe command identity emit a bounded unknown representation and contain no raw argv, credential, environment, request body, payload-file content or transport-error text. | Bypass occurrence persistence and renderer fixtures with secret-shaped arguments, payloads and transport errors assert none of those values appears in serialized or rendered output. | Concurrent producer fixtures allocate separate dispatch/producer JSONL files in .pipeline/session-events, each with one writer; every record validates as ConductorEvent with stable event id and original source time, and neither events.jsonl nor pipeline-events.jsonl is directly appended by the producer. | Schema fixtures give one invocation distinct correlated attempt/result ids and separate invocations separate ids; all new variants declare persist/render ownership in EVENT_SINKS and carry observations rather than authorization or completion evidence. | Partial-record reader fixtures consume and diagnose nothing during ordinary polling before a newline, deliver the record once complete, and report an incomplete record at the settled producer boundary without inventing contents. | Malformed JSON, oversized and invalid-attribution complete records generate bounded diagnostics while later valid records remain deliverable; byte-offset fixtures preserve UTF-8 boundaries and path validation. | Deferred-read/subscriber and fake-time fixtures assert one traversal owns progress during overlapping polls, no input advances twice, and stop remains synchronous with no new background polls after stop. | Temporarily unreadable sources and failing sinks produce caught bounded failures with no unhandled background rejection; after recovery retained complete records are deliverable, and failed delivery has not discarded pending input. | Restart integration with real fixture producer files, emitter and EventPersister projects pending prior-dispatch records with original attribution and exactly one durable canonical record per occurrence id. | Injected canonical append failure after a record is read retains unread/pending progress; after retry succeeds the canonical result has no duplicate occurrence. | Partial-subscriber-failure and process-interruption recovery fixtures replay an already persisted occurrence without duplicating its durable record; any repeated daemon-log delivery retains the same event id. | Dedup fixtures retain both distinct invocations with equal subcommand/operation and retain both correlated attempt and terminal-result records; ordinary events retain their prior append behavior. | I/O-count fixtures show canonical ids are indexed once per persistence owner and updated on append rather than rescanning the full canonical ledger per poll; observation producer files are not separately counted by canonical rollups. | Feature-event-owner integration with concurrent producer files and real internal emitter/persister plus captured daemon rendering delivers every distinct valid occurrence to the canonical record and log with its correct feature/dispatch/event identities. | Lifecycle fixtures for BUILD, FINISH, validation, repair, failure and cancellation assert tail start precedes provider execution and completed available records drain before consumers detach; shutdown also awaits the owned drain. | Managed non-daemon and project-prelude fixtures supply an explicit persistence/tail owner with project-scoped attribution where appropriate; no full Conductor lifecycle or third-party binary is needed to prove ownership. | The lifecycle diff introduces no parallel observer/poller and no bulk producer-file cleanup; pending files survive interruption under ordinary worktree retention, while synchronous legacy stop remains callable unchanged. | CLI refusal integration with available storage asserts nonzero exit, zero blocked-handler calls, a canonical feature event and daemon log naming the feature and blocked subcommand; FINISH, validation, repair and error-path contexts satisfy the same contract as BUILD. | Allowed managed worker-command fixtures reach ordinary handler dispatch with no refusal event. | Injected refusal-event write failure still invokes no handler and returns refusal, with a bounded telemetry-failure diagnostic that makes no successful-recording claim. | Ingestion fixtures claiming another feature are rejected with a bounded diagnostic and projected under neither guessed nor forged attribution. | The entry fixture proves the production process/handler adapters reach injected fakes using benign arguments before any destructive/refused argv is exercised; removing the guard cannot reach a real third party. | Classifier fixtures assert recognized reads are quiet, standard mutation families and REST field-implied writes are mutations, and GraphQL, aliases, extensions or opaque calls not safely known read-only yield possible-bypass rather than a read verdict. | Stdin and file-payload fixtures prove the classifier performs no input reads or payload-file opens, leaves bytes available unchanged for the command, and exposes no payload content in its bounded classification. | Production-wrapper fixtures for ordinary PATH-resolved raw mutations from a managed session and an inheriting child script record an attributable attempt before the single fake process call and a correlated terminal result when observed; executing REST field-implied writes produces mutation observations, and executing GraphQL, alias, extension or opaque-input calls not safely classifiable as read-only produces possible-bypass observations. | Transport fixtures assert byte-identical argv and stdin/stdout/stderr forwarding, original exit status and termination-signal behavior, exactly one underlying call and no recursion, retry, rewrite, redirect or new command-blocking policy. | Failure, timeout and lost-terminal-result fixtures report failed or unknown observations instead of successful remote writes; exit zero is only observed CLI success and never verified remote state. | Injected observation-storage failure emits a bounded degraded-telemetry diagnostic while the underlying invocation is forwarded exactly once with original transport behavior. | Before mutating argv tests run, a benign production-wrapper invocation proves the real transport adapter reaches the injected fake; the same isolation holds if classification or guard logic is absent. | Known read-only raw gh calls and authorized guarded-path calls complete through their expected transport with zero unguarded-mutation observations, while raw mutation fixtures still produce observations. | A refused guarded operation produces zero raw-observer fallback calls and zero mutation calls; no whole-session authorization or public skip-observation flag is introduced. | Guarded and unguarded executable-resolution fixtures invoke the resolved real transport once without recursive wrapper entry or duplicate mutation, and guarded calls retain existing authorization actor and operator/bot credential selection. | Static-audit fixtures admit only the identified private observation passthrough; adding a neighboring raw call in the same file, a skill-directed raw write or an unregistered harness caller still fails validation. | Prepared-invocation adapter fixtures resolve real gh before the wrapper PATH overlay, install observation only in managed child environments and inheriting scripts, preserve the core.hooksPath git guard and leave operator shells and unrelated engine commands unchanged. | Coverage-result fixtures for absolute binaries, replaced PATH, custom HTTP/SDK clients and separate MCP transports outside the approved boundary assert that no event is represented as unknown monitoring completeness, never proof that no GitHub write occurred. | Missing executable, invalid context or unprovable protected destination is reported through existing candidate setup failure before provider launch; no unobserved fallback launch or alternate public bypass is added. | Real daemon and terminal subscriber fixtures format the same declared occurrence with feature slug where present, bounded subcommand/operation and refusal/attempt/result/possible-bypass status; project-scoped events show project attribution without inventing a slug. | Persist/render registry fixtures cover every new occurrence variant and captured output excludes supplied credentials, raw arguments, payloads and transport-error text; storage-degraded and missing-terminal-result states never render as successful delivery or verified remote mutation. | Repeated delivery of one event preserves its id in log output, while distinct event ids and correlated attempt/result records remain distinguishable to existing subscribers.
+Missing obligation: D9’s optional machine-scoped bot write credential, guarded fallback, warning event, and real-binary proof are not required by any issued Done when check.
 ```
