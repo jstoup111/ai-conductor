@@ -54,26 +54,22 @@ function adrStem(path: string): string {
   return basename(path, '.md');
 }
 
-function normalizedAmendmentText(text: string): string {
-  return text.split('\n').map((line) => line.replace(/^\s{0,3}>\s?/, '')).join('\n').trim();
-}
-
-function amendmentOwnsPassage(
+/**
+ * Remove the amendment blocks D18 owns for this ADR before its decisions are
+ * parsed. D21 excludes only those branch amendments; an amendment inherited
+ * from the base is part of the approved decision and stays in its claim text,
+ * so the judge reads the decision as amended rather than as first written.
+ */
+function withoutBranchAmendments(
   adrPath: string,
-  passage: string,
+  text: string,
   amendmentClaims: readonly CoverageBindingAmendmentClaim[],
-): boolean {
-  return amendmentClaims.some((claim) =>
-    claim.artifactPath === adrPath && normalizedAmendmentText(claim.amendment).includes(passage.trim()),
-  );
-}
-
-function withoutAmendmentBlock(passage: string): string {
-  const lines = passage.split('\n');
-  const amendmentStart = lines.findIndex((line) =>
-    /^\s*\*\*Amended \d{4}-\d{2}-\d{2} by #\d+:\*\*/.test(line),
-  );
-  return lines.slice(0, amendmentStart === -1 ? undefined : amendmentStart).join('\n').trim();
+): string {
+  return amendmentClaims
+    .filter((claim) => claim.artifactPath === adrPath)
+    .reduce((remaining, { amendment }) =>
+      // Take the block's trailing blank line with it so removal leaves one paragraph break.
+      remaining.split(`${amendment}\n\n`).join('').split(amendment).join(''), text);
 }
 
 /**
@@ -109,7 +105,7 @@ export function assembleConflictClaims({
 
   for (const adr of subjectAdrs) {
     const stem = adrStem(adr.path);
-    const parsed = parseAdrDecisions(adr.text);
+    const parsed = parseAdrDecisions(withoutBranchAmendments(adr.path, adr.text, amendmentClaims));
     if (parsed.kind === 'diagnostic') {
       claims.push({
         id: `${stem}#Decision`,
@@ -133,9 +129,9 @@ export function assembleConflictClaims({
     }
 
     for (const id of parsed.ids) {
-      const passages = parsed.passages.get(id) ?? [];
-      if (passages.some((passage) => amendmentOwnsPassage(adr.path, passage, amendmentClaims))) continue;
-      const claimPassages = passages.map(withoutAmendmentBlock).filter((passage) => passage.length > 0);
+      const claimPassages = (parsed.passages.get(id) ?? [])
+        .map((passage) => passage.trim())
+        .filter((passage) => passage.length > 0);
       claims.push({
         id: `${stem}#D${id}`,
         kind: 'adr-decision',
