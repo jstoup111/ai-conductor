@@ -371,6 +371,40 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     });
   });
 
+  it('on the branchless path never deletes a child branch and matches the no-child fixture exactly', async () => {
+    const slug = 'x';
+    const leaf = 'feat/daemon-x';
+    const child = 'feat/c1/x';
+    const withChild = makeGit({ shipped: [slug], branches: [leaf, child], merged: [leaf, child] });
+    const withoutChild = makeGit({ shipped: [slug], branches: [leaf], merged: [leaf] });
+
+    const withRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const withoutRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    try {
+      await mkdir(join(withRoot, '.worktrees', slug), { recursive: true });
+      await writeOperatorPark(withRoot, slug);
+      await mkdir(join(withoutRoot, '.worktrees', slug), { recursive: true });
+      await writeOperatorPark(withoutRoot, slug);
+
+      const withOutcome = await reconcileMergedPark({ projectRoot: withRoot, slug, runGit: withChild.run });
+      const withoutOutcome = await reconcileMergedPark({ projectRoot: withoutRoot, slug, runGit: withoutChild.run });
+
+      // The child ref never reaches the deletion loop: no `git branch -d` names it.
+      expect(withChild.deleted).toEqual([]);
+      expect(withChild.deleteArgv.some((args) => args.includes(child))).toBe(false);
+
+      // Every destructive argv and the outcome deep-equal the identical fixture
+      // lacking the child branch, proving the child is filtered out before the
+      // ancestry loop, the record precondition and the deletion loop.
+      expect(withChild.deleteArgv).toEqual(withoutChild.deleteArgv);
+      expect(withChild.deleted).toEqual(withoutChild.deleted);
+      expect(withOutcome).toEqual(withoutOutcome);
+    } finally {
+      await rm(withRoot, { recursive: true, force: true });
+      await rm(withoutRoot, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { name: 'a modified tracked path', porcelain: ' M tracked.ts\n', file: 'tracked.ts', dirty: true },
     { name: 'an untracked path', porcelain: '?? untracked.txt\n', file: 'untracked.txt', dirty: true },

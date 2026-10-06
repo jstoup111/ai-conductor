@@ -558,8 +558,12 @@ async function gatherMergeEvidence(
 
   const key = undatedStem(slug);
   const shippedRecordOnMain = shippedStems.some((stem) => undatedStem(stem) === key);
+  // A stacked child branch is never deletion (or record-repair) authority on
+  // the branchless path: only the leaf branch records a ship and carries the
+  // deletion proof. Filter child refs out before the ancestry loop so the
+  // record-missing arm and the deletion loop only ever see the leaf.
   const branches = branch === undefined
-    ? branchesBySlug.get(key) ?? []
+    ? (branchesBySlug.get(key) ?? []).filter((ref) => parseFeatureBranch(ref).kind !== 'child')
     : [...branchesBySlug.values()].some((refs) => refs.includes(branch)) ? [branch] : [];
 
   const mergedBranches: string[] = [];
