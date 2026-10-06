@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-06T02:03:02.343Z
 Slug: engine-prompts-direct-daemon-sessions-to-ai-conduc
 Class: needs-human
 Halting step: unknown
