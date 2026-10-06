@@ -193,11 +193,14 @@ llm_providers:
 conflict_check:
   adr_corpus: repo_wide
 
-# Require the pre-BUILD coverage-binding judge for self-host features. The
-# shipped default remains false, so consumer repositories opt in separately.
+# Pre-BUILD coverage-binding judge. Disabled 2026-10-06 (operator order): its
+# refusals halted features on false or pedantic verdicts with no operator
+# lever, across codex terra and claude sonnet. Mechanical checks (plan slices,
+# architecture obligation coverage) still run. Re-enable once refusals are
+# verified before they halt. The shipped default is false.
 coverage_binding:
   judge:
-    enabled: true
+    enabled: false
 
 # Remediation append allowance. The effective cap is
 # min(max_appended_tasks, floor(authored_count * max_appended_ratio)), so BOTH
