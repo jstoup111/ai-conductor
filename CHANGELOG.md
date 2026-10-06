@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.6.0] - 2026-10-05
+## [1.6.0] - 2026-10-06
 
 ### Added
 
@@ -104,7 +104,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ## Migration
 
 ```bash migration
-./bin/install --update --providers=pi
+"${HARNESS_DIR}/bin/install" --update --providers=pi
 ```
 
 ## [1.5.0] - 2026-09-27
