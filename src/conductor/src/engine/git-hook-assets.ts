@@ -55,6 +55,13 @@ resolve_long_option() {
   local command="$1" token="$2" candidate metadata match='' match_negated=false matches=0 negatable
   metadata="$(option_metadata "$command" "$token")"
   if [[ -n "$metadata" ]]; then printf '%s|false' "$metadata"; return; fi
+  # Like git, an exact negated name wins before prefix matching: --no-force
+  # must not be ambiguous with --no-force-with-lease.
+  if [[ "$token" == no-* ]]; then
+    metadata="$(option_metadata "$command" "\${token#no-}")"
+    IFS='|' read -r _ _ negatable _ <<< "$metadata"
+    if [[ -n "$metadata" && "$negatable" == true ]]; then printf '%s|true' "$metadata"; return; fi
+  fi
   while IFS= read -r candidate; do
     metadata="$(option_metadata "$command" "$candidate")"
     if [[ "$candidate" == "$token"* ]]; then

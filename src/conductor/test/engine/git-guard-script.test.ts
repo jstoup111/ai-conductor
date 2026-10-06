@@ -301,6 +301,7 @@ esac
   it.each([
     ['unknown reset option', ['reset', '--bogus', 'HEAD'], '--bogus'],
     ['ambiguous push option', ['push', '--forc', 'origin', 'main'], '--forc'],
+    ['ambiguous negated push option', ['push', '--no-forc', 'origin', 'main'], '--no-forc'],
     ['unknown branch short option', ['branch', '-Z', 'unreachable'], '-Z'],
   ])('refuses an unresolvable %s before it reaches real git', async (_name, args, token) => {
     const result = invoke(args);
@@ -320,6 +321,7 @@ esac
     ['restore staged', ['restore', '--staged', 'file']],
     ['reset soft', ['reset', '--soft', 'HEAD~1']],
     ['exact no-refresh reset', ['reset', '--no-refresh', 'HEAD~1']],
+    ['exact negated push force', ['push', '--no-force', 'origin', 'main']],
     ['checkout end-of-options branch', ['checkout', '--end-of-options', 'branch']],
   ])('passes a resolvable or unguarded %s through unchanged', async (_name, args) => {
     const result = invoke(args);
