@@ -25,10 +25,11 @@ export interface PlanGapInput {
 }
 
 export type TaskDispatch =
-  | { kind: 'start'; id: string }
+  | { kind: 'start'; id: string; child?: string }
   | {
       kind: 'done';
       id: string;
+      child?: string;
       doneWhen?: DoneWhenEvidenceInput[];
       unverified?: DoneWhenUnverifiedInput[];
       planGap?: PlanGapInput;
@@ -58,12 +59,23 @@ export function detectTaskCommand(argv: string[]): TaskDispatch | null {
     return { kind: 'guide' };
   }
 
-  if (verb === 'start') return { kind: 'start', id };
+  if (verb === 'start') {
+    let child: string | undefined;
+    for (let index = 5; index < argv.length; index++) {
+      if (argv[index] !== '--child') continue;
+      const value = argv[index + 1];
+      if (!value || child !== undefined) return { kind: 'guide' };
+      child = value;
+      index++;
+    }
+    return child === undefined ? { kind: 'start', id } : { kind: 'start', id, child };
+  }
 
   const doneWhen: DoneWhenEvidenceInput[] = [];
   const unverified: DoneWhenUnverifiedInput[] = [];
   let planGapIndex: number | undefined;
   let planGapReason: string | undefined;
+  let child: string | undefined;
   for (let index = 5; index < argv.length;) {
     const flag = argv[index];
     const value = argv[index + 1];
@@ -84,6 +96,9 @@ export function detectTaskCommand(argv: string[]): TaskDispatch | null {
     } else if (flag === '--reason') {
       if (planGapReason !== undefined || !value.trim()) return { kind: 'guide' };
       planGapReason = value;
+    } else if (flag === '--child') {
+      if (child !== undefined) return { kind: 'guide' };
+      child = value;
     } else {
       return { kind: 'guide' };
     }
@@ -94,12 +109,20 @@ export function detectTaskCommand(argv: string[]): TaskDispatch | null {
     if (planGapIndex === undefined || planGapReason === undefined || doneWhen.length > 0 || unverified.length > 0) {
       return { kind: 'guide' };
     }
-    return { kind: 'done', id, planGap: { index: planGapIndex, reason: planGapReason } };
+    return child === undefined
+      ? { kind: 'done', id, planGap: { index: planGapIndex, reason: planGapReason } }
+      : { kind: 'done', id, child, planGap: { index: planGapIndex, reason: planGapReason } };
   }
 
   return doneWhen.length > 0 || unverified.length > 0
-    ? { kind: 'done', id, doneWhen: doneWhen.length > 0 ? doneWhen : undefined, unverified: unverified.length > 0 ? unverified : undefined }
-    : { kind: 'done', id };
+    ? {
+        kind: 'done',
+        id,
+        ...(child === undefined ? {} : { child }),
+        doneWhen: doneWhen.length > 0 ? doneWhen : undefined,
+        unverified: unverified.length > 0 ? unverified : undefined,
+      }
+    : child === undefined ? { kind: 'done', id } : { kind: 'done', id, child };
 }
 
 /**

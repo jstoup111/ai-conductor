@@ -35,6 +35,18 @@ describe('detectTaskCommand', () => {
         id: '42',
       });
     });
+
+    it('detects one raw --child value while retaining other extra arguments', () => {
+      expect(detectTaskCommand(['node', 'conduct', 'task', 'start', '7', '--child', '2'])).toEqual({
+        kind: 'start',
+        id: '7',
+        child: '2',
+      });
+      expect(detectTaskCommand(['node', 'conduct', 'task', 'start', '7', '--foo', 'bar'])).toEqual({
+        kind: 'start',
+        id: '7',
+      });
+    });
   });
 
   describe('done command', () => {
@@ -56,6 +68,17 @@ describe('detectTaskCommand', () => {
       expect(detectTaskCommand(['node', 'conduct', 'task', 'done', '42'])).toEqual({
         kind: 'done',
         id: '42',
+      });
+    });
+
+    it('detects one raw --child value alongside Done when evidence', () => {
+      expect(detectTaskCommand([
+        'node', 'conduct', 'task', 'done', '7', '--child', '2', '--done-when', '1=ok',
+      ])).toEqual({
+        kind: 'done',
+        id: '7',
+        child: '2',
+        doneWhen: [{ index: 1, evidence: 'ok' }],
       });
     });
   });
@@ -92,6 +115,51 @@ describe('detectTaskCommand', () => {
     });
   });
 
+  describe('--child malformed forms', () => {
+    it.each([
+      ['start duplicate', ['node', 'conduct', 'task', 'start', '7', '--child', '2', '--child', '2']],
+      ['start missing value', ['node', 'conduct', 'task', 'start', '7', '--child']],
+      ['done duplicate', ['node', 'conduct', 'task', 'done', '7', '--child', '2', '--child', '2']],
+      ['done missing value', ['node', 'conduct', 'task', 'done', '7', '--child']],
+    ])('returns guide for %s', (_name, argv) => {
+      expect(detectTaskCommand(argv)).toEqual({ kind: 'guide' });
+    });
+
+    it('prints the current guide, returns 2, and leaves task files unchanged', async () => {
+      const dir = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-child-guide-'));
+      const pipeline = join(dir, '.pipeline');
+      const statusPath = join(pipeline, 'task-status.json');
+      const stampPath = join(pipeline, 'current-task');
+      const status = JSON.stringify({ tasks: [{ id: '7', status: 'in_progress' }] }, null, 2);
+      await fsPromises.mkdir(pipeline, { recursive: true });
+      await fsPromises.writeFile(statusPath, status);
+      await fsPromises.writeFile(stampPath, '7');
+
+      const originalError = console.error;
+      const stderr: string[] = [];
+      console.error = (...args: unknown[]) => { stderr.push(args.join(' ')); };
+      try {
+        for (const argv of [
+          ['node', 'conduct', 'task', 'start', '7', '--child', '2', '--child', '2'],
+          ['node', 'conduct', 'task', 'start', '7', '--child'],
+          ['node', 'conduct', 'task', 'done', '7', '--child', '2', '--child', '2'],
+          ['node', 'conduct', 'task', 'done', '7', '--child'],
+        ]) {
+          const command = detectTaskCommand(argv);
+          expect(command).toEqual({ kind: 'guide' });
+          expect(await dispatchTaskCommand(command!, dir)).toBe(2);
+        }
+      } finally {
+        console.error = originalError;
+      }
+
+      expect(stderr.join('\n')).toContain('conduct task start <id>');
+      await expect(fsPromises.readFile(statusPath, 'utf-8')).resolves.toBe(status);
+      await expect(fsPromises.readFile(stampPath, 'utf-8')).resolves.toBe('7');
+      await fsPromises.rm(dir, { recursive: true, force: true });
+    });
+  });
+
   describe('non-task commands', () => {
     it('returns null for non-task subcommand', () => {
       expect(detectTaskCommand(['node', 'conduct', 'derive-feedback', '--sha', 'abc'])).toBeNull();
@@ -104,6 +172,74 @@ describe('detectTaskCommand', () => {
     it('returns null for arbitrary argv not containing task', () => {
       expect(detectTaskCommand(['some', 'other', 'command'])).toBeNull();
     });
+  });
+});
+
+describe('task command no-child argv compatibility', () => {
+  async function seedStartedTask(dir: string): Promise<void> {
+    await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+    await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: [{ id: '7', status: 'pending' }],
+    }, null, 2));
+  }
+
+  async function runAndCapture(dir: string, argv: string[]) {
+    const command = detectTaskCommand(argv);
+    if (!command) throw new Error('expected task command');
+    const originalError = console.error;
+    const originalLog = console.log;
+    const stderr: string[] = [];
+    const stdout: string[] = [];
+    console.error = (...args: unknown[]) => { stderr.push(args.join(' ')); };
+    console.log = (...args: unknown[]) => { stdout.push(args.join(' ')); };
+    try {
+      const exitCode = await dispatchTaskCommand(command, dir);
+      return { exitCode, stdout, stderr };
+    } finally {
+      console.error = originalError;
+      console.log = originalLog;
+    }
+  }
+
+  it('keeps start output and task files byte-identical when non-child argv is ignored', async () => {
+    const base = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-base-'));
+    const extra = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-extra-'));
+    try {
+      await Promise.all([seedStartedTask(base), seedStartedTask(extra)]);
+      const baseline = await runAndCapture(base, ['node', 'conduct', 'task', 'start', '7']);
+      const withExtra = await runAndCapture(extra, ['node', 'conduct', 'task', 'start', '7', '--foo', 'bar']);
+
+      expect(withExtra).toEqual(baseline);
+      await expect(fsPromises.readFile(join(extra, '.pipeline', 'task-status.json'), 'utf-8'))
+        .resolves.toBe(await fsPromises.readFile(join(base, '.pipeline', 'task-status.json'), 'utf-8'));
+      await expect(fsPromises.readFile(join(extra, '.pipeline', 'current-task'), 'utf-8'))
+        .resolves.toBe(await fsPromises.readFile(join(base, '.pipeline', 'current-task'), 'utf-8'));
+    } finally {
+      await Promise.all([
+        fsPromises.rm(base, { recursive: true, force: true }),
+        fsPromises.rm(extra, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it.each([
+    ['plain done', ['node', 'conduct', 'task', 'done', '7']],
+    ['done with evidence', ['node', 'conduct', 'task', 'done', '7', '--done-when', '1=ok']],
+  ])('preserves the recorded no-child fixture for %s', async (_name, argv) => {
+    const dir = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-done-parity-'));
+    const statusPath = join(dir, '.pipeline', 'task-status.json');
+    const stampPath = join(dir, '.pipeline', 'current-task');
+    try {
+      await seedStartedTask(dir);
+      const originalStatus = await fsPromises.readFile(statusPath, 'utf-8');
+      await fsPromises.writeFile(stampPath, '7');
+
+      expect(await runAndCapture(dir, argv)).toEqual({ exitCode: 0, stdout: [], stderr: [] });
+      await expect(fsPromises.readFile(statusPath, 'utf-8')).resolves.toBe(originalStatus);
+      await expect(fsPromises.access(stampPath)).rejects.toThrow();
+    } finally {
+      await fsPromises.rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
