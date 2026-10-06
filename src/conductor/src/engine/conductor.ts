@@ -2860,17 +2860,20 @@ export class Conductor {
   }
 
   /**
-   * Durable BUILD-lap identity for the unverified Done-when nudge. A session
-   * stamp changes on every conductor entry, while a feature-run stamp survives
-   * a process restart and therefore keeps the one-nudge bound intact.
+   * Durable BUILD-lap identity for the unverified Done-when nudge. The
+   * feature-run stamp survives restarts and the durable kickback total advances
+   * on every route back into BUILD.
    */
-  private unverifiedDoneWhenNudgeLapKey(state: ConductState): string {
-    return String(state.run_started_at ?? state.session_started_at ?? 'unknown');
+  private async unverifiedDoneWhenNudgeLapKey(state: ConductState): Promise<string> {
+    const ledger = await readKickbackLedger(this.projectRoot);
+    const kickbackCount = Object.values(ledger.gates)
+      .reduce((total, gate) => total + gate.cumulative, 0);
+    return `${state.run_started_at ?? state.session_started_at ?? 'unknown'}:${kickbackCount}`;
   }
 
   /** Durable once-per-BUILD-lap nudge marker; engine-state is the restart seam. */
   private async unverifiedDoneWhenNudgeSpent(state: ConductState): Promise<boolean> {
-    const key = this.unverifiedDoneWhenNudgeLapKey(state);
+    const key = await this.unverifiedDoneWhenNudgeLapKey(state);
     const read = await createEngineStateStore(join(this.projectRoot, '.pipeline', 'engine-state.json')).read();
     if (!read.ok) return false;
     const laps = read.value.unverifiedDoneWhenNudges;
@@ -2879,7 +2882,7 @@ export class Conductor {
   }
 
   private async recordUnverifiedDoneWhenNudge(state: ConductState): Promise<void> {
-    const key = this.unverifiedDoneWhenNudgeLapKey(state);
+    const key = await this.unverifiedDoneWhenNudgeLapKey(state);
     const store = createEngineStateStore(join(this.projectRoot, '.pipeline', 'engine-state.json'));
     const result = await store.update((current) => ({
       ...current,

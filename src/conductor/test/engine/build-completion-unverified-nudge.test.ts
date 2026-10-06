@@ -1,4 +1,4 @@
-// Covers: task:8, S5.1, S5.2
+// Covers: task:8, task:9, S5.1, S5.2
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -17,9 +17,15 @@ import {
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
+import { bumpKickbackGateInLedger } from '../../src/engine/kickback-ledger.js';
 
 const roots: string[] = [];
 const predicate = CUSTOM_COMPLETION_PREDICATES.build!;
+type NudgeMethods = {
+  recordUnverifiedDoneWhenNudge(state: ConductState): Promise<void>;
+  unverifiedDoneWhenNudgeSpent(state: ConductState): Promise<boolean>;
+  initializeRunState(state: ConductState): Promise<boolean>;
+};
 
 async function completion(
   tasks: unknown,
@@ -123,12 +129,6 @@ describe('BUILD completion nudge for unverified Done-when checks', () => {
       stepRunner: runner,
       events: new ConductorEventEmitter(),
     };
-    type NudgeMethods = {
-      recordUnverifiedDoneWhenNudge(state: ConductState): Promise<void>;
-      unverifiedDoneWhenNudgeSpent(state: ConductState): Promise<boolean>;
-      initializeRunState(state: ConductState): Promise<boolean>;
-    };
-
     await (new Conductor(options) as unknown as NudgeMethods).recordUnverifiedDoneWhenNudge(state);
     const restartedStateResult = await readState(statePath);
     expect(restartedStateResult.ok).toBe(true);
@@ -142,5 +142,34 @@ describe('BUILD completion nudge for unverified Done-when checks', () => {
     await expect(completion(unverifiedTasks, {
       unverifiedDoneWhenNudgeSpent: await restarted.unverifiedDoneWhenNudgeSpent(restartedState),
     })).resolves.toEqual({ done: true });
+  });
+
+  it('withholds resolved unverified checks once again after a kickback starts the next BUILD lap', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'build-unverified-nudge-next-lap-'));
+    roots.push(root);
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    const statePath = join(root, '.pipeline', 'conduct-state.json');
+    const state: ConductState = { run_started_at: 10, session_started_at: 10 };
+    await writeState(statePath, state);
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: statePath,
+      stepRunner: { run: async () => ({ success: true }) },
+      events: new ConductorEventEmitter(),
+    }) as unknown as Pick<NudgeMethods, 'recordUnverifiedDoneWhenNudge' | 'unverifiedDoneWhenNudgeSpent'>;
+
+    await conductor.recordUnverifiedDoneWhenNudge(state);
+    await expect(conductor.unverifiedDoneWhenNudgeSpent(state)).resolves.toBe(true);
+    await bumpKickbackGateInLedger(root, 'prd_audit', {
+      treeHash: null,
+      resolvedCount: 0,
+      reason: 'kick back into BUILD',
+    });
+
+    const result = await completion(unverifiedTasks, {
+      unverifiedDoneWhenNudgeSpent: await conductor.unverifiedDoneWhenNudgeSpent(state),
+    });
+    expect(result).toMatchObject({ done: false });
+    expect(result.reason).toContain('unverified Done-when checks require one BUILD review pass');
   });
 });
