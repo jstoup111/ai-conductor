@@ -28,7 +28,7 @@ export interface RewindStateResult {
   demoted: string[];
 }
 
-export type RewindDispatch = { kind: 'rewind'; target: string };
+export type RewindDispatch = { kind: 'rewind'; target: string; child?: string };
 
 /** Test seams for the operator command boundary; production uses filesystem defaults. */
 export interface RewindCommandDependencies {
@@ -63,9 +63,18 @@ const markerFilesystem: RewindMarkerFilesystem = {
 };
 
 export function detectRewindCommand(argv: string[]): RewindDispatch | null {
-  if (argv[2] !== 'rewind' || argv[3] !== '--to') return null;
-  const target = argv[4];
-  return target && !target.startsWith('--') && argv.length === 5 ? { kind: 'rewind', target } : null;
+  if (argv[2] !== 'rewind') return null;
+  const values = new Map<string, string>();
+  for (let index = 3; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (!flag || value === undefined || !['--to', '--child'].includes(flag) || values.has(flag)) return null;
+    values.set(flag, value);
+  }
+  const target = values.get('--to');
+  if (!target || target.startsWith('--')) return null;
+  const child = values.get('--child');
+  return { kind: 'rewind', target, ...(child === undefined ? {} : { child }) };
 }
 
 export async function clearHaltAtomically(
