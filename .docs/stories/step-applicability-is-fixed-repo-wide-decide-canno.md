@@ -159,11 +159,6 @@ As an operator, I want only declarations that are part of the merged spec on the
 
 ## Story 8: A declaration cannot get a started step past its gate
 
-> **Amended 2026-10-06 (operator decision, adr-2026-10-03-per-feature-step-applicability D7):** a
-> refused late declaration suppresses only the skip. It does not freeze the step at its prior
-> status: a failed or in-progress step is retried through normal dispatch, and Stories 8 and 9 now
-> state that outcome instead of a status that "stands".
-
 **Requirement:** FR-8
 
 As an operator, I want a declaration that arrives after a step has started to be refused, so that a failing gate cannot be declared away.
