@@ -11,6 +11,25 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-10-06
+
+### Added
+
+- Daemon operators receive an early refusal that identifies plan tasks conflicting with sealed story criteria or approved ADR decisions. ([implementation PR #2968](https://github.com/jstoup111/ai-conductor/pull/2968)).
+
+### Changed
+
+- Operators receive PRD audits with bounded evidence and validated typed verdicts. ([implementation PR #2897](https://github.com/jstoup111/ai-conductor/pull/2897)).
+
+### Fixed
+
+- Builds now reopen completed tasks when their plan text changes. ([implementation PR #2929](https://github.com/jstoup111/ai-conductor/pull/2929)).
+- Harness operators gain git-side protection against destructive branch deletions and unseen remote-history overwrites in prepared worktrees. ([implementation PR #2969](https://github.com/jstoup111/ai-conductor/pull/2969)).
+- FINISH now retries a failed PR-description authoring run instead of halting, and authors PR prose from a bounded view of the diff. ([implementation PR #2993](https://github.com/jstoup111/ai-conductor/pull/2993)).
+- Test runs no longer export OpenTelemetry data or use your local configuration. ([implementation PR #2984](https://github.com/jstoup111/ai-conductor/pull/2984)).
+- Resumed features safely recover interrupted rebase transitions and report actionable recovery state. ([implementation PR #2988](https://github.com/jstoup111/ai-conductor/pull/2988)).
+- Coverage-binding conflict checks now read ADR decisions with their approved amendments, so a plan is no longer refused for contradicting a sentence an earlier amendment already superseded. ([implementation PR #3006](https://github.com/jstoup111/ai-conductor/pull/3006)).
+
 ## [1.6.0] - 2026-10-06
 
 ### Added
