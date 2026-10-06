@@ -59,6 +59,7 @@ import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
 import { CODEX_PROVIDER, providerDescriptor } from './execution/provider-catalog.js';
 import {
   prepareManagedSessionContext,
+  provisionManagedSessionProducerRoot,
   type ManagedSessionContext,
 } from './execution/managed-session-context.js';
 import { createManagedSessionObservationPreparer } from './execution/managed-session-preparation.js';
@@ -976,17 +977,14 @@ export async function prepareDaemonFeatureManagedSessionContext(input: {
   readonly dispatchId: string;
   readonly provider: string;
 }): Promise<ManagedSessionContext> {
-  const producerRoot = join(
-    input.worktreeRoot,
-    '.pipeline',
-    'session-events',
-    input.dispatchId,
-  );
-  await mkdir(producerRoot, { recursive: true });
+  const provisioned = await provisionManagedSessionProducerRoot(input.worktreeRoot, input.dispatchId);
+  if (!provisioned.ok) {
+    throw new Error(`daemon managed-session context refused: ${provisioned.code}`);
+  }
   const prepared = await prepareManagedSessionContext({
     projectRoot: input.projectRoot,
     worktreeRoot: input.worktreeRoot,
-    producerRoot,
+    producerRoot: provisioned.path,
     scope: { kind: 'feature', featureSlug: input.featureSlug },
     dispatchId: input.dispatchId,
     provider: input.provider,

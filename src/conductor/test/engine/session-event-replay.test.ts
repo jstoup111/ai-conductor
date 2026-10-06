@@ -92,6 +92,36 @@ describe('session event canonical replay', () => {
     expect((await canonicalOccurrences(canonical)).filter((event) => event.eventId === occurrence.eventId)).toHaveLength(1);
   });
 
+  it('does not acknowledge a diagnostic or project its following record until persistence succeeds', async () => {
+    const { root, producer } = await fixture();
+    await writeFile(producer, `not-json\n${JSON.stringify(occurrence)}\n`);
+    const events = new ConductorEventEmitter();
+    const attempted: string[] = [];
+    const persisted: string[] = [];
+    let failDiagnostic = true;
+    const tail = new CloseoutEventTail({
+      projectRoot: root,
+      events,
+      emitEvent: async (event) => {
+        attempted.push(event.type);
+        if (failDiagnostic) {
+          failDiagnostic = false;
+          throw new Error('canonical append interrupted');
+        }
+        persisted.push(event.type);
+      },
+    });
+
+    await expect(tail.poll()).rejects.toThrow('canonical append interrupted');
+    expect(attempted).toEqual(['pipeline_tail_diagnostic']);
+    expect(persisted).toEqual([]);
+
+    await tail.poll();
+
+    expect(persisted).toEqual(['pipeline_tail_diagnostic', 'session_command_refused']);
+    expect(attempted).toEqual(['pipeline_tail_diagnostic', 'pipeline_tail_diagnostic', 'session_command_refused']);
+  });
+
   it('retains distinct observation and correlated terminal ids even when their operation matches', async () => {
     const { canonical } = await fixture();
     const events = new ConductorEventEmitter();

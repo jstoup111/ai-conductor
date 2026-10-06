@@ -145,14 +145,13 @@ export class CloseoutEventTail {
       if (record.kind === 'event') {
         await this.emitEvent(record.event);
       } else {
-        await this.events.emit({
+        await this.emitEvent({
           type: 'pipeline_tail_diagnostic',
           reason: record.code === 'malformed-json' ? 'malformed-line' : 'poll-failed',
           path: record.path.slice(this.projectRoot.length + 1),
           byteOffset: record.byteOffset,
         });
       }
-      // Task 12 replaces this best-effort acknowledgement with persistence acknowledgement.
       this.sessionReader.acknowledge(record);
     }
   }

@@ -1,5 +1,5 @@
-import { lstat, realpath } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { lstat, mkdir, realpath } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isSessionEventIdentity } from './session-event-identity.js';
 import { isFeatureSlug } from '../engine/worktree.js';
 
@@ -42,6 +42,10 @@ export type ManagedSessionContextPreparation =
 export type ManagedSessionProducerPath =
   | { readonly ok: true; readonly path: string }
   | { readonly ok: false; readonly code: 'producer-path-outside-root' | 'producer-path-unresolvable' };
+
+export type ManagedSessionProducerRoot =
+  | { readonly ok: true; readonly path: string }
+  | { readonly ok: false; readonly code: 'producer-root-outside-worktree' };
 
 const CONTEXT_ENV = 'CONDUCT_MANAGED_SESSION_CONTEXT';
 const PROJECT_ENV = 'CONDUCT_MANAGED_PROJECT';
@@ -135,6 +139,60 @@ export async function validateManagedSessionProducerPath(
   } catch {
     return { ok: false, code: 'producer-path-unresolvable' };
   }
+}
+
+/**
+ * Safely provision a dispatch-local producer directory without following a
+ * swapped pipeline segment outside the authoritative worktree.
+ */
+export async function provisionManagedSessionProducerRoot(
+  worktreeRoot: string,
+  dispatchId: string,
+): Promise<ManagedSessionProducerRoot> {
+  if (!isSessionEventIdentity(dispatchId)) return { ok: false, code: 'producer-root-outside-worktree' };
+
+  let current: string;
+  try {
+    current = await realpath(worktreeRoot);
+    if (!(await lstat(current)).isDirectory()) {
+      return { ok: false, code: 'producer-root-outside-worktree' };
+    }
+  } catch {
+    return { ok: false, code: 'producer-root-outside-worktree' };
+  }
+
+  for (const segment of ['.pipeline', 'session-events', dispatchId]) {
+    current = join(current, segment);
+    try {
+      if (!isRealDirectory(await lstat(current))) {
+        return { ok: false, code: 'producer-root-outside-worktree' };
+      }
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        return { ok: false, code: 'producer-root-outside-worktree' };
+      }
+      try {
+        await mkdir(current);
+      } catch (mkdirError: unknown) {
+        if ((mkdirError as NodeJS.ErrnoException).code !== 'EEXIST') {
+          return { ok: false, code: 'producer-root-outside-worktree' };
+        }
+      }
+      try {
+        if (!isRealDirectory(await lstat(current))) {
+          return { ok: false, code: 'producer-root-outside-worktree' };
+        }
+      } catch {
+        return { ok: false, code: 'producer-root-outside-worktree' };
+      }
+    }
+  }
+
+  return { ok: true, path: current };
+}
+
+function isRealDirectory(stat: Awaited<ReturnType<typeof lstat>>): boolean {
+  return stat.isDirectory() && !stat.isSymbolicLink();
 }
 
 function within(root: string, candidate: string): boolean {

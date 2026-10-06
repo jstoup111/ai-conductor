@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -44,6 +44,38 @@ describe('feature session-event lifecycle', () => {
       provider: 'codex',
       producerRoot: join(worktree, '.pipeline', 'session-events', 'dispatch-1'),
     });
+  });
+
+  it('refuses a symlinked pipeline root without creating producer directories outside the worktree', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'daemon-managed-session-pipeline-link-'));
+    roots.push(root);
+    const worktree = join(root, '.worktrees', 'feature-a');
+    const outside = join(root, 'outside');
+    await mkdir(worktree, { recursive: true });
+    await mkdir(outside);
+    await symlink(outside, join(worktree, '.pipeline'));
+
+    await expect(prepareDaemonFeatureManagedSessionContext({
+      projectRoot: root, worktreeRoot: worktree, featureSlug: 'feature-a', dispatchId: 'dispatch-1', provider: 'codex',
+    })).rejects.toThrow('daemon managed-session context refused: producer-root-outside-worktree');
+
+    expect(await readdir(outside)).toEqual([]);
+  });
+
+  it('refuses a symlinked session-events root without creating producer directories outside the worktree', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'daemon-managed-session-events-link-'));
+    roots.push(root);
+    const worktree = join(root, '.worktrees', 'feature-a');
+    const outside = join(root, 'outside');
+    await mkdir(join(worktree, '.pipeline'), { recursive: true });
+    await mkdir(outside);
+    await symlink(outside, join(worktree, '.pipeline', 'session-events'));
+
+    await expect(prepareDaemonFeatureManagedSessionContext({
+      projectRoot: root, worktreeRoot: worktree, featureSlug: 'feature-a', dispatchId: 'dispatch-1', provider: 'codex',
+    })).rejects.toThrow('daemon managed-session context refused: producer-root-outside-worktree');
+
+    expect(await readdir(outside)).toEqual([]);
   });
 
   it('drains a settled producer record before the feature persistence owner detaches', async () => {
