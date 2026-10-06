@@ -4,8 +4,27 @@ export const LEAF_PREFIX = 'feat/daemon-';
 export const SPEC_PREFIX = 'spec/';
 export const INTERACTIVE_PREFIX = 'feature/';
 
+export const CHILD_REF_GLOBS = [
+  'refs/heads/feat/c[1-9]/*',
+  'refs/remotes/*/feat/c[1-9]/*',
+];
+
+export const LEAF_REF_GLOBS = [
+  'refs/heads/feat/daemon-*',
+  'refs/remotes/*/feat/daemon-*',
+];
+
+export const SPEC_REF_GLOBS = [
+  'refs/heads/spec/*',
+  'refs/remotes/*/spec/*',
+];
+
 const CHILD_BRANCH_PREFIX = 'feat/c';
 const CHILD_BRANCH_REST = /^(\d+)(?:\/(.*))?$/;
+
+const LOCAL_REF_PREFIX = 'refs/heads/';
+const REMOTE_REF_PREFIX = 'refs/remotes/';
+const OWNED_NON_PREFIX_SEGMENTS = new Set(['feat', 'spec', 'feature']);
 
 export type FeatureBranchIdentity =
   | { kind: 'leaf'; slug: string }
@@ -84,4 +103,34 @@ export function parseFeatureBranch(raw: string): FeatureBranchIdentity {
   }
 
   return { kind: 'unrecognized', raw, reason: 'unrecognized' };
+}
+
+export function parseFeatureRef(ref: string): FeatureBranchIdentity {
+  if (ref.startsWith(LOCAL_REF_PREFIX)) {
+    return parseFeatureBranch(ref.slice(LOCAL_REF_PREFIX.length));
+  }
+  if (ref.startsWith(REMOTE_REF_PREFIX)) {
+    const rest = ref.slice(REMOTE_REF_PREFIX.length);
+    const slashIndex = rest.indexOf('/');
+    return parseFeatureBranch(slashIndex === -1 ? rest : rest.slice(slashIndex + 1));
+  }
+  if (parseFeatureBranch(ref).kind === 'unrecognized') {
+    const slashIndex = ref.indexOf('/');
+    const firstSegment = slashIndex === -1 ? ref : ref.slice(0, slashIndex);
+    if (!OWNED_NON_PREFIX_SEGMENTS.has(firstSegment)) {
+      return parseFeatureBranch(slashIndex === -1 ? ref : ref.slice(slashIndex + 1));
+    }
+  }
+  return parseFeatureBranch(ref);
+}
+
+export function isDaemonOwnedBranchName(name: string): boolean {
+  return name.startsWith(LEAF_PREFIX) || parseFeatureBranch(name).kind === 'child';
+}
+
+export function featureSlugOf(identity: FeatureBranchIdentity): string | undefined {
+  if (identity.kind === 'unrecognized') {
+    return undefined;
+  }
+  return identity.slug;
 }

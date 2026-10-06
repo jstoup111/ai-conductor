@@ -1,12 +1,18 @@
-// Covers: task:3
+// Covers: task:3, task:4
 import { describe, expect, it } from 'vitest';
 import {
+  CHILD_REF_GLOBS,
   INTERACTIVE_PREFIX,
   LEAF_PREFIX,
+  LEAF_REF_GLOBS,
   SPEC_PREFIX,
+  SPEC_REF_GLOBS,
   childBranchFor,
+  featureSlugOf,
+  isDaemonOwnedBranchName,
   leafBranchFor,
   parseFeatureBranch,
+  parseFeatureRef,
 } from '../../src/engine/feature-branch-identity.js';
 
 describe('feature-branch prefixes', () => {
@@ -118,4 +124,80 @@ describe('childBranchFor', () => {
       expect(result).not.toHaveProperty('branch');
     });
   }
+});
+
+describe('parseFeatureRef', () => {
+  const cases = [
+    { ref: 'refs/heads/feat/c1/x', expected: { kind: 'child', slug: 'x', child: 1 } as const },
+    { ref: 'origin/feat/c1/x', expected: { kind: 'child', slug: 'x', child: 1 } as const },
+    {
+      ref: 'refs/remotes/origin/feat/daemon-x',
+      expected: { kind: 'leaf', slug: 'x' } as const,
+    },
+    { ref: 'origin/feat/daemon-x', expected: { kind: 'leaf', slug: 'x' } as const },
+    { ref: 'origin/spec/x', expected: { kind: 'spec', slug: 'x' } as const },
+  ] as const;
+
+  for (const { ref, expected } of cases) {
+    it(`parses ${ref}`, () => {
+      expect(parseFeatureRef(ref)).toEqual(expected);
+    });
+  }
+
+  const unrecognized = [
+    { ref: 'origin/spec/', expected: { kind: 'unrecognized', raw: 'spec/', reason: 'empty slug' } as const },
+    {
+      ref: 'origin/feat/c1/a/b',
+      expected: { kind: 'unrecognized', raw: 'feat/c1/a/b', reason: 'multi-segment slug' } as const,
+    },
+  ] as const;
+
+  for (const { ref, expected } of unrecognized) {
+    it(`leaves ${ref} unrecognized`, () => {
+      expect(parseFeatureRef(ref)).toEqual(expected);
+    });
+  }
+});
+
+describe('ref globs', () => {
+  it('exposes the exact child ref globs', () => {
+    expect(CHILD_REF_GLOBS).toEqual(['refs/heads/feat/c[1-9]/*', 'refs/remotes/*/feat/c[1-9]/*']);
+  });
+
+  it('exposes the exact leaf ref globs', () => {
+    expect(LEAF_REF_GLOBS).toEqual(['refs/heads/feat/daemon-*', 'refs/remotes/*/feat/daemon-*']);
+  });
+
+  it('exposes the exact spec ref globs', () => {
+    expect(SPEC_REF_GLOBS).toEqual(['refs/heads/spec/*', 'refs/remotes/*/spec/*']);
+  });
+});
+
+describe('isDaemonOwnedBranchName', () => {
+  const owned = ['feat/daemon-x', 'feat/daemon-', 'feat/c1/x'] as const;
+  for (const name of owned) {
+    it(`owns ${name}`, () => {
+      expect(isDaemonOwnedBranchName(name)).toBe(true);
+    });
+  }
+
+  const notOwned = ['spec/x', 'feature/x', 'feat/c0/x', 'feat/c1', 'main'] as const;
+  for (const name of notOwned) {
+    it(`does not own ${name}`, () => {
+      expect(isDaemonOwnedBranchName(name)).toBe(false);
+    });
+  }
+});
+
+describe('featureSlugOf', () => {
+  it('returns the slug for leaf/child/spec/interactive identities', () => {
+    expect(featureSlugOf(parseFeatureBranch('feat/daemon-x'))).toBe('x');
+    expect(featureSlugOf(parseFeatureBranch('feat/c1/x'))).toBe('x');
+    expect(featureSlugOf(parseFeatureBranch('spec/x'))).toBe('x');
+    expect(featureSlugOf(parseFeatureBranch('feature/x'))).toBe('x');
+  });
+
+  it('returns undefined for unrecognized identities', () => {
+    expect(featureSlugOf(parseFeatureBranch('main'))).toBeUndefined();
+  });
 });
