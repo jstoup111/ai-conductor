@@ -41,6 +41,7 @@ import {
 import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
 import type { ManagedSessionContext } from '../../src/execution/managed-session-context.js';
 import type { ManagedGhObservationCoverage } from '../../src/execution/managed-session-preparation.js';
+import * as managedSessionPreparation from '../../src/execution/managed-session-preparation.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -931,6 +932,49 @@ describe('executeProviderCandidates', () => {
       outcome: 'success',
       invoked: true,
     }]);
+  });
+
+  it('carries managed context and prepares gh observation for concurrent branch fallback rungs', async () => {
+    const context: ManagedSessionContext = {
+      projectRoot: '/workspace',
+      worktreeRoot: '/workspace/feature-a',
+      producerRoot: '/workspace/feature-a/.pipeline/session-events/dispatch-1',
+      scope: { kind: 'feature', featureSlug: 'feature-a' },
+      dispatchId: 'dispatch-1',
+      provider: 'codex',
+    };
+    const coverage: ManagedGhObservationCoverage = {
+      boundary: 'managed-path-resolved-gh', completeness: 'unknown',
+    };
+    const prepare = vi.spyOn(managedSessionPreparation, 'prepareManagedGhObservation').mockResolvedValue({
+      wrapperDirectory: `${context.producerRoot}/.gh-observer`, realExecutable: '/fixture/gh', coverage,
+    });
+    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => (
+      options.model === 'first'
+        ? { success: false, output: 'model unavailable', exitCode: 1, modelUnavailable: true }
+        : { success: true, output: 'settled', exitCode: 0 }
+    ));
+    const provider: LLMProvider = { invoke, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const runner = new DefaultStepRunner(provider, 'main-session', '/workspace/feature-a', {
+      modelOverride: 'first',
+      config: { model_fallback_ladder: ['first', 'fallback'] } as HarnessConfig,
+      providerExecution: {
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', provider)]),
+        sessions: new ProviderSessionStore(),
+        managedSessionContext: context,
+      },
+    });
+
+    try {
+      const result = await runner.run('build', {}, { sessionId: 'branch-session' });
+
+      expect(invoke.mock.calls.map(([options]) => options.managedSessionContext)).toEqual([context, context]);
+      expect(prepare).toHaveBeenCalledWith({ context });
+      expect(result.managedGhObservationCoverage).toEqual(coverage);
+    } finally {
+      prepare.mockRestore();
+    }
   });
 
   it('runs an auxiliary prepared-candidate cache hit after preparation and before invocation, then tears it down once', async () => {

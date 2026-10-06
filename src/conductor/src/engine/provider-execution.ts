@@ -3,6 +3,7 @@ import { basename } from 'node:path';
 import type {
   InvokeOptions,
   InvokeResult,
+  LLMProvider,
   SelfHostInvocation,
   TokenUsage,
 } from '../execution/llm-provider.js';
@@ -351,6 +352,21 @@ export interface ProviderExecutionContext {
   /** Immutable identity established by the daemon before provider dispatch. */
   managedSessionContext?: ManagedSessionContext;
   prepareManagedSessionObservation?: ExecuteProviderCandidatesInput['prepareManagedSessionObservation'];
+}
+
+/**
+ * Prepare the managed-child `gh` wrapper at every native provider launch
+ * boundary. Provider-aware candidate execution and direct runner invokes share
+ * this seam so a managed context cannot reach one without the other.
+ */
+export async function prepareNativeManagedGhObservation(
+  provider: Pick<LLMProvider, 'lifecycleCapability'>,
+  context: ManagedSessionContext | undefined,
+): Promise<ManagedGhObservationCoverage> {
+  if (!context || provider.lifecycleCapability?.synchronousSpawnPermit !== true) {
+    return UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE;
+  }
+  return (await prepareManagedGhObservation({ context })).coverage;
 }
 
 function hasRecoveryPrecedence(result: InvokeResult): boolean {
@@ -1013,12 +1029,10 @@ export async function executeProviderCandidates({
           // Only a native provider adapter owns a managed child process. Test
           // runtimes and policy-only providers receive the context as data but
           // must not acquire a filesystem wrapper as a side effect.
-          if (ownedCandidateOptions.managedSessionContext && runtime.provider.lifecycleCapability?.synchronousSpawnPermit === true) {
-            const observation = await prepareManagedGhObservation({
-              context: ownedCandidateOptions.managedSessionContext,
-            });
-            managedGhObservationCoverage = observation.coverage;
-          }
+          managedGhObservationCoverage = await prepareNativeManagedGhObservation(
+            runtime.provider,
+            ownedCandidateOptions.managedSessionContext,
+          );
           if (ownedCandidateOptions.readOnlyReview && ownedCandidateOptions.managedSessionContext && prepareManagedSessionObservation) {
             await prepareManagedSessionObservation({
               provider: providerKey,
