@@ -129,7 +129,7 @@ describe('daemon backlog applicability seeding', () => {
   });
 
   it('logs a production git-tree marker prefetch failure and continues scanning', async () => {
-    const files = { ...featureFiles('production-read-failure'), '.docs/applicability/production-read-failure.md': 'Inapplicable: manual_test — reason\n' };
+    const files: Record<string, string> = { ...featureFiles('production-read-failure'), '.docs/applicability/production-read-failure.md': 'Inapplicable: manual_test — reason\n' };
     const logs: string[] = [];
     const result = await discoverBacklog('/unused', undefined, (line) => logs.push(line), {
       treeSource: gitTreeSource('/unused', 'claimed-sha', {
