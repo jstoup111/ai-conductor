@@ -1,8 +1,13 @@
-// Covers: S1.1, S3.1, task:1
+// Covers: S1.1, S3.1, task:1, task:2
 
 import { describe, expect, it } from 'vitest';
 
-import { renderRefusalReworkContext, type RefusalReworkEvidence } from '../../src/engine/prd-widening-refusal-rework.js';
+import {
+  admitRefusalReworkPlan,
+  renderRefusalReworkContext,
+  type RefusalReworkEvidence,
+} from '../../src/engine/prd-widening-refusal-rework.js';
+import type { RemediationGap, RemediationPlan } from '../../src/engine/artifacts.js';
 
 const storyRefusal: RefusalReworkEvidence = {
   key: 'S2.1',
@@ -55,5 +60,62 @@ describe('renderRefusalReworkContext', () => {
   it('restricts the rework tasks to removing or reworking the refused behavior', () => {
     const text = renderRefusalReworkContext([storyRefusal, ncRefusal]);
     expect(text).toMatch(/must either remove the refused behavior or rework it/);
+  });
+});
+
+function buildReworkPlan(gaps: RemediationGap[]): RemediationPlan {
+  return { gaps, rejected: [], invalidTasklessBuild: false };
+}
+
+function buildReworkGap(overrides?: Partial<RemediationGap>): RemediationGap {
+  return {
+    id: 'refusal-dec-story-1',
+    disposition: 'build',
+    category: null,
+    rationale: 'remove the refused behavior',
+    tasks: [{ id: 'remove-refused-story', title: 'Remove the refused behavior' }],
+    ...overrides,
+  };
+}
+
+describe('admitRefusalReworkPlan', () => {
+  it('admits a build gap whose id matches the refusal decision and carries concrete tasks', () => {
+    const plan = buildReworkPlan([buildReworkGap()]);
+    const result = admitRefusalReworkPlan(plan, [storyRefusal]);
+
+    expect(result).toEqual({
+      kind: 'admitted',
+      gaps: [{
+        id: 'refusal-dec-story-1',
+        disposition: 'build',
+        category: null,
+        rationale: 'remove the refused behavior',
+        tasks: [{ id: 'remove-refused-story', title: 'Remove the refused behavior' }],
+        gateSource: 'prd-audit',
+        criterion: 'S2.1',
+        governingClause: 'Refused S2.1 (decision dec-story-1 r3)',
+      }],
+    });
+  });
+
+  it('rejects a gap that is halt/deferral, naming the unbound refusal key', () => {
+    const plan = buildReworkPlan([buildReworkGap({ disposition: 'halt', category: 'product-scope' })]);
+    const result = admitRefusalReworkPlan(plan, [storyRefusal]);
+
+    expect(result).toEqual({ kind: 'rejected', criteria: ['S2.1'] });
+  });
+
+  it('rejects a matching gap with an empty task list, naming the unbound refusal key', () => {
+    const plan = buildReworkPlan([buildReworkGap({ tasks: [] })]);
+    const result = admitRefusalReworkPlan(plan, [storyRefusal]);
+
+    expect(result).toEqual({ kind: 'rejected', criteria: ['S2.1'] });
+  });
+
+  it('rejects a refusal with no matching gap id, naming the unbound refusal key', () => {
+    const plan = buildReworkPlan([buildReworkGap({ id: 'refusal-other-decision' })]);
+    const result = admitRefusalReworkPlan(plan, [storyRefusal]);
+
+    expect(result).toEqual({ kind: 'rejected', criteria: ['S2.1'] });
   });
 });
