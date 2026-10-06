@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:26
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   detectTaskCommand,
@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { execa } from 'execa';
 import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
 import { resolveTaskIds } from '../../src/engine/task-progress.js';
+import { writeCoverageBindingEnvelope } from '../../src/engine/coverage-binding-envelope.js';
 
 describe('detectTaskCommand', () => {
   describe('start command', () => {
@@ -239,6 +240,194 @@ describe('task command no-child argv compatibility', () => {
       await expect(fsPromises.access(stampPath)).rejects.toThrow();
     } finally {
       await fsPromises.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('task command child slice membership', () => {
+  const coverageBindingFilesystem = {
+    readFile: (path: string) => fsPromises.readFile(path, 'utf8'),
+    mkdir: (path: string) => fsPromises.mkdir(path, { recursive: true }).then(() => undefined),
+    writeFile: (path: string, contents: string) => fsPromises.writeFile(path, contents, 'utf8').then(() => undefined),
+    rename: fsPromises.rename,
+  };
+
+  async function seedTaskState(root: string, currentTask?: string): Promise<void> {
+    const pipeline = join(root, '.pipeline');
+    await fsPromises.mkdir(pipeline, { recursive: true });
+    await fsPromises.writeFile(join(pipeline, 'task-status.json'), JSON.stringify({
+      tasks: [
+        { id: '3', status: 'pending' },
+        { id: '7', status: 'pending' },
+        { id: 'rem-fr10-1', status: 'pending' },
+      ],
+    }, null, 2));
+    if (currentTask !== undefined) await fsPromises.writeFile(join(pipeline, 'current-task'), currentTask);
+  }
+
+  async function writeEnvelope(root: string, membership = true): Promise<void> {
+    await writeCoverageBindingEnvelope(root, {
+      version: 1,
+      slug: 'feature',
+      runId: 'run-1',
+      status: 'done',
+      entries: [],
+      ...(membership ? { sliceMembership: { taskSlices: { '3': 1, '7': 2 }, titles: ['Foundation', 'Delivery'] } } : {}),
+    }, coverageBindingFilesystem);
+  }
+
+  async function snapshotPipeline(root: string): Promise<Record<string, string>> {
+    const pipeline = join(root, '.pipeline');
+    const files: Record<string, string> = {};
+    async function visit(path: string, relative = ''): Promise<void> {
+      for (const entry of await fsPromises.readdir(path, { withFileTypes: true })) {
+        const entryRelative = relative === '' ? entry.name : join(relative, entry.name);
+        const entryPath = join(path, entry.name);
+        if (entry.isDirectory()) await visit(entryPath, entryRelative);
+        else files[entryRelative] = await fsPromises.readFile(entryPath, 'utf8');
+      }
+    }
+    await visit(pipeline);
+    return files;
+  }
+
+  async function dispatchWithStderr(command: NonNullable<ReturnType<typeof detectTaskCommand>>, root: string) {
+    const originalError = console.error;
+    const stderr: string[] = [];
+    console.error = (...args: unknown[]) => { stderr.push(args.join(' ')); };
+    try {
+      return { exitCode: await dispatchTaskCommand(command, root), stderr: stderr.join('\n') };
+    } finally {
+      console.error = originalError;
+    }
+  }
+
+  it.each([
+    ['invalid child id', '0', '[task-cli] invalid child id "0" (expected 1-9)'],
+    ['non-numeric child id', 'two', '[task-cli] invalid child id "two" (expected 1-9)'],
+  ])('refuses %s before writing task state', async (_name, child, message) => {
+    const root = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-child-invalid-'));
+    try {
+      await seedTaskState(root, '3');
+      const before = await snapshotPipeline(root);
+      const command = detectTaskCommand(['node', 'conduct', 'task', 'start', '7', '--child', child]);
+
+      await expect(dispatchWithStderr(command!, root)).resolves.toEqual({ exitCode: 1, stderr: message });
+      await expect(snapshotPipeline(root)).resolves.toEqual(before);
+    } finally {
+      await fsPromises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a valid child that has no state before reading membership', async () => {
+    const root = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-child-missing-state-'));
+    try {
+      await seedTaskState(root, '3');
+      const before = await snapshotPipeline(root);
+      const command = detectTaskCommand(['node', 'conduct', 'task', 'start', '7', '--child', '2']);
+
+      await expect(dispatchWithStderr(command!, root)).resolves.toEqual({
+        exitCode: 1,
+        stderr: '[task-cli] child 2 has no child state (.pipeline/children/2/ does not exist)',
+      });
+      await expect(snapshotPipeline(root)).resolves.toEqual(before);
+    } finally {
+      await fsPromises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['without an envelope', false],
+    ['without slice membership in the envelope', true],
+  ])('refuses %s without changing task state', async (_name, writeEnvelopeWithoutMembership) => {
+    const root = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-child-no-membership-'));
+    try {
+      await seedTaskState(root, '3');
+      await fsPromises.mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
+      if (writeEnvelopeWithoutMembership) await writeEnvelope(root, false);
+      const before = await snapshotPipeline(root);
+      const command = detectTaskCommand(['node', 'conduct', 'task', 'start', '7', '--child', '2']);
+
+      await expect(dispatchWithStderr(command!, root)).resolves.toEqual({
+        exitCode: 1,
+        stderr: '[task-cli] no slice membership is recorded for the feature (coverage-binding envelope missing)',
+      });
+      await expect(snapshotPipeline(root)).resolves.toEqual(before);
+    } finally {
+      await fsPromises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['task from another child', '3', '[task-cli] task 3 belongs to child 1, not child 2'],
+    ['task without a recorded slice', '8', '[task-cli] task 8 has no recorded slice membership'],
+  ])('refuses %s without writing task state', async (_name, id, message) => {
+    const root = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-child-wrong-membership-'));
+    try {
+      await seedTaskState(root, '3');
+      await fsPromises.mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
+      await writeEnvelope(root);
+      const before = await snapshotPipeline(root);
+      const command = detectTaskCommand(['node', 'conduct', 'task', 'start', id, '--child', '2']);
+
+      await expect(dispatchWithStderr(command!, root)).resolves.toEqual({ exitCode: 1, stderr: message });
+      await expect(snapshotPipeline(root)).resolves.toEqual(before);
+    } finally {
+      await fsPromises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['7', 'rem-fr10-1'])('starts %s through the existing flat task path after membership validation', async (id) => {
+    const baseline = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-child-start-baseline-'));
+    const child = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-child-start-child-'));
+    try {
+      for (const root of [baseline, child]) {
+        await seedTaskState(root);
+        await fsPromises.mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
+        await writeEnvelope(root);
+      }
+
+      const baselineCommand = detectTaskCommand(['node', 'conduct', 'task', 'start', id]);
+      const childCommand = detectTaskCommand(['node', 'conduct', 'task', 'start', id, '--child', '2']);
+      await expect(dispatchTaskCommand(baselineCommand!, baseline)).resolves.toBe(0);
+      await expect(dispatchTaskCommand(childCommand!, child)).resolves.toBe(0);
+
+      await expect(snapshotPipeline(child)).resolves.toEqual(await snapshotPipeline(baseline));
+      await expect(fsPromises.readFile(join(child, '.pipeline', 'current-task'), 'utf8')).resolves.toBe(id);
+      await expect(fsPromises.access(join(child, '.pipeline', 'children', '2', 'current-task'))).rejects.toThrow();
+    } finally {
+      await Promise.all([
+        fsPromises.rm(baseline, { recursive: true, force: true }),
+        fsPromises.rm(child, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it('completes an ordinary task through the existing path after membership validation', async () => {
+    const baseline = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-child-done-baseline-'));
+    const child = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-child-done-child-'));
+    try {
+      for (const root of [baseline, child]) {
+        await seedTaskState(root, '7');
+        await fsPromises.mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
+        await writeEnvelope(root);
+      }
+
+      const baselineCommand = detectTaskCommand(['node', 'conduct', 'task', 'done', '7', '--done-when', '1=ok']);
+      const childCommand = detectTaskCommand([
+        'node', 'conduct', 'task', 'done', '7', '--child', '2', '--done-when', '1=ok',
+      ]);
+      await expect(dispatchTaskCommand(baselineCommand!, baseline)).resolves.toBe(0);
+      await expect(dispatchTaskCommand(childCommand!, child)).resolves.toBe(0);
+
+      await expect(snapshotPipeline(child)).resolves.toEqual(await snapshotPipeline(baseline));
+      await expect(fsPromises.access(join(child, '.pipeline', 'current-task'))).rejects.toThrow();
+      await expect(fsPromises.access(join(child, '.pipeline', 'children', '2', 'current-task'))).rejects.toThrow();
+    } finally {
+      await Promise.all([
+        fsPromises.rm(baseline, { recursive: true, force: true }),
+        fsPromises.rm(child, { recursive: true, force: true }),
+      ]);
     }
   });
 });
