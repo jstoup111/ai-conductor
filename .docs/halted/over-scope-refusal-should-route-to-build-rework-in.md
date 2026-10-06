@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-06T16:04:07.544Z
 Slug: over-scope-refusal-should-route-to-build-rework-in
 Class: needs-human
 Halting step: unknown
