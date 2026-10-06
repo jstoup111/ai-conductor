@@ -7,6 +7,7 @@ import {
   CHILD_REF_GLOBS,
   LEAF_REF_GLOBS,
   SPEC_REF_GLOBS,
+  featureSlugOf,
   parseFeatureRef,
 } from '../../feature-branch-identity.js';
 import { runTrackerRead, type GhRunner } from '../../tracker-client.js';
@@ -119,10 +120,10 @@ export async function collectOpenIssueOverlaps({
 }
 
 function inFlightSlug(branch: string): string | null {
-  const localName = branch.match(/(?:^|\/)(spec\/.+|feat\/daemon-.+)$/)?.[1];
-  if (!localName) return null;
-  if (localName.startsWith('spec/')) return localName.slice('spec/'.length);
-  if (localName.startsWith('feat/daemon-')) return localName.slice('feat/daemon-'.length);
+  const identity = parseFeatureRef(branch);
+  if (identity.kind === 'spec' || identity.kind === 'leaf' || identity.kind === 'child') {
+    return featureSlugOf(identity) ?? null;
+  }
   return null;
 }
 

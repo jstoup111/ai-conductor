@@ -9,6 +9,7 @@ import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import {
   collectInFlightOverlaps,
   selectInFlightBranches,
+  traceBranchIssue,
 } from '../../src/engine/engineer/intake/overlap-sources.js';
 
 const fixtureRoots: string[] = [];
@@ -66,6 +67,40 @@ async function createChildBranchesFixture(): Promise<string> {
   git(repo, 'switch', '-q', 'main');
 
   return repo;
+}
+
+async function createLeafAndChildFixture(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'intake-overlap-leaf-child-'));
+  fixtureRoots.push(root);
+  const remote = join(root, 'origin.git');
+  const repo = join(root, 'repo');
+  git(root, 'init', '-q', '--bare', '-b', 'main', remote);
+  git(root, 'init', '-q', '-b', 'main', repo);
+  git(repo, 'config', 'user.email', 'test@example.com');
+  git(repo, 'config', 'user.name', 'Test User');
+  await mkdir(join(repo, 'src'), { recursive: true });
+  await writeFile(join(repo, 'src/markers.ts'), 'export const marker = 0;\n');
+  git(repo, 'add', '.');
+  git(repo, 'commit', '-q', '-m', 'base');
+  git(repo, 'remote', 'add', 'origin', remote);
+  git(repo, 'push', '-q', '-u', 'origin', 'main');
+
+  await commitFile(repo, 'feat/daemon-x', 'src/markers.ts', 'export const marker = 1;\n', '2020-01-01T00:00:00Z');
+  git(repo, 'push', '-q', 'origin', 'feat/daemon-x');
+  git(repo, 'switch', '-q', 'main');
+
+  await commitFile(repo, 'feat/c1/x', 'src/markers.ts', 'export const marker = 2;\n', '2019-01-01T00:00:00Z');
+  git(repo, 'push', '-q', 'origin', 'feat/c1/x');
+  git(repo, 'switch', '-q', 'main');
+
+  return repo;
+}
+
+async function recordShipped(repo: string, slug: string): Promise<void> {
+  await mkdir(join(repo, '.docs/shipped'), { recursive: true });
+  await writeFile(join(repo, `.docs/shipped/${slug}.md`), 'shipped\n');
+  git(repo, 'add', `.docs/shipped/${slug}.md`);
+  git(repo, 'commit', '-q', '-m', `record shipped ${slug}`);
 }
 
 async function createFixture(): Promise<string> {
@@ -175,5 +210,65 @@ describe('engineer/intake/overlap-sources — in-flight branch overlaps (Task 4)
     });
 
     expect(result.branches).toEqual(['feat/c1/x', 'origin/feat/c1/x']);
+  });
+});
+
+describe('engineer/intake/overlap-sources — child attribution to the parent feature (Task 12)', () => {
+  it('traceBranchIssue reads the parent intake marker for leaf and child branches', async () => {
+    const calls: string[][] = [];
+    const gitRunner: GitRunner = async (args) => {
+      calls.push(args);
+      return { exitCode: 1, stdout: '', stderr: '' };
+    };
+    const readIssueState = async (): Promise<'OPEN' | 'CLOSED' | string | null> => 'CLOSED';
+
+    expect(await traceBranchIssue({
+      git: gitRunner,
+      branch: 'feat/daemon-x',
+      repository: 'owner/repo',
+      readIssueState,
+    })).toBeNull();
+    expect(await traceBranchIssue({
+      git: gitRunner,
+      branch: 'feat/c2/x',
+      repository: 'owner/repo',
+      readIssueState,
+    })).toBeNull();
+
+    expect(calls).toEqual([
+      ['show', 'feat/daemon-x:.docs/intake/x.md'],
+      ['show', 'feat/c2/x:.docs/intake/x.md'],
+    ]);
+  });
+
+  it('isShippedBranch probes the parent shipped record for leaf and child branches', async () => {
+    const calls: string[][] = [];
+    const gitRunner: GitRunner = async (args) => {
+      calls.push(args);
+      if (args[0] === 'for-each-ref') {
+        return { exitCode: 0, stdout: 'feat/daemon-x\nfeat/c2/x\n', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+
+    await selectInFlightBranches({ git: gitRunner, baseRef: 'main' });
+
+    const shippedProbes = calls.filter((args) => args[0] === 'cat-file');
+    expect(shippedProbes).toEqual([
+      ['cat-file', '-e', 'main:.docs/shipped/x.md'],
+      ['cat-file', '-e', 'main:.docs/shipped/x.md'],
+    ]);
+    expect(shippedProbes.flat().join(' ')).not.toMatch(/c2\.md|x-c2\.md/);
+  });
+
+  it('excludes a shipped child exactly like a shipped leaf and includes both when unshipped', async () => {
+    const repo = await createLeafAndChildFixture();
+
+    const unshipped = await selectInFlightBranches({ git: makeGitRunner(repo), baseRef: 'main' });
+    expect(unshipped.branches).toEqual(expect.arrayContaining(['feat/daemon-x', 'feat/c1/x']));
+
+    await recordShipped(repo, 'x');
+    const shipped = await selectInFlightBranches({ git: makeGitRunner(repo), baseRef: 'main' });
+    expect(shipped.branches).toEqual([]);
   });
 });
