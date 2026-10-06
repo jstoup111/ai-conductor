@@ -88,7 +88,7 @@ describe('bot configuration does not affect identity or @me intake reads', () =>
 
   it('keeps gh api user and gh issue list --assignee @me on the ambient operator credential', async () => {
     const repo = join(root, 'repo');
-    const gh = makeProductionGh();
+    const gh = makeProductionGh({ execFile: execFileCb });
 
     await expect(ghLoginOwner(gh, repo)).resolves.toEqual({ resolved: true, id: 'operator-login' });
     const intake = createGithubIssuesAdapter({

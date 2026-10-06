@@ -3,6 +3,7 @@ import { basename } from 'node:path';
 import type {
   InvokeOptions,
   InvokeResult,
+  LLMProvider,
   SelfHostInvocation,
   TokenUsage,
 } from '../execution/llm-provider.js';
@@ -41,6 +42,7 @@ import { ModelAvailability } from './model-availability.js';
 import type { ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import {
+  ProviderSetupUnavailableError,
   normalizeProviderSetupUnavailable,
   type ProviderSetupUnavailable,
   type ProviderSetupExhaustion,
@@ -52,6 +54,12 @@ import {
   findBuiltInProviderDescriptor,
   supportsProviderCapability,
 } from '../execution/provider-catalog.js';
+import type { ManagedSessionContext } from '../execution/managed-session-context.js';
+import {
+  prepareManagedGhObservation,
+  UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE,
+} from '../execution/managed-session-preparation.js';
+import type { ManagedGhObservationCoverage } from '../execution/managed-session-preparation.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -109,6 +117,8 @@ export interface ProviderExecutionResult extends InvokeResult, ProviderAttributi
   attempts: ProviderAttemptMetadata[];
   /** Lifecycle-supervisor marker outcome, when preparation recovery was exhausted. */
   haltMarkerWrite?: HaltMarkerWriteResult;
+  /** PATH, custom-client, and MCP gaps remain explicitly unknown. */
+  managedGhObservationCoverage?: ManagedGhObservationCoverage;
 }
 
 export type ProviderTransitionWarning =
@@ -301,6 +311,13 @@ export interface ExecuteProviderCandidatesInput {
   /** Safety boundary for each resolved candidate, after resolution and before fallback. */
   withCandidateSafety?: WithCandidateSafety;
   prepareCandidateSelfHost?: PrepareCandidateSelfHost;
+  /** Candidate setup proving narrow telemetry access under a native read-only review policy. */
+  prepareManagedSessionObservation?: (input: {
+    readonly provider: string;
+    readonly context: ManagedSessionContext;
+    readonly readOnlyReview: boolean;
+    readonly executable?: string;
+  }) => Promise<unknown>;
   warn?: (
     message: string,
     transition: ProviderTransitionWarning,
@@ -332,6 +349,24 @@ export interface ProviderExecutionContext {
   warn?: ExecuteProviderCandidatesInput['warn'];
   /** Feature-owned persisted sink for provider subprocess diagnostics. */
   diagnosticLog?: (message: string) => void;
+  /** Immutable identity established by the daemon before provider dispatch. */
+  managedSessionContext?: ManagedSessionContext;
+  prepareManagedSessionObservation?: ExecuteProviderCandidatesInput['prepareManagedSessionObservation'];
+}
+
+/**
+ * Prepare the managed-child `gh` wrapper at every native provider launch
+ * boundary. Provider-aware candidate execution and direct runner invokes share
+ * this seam so a managed context cannot reach one without the other.
+ */
+export async function prepareNativeManagedGhObservation(
+  provider: Pick<LLMProvider, 'lifecycleCapability'>,
+  context: ManagedSessionContext | undefined,
+): Promise<ManagedGhObservationCoverage> {
+  if (!context || provider.lifecycleCapability?.synchronousSpawnPermit !== true) {
+    return UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE;
+  }
+  return (await prepareManagedGhObservation({ context })).coverage;
 }
 
 function hasRecoveryPrecedence(result: InvokeResult): boolean {
@@ -785,6 +820,7 @@ export async function executeProviderCandidates({
   onTelemetryError,
   withCandidateSafety,
   prepareCandidateSelfHost,
+  prepareManagedSessionObservation,
   warn,
   options,
   optionsForCandidate,
@@ -886,17 +922,25 @@ export async function executeProviderCandidates({
           // candidate-local override must not detach a running subprocess from
           // that authority.
           ...(abortSignal !== undefined ? { abortSignal } : {}),
+          // Attribution belongs to the owning dispatch. A candidate may
+          // re-render its prompt, but cannot replace or clear that context.
+          ...(options.managedSessionContext !== undefined
+            ? { managedSessionContext: options.managedSessionContext }
+            : {}),
         }
       : abortSignal !== undefined
         ? { ...options, abortSignal, ...(descriptorTrust === undefined ? {} : { trustProjectFiles: descriptorTrust }) }
         : { ...options, ...(descriptorTrust === undefined ? {} : { trustProjectFiles: descriptorTrust }) };
+    const ownedCandidateOptions = candidateOptions.managedSessionContext === undefined
+      ? candidateOptions
+      : { ...candidateOptions, managedSessionContext: { ...candidateOptions.managedSessionContext, provider: providerKey } };
     const candidate: ProviderCandidate = {
       step,
       providerKey,
       model: resolved.model,
       effort: resolved.effort,
     };
-    let candidateObserver: ReturnType<NonNullable<typeof candidateOptions.providerStreamObserverForCandidate>> | undefined;
+    let candidateObserver: ReturnType<NonNullable<typeof ownedCandidateOptions.providerStreamObserverForCandidate>> | undefined;
     let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
     let selfHost: SelfHostInvocation | undefined;
     let setupUnavailable: ProviderSetupUnavailable | undefined;
@@ -908,6 +952,7 @@ export async function executeProviderCandidates({
     // so the step keys the schema home whenever no auxiliary member does.
     const schemaScratchMember = auxiliaryMember ?? step;
     let invocationResult: Promise<InvokeResult> | undefined;
+    let managedGhObservationCoverage: ManagedGhObservationCoverage = UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE;
     const teardownCallbacks: Array<() => Promise<void>> = [];
     const supportsNativeSchemaCapability =
       runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
@@ -918,15 +963,15 @@ export async function executeProviderCandidates({
       invocationResult ??= (async () => {
         const candidateInvocationOptions = candidateObserver
           ? {
-              ...candidateOptions,
+              ...ownedCandidateOptions,
               ...overrides,
               streamConsumer: candidateObserver,
               onProviderStream: candidateObserver.onProviderStream,
               ...(selfHost ? { selfHost } : {}),
             }
           : selfHost
-            ? { ...candidateOptions, ...overrides, selfHost }
-            : { ...candidateOptions, ...overrides };
+            ? { ...ownedCandidateOptions, ...overrides, selfHost }
+            : { ...ownedCandidateOptions, ...overrides };
         invocation = await invokeProviderCandidate({
           providerKey,
           runtime,
@@ -976,11 +1021,33 @@ export async function executeProviderCandidates({
         // structurally cannot carry machine envelopes, so it is not merely
         // inert — it must never be created or attached. Create it before
         // preparation so its close boundary survives preparation failures.
-        candidateObserver = candidateOptions.interactive
+        candidateObserver = ownedCandidateOptions.interactive
           ? undefined
-          : candidateOptions.providerStreamObserverForCandidate?.(providerKey);
+          : ownedCandidateOptions.providerStreamObserverForCandidate?.(providerKey);
         try {
           selfHost = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index, member: auxiliaryMember });
+          // Only a native provider adapter owns a managed child process. Test
+          // runtimes and policy-only providers receive the context as data but
+          // must not acquire a filesystem wrapper as a side effect.
+          managedGhObservationCoverage = await prepareNativeManagedGhObservation(
+            runtime.provider,
+            ownedCandidateOptions.managedSessionContext,
+          );
+          if (ownedCandidateOptions.readOnlyReview && ownedCandidateOptions.managedSessionContext && prepareManagedSessionObservation) {
+            await prepareManagedSessionObservation({
+              provider: providerKey,
+              context: ownedCandidateOptions.managedSessionContext,
+              readOnlyReview: true,
+              ...(selfHost?.executable ? { executable: selfHost.executable } : {}),
+            });
+          } else if (ownedCandidateOptions.readOnlyReview && ownedCandidateOptions.managedSessionContext) {
+            throw new ProviderSetupUnavailableError({
+              provider: providerKey,
+              capability: 'managed-observation-destination',
+              reason: 'native read-only review is available, but narrow observation access was not proven for this candidate.',
+              recoveryAction: 'Configure a provider review policy that proves the per-dispatch observation destination is writable while protected paths remain refused.',
+            });
+          }
         } catch (error) {
           setupUnavailable = normalizeProviderSetupUnavailable(error, providerKey);
           if (!setupUnavailable) throw error;
@@ -1065,6 +1132,7 @@ export async function executeProviderCandidates({
           rateLimited: true,
           preferredProvider,
           attempts,
+          managedGhObservationCoverage,
         };
       }
       const diagnostic = attempts
@@ -1083,6 +1151,7 @@ export async function executeProviderCandidates({
         exitCode: lastResult.exitCode ?? 1,
         preferredProvider,
         attempts,
+        managedGhObservationCoverage,
       };
     }
     let result: InvokeResult;
@@ -1188,6 +1257,7 @@ export async function executeProviderCandidates({
         resolvedEffort: resolved.effort,
         attempts,
         ...(observedIntervals.length ? { observedIntervals } : {}),
+        managedGhObservationCoverage,
       };
     }
 
@@ -1220,6 +1290,7 @@ export async function executeProviderCandidates({
           preferredProvider,
           attempts,
           ...(observedIntervals.length ? { observedIntervals } : {}),
+          managedGhObservationCoverage,
         };
       }
     }
@@ -1255,6 +1326,7 @@ export async function executeProviderCandidates({
             }
           : {}),
         ...(observedIntervals.length ? { observedIntervals } : {}),
+        managedGhObservationCoverage,
       };
     }
 
@@ -1320,5 +1392,6 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
     exitCode: 1,
     preferredProvider: configuredProviders[0] ?? 'unknown',
     attempts: [],
+    managedGhObservationCoverage: UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE,
   };
 }

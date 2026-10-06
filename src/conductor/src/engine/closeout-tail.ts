@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import type { ExternalPipelineEvent } from './closeout-events.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
+import { SessionEventReader } from './session-event-reader.js';
 
 const PIPELINE_CLOSEOUT_LEDGER = '.pipeline/pipeline-events.jsonl';
 const CANONICAL_EVENTS_LEDGER = '.pipeline/events.jsonl';
@@ -75,23 +76,38 @@ class CloseoutTailReader {
 /** Polls the pipeline-owned closeout ledger and re-emits complete records. */
 export class CloseoutEventTail {
   private readonly reader: CloseoutTailReader;
+  private readonly sessionReader: SessionEventReader;
   private readonly events: ConductorEventEmitter;
+  private readonly emitEvent: (event: Parameters<ConductorEventEmitter['emit']>[0]) => Promise<void>;
   private readonly projectRoot: string;
   private interval: ReturnType<typeof setInterval> | null = null;
   private inFlight: Promise<void> | null = null;
 
   constructor({
     projectRoot,
+    featureSlug,
     events,
     readLedger,
+    sessionReader,
+    emitEvent,
   }: {
     projectRoot: string;
+    featureSlug?: string;
     events: ConductorEventEmitter;
     readLedger?: (path: string) => Promise<Buffer>;
+    /** Test seam; production reads the validated dispatch-local producer files. */
+    sessionReader?: SessionEventReader;
+    /** Test seam for a failing persistence-acknowledged observation projection. */
+    emitEvent?: (event: Parameters<ConductorEventEmitter['emit']>[0]) => Promise<void>;
   }) {
     this.projectRoot = projectRoot;
     this.reader = new CloseoutTailReader(projectRoot, readLedger);
+    this.sessionReader = sessionReader ?? new SessionEventReader({ projectRoot, featureSlug });
     this.events = events;
+    // Producer offsets advance only after every subscriber, including the
+    // canonical EventPersister, has acknowledged this occurrence. Pipeline
+    // closeout projection below intentionally remains best-effort.
+    this.emitEvent = emitEvent ?? ((event) => this.events.emitOrThrow(event));
   }
 
   poll(): Promise<void> {
@@ -119,6 +135,25 @@ export class CloseoutEventTail {
         });
       }
     }
+    await this.projectSessionRecords(false);
+  }
+
+  private async projectSessionRecords(settled: boolean): Promise<void> {
+    // acknowledge() shifts the reader's pending queue; iterate a snapshot so
+    // every record in a batch is persisted and advances its own offset.
+    for (const record of [...await (settled ? this.sessionReader.drain() : this.sessionReader.read())]) {
+      if (record.kind === 'event') {
+        await this.emitEvent(record.event);
+      } else {
+        await this.emitEvent({
+          type: 'pipeline_tail_diagnostic',
+          reason: record.code === 'malformed-json' ? 'malformed-line' : 'poll-failed',
+          path: record.path.slice(this.projectRoot.length + 1),
+          byteOffset: record.byteOffset,
+        });
+      }
+      this.sessionReader.acknowledge(record);
+    }
   }
 
   /** Start background polling; lifecycle ownership stays with the conductor. */
@@ -142,5 +177,11 @@ export class CloseoutEventTail {
     if (!this.interval) return;
     clearInterval(this.interval);
     this.interval = null;
+  }
+
+  /** Final, awaited producer pass after the owner has stopped new polling. */
+  async drain(): Promise<void> {
+    await this.poll();
+    await this.projectSessionRecords(true);
   }
 }

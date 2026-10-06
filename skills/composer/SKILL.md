@@ -9,6 +9,8 @@ requires: []
 model: opus
 ---
 
+<!-- ai-conductor:session-command-context=operator-only -->
+
 ## Purpose
 
 The **composer** is the agent-hosted control plane for turning raw ideas into routed, approved
@@ -165,3 +167,4 @@ Report `✅ Spec delivered for <slug> → <PR url / branch>.` Do not ask for ano
 - [ ] The spec PR (or local fallback) was delivered, and nothing built or merged.
 - [ ] The daemon received only the fire-and-forget `ensureRunning` nudge.
 - [ ] Sibling repos left byte-for-byte unchanged.
+<!-- /ai-conductor:session-command-context -->

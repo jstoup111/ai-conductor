@@ -515,6 +515,7 @@ async function loadProjectConfig(
   try {
     raw = await readFile(configPath, 'utf-8');
   } catch {
+    // ai-conductor:session-command-context=operator-only
     return {
       ok: false,
       error: {
@@ -522,6 +523,7 @@ async function loadProjectConfig(
         message: `Config file not found: ${configPath}. Run ai-conductor config init to create it.`,
       },
     };
+    // /ai-conductor:session-command-context
   }
 
   let parsed: unknown;
@@ -3305,6 +3307,7 @@ export async function loadMergedConfigForRead(
   try {
     raw = await readFile(configPath, 'utf-8');
   } catch {
+    // ai-conductor:session-command-context=operator-only
     return {
       ok: false,
       error: {
@@ -3312,6 +3315,7 @@ export async function loadMergedConfigForRead(
         message: `Config file not found: ${configPath}. Run ai-conductor config init to create it.`,
       },
     };
+    // /ai-conductor:session-command-context
   }
 
   let project: unknown;

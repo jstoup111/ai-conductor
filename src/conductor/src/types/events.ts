@@ -319,8 +319,77 @@ export type ProviderStreamProgressEvent = ProviderStreamObservation & {
 /** Activity classification for an intra-step build-progress observation. */
 export type BuildActivity = 'quiet' | 'active-committing' | 'active-not-committing';
 
+/** Engine-established attribution carried by an external managed-session producer. */
+export type SessionObservationScope =
+  | { kind: 'feature'; featureSlug: string }
+  | { kind: 'project' };
+
+/** Closed outcomes from a locally observed `gh` process; never remote-state proof. */
+export type GithubBypassCliOutcome = 'cli-succeeded' | 'cli-failed' | 'unknown';
+
+/** A command was refused before its handler was allowed to run. */
+export interface SessionCommandRefusedEvent {
+  type: 'session_command_refused';
+  eventId: string;
+  sourceTime: string;
+  dispatchId: string;
+  provider: string;
+  scope: SessionObservationScope;
+  subcommand: string | 'unknown';
+}
+
+/** An unguarded GitHub operation was observed before its local transport ran. */
+export interface GithubBypassAttemptEvent {
+  type: 'github_bypass_attempt';
+  eventId: string;
+  sourceTime: string;
+  dispatchId: string;
+  provider: string;
+  scope: SessionObservationScope;
+  operation: string | 'unknown';
+}
+
+/** The terminal local result correlated to one observed unguarded GitHub attempt. */
+export interface GithubBypassResultEvent {
+  type: 'github_bypass_result';
+  eventId: string;
+  sourceTime: string;
+  dispatchId: string;
+  provider: string;
+  scope: SessionObservationScope;
+  attemptId: string;
+  outcome: GithubBypassCliOutcome;
+}
+
+/** An opaque GitHub invocation could not safely be classified as read-only. */
+export interface GithubPossibleBypassEvent {
+  type: 'github_possible_bypass';
+  eventId: string;
+  sourceTime: string;
+  dispatchId: string;
+  provider: string;
+  scope: SessionObservationScope;
+  operation: string | 'unknown';
+}
+
+/** A closed diagnostic for degraded cross-process observation delivery. */
+export interface SessionEventDeliveryDiagnosticEvent {
+  type: 'session_event_delivery_diagnostic';
+  eventId: string;
+  sourceTime: string;
+  dispatchId: string;
+  provider: string;
+  scope: SessionObservationScope;
+  code: 'producer-path-invalid' | 'record-too-large' | 'write-failed';
+}
+
 export type ConductorEvent =
   | BotCoAuthorSkippedEvent
+  | SessionCommandRefusedEvent
+  | GithubBypassAttemptEvent
+  | GithubBypassResultEvent
+  | GithubPossibleBypassEvent
+  | SessionEventDeliveryDiagnosticEvent
   | {
       /** A durable spool batch was evicted locally or rejected by the backend. */
       type: 'otel_spool_drop';
@@ -816,6 +885,8 @@ export type ConductorEvent =
       /** Provider that produced the successful result. */
       actualProvider?: string;
       observedIntervals?: readonly ObservedInterval[];
+      /** Bounded completeness of managed gh observation for this step outcome. */
+      managedGhObservationCoverage?: import('../execution/managed-session-preparation.js').ManagedGhObservationCoverage;
       /** Build-only tree witnesses; absent on legacy and non-build events. */
       treeBefore?: string | null;
       treeAfter?: string | null;

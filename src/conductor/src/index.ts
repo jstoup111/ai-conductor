@@ -5,7 +5,7 @@ export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.j
 
 import type { RunMode } from './types/index.js';
 import { recoverCommandState, replaceCommandState } from './engine/command-state.js';
-import { guardDaemonSessionInvocation } from './execution/daemon-session.js';
+import { emitDaemonSessionRefusal, guardDaemonSessionInvocation } from './execution/daemon-session.js';
 
 export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMode {
   if (opts.auto && opts.interactive) {
@@ -27,9 +27,9 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { realpathSync, writeSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import { execa } from 'execa';
+import { v4 as uuidv4 } from 'uuid';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-import { v4 as uuidv4 } from 'uuid';
 import { Conductor, createProvenanceGuardedFinishPresentationRepair } from './engine/conductor.js';
 import { createProductionAcceptanceRedExec } from './engine/acceptance-red-runner.js';
 import {
@@ -42,6 +42,9 @@ import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
+import { prepareManagedSessionContext } from './execution/managed-session-context.js';
+import { createManagedSessionObservationPreparer } from './execution/managed-session-preparation.js';
+import { createSessionEventIdentity } from './execution/session-event-identity.js';
 import {
   normalizeProviderSelection,
   validateProviderInstallation,
@@ -57,6 +60,7 @@ import {
 } from './engine/provider-model-probe.js';
 import { resolveBuildReviewConfig } from './engine/resolved-config.js';
 import {
+  probeManagedObservationDestination,
   probeReadOnlyReviewCapability,
   type ReadOnlyReviewCapability,
 } from './engine/build-review-read-only-capability.js';
@@ -113,7 +117,11 @@ import { runProjectPrelude } from './engine/project-prelude.js';
 import { discoverPlugins } from './engine/plugin-loader.js';
 import { registerCliBuiltins } from './engine/cli-builtins.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
-import { EventPersister, startOperatorEventSpine } from './engine/event-persister.js';
+import {
+  EventPersister,
+  startOperatorEventSpine,
+  startSessionEventTail,
+} from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { wireInteractiveOtelMetrics, wireOtelVisualizer } from './engine/otel/wire.js';
 import type { OtelVisualizerStartContext } from './engine/otel/wire.js';
@@ -570,6 +578,16 @@ async function readHarnessVersion(): Promise<string> {
   return resolveHarnessVersion(__dirname);
 }
 
+/** Reuse the persisted foreground run id when resuming; mint one otherwise. */
+export async function resolveForegroundRunId(pipelineDir: string): Promise<string> {
+  try {
+    const persisted = await readFile(join(pipelineDir, 'conduct-session-id'), 'utf-8');
+    return persisted.trim() || uuidv4();
+  } catch {
+    return uuidv4();
+  }
+}
+
 interface VisualizerStartContextInput {
   runId: string;
   project: string;
@@ -783,20 +801,37 @@ export async function dispatchNonDispatchingCliCommand(
   return undefined;
 }
 
+/**
+ * The process-entry guard is deliberately a tiny injected collaboration: the
+ * refused path cannot reach command parsing or a handler, while tests can
+ * replace that boundary before presenting a blocked argv.
+ */
+export async function dispatchCliEntry(input: {
+  readonly argv: readonly string[];
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly dispatch: () => Promise<number>;
+  readonly emitRefusal?: typeof emitDaemonSessionRefusal;
+  readonly diagnostic?: (message: string) => void;
+}): Promise<{ readonly exitCode: number; readonly refused: boolean }> {
+  const environment = input.environment ?? process.env;
+  const diagnostic = input.diagnostic ?? ((message: string) => console.error(`Error: ${message}`));
+  // Keep the production-process call explicit: the structural boundary test
+  // guards this ordering, while injected argv remains available to the entry
+  // collaboration fixture.
+  const verdict = input.argv === process.argv
+    ? guardDaemonSessionInvocation(process.argv)
+    : guardDaemonSessionInvocation(input.argv, environment);
+  if (!verdict.allowed) {
+    await (input.emitRefusal ?? emitDaemonSessionRefusal)(verdict, { environment, diagnostic });
+    diagnostic(verdict.message);
+    return { exitCode: 1, refused: true };
+  }
+  return { exitCode: await input.dispatch(), refused: false };
+}
+
 // --- Main ---
 
-async function main(): Promise<void> {
-  // Boundary enforcement, before any subcommand parsing: an ai-conductor
-  // invocation from inside an engine-dispatched provider session (daemon
-  // builds, reviews, self-host candidates — marked CONDUCT_DAEMON_SESSION=1)
-  // is refused, except for the session-sanctioned worker subcommands the
-  // harness's own skills/hooks mandate. See execution/daemon-session.ts.
-  const daemonSessionVerdict = guardDaemonSessionInvocation(process.argv);
-  if (!daemonSessionVerdict.allowed) {
-    console.error(`Error: ${daemonSessionVerdict.message}`);
-    process.exitCode = 1;
-    return;
-  }
+async function dispatchCliCommand(): Promise<void> {
 
   const nonDispatchingExitCode = await dispatchNonDispatchingCliCommand(
     process.argv,
@@ -1617,15 +1652,11 @@ async function main(): Promise<void> {
     }
   }
 
-  // Set up conductor — reuse persisted session ID if resuming
-  let sessionId: string;
-  const sessionIdPath = join(pipelineDir, 'conduct-session-id');
-  try {
-    const persisted = await readFile(sessionIdPath, 'utf-8');
-    sessionId = persisted.trim() || uuidv4();
-  } catch {
-    sessionId = uuidv4();
-  }
+  // Foreground resume reuses the persisted run id (conductor.run.id stays
+  // stable across resumes). That id may be a legacy bare UUID, so the
+  // prelude dispatch directory gets its own letter-prefixed identity.
+  const sessionId = await resolveForegroundRunId(pipelineDir);
+  const preludeDispatchId = createSessionEventIdentity();
 
   // Set up terminal UI with live dashboard (needed before registry initialization)
   const rendererOpts = {
@@ -1653,16 +1684,23 @@ async function main(): Promise<void> {
   const eventsLogPath = join(pipelineDir, 'events.jsonl');
   const persister = new EventPersister(eventsLogPath, events);
   persister.start();
-  const subscriber = await bootDispatchingCliProviders({
+  // Foreground/project-prelude provider sessions have no daemon feature
+  // scope. Own their same-schema producer tail alongside this persister so
+  // every exit drains records before subscribers detach.
+  const sessionTail = startSessionEventTail(projectRoot, events);
+  let subscriber: Awaited<ReturnType<typeof bootDispatchingCliProviders>>;
+  let visualizerList: ReturnType<typeof buildInteractiveVisualizers> = [];
+  try {
+    subscriber = await bootDispatchingCliProviders({
     command: 'inline',
     registry,
     events,
     config,
     rendererOpts,
-  });
-  if (!subscriber) {
-    throw new Error('Provider discovery was not enabled for the inline command');
-  }
+    });
+    if (!subscriber) {
+      throw new Error('Provider discovery was not enabled for the inline command');
+    }
 
   // Compose one provider-routing context from the complete frozen registry.
   // The ordered config survives intact; its first entry is only the
@@ -1688,6 +1726,32 @@ async function main(): Promise<void> {
   const compatibilityRuntime = providerExecution.runtimes.get(
     providerExecution.configuredProviders[0],
   );
+  const preludeProvider = providerExecution.configuredProviders[0];
+  if (!preludeProvider) throw new Error('Project prelude requires a configured provider');
+  const preludeProducerRoot = join(pipelineDir, 'session-events', preludeDispatchId);
+  await mkdir(preludeProducerRoot, { recursive: true });
+  const preparedPreludeContext = await prepareManagedSessionContext({
+    projectRoot,
+    worktreeRoot: projectRoot,
+    producerRoot: preludeProducerRoot,
+    scope: { kind: 'project' },
+    dispatchId: preludeDispatchId,
+    provider: preludeProvider,
+  });
+  if (!preparedPreludeContext.ok) {
+    throw new Error(`Project prelude managed-session context refused: ${preparedPreludeContext.code}`);
+  }
+  const preludeProviderExecution: ProviderExecutionContext = {
+    ...providerExecution,
+    managedSessionContext: preparedPreludeContext.context,
+    prepareManagedSessionObservation: createManagedSessionObservationPreparer((input) => probeManagedObservationDestination({
+          ...input,
+          runProcess: async (executable, args) => {
+            const result = await execa(executable, [...args], { reject: false });
+            return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
+          },
+        })),
+  };
 
   // Select UI subscriber based on config (default: 'terminal')
   const renderer = registry.get<UIRenderer>('ui_renderer', config?.ui_renderer ?? 'terminal');
@@ -1722,7 +1786,7 @@ async function main(): Promise<void> {
       pipelineDir,
     }),
   };
-  const visualizerList = buildInteractiveVisualizers(
+  visualizerList = buildInteractiveVisualizers(
     registry,
     visualizerContext.config,
     visualizerContext,
@@ -1735,7 +1799,7 @@ async function main(): Promise<void> {
     config,
     modelPolicy: compatibilityRuntime.policy,
     mode,
-    providerExecution,
+    providerExecution: preludeProviderExecution,
     events,
   });
 
@@ -1762,7 +1826,7 @@ async function main(): Promise<void> {
     {
       harnessVersion,
       onAssessStalePrompt: interactivePrompt,
-      providerExecution,
+      providerExecution: preludeProviderExecution,
     },
   );
   if (prelude.bootstrapExecuted) {
@@ -1778,6 +1842,10 @@ async function main(): Promise<void> {
         prelude.assessSuccess ? 'ok' : 'failed'
       }`,
     );
+  }
+  if (prelude.setupRequired) {
+    const detail = prelude.setupRequired.configError.message;
+    throw new Error(`Project bootstrap configuration is required before provider launch: ${detail}`);
   }
 
   // Auto-update check (port-self-update-flow T5 / Story 7): spawn
@@ -1804,7 +1872,7 @@ async function main(): Promise<void> {
     mode,
     config,
     modelPolicy: compatibilityRuntime.policy,
-    providerExecution,
+    providerExecution: preludeProviderExecution,
     ...(readOnlyReviewCapabilities !== undefined ? { readOnlyReviewCapabilities } : {}),
     projectRoot,
     acceptanceRedExec: createProductionAcceptanceRedExec(),
@@ -1852,11 +1920,25 @@ async function main(): Promise<void> {
     onComplexityAssessment: (r) => promptHost.complexityAssessment(r),
   });
 
-  await conductor.run();
+    await conductor.run();
+  } finally {
+    await sessionTail.drain();
+    persister.stop();
+    await stopVisualizers(visualizerList);
+    await subscriber?.stop();
+  }
+}
 
-  persister.stop();
-  await stopVisualizers(visualizerList);
-  await subscriber.stop();
+async function main(): Promise<void> {
+  const outcome = await dispatchCliEntry({
+    argv: process.argv,
+    environment: process.env,
+    dispatch: async () => {
+      await dispatchCliCommand();
+      return typeof process.exitCode === 'number' ? process.exitCode : 0;
+    },
+  });
+  process.exitCode = outcome.exitCode;
 }
 
 // Only run the CLI when executed directly (e.g. `node dist/index.js` via

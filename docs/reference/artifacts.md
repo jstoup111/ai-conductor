@@ -758,7 +758,37 @@ no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` fo
 `shipment_evidence_refused`, `step_status_write_refused`, `rebase_changed`, `rebase_gate_preserved`,
 `rebase_gate_invalidated`, `rebase_merge_audit`, `rebase_conflict_halt`, `unattributed_progress`,
 `attribution_divergence`, `acceptance_red`, `step_inapplicable`, `step_inapplicable_ignored`,
-`step_inapplicable_refused`, `rebase_citation_residue`, and `rebase_supersession_verdict`.
+`step_inapplicable_refused`, `rebase_citation_residue`, `rebase_supersession_verdict`,
+`session_command_refused`, `github_bypass_attempt`, `github_bypass_result`, `github_possible_bypass`, and
+`session_event_delivery_diagnostic`.
+
+#### Managed-session occurrence events
+
+A dispatched provider session is a separate process and cannot reach the engine's emitter. The engine
+gives each managed child a per-dispatch producer directory; the child appends bounded records there,
+and the engine's event tail projects them onto the ordinary spine. Each event carries `eventId`,
+`sourceTime`, `dispatchId`, `provider`, and `scope` (`{kind: 'feature', featureSlug}` or
+`{kind: 'project'}`). All five render to the terminal and daemon log and persist to this file.
+
+| Event | Records | Extra field |
+| --- | --- | --- |
+| `session_command_refused` | The [daemon-session guard](cli.md#daemon-session-refusal) refused an `ai-conductor` command | `subcommand` (bounded; `unknown` for unrecognized text) |
+| `github_bypass_attempt` | A PATH-resolved `gh` call classified as mutating, observed before it ran | `operation` |
+| `github_bypass_result` | The local exit of that call | `attemptId`, `outcome`: `cli-succeeded`, `cli-failed`, or `unknown` |
+| `github_possible_bypass` | A `gh` call that could not be classified read-only (extensions, aliases, GraphQL, `--input` payloads, unknown forms) | `operation` |
+| `session_event_delivery_diagnostic` | A producer record that could not be delivered | `code`: `producer-path-invalid`, `record-too-large`, or `write-failed` |
+
+These are observations, not proof. `cli-succeeded` is a local exit status; the daemon log line says
+`remote outcome unverified`. Coverage is limited to `gh` resolved through the session's `PATH`: an
+absolute binary path, a replaced `PATH`, a custom HTTP or SDK client, or a separate MCP transport is not
+observed. A managed session's `step_completed` carries `managedGhObservationCoverage` (`boundary:
+managed-path-resolved-gh`, `completeness: unknown`; absent for unmanaged steps) so that an empty event
+set is never read as "no GitHub write happened".
+
+The `gh` observer is a wrapper the engine places first on the managed child's `PATH`; it forwards to
+the real `gh` resolved from the inherited `PATH`. If no executable `gh` resolves, or the wrapper
+cannot be written, the candidate fails provider setup with capability `managed-gh-observation` and
+the recovery action names both fixes. Operator shells and other engine subprocesses are unaffected.
 
 `rebase_merge_audit` records a flattened replay of a merge-bearing feature branch: the shas of
 flattened merges, the shas of dropped ancestry-only merges, and the count of side-lineage commits not

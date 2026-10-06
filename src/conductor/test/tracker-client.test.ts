@@ -1,14 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-
-// setup.ts can import engine modules before this file's mock is registered.
-// Reset that cached graph so tracker-client promisifies this fake boundary.
-vi.hoisted(() => { vi.resetModules(); });
-vi.mock('node:child_process', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:child_process')>();
-  return { ...actual, execFile: vi.fn(actual.execFile) };
-});
-
-import { execFile as execFileSpy } from 'node:child_process';
+import type { execFile as ExecFile } from 'node:child_process';
 import {
   GhCapabilityError,
   makeProductionGh,
@@ -31,21 +22,21 @@ describe('tracker-client: canonical GhRunner + guarded makeProductionGh', () => 
   });
 
   it('makeProductionGh() throws under AI_CONDUCTOR_NO_REAL_EXEC before spawning a process', async () => {
-    vi.mocked(execFileSpy).mockClear();
+    const execFile = vi.fn();
     expect(process.env.AI_CONDUCTOR_NO_REAL_EXEC).toBeTruthy();
 
-    const gh = makeProductionGh();
+    const gh = makeProductionGh({ execFile: execFile as unknown as typeof ExecFile });
 
     await expect(gh(['pr', 'view'], { cwd: '/tmp' })).rejects.toThrow(
       /AI_CONDUCTOR_NO_REAL_EXEC|real .*(gh|exec).* blocked/i,
     );
-    expect(execFileSpy).not.toHaveBeenCalled();
+    expect(execFile).not.toHaveBeenCalled();
   });
 
   it('forwards caller timeout and capture limits to the process boundary without changing defaults', async () => {
     const noRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-    vi.mocked(execFileSpy).mockImplementationOnce(((
+    const execFile = vi.fn(((
       _file: string,
       _args: readonly string[] | null | undefined,
       _options: unknown,
@@ -53,13 +44,13 @@ describe('tracker-client: canonical GhRunner + guarded makeProductionGh', () => 
     ) => {
       callback?.(null, 'ok', '');
       return undefined as never;
-    }) as unknown as typeof execFileSpy);
+    }) as unknown as typeof ExecFile);
 
     try {
-      await expect(makeProductionGh()(['run', 'view', '7'], {
+      await expect(makeProductionGh({ execFile: execFile as unknown as typeof ExecFile })(['run', 'view', '7'], {
         cwd: '/repo', timeout: 10_000, maxBuffer: 65_536,
       })).resolves.toMatchObject({ stdout: expect.any(String) });
-      expect(execFileSpy).toHaveBeenLastCalledWith('gh', ['run', 'view', '7'], {
+      expect(execFile).toHaveBeenLastCalledWith('gh', ['run', 'view', '7'], {
         cwd: '/repo', timeout: 10_000, maxBuffer: 65_536,
       }, expect.any(Function));
     } finally {
@@ -68,8 +59,8 @@ describe('tracker-client: canonical GhRunner + guarded makeProductionGh', () => 
   });
 });
 
-function mockProductionGhFailure(input: { code: number; stderr: string; message: string }): void {
-  vi.mocked(execFileSpy).mockImplementationOnce(((
+function mockProductionGhFailure(input: { code: number; stderr: string; message: string }): typeof ExecFile {
+  return vi.fn(((
     _file: string,
     _args: readonly string[] | null | undefined,
     _options: unknown,
@@ -81,21 +72,21 @@ function mockProductionGhFailure(input: { code: number; stderr: string; message:
     });
     callback?.(error as never, '' as never, input.stderr as never);
     return undefined as never;
-  }) as unknown as typeof execFileSpy);
+  }) as unknown as typeof ExecFile) as unknown as typeof ExecFile;
 }
 
 describe('makeProductionGh — unsupported JSON-field capability errors', () => {
   it('translates a non-zero stderr unsupported-field signal into structured capability evidence', async () => {
     const noRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-    mockProductionGhFailure({
+    const execFile = mockProductionGhFailure({
       code: 1,
       stderr: 'Unknown JSON field: "headRefOid"',
       message: 'Command failed: gh pr view',
     });
 
     try {
-      const invocation = makeProductionGh()(['pr', 'view'], { cwd: '/tmp' });
+      const invocation = makeProductionGh({ execFile })(['pr', 'view'], { cwd: '/tmp' });
       await expect(invocation).rejects.toMatchObject({
         name: 'GhCapabilityError',
         cli: 'gh',
@@ -110,14 +101,14 @@ describe('makeProductionGh — unsupported JSON-field capability errors', () => 
   it('does not infer a capability error from an unsupported-field phrase in message alone', async () => {
     const noRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-    mockProductionGhFailure({
+    const execFile = mockProductionGhFailure({
       code: 1,
       stderr: '',
       message: 'Unknown JSON field: "headRefOid"',
     });
 
     try {
-      await expect(makeProductionGh()(['pr', 'view'], { cwd: '/tmp' })).rejects.not.toBeInstanceOf(
+      await expect(makeProductionGh({ execFile })(['pr', 'view'], { cwd: '/tmp' })).rejects.not.toBeInstanceOf(
         GhCapabilityError,
       );
     } finally {
@@ -132,9 +123,9 @@ describe('makeProductionGh — unsupported JSON-field capability errors', () => 
   ])('leaves ambiguous failures unchanged', async (failure) => {
     const noRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-    mockProductionGhFailure(failure);
+    const execFile = mockProductionGhFailure(failure);
     try {
-      await expect(makeProductionGh()(['pr', 'view'], { cwd: '/tmp' })).rejects.not.toBeInstanceOf(
+      await expect(makeProductionGh({ execFile })(['pr', 'view'], { cwd: '/tmp' })).rejects.not.toBeInstanceOf(
         GhCapabilityError,
       );
     } finally {

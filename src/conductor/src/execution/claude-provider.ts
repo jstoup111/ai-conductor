@@ -28,6 +28,8 @@ import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { withGitGuardPath } from './child-environment.js';
 import { ensureGitGuardForDispatch } from '../engine/git-guard.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
+import { composeManagedSessionEnvironment } from './managed-session-context.js';
+import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
 import {
   inferRateLimitWaitSeconds,
   rateLimitDurationUnitAlternation,
@@ -950,11 +952,14 @@ export class ClaudeProvider implements LLMProvider {
   private buildEnv(options: InvokeOptions): NodeJS.ProcessEnv {
     // tmux target variables are scrubbed last so neither the inherited env
     // nor a self-host overlay can hand the child the daemon's own pane.
-    return scrubTmuxEnvironment(withDaemonSessionMarker({
+    const environment = withDaemonSessionMarker({
       ...process.env,
       ...options.selfHost?.env,
       ...(options.effort ? { CLAUDE_CODE_EFFORT_LEVEL: options.effort } : {}),
       ...FOREGROUND_ONLY_ENV,
-    }));
+    });
+    return scrubTmuxEnvironment(options.managedSessionContext
+      ? composePreparedManagedSessionEnvironment(options.managedSessionContext, composeManagedSessionEnvironment(options.managedSessionContext, environment))
+      : environment);
   }
 }

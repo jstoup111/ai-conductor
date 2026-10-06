@@ -35,9 +35,11 @@ export function renderKickbackRecoveryHint({
   gate: string;
   allowance: 'laps' | 'growth';
 }): string {
+  // ai-conductor:session-command-context=operator-only
   const allowanceName = allowance === 'growth' ? 'Plan-growth' : 'Lap';
   return `${allowanceName} allowance exhausted. Recover with: ` +
     `ai-conductor kickback-budget raise --feature ${slug ?? '«slug»'} --gate ${gate} --by «N» --rationale "«why»"`;
+  // /ai-conductor:session-command-context
 }
 
 export function kickbackBudgetView(

@@ -7,7 +7,11 @@ import { promisify } from 'node:util';
 
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
-import { probeReadOnlyReviewCapability } from '../../src/engine/build-review-read-only-capability.js';
+import {
+  buildCodexReadOnlyProducerRootPolicyArgs,
+  probeManagedObservationDestination,
+  probeReadOnlyReviewCapability,
+} from '../../src/engine/build-review-read-only-capability.js';
 import { materializePiHarnessExtension } from '../../src/execution/pi-harness-extension.js';
 import { PiProvider } from '../../src/execution/pi-provider.js';
 
@@ -35,7 +39,7 @@ describe('probeReadOnlyReviewCapability', () => {
       provider: 'codex', platform: 'linux', runProcess, scratchDir,
     })).resolves.toEqual({ provider: 'codex', platform: 'linux', status: 'available' });
     expect(runProcess).toHaveBeenCalledWith('codex', [
-      'sandbox', '-P', ':read-only', '--', '/bin/sh', '-c', expect.any(String), 'read-only-review-probe',
+      'sandbox', '--config', 'sandbox_mode="read-only"', '--', '/bin/sh', '-c', expect.any(String), 'read-only-review-probe',
       `${scratchDir}/write-probe`, scratchDir,
     ]);
   });
@@ -230,5 +234,86 @@ describe('probeReadOnlyReviewCapability', () => {
         chmodSync(assetDir, 0o700);
       }
     });
+  });
+});
+
+describe('buildCodexReadOnlyProducerRootPolicyArgs', () => {
+  const producerRoot = '/repo/.pipeline/session-events/dispatch-1';
+  const definition = `permissions.conductor-managed-review={extends=":read-only", filesystem={"${producerRoot}"="write"}}`;
+  const execAcceptedOptions = new Set(['-c', '--config', '-s', '--sandbox', '-p', '--profile']);
+
+  it('keeps the plain read-only native review profile byte-identical without a producer root', () => {
+    expect(buildCodexReadOnlyProducerRootPolicyArgs(undefined)).toEqual([
+      '--config', 'sandbox_mode="read-only"',
+    ]);
+  });
+
+  it('uses only codex exec-accepted option spellings for both policy shapes', () => {
+    const producerPolicy = buildCodexReadOnlyProducerRootPolicyArgs(producerRoot);
+    expect(producerPolicy).toEqual([
+      '--config', definition,
+      '--config', 'default_permissions="conductor-managed-review"',
+    ]);
+    for (const policy of [buildCodexReadOnlyProducerRootPolicyArgs(undefined), producerPolicy]) {
+      expect(policy.filter((token) => token.startsWith('-')).every((token) => execAcceptedOptions.has(token))).toBe(true);
+      expect(policy).not.toContain('-P');
+    }
+  });
+
+  it('quotes a producer root containing TOML-significant characters', () => {
+    const [, quoted] = buildCodexReadOnlyProducerRootPolicyArgs('/repo/a "b"\\c');
+    expect(quoted).toBe(
+      'permissions.conductor-managed-review={extends=":read-only", filesystem={"/repo/a \\"b\\"\\\\c"="write"}}',
+    );
+  });
+});
+
+describe('probeManagedObservationDestination', () => {
+  const producerRoot = join(tempRoot, 'worktree', '.pipeline', 'session-events', 'dispatch-1');
+  const protectedPaths = [
+    join(tempRoot, 'worktree'),
+    join(tempRoot, 'worktree', '.pipeline', 'sealed'),
+    join(tempRoot, 'worktree', '.pipeline', 'unrelated'),
+    join(tempRoot, '.codex'),
+  ];
+
+  it('passes the exec-compatible producer policy unchanged to the sandbox admission probe', async () => {
+    const runProcess = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: 'producer-write-allowed\nprotected-writes-refused\n',
+      stderr: '',
+    }));
+
+    await expect(probeManagedObservationDestination({
+      provider: 'codex', producerRoot, protectedPaths, executable: '/isolated/codex', runProcess,
+    })).resolves.toEqual({ producerWrite: 'allowed', protectedWrites: 'refused' });
+    expect(runProcess).toHaveBeenCalledWith('/isolated/codex', [
+      'sandbox',
+      '--config', `permissions.conductor-managed-review={extends=":read-only", filesystem={"${producerRoot}"="write"}}`,
+      '--config', 'default_permissions="conductor-managed-review"', '--',
+      '/bin/bash', '-c', expect.any(String), 'managed-observation-policy',
+      producerRoot,
+    ]);
+  });
+
+  it.each([
+    ['allows a protected path', 'producer-write-allowed\nprotected-write-succeeded\n'],
+    ['cannot establish the producer exception', 'producer-write-refused\nprotected-writes-refused\n'],
+    ['cannot establish every protected parent', 'probe-parent-missing\n'],
+    ['returns malformed proof', 'producer-write-allowed\n'],
+  ])('refuses an unprovable native policy when it %s', async (_case, stdout) => {
+    const runProcess = vi.fn(async () => ({ exitCode: 0, stdout, stderr: '' }));
+
+    await expect(probeManagedObservationDestination({
+      provider: 'codex', producerRoot, protectedPaths, runProcess,
+    })).resolves.toEqual(expect.objectContaining({ producerWrite: expect.not.stringMatching(/^allowed$/) }));
+  });
+
+  it('does not invent a policy proof for providers without an exact native policy', async () => {
+    const runProcess = vi.fn();
+    await expect(probeManagedObservationDestination({
+      provider: 'claude', producerRoot, protectedPaths, runProcess,
+    })).resolves.toEqual({ producerWrite: 'unproven', protectedWrites: 'unproven' });
+    expect(runProcess).not.toHaveBeenCalled();
   });
 });

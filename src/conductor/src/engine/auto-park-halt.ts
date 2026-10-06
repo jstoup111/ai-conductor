@@ -18,6 +18,7 @@ export function deferredAutoParkHaltPresentation(
   slug: string,
   state: DeferredAutoParkHaltState,
 ): DeferredAutoParkHaltPresentation {
+  // ai-conductor:session-command-context=operator-only
   if (state === 'write-failed') {
     return {
       heading: 'feature errored — automatic park failed',
@@ -37,6 +38,7 @@ export function deferredAutoParkHaltPresentation(
       `  3. ai-conductor daemon unpark ${slug}\n` +
       `  4. Re-queue the feature (restart the daemon if it was excluded this run).\n`,
   };
+  // /ai-conductor:session-command-context
 }
 
 function errorMessage(error: unknown): string {

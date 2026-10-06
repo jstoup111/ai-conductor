@@ -174,12 +174,13 @@ describe('exhaustive direct GitHub transport detection', () => {
       "import { execFile as execFileCb } from 'node:child_process';",
       "import { promisify } from 'node:util';",
       'const execFileP = promisify(execFileCb);',
-      "export function makeProductionGh() { return async (args: string[], opts: { cwd: string }) => execFileP('gh', args, { cwd: opts.cwd }); }",
+      "function resolvePrivateGhObserverPassthrough() { return 'gh'; }",
+      "export function makeProductionGh() { return async (args: string[], opts: { cwd: string }) => execFileP(resolvePrivateGhObserverPassthrough(), args, { cwd: opts.cwd }); }",
     ].join('\n');
     const extraRead = `${transport}\nexport async function peek() { return execFileP('gh', ['api', 'user']); }`;
     expect(messages('engine/tracker-client.ts', transport)).toEqual([]);
     expect(messages('engine/tracker-client.ts', extraRead)).toEqual([READ]);
-    expect(messages('engine/other.ts', transport)).toEqual([UNRESOLVABLE]);
+    expect(messages('engine/other.ts', transport)).toEqual(['private gh observer passthrough outside makeProductionGh']);
   });
 });
 

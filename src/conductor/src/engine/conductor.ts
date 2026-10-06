@@ -84,6 +84,7 @@ import type {
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
+import type { ManagedGhObservationCoverage } from '../execution/managed-session-preparation.js';
 import type { ConductState, ConductorEvent, ExecutionContext, FinishPublicationEvent } from '../types/index.js';
 import type {
   StepName,
@@ -147,7 +148,6 @@ import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { ExecutionLifecycle } from './execution-lifecycle.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
-import { CloseoutEventTail } from './closeout-tail.js';
 import {
   resolveBuildProgressConfig,
   resolveGateCodeValidityConfig,
@@ -1223,6 +1223,8 @@ export interface StepRunResult {
   publicationDisposition?: unknown;
   /** Engine-observed provider subprocess intervals, forwarded without reinterpretation. */
   observedIntervals?: readonly ObservedInterval[];
+  /** Bounded completeness of managed gh observation for this step outcome. */
+  managedGhObservationCoverage?: ManagedGhObservationCoverage;
   /** Engine-native aggregate-suite result retained for Task 17 failure routing. */
   fullSuiteVerification?: FullSuiteVerifierResult;
   /**
@@ -1884,12 +1886,15 @@ export function renderExhaustedMechanicalBuildReviewHalt(
         `; Last recorded fault: ${lastMechanicalFault.rubric} closed cause ${lastMechanicalFault.reason} ` +
         `on lap ${lastMechanicalFault.lapId} (${lastMechanicalFault.detail}).`);
   }
-  return [
+  // ai-conductor:session-command-context=operator-only
+  const message = [
     `build_review mechanical fault allowance exhausted: ${consumed} of ${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed.`,
     `Current lap ${aggregate.lapId}: ${failure.rubric} closed cause ${failure.reason} (${failure.detail}).`,
     `1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap ${aggregate.lapId} --rubric ${failure.rubric} --rationale "<rationale>".`,
     '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
   ].join('\n');
+  // /ai-conductor:session-command-context
+  return message;
 }
 
 /** Render the closed recovery for a custom review with no read-only candidate. */
@@ -3230,7 +3235,17 @@ export class Conductor {
     options: StepRunOptions,
   ): Promise<StepRunResult> {
     if (!this.finishPublication) {
-      return this.stepRunner.run('finish', state, options);
+      // Compatibility-only test and embedding callers can still supply their
+      // own FINISH runner. An engine-managed provider session must never get
+      // the legacy recording assignment: production wires the coordinator.
+      if (!this.providerExecution) return this.stepRunner.run('finish', state, options);
+      return {
+        success: false,
+        publicationDisposition: {
+          kind: 'human_required',
+          reason: 'publication_coordinator_unavailable',
+        },
+      };
     }
 
     const publicationDisposition = await this.finishPublication.advance({
@@ -10690,15 +10705,6 @@ export class Conductor {
                 })
               : null;
           buildWatcher?.start();
-          const closeoutTail: CloseoutEventTail | null =
-            step.name === 'build'
-              ? new CloseoutEventTail({
-                  projectRoot: this.projectRoot,
-                  events: this.events,
-                })
-              : null;
-          closeoutTail?.start();
-
           // Approved DECIDE artifacts are a durable BUILD/SHIP boundary. Verify
           // every attempt before writing phase markers or starting dispatch; a
           // resume therefore cannot accept a dirty workspace as a new baseline.
@@ -10760,7 +10766,6 @@ export class Conductor {
           if (protectedArtifactIssue) {
             buildAttemptSettled = true;
             buildWatcher?.stop();
-            closeoutTail?.stop();
             const dispatchIssue = protectedArtifactIssue;
             result = {
               success: false,
@@ -10898,7 +10903,7 @@ export class Conductor {
                       ? await this.runRebaseStep(state)
                       : step.name === 'test_suite'
                         ? await this.runTestSuiteStep()
-                        : step.name === 'finish' && this.finishPublication
+                        : step.name === 'finish'
                           ? await this.runFinishPublication(state, {
                               retryReason: retryHint,
                               attempt,
@@ -10966,7 +10971,6 @@ export class Conductor {
           } finally {
             buildAttemptSettled = true;
             buildWatcher?.stop();
-            closeoutTail?.stop();
             // Task 4 (#788): the phase-active marker is written for any
             // BUILD/SHIP step, not gated on step.name === 'build'.
             removePhaseMarker(this.projectRoot);
@@ -14498,6 +14502,9 @@ export class Conductor {
             ...(stepResult?.observedIntervals
               ? { observedIntervals: stepResult.observedIntervals }
               : {}),
+            ...(stepResult?.managedGhObservationCoverage
+              ? { managedGhObservationCoverage: stepResult.managedGhObservationCoverage }
+              : {}),
             executionContext: serialExecutionContext,
           });
 
@@ -16372,6 +16379,7 @@ export function buildRemediationHint(
   source = 'prd-audit',
   evidenceFile = '.pipeline/prd-audit.md',
 ): string {
+  // ai-conductor:session-command-context=managed
   const lines = fixes.map((g) => {
     const tasks = g.tasks.length ? ` Tasks: ${g.tasks.map((t) => t.title).join('; ')}` : '';
     return `- ${g.id} [${g.disposition}]: ${g.rationale}.${tasks}`;
@@ -16397,6 +16405,7 @@ export function buildRemediationHint(
     'the as-built code is re-audited after this step:\n' +
     lines.join('\n')
   );
+  // /ai-conductor:session-command-context
 }
 
 /**
@@ -16424,6 +16433,8 @@ export function buildRetryHint(
   missing?: 'recording' | 'presentation' | 'uncommitted' | 'other',
   pipelineDirArg?: string,
 ): string {
+  // ai-conductor:session-command-context=managed
+  void pipelineDirArg;
   const r = reason ?? 'unknown';
   if (step === 'finish' && missing === 'presentation') {
     // A publication defect: every evidence check passed and only the PR's own
@@ -16443,21 +16454,15 @@ export function buildRetryHint(
       'boilerplate, no remediation narrative (those belong in a guarded `pull-request.comment.create` request), and ' +
       'no engine placeholder text.\n' +
       '  2. If the PR is still a draft, submit a guarded `pull-request.ready` request through the same CLI.\n' +
-      'Then re-record the finish outcome. The step is NOT complete until the recorded ' +
-      'PR carries an authored body.'
+      'The engine-owned publication coordinator will re-observe the edited PR, record completion when authorized, and verify it.'
     );
   }
   if (step === 'finish' && missing === 'recording') {
-    const dirArg = pipelineDirArg ?? '.pipeline';
     return (
       `Previous attempt did not satisfy the completion check: ${r}. ` +
       'The finish work itself appears done — only the outcome was not recorded. ' +
-      'Do NOT repeat the full /finish walk. Instead, determine the finish outcome ' +
-      '(pr | merge-local | keep | discard) from current repo state and run ONLY:\n' +
-      `  ai-conductor finish-record --choice <choice> [--pr-url <url>] --pipeline-dir ${dirArg}\n` +
-      'IMPORTANT: do NOT `cd` elsewhere before running it; use this exact `--pipeline-dir` value ' +
-      'regardless of the current working directory. The step is NOT complete until ' +
-      '`finish-record` exits 0.'
+      'Do NOT repeat the full /finish walk. The engine-owned publication coordinator ' +
+      'will re-observe the existing result, record completion when authorized, and verify it.'
     );
   }
   if (step === 'manual_test') {
@@ -16500,6 +16505,7 @@ export function buildRetryHint(
       );
     }
   }
+  // /ai-conductor:session-command-context
   return `Previous attempt did not satisfy the completion check: ${r}. Finish the work now.`;
 }
 

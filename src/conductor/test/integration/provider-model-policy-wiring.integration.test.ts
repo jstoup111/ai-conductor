@@ -201,9 +201,9 @@ it('composes one ordered provider context across the interactive run after regis
     runtimeSetConstructionCount: 1,
     sessionStoreConstructionCount: 1,
     runnerProvider: 'compatibilityRuntime.provider',
-    runnerContext: 'providerExecution',
-    conductorContext: 'providerExecution',
-    preludeContext: 'providerExecution',
+    runnerContext: 'providerExecution: preludeProviderExecution',
+    conductorContext: 'providerExecution: preludeProviderExecution',
+    preludeContext: 'providerExecution: preludeProviderExecution',
     startupOrder: true,
   });
 });
@@ -261,6 +261,12 @@ it('composes isolated provider execution state for every daemon feature after on
   const featureExecution = featureProperties.find(
     (property) => property.name?.getText(daemonFile) === 'providerExecution',
   );
+  const featureProviderExecution = featureRunFunction?.body && ts.isBlock(featureRunFunction.body)
+    ? featureRunFunction.body.statements
+      .filter(ts.isVariableStatement)
+      .flatMap((statement) => statement.declarationList.declarations)
+      .find((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === 'providerExecution')
+    : undefined;
   const compact = daemonSource.replace(/\s+/g, ' ');
   const featureBody = runnerSource.slice(
     runnerSource.indexOf('return async (item: BacklogItem)'),
@@ -315,12 +321,10 @@ it('composes isolated provider execution state for every daemon feature after on
         'ProviderSessionStore',
     featureInjectsScopedRuntimeLogger:
       featureExecution !== undefined &&
-      ts.isPropertyAssignment(featureExecution) &&
-      ts.isCallExpression(featureExecution.initializer) &&
-      featureExecution.initializer.expression.getText(daemonFile) ===
-        'createProviderExecution' &&
-      featureExecution.initializer.arguments[1]?.getText(daemonFile) ===
-        'featureLog',
+      featureProviderExecution?.initializer !== undefined &&
+      ts.isCallExpression(featureProviderExecution.initializer) &&
+      featureProviderExecution.initializer.expression.getText(daemonFile) === 'createProviderExecution' &&
+      featureProviderExecution.initializer.arguments[1]?.getText(daemonFile) === 'featureLog',
     factoryInjectedAtFeatureBoundary:
       /providerExecution:\s*createProviderExecution/.test(daemonSource) &&
       (featureBody.match(/deps\.providerExecution\?\.\(\)/g)?.length ?? 0) === 1,
@@ -338,14 +342,14 @@ it('composes isolated provider execution state for every daemon feature after on
       ),
     rebaseRecoveryContext:
       (rebaseBody.match(
-        /const providerExecution = createSlugScopedProviderExecution\(entry\.slug\);/g,
+        /const providerExecution = await createSlugScopedProviderExecution\(\s*entry\.slug,\s*ctx\.projectRoot,\s*dispatchId,\s*\);/g,
       )?.length ?? 0) === 1 &&
       /featureDesc:\s*`rebase-resolution-\$\{entry\.slug\}`,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(
         rebaseBody,
       ),
     ciRecoveryContext:
       (ciBody.match(
-        /const providerExecution = createSlugScopedProviderExecution\(ctx\.entry\.slug\);/g,
+        /const providerExecution = await createSlugScopedProviderExecution\(\s*ctx\.entry\.slug,\s*ctx\.worktreePath,\s*dispatchId,\s*\);/g,
       )?.length ?? 0) === 1 &&
       /featureDesc:\s*`ci-fix-resolution-\$\{ctx\.entry\.slug\}`,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(
         ciBody,

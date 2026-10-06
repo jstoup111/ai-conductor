@@ -31,12 +31,15 @@ import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { withGitGuardPath } from './child-environment.js';
 import { ensureGitGuardForDispatch } from '../engine/git-guard.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
+import { composeManagedSessionEnvironment } from './managed-session-context.js';
+import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 import { fromCodexStrictResult, toCodexStrictSchema } from './codex-strict-schema.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
 import { providerDescriptor } from './provider-catalog.js';
+import { buildCodexReadOnlyProducerRootPolicyArgs } from '../engine/build-review-read-only-capability.js';
 
 function codexDisplayName(): string {
   return providerDescriptor('codex').displayName;
@@ -1022,10 +1025,13 @@ export class CodexProvider implements LLMProvider {
     if (unattended) {
       if (options.readOnlyReview) {
         args.push(
-          '--config', 'sandbox_mode="read-only"',
+          ...buildCodexReadOnlyProducerRootPolicyArgs(options.managedSessionContext?.producerRoot),
           '--config', 'approval_policy="never"',
           '--config', 'shell_environment_policy.ignore_default_excludes=false',
         );
+        // The read-only admission probe proves this exact narrow exception.
+        // It is the only writable path available to a managed reviewer, where
+        // it appends session observations; the worktree remains read-only.
       } else {
         args.push(
           '--config', 'sandbox_mode="workspace-write"',
@@ -1071,12 +1077,13 @@ export class CodexProvider implements LLMProvider {
     // can unset it.
     // tmux target variables are masked in the overlay (execa extends
     // process.env underneath it) so the child cannot resolve the daemon's pane.
-    return scrubTmuxEnvironment(withDaemonSessionMarker(
-      {
-        ...(options.selfHost?.env ?? {}),
-        ...auth,
-      },
-    ));
+    const environment = withDaemonSessionMarker({
+      ...(options.selfHost?.env ?? {}),
+      ...auth,
+    });
+    return scrubTmuxEnvironment(options.managedSessionContext
+      ? composePreparedManagedSessionEnvironment(options.managedSessionContext, composeManagedSessionEnvironment(options.managedSessionContext, environment))
+      : environment);
   }
 
   private selfHostArgs(options: InvokeOptions): readonly string[] {

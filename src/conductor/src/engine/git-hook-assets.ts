@@ -151,6 +151,7 @@ has_canon() { local wanted="$1" value; for value in "\${canon[@]}"; do [[ "$valu
  * A PATH-shadowing git wrapper for agent processes. Runtime values are data
  * files beside the wrapper so this source remains deterministic and auditable.
  */
+// ai-conductor:session-command-context=operator-only
 export const GIT_GUARD_SCRIPT = `#!/usr/bin/env bash
 set -u
 guard_dir="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
@@ -277,6 +278,7 @@ if [[ "$destructive" == true ]]; then
 fi
 exec "$real_git" "\${original_args[@]}"
 `;
+// /ai-conductor:session-command-context
 
 /**
  * Git hook scripts embedded as engine assets

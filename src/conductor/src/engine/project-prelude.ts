@@ -16,6 +16,7 @@ import { exec as execCb } from 'child_process';
 import { promisify } from 'util';
 import { load as loadYaml, dump as dumpYaml } from 'js-yaml';
 import type { HarnessConfig } from '../types/config.js';
+import { loadConfig, type ConfigError } from './config.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import type { StepName } from '../types/index.js';
 import {
@@ -55,6 +56,12 @@ export interface PreludeResult {
   assessSkipped?: AssessSkip;
   bootstrapSuccess?: boolean;
   assessSuccess?: boolean;
+  setupRequired?: PreludeSetupRequired;
+}
+
+export interface PreludeSetupRequired {
+  reason: 'bootstrap_configuration_required';
+  configError: ConfigError;
 }
 
 export interface PreludeOptions {
@@ -125,12 +132,27 @@ export async function runProjectPrelude(
   }
 
   if (bootstrapReason) {
+    if (options.providerExecution) {
+      const readiness = await loadConfig(projectRoot);
+      if (!readiness.ok) {
+        result.setupRequired = {
+          reason: 'bootstrap_configuration_required',
+          configError: readiness.error,
+        };
+        return result;
+      }
+    }
     result.bootstrapExecuted = true;
     result.bootstrapReason = bootstrapReason;
     const skillResult = await invokePreludeSkill('bootstrap', projectRoot,
       provider, sessionId, config, options, STEP_SKILL_INVOCATIONS.bootstrap!,
-      'Run the bootstrap skill for this project. It is safe to re-run: detect ' +
-      'current state, refresh artifacts, apply any harness migrations.');
+      options.providerExecution
+        ? 'Run the managed bootstrap refresh for this project. The engine has already ' +
+          'validated its initialized configuration. Refresh artifacts and apply any harness ' +
+          'migrations, but do not run configuration reads, initialization, writes, or ' +
+          'registration commands and do not conduct the operator configuration interview.'
+        : 'Run the bootstrap skill for this project. It is safe to re-run: detect ' +
+          'current state, refresh artifacts, apply any harness migrations.');
     result.bootstrapSuccess = skillResult.success;
     if (skillResult.success) {
       await writeBootstrapMarker(projectRoot, options.harnessVersion);
@@ -190,6 +212,9 @@ async function invokePreludeSkill(
       cwd: projectRoot,
       dangerouslySkipPermissions: true,
       systemPrompt,
+      ...(execution.managedSessionContext
+        ? { managedSessionContext: execution.managedSessionContext }
+        : {}),
     },
     optionsForCandidate: (candidateKey) => ({
       prompt: renderSkillInvocation(invocation, candidateKey),

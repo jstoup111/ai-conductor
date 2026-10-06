@@ -124,7 +124,7 @@ export async function sweepFeatureWorktreeScratch(options: {
    * The daemon supplies a per-worktree scope so each cleanup decision reaches
    * that feature's ledger before it is forwarded to daemon-wide rendering.
    */
-  readonly startFeatureEventScope?: (worktreePath: string) => {
+  readonly startFeatureEventScope?: (worktreePath: string, featureSlug: string) => {
     readonly events: ConductorEventEmitter;
     stop(): void;
   };
@@ -137,7 +137,7 @@ export async function sweepFeatureWorktreeScratch(options: {
   }
   for (const slug of entries) {
     const worktreePath = join(options.worktreeBase, slug);
-    const scope = options.startFeatureEventScope?.(worktreePath);
+    const scope = options.startFeatureEventScope?.(worktreePath, slug);
     try {
       await sweepScratch({ worktreeRoot: worktreePath, events: scope?.events ?? options.events });
     } catch (error) {

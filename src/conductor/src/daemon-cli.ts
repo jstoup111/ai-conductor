@@ -38,6 +38,7 @@ import {
   resolveFeatureApplicabilityConfig,
 } from './engine/resolved-config.js';
 import {
+  probeManagedObservationDestination,
   probeReadOnlyReviewCapability,
   type ReadOnlyReviewCapability,
 } from './engine/build-review-read-only-capability.js';
@@ -56,6 +57,13 @@ import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
 import { CODEX_PROVIDER, providerDescriptor } from './execution/provider-catalog.js';
+import {
+  prepareManagedSessionContext,
+  provisionManagedSessionProducerRoot,
+  type ManagedSessionContext,
+} from './execution/managed-session-context.js';
+import { createManagedSessionObservationPreparer } from './execution/managed-session-preparation.js';
+import { createSessionEventIdentity } from './execution/session-event-identity.js';
 import { createProviderAvailability, restoreProviderAvailabilityFromDaemonLedger } from './engine/provider-availability.js';
 import {
   normalizeProviderSelection,
@@ -83,9 +91,20 @@ import {
 } from './engine/finish-publication-production.js';
 import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-labels.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
-import { forwardedFeatureOf, isForwardedFromFeature, startDaemonEventPersistence, startFeatureEventPersistence } from './engine/event-persister.js';
+import {
+  forwardedFeatureOf,
+  isForwardedFromFeature,
+  startDaemonEventPersistence,
+  startFeatureEventPersistence,
+  withFeatureEventPersistence,
+  withSessionEventTail,
+} from './engine/event-persister.js';
 import { heapDumpOptionsFromConfig, startDaemonMemorySampler } from './engine/daemon-memory.js';
-import { renderedEventTypes } from './engine/event-sinks.js';
+import {
+  formatSessionOccurrence,
+  renderedEventTypes,
+  renderedSessionOccurrenceTypes,
+} from './engine/event-sinks.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
 import { formatGithubCredentialFallback, formatGithubOperationRefusal } from './engine/github-operations.js';
 import { createBotCoAuthorResolver, formatBotCoAuthorSkipped, installDaemonBotCoAuthor } from './engine/bot-co-author.js';
@@ -947,6 +966,37 @@ export function createForcedSetupPrepare(
 }
 
 /**
+ * Establish the one immutable context for a daemon feature dispatch. The
+ * daemon owns both roots and the dispatch identity, so this deliberately
+ * accepts no cwd-derived input.
+ */
+export async function prepareDaemonFeatureManagedSessionContext(input: {
+  readonly projectRoot: string;
+  readonly worktreeRoot: string;
+  readonly featureSlug: string;
+  readonly dispatchId: string;
+  readonly provider: string;
+}): Promise<ManagedSessionContext> {
+  const provisioned = await provisionManagedSessionProducerRoot(input.worktreeRoot, input.dispatchId);
+  if (!provisioned.ok) {
+    throw new Error(`daemon managed-session context refused: ${provisioned.code}`);
+  }
+  const prepared = await prepareManagedSessionContext({
+    projectRoot: input.projectRoot,
+    worktreeRoot: input.worktreeRoot,
+    producerRoot: provisioned.path,
+    scope: { kind: 'feature', featureSlug: input.featureSlug },
+    dispatchId: input.dispatchId,
+    provider: input.provider,
+    daemonFeature: true,
+  });
+  if (!prepared.ok) {
+    throw new Error(`daemon managed-session context refused: ${prepared.code}`);
+  }
+  return prepared.context;
+}
+
+/**
  * Daemon entry (Phase 6). Drains the backlog of features with existing
  * stories+plan, running each in its own worktree via the gate loop
  * (verifyArtifacts + the engine's unconditional fresh-session-per-step),
@@ -1381,7 +1431,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // so their provider_fallback transitions and subprocess diagnostics render
   // tagged with the slug (e.g. `[daemon][<slug>] ...`) instead of falling
   // back to the untagged global logger.
-  const createSlugScopedProviderExecution = (slug: string): ProviderExecutionContext => {
+  const createSlugScopedProviderExecution = async (
+    slug: string,
+    worktreeRoot: string,
+    dispatchId: string,
+  ): Promise<ProviderExecutionContext> => {
     const scopedEvents = new ConductorEventEmitter();
     const scopedLog = createFeatureDaemonLogger(
       slug,
@@ -1391,7 +1445,40 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     scopedEvents.on('provider_attempt', (event) => renderDaemonEvent(event, scopedLog));
     scopedEvents.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
     scopedEvents.on('session_policy', (event) => renderDaemonEvent(event, scopedLog));
-    return createProviderExecution(scopedEvents, scopedLog);
+    subscribeRecoverySessionOccurrences(scopedEvents, scopedLog);
+    const providerExecution = createProviderExecution(scopedEvents, scopedLog);
+    const provider = providerExecution.configuredProviders[0];
+    if (!provider) throw new Error('daemon recovery dispatch requires a configured provider');
+    const managedSessionContext = await prepareDaemonFeatureManagedSessionContext({
+      projectRoot,
+      worktreeRoot,
+      featureSlug: slug,
+      dispatchId,
+      provider,
+    });
+    return {
+      ...providerExecution,
+      managedSessionContext,
+      prepareManagedSessionObservation: createManagedSessionObservationPreparer((input) => probeManagedObservationDestination({
+            ...input,
+            runProcess: async (executable, args) => {
+              const result = await execFile(executable, [...args]);
+              return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+            },
+          })),
+    };
+  };
+  // Repair providers can write in a transient worktree, but their producer
+  // records are projected through the retained feature's persistence scope.
+  // Deriving this subscription from EVENT_SINKS keeps refusals and bypasses
+  // visible on the same feature logger as normal feature dispatches.
+  const subscribeRecoverySessionOccurrences = (
+    eventSource: ConductorEventEmitter,
+    eventLog: (message: string) => void,
+  ): void => {
+    for (const type of renderedSessionOccurrenceTypes()) {
+      eventSource.on(type, (event) => renderDaemonEvent(event, eventLog));
+    }
   };
   // The pool emits a feature's start/resume/done records before and after its
   // worktree scope exists. Cache the scoped logger by slug so those lifecycle
@@ -1410,9 +1497,30 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     return featureLog;
   };
   const beginFeatureRun = async (worktree: FeatureWorktree, item: BacklogItem) => {
-    const sessionId = uuidv4();
+    const sessionId = createSessionEventIdentity();
     const persistence = startFeatureEventPersistence(worktree.path, events, item.slug);
     const featureEvents = persistence.events;
+    const featureLog = featureLogFor(item.slug);
+    const providerExecution = createProviderExecution(featureEvents, featureLog);
+    const provider = providerExecution.configuredProviders[0];
+    let managedSessionContext: ManagedSessionContext;
+    try {
+      if (!provider) throw new Error('daemon feature dispatch requires a configured provider');
+      managedSessionContext = await prepareDaemonFeatureManagedSessionContext({
+        projectRoot,
+        worktreeRoot: worktree.path,
+        featureSlug: item.slug,
+        dispatchId: sessionId,
+        provider,
+      });
+    } catch (error) {
+      // Context preparation is an early feature exit too. A provider may
+      // already have settled an observation while preparation was failing, so
+      // preserve the feature persistence lifetime through its final drain
+      // rather than detaching the tail synchronously.
+      await persistence.drain();
+      throw error;
+    }
     const pipelineDir = join(worktree.path, '.pipeline');
     const persistedSessionId = await readFile(join(pipelineDir, 'conduct-session-id'), 'utf8')
       .catch(() => undefined);
@@ -1431,7 +1539,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       ? wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents, daemonOtel.spoolRuntime)
       : wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents);
     if (visualizer) activeDispatchVisualizers.add(visualizer);
-    const featureLog = featureLogFor(item.slug);
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
     const renderableEvents = renderedEventTypes();
     for (const type of renderableEvents) featureEvents.on(type, renderEvent);
@@ -1439,13 +1546,20 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const stop = (): Promise<void> => {
       if (stopPromise) return stopPromise;
       stopPromise = (async () => {
+        // OTel shutdown can itself report a renderer error. Stop it while the
+        // feature persister remains subscribed, then drain producers before
+        // detaching feature renderers.
         try {
           await visualizer?.stop();
-          await daemonOtel?.flush();
+          await persistence.drain();
         } finally {
-          if (visualizer) activeDispatchVisualizers.delete(visualizer);
-          for (const type of renderableEvents) featureEvents.off(type, renderEvent);
-          persistence.stop();
+          try {
+            await daemonOtel?.flush();
+          } finally {
+            if (visualizer) activeDispatchVisualizers.delete(visualizer);
+            for (const type of renderableEvents) featureEvents.off(type, renderEvent);
+            persistence.stop();
+          }
         }
       })();
       return stopPromise;
@@ -1455,7 +1569,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       rootEvents: events,
       sessionId,
       visualizer,
-      providerExecution: createProviderExecution(featureEvents, featureLog),
+      providerExecution: {
+        ...providerExecution,
+        managedSessionContext,
+        prepareManagedSessionObservation: createManagedSessionObservationPreparer((input) => probeManagedObservationDestination({
+              ...input,
+              runProcess: async (executable, args) => {
+                const result = await execFile(executable, [...args]);
+                return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+              },
+            })),
+      },
       log: featureLog,
       stop,
     };
@@ -2149,7 +2273,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         worktreeBase,
         events,
         log,
-        startFeatureEventScope: (worktreePath) => startFeatureEventPersistence(worktreePath, events),
+        startFeatureEventScope: (worktreePath, featureSlug) => startFeatureEventPersistence(worktreePath, events, featureSlug),
       }),
       // Task 14: wire the filesystem watcher for HALT marker removal.
       // When watch is false, the watcher is undefined and the daemon falls
@@ -2648,10 +2772,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 // the daemon's aggregate ledger. The forwarding emitter keeps
                 // daemon observers live while persisting the canonical copy in
                 // this feature worktree.
-                const featureScope = startFeatureEventPersistence(
-                  join(projectRoot, '.worktrees', entry.slug), events, entry.slug,
+                return await withFeatureEventPersistence({
+                  worktreePath: join(projectRoot, '.worktrees', entry.slug), globalEvents: events, featureSlug: entry.slug,
+                  run: async (featureEvents) => {
+                subscribeRecoverySessionOccurrences(
+                  featureEvents,
+                  createFeatureDaemonLogger(
+                    entry.slug,
+                    (message) => log(message, true),
+                    formatDaemonFeatureTag(entry.slug),
+                  ),
                 );
-                try {
                   // Create a real Tier-2 resolver that dispatches to the /rebase skill
                   // FR-7: wire stepRunner and events for rebase resolution dispatch
                   let attempt = 0;
@@ -2659,35 +2790,49 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                   const resolver: RebaseResolver = async (ctx) => {
                   attempt += 1;
                   try {
-                    await featureScope.events.emit({ type: 'rebase_resolution_attempt', index: attempt, cap: attemptCap });
+                    await featureEvents.emit({ type: 'rebase_resolution_attempt', index: attempt, cap: attemptCap });
                   } catch {
                     /* best-effort: event emission must not block resolution */
                   }
                   try {
-                    // Create a fresh step runner for this rebase resolution attempt
-                    const sessionId = uuidv4();
-                    const providerExecution = createSlugScopedProviderExecution(entry.slug);
-                    const selectedRuntime = providerExecution.runtimes.get(
-                      providerExecution.configuredProviders[0],
-                    );
-                    const stepRunner = new DefaultStepRunner(
-                      selectedRuntime.provider,
-                      sessionId,
-                      ctx.projectRoot,
-                      {
-                        featureDesc: `rebase-resolution-${entry.slug}`,
-                        config,
-                        modelPolicy: selectedRuntime.policy,
-                        mode: 'auto',
-                        providerExecution,
-                        log: createFeatureDaemonLogger(
+                    return await withSessionEventTail({
+                      // Rebase constructs a transient repair worktree. Tail
+                      // its producer root, while featureScope retains the
+                      // canonical ledger and feature-scoped renderer.
+                      projectRoot: ctx.projectRoot,
+                      events: featureEvents,
+                      featureSlug: entry.slug,
+                      run: async () => {
+                        const sessionId = uuidv4();
+                        const dispatchId = createSessionEventIdentity();
+                        const providerExecution = await createSlugScopedProviderExecution(
                           entry.slug,
-                          (message) => log(message, true),
-                          formatDaemonFeatureTag(entry.slug),
-                        ),
+                          ctx.projectRoot,
+                          dispatchId,
+                        );
+                        const selectedRuntime = providerExecution.runtimes.get(
+                          providerExecution.configuredProviders[0],
+                        );
+                        const stepRunner = new DefaultStepRunner(
+                          selectedRuntime.provider,
+                          sessionId,
+                          ctx.projectRoot,
+                          {
+                            featureDesc: `rebase-resolution-${entry.slug}`,
+                            config,
+                            modelPolicy: selectedRuntime.policy,
+                            mode: 'auto',
+                            providerExecution,
+                            log: createFeatureDaemonLogger(
+                              entry.slug,
+                              (message) => log(message, true),
+                              formatDaemonFeatureTag(entry.slug),
+                            ),
+                          },
+                        );
+                        return stepRunner.resolveRebaseConflict(ctx);
                       },
-                    );
-                    return await stepRunner.resolveRebaseConflict(ctx);
+                    });
                   } catch (err) {
                     return {
                       resolved: false,
@@ -2706,14 +2851,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     cooldownMinutes: config?.mergeable_autoresolve?.cooldownMinutes ?? 60,
                     attemptCap,
                   },
-                    { runGh: ghRunner, runSuite, resolver, log, isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, events: featureScope.events },
+                    { runGh: ghRunner, runSuite, resolver, log, isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, events: featureEvents },
                   );
 
                   log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
                   return { kind: outcome.kind };
-                } finally {
-                  featureScope.stop();
-                }
+                  },
+                });
               } catch (err: any) {
                 log(`[autoresolve] error resolving ${entry.prUrl}: ${err?.message || err}`);
                 return { kind: 'escalated' };
@@ -2735,6 +2879,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             },
             dispatch: async (entry, state) => {
               if (!ciFixEnabled) return;
+              return await withFeatureEventPersistence({
+                worktreePath: join(projectRoot, '.worktrees', entry.slug), globalEvents: events, featureSlug: entry.slug,
+                run: async (featureEvents) => {
+              subscribeRecoverySessionOccurrences(
+                featureEvents,
+                createFeatureDaemonLogger(
+                  entry.slug,
+                  (message) => log(message, true),
+                  formatDaemonFeatureTag(entry.slug),
+                ),
+              );
               const dispatchCiFix = createDaemonCiFixDispatch({
                 tracker: createGithubTrackerClient(makeProductionGh()),
                 // Feature-scoped transport: pin gh to the entry's repo so the remote
@@ -2755,33 +2910,47 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 // runner directly — mirrors the resolveRebaseConflict /
                 // DefaultStepRunner pattern used for rebase resolution above.
                   resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: typeof entry }) => {
-                    const sessionId = uuidv4();
-                    const providerExecution = createSlugScopedProviderExecution(ctx.entry.slug);
-                    const selectedRuntime = providerExecution.runtimes.get(
-                      providerExecution.configuredProviders[0],
-                    );
-                    const stepRunner = new DefaultStepRunner(
-                      selectedRuntime.provider,
-                      sessionId,
-                      ctx.worktreePath,
-                      {
-                        featureDesc: `ci-fix-resolution-${ctx.entry.slug}`,
-                        config,
-                        modelPolicy: selectedRuntime.policy,
-                        mode: 'auto',
-                        providerExecution,
-                        log: createFeatureDaemonLogger(
+                    return withSessionEventTail({
+                      // CI repair owns a transient checkout just like rebase;
+                      // delivery still belongs to the retained feature scope.
+                      projectRoot: ctx.worktreePath,
+                      events: featureEvents,
+                      featureSlug: ctx.entry.slug,
+                      run: async () => {
+                        const sessionId = uuidv4();
+                        const dispatchId = createSessionEventIdentity();
+                        const providerExecution = await createSlugScopedProviderExecution(
                           ctx.entry.slug,
-                          (message) => log(message, true),
-                          formatDaemonFeatureTag(ctx.entry.slug),
-                        ),
+                          ctx.worktreePath,
+                          dispatchId,
+                        );
+                        const selectedRuntime = providerExecution.runtimes.get(
+                          providerExecution.configuredProviders[0],
+                        );
+                        const stepRunner = new DefaultStepRunner(
+                          selectedRuntime.provider,
+                          sessionId,
+                          ctx.worktreePath,
+                          {
+                            featureDesc: `ci-fix-resolution-${ctx.entry.slug}`,
+                            config,
+                            modelPolicy: selectedRuntime.policy,
+                            mode: 'auto',
+                            providerExecution,
+                            log: createFeatureDaemonLogger(
+                              ctx.entry.slug,
+                              (message) => log(message, true),
+                              formatDaemonFeatureTag(ctx.entry.slug),
+                            ),
+                          },
+                        );
+                        return stepRunner.resolveCiFailure({
+                          worktreePath: ctx.worktreePath,
+                          prUrl: ctx.entry.prUrl,
+                          hint: ctx.hint,
+                          slug: ctx.entry.slug,
+                        });
                       },
-                    );
-                    return stepRunner.resolveCiFailure({
-                      worktreePath: ctx.worktreePath,
-                      prUrl: ctx.entry.prUrl,
-                      hint: ctx.hint,
-                      slug: ctx.entry.slug,
                     });
                   },
                 }),
@@ -2794,6 +2963,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 await events.emit(ciRepairOutcomeDiagnostic(entry, outcome));
               }
               return outcome;
+                },
+              });
             },
           },
           operations: (entry) => {
@@ -3110,6 +3281,21 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'github_operation_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatGithubOperationRefusal(event))}`);
+      break;
+    case 'session_command_refused':
+      log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatSessionOccurrence(event))}`);
+      break;
+    case 'github_bypass_attempt':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(formatSessionOccurrence(event))}`);
+      break;
+    case 'github_bypass_result':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(formatSessionOccurrence(event))}`);
+      break;
+    case 'github_possible_bypass':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(formatSessionOccurrence(event))}`);
+      break;
+    case 'session_event_delivery_diagnostic':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(formatSessionOccurrence(event))}`);
       break;
     case 'github_write_credential_fallback':
       log(`${dot} ${chalk.yellow('↻')} ${chalk.yellow(formatGithubCredentialFallback(event))}`);

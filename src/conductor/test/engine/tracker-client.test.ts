@@ -203,6 +203,11 @@ describe('createGithubTrackerClient.readPullRequestMergeState', () => {
 
 describe('makeProductionGh bot write credential', () => {
   const savedEnvironment = new Map<string, string | undefined>();
+  const makeMockedProductionGh = (): GhRunner => makeProductionGh({
+    execFile: execFileCb,
+    readCredential: async () => botCredential.credential,
+    readToken: async () => botCredential.token,
+  });
 
   beforeEach(() => {
     vi.mocked(execFileCb).mockClear();
@@ -210,7 +215,7 @@ describe('makeProductionGh bot write credential', () => {
     productionGh.stdout = '{"login":"bot"}';
     botCredential.credential = { kind: 'unconfigured' };
     botCredential.token = { kind: 'unavailable' };
-    for (const key of ['AI_CONDUCTOR_NO_REAL_EXEC', 'GH_TOKEN', 'GITHUB_TOKEN']) {
+    for (const key of ['AI_CONDUCTOR_NO_REAL_EXEC', 'GH_TOKEN', 'GITHUB_TOKEN', 'CONDUCT_GH_REAL_EXECUTABLE']) {
       savedEnvironment.set(key, process.env[key]);
     }
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
@@ -231,7 +236,7 @@ describe('makeProductionGh bot write credential', () => {
     botCredential.credential = { kind: 'configured', tokenFile: '/private/bot-token' };
     botCredential.token = { kind: 'token', token: 'bot-token' };
 
-    await makeProductionGh()(['api', 'user'], { cwd: '/worktree', credential: 'write' });
+    await makeMockedProductionGh()(['api', 'user'], { cwd: '/worktree', credential: 'write' });
 
     // First prove the production adapter reached the mocked process boundary.
     expect(execFileCb).toHaveBeenCalledTimes(1);
@@ -245,11 +250,21 @@ describe('makeProductionGh bot write credential', () => {
     expect(process.env.GITHUB_TOKEN).toBe('operator-github-token');
   });
 
+  it('uses the provisioned real executable for a guarded operation without invoking the managed PATH observer', async () => {
+    process.env.CONDUCT_GH_REAL_EXECUTABLE = '/private/real-gh';
+
+    await makeMockedProductionGh()(['issue', 'edit', '7'], { cwd: '/worktree', credential: 'write' });
+
+    expect(execFileCb).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(execFileCb).mock.calls[0]?.[0]).toBe('/private/real-gh');
+    expect(vi.mocked(execFileCb).mock.calls[0]?.[1]).toEqual(['issue', 'edit', '7']);
+  });
+
   it.each([
     ['operator credential', { credential: 'operator' as const }],
     ['no credential hint', {}],
   ])('leaves the child environment ambient for %s', async (_label, options) => {
-    await makeProductionGh()(['api', 'user'], { cwd: '/worktree', ...options });
+    await makeMockedProductionGh()(['api', 'user'], { cwd: '/worktree', ...options });
 
     expect(execFileCb).toHaveBeenCalledTimes(1);
     expect(vi.mocked(execFileCb).mock.calls[0]?.[2]).toEqual({
@@ -260,7 +275,7 @@ describe('makeProductionGh bot write credential', () => {
   });
 
   it('leaves the child environment ambient when no bot is configured', async () => {
-    await makeProductionGh()(['api', 'user'], { cwd: '/worktree', credential: 'write' });
+    await makeMockedProductionGh()(['api', 'user'], { cwd: '/worktree', credential: 'write' });
 
     expect(execFileCb).toHaveBeenCalledTimes(1);
     expect(vi.mocked(execFileCb).mock.calls[0]?.[2]).toEqual({
@@ -273,7 +288,7 @@ describe('makeProductionGh bot write credential', () => {
   it('refuses an unavailable configured bot token before spawning', async () => {
     botCredential.credential = { kind: 'configured', tokenFile: '/private/missing-token' };
 
-    await expect(makeProductionGh()(['api', 'user'], { cwd: '/worktree', credential: 'write' }))
+    await expect(makeMockedProductionGh()(['api', 'user'], { cwd: '/worktree', credential: 'write' }))
       .rejects.toMatchObject({ name: 'GithubBotAuthRefusalError', reason: 'token-unavailable' });
     expect(execFileCb).not.toHaveBeenCalled();
   });
@@ -285,11 +300,11 @@ describe('makeProductionGh bot write credential', () => {
     failure.stderr = 'HTTP 401: Bad credentials';
     productionGh.error = failure;
 
-    const attempt = makeProductionGh()(['api', 'user'], { cwd: '/worktree', credential: 'write' });
+    const attempt = makeMockedProductionGh()(['api', 'user'], { cwd: '/worktree', credential: 'write' });
     const rejected = attempt.catch((error: unknown) => error);
     await vi.waitFor(() => expect(execFileCb).toHaveBeenCalledTimes(1));
     await expect(rejected).resolves.toBeInstanceOf(GithubBotAuthRefusalError);
-    await expect(makeProductionGh()(['api', 'user'], { cwd: '/worktree', credential: 'write' }))
+    await expect(makeMockedProductionGh()(['api', 'user'], { cwd: '/worktree', credential: 'write' }))
       .rejects.toMatchObject({ reason: 'auth-refused', message: expect.not.stringContaining('bot-token') });
   });
 });

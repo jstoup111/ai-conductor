@@ -1514,13 +1514,22 @@ describe('CodexProvider', () => {
     expect(result.tokenUsage).toEqual({ input: 8, cacheRead: 4, output: 7, numTurns: 1 });
   });
 
-  it('uses the read-only sandbox and unchanged child environment for an unattended review', async () => {
+  it('uses the exec-compatible read-only policy and sole managed producer-root exception for an unattended review', async () => {
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('Reviewed.'), exitCode: 0 } as any);
+    const producerRoot = '/workspace/project/.pipeline/session-events/dispatch-1';
 
     await provider.invoke({
       ...baseOptions,
       interactive: false,
       readOnlyReview: true,
+      managedSessionContext: {
+        projectRoot: '/workspace/project',
+        worktreeRoot: '/workspace/project',
+        producerRoot,
+        dispatchId: 'dispatch-1',
+        provider: 'codex',
+        scope: { kind: 'feature', featureSlug: 'feature-a' },
+      },
     } as InvokeOptions & { readOnlyReview: true });
     await provider.invoke({ ...baseOptions, interactive: false });
 
@@ -1530,24 +1539,46 @@ describe('CodexProvider', () => {
       argument === '--config' ? [reviewArgs[index + 1]] : [],
     );
 
+    // `codex exec` has no -P/--permission-profile option; the profile is
+    // defined and selected through config overrides only.
+    expect(reviewArgs[0]).toBe('exec');
+    expect(reviewArgs).not.toContain('-P');
+    expect(reviewArgs).not.toContain('--permission-profile');
     expect(reviewConfigValues).toEqual(expect.arrayContaining([
-      'sandbox_mode="read-only"',
+      `permissions.conductor-managed-review={extends=":read-only", filesystem={"${producerRoot}"="write"}}`,
+      'default_permissions="conductor-managed-review"',
       'approval_policy="never"',
       'shell_environment_policy.ignore_default_excludes=false',
     ]));
+    expect(reviewConfigValues).not.toContain('sandbox_mode="read-only"');
     expect(reviewConfigValues).not.toEqual(expect.arrayContaining([
       'sandbox_mode="workspace-write"',
       'sandbox_workspace_write.network_access=true',
       'approval_policy="on-request"',
       'approvals_reviewer="auto_review"',
     ]));
-    expect(reviewOptions.env).toEqual(ordinaryOptions.env);
+    expect(reviewOptions.env).toEqual(expect.objectContaining({
+      ...ordinaryOptions.env,
+      CONDUCT_MANAGED_PRODUCER_ROOT: producerRoot,
+      CONDUCT_MANAGED_DISPATCH: 'dispatch-1',
+      CONDUCT_MANAGED_FEATURE: 'feature-a',
+    }));
     expect(ordinaryArgs).toEqual(expect.arrayContaining([
       'sandbox_mode="workspace-write"',
       'sandbox_workspace_write.network_access=true',
       'approval_policy="on-request"',
       'approvals_reviewer="auto_review"',
     ]));
+  });
+
+  it('keeps a no-context read-only exec launch byte-identical to the native read-only policy', async () => {
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Reviewed.'), exitCode: 0 } as any);
+
+    await provider.invoke({ ...baseOptions, interactive: false, readOnlyReview: true });
+
+    const [, args] = mockExeca.mock.calls[0];
+    expect(args.slice(0, 3)).toEqual(['exec', '--config', 'sandbox_mode="read-only"']);
+    expect(args).not.toContain('-P');
   });
 
   it('starts a fresh Codex exec and preserves cwd when handed resume: true', async () => {

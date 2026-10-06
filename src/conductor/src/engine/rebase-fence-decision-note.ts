@@ -32,9 +32,11 @@ function unreadableClearNote(): string {
   return `The recorded clear state in ${HALT_CLEARED_PATH} could not be read; repair it before the decision state can be trusted.`;
 }
 
+// ai-conductor:session-command-context=operator-only
 function clearDefectNote(defect: { kind: string; criterion?: string }): string {
   return `Unreadable over-scope decision${defect.criterion ? ` for ${defect.criterion}` : ''}: ${defect.kind}; correct the over-scope-decisions block and re-run \`ai-conductor halt clear\`.`;
 }
+// /ai-conductor:session-command-context
 
 type ClearedDecisionDefect = { kind: 'malformed-block' | 'unknown-criterion' | 'invalid-decision' | 'missing-rationale'; criterion?: string };
 type ClearedDecisions =
@@ -144,7 +146,9 @@ export async function renderRebaseFenceDecisionNote(projectRoot: string): Promis
   if (recorded !== undefined) return recordedDecisionNote(recorded.criterion, recorded.authority);
 
   if (offers.length === 0) return '';
+  // ai-conductor:session-command-context=operator-only
   return offers
     .map((offer) => `Over-scope decision: ${offer.criterion} awaiting a decision; run \`ai-conductor halt clear\` after recording it.`)
     .join('\n');
+  // /ai-conductor:session-command-context
 }

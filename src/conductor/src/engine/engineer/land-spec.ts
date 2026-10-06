@@ -201,11 +201,13 @@ export async function landSpec(
   try {
     await access(worktreePath);
   } catch {
+    // ai-conductor:session-command-context=operator-only
     throw landGateError('worktree-missing',
       `landSpec: per-idea worktree "${worktreePath}" does not exist. ` +
         'Create the worktree (ai-conductor compose worktree) before landing — landSpec never ' +
-        'falls back to the primary checkout.',
+      'falls back to the primary checkout.',
     );
+    // /ai-conductor:session-command-context
   }
   try {
     await access(canonical);

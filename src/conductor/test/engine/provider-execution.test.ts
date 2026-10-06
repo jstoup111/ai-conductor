@@ -39,6 +39,9 @@ import {
   type ProviderAttemptMetadata,
 } from '../../src/engine/provider-execution.js';
 import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
+import type { ManagedSessionContext } from '../../src/execution/managed-session-context.js';
+import type { ManagedGhObservationCoverage } from '../../src/execution/managed-session-preparation.js';
+import * as managedSessionPreparation from '../../src/execution/managed-session-preparation.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -72,6 +75,7 @@ function expectFreshSessions(
 
 interface PreferredExecutionResult extends InvokeResult {
   preferredProvider: string;
+  managedGhObservationCoverage: ManagedGhObservationCoverage;
   actualProvider?: string;
   resolvedModel?: string;
   resolvedEffort?: string;
@@ -141,6 +145,105 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('returns unknown managed-observation completeness after a successful provider invocation', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'done', exitCode: 0 }));
+
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex'], preferredProvider: 'codex',
+      config: { provider_substitution: 'disallow' },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      managedGhObservationCoverage: {
+        boundary: 'managed-path-resolved-gh',
+        completeness: 'unknown',
+      },
+    });
+  });
+
+  it('keeps the engine-owned managed context across an unavailable candidate fallback', async () => {
+    const context: ManagedSessionContext = {
+      projectRoot: '/project', worktreeRoot: '/project/worktree', producerRoot: '/project/worktree/.pipeline/session-events',
+      scope: { kind: 'feature', featureSlug: 'feature-a' }, dispatchId: 'engine-dispatch-8', provider: 'claude',
+    };
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false, output: 'unavailable', exitCode: 127,
+      providerUnavailable: true, providerUnavailableScope: 'run', providerUnavailableReason: 'unavailable',
+    }));
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'done', exitCode: 0 }));
+
+    await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'], preferredProvider: 'codex',
+      config: { provider_substitution: 'allow' },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'build', cwd: '/changed-child-cwd', managedSessionContext: context },
+    });
+
+    expect(codexInvoke.mock.calls[0]).toMatchObject([{ managedSessionContext: { ...context, provider: 'codex' }, cwd: '/changed-child-cwd' }]);
+    expect(claudeInvoke.mock.calls[0]).toMatchObject([{ managedSessionContext: { ...context, provider: 'claude' }, cwd: '/changed-child-cwd' }]);
+  });
+
+  it('does not let candidate options replace the owning managed context', async () => {
+    const context: ManagedSessionContext = {
+      projectRoot: '/project', worktreeRoot: '/project/worktree', producerRoot: '/project/worktree/.pipeline/session-events',
+      scope: { kind: 'feature', featureSlug: 'feature-a' }, dispatchId: 'engine-dispatch-9', provider: 'codex',
+    };
+    const hostile: ManagedSessionContext = { ...context, dispatchId: 'attacker-dispatch', provider: 'claude' };
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'done', exitCode: 0 }));
+
+    await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex'], preferredProvider: 'codex',
+      config: { provider_substitution: 'disallow' },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]), sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'build', cwd: '/workspace', managedSessionContext: context },
+      optionsForCandidate: () => ({ prompt: 'candidate', managedSessionContext: hostile }),
+    });
+
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
+      managedSessionContext: { ...context, provider: 'codex' },
+    }));
+  });
+
+  it('pins daemon context through auxiliary custom-policy fallback candidates', async () => {
+    const context: ManagedSessionContext = {
+      projectRoot: '/project', worktreeRoot: '/project/worktree', producerRoot: '/project/worktree/.pipeline/session-events',
+      scope: { kind: 'feature', featureSlug: 'custom-policy-feature' }, dispatchId: 'custom-policy-dispatch', provider: 'codex',
+    };
+    const hostile: ManagedSessionContext = { ...context, dispatchId: 'candidate-override', provider: 'pi' };
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false, output: 'model unavailable', exitCode: 1, modelUnavailable: true,
+    }));
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'judged', exitCode: 0 }));
+
+    const result = await executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'custom-policy',
+      policy: {
+        enabled: true, llm_provider: ['codex', 'claude'], model: 'gpt-5.6-sol', effort: 'high',
+        model_fallback_ladder: ['gpt-5.6-sol'], max_projection_bytes: 1_048_576, max_retries: 1, escalate: false, min_confidence: 0,
+      },
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: codexInvoke }),
+        runtime('claude', { invoke: claudeInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'custom policy', cwd: '/workspace', managedSessionContext: context },
+      optionsForCandidate: () => ({ prompt: 'candidate custom policy', managedSessionContext: hostile }),
+    });
+
+    expect(result.success).toBe(true);
+    expect(codexInvoke).toHaveBeenCalledWith(expect.objectContaining({
+      managedSessionContext: { ...context, provider: 'codex' },
+    }));
+    expect(claudeInvoke).toHaveBeenCalledWith(expect.objectContaining({
+      managedSessionContext: { ...context, provider: 'claude' },
+    }));
+  });
+
   it('suppresses session resume for a Pi adapter when its descriptor omits supportsSessionResume', async () => {
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: 'done' }));
     const result = await invokeProviderCandidate({
@@ -829,6 +932,49 @@ describe('executeProviderCandidates', () => {
       outcome: 'success',
       invoked: true,
     }]);
+  });
+
+  it('carries managed context and prepares gh observation for concurrent branch fallback rungs', async () => {
+    const context: ManagedSessionContext = {
+      projectRoot: '/workspace',
+      worktreeRoot: '/workspace/feature-a',
+      producerRoot: '/workspace/feature-a/.pipeline/session-events/dispatch-1',
+      scope: { kind: 'feature', featureSlug: 'feature-a' },
+      dispatchId: 'dispatch-1',
+      provider: 'codex',
+    };
+    const coverage: ManagedGhObservationCoverage = {
+      boundary: 'managed-path-resolved-gh', completeness: 'unknown',
+    };
+    const prepare = vi.spyOn(managedSessionPreparation, 'prepareManagedGhObservation').mockResolvedValue({
+      wrapperDirectory: `${context.producerRoot}/.gh-observer`, realExecutable: '/fixture/gh', coverage,
+    });
+    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => (
+      options.model === 'first'
+        ? { success: false, output: 'model unavailable', exitCode: 1, modelUnavailable: true }
+        : { success: true, output: 'settled', exitCode: 0 }
+    ));
+    const provider: LLMProvider = { invoke, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const runner = new DefaultStepRunner(provider, 'main-session', '/workspace/feature-a', {
+      modelOverride: 'first',
+      config: { model_fallback_ladder: ['first', 'fallback'] } as HarnessConfig,
+      providerExecution: {
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', provider)]),
+        sessions: new ProviderSessionStore(),
+        managedSessionContext: context,
+      },
+    });
+
+    try {
+      const result = await runner.run('build', {}, { sessionId: 'branch-session' });
+
+      expect(invoke.mock.calls.map(([options]) => options.managedSessionContext)).toEqual([context, context]);
+      expect(prepare).toHaveBeenCalledWith({ context });
+      expect(result.managedGhObservationCoverage).toEqual(coverage);
+    } finally {
+      prepare.mockRestore();
+    }
   });
 
   it('runs an auxiliary prepared-candidate cache hit after preparation and before invocation, then tears it down once', async () => {
@@ -2700,6 +2846,7 @@ describe('executeProviderCandidates', () => {
     // and the scope records no session for either provider.
     expectFreshSessions(codexInvoke.mock.calls.map(([options]) => options));
     const codexSessionId = codexInvoke.mock.calls[0]?.[0]?.sessionId;
+    const { managedGhObservationCoverage: _coverage, ...resultWithoutCoverage } = result!;
     expect(codexSessionId).not.toBe('review-codex-session');
     expect({
       executorDefined: execute !== undefined,
@@ -2710,7 +2857,7 @@ describe('executeProviderCandidates', () => {
         claude: sessions.current('claude'),
         codex: sessions.current('codex'),
       },
-      result,
+      result: resultWithoutCoverage,
     }).toEqual({
       executorDefined: true,
       claudeCalls: [],
@@ -3070,6 +3217,9 @@ describe('executeProviderCandidates', () => {
     const codexSessionId = codexOptions[0]?.sessionId;
     const [liveClaudeSessionId, cachedClaudeSessionId] =
       claudeOptions.map((options) => options.sessionId);
+    const { managedGhObservationCoverage: _liveCoverage, ...liveWithoutCoverage } = live!;
+    const { managedGhObservationCoverage: _cachedCoverage, ...cachedWithoutCoverage } = cached!;
+    const { managedGhObservationCoverage: _noNextCoverage, ...noNextWithoutCoverage } = noNext!;
     expect({
       codexCalls: codexInvoke.mock.calls,
       claudeCalls: claudeInvoke.mock.calls,
@@ -3086,9 +3236,9 @@ describe('executeProviderCandidates', () => {
       },
       noNextCodex: noNextSessions.current('codex'),
       warnings,
-      live,
-      cached,
-      noNext,
+      live: liveWithoutCoverage,
+      cached: cachedWithoutCoverage,
+      noNext: noNextWithoutCoverage,
     }).toEqual({
       codexCalls: [
         [
@@ -3495,7 +3645,7 @@ describe('executeProviderCandidates', () => {
       partial: {
         codexModels: partialCodex.calls.map(({ model }) => model),
         claudeCalls: partialClaude.calls,
-        result: partial,
+        result: (() => { const { managedGhObservationCoverage: _coverage, ...result } = partial!; return result; })(),
       },
       exhausted: {
         codexCalls: fullCodex.calls
@@ -3506,12 +3656,12 @@ describe('executeProviderCandidates', () => {
           codex: fullSessions.current('codex'),
           claude: fullSessions.current('claude'),
         },
-        result: full,
+        result: (() => { const { managedGhObservationCoverage: _coverage, ...result } = full!; return result; })(),
       },
       later: {
         codexCalls: fullCodex.calls.slice(CODEX_MODEL_POLICY.modelFallbackLadder.length),
         claudeCall: fullClaude.calls.at(-1),
-        result: later,
+        result: (() => { const { managedGhObservationCoverage: _coverage, ...result } = later!; return result; })(),
       },
       availability: {
         codexRunWide: fullRuntimes.get('codex').runWideUnavailable,
@@ -3797,7 +3947,7 @@ describe('executeProviderCandidates', () => {
         runWideUnavailable: runtimes.get('codex').runWideUnavailable,
         preferredDead: [...runtimes.get('codex').availability.dead],
         nextDead: [...runtimes.get('claude').availability.dead],
-        result,
+        result: (() => { const { managedGhObservationCoverage: _coverage, ...resultWithoutCoverage } = result!; return resultWithoutCoverage; })(),
       });
     }
 
@@ -3884,7 +4034,8 @@ describe('executeProviderCandidates', () => {
       },
     });
 
-    expect(result).toEqual({
+    const { managedGhObservationCoverage: _coverage, ...resultWithoutCoverage } = result!;
+    expect(resultWithoutCoverage).toEqual({
       success: true,
       output: 'fallback completed',
       exitCode: 0,
@@ -4124,7 +4275,8 @@ describe('executeProviderCandidates', () => {
     });
 
     expect(result?.attempts?.[1]).not.toHaveProperty('observedIntervals');
-    expect({ calls, unlistedCalls: unlistedInvoke.mock.calls, warnings, result })
+    const { managedGhObservationCoverage: _coverage, ...resultWithoutCoverage } = result!;
+    expect({ calls, unlistedCalls: unlistedInvoke.mock.calls, warnings, result: resultWithoutCoverage })
       .toEqual({
         calls: [
           { provider: 'codex', model: 'gpt-5.6-terra' },

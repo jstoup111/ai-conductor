@@ -1,6 +1,6 @@
 // Covers: task:1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, writeFile, rm, mkdir } from 'fs/promises';
+import { mkdtemp, readFile, writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -24,6 +24,7 @@ import {
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
 import { dispatchMemorySetup } from '../../src/engine/memory-cli.js';
 
 vi.mock('../../src/engine/memory-cli.js', () => ({
@@ -34,6 +35,15 @@ function createMockProvider(): LLMProvider {
   return {
     invoke: vi.fn().mockResolvedValue({ success: true, output: '', exitCode: 0 }),
   } as unknown as LLMProvider;
+}
+
+function managedPreludeExecution(executor: ProviderExecutionContext['executor']): ProviderExecutionContext {
+  return {
+    configuredProviders: [],
+    runtimes: {} as ProviderExecutionContext['runtimes'],
+    sessions: new ProviderSessionStore(),
+    executor,
+  };
 }
 
 describe('defaultHasMigration', () => {
@@ -257,8 +267,55 @@ describe('runProjectPrelude (happy paths)', () => {
     expect(warn).toHaveBeenCalledWith('[prelude] memory-store setup failed; continuing');
   });
 
+  it('requires initialized configuration before a managed bootstrap launch without writing defaults', async () => {
+    const provider = createMockProvider();
+    const execute = vi.fn();
+    const before = await readFile(join(dir, '.ai-conductor', 'config.yml')).catch(() => null);
+
+    const result = await runProjectPrelude(dir, provider, 'session-1', {}, {
+      harnessVersion: '1.0.0',
+      providerExecution: managedPreludeExecution(execute),
+    });
+
+    expect(result).toMatchObject({
+      bootstrapExecuted: false,
+      setupRequired: {
+        reason: 'bootstrap_configuration_required',
+        configError: { type: 'missing' },
+      },
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(provider.invoke).not.toHaveBeenCalled();
+    expect(await readFile(join(dir, '.ai-conductor', 'config.yml')).catch(() => null)).toBe(before);
+    expect(await readBootstrapMarker(dir)).toBeNull();
+  });
+
+  it('reports invalid managed bootstrap configuration without launching or changing it', async () => {
+    const configPath = join(dir, '.ai-conductor', 'config.yml');
+    const provider = createMockProvider();
+    const execute = vi.fn();
+    await mkdir(join(dir, '.ai-conductor'), { recursive: true });
+    await writeFile(configPath, 'test_suite: [\n', 'utf8');
+    const before = await readFile(configPath, 'utf8');
+
+    const result = await runProjectPrelude(dir, provider, 'session-1', {}, {
+      harnessVersion: '1.0.0',
+      providerExecution: managedPreludeExecution(execute),
+    });
+
+    expect(result.setupRequired).toMatchObject({
+      reason: 'bootstrap_configuration_required',
+      configError: { type: 'parse_error' },
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(provider.invoke).not.toHaveBeenCalled();
+    expect(await readFile(configPath, 'utf8')).toBe(before);
+  });
+
   it('routes bootstrap and assess by their exact configured providers with fresh scopes', async () => {
     await writeFile(join(dir, 'app.rb'), 'puts 1\n');
+    await mkdir(join(dir, '.ai-conductor'), { recursive: true });
+    await writeFile(join(dir, '.ai-conductor', 'config.yml'), 'harness_version: ">=0.99.0"\n');
     const capturedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,
       output: 'captured provider must not run',
@@ -342,6 +399,12 @@ describe('runProjectPrelude (happy paths)', () => {
     expect(bootstrapSessionId).toMatch(uuidRe);
     expect(assessSessionId).toMatch(uuidRe);
     expect(bootstrapSessionId).not.toBe(assessSessionId);
+    expect(codexInvoke.mock.calls[0]?.[0].systemPrompt).toContain(
+      'do not run configuration reads, initialization, writes, or registration commands',
+    );
+    expect(codexInvoke.mock.calls[0]?.[0].systemPrompt).toContain(
+      'do not conduct the operator configuration interview',
+    );
 
     expect({
       capturedCalls: {
@@ -431,6 +494,8 @@ describe('runProjectPrelude (happy paths)', () => {
 
   it('renders bootstrap and assess skills for Pi through provider execution', async () => {
     await writeFile(join(dir, 'app.rb'), 'puts 1\n');
+    await mkdir(join(dir, '.ai-conductor'), { recursive: true });
+    await writeFile(join(dir, '.ai-conductor', 'config.yml'), 'harness_version: ">=0.99.0"\n');
     const piInvoke = vi.fn<LLMProvider['invoke']>(async (): Promise<InvokeResult> => ({
       success: true,
       output: 'completed',

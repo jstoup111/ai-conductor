@@ -822,10 +822,12 @@ async function replayFlattenedEntries(
       return { kind: 'refused', reason: `merge-tree failed while proving replay at entry ${index} (${entry.sha}): ${merged.stderr}` };
     }
     finalTree = merged.stdout.trim();
+    // ai-conductor:session-command-context=operator-only
     const committed = await git(
       ['commit-tree', finalTree, '-p', accumulator],
       { input: withDaemonCoAuthorTrailer('ai-conductor flattened replay proof\n') },
     );
+    // /ai-conductor:session-command-context
     if (committed.exitCode !== 0) {
       return { kind: 'refused', reason: `commit-tree failed while proving replay at entry ${index} (${entry.sha}): ${committed.stderr}` };
     }

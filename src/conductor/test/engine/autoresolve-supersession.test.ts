@@ -455,10 +455,11 @@ describe('engine/autoresolve — resolveConflictingPr sweep judgement flow (real
 
   it('S3.2: the daemon sweep binding hands resolution a feature-scoped persisted bus', async () => {
     const source = await readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8');
-    const scopeAt = source.indexOf('const featureScope = startFeatureEventPersistence(');
+    const scopeAt = source.indexOf('return await withFeatureEventPersistence({');
     const callAt = source.indexOf('await resolveConflictingPr(', scopeAt);
     expect(scopeAt).toBeGreaterThan(-1);
     expect(callAt).toBeGreaterThan(scopeAt);
-    expect(source.slice(callAt, source.indexOf(');', callAt))).toContain('events: featureScope.events');
+    expect(source.slice(scopeAt, callAt)).toContain('run: async (featureEvents) =>');
+    expect(source.slice(callAt, source.indexOf(');', callAt))).toContain('events: featureEvents');
   });
 });

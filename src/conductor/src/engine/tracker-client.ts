@@ -40,8 +40,8 @@ import type {
 import type { MutationProvenanceRequest } from './owner-gate/mutation-provenance.js';
 import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
 import { classifyGhAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
+import { resolvePrivateGhObserverPassthrough } from '../execution/gh-observer-passthrough.js';
 
-const execFileP = promisify(execFileCb);
 const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
 
 /**
@@ -366,15 +366,22 @@ export function assertRealExecAllowed(bin: string): void {
 }
 
 /** Construct the real gh runner used in production. */
-export function makeProductionGh(): GhRunner {
+export function makeProductionGh(dependencies: {
+  execFile?: typeof execFileCb;
+  readCredential?: typeof readGithubBotCredential;
+  readToken?: typeof readGithubBotToken;
+} = {}): GhRunner {
+  const execFileP = promisify(dependencies.execFile ?? execFileCb);
+  const readCredential = dependencies.readCredential ?? readGithubBotCredential;
+  const readToken = dependencies.readToken ?? readGithubBotToken;
   return async (args: string[], opts: { cwd: string; timeout?: number; maxBuffer?: number; credential?: 'operator' | 'write' | 'bot' }) => {
     assertRealExecAllowed('gh');
     let env: NodeJS.ProcessEnv | undefined;
     let botToken: string | undefined;
     if (opts.credential === 'write' || opts.credential === 'bot') {
-      const credential = await readGithubBotCredential();
+      const credential = await readCredential();
       if (credential.kind === 'configured') {
-        const token = await readGithubBotToken(credential.tokenFile);
+        const token = await readToken(credential.tokenFile);
         if (token.kind === 'unavailable') throw new GithubBotAuthRefusalError('token-unavailable');
         botToken = token.token;
         env = { ...process.env, GH_TOKEN: botToken };
@@ -383,7 +390,7 @@ export function makeProductionGh(): GhRunner {
       }
     }
     try {
-      const result = await execFileP('gh', args, {
+      const result = await execFileP(resolvePrivateGhObserverPassthrough(), args, {
         cwd: opts.cwd,
         maxBuffer: opts.maxBuffer ?? GH_STDOUT_MAX_BUFFER,
         timeout: opts.timeout,

@@ -266,7 +266,15 @@ describe('GitHub invocation audit', () => {
       "import { execFile as execFileCb } from 'node:child_process';",
       "import { promisify } from 'node:util';",
       'const execFileP = promisify(execFileCb);',
-      'function makeProductionGh(args: string[]) { return execFileP(\'gh\', args); }',
+      'function resolvePrivateGhObserverPassthrough() { return \'/private/real-gh\'; }',
+      'function makeProductionGh(args: string[]) { return execFileP(resolvePrivateGhObserverPassthrough(), args); }',
+    ].join('\n');
+    const adjacentPassthroughBypass = [
+      "import { execFile as execFileCb } from 'node:child_process';",
+      "import { promisify } from 'node:util';",
+      'const execFileP = promisify(execFileCb);',
+      'function resolvePrivateGhObserverPassthrough() { return \'/private/real-gh\'; }',
+      'function unrelated(args: string[]) { return execFileP(resolvePrivateGhObserverPassthrough(), args); }',
     ].join('\n');
     const trackerBypass = [
       "import { execFile } from 'node:child_process';",
@@ -288,6 +296,9 @@ describe('GitHub invocation audit', () => {
     ].join('\n');
 
     expect(auditGithubInvocationSource('engine/tracker-client.ts', productionTransport)).toEqual([]);
+    expect(auditGithubInvocationSource('engine/tracker-client.ts', adjacentPassthroughBypass)).toEqual([
+      expect.objectContaining({ line: 5, message: 'private gh observer passthrough outside makeProductionGh' }),
+    ]);
     expect(auditGithubInvocationSource('engine/tracker-client.ts', trackerBypass)).toEqual([
       expect.objectContaining({ line: 2, message: 'direct GitHub mutation outside guarded adapter' }),
     ]);
@@ -314,6 +325,21 @@ describe('GitHub invocation audit', () => {
     expect(findGithubInvocationSites('engine/bypass.ts', await readFile(join(root, 'src', 'engine', 'bypass.ts'), 'utf8'))).toEqual([
       expect.objectContaining({ command: 'git', classification: 'remote-write' }),
     ]);
+  });
+
+  it('fails the shipped boundary for an unclassified engine command instruction', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'github-invocation-audit-'));
+    directories.push(root);
+    await mkdir(join(root, 'src', 'engine'), { recursive: true });
+    await writeFile(
+      join(root, 'src', 'engine', 'new-prompt.ts'),
+      "export const prompt = 'Run ai-conductor daemon park feature-a';\n",
+    );
+
+    expect(auditShippedGithubInvocationBoundary(root)).toContainEqual(expect.objectContaining({
+      file: 'engine/new-prompt.ts',
+      message: expect.stringContaining('unclassified session-command context'),
+    }));
   });
 
   it('enumerates runtime scripts and retains their scripts-relative audit label', async () => {

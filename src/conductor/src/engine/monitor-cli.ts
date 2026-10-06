@@ -21,8 +21,10 @@ export type MonitorDispatch =
   | { readonly kind: 'guide' };
 
 export const MONITOR_USAGE =
+  // ai-conductor:session-command-context=operator-only
   'Usage: ai-conductor monitor all|<project>\n' +
   '  Monitor halted features across every registered project, or one named project.\n';
+// /ai-conductor:session-command-context
 
 /**
  * Parse the foreground monitor selector. A malformed `monitor` invocation is

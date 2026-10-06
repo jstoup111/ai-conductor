@@ -2683,12 +2683,14 @@ export async function prdAuditBlockingFindings(
 }
 
 /** Renders the prd_audit gate reason for blocking findings. */
+// ai-conductor:session-command-context=operator-only
 export function prdAuditBlockingReason(blocking: { labels: readonly string[]; awaitingDecisionOnly: boolean }): string {
   const grades = `prd-audit found blocking criterion grades: ${blocking.labels.join('; ')}`;
   return blocking.awaitingDecisionOnly
     ? `${grades} — record an explicit scope decision, then run ai-conductor halt clear and re-audit`
     : `${grades} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`;
 }
+// /ai-conductor:session-command-context
 
 async function writeArchitectureReviewAsBuiltCodeStamp(
   dir: string,

@@ -151,6 +151,7 @@ export async function dispatchHaltIssuesSweep(
   void cwd;
   const output = opts.output ?? console;
 
+  // ai-conductor:session-command-context=operator-only
   const helpText =
     'Usage: ai-conductor halt-issues sweep [options]\n\n' +
     'Orchestrate the full sweep pipeline for processing filed halt-monitor issues:\n' +
@@ -165,6 +166,7 @@ export async function dispatchHaltIssuesSweep(
     '  --gh-repo <repo>      GitHub repository owner/name (required)\n' +
     '  --monitor-log <path>  Path to monitor.log (default: ~/.ai-conductor/halt-monitor/monitor.log)\n' +
     '  --ledger <path>       Path to ledger.json (default: ~/.ai-conductor/halt-issues/ledger.json)';
+  // /ai-conductor:session-command-context
 
   if (cmd.kind === 'help') {
     output.log(helpText);

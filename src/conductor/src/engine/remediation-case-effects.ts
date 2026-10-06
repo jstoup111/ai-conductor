@@ -260,7 +260,9 @@ export async function applyBuildReviewActionEffects(input: {
 }
 
 export function remediationEffectMarker(effectId: string): string {
+  // ai-conductor:session-command-context=operator-only
   return `<!-- ai-conductor-remediation-effect:${effectId} -->`;
+  // /ai-conductor:session-command-context
 }
 
 /**

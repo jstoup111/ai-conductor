@@ -15,17 +15,22 @@
  *   results through `??`/`||`/`?:`/parentheses, and the conventional runner
  *   names `gh`, `runGh`, `ghRunner` (name inference fails closed by design).
  * - Raw GitHub HTTP transports are findings at import and at each call.
- * - The one admitted `gh` process call is the transport inside
- *   `makeProductionGh` in tracker-client.ts (`productionGhTransportCall`).
+ * - The one admitted `gh` process call is the private observer-passthrough
+ *   transport inside `makeProductionGh` in tracker-client.ts
+ *   (`productionGhTransportCall`).
  * - A process call whose program is unresolvable is a finding only when its
  *   argv carries a `gh` command family. D7 is explicit that this audit is not a
  *   general-purpose process sandbox, so generic runners of project scripts,
  *   test commands, or openers whose program is an opaque parameter stay clean.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import ts from 'typescript';
 import { GITHUB_OPERATION_REGISTRY, type GithubOperationName } from './github-operations.js';
+import {
+  auditShippedManagedSessionInstructionSource,
+  discoverShippedSessionCommandSources,
+} from './session-command-audit.js';
 
 export interface GithubInvocationAuditFinding {
   readonly file: string;
@@ -380,15 +385,26 @@ function guardedDynamicRunnerForwarding(file: string, node: ts.CallExpression): 
 
 /**
  * The production `gh` transport may forward its caller-provided argv only from
- * its one real shell boundary.  This deliberately does not exempt the file:
- * a second literal `gh` write in tracker-client.ts remains a finding.
+ * its one real shell boundary. It may use only the private observer
+ * passthrough resolver so a guarded operation cannot recursively enter the
+ * managed raw-command observer. This deliberately does not exempt the file:
+ * a second process call in tracker-client.ts remains a finding.
  */
 function productionGhTransportCall(file: string, node: ts.CallExpression): boolean {
+  const executable = node.arguments[0];
   return normalizedFile(file) === 'engine/tracker-client.ts'
     && enclosingFunctionName(node) === 'makeProductionGh'
-    && text(node.arguments[0]) === 'gh'
+    && privateGhObserverPassthroughCall(executable)
     && ts.isIdentifier(node.arguments[1])
     && node.arguments[1].text === 'args';
+}
+
+function privateGhObserverPassthroughCall(node: ts.Expression | undefined): boolean {
+  return node !== undefined
+    && ts.isCallExpression(node)
+    && ts.isIdentifier(node.expression)
+    && node.expression.text === 'resolvePrivateGhObserverPassthrough'
+    && node.arguments.length === 0;
 }
 
 function remoteGitRunnerInvocation(node: ts.CallExpression): boolean {
@@ -762,6 +778,9 @@ function auditExecutableSite(parsed: ts.SourceFile, file: string, site: Executab
   const args = argv(site.argvNode);
   const command = argvHead(site.argvNode);
   const shellMessage = 'unapproved executable GitHub or remote-Git shell block';
+  if (privateGhObserverPassthroughCall(node.arguments[0]) && !productionGhTransportCall(file, node)) {
+    return [report(parsed, file, node, 'private gh observer passthrough outside makeProductionGh')];
+  }
   if (program.kind === 'literal') {
     const value = program.value;
     if (value === 'gh') {
@@ -830,6 +849,22 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
       }
     }
   }
+  // This is intentionally part of the established boundary audit command:
+  // session instructions can ask a provider to cross the same ownership
+  // boundary even though they are prose rather than a child-process call.
+  // Runtime code lives under src/conductor, but shipped skills live at the
+  // repository root. Prefer that root whenever it is present.
+  const sessionRepositoryRoot = repositoryRootForSessionInstructionAudit(conductorRoot);
+  const sessionSources = discoverShippedSessionCommandSources(sessionRepositoryRoot);
+  for (const instruction of sessionSources.flatMap(auditShippedManagedSessionInstructionSource)) {
+    if (!instruction.reason) continue;
+    findings.push({
+      file: instruction.file,
+      line: instruction.line,
+      column: instruction.column,
+      message: `${instruction.reason} (session instruction: ${instruction.subcommand})`,
+    });
+  }
   const repositoryRoots = [join(conductorRoot, '..', '..'), conductorRoot];
   const scanned = new Set<string>();
   for (const repositoryRoot of repositoryRoots) for (const directory of [join(repositoryRoot, 'skills'), join(repositoryRoot, 'bin')]) {
@@ -852,17 +887,33 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
           const raw = /\bgh\s+(?:repo\s+create|pr\s+(?:create|edit|ready|comment|close|merge)|issue\s+(?:create|edit|close|comment)|api\b)|\bgit\s+push\b|\bgit\s+push\s+.*--delete\b/.exec(block.text);
           if (!raw) continue;
           const line = source.slice(0, block.offset + raw.index).split('\n').length;
+          // ai-conductor:session-command-context=operator-only
           findings.push({
             file: relativeFile,
             line,
             column: 1,
             message: 'raw GitHub or remote-Git write in executable publication block; use ai-conductor github-operation',
           });
+          // /ai-conductor:session-command-context
         }
       }
     }
   }
   return findings;
+}
+
+/** Find the repository-owned skills without assuming a fixed package depth. */
+function repositoryRootForSessionInstructionAudit(conductorRoot: string): string {
+  let candidate = resolve(conductorRoot);
+  // A supplied fixture/runtime root without a package boundary is self-contained.
+  // Do not walk out through the test temp directory into this checkout's skills.
+  if (!existsSync(join(candidate, 'package.json'))) return candidate;
+  for (;;) {
+    if (existsSync(join(candidate, 'skills'))) return candidate;
+    const parent = dirname(candidate);
+    if (parent === candidate) return conductorRoot;
+    candidate = parent;
+  }
 }
 
 /** Boundary-site inventory for diagnostics and fixture assertions. */

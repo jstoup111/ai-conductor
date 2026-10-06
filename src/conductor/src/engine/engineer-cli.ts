@@ -753,6 +753,7 @@ export const SUBCOMMAND_HELP = {
 
 /** Print the canonical compose usage/guide text (front door + deterministic primitives). */
 function printGuide(print: (s: string) => void): void {
+  // ai-conductor:session-command-context=operator-only
   print(
     'Compose is the agent-hosted idea→spec loop. Run `ai-conductor compose` (no\n' +
       'subcommand) to drop into an interactive host /composer session and drive it\n' +
@@ -776,6 +777,7 @@ function printGuide(print: (s: string) => void): void {
       '  ai-conductor compose migrate-issue-deps [--confirm]      — one-time prose→link dependency migration ' +
       '(dry-run by default; --confirm writes)\n',
   );
+  // /ai-conductor:session-command-context
 }
 
 // Real gh runner used in production is the canonical one from tracker-client.ts

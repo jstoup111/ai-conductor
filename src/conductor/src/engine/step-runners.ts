@@ -225,6 +225,7 @@ import {
   buildProviderAttemptMetadata,
   executeProviderCandidates,
   executeAuxiliaryProviderCandidates,
+  prepareNativeManagedGhObservation,
   type ExecuteProviderCandidatesInput,
   type ProviderExecutionResult,
   type ProviderExecutionContext,
@@ -235,6 +236,7 @@ import {
   ProviderRuntimeSet,
 } from './provider-runtime.js';
 import { normalizeProviderSelection } from './provider-selection.js';
+import { UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE } from '../execution/managed-session-preparation.js';
 import type { VerifierDispatchResult } from './attribution-lane.js';
 import {
   renderSkillInvocation,
@@ -447,6 +449,7 @@ function mapProviderLifecycleHalt(
     preferredProvider,
     attempts: [],
     haltMarkerWrite: result.haltMarkerWrite,
+    managedGhObservationCoverage: UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE,
   };
 }
 
@@ -1567,6 +1570,12 @@ export class DefaultStepRunner implements StepRunner {
       : this.createProviderStreamConsumer(step, this.providerKey);
 
     try {
+      const managedGhObservationCoverage = this.providerExecutionContext?.managedSessionContext
+        ? await prepareNativeManagedGhObservation(
+            this.provider,
+            this.providerExecutionContext.managedSessionContext,
+          )
+        : undefined;
       const result = await this.provider.invoke({
         prompt,
         sessionId: branchSessionId ?? this.sessionId,
@@ -1583,6 +1592,9 @@ export class DefaultStepRunner implements StepRunner {
         systemPrompt,
         model: effectiveModel,
         effort: resolved.effort,
+        ...(this.providerExecutionContext?.managedSessionContext
+          ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
+          : {}),
         ...(streamConsumer ? { streamConsumer } : {}),
       });
       await this.emitScalarProviderAttempt(
@@ -1608,7 +1620,10 @@ export class DefaultStepRunner implements StepRunner {
         }
       }
 
-      return { success: true };
+      return {
+        success: true,
+        ...(managedGhObservationCoverage ? { managedGhObservationCoverage } : {}),
+      };
     } catch (error) {
       this.callCount++;
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1645,6 +1660,9 @@ export class DefaultStepRunner implements StepRunner {
         ? this.mode === 'auto'
         : true,
       ...(streaming ? { interactive } : {}),
+      ...(this.providerExecutionContext?.managedSessionContext
+        ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
+        : {}),
     });
     const safety = this.candidateSafetyFor(step);
     try {
@@ -1677,6 +1695,7 @@ export class DefaultStepRunner implements StepRunner {
             withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
             prepareCandidateSelfHost:
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+            prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
             onAttempt: this.providerAttempt,
             warn: this.providerWarn,
             options,
@@ -1748,6 +1767,9 @@ export class DefaultStepRunner implements StepRunner {
 
     const safety = this.candidateSafetyFor(request.step);
     const invocationOptions = this.withFeatureDiagnosticLog(request.options);
+    if (this.providerExecutionContext?.managedSessionContext) {
+      invocationOptions.managedSessionContext = this.providerExecutionContext.managedSessionContext;
+    }
     const result = await this.dispatchProviderWithLifecycleSupervision(
       request.step,
       invocationOptions,
@@ -1776,6 +1798,7 @@ export class DefaultStepRunner implements StepRunner {
           withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
           prepareCandidateSelfHost:
             this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+          prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
           onAttempt: this.providerAttempt,
           warn: this.providerWarn,
           options,
@@ -1852,6 +1875,13 @@ export class DefaultStepRunner implements StepRunner {
       const result = await supervisor.supervise((lease) =>
         run({
           ...baseOptions,
+          // Auxiliary provider paths (custom review, regrade, and coverage
+          // binding) share this supervisor.  Stamp the daemon-owned context
+          // here so none of those direct executor call sites can omit either
+          // attribution or managed-observation preparation.
+          ...(this.providerExecutionContext?.managedSessionContext
+            ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
+            : {}),
           onActivity: pulse,
           providerStreamObserverForCandidate: (provider) => {
             const throttle = createProviderStreamThrottle<ProviderStreamObservation>(
@@ -1929,6 +1959,7 @@ export class DefaultStepRunner implements StepRunner {
       ...(result.observedIntervals
         ? { observedIntervals: result.observedIntervals }
         : {}),
+      managedGhObservationCoverage: result.managedGhObservationCoverage,
       ...(result.providerSetupExhaustion
         ? { providerSetupExhaustion: result.providerSetupExhaustion }
         : {}),
@@ -2030,6 +2061,11 @@ export class DefaultStepRunner implements StepRunner {
       ...(result.observedIntervals
         ? { observedIntervals: result.observedIntervals }
         : {}),
+      // Coverage is deliberately carried even when its completeness is
+      // unknown; absence of observed events is not evidence of no bypass.
+      ...(result.managedGhObservationCoverage
+        ? { managedGhObservationCoverage: result.managedGhObservationCoverage }
+        : {}),
       ...(result.resolvedModel ? { model: result.resolvedModel } : {}),
       ...(result.resolvedEffort !== undefined ? { effort: result.resolvedEffort } : {}),
       preferredProvider: result.preferredProvider,
@@ -2070,6 +2106,15 @@ export class DefaultStepRunner implements StepRunner {
     // when provided, and never mutate this.sessionId/this.sessionStarted —
     // those belong exclusively to the shared main conductor session.
     const dispatchSessionId = branchSessionId ?? this.sessionId;
+    const managedGhObservationCoverage = this.providerExecutionContext?.managedSessionContext
+      ? await prepareNativeManagedGhObservation(
+          this.provider,
+          this.providerExecutionContext.managedSessionContext,
+        )
+      : undefined;
+    const managedGhObservation = managedGhObservationCoverage
+      ? { managedGhObservationCoverage }
+      : {};
 
     const result = await this.modelAvailability.invokeWithLadder(trackingProvider, {
       prompt,
@@ -2080,6 +2125,9 @@ export class DefaultStepRunner implements StepRunner {
       model: effectiveModel,
       effort: resolved.effort,
       cwd: this.projectDir,
+      ...(this.providerExecutionContext?.managedSessionContext
+        ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
+        : {}),
     }, async () => {
       const { v4: uuidv4 } = await import('uuid');
       return { sessionId: uuidv4(), resume: false };
@@ -2107,6 +2155,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),
+        ...managedGhObservation,
         ...observedIntervals,
       };
     }
@@ -2119,6 +2168,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.commandUnresolvedName
           ? { commandUnresolvedName: result.commandUnresolvedName }
           : {}),
+        ...managedGhObservation,
         ...observedIntervals,
       };
     }
@@ -2131,6 +2181,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),
+        ...managedGhObservation,
         ...observedIntervals,
       };
     }
@@ -2149,6 +2200,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),
+        ...managedGhObservation,
         ...observedIntervals,
       };
     }
@@ -2175,6 +2227,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),
+        ...managedGhObservation,
         ...observedIntervals,
       };
     }
@@ -2187,6 +2240,7 @@ export class DefaultStepRunner implements StepRunner {
         success: false,
         output: `${result.output} (model fallback ladder exhausted, tried: ${attemptedModels.join(', ')})`,
         model: effectiveModel,
+        ...managedGhObservation,
         ...observedIntervals,
       };
     }
@@ -2198,6 +2252,7 @@ export class DefaultStepRunner implements StepRunner {
       ...(result.authentication
         ? { authentication: result.authentication }
         : {}),
+      ...managedGhObservation,
       ...observedIntervals,
     };
   }
@@ -3379,6 +3434,13 @@ export class DefaultStepRunner implements StepRunner {
       // enclosing conductor is serving an interactive operator session.
       interactive: false,
       nativeSchema: entry.contract.output.jsonSchema,
+      readOnlyReview: true,
+      // This direct custom-policy path bypasses lifecycle supervision. Pin the
+      // daemon-owned child context in candidate options, where the executor
+      // reads it; a top-level input field is intentionally not authoritative.
+      ...(this.providerExecutionContext?.managedSessionContext
+        ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
+        : {}),
     };
     let failure: { reason: import('./build-review-artifacts.js').BuildReviewCustomInfrastructureFailureReason; detail: string } = {
       reason: 'provider-error', detail: `custom policy ${entry.id} did not produce a judgment`,
@@ -3408,6 +3470,7 @@ export class DefaultStepRunner implements StepRunner {
       providerAvailability: this.providerExecutionContext?.providerAvailability,
       withCandidateSafety: this.candidateSafetyFor('build_review')?.wrapper ?? this.withCandidateSafety,
       prepareCandidateSelfHost: this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+      prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
       onAttempt: this.providerAttempt, warn: this.providerWarn, options,
       abortSignal: controller.signal, deadlineAt,
       ...(Array.isArray(entry.policy.llm_provider) && entry.policy.llm_provider.length > 1 ? { prepareCandidateBaseline: async ({ candidate, prepared }) => {
@@ -4171,6 +4234,7 @@ export class DefaultStepRunner implements StepRunner {
             withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
             prepareCandidateSelfHost:
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+            prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
             onAttempt: this.providerAttempt,
             warn: this.providerWarn,
             abortSignal: controller.signal,
@@ -4182,10 +4246,12 @@ export class DefaultStepRunner implements StepRunner {
               // inheriting the enclosing conductor mode.
               interactive: false,
               nativeSchema: getBuildReviewRubricDescriptor(branch.rubric).contract.output.jsonSchema,
+              ...(customPolicyLap ? { readOnlyReview: true } : {}),
             },
             optionsForCandidate: (providerKey) => ({
               ...options,
               nativeSchema: getBuildReviewRubricDescriptor(branch.rubric).contract.output.jsonSchema,
+              ...(customPolicyLap ? { readOnlyReview: true } : {}),
               prompt: `${renderAuxiliarySkillInvocation(branch.skillName, providerKey)}\n\n${prompt}`,
             }),
             ...(customPolicyLap ? { prepareCandidateBaseline: async ({ candidate, prepared }) => {
@@ -5510,6 +5576,7 @@ export class DefaultStepRunner implements StepRunner {
     tier?: ComplexityTier,
     prdWideningReviewContext?: StepRunOptions['prdWideningReviewContext'],
   ): Promise<string> {
+    // ai-conductor:session-command-context=managed
     const stepDef = this.stepRegistry.find((candidate) => candidate.name === step)
       ?? getStepDefinition(step);
     // Out-of-band steps (e.g. `remediate`) have no position in the linear
@@ -5656,6 +5723,7 @@ export class DefaultStepRunner implements StepRunner {
       prompt = `RETRY: ${retryReason}\n${prompt}`;
     }
 
+    // /ai-conductor:session-command-context
     return prompt;
   }
 

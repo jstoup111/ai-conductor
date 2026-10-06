@@ -19,6 +19,11 @@ async function fixtureRoot(source: string): Promise<string> {
   return root;
 }
 
+async function fixtureSkill(root: string, source: string): Promise<void> {
+  await mkdir(join(root, 'skills', 'example'), { recursive: true });
+  await writeFile(join(root, 'skills', 'example', 'SKILL.md'), source);
+}
+
 describe('github-boundary-audit command', () => {
   it('detects only its exact argv shapes', () => {
     expect(detectGithubBoundaryAuditCommand(['node', 'conduct', 'github-boundary-audit'])).toEqual({});
@@ -61,5 +66,35 @@ describe('github-boundary-audit command', () => {
     const lines: string[] = [];
     expect(dispatchGithubBoundaryAudit({ root }, { stdout: (line) => lines.push(line), stderr: () => {} })).toBe(0);
     expect(lines.join('\n')).toContain('1 runtime file');
+  });
+
+  it('fails through the production entry point for newly discovered blocked engine and skill instructions', async () => {
+    const root = await fixtureRoot("// ai-conductor:session-command-context=managed\nexport const systemPrompt = 'Run ai-conductor daemon park feature';\n// /ai-conductor:session-command-context\n");
+    await writeFile(join(root, 'src', 'engine', 'step-runners.ts'), "// ai-conductor:session-command-context=managed\nexport const buildRetryHint = 'Run ai-conductor daemon park feature';\n// /ai-conductor:session-command-context\n");
+    await fixtureSkill(root, '```bash\nai-conductor config init\n```\n');
+    await mkdir(join(root, 'skills', 'bootstrap'), { recursive: true });
+    await writeFile(join(root, 'skills', 'bootstrap', 'SKILL.md'), '```bash\nai-conductor config init\n```\n');
+    const errors: string[] = [];
+
+    expect(dispatchGithubBoundaryAudit({ root }, { stdout: () => {}, stderr: (line) => errors.push(line) })).toBe(1);
+    expect(errors.join('\n')).toContain('engine/step-runners.ts:2:');
+    expect(errors.join('\n')).toMatch(/blocked subcommand: daemon/i);
+    expect(errors.join('\n')).toContain('skills/bootstrap/SKILL.md:2:');
+    expect(errors.join('\n')).toMatch(/blocked subcommand: config/i);
+  });
+
+  it('discovers shipped skills from the repository root above a packaged conductor root', async () => {
+    const repository = await mkdtemp(join(tmpdir(), 'github-boundary-audit-repository-'));
+    directories.push(repository);
+    const conductorRoot = join(repository, 'packages', 'conductor');
+    await mkdir(join(conductorRoot, 'src', 'engine'), { recursive: true });
+    await writeFile(join(conductorRoot, 'package.json'), '{}\n');
+    await writeFile(join(conductorRoot, 'src', 'engine', 'site.ts'), 'export const value = 1;\n');
+    await fixtureSkill(repository, '```bash\nai-conductor config init\n```\n');
+    const errors: string[] = [];
+
+    expect(dispatchGithubBoundaryAudit({ root: conductorRoot }, { stdout: () => {}, stderr: (line) => errors.push(line) })).toBe(1);
+    expect(errors.join('\n')).toContain('skills/example/SKILL.md:2:');
+    expect(errors.join('\n')).toMatch(/blocked subcommand: config/i);
   });
 });

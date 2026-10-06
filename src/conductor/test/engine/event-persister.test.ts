@@ -43,6 +43,42 @@ describe('EventPersister', () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
+  it('continues to append ordinary events with no observation id', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    await emitter.emit({ type: 'rate_limit', waitSeconds: 5 });
+    await emitter.emit({ type: 'rate_limit', waitSeconds: 5 });
+    persister.stop();
+
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(2);
+  });
+
+  it('indexes persisted observation ids once and updates the index after each append', async () => {
+    const readPersistedEvents = vi.fn(() => '');
+    const persister = new EventPersister(eventsPath, emitter, undefined, { readPersistedEvents });
+    persister.start();
+
+    await emitter.emit({
+      type: 'session_command_refused', eventId: 'first-observation', sourceTime: '2026-10-02T12:00:00.000Z',
+      dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'feature', featureSlug: 'feature-a' }, subcommand: 'finish-record',
+    });
+    await emitter.emit({
+      type: 'session_command_refused', eventId: 'second-observation', sourceTime: '2026-10-02T12:00:01.000Z',
+      dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'feature', featureSlug: 'feature-a' }, subcommand: 'finish-record',
+    });
+    // The first append must be recognized from the in-memory update, not a
+    // second full-ledger scan during the second producer delivery.
+    await emitter.emit({
+      type: 'session_command_refused', eventId: 'first-observation', sourceTime: '2026-10-02T12:00:02.000Z',
+      dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'feature', featureSlug: 'feature-a' }, subcommand: 'finish-record',
+    });
+    persister.stop();
+
+    expect(readPersistedEvents).toHaveBeenCalledTimes(1);
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(2);
+  });
+
   // ─── Task 5: basic write ───────────────────────────────────────────────────
 
   it('writes 3 emitted events as 3 JSONL lines', async () => {

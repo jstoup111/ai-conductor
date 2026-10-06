@@ -107,7 +107,9 @@ export async function installedHarnessVersionForConfig(
 
 /** One line naming the harness version and the engine build behind it. */
 export function renderVersionReport(report: VersionReport): string {
+  // ai-conductor:session-command-context=operator-only
   return `ai-conductor ${report.harnessVersion} (engine ${report.engineVersion})`;
+  // /ai-conductor:session-command-context
 }
 
 export interface VersionDispatchOptions {

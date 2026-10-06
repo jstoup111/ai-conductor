@@ -155,14 +155,23 @@ Every provider session the engine dispatches (daemon builds, reviews, interactiv
 self-host candidates — both providers, invoke and interactive paths) carries
 `CONDUCT_DAEMON_SESSION=1` in its environment. When that marker is present, `ai-conductor` refuses to
 run — printing `ai-conductor may not be invoked from inside a daemon-managed session; the engine owns
-all conductor operations for this run` and exiting 1 — before any subcommand parsing. This exists
+all conductor operations for this run (blocked subcommand: <name>).` and exiting 1 — before any
+subcommand parsing. `<name>` is a bounded identity: a recognized subcommand (`daemon`, `config`,
+`test-suite`, `build-review`, `finish-record`, or a sanctioned one), `unknown` for any other text, or
+`<none>`. Unrecognized argv is never echoed. When the engine supplied a managed-session context, the
+refusal also records a [`session_command_refused`](artifacts.md#managed-session-occurrence-events)
+event; without that context the command prints `session refusal telemetry unavailable` and still
+refuses. This exists
 because dispatched maker sessions have recursively invoked the conductor (including `daemon
 park`/`unpark`/`restart` and `reseal`), corrupting the run that dispatched them; the engine that
 started the session owns all conductor operations for it. The only exceptions are the
 session-sanctioned worker commands the harness's own skills and hooks require a session to run —
 `scoped-run`, `overlap-scan`, `plan-protected-targets`, `manual-test-record`, `closeout-event`, and
-`derive-feedback`, `scope-check`, and `task` (`start`/`done`) — which stay available under the marker. There is no config off-switch;
-enforcement lives in `src/conductor/src/execution/daemon-session.ts`.
+`derive-feedback`, `scope-check`, `task` (`start`/`done`), and `github-operation` — which stay
+available under the marker. There is no config off-switch; enforcement lives in
+`src/conductor/src/execution/daemon-session.ts`. The same policy backs the instruction audit that
+keeps engine prompts and shipped skills from directing a managed session to a refused command — see
+[session-command contexts](../contributing/extending.md#session-command-contexts).
 
 ## `ai-conductor build-review`
 
@@ -1314,7 +1323,7 @@ These are dispatched by skills, hooks, and the daemon rather than typed by an op
 | `rate-card` | `ai-conductor rate-card refresh [--model <id>]…` · `ai-conductor rate-card show` | Maintains `<project>/.ai-conductor/rate-card.json`, the committed per-model token price card the harness prices dispatches from for providers that report token counts but no cost (codex, and Pi messages without a provider cost). `refresh` fetches LiteLLM's public `model_prices_and_context_window.json`, prunes it to the models the provider model policies route to and supported opt-in models (plus any `--model`), and rewrites the card with a fresh `as_of`; commit the result. `--model` is repeatable. `show` prints the committed card. The fetch lives here, never on the dispatch path. `.github/workflows/rate-card-refresh.yml` runs `refresh` daily and opens a bot PR on the `automation/rate-card` branch when the published rates actually change — a run that finds identical rates discards its own `as_of`-only diff and opens nothing. A failed fetch, an unparseable payload, or a payload pricing none of the requested models leaves the committed card byte-for-byte unchanged. | 0 on success; 1 for the usage guide, a failed refresh, or a missing/unreadable card under `show` |
 | `shipment-evidence` | `ai-conductor shipment-evidence --pr <url> [--event <path>]` · `shipment-evidence reconcile --pr <url> --shipped <YYYY-MM-DD>` · `shipment-evidence audit [--report <path>]` | Classifies, repairs, or audits the association between a PR and its shipped record. `audit` is report-only and never writes records. `reconcile` requires `GITHUB_REPOSITORY`. | check: 0 valid or not-applicable association, 1 otherwise. reconcile: 0 unless unresolved. audit: 0. Malformed: 1 |
 | `finish-record` | `ai-conductor finish-record --choice <pr\|keep> [--pr-url <url>] --pipeline-dir <dir>` | Records the finish choice. `--choice pr` requires `--pr-url`; `--choice keep` must not carry one; `discard` is not accepted. `--pipeline-dir` must be an absolute path to an existing directory, checked before any spawn or write. The `pr` path is fail-closed across seven checks — PR binding, upstream push, state readability, branch shape (`spec/<slug>`, `feature/<slug>`, or the daemon's `feat/daemon-<slug>` — a bare `feat/<name>` is refused), slug derivability, `git rev-parse HEAD`, and a valid shipment-evidence verdict. | 0; 1 on any guide or failed check |
-| `github-boundary-audit` | `ai-conductor github-boundary-audit [--root <conductor-root>]` | Read-only static audit of the shipped runtime's GitHub and remote-Git invocation sites. Reports one `file:line:column: message` diagnostic per site that bypasses the guarded operation interface. The integrity suite runs it. | 0 clean; 1 on any finding or unreadable root |
+| `github-boundary-audit` | `ai-conductor github-boundary-audit [--root <conductor-root>]` | Read-only static audit of the shipped runtime's GitHub and remote-Git invocation sites. Reports one `file:line:column: message` diagnostic per site that bypasses the guarded operation interface. It also reports shipped skills and managed engine prompt regions that direct a daemon-managed session to a [refused command](#daemon-session-refusal) (see [session-command contexts](../contributing/extending.md#session-command-contexts)). The integrity suite runs it. | 0 clean; 1 on any finding or unreadable root |
 | `manual-test-record` | `ai-conductor manual-test-record --skip --reason <r> --pipeline-dir <dir>` · `ai-conductor manual-test-record --results <path\|-> --pipeline-dir <dir>` | Appends a `## Attempt N` section to `<pipelineDir>/manual-test-results.md`, atomically. `--results -` reads stdin; an exact `WARN` result cell stamps the attempt with `<!-- manual-test:warning -->`. `--skip` and `--results` are mutually exclusive and one is required. `--pipeline-dir` must be absolute. | 0; 1 on a usage error, an empty results payload, or any read/write error |
 | `derive-feedback` | `ai-conductor derive-feedback --sha <sha> [--plan <path>]` | Read-only advisory check for whether commit `<sha>` carries `Task: <id>` evidence, or touches files declared under a task in the given plan. Prints one JSON line. Never writes task status or the evidence sidecar. | **0 evidenced, 1 not evidenced, 2 usage.** Informational only — the calling hook must not propagate them |
 | `build-auth-status` | `ai-conductor build-auth-status` | Reports the self-host build auth mode and token state as `build-auth-status: mode=<mode> state=<state>[ path=<path>][ (<detail>)]`. Probes the real dispatch auth path when a token is present. | 0 when the mode is not `daemon-token` (`state=api-key`) or the token is `valid`; 1 for `missing`, `unreadable`, `invalid`, or `unverifiable`, each with a remediation message |

@@ -1544,7 +1544,12 @@ mode and the Codex read-only sandbox), in the ordinary provider environment. The
 capability result is reported at daemon start, interactive config load, and `daemon status` under
 `READ-ONLY REVIEW CAPABILITY`. A candidate without an available read-only mode is skipped; a member
 with none settles `read-only-review-unavailable` and halts `needs-human` immediately without spending
-mechanical allowance, recoverable with `record-reduced-coverage`. Any reviewer-visible input change
+mechanical allowance, recoverable with `record-reduced-coverage`. A daemon-managed review also needs
+one writable path, its per-dispatch [observation producer directory](artifacts.md#managed-session-occurrence-events);
+Codex grants it through the `conductor-managed-review` permissions profile, which extends `:read-only`
+with that single exception. Before launch the engine proves the producer directory is writable and the
+worktree and protected paths are refused; if it cannot, the candidate fails provider setup with
+capability `managed-observation-destination` instead of launching. Any reviewer-visible input change
 discards the whole lap as retryable `review-input-mutated`. Reuse keys
 include the selected declaration and captured policy digest, frozen input, engine version, and actual
 provider/model/effort, so a fallback provider never borrows a preferred-provider result. Exact
