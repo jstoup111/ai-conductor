@@ -124,6 +124,10 @@ A current requirement/plan/architecture gap cannot be converted to a non-blockin
 > unfinished effect is discarded, then the decision-stop case opens as the sole owner (D6.1 unchanged).
 > No suspended or overlaid case state exists. On decision resolution, recovery re-evaluates against
 > the new approved baseline; a still-needed repair is re-derived, never resumed.
+>
+> Scope: this feature delivers the supersession transition itself. Its remaining interactions (partial
+> escalation coverage, replay idempotence of bound stops under D11, and D12 emission of superseded
+> effects and blocked-consistency results) are deferred to jstoup111/ai-conductor#3005; each fails closed.
 
 ### D10 — One authority across attended and daemon execution
 

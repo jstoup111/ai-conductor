@@ -228,6 +228,14 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 > stays valid. An older engine reading a store with shared sources fails closed, as
 > adr-2026-09-07-durable-prd-widening-decision-reconciliation D2 already requires for a downgrade.
 
+> **Amended 2026-10-05 by operator decision (James Stoup, split of
+> `new-review-concern-at-a-resolved-anchor-halts-as-m`):** D6 is delivered for the ordinary
+> adjudication path. Its interaction with decision stops, escalations, and `blocked` consistency results
+> is deferred to jstoup111/ai-conductor#3005: there, D6.3 may surface as a decision-stop halt rather
+> than a `regressed` halt, and D6.6's typed evidence fields may be incomplete or duplicated. Every such
+> path still fails closed (a halt, never a pass or a store rewrite). One validated judgement's store
+> writes are applied atomically as a unit; that part is not deferred.
+
 ## Consequences
 
 - A mechanical failure cannot erase or postpone valid sibling content merely because reduced
