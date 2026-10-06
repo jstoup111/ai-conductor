@@ -167,6 +167,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'llm_providers.model_escalation_order': consumer('src/conductor/src/engine/provider-model-policy.ts'),
   'llm_providers.model_fallback_ladder': consumer('src/conductor/src/engine/provider-model-policy.ts'),
   'llm_providers.trust_project_files': consumer('src/conductor/src/engine/provider-execution.ts'),
+  'llm_providers.subagents': consumer('src/conductor/src/engine/provider-execution.ts'),
 
   // ── tracker ───────────────────────────────────────────────────────────────
   'tracker.backend': consumer('src/conductor/src/engine/tracker-selection.ts'),

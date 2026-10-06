@@ -319,6 +319,8 @@ export interface InvokeOptions {
   reviewDispatch?: boolean;
   /** Pi-only opt-in to project-owned .pi files for unattended build work. */
   trustProjectFiles?: boolean;
+  /** Pi-only: load the operator-installed pi-subagents extension on writable dispatches. */
+  subagents?: boolean;
   stepCooldown?: number;
   sessionName?: string;
   /**

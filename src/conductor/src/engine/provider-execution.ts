@@ -902,6 +902,13 @@ export async function executeProviderCandidates({
     const descriptorTrust = candidateDescriptor && 'projectFileTrust' in candidateDescriptor && candidateDescriptor.projectFileTrust === true
       ? config?.llm_providers?.[providerKey]?.trust_project_files
       : undefined;
+    const descriptorSubagents = candidateDescriptor && 'subagentExtension' in candidateDescriptor && candidateDescriptor.subagentExtension === true
+      ? config?.llm_providers?.[providerKey]?.subagents
+      : undefined;
+    const providerOptIns = {
+      ...(descriptorTrust === undefined ? {} : { trustProjectFiles: descriptorTrust }),
+      ...(descriptorSubagents === undefined ? {} : { subagents: descriptorSubagents }),
+    };
     const candidateOptions = candidateOverrides
       ? {
           ...options,
@@ -917,7 +924,7 @@ export async function executeProviderCandidates({
           ...(options.nativeSchema !== undefined
             ? { nativeSchema: options.nativeSchema }
             : {}),
-          ...(descriptorTrust === undefined ? {} : { trustProjectFiles: descriptorTrust }),
+          ...providerOptIns,
           // Cancellation belongs to the enclosing lifecycle attempt. A
           // candidate-local override must not detach a running subprocess from
           // that authority.
@@ -929,8 +936,8 @@ export async function executeProviderCandidates({
             : {}),
         }
       : abortSignal !== undefined
-        ? { ...options, abortSignal, ...(descriptorTrust === undefined ? {} : { trustProjectFiles: descriptorTrust }) }
-        : { ...options, ...(descriptorTrust === undefined ? {} : { trustProjectFiles: descriptorTrust }) };
+        ? { ...options, abortSignal, ...providerOptIns }
+        : { ...options, ...providerOptIns };
     const ownedCandidateOptions = candidateOptions.managedSessionContext === undefined
       ? candidateOptions
       : { ...candidateOptions, managedSessionContext: { ...candidateOptions.managedSessionContext, provider: providerKey } };

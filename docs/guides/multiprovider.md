@@ -202,6 +202,7 @@ records the exhausted provider and deadline; see [artifacts](../reference/artifa
 | Isolated-home variable | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` | `PI_CODING_AGENT_DIR` |
 | Model selection | harness model table | harness model table | required `llm_providers.pi` block; boot validates ids with `pi --list-models` |
 | Project-local `.pi` files | n/a | n/a | ignored (`-na`) unless `llm_providers.pi.trust_project_files: true` |
+| Subagent delegation (`build` orchestration) | native Agent tool | native | none built in; `llm_providers.pi.subagents: true` loads the `pi-subagents` extension |
 | Cost reporting | provider-reported `total_cost_usd` | token counts only; priced from the [rate card](../reference/configuration.md#rate-card-ai-conductorrate-cardjson) | per-message provider cost, with rate-card fallback; see the [rate card](../reference/configuration.md#rate-card-ai-conductorrate-cardjson) |
 | Provider-specific features | self-host and custom build-review policies | self-host and custom build-review policies | self-host (see [Pi self-host credential](self-hosting.md#pi-self-host-credential)); custom build-review policies are unsupported and the engine refuses before spawning |
 

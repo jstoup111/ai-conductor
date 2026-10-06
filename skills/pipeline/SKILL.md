@@ -33,6 +33,10 @@ subagent facility. It must NOT implement directly in the orchestration session. 
 context bounded to ~2-3 summary lines per task regardless of feature size.
 
 **Host mechanics:** Claude Code uses its Agent tool and Claude model labels for this delegation.
+Pi has no native facility; with `llm_providers.pi.subagents: true` the engine loads the
+`pi-subagents` extension, and the orchestrator delegates each task with one
+`subagent({ agent: "delegate", task: <dispatch prompt>, async: false })` call. Never shell out to
+`pi` to delegate: a nested process runs outside the engine's model, sandbox, and accounting.
 Other supported hosts use their native equivalent. These mechanics may differ, but they MUST
 preserve the shared task scope, TDD cycle, task attribution, verification, review, and gate
 contracts below.
@@ -65,7 +69,7 @@ never a wrong stamp. A symmetric PostToolUse hook removes `.pipeline/current-tas
 subagent return iff its content still matches that dispatch's id. Other supported hosts use their
 native task-attribution mechanism to preserve the same marker, state, and recovery contract.
 
-**Hosts without a session hook (Codex today) stamp through the CLI.** Codex has no PreToolUse
+**Hosts without a session hook (Codex and Pi today) stamp through the CLI.** Neither has a PreToolUse
 hook, so nothing writes `.pipeline/current-task` or flips the row to `in_progress` when a task is
 dispatched. On such a host the orchestrator MUST run `conduct task start <id>` immediately before
 each dispatch; that writes the stamp and marks the row `in_progress` as the hook would have done.

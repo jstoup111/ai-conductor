@@ -16,6 +16,7 @@ import { validateSpawnPermit } from './spawn-permit.js';
 import { providerDescriptor } from './provider-catalog.js';
 import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
+import { piSubagentsArgs, piSubagentsPackageDir, seedPiSubagentsHome } from './pi-subagents.js';
 import { scrubTmuxEnvironment } from './child-environment.js';
 import { materializePiHarnessExtension } from './pi-harness-extension.js';
 import { preparePiSelfHostAuth, type PiSelfHostAuthRunner } from './pi-self-host-auth.js';
@@ -457,6 +458,31 @@ export class PiProvider implements LLMProvider {
       args.push('--no-extensions', '--tools', `read,grep,find,ls,git_read${schemaFile ? ',submit_result' : ''}`, '--conduct-git-read');
     }
     if (schemaFile) args.push('--conduct-output-schema', schemaFile);
+    // Delegation is for writable work only: a read-only review or a
+    // schema-constrained answer never needs a child session.
+    let subagentsTempRoot: string | undefined;
+    if (options.subagents === true && !options.readOnlyReview && options.nativeSchema === undefined) {
+      const descriptor = providerDescriptor('pi');
+      const operatorAgentDir = this.environment.env[descriptor.homeVariable]
+        ?? join(this.environment.homeDir(), descriptor.defaultHome);
+      const packageDir = piSubagentsPackageDir(operatorAgentDir);
+      if (!await isFile(join(packageDir, 'package.json'), this.environment)) {
+        const reason = `${piDisplayName()} subagents are enabled (llm_providers.pi.subagents) but ${packageDir} is not installed. Run \`pi install npm:pi-subagents\`.`;
+        return {
+          success: false,
+          output: reason,
+          exitCode: 1,
+          providerUnavailable: true,
+          providerUnavailableScope: 'run',
+          providerUnavailableReason: reason,
+        };
+      }
+      args.push(...piSubagentsArgs(packageDir));
+      const isolatedAgentDir = options.selfHost?.env[descriptor.homeVariable];
+      if (isolatedAgentDir !== undefined) {
+        subagentsTempRoot = (await seedPiSubagentsHome(isolatedAgentDir, options.effort)).tempRoot;
+      }
+    }
     if (options.model) {
       const parsedModel = parsePiModelId(options.model);
       if ('provider' in parsedModel) {
@@ -473,6 +499,7 @@ export class PiProvider implements LLMProvider {
     // pane from its parent environment.
     const environment = scrubTmuxEnvironment(withDaemonSessionMarker({
       ...(options.selfHost?.env ?? {}),
+      ...(subagentsTempRoot === undefined ? {} : { PI_SUBAGENTS_TEMP_ROOT: subagentsTempRoot }),
     }));
     const subprocess = this.subprocessFactory(this.executable, args, {
       reject: false,
