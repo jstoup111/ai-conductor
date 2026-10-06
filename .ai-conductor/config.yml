@@ -178,7 +178,17 @@ test_suite:
 # disabled. Read per conduct run; new builds pick it up once the engine
 # supporting `configDisableAllowed` is deployed (rebuild + daemon reload) —
 # an OLDER engine rejects this key as "Cannot disable gating step".
-llm_provider: [codex, claude]
+llm_provider: [codex, claude, pi]
+
+# Pi routes the build step to GLM via OpenRouter (operator order, 2026-10-06).
+# Pi requires all three keys once any step selects it. Retries escalate from
+# GLM Flash to DeepSeek V4.1 Flash; a model-unavailable failure falls back to
+# DeepSeek V4.1 Flash, then V4 Flash. All via OpenRouter (single billing).
+llm_providers:
+  pi:
+    model: openrouter/z-ai/glm-5.3-flash
+    model_escalation_order: [openrouter/z-ai/glm-5.3-flash, openrouter/deepseek/deepseek-v4.1-flash]
+    model_fallback_ladder: [openrouter/deepseek/deepseek-v4.1-flash, openrouter/deepseek/deepseek-v4-flash]
 
 conflict_check:
   adr_corpus: repo_wide
@@ -242,8 +252,11 @@ steps:
   # tasks + story criteria + scope trailers + intent relations. A wrong
   # BLOCKED is loud and lands in front of the operator. `prd_audit`
   # deliberately stays on claude.
+  # Moved to gpt-6-astra at low effort 2026-10-06 (operator order).
   architecture_review_as_built:
     llm_provider: codex
+    model: gpt-6-astra
+    effort: low
   # Pinned to claude (operator order, 2026-08-10), reverting #1471. Conflict
   # resolution was rerouted to codex on the theory that it is mechanical
   # pattern-matching; in practice codex does not resolve rebases acceptably, so
@@ -262,12 +275,11 @@ steps:
     llm_provider: codex
   manual_test:
     disable: true
-  # build stays on the codex `terra` default at medium effort. A bump to `sol`
-  # was considered and dropped 2026-08-23: there is no control group showing
-  # the builder is the limiter (codex built 28/28 corpus features), the
-  # findings-per-lap rate is flat, and `escalate` already climbs build to
-  # sol/high on retry when a task actually needs it (18 such escalations in
-  # the corpus). Revisit alongside #1805 rather than as a blind bump.
+  # build routed to GLM 5.3 Flash via OpenRouter through the Pi provider
+  # (operator order, 2026-10-06), replacing the codex `terra` default.
+  build:
+    llm_provider: pi
+    model: openrouter/z-ai/glm-5.3-flash
   # Remediate decides what work a failing lap actually gets, across laps. That
   # is a judgement call over plan contract + prior-lap findings, so pin it to
   # claude rather than letting the run-level codex entry resolve first.
