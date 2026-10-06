@@ -106,9 +106,9 @@ escalations. The floor is 3, not 2, because the model-bump rung lives at attempt
 
 ## Tier overrides
 
-Six steps carry policy-level tier overrides. `COMMON_TIER_OVERRIDES`
-(`provider-model-policy.ts:119-137`) supplies five; each provider policy then adds its own `plan: L` and
-`conflict_check: L` entries (`:142-149` for Claude, `:158-165` for Codex).
+Seven steps carry policy-level tier overrides. `COMMON_TIER_OVERRIDES`
+(`provider-model-policy-defaults.ts:60-66`) supplies five; each provider policy then adds its own `plan: L`,
+`conflict_check: L`, and `coherence_check: L` entries (`:72-77` for Claude, `:87-92` for Codex).
 
 | Step | S | M | L (Claude) | L (Codex) |
 | --- | --- | --- | --- | --- |
@@ -118,6 +118,7 @@ Six steps carry policy-level tier overrides. `COMMON_TIER_OVERRIDES`
 | `acceptance_specs` | — | — | effort `high` | effort `high` |
 | `build` | `max_retries` 3 | — | effort `high` | effort `high` |
 | `conflict_check` | — | — | model `opus` | model `gpt-5.6-sol` |
+| `coherence_check` | — | — | model `opus` | model `gpt-5.6-sol` |
 
 Every other step resolves identically across all three tiers. Which steps a tier *skips* is a separate
 concern — see [steps](steps.md).
