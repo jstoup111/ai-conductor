@@ -19,6 +19,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Projects can declare selected pipeline steps inapplicable for an individual feature. ([implementation PR #2992](https://github.com/jstoup111/ai-conductor/pull/2992)).
 - Task completion now verifies `[test]`-tagged Done-when checks against committed test evidence. ([implementation PR #2989](https://github.com/jstoup111/ai-conductor/pull/2989)).
 - Daemon operators gain observable, enforced managed-session command boundaries. ([implementation PR #2920](https://github.com/jstoup111/ai-conductor/pull/2920)).
+- Pi builds can delegate each task to a same-model sub-agent: set `llm_providers.pi.subagents: true` after `pi install npm:pi-subagents`. ([implementation PR #3017](https://github.com/jstoup111/ai-conductor/pull/3017)).
 
 ### Changed
 
