@@ -106,6 +106,14 @@ describe('prd_audit reconciled verdict reasons', () => {
     if (!result.ok) throw new Error(`fixture write failed: ${result.reason}`);
   }
 
+  /** A git fixture gives the persisted verdict a reviewed code stamp. */
+  async function reviewedCodeStamp(): Promise<string> {
+    const git = (...args: string[]) => execFileAsync('git', ['-C', projectRoot, ...args]);
+    await git('init', '-b', 'main');
+    await git('-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'base');
+    return (await git('rev-parse', 'HEAD')).stdout.trim();
+  }
+
   async function score(subject: PersistedPrdAuditVerdict = wideningVerdict) {
     return prdAuditBlockingReason(await prdAuditBlockingFindings(projectRoot, subject));
   }
@@ -157,10 +165,7 @@ describe('prd_audit reconciled verdict reasons', () => {
     expect(fixable).not.toMatch(/\[(awaiting-decision|uncertain-relation|corrupt-decision-store)\]/);
   });
   it('emits the reconciled awaiting-decision reason from a conductor-driven prd_audit lap', async () => {
-    const git = (...args: string[]) => execFileAsync('git', ['-C', projectRoot, ...args]);
-    await git('init', '-b', 'main');
-    await git('-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'base');
-    const codeStamp = (await git('rev-parse', 'HEAD')).stdout.trim();
+    const codeStamp = await reviewedCodeStamp();
 
     await publishRelation('same-case');
     const state = { feature_desc: feature.feature } as ConductState;
@@ -203,28 +208,35 @@ describe('prd_audit reconciled verdict reasons', () => {
   });
 
   it('emits one prd_audit gate verdict for a passing lap that reaches the serial tail', async () => {
+    const codeStamp = await reviewedCodeStamp();
     const state = { feature_desc: feature.feature } as ConductState;
     for (const step of ALL_STEPS) {
       state[step.name] = step.name === 'prd_audit' ? 'pending' : 'done';
       if (step.name === 'prd_audit') break;
     }
-    await writeState(join(projectRoot, 'conduct-state.json'), state);
+    await writeState(join(projectRoot, '.pipeline', 'conduct-state.json'), state);
 
     const events = new ConductorEventEmitter();
     const emitted: ConductorEvent[] = [];
     events.on('gate_verdict', (event) => { emitted.push(event); });
     const runner: StepRunner = {
-      run: async (step) => {
+      run: async (step, _state, opts) => {
         // End the run at the first later step: only prd_audit's lap is observed.
         if (step !== 'prd_audit') return { success: false, error: 'sentinel: stop after prd_audit' };
-        await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), auditReport(''));
+        await persistPrdAuditVerdict(projectRoot, verdict({
+          criterionJudgments: [{
+            criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
+            evidence: 'Covered behavior', rationale: 'Fixture pass.',
+            requirementAssociations: [], evidenceTaskIds: [],
+          }],
+        }), { attemptId: opts?.runId ?? 'fixture-run', codeStamp });
         return { success: true };
       },
     };
 
     await new Conductor({
       projectRoot,
-      stateFilePath: join(projectRoot, 'conduct-state.json'),
+      stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
       stepRunner: runner,
       events,
       fromStep: 'prd_audit',

@@ -1,10 +1,7 @@
 import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import {
-  AcceptedWideningDecisionStore,
-  parseClearedOverScopeDecisions,
-} from './accepted-widenings.js';
+import { AcceptedWideningDecisionStore } from './accepted-widenings.js';
 import { offeredCaseToPersistedOffer } from './prd-widening-offers.js';
 import {
   readRemediationCaseStoreFeature,
@@ -39,6 +36,36 @@ function clearDefectNote(defect: { kind: string; criterion?: string }): string {
   return `Unreadable over-scope decision${defect.criterion ? ` for ${defect.criterion}` : ''}: ${defect.kind}; correct the over-scope-decisions block and re-run \`ai-conductor halt clear\`.`;
 }
 
+type ClearedDecisionDefect = { kind: 'malformed-block' | 'unknown-criterion' | 'invalid-decision' | 'missing-rationale'; criterion?: string };
+type ClearedDecisions =
+  | { kind: 'absent' }
+  | { kind: 'parsed'; decisions: { criterion: string; decision: 'accept' | 'refuse' }[]; defects: ClearedDecisionDefect[] };
+
+/**
+ * Reads the operator-edited over-scope-decisions block for display only.
+ * Capture authority stays with prd-widening-capture; each entry is judged on
+ * its own so one bad row never hides a valid sibling in the note.
+ */
+function readClearedDecisions(body: string, offered: ReadonlyMap<string, string>): ClearedDecisions {
+  const match = body.match(/```json\s+over-scope-decisions\s*\n([\s\S]*?)\n```/i);
+  if (!match) return { kind: 'absent' };
+  let entries: unknown;
+  try { entries = JSON.parse(match[1]!); } catch { return { kind: 'parsed', decisions: [], defects: [{ kind: 'malformed-block' }] }; }
+  if (!Array.isArray(entries)) return { kind: 'parsed', decisions: [], defects: [{ kind: 'malformed-block' }] };
+  const decisions: { criterion: string; decision: 'accept' | 'refuse' }[] = [];
+  const defects: ClearedDecisionDefect[] = [];
+  for (const raw of entries) {
+    const entry = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    const criterion = typeof entry.criterion === 'string' ? entry.criterion.trim() : undefined;
+    if (!criterion || !offered.has(criterion)) { defects.push({ kind: 'unknown-criterion', ...(criterion ? { criterion } : {}) }); continue; }
+    if (entry.decision === 'pending' || entry.decision === undefined) continue;
+    if (entry.decision !== 'accept' && entry.decision !== 'refuse') { defects.push({ kind: 'invalid-decision', criterion }); continue; }
+    if (typeof entry.rationale !== 'string' || !entry.rationale.trim()) { defects.push({ kind: 'missing-rationale', criterion }); continue; }
+    decisions.push({ criterion, decision: entry.decision });
+  }
+  return { kind: 'parsed', decisions, defects };
+}
+
 /**
  * Renders the widening-decision context for a resume integrity halt. This is
  * deliberately a read-only composition of existing widening authority; it
@@ -64,7 +91,7 @@ export async function renderRebaseFenceDecisionNote(projectRoot: string): Promis
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return unreadableClearNote();
     }
-    if (parseClearedOverScopeDecisions(cleared, new Map()).kind !== 'absent') {
+    if (readClearedDecisions(cleared, new Map()).kind !== 'absent') {
       return orphanedDecisionStateNote(HALT_CLEARED_PATH);
     }
     return '';
@@ -100,7 +127,7 @@ export async function renderRebaseFenceDecisionNote(projectRoot: string): Promis
   if (clearReadError) {
     notes.push(unreadableClearNote());
   } else {
-    const parsedClear = parseClearedOverScopeDecisions(cleared, offeredFindings);
+    const parsedClear = readClearedDecisions(cleared, offeredFindings);
     if (parsedClear.kind === 'parsed') {
       notes.push(
       ...parsedClear.decisions.map((decision) => recordedDecisionNote(decision.criterion, decision.decision)),
