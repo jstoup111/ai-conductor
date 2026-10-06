@@ -11,6 +11,7 @@
 import type { GhRunner, GitRunner } from './pr-labels.js';
 import type { GithubOperationRunner } from './github-operations.js';
 import { engineBodyIncludes } from './pr-body-engine-markers.js';
+import { parseFeatureBranch, featureSlugOf, leafBranchFor } from './feature-branch-identity.js';
 import {
   makeProductionGh,
   makeProductionGit,
@@ -34,21 +35,6 @@ export interface HaltPrReconciliationTarget {
 }
 
 export type PrSweepOutcome = 'conforming' | 'healed' | 'unconfirmed' | 'cleared' | 'clear-unconfirmed';
-
-/** Branch prefix the daemon cuts for every feature it builds (`daemon-deps.ts`). */
-const DAEMON_BRANCH_PREFIX = 'feat/daemon-';
-
-/**
- * Recover the feature slug from a daemon-cut branch name. Returns null for any
- * branch the daemon did not cut — a halt PR only ever lives on `feat/daemon-<slug>`
- * (`escalateBuildFailure` pushes the daemon's own worktree branch), so refusing
- * to guess for other branches keeps the resolution check fail-closed.
- */
-export function featureSlugFromDaemonBranch(branch: string | undefined | null): string | null {
-  if (!branch || !branch.startsWith(DAEMON_BRANCH_PREFIX)) return null;
-  const slug = branch.slice(DAEMON_BRANCH_PREFIX.length).trim();
-  return slug.length > 0 ? slug : null;
-}
 
 /**
  * Durable, positive evidence that the halt which drafted+labeled this PR has
@@ -169,11 +155,18 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, operations, ru
         // pins a resolved PR in draft+needs-remediation until a human clears
         // it by hand. The durable resolution signal is the committed
         // shipped-record on the PR's own head branch.
-        const slug = featureSlugFromDaemonBranch(pr.headRefName);
-        if (slug && (await hasShippedRecordOnBranch(git, projectRoot, pr.headRefName!, slug))) {
+        const identity = parseFeatureBranch(pr.headRefName ?? '');
+        const slug =
+          identity.kind === 'leaf' || identity.kind === 'child'
+            ? featureSlugOf(identity)
+            : undefined;
+        const probeBranch =
+          identity.kind === 'child' ? leafBranchFor(identity.slug) : pr.headRefName ?? '';
+
+        if (slug && (await hasShippedRecordOnBranch(git, projectRoot, probeBranch, slug))) {
           if (outcomeCache.get(pr.url) !== 'cleared') {
             emit(
-              `[halt-pr-reconciliation] ${pr.url} halt resolved (shipped record for ${slug} on ${pr.headRefName}) — clearing`,
+              `[halt-pr-reconciliation] ${pr.url} halt resolved (shipped record for ${slug} on ${probeBranch}) — clearing`,
             );
           }
           const clearResult = await cleanupHaltPresentation(prRunner, projectRoot, pr.url, log);
@@ -185,7 +178,7 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, operations, ru
             pr.url,
             NEEDS_REMEDIATION_MARKER,
             'Halt resolved — the feature shipped and recorded ' +
-              `\`.docs/shipped/${slug}.md\` on \`${pr.headRefName}\`. ` +
+              `\`.docs/shipped/${slug}.md\` on \`${probeBranch}\`. ` +
               'The `needs-remediation` label and draft status were cleared automatically.',
             log,
           );
