@@ -10,6 +10,9 @@ import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
 import type { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { readVerdict } from '../../src/engine/gate-verdicts.js';
+import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
+import { applyRebaseTransition } from '../../src/engine/rebase-transition.js';
+import { rewindState } from '../../src/engine/rewind.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 
@@ -168,21 +171,138 @@ describe('Conductor feature applicability dispatch', () => {
     expect(ignored).toEqual([expect.objectContaining({ cause: 'toggle-off', step: 'manual_test' })]);
   });
 
-  it('refuses a late declaration without changing its established status', async () => {
+  it('refuses a failed manual_test declaration, retries it normally, and persists the refusal', async () => {
     const declaration = { step: 'manual_test' as const, reason: 'no browser surface', decider: 'unknown' as const };
     await writeState(statePath, allDoneExcept('manual_test', {
       manual_test: 'failed', applicability_declarations: [declaration],
     }));
     const refused: unknown[] = [];
     events.on('step_inapplicable_refused', (event) => { refused.push(event); });
-
     const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
-    await conductor(runner, 'manual_test').run();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await conductor(runner, 'manual_test').run();
+    } finally {
+      persister.stop();
+    }
 
     const state = await readState(statePath);
     expect(state.ok && state.value.manual_test).toBe('done');
     expect(refused).toEqual([expect.objectContaining({ step: 'manual_test', priorStatus: 'failed' })]);
     expect(runner.run).toHaveBeenCalledWith('manual_test', expect.any(Object), expect.any(Object));
+    const persisted = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(persisted.filter((event) => event.type === 'step_inapplicable_refused')).toEqual([
+      expect.objectContaining({ step: 'manual_test', priorStatus: 'failed' }),
+    ]);
+  });
+
+  it.each(['in_progress'] as const)(
+    'refuses a late manual_test declaration with prior status %s without skipping it',
+    async (priorStatus) => {
+      const declaration = { step: 'manual_test' as const, reason: 'no browser surface', decider: 'unknown' as const };
+      await writeState(statePath, allDoneExcept('manual_test', {
+        manual_test: priorStatus, applicability_declarations: [declaration],
+      }));
+      const refused: unknown[] = [];
+      events.on('step_inapplicable_refused', (event) => { refused.push(event); });
+      const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+
+      await conductor(runner, 'manual_test').run();
+
+      const state = await readState(statePath);
+      expect(state.ok && state.value.manual_test).toBe('done');
+      expect(state.ok && state.value.feature_inapplicable).toBeUndefined();
+      expect(refused).toEqual([expect.objectContaining({ step: 'manual_test', priorStatus })]);
+      expect(runner.run).toHaveBeenCalledWith('manual_test', expect.any(Object), expect.any(Object));
+    },
+  );
+
+  it('refuses a declaration for an in-progress manual_test when the feature is halted', async () => {
+    const declaration = { step: 'manual_test' as const, reason: 'no browser surface', decider: 'unknown' as const };
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(join(projectRoot, '.pipeline', 'HALT'), 'operator intervention required\n');
+    await writeState(statePath, allDoneExcept('manual_test', {
+      manual_test: 'in_progress', applicability_declarations: [declaration],
+    }));
+    const refused: unknown[] = [];
+    events.on('step_inapplicable_refused', (event) => { refused.push(event); });
+    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+
+    await conductor(runner, 'manual_test').run();
+
+    const state = await readState(statePath);
+    expect(state.ok && state.value.manual_test).toBe('done');
+    expect(state.ok && state.value.feature_inapplicable).toBeUndefined();
+    expect(refused).toEqual([expect.objectContaining({ step: 'manual_test', priorStatus: 'in_progress' })]);
+    expect(runner.run).toHaveBeenCalledWith('manual_test', expect.any(Object), expect.any(Object));
+  });
+
+  it('refuses a late acceptance_specs declaration without changing its done status', async () => {
+    await writeState(statePath, allDoneExcept('manual_test', {
+      acceptance_specs: 'done',
+      applicability_declarations: [FEATURE_A_DECLARATION],
+    }));
+    const refused: unknown[] = [];
+    events.on('step_inapplicable_refused', (event) => { refused.push(event); });
+    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+
+    await conductor(runner, 'manual_test').run();
+
+    const state = await readState(statePath);
+    expect(state.ok && state.value.acceptance_specs).toBe('done');
+    expect(refused).toEqual([expect.objectContaining({ step: 'acceptance_specs', priorStatus: 'done' })]);
+  });
+
+  it('leaves an already-honored declaration skipped on re-dispatch without refusing it', async () => {
+    const declaration = { step: 'manual_test' as const, reason: 'no browser surface', decider: 'unknown' as const };
+    await writeState(statePath, allDoneExcept('manual_test', {
+      manual_test: 'skipped', applicability_declarations: [declaration], feature_inapplicable: [declaration],
+    }));
+    const refused: unknown[] = [];
+    events.on('step_inapplicable_refused', (event) => { refused.push(event); });
+    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+
+    await conductor(runner, 'manual_test').run();
+
+    const state = await readState(statePath);
+    expect(state.ok && state.value.manual_test).toBe('skipped');
+    expect(runner.run).not.toHaveBeenCalled();
+    expect(refused).toEqual([]);
+  });
+
+  it('preserves an honored manual_test skip through rebase transition and operator rewind', async () => {
+    const declaration = { step: 'manual_test' as const, reason: 'no browser surface', decider: 'unknown' as const };
+    const transitionStatePath = join(projectRoot, '.pipeline', 'conduct-state.json');
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeState(transitionStatePath, allDoneExcept('manual_test', {
+      manual_test: 'skipped', applicability_declarations: [declaration], feature_inapplicable: [declaration],
+      build_review: 'done', prd_audit: 'done', rebase: 'done', finish: 'done', last_step: 'finish',
+    }));
+    const store = createFilesystemConductStateStore(transitionStatePath);
+
+    await applyRebaseTransition({
+      projectRoot,
+      stateStore: store,
+      operationId: 'preserve-inapplicable-manual-test',
+      replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      invalidated: ['build_review'], preserved: [], preservedCandidates: [],
+    });
+    let state = await readState(transitionStatePath);
+    expect(state.ok && state.value.manual_test).toBe('skipped');
+
+    await rewindState({
+      state: state.ok ? state.value : (() => { throw new Error('state should be readable'); })(),
+      config: {}, target: 'build', store,
+      readCurrentState: async () => {
+        const current = await readState(transitionStatePath);
+        if (!current.ok) throw new Error('state should be readable');
+        return current.value;
+      },
+    });
+    state = await readState(transitionStatePath);
+    expect(state.ok && state.value.manual_test).toBe('skipped');
   });
 
   it('never honors a declaration that appears only in the worktree marker', async () => {
