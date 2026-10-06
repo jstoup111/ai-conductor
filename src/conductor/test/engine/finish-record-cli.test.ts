@@ -1201,6 +1201,141 @@ describe('engine/finish-record-cli', () => {
     });
   });
 
+  describe('dispatchFinishRecord — worktree branch resolved through the identity module', () => {
+    const PR = 'https://github.com/org/repo/pull/1';
+
+    let scratchParent: string;
+    let pipelineDir: string;
+
+    beforeEach(async () => {
+      scratchParent = await mkdtemp(join(tmpdir(), 'finish-record-identity-'));
+      pipelineDir = await mkdtemp(join(scratchParent, 'pipeline-'));
+    });
+
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      await rm(scratchParent, { recursive: true, force: true });
+    });
+
+    const passingGit = () =>
+      vi.fn(async (args: string[]) => {
+        if (args[0] === 'rev-parse' && args.includes('@{u}')) {
+          return { stdout: 'refs/remotes/origin/feat\n' };
+        }
+        if (args[0] === 'merge-base') {
+          return { stdout: '' };
+        }
+        if (args[0] === 'rev-parse' && args.includes('HEAD')) {
+          return { stdout: 'candidate\n' };
+        }
+        throw new Error(`unexpected git args: ${args.join(' ')}`);
+      });
+
+    const passingGh = () =>
+      vi.fn(async () => ({
+        stdout: JSON.stringify({ url: PR, headRefOid: 'candidate' }),
+      }));
+
+    it.each([
+      { branch: 'spec/x', kind: 'accept' as const, slug: 'x' },
+      { branch: 'feature/x', kind: 'accept' as const, slug: 'x' },
+      { branch: 'feat/daemon-x', kind: 'accept' as const, slug: 'x' },
+      { branch: 'feat/daemon-', kind: 'unrecognized' as const },
+      { branch: 'spec/', kind: 'unrecognized' as const },
+      { branch: 'feature/', kind: 'unrecognized' as const },
+      { branch: 'main', kind: 'unrecognized' as const },
+      { branch: 'feat/c1/x', kind: 'child' as const },
+    ])('worktree_branch "$branch" is $kind', async ({ branch, kind, slug }) => {
+      const statePath = join(pipelineDir, 'conduct-state.json');
+      await writeFile(
+        statePath,
+        JSON.stringify({ feature_desc: 'feature-desc', worktree_branch: branch }),
+        'utf-8',
+      );
+      const stateBefore = await readFile(statePath, 'utf-8');
+
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const runGh = passingGh();
+      const runGit = passingGit();
+      let observedSlug: string | undefined;
+
+      const code = await dispatchFinishRecord(
+        { kind: 'record', choice: 'pr', prUrl: PR, pipelineDir },
+        scratchParent,
+        {
+          runGh,
+          runGit,
+          evaluateEvidence: async (input) => {
+            observedSlug = input.slug;
+            return validEvidence;
+          },
+        },
+      );
+
+      if (kind === 'accept') {
+        expect(code).toBe(0);
+        expect(observedSlug).toBe(slug);
+        expect(JSON.parse(await readFile(statePath, 'utf-8')).pr_url).toBe(PR);
+        expect((await readFile(join(pipelineDir, 'finish-choice'), 'utf-8')).trim()).toBe('pr');
+        expect(await readdir(pipelineDir)).toContain('DONE');
+        expect(errSpy).not.toHaveBeenCalled();
+        return;
+      }
+
+      if (kind === 'unrecognized') {
+        expect(code).toBe(1);
+        expect(errSpy.mock.calls.flat().join(' ')).toBe(
+          `finish-record: worktree_branch "${branch}" is not a valid spec/<slug>, feature/<slug>, or feat/daemon-<slug> branch identity — refusing to record PR ${PR}`,
+        );
+        expect(runGh).not.toHaveBeenCalled();
+        expect(runGit).not.toHaveBeenCalled();
+        expect(await readFile(statePath, 'utf-8')).toBe(stateBefore);
+        expect(await readdir(pipelineDir)).toEqual(['conduct-state.json']);
+        return;
+      }
+
+      // child
+      const stderr = errSpy.mock.calls.flat().join(' ');
+      expect(code).toBe(1);
+      expect(stderr).toContain('feat/c<k>/<slug>');
+      expect(stderr).toContain('only the leaf');
+      expect(stderr).toContain('records a ship');
+      expect(runGh).not.toHaveBeenCalled();
+      expect(runGit).not.toHaveBeenCalled();
+      expect(await readFile(statePath, 'utf-8')).toBe(stateBefore);
+      expect(await readdir(pipelineDir)).toEqual(['conduct-state.json']);
+    });
+  });
+
+  describe('dispatchFinishRecord — identity module adoption (source invariants)', () => {
+    it('implements the worktree branch via parseFeatureBranch and drops featureSlugFromDaemonBranch', async () => {
+      const src = await readFile(
+        new URL('../../src/engine/finish-record-cli.ts', import.meta.url),
+        'utf8',
+      );
+      expect(src).not.toMatch(/featureSlugFromDaemonBranch/);
+      expect(src).toMatch(
+        /import\s*\{(?=[^}]*\bparseFeatureBranch\b)(?=[^}]*\bfeatureSlugOf\b)(?=[^}]*\bLEAF_PREFIX\b)(?=[^}]*\bSPEC_PREFIX\b)(?=[^}]*\bINTERACTIVE_PREFIX\b)[^}]*\}\s*from\s*['"]\.\/feature-branch-identity\.js['"]/,
+      );
+      expect(src).toMatch(/parseFeatureBranch\(worktreeBranch\)/);
+    });
+
+    it('contains no spec//feature//feat/daemon- branch-shape literals outside comments', async () => {
+      const src = await readFile(
+        new URL('../../src/engine/finish-record-cli.ts', import.meta.url),
+        'utf8',
+      );
+      const withoutComments = src
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('//'))
+        .join('\n');
+      expect(withoutComments).not.toMatch(/feat\/daemon-/);
+      expect(withoutComments).not.toMatch(/spec\//);
+      expect(withoutComments).not.toMatch(/feature\//);
+    });
+  });
+
   describe('dispatchFinishRecord — reuses push-evidence module (no local reimplementation)', () => {
     it('imports headPushedToUpstream from ./push-evidence.js instead of reimplementing merge-base logic', async () => {
       const src = await readFile(
