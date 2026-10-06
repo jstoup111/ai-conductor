@@ -33,6 +33,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Resumed features safely recover interrupted rebase transitions and report actionable recovery state. ([implementation PR #2988](https://github.com/jstoup111/ai-conductor/pull/2988)).
 - Coverage-binding conflict checks now read ADR decisions with their approved amendments, so a plan is no longer refused for contradicting a sentence an earlier amendment already superseded. ([implementation PR #3006](https://github.com/jstoup111/ai-conductor/pull/3006)).
 - Claude users receive reliable destructive-Git protection for valid abbreviated, bundled, and negated option spellings. ([implementation PR #2997](https://github.com/jstoup111/ai-conductor/pull/2997)).
+- coverage_binding no longer fails a judge batch when the judge appends a verdict for a claim id it was never issued, provided every issued claim id was answered. ([implementation PR #3011](https://github.com/jstoup111/ai-conductor/pull/3011)).
 
 ## Migration
 
