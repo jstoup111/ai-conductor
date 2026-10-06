@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -176,7 +176,7 @@ describe('N=1 golden renderings', () => {
       registeredAt: '2026-01-01T00:00:00Z',
     }]));
     const statusLines: string[] = [];
-    const statusRows = await runDaemonStatus({
+    await runDaemonStatus({
       registryPath,
       out: (line: string) => statusLines.push(line),
       clock: () => new Date('2026-01-01T00:00:00Z'),
