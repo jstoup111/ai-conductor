@@ -15,6 +15,10 @@ import { SpoolStore } from '../src/engine/otel/spool-store.js';
 import { registerSighupPersistence } from '../src/engine/sighup-persistence.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 
+// These fixtures exercise the durable local spool, not a live OTLP export.
+// Construction must therefore not inherit the suite-wide direct-export refusal.
+const otelFixtureEnv = { ...process.env, AI_CONDUCTOR_NO_REAL_EXEC: undefined };
+
 function processProbe(): {
   adapter: DaemonProcessAdapter;
   listeners: Map<NodeJS.Signals, () => Promise<void>>;
@@ -63,7 +67,7 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
       exporter: 'otlp', endpoint: 'http://127.0.0.1:1', spool: { enabled: true },
     } } as const;
     const daemonOtel = wireDaemonOtel(config, {
-      mainRoot: root, project: root, projectName: 'test', rootEvents: new ConductorEventEmitter(),
+      mainRoot: root, project: root, projectName: 'test', rootEvents: new ConductorEventEmitter(), env: otelFixtureEnv,
     });
     expect(daemonOtel).not.toBeNull();
     const stop = daemonOtel!.stop.bind(daemonOtel);
@@ -74,7 +78,7 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
     const events = new ConductorEventEmitter();
     const visualizer = wireOtelVisualizer(config, {
       pipelineDir: join(root, '.pipeline'), runId: 'run', feature: 'feature', project: root,
-      branch: 'feature', engineVersion: 'test', harnessVersion: 'test',
+      branch: 'feature', engineVersion: 'test', harnessVersion: 'test', env: otelFixtureEnv,
     }, events, daemonOtel!.spoolRuntime);
     if (!visualizer) throw new Error('expected dispatch visualizer');
     await events.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
@@ -125,12 +129,12 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
     const root = await mkdtemp(join(tmpdir(), 'daemon-sighup-dispatch-span-'));
     const config = { otel: { exporter: 'otlp' as const, endpoint: 'http://127.0.0.1:1', spool: { enabled: true } } };
     const daemon = wireDaemonOtel(config, {
-      mainRoot: root, project: root, projectName: 'test', rootEvents: new ConductorEventEmitter(),
+      mainRoot: root, project: root, projectName: 'test', rootEvents: new ConductorEventEmitter(), env: otelFixtureEnv,
     });
     const events = new ConductorEventEmitter();
     const visualizer = wireOtelVisualizer(config, {
       pipelineDir: join(root, '.pipeline'), runId: 'run', feature: 'feature', project: root,
-      branch: 'feature', engineVersion: 'test', harnessVersion: 'test',
+      branch: 'feature', engineVersion: 'test', harnessVersion: 'test', env: otelFixtureEnv,
     }, events, daemon?.spoolRuntime);
     if (!visualizer) throw new Error('expected dispatch visualizer');
     const activeDispatchVisualizers = new Set([{ stop: visualizer.stop.bind(visualizer) }]);

@@ -144,13 +144,17 @@ beforeEach(async () => {
   await mkdir(join(workDir, '.ai-conductor'), { recursive: true });
   await writeFile(join(workDir, '.ai-conductor', 'config.yml'), 'spec_owner: test-owner\n', 'utf-8');
   savedEnv.HOME = process.env.HOME;
+  savedEnv.AI_CONDUCTOR_USER_CONFIG_DIR = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
   process.env.HOME = workDir;
+  delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
 });
 
 afterEach(async () => {
   process.env.AI_CONDUCTOR_REGISTRY = savedEnv.AI_CONDUCTOR_REGISTRY;
   process.env.AI_CONDUCTOR_ENGINEER_DIR = savedEnv.AI_CONDUCTOR_ENGINEER_DIR;
   process.env.HOME = savedEnv.HOME;
+  if (savedEnv.AI_CONDUCTOR_USER_CONFIG_DIR === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+  else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = savedEnv.AI_CONDUCTOR_USER_CONFIG_DIR;
   await rm(workDir, { recursive: true, force: true });
 });
 

@@ -16,7 +16,7 @@ import type { OtelVisualizerStartContext } from '../src/engine/otel/wire.js';
 const buildExporters = vi.hoisted(() => vi.fn());
 const execFile = promisify(execFileCallback);
 
-vi.mock('../src/engine/otel/transport.js', () => ({ buildExporters }));
+vi.mock('../src/engine/otel/transport.js', () => ({ buildExporters, isExportRefused: () => false }));
 
 describe('interactive OTel wiring', () => {
   it('warns once when enabled interactive spooling cannot resolve a Git checkout', async () => {

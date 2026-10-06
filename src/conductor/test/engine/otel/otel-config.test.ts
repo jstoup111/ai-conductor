@@ -223,7 +223,7 @@ describe('resolveOtelConfig', () => {
         provenance: DEFAULT_PROVENANCE,
         spool: { enabled: true, maxBytes: 536_870_912 },
       });
-      expect(buildExporters(resolved as Extract<typeof resolved, { enabled: true }>).spanExporter)
+      expect(buildExporters(resolved as Extract<typeof resolved, { enabled: true }>, { env: {} }).spanExporter)
         .toBeInstanceOf(OTLPHttpTraceExporter);
     });
 

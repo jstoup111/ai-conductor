@@ -13,11 +13,15 @@ import { allInstalledProviderDiscoveryRunner } from './engine/boot-test-helpers.
 
 const dirs: string[] = [];
 let previousHome: string | undefined;
+let previousUserConfigDir: string | undefined;
 
 afterEach(async () => {
   if (previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = previousHome;
   previousHome = undefined;
+  if (previousUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+  else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = previousUserConfigDir;
+  previousUserConfigDir = undefined;
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -37,7 +41,9 @@ async function daemonDeprecatedKeys(
     writeFile(join(home, '.ai-conductor', 'config.yml'), userConfig, 'utf8'),
   ]);
   previousHome = process.env.HOME;
+  previousUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
   process.env.HOME = home;
+  delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
 
   await runDaemonMode({
     projectRoot,

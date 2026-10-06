@@ -18,7 +18,7 @@ import {
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import { basename, dirname, join } from 'node:path';
 import { buildResource } from './resource.js';
-import { buildExporters } from './transport.js';
+import { buildExporters, isExportRefused } from './transport.js';
 import { MetricsRecorder } from './metrics.js';
 import { MetricsListener } from './metrics-listener.js';
 import { createSpoolRuntime, resolveSpoolDirSync, type SpoolRuntime, warnDisabledSpoolBacklog, warnSpoolUnavailable } from './spool-wiring.js';
@@ -84,6 +84,7 @@ export interface OtelVisualizerStartContext extends VisualizerStartContext {
   branch: string | undefined;
   engineVersion: string | undefined;
   harnessVersion: string | undefined;
+  env?: NodeJS.ProcessEnv;
 }
 
 export function createOtelVisualizerRegistry(events: ConductorEventEmitter): PluginRegistry {
@@ -172,7 +173,11 @@ export function wireOtelVisualizer(
       emitter: events,
       resolvedWarningsHandled: true,
       ...(activeSpoolRuntime && resolved.exporter === 'otlp' && resolved.spool?.enabled
-        ? { otelSpanExporter: buildExporters(resolved, { spoolStore: activeSpoolRuntime.store, events }).spanExporter }
+        ? (() => {
+          const built = buildExporters(resolved, { spoolStore: activeSpoolRuntime.store, events, env: context.env });
+          if (isExportRefused(built)) throw new Error(built.message);
+          return { otelSpanExporter: built.spanExporter };
+        })()
         : {}),
     });
     if (!visualizer) return null;
@@ -208,7 +213,7 @@ export function wireOtelVisualizer(
 /** Daemon-lifetime meter: one recorder/listener survives feature process exits. */
 export function wireDaemonOtel(
   config: HarnessConfig,
-  context: { mainRoot: string; project: string; projectName: string; workerName?: string; harnessVersion?: string; rootEvents: ConductorEventEmitter },
+  context: { mainRoot: string; project: string; projectName: string; workerName?: string; harnessVersion?: string; rootEvents: ConductorEventEmitter; env?: NodeJS.ProcessEnv },
 ): { flush: () => Promise<void>; stop: () => Promise<void>; spoolRuntime?: SpoolRuntime } | null {
   const resolved = resolveOtelConfig(config, join(context.mainRoot, '.pipeline'));
   if (!resolved.enabled) return null;
@@ -218,8 +223,12 @@ export function wireDaemonOtel(
     ? createSpoolRuntime(join(context.mainRoot, '.daemon', 'otel-spool'), resolved, context.rootEvents)
     : undefined;
   const exporters = spoolRuntime
-    ? buildExporters(resolved, { spoolStore: spoolRuntime.store, events: context.rootEvents })
-    : buildExporters(resolved);
+    ? buildExporters(resolved, { spoolStore: spoolRuntime.store, events: context.rootEvents, env: context.env })
+    : buildExporters(resolved, { env: context.env });
+  if (isExportRefused(exporters)) {
+    void context.rootEvents.emit({ type: 'renderer_error', rendererName: 'otel', error: exporters.message }).catch(() => {});
+    return null;
+  }
   const workerName = context.workerName ?? resolveWorkerName(resolved);
   const reader = new PeriodicExportingMetricReader({
     exporter: warnOnceMetricExporter(exporters.metricExporter, context.rootEvents),
@@ -282,8 +291,13 @@ export function wireInteractiveOtelMetrics(
   if (spoolLifecycle) spoolLifecycle.metricsOpen = true;
   const spoolRuntime = spoolLifecycle?.runtime;
   const exporters = spoolRuntime
-    ? buildExporters(resolved, { spoolStore: spoolRuntime.store, events })
-    : buildExporters(resolved);
+    ? buildExporters(resolved, { spoolStore: spoolRuntime.store, events, env: context.env })
+    : buildExporters(resolved, { env: context.env });
+  if (isExportRefused(exporters)) {
+    void events.emit({ type: 'renderer_error', rendererName: 'otel', error: exporters.message }).catch(() => {});
+    if (spoolLifecycle) spoolLifecycle.metricsOpen = false;
+    return null;
+  }
   const workerName = resolveWorkerName(resolved);
   const projectName = resolved.projectName ?? (context.project ? basename(context.project) : 'unknown');
   const provider = new MeterProvider({

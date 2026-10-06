@@ -69,7 +69,9 @@ describe('config deprecated-key event spine', () => {
     await writeFile(join(home, '.ai-conductor', 'config.yml'), 'wiring:\n  entry_points: [src/cli.ts]\n', 'utf8');
 
     const originalHome = process.env.HOME;
+    const originalUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
     process.env.HOME = home;
+    delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
     try {
       const result = await loadMergedConfig(root);
       expect(result).toMatchObject({
@@ -89,6 +91,8 @@ describe('config deprecated-key event spine', () => {
     } finally {
       if (originalHome === undefined) delete process.env.HOME;
       else process.env.HOME = originalHome;
+      if (originalUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+      else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = originalUserConfigDir;
     }
   });
 

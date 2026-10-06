@@ -27,10 +27,13 @@ import { loadMergedConfig } from '../../src/engine/config.js';
 
 const tempDirs: string[] = [];
 const originalHome = process.env.HOME;
+const originalUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
 
 afterEach(async () => {
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+  else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = originalUserConfigDir;
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -46,6 +49,7 @@ async function makeConfigPair(
   await writeFile(join(root, '.ai-conductor', 'config.yml'), projectYaml, 'utf8');
 
   process.env.HOME = home;
+  delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
   if (userYaml !== undefined) {
     await mkdir(join(home, '.ai-conductor'), { recursive: true });
     await writeFile(join(home, '.ai-conductor', 'config.yml'), userYaml, 'utf8');

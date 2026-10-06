@@ -112,9 +112,11 @@ describe('composer handoff post-create writes through the production publication
     await writeFile(join(home, 'repo', '.github', 'pull_request_template.md'), 'Release-Disposition: no-note\n', 'utf8');
     previousHome = process.env.HOME;
     process.env.HOME = home;
+    vi.stubEnv('AI_CONDUCTOR_USER_CONFIG_DIR', undefined);
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;
     await rm(home, { recursive: true, force: true });

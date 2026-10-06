@@ -11,7 +11,7 @@ import { createOtelVisualizerRegistry, wireOtelVisualizer } from '../src/engine/
 
 const buildExporters = vi.hoisted(() => vi.fn());
 
-vi.mock('../src/engine/otel/transport.js', () => ({ buildExporters }));
+vi.mock('../src/engine/otel/transport.js', () => ({ buildExporters, isExportRefused: () => false }));
 
 type OtelWireContext = Parameters<typeof wireOtelVisualizer>[1];
 

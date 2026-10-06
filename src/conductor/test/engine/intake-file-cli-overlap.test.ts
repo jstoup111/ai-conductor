@@ -77,6 +77,9 @@ esac
     env: {
       ...process.env,
       AI_CONDUCTOR_NO_REAL_EXEC: undefined,
+      // This subprocess proves user-config behavior against `HOME`, so it
+      // must not inherit the suite-wide isolated config-directory redirect.
+      AI_CONDUCTOR_USER_CONFIG_DIR: undefined,
       GH_CAPTURE: capture,
       HOME: home,
       PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}`,

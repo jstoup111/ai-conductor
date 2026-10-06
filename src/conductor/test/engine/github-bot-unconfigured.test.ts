@@ -60,10 +60,11 @@ describe('unconfigured GitHub bot credential', () => {
     await mkdir(join(root, 'home', '.ai-conductor'), { recursive: true });
     // Deliberately present user config with no github_bot block.
     await writeFile(join(root, 'home', '.ai-conductor', 'config.yml'), 'spec_owner: alice\n');
-    for (const key of ['AI_CONDUCTOR_NO_REAL_EXEC', 'HOME', 'GH_TOKEN', 'GITHUB_TOKEN']) {
+    for (const key of ['AI_CONDUCTOR_NO_REAL_EXEC', 'AI_CONDUCTOR_USER_CONFIG_DIR', 'HOME', 'GH_TOKEN', 'GITHUB_TOKEN']) {
       savedEnvironment.set(key, process.env[key]);
     }
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
     process.env.HOME = join(root, 'home');
     process.env.GH_TOKEN = 'operator-token';
     process.env.GITHUB_TOKEN = 'operator-github-token';

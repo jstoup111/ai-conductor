@@ -436,6 +436,7 @@ describe('dispatchEngineer interactive host launch', () => {
     await mkdir(join(home, '.ai-conductor'), { recursive: true });
     await writeFile(join(home, '.ai-conductor', 'config.yml'), 'llm_provider: codex\n');
     vi.stubEnv('HOME', home);
+    vi.stubEnv('AI_CONDUCTOR_USER_CONFIG_DIR', undefined);
     process.chdir(project);
     const spawnHost = vi.fn(async () => 0);
 
@@ -473,6 +474,7 @@ describe('dispatchEngineer interactive host launch', () => {
       '',
     ].join('\n'));
     vi.stubEnv('HOME', home);
+    vi.stubEnv('AI_CONDUCTOR_USER_CONFIG_DIR', undefined);
     process.chdir(project);
     const spawnHost = vi.fn(async () => 0);
 

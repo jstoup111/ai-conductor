@@ -158,6 +158,7 @@ describe('halt PR rehabilitation across daemon re-dispatch and reconciliation', 
     await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
     await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'spec_owner: test-owner\n');
     vi.stubEnv('HOME', projectRoot);
+    vi.stubEnv('AI_CONDUCTOR_USER_CONFIG_DIR', undefined);
     stateFilePath = join(projectRoot, '.pipeline', 'conduct-state.json');
   });
 

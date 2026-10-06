@@ -7,6 +7,7 @@ import { resolveGithubBotCredential, readGithubBotToken } from '../../src/engine
 import { loadMergedConfig } from '../../src/engine/config.js';
 
 const originalHome = process.env.HOME;
+const originalUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
 
 describe('github bot credential', () => {
   let root: string;
@@ -16,9 +17,12 @@ describe('github bot credential', () => {
     await mkdir(join(root, '.ai-conductor'), { recursive: true });
     await writeFile(join(root, '.ai-conductor', 'config.yml'), 'harness_version: ">=1.0.0"\n');
     process.env.HOME = join(root, 'home');
+    delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
   });
   afterEach(async () => {
     if (originalHome === undefined) delete process.env.HOME; else process.env.HOME = originalHome;
+    if (originalUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+    else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = originalUserConfigDir;
     await rm(root, { recursive: true, force: true });
   });
 

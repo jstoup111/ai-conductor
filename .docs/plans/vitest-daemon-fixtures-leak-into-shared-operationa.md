@@ -99,6 +99,7 @@ Ordinary test runs stop inheriting the operator's user config, and OTLP network 
 - `otlpExportRefusal` returns the refusal message, which names both `AI_CONDUCTOR_NO_REAL_EXEC` and `AI_CONDUCTOR_OTEL_SMOKE`, when the marker equals `1` and the opt-in is absent or any value other than `1` (`true`, `0`, empty, and ` 1 ` are asserted).
 - `otlpExportRefusal` returns `null` when the marker equals `1` and the opt-in equals `1`, and returns `null` whenever the marker is absent, including when the opt-in equals `1` without it.
 - `otlpExportRefusal` reads only the environment object it is given, as asserted by a case whose argument lacks the marker while `process.env` carries it.
+- `buildExporters` with `AI_CONDUCTOR_OTEL_SMOKE` set to any value and the marker absent (no `AI_CONDUCTOR_NO_REAL_EXEC`) builds the exact exporters it builds when the opt-in is unset, as asserted by a case comparing both construction results in export-refusal.test.ts.
 
 **Files:** src/conductor/src/engine/otel/export-refusal.ts; src/conductor/test/engine/otel/export-refusal.test.ts
 
@@ -190,7 +191,7 @@ Ordinary test runs stop inheriting the operator's user config, and OTLP network 
 **Type:** negative-path
 
 **Steps:**
-1. Write `src/conductor/test/otel-smoke-opt-in-guard.test.ts`. It imports `vitest.smoke.config.ts`, reads `test.include`, and lists every `test/**/*.ts` file with `fs.globSync` (Node 22+) that does not match those include globs (use `path.matchesGlob`). It fails, naming each offending file, when any of them contains the opt-in variable name. Build the name by concatenation inside the guard so the guard does not flag itself. Add a second case that runs the same scanner over a temp directory with a non-smoke fixture file containing the name and asserts the scanner reports exactly that path.
+1. Write `src/conductor/test/otel-smoke-opt-in-guard.test.ts`. It imports `vitest.smoke.config.ts`, reads `test.include`, and lists every `test/**/*.ts` file with `fs.globSync` (Node 22+) that does not match those include globs (use `path.matchesGlob`). It fails, naming each offending file, when any of them contains the opt-in variable name and is not on the guard's explicit exemption list. The exemption list is an in-file array naming exactly the two plan-sanctioned referencing files: `test/engine/otel/export-refusal.test.ts` (Task 4 — its cases reference the name only as env-object arguments to the pure `otlpExportRefusal` and `buildExporters` decision, and its Done-when asserts the function reads only its argument environment) and `test/engine/otel/transport.test.ts` (Task 5 — it supplies explicit environments to `buildExporters` and never mutates `process.env`). Neither writes the shared environment. Adding a file to the list is a visible, reviewed one-line change; every other non-smoke test file that contains the name fails the guard. Build the name by concatenation inside the guard so the guard does not flag itself. Add a second case that runs the same scanner over a temp directory with a non-smoke fixture file containing the name and asserts the scanner reports exactly that path.
 2. Verify RED for the fixture case before the scanner exists.
 3. Implement the scanner as a helper in the same test file. `test/setup.ts` and `src/` are outside the scanned set by construction (setup never sets the opt-in).
 4. Verify GREEN and commit.
@@ -198,6 +199,8 @@ Ordinary test runs stop inheriting the operator's user config, and OTLP network 
 **Done when:**
 - The guard derives the smoke tier from the `include` globs exported by `vitest.smoke.config.ts`, not from a hand-kept list, and passes on the current tree.
 - The guard's scanner, run over a temp tree containing a non-smoke test file that references the opt-in variable, fails naming that file's path.
+- The guard's exemption list is an explicit in-file array containing exactly `test/engine/otel/export-refusal.test.ts` and `test/engine/otel/transport.test.ts`; both files reference the opt-in variable without assigning it, and the scanner passes on the current tree with the list in place, as asserted by the guard's self-check case.
+- When the default test suite runs, the guard itself runs: the path `test/otel-smoke-opt-in-guard.test.ts` matches `vitest.config.ts`'s `test.include` globs (`test/**/*.test.ts`) and matches none of its `test.exclude` patterns, and a guard case that fails on the current tree fails the whole default suite run, as asserted by a case that evaluates the default config's include and exclude against the guard's own path.
 - No file loaded by the default, e2e, or acceptance tiers, including `test/setup.ts`, assigns the opt-in variable, as asserted by the guard passing on the current tree.
 
 **Files:** src/conductor/test/otel-smoke-opt-in-guard.test.ts

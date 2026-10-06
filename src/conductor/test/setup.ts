@@ -57,3 +57,8 @@ if (!process.env.AI_CONDUCTOR_ENGINEER_DIR) {
     join(tmpdir(), 'ai-conductor-test-engineer-')
   );
 }
+if (!process.env.AI_CONDUCTOR_USER_CONFIG_DIR?.trim()) {
+  process.env.AI_CONDUCTOR_USER_CONFIG_DIR = mkdtempSync(
+    join(tmpdir(), 'ai-conductor-test-user-config-')
+  );
+}

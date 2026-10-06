@@ -131,6 +131,7 @@ async function makeHarness(options: { withConductor?: boolean } = {}): Promise<F
     env: {
       ...process.env,
       HOME: home,
+      AI_CONDUCTOR_USER_CONFIG_DIR: undefined,
       FAKE_GIT_LOG: gitLog,
       PATH: `${bin}:/usr/bin:/bin:${process.env.PATH ?? ''}`,
     },
@@ -146,7 +147,7 @@ describe('update-check config uses one schema-owned surface (#1400)', () => {
     const configPath = await writeUserConfig(
       'markdown_viewer:\n  command: glow\n  args: ["-p"]\n',
     );
-    const env = { ...process.env, HOME: home };
+    const env = { ...process.env, HOME: home, AI_CONDUCTOR_USER_CONFIG_DIR: undefined };
 
     const channelSet = await run(
       REAL_CONDUCT_TS,

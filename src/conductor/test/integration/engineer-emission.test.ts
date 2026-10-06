@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -36,17 +36,17 @@ async function readSignalLines(engineerDir: string): Promise<string[]> {
 describe('integration/engineer-emission — makeRunFeature emits on daemon completion', () => {
   let engineerDir: string;
   let worktreePath: string;
-  const savedEnv = process.env.AI_CONDUCTOR_ENGINEER_DIR;
 
   beforeEach(async () => {
     engineerDir = await mkdtemp(join(tmpdir(), 'engineer-emit-test-'));
     worktreePath = await mkdtemp(join(tmpdir(), 'engineer-emit-wt-'));
-    process.env.AI_CONDUCTOR_ENGINEER_DIR = engineerDir;
+    // The production runner resolves the store through ADR-002 D6's env
+    // override; stub it per test so no fixture can reach the operator store.
+    vi.stubEnv('AI_CONDUCTOR_ENGINEER_DIR', engineerDir);
   });
 
   afterEach(async () => {
-    if (savedEnv === undefined) delete process.env.AI_CONDUCTOR_ENGINEER_DIR;
-    else process.env.AI_CONDUCTOR_ENGINEER_DIR = savedEnv;
+    vi.unstubAllEnvs();
     await rm(engineerDir, { recursive: true, force: true });
     await rm(worktreePath, { recursive: true, force: true });
   });
@@ -190,7 +190,7 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     const blocker = join(worktreePath, 'blocker');
     await mkdir(worktreePath, { recursive: true });
     await writeFile(blocker, 'x', 'utf-8');
-    process.env.AI_CONDUCTOR_ENGINEER_DIR = join(blocker, 'engineer');
+    vi.stubEnv('AI_CONDUCTOR_ENGINEER_DIR', join(blocker, 'engineer'));
 
     const logs: string[] = [];
     const run = makeRunFeature(
@@ -214,7 +214,7 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     const blocker = join(worktreePath, 'feature-logger-blocker');
     await mkdir(worktreePath, { recursive: true });
     await writeFile(blocker, 'x', 'utf-8');
-    process.env.AI_CONDUCTOR_ENGINEER_DIR = join(blocker, 'engineer');
+    vi.stubEnv('AI_CONDUCTOR_ENGINEER_DIR', join(blocker, 'engineer'));
 
     const featureLogs: string[] = [];
     const featureDeps = deps(

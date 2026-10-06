@@ -38,7 +38,7 @@ import type { VisualizerPlugin, VisualizerStartContext } from '../../types/plugi
 import type { ResolvedOtelConfig } from './otel-config.js';
 import type { ResolvedOtelProvenance } from './otel-config.js';
 import { buildResource } from './resource.js';
-import { buildExporters } from './transport.js';
+import { buildExporters, isExportRefused } from './transport.js';
 import { SpanManager } from './span-manager.js';
 import { DispatchMeteringTracker } from '../dispatch-metering.js';
 
@@ -99,6 +99,8 @@ export interface OtelVisualizerContext {
    * test suite fast even with a hung/refused transport.
    */
   exportTimeoutMillis?: number;
+  /** Environment used for the OTLP test-export guard. */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** Default export timeout (ms). An endpoint that does not respond within this
@@ -162,7 +164,8 @@ export class OtelVisualizer implements VisualizerPlugin {
       spanExporter = ctx.spanExporter;
     } else if (config.enabled) {
       // Build from transport config (production path).
-      const built = buildExporters(config as Extract<ResolvedOtelConfig, { enabled: true }>);
+      const built = buildExporters(config as Extract<ResolvedOtelConfig, { enabled: true }>, { env: ctx.env });
+      if (isExportRefused(built)) throw new Error(built.message);
       spanExporter = built.spanExporter;
     } else {
       // Disabled config: should not be constructed. Throw to surface the bug.

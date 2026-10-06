@@ -27,7 +27,7 @@ const fixture = vi.hoisted(() => ({
 }));
 const buildExporters = vi.hoisted(() => vi.fn());
 
-vi.mock('../../src/engine/otel/transport.js', () => ({ buildExporters }));
+vi.mock('../../src/engine/otel/transport.js', () => ({ buildExporters, isExportRefused: () => false }));
 vi.mock('../../src/engine/self-host/daemon-build-token.js', () => ({
   readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })),
 }));

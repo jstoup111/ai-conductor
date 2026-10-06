@@ -323,15 +323,21 @@ symlink target.
 
 ### setup.ts
 
-`src/conductor/test/setup.ts` runs before every test file (`setupFiles`) and sets three process-wide
+`src/conductor/test/setup.ts` runs before every test file (`setupFiles`) and sets four process-wide
 kill-switches:
 
 - `NO_AUTOLAUNCH_ENV=1` — the engineer handoff's default launch path becomes a no-op, so no test spawns a
   real `tmux new-session -d 'ai-conductor daemon --continuous'` that outlives its tmpdir.
 - `AI_CONDUCTOR_NO_REAL_EXEC=1` — `makeProductionGh` and `makeProductionGit` refuse to exec. A test once
   added a `needs-remediation` label and a `boom` comment to a live PR; this is the guard against that.
+  It also refuses OTLP export, so no fixture ships spans or metrics to the operator's collector. A
+  smoke-tier test opts back in with `AI_CONDUCTOR_OTEL_SMOKE=1`; `test/otel-smoke-opt-in-guard.test.ts`
+  fails any other test file that references that variable.
 - `AI_CONDUCTOR_ENGINEER_DIR` — redirected to a fresh `mkdtempSync` directory unless a test already set
   it, so nothing writes into the operator's real `~/.ai-conductor/engineer/`.
+- `AI_CONDUCTOR_USER_CONFIG_DIR` — redirected to a fresh `mkdtempSync` directory unless a test already
+  set it to a non-blank value, so no fixture reads or writes the operator's real
+  `~/.ai-conductor/config.yml`. Passing an explicit `home` to `userConfigPath` bypasses the override.
 
 ### global-setup.ts
 

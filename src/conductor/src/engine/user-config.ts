@@ -12,8 +12,19 @@ import type { HarnessConfig } from '../types/config.js';
 
 export const USER_CONFIG_DIR = '.ai-conductor';
 export const USER_CONFIG_FILE = 'config.yml';
+export const USER_CONFIG_DIR_ENV = 'AI_CONDUCTOR_USER_CONFIG_DIR';
 
-export function userConfigPath(home: string = homedir()): string {
+export function userConfigPath(
+  home?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (home === undefined) {
+    const override = env[USER_CONFIG_DIR_ENV];
+    if (override && override.trim() !== '') {
+      return join(override, USER_CONFIG_FILE);
+    }
+  }
+  home ??= homedir();
   return join(home, USER_CONFIG_DIR, USER_CONFIG_FILE);
 }
 
