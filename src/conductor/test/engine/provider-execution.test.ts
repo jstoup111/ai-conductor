@@ -1798,9 +1798,43 @@ describe('executeProviderCandidates', () => {
         nativeSchemaScratch: { worktreeRoot, repository: 'acme/repo', featureSlug: 'feature' },
         options: { prompt: 'Return the constrained result.', cwd: worktreeRoot, nativeSchema: { type: 'object' } },
       })).resolves.toMatchObject({ success: true, finalStructuredResult: { version: 'v1' } });
-      expect(scratchHome).toBe(join(worktreeRoot, '.daemon', 'scratch', 'feature-run', '2-codex'));
+      expect(scratchHome).toBe(join(worktreeRoot, '.daemon', 'scratch', 'feature-run', '2-codex-remediate'));
       await expect(access(scratchHome!)).rejects.toMatchObject({ code: 'ENOENT' });
       expect(invoke.mock.calls[0]?.[0]).not.toHaveProperty('selfHost');
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('gives concurrent validation-group members sharing a run and attempt separate schema scratch homes', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-schema-scratch-group-'));
+    const homes: string[] = [];
+    let releaseFirst: () => void = () => undefined;
+    const firstMayFinish = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+      homes.push(options.nativeSchemaScratchHome!);
+      // Hold the first member inside its home until the sibling has finished
+      // and released its own, as a parallel prd_audit / as-built pair does.
+      if (homes.length === 1) await firstMayFinish;
+      await access(join(options.nativeSchemaScratchHome!, 'owner.json'));
+      return { success: true, output: 'constrained result', exitCode: 0, finalStructuredResult: { version: 'v1' } };
+    });
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    const execute = (step: 'prd_audit' | 'architecture_review_as_built') => executeProviderCandidates({
+      step, configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', { nativeSchemaCapability: { nativeOutputSchema: true }, invoke })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('stored-session')),
+      runId: 'feature-run', attempt: 1,
+      nativeSchemaScratch: { worktreeRoot, repository: 'acme/repo', featureSlug: 'feature' },
+      options: { prompt: 'Return the constrained result.', cwd: worktreeRoot, nativeSchema: { type: 'object' } },
+    });
+    try {
+      const first = execute('prd_audit');
+      await vi.waitFor(() => expect(homes).toHaveLength(1));
+      await expect(execute('architecture_review_as_built')).resolves.toMatchObject({ success: true });
+      releaseFirst();
+      await expect(first).resolves.toMatchObject({ success: true });
+      expect(new Set(homes).size).toBe(2);
     } finally {
       await rm(worktreeRoot, { recursive: true, force: true });
     }
@@ -1823,7 +1857,7 @@ describe('executeProviderCandidates', () => {
       });
       expect(invoke.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
         cwd: '/read-only/review-snapshot',
-        nativeSchemaScratchHome: join(worktreeRoot, '.daemon', 'scratch', 'review-run', '1-codex'),
+        nativeSchemaScratchHome: join(worktreeRoot, '.daemon', 'scratch', 'review-run', '1-codex-build_review'),
         nativeSchemaScratchRoot: worktreeRoot,
       }));
     } finally {
