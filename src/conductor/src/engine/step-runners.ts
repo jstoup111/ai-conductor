@@ -5110,6 +5110,7 @@ export class DefaultStepRunner implements StepRunner {
           const infrastructureFailure = new CoverageBindingPayloadError(parsed.reason);
           return { success: false, output: infrastructureFailure.message, infrastructureFailure };
         }
+        if (parsed.ignoredIds) this.log(`coverage_binding: ignored amendment judge verdicts for unissued claim ids ${parsed.ignoredIds.join(', ')}; every issued id was answered`);
         for (const { claim, claimDigest: digest } of batch) {
           const verdict = parsed.verdicts.get(digest)!;
           const entry = {
@@ -5136,6 +5137,7 @@ export class DefaultStepRunner implements StepRunner {
           const infrastructureFailure = new CoverageBindingPayloadError(parsed.reason);
           return { success: false, output: infrastructureFailure.message, infrastructureFailure };
         }
+        if (parsed.ignoredIds) this.log(`coverage_binding: ignored criterion judge verdicts for unissued claim ids ${parsed.ignoredIds.join(', ')}; every issued id was answered`);
         for (const { claim, claimDigest: digest } of batch) {
           const verdict = parsed.verdicts.get(digest)!;
           const entry: CoverageBindingEnvelopeEntry = {
@@ -5207,6 +5209,7 @@ export class DefaultStepRunner implements StepRunner {
         const infrastructureFailure = new CoverageBindingPayloadError(parsed.reason);
         return { success: false, output: infrastructureFailure.message, infrastructureFailure };
       }
+      if (parsed.ignoredIds) this.log(`coverage_binding: ignored conflict judge verdicts for unissued claim ids ${parsed.ignoredIds.join(', ')}; every issued id was answered`);
       for (const { claim, claimDigest: digest } of batch) {
         const verdict = parsed.verdicts.get(digest)!;
         const entry = { kind: 'conflict' as const, digest, claimKind: claim.kind, claimId: claim.id, verdict: verdict.verdict, ...(verdict.verdict === 'conflicts' ? { taskIds: verdict.taskIds, conflict: verdict.conflict } : {}) } as unknown as CoverageBindingEnvelopeEntry;

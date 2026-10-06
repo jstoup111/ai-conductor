@@ -378,6 +378,19 @@ describe('coverage binding envelope', () => {
     });
   });
 
+  it('ignores a surplus unissued id once every issued id is answered, reporting it as ignored', () => {
+    const surplus = (verdict: Record<string, unknown>, ids: readonly string[]) => JSON.stringify({
+      verdicts: [...ids.map((id) => ({ id, ...verdict })), { id: 'c9', verdict: 'not-a-verdict' }],
+    });
+
+    expect(parseConflictBatchPayload(surplus({ verdict: 'consistent' }, ['c1', 'c2']), issueJudgeClaimIds(['sha256:first', 'sha256:second'], 'criterion'), '### Task 1: First task'))
+      .toEqual({ ok: true, ignoredIds: ['c9'], verdicts: new Map([['sha256:first', { verdict: 'consistent' }], ['sha256:second', { verdict: 'consistent' }]]) });
+    expect(parseJudgeBatchPayload(surplus({ verdict: 'asserts' }, ['c1']), issueJudgeClaimIds(['sha256:first'], 'criterion')))
+      .toEqual({ ok: true, ignoredIds: ['c9'], verdicts: new Map([['sha256:first', { verdict: 'asserts' }]]) });
+    expect(parseAmendmentBatchPayload(surplus({ verdict: 'no-plan-obligation' }, ['a1']), issueJudgeClaimIds(['sha256:first'], 'amendment'), ['1'], []))
+      .toEqual({ ok: true, ignoredIds: ['c9'], verdicts: new Map([['sha256:first', { verdict: 'no-plan-obligation' }]]) });
+  });
+
   it('accepts agreeing verdicts for two claim ids sharing one digest and fails conflicting ones closed', () => {
     const issued = issueJudgeClaimIds(['sha256:shared', 'sha256:shared'], 'criterion');
 

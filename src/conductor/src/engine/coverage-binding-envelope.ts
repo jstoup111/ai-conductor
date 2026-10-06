@@ -283,6 +283,27 @@ function agreesWithRecorded(recorded: unknown, verdict: unknown): boolean {
 }
 
 /**
+ * Judges occasionally append a verdict for an id that was never issued (e.g. c9
+ * after c1-c8). Such a surplus entry carries no judgement for any issued claim,
+ * so it is ignored once every issued id is answered; while any issued id is
+ * unanswered, the unknown id is reported as the likely mislabel.
+ */
+function closeIssuedIds(
+  label: string,
+  issuedIds: ReadonlyMap<string, string>,
+  answered: ReadonlySet<string>,
+  unknownIds: readonly string[],
+): { ok: true; ignoredIds?: readonly string[] } | { ok: false; reason: string } {
+  for (const [id, digest] of issuedIds) {
+    if (answered.has(id)) continue;
+    return unknownIds.length > 0
+      ? { ok: false, reason: `${label} has unknown claim id ${unknownIds[0]}` }
+      : { ok: false, reason: `${label} is missing issued claim id ${id} (${digest})` };
+  }
+  return unknownIds.length > 0 ? { ok: true, ignoredIds: unknownIds } : { ok: true };
+}
+
+/**
  * Issues the short opaque ids a judge batch echoes back in place of claim
  * digests. LLM judges cannot reliably copy 64-hex digests, so the engine keeps
  * the id-to-digest mapping and resolves verdicts to digests before validation.
@@ -299,7 +320,7 @@ export function issueJudgeClaimIds(
 export function parseJudgeBatchPayload(
   payload: string,
   issuedIds: ReadonlyMap<string, string>,
-): { ok: true; verdicts: ReadonlyMap<string, CoverageBindingJudgePayload> } | { ok: false; reason: string } {
+): { ok: true; verdicts: ReadonlyMap<string, CoverageBindingJudgePayload>; ignoredIds?: readonly string[] } | { ok: false; reason: string } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload);
@@ -318,6 +339,7 @@ export function parseJudgeBatchPayload(
   }
 
   const answered = new Set<string>();
+  const unknownIds: string[] = [];
   const verdicts = new Map<string, CoverageBindingJudgePayload>();
   for (const entry of batch.verdicts) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
@@ -329,7 +351,8 @@ export function parseJudgeBatchPayload(
     }
     const digest = issuedIds.get(candidate.id);
     if (digest === undefined) {
-      return { ok: false, reason: `batch verdict has unknown claim id ${candidate.id}` };
+      unknownIds.push(candidate.id);
+      continue;
     }
     if (answered.has(candidate.id)) {
       return { ok: false, reason: `batch verdict repeats claim id ${candidate.id}` };
@@ -346,12 +369,8 @@ export function parseJudgeBatchPayload(
     verdicts.set(digest, parsedEntry.value);
   }
 
-  for (const [id, digest] of issuedIds) {
-    if (!answered.has(id)) {
-      return { ok: false, reason: `batch verdict is missing issued claim id ${id} (${digest})` };
-    }
-  }
-  return { ok: true, verdicts };
+  const closed = closeIssuedIds('batch verdict', issuedIds, answered, unknownIds);
+  return closed.ok ? { ...closed, verdicts } : closed;
 }
 
 function parseAmendmentJudgePayloadValue(
@@ -398,7 +417,7 @@ export function parseAmendmentBatchPayload(
   issuedIds: ReadonlyMap<string, string>,
   issuedTaskIds: readonly string[],
   issuedCompletedTaskIds: readonly string[],
-): { ok: true; verdicts: ReadonlyMap<string, CoverageBindingAmendmentJudgeVerdict> } | { ok: false; reason: string } {
+): { ok: true; verdicts: ReadonlyMap<string, CoverageBindingAmendmentJudgeVerdict>; ignoredIds?: readonly string[] } | { ok: false; reason: string } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload);
@@ -409,13 +428,14 @@ export function parseAmendmentBatchPayload(
     return { ok: false, reason: 'amendment batch payload must contain only a verdicts array' };
   }
   const answered = new Set<string>();
+  const unknownIds: string[] = [];
   const verdicts = new Map<string, CoverageBindingAmendmentJudgeVerdict>();
   for (const entry of (parsed as { verdicts: unknown[] }).verdicts) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return { ok: false, reason: 'amendment batch verdict entry must be a JSON object' };
     const candidate = entry as Record<string, unknown>;
     if (!text(candidate.id)) return { ok: false, reason: 'amendment batch verdict entry requires a non-empty claim id' };
     const digest = issuedIds.get(candidate.id);
-    if (digest === undefined) return { ok: false, reason: `amendment batch verdict has unknown claim id ${candidate.id}` };
+    if (digest === undefined) { unknownIds.push(candidate.id); continue; }
     if (answered.has(candidate.id)) return { ok: false, reason: `amendment batch verdict repeats claim id ${candidate.id}` };
     const { id, ...verdictPayload } = candidate;
     const verdict = parseAmendmentJudgePayloadValue(verdictPayload, new Set(issuedTaskIds), new Set(issuedCompletedTaskIds));
@@ -424,8 +444,8 @@ export function parseAmendmentBatchPayload(
     answered.add(candidate.id);
     verdicts.set(digest, verdict.value);
   }
-  for (const [id, digest] of issuedIds) if (!answered.has(id)) return { ok: false, reason: `amendment batch verdict is missing issued claim id ${id} (${digest})` };
-  return { ok: true, verdicts };
+  const closed = closeIssuedIds('amendment batch verdict', issuedIds, answered, unknownIds);
+  return closed.ok ? { ...closed, verdicts } : closed;
 }
 
 function parseConflictJudgePayloadValue(
@@ -463,7 +483,7 @@ export function parseConflictBatchPayload(
   payload: string,
   issuedIds: ReadonlyMap<string, string>,
   planText: string,
-): { ok: true; verdicts: ReadonlyMap<string, CoverageBindingConflictJudgeVerdict> } | { ok: false; reason: string } {
+): { ok: true; verdicts: ReadonlyMap<string, CoverageBindingConflictJudgeVerdict>; ignoredIds?: readonly string[] } | { ok: false; reason: string } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload);
@@ -477,13 +497,14 @@ export function parseConflictBatchPayload(
 
   const planTaskIds = new Set(parsePlanTaskBodies(planText).keys());
   const answered = new Set<string>();
+  const unknownIds: string[] = [];
   const verdicts = new Map<string, CoverageBindingConflictJudgeVerdict>();
   for (const entry of (parsed as { verdicts: unknown[] }).verdicts) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return { ok: false, reason: 'conflict batch verdict entry must be a JSON object' };
     const candidate = entry as Record<string, unknown>;
     if (!text(candidate.id)) return { ok: false, reason: 'conflict batch verdict entry requires a non-empty claim id' };
     const digest = issuedIds.get(candidate.id);
-    if (digest === undefined) return { ok: false, reason: `conflict batch verdict has unknown claim id ${candidate.id}` };
+    if (digest === undefined) { unknownIds.push(candidate.id); continue; }
     if (answered.has(candidate.id)) return { ok: false, reason: `conflict batch verdict repeats claim id ${candidate.id}` };
     const { id, ...verdictPayload } = candidate;
     const verdict = parseConflictJudgePayloadValue(verdictPayload, planTaskIds);
@@ -492,8 +513,8 @@ export function parseConflictBatchPayload(
     answered.add(candidate.id);
     verdicts.set(digest, verdict.value);
   }
-  for (const [id, digest] of issuedIds) if (!answered.has(id)) return { ok: false, reason: `conflict batch verdict is missing issued claim id ${id} (${digest})` };
-  return { ok: true, verdicts };
+  const closed = closeIssuedIds('conflict batch verdict', issuedIds, answered, unknownIds);
+  return closed.ok ? { ...closed, verdicts } : closed;
 }
 
 /** Identity is intentionally limited to the text the fresh judge receives. */
