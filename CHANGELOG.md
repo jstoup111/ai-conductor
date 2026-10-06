@@ -18,6 +18,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon operators receive an early refusal that identifies plan tasks conflicting with sealed story criteria or approved ADR decisions. ([implementation PR #2968](https://github.com/jstoup111/ai-conductor/pull/2968)).
 - Projects can declare selected pipeline steps inapplicable for an individual feature. ([implementation PR #2992](https://github.com/jstoup111/ai-conductor/pull/2992)).
 - Task completion now verifies `[test]`-tagged Done-when checks against committed test evidence. ([implementation PR #2989](https://github.com/jstoup111/ai-conductor/pull/2989)).
+- Daemon operators gain observable, enforced managed-session command boundaries. ([implementation PR #2920](https://github.com/jstoup111/ai-conductor/pull/2920)).
 
 ### Changed
 
