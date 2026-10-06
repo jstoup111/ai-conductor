@@ -1,4 +1,4 @@
-import type { ConductState, HarnessConfig } from '../types/index.js';
+import type { ConductState, HarnessConfig, StepName } from '../types/index.js';
 import type { ConductStateStore, NamedAtomicStateMutationBatch, StateFieldDeletion, StateMutation } from './conduct-state-store.js';
 import { buildStepRegistry } from './steps.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
@@ -8,7 +8,7 @@ import { ConductorEventEmitter } from '../ui/events.js';
 import { EventPersister } from './event-persister.js';
 import { AuditTrailWriter } from './audit-trail.js';
 import { HALT_CLASS_MARKER, HALT_MARKER, writeHaltMarker } from './halt-marker.js';
-import { GATES_DIR } from './gate-verdicts.js';
+import { verdictPathFor } from './gate-verdicts.js';
 import { AS_BUILT_REPORT_PATH, AS_BUILT_VERDICT_PATH } from './as-built-verdict-store.js';
 import { PRD_AUDIT_REPORT_PATH, PRD_AUDIT_VERDICT_PATH } from './prd-audit-verdict-store.js';
 import {
@@ -74,9 +74,9 @@ export interface RewindCommandDependencies {
   store?: ConductStateStore<ConductState>;
   storeFor?: (path: string) => ConductStateStore<ConductState>;
   preflightDerivedRecords?: (root: string) => Promise<void>;
-  clearDerivedRecords?: (root: string, demoted: string[]) => Promise<void>;
+  clearDerivedRecords?: (root: string, demoted: RewindChildDemotion[]) => Promise<void>;
   markerFilesystem?: RewindMarkerFilesystem;
-  emit?: (result: RewindStateResult) => Promise<void>;
+  emit?: (result: RewindStateResult & { child?: ChildId }) => Promise<void>;
 }
 
 export interface RewindMarkerFilesystem {
@@ -189,7 +189,7 @@ async function preflightDerivedRecords(root: string): Promise<void> {
 
 async function clearDerivedRecords(
   root: string,
-  demoted: string[],
+  demoted: RewindChildDemotion[],
   filesystem: RewindMarkerFilesystem = markerFilesystem,
 ): Promise<void> {
   const staged: Array<{ original: string; staged: string; contents: string }> = [];
@@ -199,16 +199,17 @@ async function clearDerivedRecords(
   ]);
   let haltCleared = false;
   try {
-    for (const step of demoted) {
+    for (const { child, step } of demoted) {
+      const verdict = verdictPathFor(root, step as StepName, child);
       const records = [
-        { original: join(root, GATES_DIR, `${step}.json`), staged: join(root, GATES_DIR, `${step}.rewind-clearing`) },
-        ...(step === 'architecture_review_as_built'
+        { original: verdict, staged: verdict.replace(/\.json$/, '.rewind-clearing') },
+        ...(child === undefined && step === 'architecture_review_as_built'
           ? [
               { original: join(root, AS_BUILT_VERDICT_PATH), staged: join(root, `${AS_BUILT_VERDICT_PATH}.rewind-clearing`) },
               { original: join(root, AS_BUILT_REPORT_PATH), staged: join(root, `${AS_BUILT_REPORT_PATH}.rewind-clearing`) },
             ]
           : []),
-        ...(step === 'prd_audit'
+        ...(child === undefined && step === 'prd_audit'
           ? [
               { original: join(root, PRD_AUDIT_VERDICT_PATH), staged: join(root, `${PRD_AUDIT_VERDICT_PATH}.rewind-clearing`) },
               { original: join(root, PRD_AUDIT_REPORT_PATH), staged: join(root, `${PRD_AUDIT_REPORT_PATH}.rewind-clearing`) },
@@ -274,6 +275,7 @@ async function rollbackRewindState(
   config: HarnessConfig,
   result: RewindStateResult,
   store: ConductStateStore<ConductState>,
+  expectedLastStep?: NonNullable<ConductState['last_step']>,
 ): Promise<void> {
   const steps = buildStepRegistry(config);
   const targetIndex = steps.findIndex((step) => step.name === result.target);
@@ -293,7 +295,7 @@ async function rollbackRewindState(
   }
   const lastStepRollback = {
     field: 'last_step',
-    expected: predecessor,
+    expected: expectedLastStep ?? predecessor,
     intent: `rollback failed operator rewind to ${result.target}`,
     next: previousLastStep,
   } as StateMutation<ConductState>;
@@ -315,6 +317,39 @@ async function rollbackRewindState(
       : { kind: 'persistence' as const, message: `State store does not support corrective mutations for absent rewind fields: ${absentRollback.map(({ field }) => field).join(', ')}` };
   if ('message' in rollback) {
     throw new Error(`Operator rewind rollback failed (${rollback.kind}): ${rollback.message}`);
+  }
+}
+
+async function rollbackChildRewindState(
+  result: RewindChildStateResult,
+  config: HarnessConfig,
+  storeFor: (path: string) => ConductStateStore<ConductState>,
+): Promise<void> {
+  for (const applied of [...result.applied].reverse()) {
+    const lastStep = applied.batch.mutations.find((mutation) => mutation.field === 'last_step');
+    if (!lastStep) throw new Error(`Cannot restore child rewind state without last_step for ${applied.path}`);
+    await rollbackRewindState(
+      applied.originalState,
+      config,
+      {
+        target: result.target,
+        demoted: applied.batch.mutations
+          .filter((mutation) => mutation.field !== 'last_step')
+          .map((mutation) => String(mutation.field)),
+      },
+      storeFor(applied.path),
+      lastStep.next as NonNullable<ConductState['last_step']>,
+    );
+  }
+}
+
+class RewindChildStateFailure extends Error {
+  constructor(
+    cause: unknown,
+    readonly result: RewindChildStateResult,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = 'RewindChildStateFailure';
   }
 }
 
@@ -346,8 +381,13 @@ export async function dispatchRewindCommand(
     const config = configResult.ok ? configResult.config : {};
     const storeFor = dependencies.storeFor
       ?? ((path: string) => dependencies.store ?? createFilesystemConductStateStore(path));
+    const preflight = dependencies.preflightDerivedRecords ?? preflightDerivedRecords;
+    const clear = dependencies.clearDerivedRecords
+      ?? ((root, demoted) => clearDerivedRecords(root, demoted, dependencies.markerFilesystem));
+    let result: RewindChildStateResult | undefined;
     try {
-      await rewindChildState({
+      await preflight(cwd);
+      result = await rewindChildState({
         root: cwd,
         config,
         target: command.target,
@@ -358,11 +398,36 @@ export async function dispatchRewindCommand(
           return current.ok ? current.value : {};
         },
       });
+      await clear(cwd, result.demotions);
     } catch (error) {
       console.error(`rewind: ${error instanceof Error ? error.message : String(error)}`);
+      const partial = error instanceof RewindChildStateFailure ? error.result : result;
+      if (partial) {
+        try {
+          await rollbackChildRewindState(partial, config, storeFor);
+        } catch (rollbackError) {
+          console.error(`rewind: rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+        }
+      }
       return 1;
     }
-    // Task 24 adds the shared derived-record clear, event, and rollback phase.
+    if (!result) return 1;
+    const demoted = result.demotions.map(({ child: demotedChild, step }) =>
+      demotedChild === undefined ? step : `children/${demotedChild}/${step}`,
+    );
+    if (dependencies.emit) {
+      await dependencies.emit({ target: result.target, demoted, child: result.child });
+    } else {
+      const events = new ConductorEventEmitter();
+      const persister = new EventPersister(join(cwd, '.pipeline', 'events.jsonl'), events);
+      new AuditTrailWriter(cwd, { throwOnWriteFailure: true }).subscribe(events);
+      persister.start();
+      await events.emitOrThrow({
+        type: 'operator_rewind', operator: process.env.USER ?? 'operator', target: result.target, demoted, child: result.child,
+      });
+      persister.stop();
+    }
+    console.log(`Rewound child ${result.child} to ${result.target}.`);
     return 0;
   }
   const statePath = join(cwd, '.pipeline', 'conduct-state.json');
@@ -381,7 +446,7 @@ export async function dispatchRewindCommand(
   const store = dependencies.store ?? createFilesystemConductStateStore(statePath);
   const preflight = dependencies.preflightDerivedRecords ?? preflightDerivedRecords;
   const clear = dependencies.clearDerivedRecords
-    ?? ((root, demoted) => clearDerivedRecords(root, demoted, dependencies.markerFilesystem));
+    ?? ((root, demoted) => clearDerivedRecords(root, demoted.map((step) => ({ step })), dependencies.markerFilesystem));
   const originalState = { ...observed.value };
   let result: RewindStateResult | undefined;
   try {
@@ -545,34 +610,38 @@ export async function rewindChildState({
     applied.push({ path, originalState: { ...state }, batch });
   };
 
-  await apply(
-    childPath,
-    observedChild.value,
-    CHILD_REGION_STEPS.slice(regionTargetIndex),
-    steps[targetIndex - 1]!.name,
-    child,
-  );
+  try {
+    await apply(
+      childPath,
+      observedChild.value,
+      CHILD_REGION_STEPS.slice(regionTargetIndex),
+      steps[targetIndex - 1]!.name,
+      child,
+    );
 
-  const acceptanceSpecsIndex = steps.findIndex((step) => step.name === 'acceptance_specs');
-  if (acceptanceSpecsIndex <= 0) throw new Error('Cannot rewind child state without an acceptance_specs predecessor');
-  const laterChildren = (await listExistingChildren(root)).filter((candidate) => candidate > child);
-  for (const laterChild of laterChildren) {
-    const path = pipelinePathFor(root, 'conduct-state.json', laterChild);
-    const observed = await readState(path);
-    if (!observed.ok) throw new Error(observed.error.message);
-    await apply(path, observed.value, CHILD_REGION_STEPS, steps[acceptanceSpecsIndex - 1]!.name, laterChild);
-  }
+    const acceptanceSpecsIndex = steps.findIndex((step) => step.name === 'acceptance_specs');
+    if (acceptanceSpecsIndex <= 0) throw new Error('Cannot rewind child state without an acceptance_specs predecessor');
+    const laterChildren = (await listExistingChildren(root)).filter((candidate) => candidate > child);
+    for (const laterChild of laterChildren) {
+      const path = pipelinePathFor(root, 'conduct-state.json', laterChild);
+      const observed = await readState(path);
+      if (!observed.ok) throw new Error(observed.error.message);
+      await apply(path, observed.value, CHILD_REGION_STEPS, steps[acceptanceSpecsIndex - 1]!.name, laterChild);
+    }
 
-  const flatPath = pipelinePathFor(root, 'conduct-state.json');
-  const observedFlat = await readState(flatPath);
-  if (!observedFlat.ok) throw new Error(observedFlat.error.message);
-  const buildReviewIndex = steps.findIndex((step) => step.name === 'build_review');
-  if (buildReviewIndex === -1) throw new Error('Cannot rewind child state without build_review');
-  const flatSteps = steps.slice(buildReviewIndex + 1).map((step) => step.name);
-  const firstFlatDemotion = flatSteps.find((step) => observedFlat.value[step as keyof ConductState] !== 'skipped');
-  if (firstFlatDemotion !== undefined) {
-    const firstFlatIndex = steps.findIndex((step) => step.name === firstFlatDemotion);
-    await apply(flatPath, observedFlat.value, flatSteps, steps[firstFlatIndex - 1]!.name);
+    const flatPath = pipelinePathFor(root, 'conduct-state.json');
+    const observedFlat = await readState(flatPath);
+    if (!observedFlat.ok) throw new Error(observedFlat.error.message);
+    const buildReviewIndex = steps.findIndex((step) => step.name === 'build_review');
+    if (buildReviewIndex === -1) throw new Error('Cannot rewind child state without build_review');
+    const flatSteps = steps.slice(buildReviewIndex + 1).map((step) => step.name);
+    const firstFlatDemotion = flatSteps.find((step) => observedFlat.value[step as keyof ConductState] !== 'skipped');
+    if (firstFlatDemotion !== undefined) {
+      const firstFlatIndex = steps.findIndex((step) => step.name === firstFlatDemotion);
+      await apply(flatPath, observedFlat.value, flatSteps, steps[firstFlatIndex - 1]!.name);
+    }
+  } catch (error) {
+    throw new RewindChildStateFailure(error, { target, child, demotions, applied });
   }
 
   return { target, child, demotions, applied };

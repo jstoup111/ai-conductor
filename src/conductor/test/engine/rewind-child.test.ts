@@ -1,5 +1,5 @@
-// Covers: task:22
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+// Covers: task:22, task:23, task:24
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RewindCommandDependencies } from '../../src/engine/rewind.js';
 import { dispatchRewindCommand, rewindChildState } from '../../src/engine/rewind.js';
 import { parseChildId, pipelinePathFor } from '../../src/engine/child-context.js';
+import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
@@ -283,6 +284,154 @@ describe('rewind --child demotions', () => {
       expect(error).toHaveBeenCalledWith('rewind: target "test_suite" must be earlier than child 2\'s current step "build"');
       expect(storeFor).not.toHaveBeenCalled();
       await expect(pipelineFileBytes(root)).resolves.toEqual(before);
+    } finally {
+      error.mockRestore();
+    }
+  });
+});
+
+describe('rewind --child derived records, event, and rollback', () => {
+  let root: string;
+
+  async function writeFixture(): Promise<{ child2: string; child3: string; flat: string }> {
+    const flat = pipelinePathFor(root, 'conduct-state.json');
+    const child2 = pipelinePathFor(root, 'conduct-state.json', parseChildId(2)!);
+    const child3 = pipelinePathFor(root, 'conduct-state.json', parseChildId(3)!);
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await Promise.all([
+      mkdir(join(root, '.pipeline', 'gates'), { recursive: true }),
+      ...[1, 2, 3].map(async (child) => {
+        const childRoot = join(root, '.pipeline', 'children', String(child));
+        await mkdir(join(childRoot, 'gates'), { recursive: true });
+        await writeFile(join(childRoot, 'conduct-state.json'), `${JSON.stringify({
+          acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done', last_step: 'build_review',
+        }, null, 2)}\n`, 'utf-8');
+        await Promise.all(['acceptance_specs', 'build', 'test_suite', 'build_review'].map((step) =>
+          writeFile(join(childRoot, 'gates', `${step}.json`), `${JSON.stringify({ child, step })}\n`, 'utf-8')));
+      }),
+      writeFile(flat, `${JSON.stringify({ ...completeState, coverage_binding: 'done', last_step: 'prd_audit' }, null, 2)}\n`, 'utf-8'),
+      writeFile(join(root, '.pipeline', 'HALT'), 'operator action required\n', 'utf-8'),
+      writeFile(join(root, '.pipeline', 'HALT.class'), 'needs-human\n', 'utf-8'),
+      ...['manual_test', 'prd_audit', 'architecture_review_as_built', 'rebase', 'finish'].map((step) =>
+        writeFile(join(root, '.pipeline', 'gates', `${step}.json`), `${JSON.stringify({ step })}\n`, 'utf-8')),
+      writeFile(join(root, '.pipeline', 'gates', 'coverage_binding.json'), '{"step":"coverage_binding"}\n', 'utf-8'),
+      writeFile(join(root, '.pipeline', 'architecture-review-as-built.json'), '{"verdict":"pass"}\n', 'utf-8'),
+      writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), '# report\n', 'utf-8'),
+      writeFile(join(root, '.pipeline', 'prd-audit.json'), '{"verdict":"pass"}\n', 'utf-8'),
+      writeFile(join(root, '.pipeline', 'prd-audit.md'), '# report\n', 'utf-8'),
+    ]);
+    return { child2, child3, flat };
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'rewind-child-derived-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('clears each demoted child and flat verdict, HALT pair, and emits one child-tagged event', async () => {
+    await writeFixture();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build', child: '2' }, root)).resolves.toBe(0);
+
+      await expect(readFile(join(root, '.pipeline', 'children/1/gates/build.json'), 'utf-8')).resolves.toContain('"child":1');
+      await expect(readFile(join(root, '.pipeline', 'children/2/gates/build.json'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline', 'children/2/gates/test_suite.json'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline', 'children/2/gates/build_review.json'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline', 'children/3/gates/acceptance_specs.json'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline', 'children/3/gates/build.json'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline', 'children/3/gates/test_suite.json'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline', 'children/3/gates/build_review.json'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline', 'gates/manual_test.json'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline', 'gates/prd_audit.json'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline', 'gates/coverage_binding.json'), 'utf-8')).resolves.toBe('{"step":"coverage_binding"}\n');
+      await expect(readFile(join(root, '.pipeline', 'architecture-review-as-built.json'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline', 'architecture-review-as-built.md'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline', 'prd-audit.json'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline', 'prd-audit.md'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+      const events = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf-8')).trim().split('\n').map((line) => JSON.parse(line));
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'operator_rewind', target: 'build', child: 2,
+        demoted: [
+          'children/2/build', 'children/2/test_suite', 'children/2/build_review',
+          'children/3/acceptance_specs', 'children/3/build', 'children/3/test_suite', 'children/3/build_review',
+          'manual_test', 'prd_audit', 'architecture_review_as_built', 'rebase', 'finish',
+        ],
+      }));
+      expect(log).toHaveBeenCalledWith('Rewound child 2 to build.');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('rolls back an already-applied child batch when a later child port refuses before clearing records', async () => {
+    const { child2, child3, flat } = await writeFixture();
+    const before = await Promise.all([child2, flat].map(async (path) => [path, await readFile(path, 'utf-8')] as const));
+    const child3Store: ConductStateStore<ConductState> = {
+      async apply() { throw new Error('unexpected single mutation'); },
+      async applyBatch() {
+        const state = JSON.parse(await readFile(child3, 'utf-8')) as ConductState;
+        await writeFile(child3, `${JSON.stringify({ ...state, build: 'failed' }, null, 2)}\n`, 'utf-8');
+        return { kind: 'conflict', message: 'simulated child 3 refusal' };
+      },
+      async replace() { throw new Error('unexpected replacement'); },
+    };
+    const stores = new Map<string, ConductStateStore<ConductState>>();
+    const storeFor = (path: string): ConductStateStore<ConductState> => {
+      if (path === child3) return child3Store;
+      let store = stores.get(path);
+      if (!store) {
+        store = createFilesystemConductStateStore(path);
+        stores.set(path, store);
+      }
+      return store;
+    };
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build', child: '2' }, root, { storeFor })).resolves.toBe(1);
+      expect(error).toHaveBeenCalledWith('rewind: Operator rewind refused build: expected done, current failed');
+      await expect(Promise.all([child2, flat].map(async (path) => [path, await readFile(path, 'utf-8')] as const))).resolves.toEqual(before);
+      await expect(readFile(join(root, '.pipeline', 'children/2/gates/build.json'), 'utf-8')).resolves.toContain('"child":2');
+      await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf-8')).resolves.toBe('operator action required\n');
+      await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human\n');
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('rolls back every applied state file and restores staged records when clearing fails', async () => {
+    const { child2, child3, flat } = await writeFixture();
+    const before = await Promise.all([child2, child3, flat].map(async (path) => [path, await readFile(path, 'utf-8')] as const));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build', child: '2' }, root, {
+        markerFilesystem: {
+          rename,
+          remove: async (path, options) => {
+            if (typeof path === 'string' && path.includes('/gates/') && path.endsWith('.rewind-clearing')) {
+              throw new Error('staged verdict removal failed');
+            }
+            await rm(path, options);
+          },
+          readFile: (path) => readFile(path, 'utf-8'),
+          restoreHalt: (cwd, body) => writeFile(join(cwd, '.pipeline', 'HALT'), body, 'utf-8'),
+          writeClass: (path, contents) => writeFile(path, contents, 'utf-8'),
+        },
+      })).resolves.toBe(1);
+
+      await expect(Promise.all([child2, child3, flat].map(async (path) => [path, await readFile(path, 'utf-8')] as const))).resolves.toEqual(before);
+      await expect(readFile(join(root, '.pipeline', 'children/2/gates/build.json'), 'utf-8')).resolves.toContain('"child":2');
+      await expect(readFile(join(root, '.pipeline', 'children/3/gates/build.json'), 'utf-8')).resolves.toContain('"child":3');
+      await expect(readFile(join(root, '.pipeline', 'gates/manual_test.json'), 'utf-8')).resolves.toContain('manual_test');
+      await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf-8')).resolves.toBe('operator action required\n');
+      await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human\n');
+      expect(error).toHaveBeenCalledWith('rewind: staged verdict removal failed');
     } finally {
       error.mockRestore();
     }
