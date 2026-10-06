@@ -11,11 +11,13 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.6.1] - 2026-10-06
+## [1.7.0] - 2026-10-06
 
 ### Added
 
 - Daemon operators receive an early refusal that identifies plan tasks conflicting with sealed story criteria or approved ADR decisions. ([implementation PR #2968](https://github.com/jstoup111/ai-conductor/pull/2968)).
+- Projects can declare selected pipeline steps inapplicable for an individual feature. ([implementation PR #2992](https://github.com/jstoup111/ai-conductor/pull/2992)).
+- Task completion now verifies `[test]`-tagged Done-when checks against committed test evidence. ([implementation PR #2989](https://github.com/jstoup111/ai-conductor/pull/2989)).
 
 ### Changed
 
@@ -29,6 +31,13 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Test runs no longer export OpenTelemetry data or use your local configuration. ([implementation PR #2984](https://github.com/jstoup111/ai-conductor/pull/2984)).
 - Resumed features safely recover interrupted rebase transitions and report actionable recovery state. ([implementation PR #2988](https://github.com/jstoup111/ai-conductor/pull/2988)).
 - Coverage-binding conflict checks now read ADR decisions with their approved amendments, so a plan is no longer refused for contradicting a sentence an earlier amendment already superseded. ([implementation PR #3006](https://github.com/jstoup111/ai-conductor/pull/3006)).
+- Claude users receive reliable destructive-Git protection for valid abbreviated, bundled, and negated option spellings. ([implementation PR #2997](https://github.com/jstoup111/ai-conductor/pull/2997)).
+
+## Migration
+
+```bash migration
+"${HARNESS_DIR}/bin/install" --update
+```
 
 ## [1.6.0] - 2026-10-06
 
