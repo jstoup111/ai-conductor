@@ -47,7 +47,7 @@ describe('tracker-client: canonical GhRunner + guarded makeProductionGh', () => 
     }) as unknown as typeof ExecFile);
 
     try {
-      await expect(makeProductionGh({ execFile })(['run', 'view', '7'], {
+      await expect(makeProductionGh({ execFile: execFile as unknown as typeof ExecFile })(['run', 'view', '7'], {
         cwd: '/repo', timeout: 10_000, maxBuffer: 65_536,
       })).resolves.toMatchObject({ stdout: expect.any(String) });
       expect(execFile).toHaveBeenLastCalledWith('gh', ['run', 'view', '7'], {

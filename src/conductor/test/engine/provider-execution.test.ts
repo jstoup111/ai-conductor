@@ -2846,7 +2846,7 @@ describe('executeProviderCandidates', () => {
     // and the scope records no session for either provider.
     expectFreshSessions(codexInvoke.mock.calls.map(([options]) => options));
     const codexSessionId = codexInvoke.mock.calls[0]?.[0]?.sessionId;
-    const { managedGhObservationCoverage: _coverage, ...resultWithoutCoverage } = result;
+    const { managedGhObservationCoverage: _coverage, ...resultWithoutCoverage } = result!;
     expect(codexSessionId).not.toBe('review-codex-session');
     expect({
       executorDefined: execute !== undefined,
@@ -3217,9 +3217,9 @@ describe('executeProviderCandidates', () => {
     const codexSessionId = codexOptions[0]?.sessionId;
     const [liveClaudeSessionId, cachedClaudeSessionId] =
       claudeOptions.map((options) => options.sessionId);
-    const { managedGhObservationCoverage: _liveCoverage, ...liveWithoutCoverage } = live;
-    const { managedGhObservationCoverage: _cachedCoverage, ...cachedWithoutCoverage } = cached;
-    const { managedGhObservationCoverage: _noNextCoverage, ...noNextWithoutCoverage } = noNext;
+    const { managedGhObservationCoverage: _liveCoverage, ...liveWithoutCoverage } = live!;
+    const { managedGhObservationCoverage: _cachedCoverage, ...cachedWithoutCoverage } = cached!;
+    const { managedGhObservationCoverage: _noNextCoverage, ...noNextWithoutCoverage } = noNext!;
     expect({
       codexCalls: codexInvoke.mock.calls,
       claudeCalls: claudeInvoke.mock.calls,
@@ -3645,7 +3645,7 @@ describe('executeProviderCandidates', () => {
       partial: {
         codexModels: partialCodex.calls.map(({ model }) => model),
         claudeCalls: partialClaude.calls,
-        result: (() => { const { managedGhObservationCoverage: _coverage, ...result } = partial; return result; })(),
+        result: (() => { const { managedGhObservationCoverage: _coverage, ...result } = partial!; return result; })(),
       },
       exhausted: {
         codexCalls: fullCodex.calls
@@ -3656,12 +3656,12 @@ describe('executeProviderCandidates', () => {
           codex: fullSessions.current('codex'),
           claude: fullSessions.current('claude'),
         },
-        result: (() => { const { managedGhObservationCoverage: _coverage, ...result } = full; return result; })(),
+        result: (() => { const { managedGhObservationCoverage: _coverage, ...result } = full!; return result; })(),
       },
       later: {
         codexCalls: fullCodex.calls.slice(CODEX_MODEL_POLICY.modelFallbackLadder.length),
         claudeCall: fullClaude.calls.at(-1),
-        result: (() => { const { managedGhObservationCoverage: _coverage, ...result } = later; return result; })(),
+        result: (() => { const { managedGhObservationCoverage: _coverage, ...result } = later!; return result; })(),
       },
       availability: {
         codexRunWide: fullRuntimes.get('codex').runWideUnavailable,
@@ -3947,7 +3947,7 @@ describe('executeProviderCandidates', () => {
         runWideUnavailable: runtimes.get('codex').runWideUnavailable,
         preferredDead: [...runtimes.get('codex').availability.dead],
         nextDead: [...runtimes.get('claude').availability.dead],
-        result: (() => { const { managedGhObservationCoverage: _coverage, ...resultWithoutCoverage } = result; return resultWithoutCoverage; })(),
+        result: (() => { const { managedGhObservationCoverage: _coverage, ...resultWithoutCoverage } = result!; return resultWithoutCoverage; })(),
       });
     }
 
@@ -4034,7 +4034,7 @@ describe('executeProviderCandidates', () => {
       },
     });
 
-    const { managedGhObservationCoverage: _coverage, ...resultWithoutCoverage } = result;
+    const { managedGhObservationCoverage: _coverage, ...resultWithoutCoverage } = result!;
     expect(resultWithoutCoverage).toEqual({
       success: true,
       output: 'fallback completed',
@@ -4275,7 +4275,7 @@ describe('executeProviderCandidates', () => {
     });
 
     expect(result?.attempts?.[1]).not.toHaveProperty('observedIntervals');
-    const { managedGhObservationCoverage: _coverage, ...resultWithoutCoverage } = result;
+    const { managedGhObservationCoverage: _coverage, ...resultWithoutCoverage } = result!;
     expect({ calls, unlistedCalls: unlistedInvoke.mock.calls, warnings, result: resultWithoutCoverage })
       .toEqual({
         calls: [

@@ -29,7 +29,7 @@ describe('bot identity read transport', () => {
       const stdout = args[0] === 'issue'
         ? '[]'
         : env?.GH_TOKEN === 'bot-token' ? '{"login":"conductor-bot"}' : 'operator-login\n';
-      queueMicrotask(() => callback(null, { stdout, stderr: '' }));
+      queueMicrotask(() => (callback as unknown as (error: null, result: { stdout: string; stderr: string }) => void)(null, { stdout, stderr: '' }));
       return {};
     }) as typeof execFileCb,
     readCredential: async () => credential,

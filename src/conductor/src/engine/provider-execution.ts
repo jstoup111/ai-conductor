@@ -118,7 +118,7 @@ export interface ProviderExecutionResult extends InvokeResult, ProviderAttributi
   /** Lifecycle-supervisor marker outcome, when preparation recovery was exhausted. */
   haltMarkerWrite?: HaltMarkerWriteResult;
   /** PATH, custom-client, and MCP gaps remain explicitly unknown. */
-  managedGhObservationCoverage: ManagedGhObservationCoverage;
+  managedGhObservationCoverage?: ManagedGhObservationCoverage;
 }
 
 export type ProviderTransitionWarning =
