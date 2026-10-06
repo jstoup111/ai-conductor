@@ -289,11 +289,11 @@ steps:
     llm_provider: codex
   manual_test:
     disable: true
-  # build routed to DeepSeek Pro via OpenRouter through the Pi provider
-  # (operator order, 2026-10-06), replacing the codex `terra` default.
+  # build back on codex `terra` (operator order, 2026-10-06), replacing the
+  # DeepSeek Pro / Pi route. The `llm_providers.pi` block stays for re-use.
   build:
-    llm_provider: pi
-    model: openrouter/~deepseek/deepseek-pro-latest
+    llm_provider: codex
+    model: gpt-5.6-terra
   # Remediate decides what work a failing lap actually gets, across laps. That
   # is a judgement call over plan contract + prior-lap findings, so pin it to
   # claude rather than letting the run-level codex entry resolve first.
