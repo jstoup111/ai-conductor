@@ -781,9 +781,9 @@ and the engine's event tail projects them onto the ordinary spine. Each event ca
 These are observations, not proof. `cli-succeeded` is a local exit status; the daemon log line says
 `remote outcome unverified`. Coverage is limited to `gh` resolved through the session's `PATH`: an
 absolute binary path, a replaced `PATH`, a custom HTTP or SDK client, or a separate MCP transport is not
-observed. `step_completed` carries `managedGhObservationCoverage` (`boundary:
-managed-path-resolved-gh`, `completeness: unknown`) so that an empty event set is never read as "no
-GitHub write happened".
+observed. A managed session's `step_completed` carries `managedGhObservationCoverage` (`boundary:
+managed-path-resolved-gh`, `completeness: unknown`; absent for unmanaged steps) so that an empty event
+set is never read as "no GitHub write happened".
 
 The `gh` observer is a wrapper the engine places first on the managed child's `PATH`; it forwards to
 the real `gh` resolved from the inherited `PATH`. If no executable `gh` resolves, or the wrapper
