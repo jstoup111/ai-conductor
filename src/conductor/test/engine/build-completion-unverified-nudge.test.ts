@@ -130,7 +130,10 @@ describe('BUILD completion nudge for unverified Done-when checks', () => {
     };
 
     await (new Conductor(options) as unknown as NudgeMethods).recordUnverifiedDoneWhenNudge(state);
-    const restartedState = (await readState(statePath)).value as ConductState;
+    const restartedStateResult = await readState(statePath);
+    expect(restartedStateResult.ok).toBe(true);
+    if (!restartedStateResult.ok) throw new Error(restartedStateResult.error.message);
+    const restartedState = restartedStateResult.value;
     const restarted = new Conductor(options) as unknown as NudgeMethods;
     await restarted.initializeRunState(restartedState);
 
