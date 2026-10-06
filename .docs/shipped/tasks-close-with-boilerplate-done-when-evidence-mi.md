@@ -4,6 +4,13 @@ spec_hash: 8cc11f1799d72f0fc54bf92eedc193a0d8a00c78888fecc27e034615e9d0f099
 pr: https://github.com/jstoup111/ai-conductor/pull/2989
 shipped: 2026-10-06
 engine_version: 20261006T020324Z-8eb030a48b13
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "Changing `task start` to resolve the repository root goes beyond what the plan names. It is coupled to S2.4, though: `start` and `done` must agree on where `.pipeline/current-task` lives. It is user-visible and fits the feature's subdirectory-close intent. Residual risk: a consumer whose `.pipeline` sits below the git toplevel would now resolve to the wrong directory."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
