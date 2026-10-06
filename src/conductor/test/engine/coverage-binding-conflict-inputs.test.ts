@@ -191,6 +191,35 @@ Task prose without a completion-check block.`;
     ]);
   });
 
+  it('keeps inherited amendments in the decision text while excluding branch-owned amendments', () => {
+    const inherited = '> **Amended 2026-10-01 by #2709:** The managed prelude no longer initializes configuration.';
+    const branch = '> **Amended 2026-10-06 by #3010:** This branch amendment is judged by D18 alone.';
+
+    const [claim] = assembleConflictClaims({
+      planText: plan,
+      storiesText: '',
+      subjectAdrs: [{
+        path: '.docs/decisions/adr-subject.md',
+        text: `# ADR\n\n## Decision\n\n8. The managed prelude keeps its auto-init call.\n\n${inherited}\n\n${branch}\n\n` +
+          'A ruling that follows both amendments.',
+      }],
+      amendmentClaims: [{
+        kind: 'amendment',
+        artifactPath: '.docs/decisions/adr-subject.md',
+        amendment: branch,
+        taskIds: ['1', '2'],
+        doneWhen: [['The first outcome is observable.'], []],
+      }],
+    }).filter(({ kind }) => kind === 'adr-decision');
+
+    expect(claim).toMatchObject({
+      id: 'adr-subject#D8',
+      text: '8. The managed prelude keeps its auto-init call.\n\n' +
+        '**Amended 2026-10-01 by #2709:** The managed prelude no longer initializes configuration.\n\n' +
+        'A ruling that follows both amendments.',
+    });
+  });
+
   it('marks every claim not-applicable when no task has a Done when block', () => {
     expect(assembleConflictClaims({
       planText: '### Task 1: Legacy task\nTask prose only.',
