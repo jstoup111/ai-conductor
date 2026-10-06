@@ -279,7 +279,11 @@ command to the real `git`.
 | `clean` with `-f` or `--force` | `git clean -n`, then remove named paths |
 | `checkout [<tree-ish>] -- <paths>` and `restore <paths>` without `--ours`, `--theirs` or `--merge` (`restore --staged` alone passes) | Commit a WIP first, or use a temporary worktree |
 
-A single-level non-shell alias is expanded before classification. Repositories with a different common
+Global and per-subcommand options are normalized against the shared option spec
+(`src/conductor/src/engine/git-option-spec.ts`), so abbreviated, bundled and negated spellings classify
+like their canonical forms. An unrecognized global option, or an unknown or ambiguous option on a
+guarded subcommand, is refused with `spell the option in full`. A single-level non-shell alias is
+expanded before classification. Repositories with a different common
 directory, such as test fixtures, pass through untouched.
 
 ### What the guard does NOT cover
@@ -290,8 +294,6 @@ directory, such as test fixtures, pass through untouched.
 - Interactive and inline runs, and any dispatch whose working directory is not an engine-prepared worktree.
 - `build_review` dispatches, which run without the guard by design.
 - Custom providers, which build their own child environment.
-- Git's global and per-subcommand option grammars are normalized from the shared spec. Unknown or
-  ambiguous options on guarded subcommands are refused.
 - Pi provider dispatches, which run unguarded until #2895 ships.
 - An overridden worktree `core.hooksPath`, which bypasses the git-side ref-hook backstop.
 - `git push --no-verify`, which bypasses `pre-push`.
