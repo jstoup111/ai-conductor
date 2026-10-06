@@ -4,6 +4,19 @@ spec_hash: 339de4a50f4bda2fcde687278048524156fed6bb78b376a82aa3f3c5dec7f006
 pr: https://github.com/jstoup111/ai-conductor/pull/2920
 shipped: 2026-10-06
 engine_version: 20261006T122043Z-5c4e39f1a089
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-01-daemon-session-command-contracts decision 5"
+    outcome: remediated
+    summary: "Verified (99%): src/conductor/src/daemon-cli.ts:981 recursively creates the producer directory before src/conductor/src/execution/managed-session-context.ts:74-83 canonicalizes and checks containment. A pre-existing .pipeline/session-events symlink can therefore cause an outside directory write before rejection, violating D5’s requirement to reject symlink escapes rather than write outside the provisioned root."
+  - gate: architecture_review_as_built
+    finding: AB-2
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-01-daemon-session-command-contracts decision 5"
+    outcome: remediated
+    summary: "Verified (99%): src/conductor/src/engine/closeout-tail.ts:148-156 emits malformed/oversized/invalid-attribution diagnostics through best-effort emit and then unconditionally acknowledges the producer record. src/conductor/src/ui/events.ts:24-45 swallows subscriber failures, so canonical persistence can fail while source progress advances, contrary to D5’s persistence-before-progress rule."
 ---
 
 ## Cost
