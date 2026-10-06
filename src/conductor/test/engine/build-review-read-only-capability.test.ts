@@ -39,7 +39,7 @@ describe('probeReadOnlyReviewCapability', () => {
       provider: 'codex', platform: 'linux', runProcess, scratchDir,
     })).resolves.toEqual({ provider: 'codex', platform: 'linux', status: 'available' });
     expect(runProcess).toHaveBeenCalledWith('codex', [
-      'sandbox', '-P', ':read-only', '--', '/bin/sh', '-c', expect.any(String), 'read-only-review-probe',
+      'sandbox', '--config', 'sandbox_mode="read-only"', '--', '/bin/sh', '-c', expect.any(String), 'read-only-review-probe',
       `${scratchDir}/write-probe`, scratchDir,
     ]);
   });
@@ -240,30 +240,28 @@ describe('probeReadOnlyReviewCapability', () => {
 describe('buildCodexReadOnlyProducerRootPolicyArgs', () => {
   const producerRoot = '/repo/.pipeline/session-events/dispatch-1';
   const definition = `permissions.conductor-managed-review={extends=":read-only", filesystem={"${producerRoot}"="write"}}`;
+  const execAcceptedOptions = new Set(['-c', '--config', '-s', '--sandbox', '-p', '--profile']);
 
-  it('selects the producer-root profile on exec through config only, since exec has no -P option', () => {
-    expect(buildCodexReadOnlyProducerRootPolicyArgs(producerRoot, 'exec')).toEqual([
+  it('keeps the plain read-only native review profile byte-identical without a producer root', () => {
+    expect(buildCodexReadOnlyProducerRootPolicyArgs(undefined)).toEqual([
+      '--config', 'sandbox_mode="read-only"',
+    ]);
+  });
+
+  it('uses only codex exec-accepted option spellings for both policy shapes', () => {
+    const producerPolicy = buildCodexReadOnlyProducerRootPolicyArgs(producerRoot);
+    expect(producerPolicy).toEqual([
       '--config', definition,
       '--config', 'default_permissions="conductor-managed-review"',
     ]);
-  });
-
-  it('proves the same profile definition in the sandbox probe by name', () => {
-    expect(buildCodexReadOnlyProducerRootPolicyArgs(producerRoot, 'sandbox')).toEqual([
-      '--config', definition,
-      '-P', 'conductor-managed-review',
-    ]);
-  });
-
-  it('keeps the plain read-only native review profile on exec without a producer root', () => {
-    expect(buildCodexReadOnlyProducerRootPolicyArgs(undefined, 'exec')).toEqual([
-      '--config', 'sandbox_mode="read-only"',
-    ]);
-    expect(buildCodexReadOnlyProducerRootPolicyArgs(undefined, 'sandbox')).toEqual(['-P', ':read-only']);
+    for (const policy of [buildCodexReadOnlyProducerRootPolicyArgs(undefined), producerPolicy]) {
+      expect(policy.filter((token) => token.startsWith('-')).every((token) => execAcceptedOptions.has(token))).toBe(true);
+      expect(policy).not.toContain('-P');
+    }
   });
 
   it('quotes a producer root containing TOML-significant characters', () => {
-    const [, quoted] = buildCodexReadOnlyProducerRootPolicyArgs('/repo/a "b"\\c', 'exec');
+    const [, quoted] = buildCodexReadOnlyProducerRootPolicyArgs('/repo/a "b"\\c');
     expect(quoted).toBe(
       'permissions.conductor-managed-review={extends=":read-only", filesystem={"/repo/a \\"b\\"\\\\c"="write"}}',
     );
@@ -279,7 +277,7 @@ describe('probeManagedObservationDestination', () => {
     join(tempRoot, '.codex'),
   ];
 
-  it('proves the selected Codex executable with the exact producer-root policy it launches', async () => {
+  it('passes the exec-compatible producer policy unchanged to the sandbox admission probe', async () => {
     const runProcess = vi.fn(async () => ({
       exitCode: 0,
       stdout: 'producer-write-allowed\nprotected-writes-refused\n',
@@ -290,7 +288,9 @@ describe('probeManagedObservationDestination', () => {
       provider: 'codex', producerRoot, protectedPaths, executable: '/isolated/codex', runProcess,
     })).resolves.toEqual({ producerWrite: 'allowed', protectedWrites: 'refused' });
     expect(runProcess).toHaveBeenCalledWith('/isolated/codex', [
-      'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(producerRoot, 'sandbox'), '--',
+      'sandbox',
+      '--config', `permissions.conductor-managed-review={extends=":read-only", filesystem={"${producerRoot}"="write"}}`,
+      '--config', 'default_permissions="conductor-managed-review"', '--',
       '/bin/bash', '-c', expect.any(String), 'managed-observation-policy',
       producerRoot,
     ]);

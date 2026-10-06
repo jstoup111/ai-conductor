@@ -31,7 +31,7 @@ describe.skipIf(!available)('Codex read-only review policy against the installed
     ['without', undefined],
   ])('codex exec accepts the launch policy %s a producer root', (_case, root) => {
     const result = spawnSync('codex', [
-      'exec', ...buildCodexReadOnlyProducerRootPolicyArgs(root, 'exec'), '--help',
+      'exec', ...buildCodexReadOnlyProducerRootPolicyArgs(root), '--help',
     ], { encoding: 'utf8' });
     expect(result.stderr).not.toMatch(/unexpected argument/);
     expect(result.status).toBe(0);
@@ -39,7 +39,7 @@ describe.skipIf(!available)('Codex read-only review policy against the installed
 
   it('codex sandbox grants only the producer-root write under the same profile', () => {
     const result = spawnSync('codex', [
-      'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(producerRoot, 'sandbox'), '--',
+      'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(producerRoot), '--',
       '/bin/sh', '-c', 'printf x > "$1/ok"; printf x > "$2/bad"; exit 0', 'probe', producerRoot, worktree,
     ], { cwd: worktree, encoding: 'utf8' });
     expect(result.status).toBe(0);

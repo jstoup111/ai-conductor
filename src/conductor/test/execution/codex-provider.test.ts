@@ -1514,7 +1514,7 @@ describe('CodexProvider', () => {
     expect(result.tokenUsage).toEqual({ input: 8, cacheRead: 4, output: 7, numTurns: 1 });
   });
 
-  it('uses the read-only sandbox and the sole managed producer-root exception for an unattended review', async () => {
+  it('uses the exec-compatible read-only policy and sole managed producer-root exception for an unattended review', async () => {
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('Reviewed.'), exitCode: 0 } as any);
     const producerRoot = '/workspace/project/.pipeline/session-events/dispatch-1';
 
@@ -1569,6 +1569,16 @@ describe('CodexProvider', () => {
       'approval_policy="on-request"',
       'approvals_reviewer="auto_review"',
     ]));
+  });
+
+  it('keeps a no-context read-only exec launch byte-identical to the native read-only policy', async () => {
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Reviewed.'), exitCode: 0 } as any);
+
+    await provider.invoke({ ...baseOptions, interactive: false, readOnlyReview: true });
+
+    const [, args] = mockExeca.mock.calls[0];
+    expect(args.slice(0, 3)).toEqual(['exec', '--config', 'sandbox_mode="read-only"']);
+    expect(args).not.toContain('-P');
   });
 
   it('starts a fresh Codex exec and preserves cwd when handed resume: true', async () => {

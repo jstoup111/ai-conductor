@@ -57,10 +57,9 @@ export const CODEX_MANAGED_REVIEW_PERMISSION_PROFILE = 'conductor-managed-review
  * base and sole producer-root exception in one builder so admission proves
  * the exact policy the provider launch receives.
  *
- * `-P` names a configured profile and exists only on `codex sandbox`;
- * `codex exec` rejects it, so exec selects the same profile through
- * `default_permissions`. Without a producer root, exec keeps the plain
- * `sandbox_mode="read-only"` native review profile.
+ * The shared config overrides are accepted by both `codex exec` and
+ * `codex sandbox`. Without a producer root, keep the plain
+ * `sandbox_mode="read-only"` native review profile byte-for-byte.
  *
  * Verified on the real CLI (codex-cli 0.159.2): the producer root is writable
  * and the worktree is refused under both entrypoints, as the toolchain smoke
@@ -70,21 +69,16 @@ export const CODEX_MANAGED_REVIEW_PERMISSION_PROFILE = 'conductor-managed-review
  */
 export function buildCodexReadOnlyProducerRootPolicyArgs(
   producerRoot: string | undefined,
-  entrypoint: 'exec' | 'sandbox',
 ): readonly string[] {
   if (producerRoot === undefined) {
-    return entrypoint === 'exec'
-      ? ['--config', 'sandbox_mode="read-only"']
-      : ['-P', ':read-only'];
+    return ['--config', 'sandbox_mode="read-only"'];
   }
   const profile = CODEX_MANAGED_REVIEW_PERMISSION_PROFILE;
   const definition = [
     '--config',
     `permissions.${profile}={extends=":read-only", filesystem={${JSON.stringify(producerRoot)}="write"}}`,
   ];
-  return entrypoint === 'exec'
-    ? [...definition, '--config', `default_permissions="${profile}"`]
-    : [...definition, '-P', profile];
+  return [...definition, '--config', `default_permissions="${profile}"`];
 }
 
 const CODEX_PROBE_OBSERVATIONS = new Set([
@@ -152,7 +146,7 @@ async function probeCodex(options: ProbeReadOnlyReviewCapabilityOptions): Promis
   let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
   try {
     result = await options.runProcess(resolveProviderExecutable(CODEX_PROVIDER), [
-      'sandbox', '-P', ':read-only', '--', '/bin/sh', '-c', CODEX_READ_ONLY_PROBE,
+      'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(undefined), '--', '/bin/sh', '-c', CODEX_READ_ONLY_PROBE,
       'read-only-review-probe', `${options.scratchDir}/write-probe`, options.scratchDir,
     ]);
   } catch (error) {
@@ -248,7 +242,7 @@ export async function probeManagedObservationDestination(
     // failures; only existing protected surfaces can demonstrate refusal.
     const protectedPaths = options.protectedPaths.filter(existsSync);
     result = await options.runProcess(options.executable ?? resolveProviderExecutable(CODEX_PROVIDER), [
-      'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(options.producerRoot, 'sandbox'), '--',
+      'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(options.producerRoot), '--',
       '/bin/bash', '-c', OBSERVATION_DESTINATION_PROBE, 'managed-observation-policy',
       options.producerRoot, ...protectedPaths,
     ]);
