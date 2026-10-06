@@ -87,7 +87,20 @@ while [[ $command_index -lt $# ]]; do
   break
 done
 case "\${argv[$command_index]}" in
-  rev-parse) printf '%s\\n' ${JSON.stringify(FEATURE_COMMON_DIR)} ;;
+  rev-parse)
+    common_dir=${JSON.stringify(FEATURE_COMMON_DIR)}
+    for ((arg_index=0; arg_index < $#; arg_index++)); do
+      case "\${argv[$arg_index]}" in
+        -C)
+          if [[ "\${argv[$((arg_index + 1))]:-}" == outside ]]; then
+            common_dir=/outside/common-dir
+          else
+            common_dir=${JSON.stringify(FEATURE_COMMON_DIR)}
+          fi ;;
+        --git-dir=outside/.git) common_dir=/outside/common-dir ;;
+      esac
+    done
+    printf '%s\\n' "$common_dir" ;;
   config) cat ${JSON.stringify(aliasPath)} 2>/dev/null || true ;;
   for-each-ref) [[ "$(cat ${JSON.stringify(branchStatePath)} 2>/dev/null)" == reachable-unmerged ]] && printf '%s\\n' refs/heads/other ;;
   merge-base) [[ "$(cat ${JSON.stringify(branchStatePath)} 2>/dev/null)" == reachable-unmerged ]] && exit 0; exit 1 ;;
@@ -186,6 +199,33 @@ esac
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('unrecognized git option «--no-pag» before «reset»');
     expect((await recordedArgv()).some((argv) => argv.includes('reset'))).toBe(false);
+  });
+
+  it.each([
+    ['-C form', ['--no-pag', '-C', 'outside', 'reset', '--hard']],
+    ['git-dir equals form', ['--no-pag', '--git-dir=outside/.git', 'reset', '--hard']],
+  ])('passes unknown global then an outside selector in the %s through unchanged and excludes the unknown option from classification', async (_name, args) => {
+    expect(invoke(args).status).toBe(0);
+
+    const calls = await recordedArgv();
+    expect(calls.at(-1)).toEqual(args);
+    const classificationArgv = _name === '-C form'
+      ? ['-C', 'outside', 'rev-parse', '--path-format=absolute', '--git-common-dir']
+      : ['--git-dir=outside/.git', 'rev-parse', '--path-format=absolute', '--git-common-dir'];
+    expect(calls.filter((argv) => argv.includes('rev-parse'))).toEqual([classificationArgv, classificationArgv]);
+    expect(calls.filter((argv) => argv.includes('rev-parse')).every((argv) => !argv.includes('--no-pag'))).toBe(true);
+  });
+
+  it('refuses when a feature selector follows an unknown global option, excluding the unknown option from classification', async () => {
+    const args = ['-C', 'outside', '--no-pag', '-C', 'fixture', 'reset', '--hard'];
+
+    const result = invoke(args);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unrecognized git option «--no-pag» before «reset»');
+    const calls = await recordedArgv();
+    expect(calls).toEqual([['-C', 'outside', '-C', 'fixture', 'rev-parse', '--path-format=absolute', '--git-common-dir']]);
+    expect(calls.every((argv) => !argv.includes('--no-pag'))).toBe(true);
   });
 
   it('consumes a spaced attr-source value before refusing a hard reset', async () => {

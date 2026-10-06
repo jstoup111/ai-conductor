@@ -7,12 +7,14 @@ const globalOptionCase = GIT_OPTION_SPEC.global.flatMap((option) => {
     option.name === undefined ? undefined : `--${option.name}`,
     option.short === undefined ? undefined : `-${option.short}`,
   ].filter((spelling): spelling is string => spelling !== undefined);
-  const consume = option.arity === 'required' ? '((i+=2))' : '((i++))';
+  const consume = option.arity === 'required'
+    ? 'classification_prefix+=("${args[$i]}" "${args[$((i + 1))]:-}"); ((i+=2))'
+    : 'classification_prefix+=("${args[$i]}"); ((i++))';
   return [
     `    ${spellings.join('|')}) ${consume}; continue ;;`,
     ...(option.name === undefined || !option.acceptsEquals
       ? []
-      : [`    --${option.name}=*) ((i++)); continue ;;`]),
+      : [`    --${option.name}=*) classification_prefix+=("\${args[$i]}"); ((i++)); continue ;;`]),
   ];
 }).join('\n');
 
@@ -164,6 +166,7 @@ refuse() {
 args=("$@")
 original_args=("$@")
 i=0
+classification_prefix=()
 unknown_global=''
 unknown_prefix_end=-1
 while [[ $i -lt \${#args[@]} ]]; do
@@ -186,14 +189,14 @@ if [[ -n "$unknown_global" ]]; then
   done
 fi
 if [[ -n "$unknown_global" && -n "$command" ]]; then
-  common="$("$real_git" "\${args[@]:0:$unknown_prefix_end}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  common="$("$real_git" "\${classification_prefix[@]}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
   [[ "$common" == "$feature_common" ]] && refuse "$command" "unrecognized git option «$unknown_global» before «$command»" 'spell the option in full'
 fi
 # These are Git's own non-destructive query commands.  Keep this a static
 # built-in-only set: consulting config for one of these commands both adds an
 # observable real-git call and incorrectly treats a built-in as an alias.
 if [[ -n "$command" ]] && [[ ! "$command" =~ ^(add|annotate|blame|bugreport|cat-file|check-attr|check-ignore|check-mailmap|check-ref-format|column|config|count-objects|describe|diff|diff-files|diff-index|diff-tree|fetch|for-each-ref|fsck|get-tar-commit-id|grep|help|ls-files|ls-remote|ls-tree|log|merge-base|name-rev|range-diff|rev-list|rev-parse|show|show-branch|show-index|show-ref|status|var|verify-commit|verify-pack|verify-tag|whatchanged|worktree)$ ]]; then
-  alias_value="$($real_git "\${args[@]:0:$i}" config --get "alias.$command" 2>/dev/null || true)"
+  alias_value="$($real_git "\${classification_prefix[@]}" config --get "alias.$command" 2>/dev/null || true)"
   if [[ -n "$alias_value" && "$alias_value" != '!'* ]]; then
     # Git aliases use quote-aware split_cmdline semantics, not bash's plain
     # word splitting.  Keep shell bang aliases above out of this path.
@@ -222,7 +225,7 @@ if [[ "$command" =~ ^(reset|branch|clean|push|checkout|restore)$ ]]; then
   normalize_options "$command" "$i"
 fi
 if [[ -n "$normalization_error" ]]; then
-  common="$("$real_git" "\${args[@]:0:$i}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  common="$("$real_git" "\${classification_prefix[@]}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
   [[ "$common" == "$feature_common" ]] && refuse "$command" "unrecognized option «$normalization_error» for git «$command»" 'spell the option in full'
 fi
 
@@ -258,18 +261,18 @@ case "$command" in
         reachable=false
         while IFS= read -r ref; do
           [[ "$ref" == "refs/heads/$name" ]] && continue
-          if "$real_git" "\${args[@]:0:$i}" merge-base --is-ancestor "refs/heads/$name" "$ref" >/dev/null 2>&1; then
+          if "$real_git" "\${classification_prefix[@]}" merge-base --is-ancestor "refs/heads/$name" "$ref" >/dev/null 2>&1; then
             reachable=true
             break
           fi
-        done < <("$real_git" "\${args[@]:0:$i}" for-each-ref --format='%(refname)' refs/heads refs/remotes)
+        done < <("$real_git" "\${classification_prefix[@]}" for-each-ref --format='%(refname)' refs/heads refs/remotes)
         [[ "$reachable" == false ]] && { destructive=true; reason='force deletion would make commits unreachable'; alternative='git branch -d <branch>'; break; }
       done
     fi ;;
 esac
 
 if [[ "$destructive" == true ]]; then
-  common="$($real_git "\${args[@]:0:$i}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  common="$($real_git "\${classification_prefix[@]}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
   [[ "$common" == "$feature_common" ]] && refuse "$command" "$reason" "$alternative"
 fi
 exec "$real_git" "\${original_args[@]}"
