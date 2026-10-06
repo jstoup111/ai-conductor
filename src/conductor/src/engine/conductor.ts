@@ -61,7 +61,8 @@ import {
   renderPrdAuditScopeHalt,
   renderPrdWideningRecovery,
 } from './prd-widening-recovery.js';
-import { classifyPrdWideningProjection } from './prd-widening-classification.js';
+import { classifyPrdWideningProjection, type PrdWideningClassification } from './prd-widening-classification.js';
+import type { RefusalReworkEvidence } from './prd-widening-refusal-rework.js';
 import type { RemediationCasePrdWideningRecord } from './remediation-case-store.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { createGithubTrackerClient } from './tracker-client.js';
@@ -997,7 +998,8 @@ function criterionStorySection(
 export type PrdAuditOverScopeRoute =
   | { kind: 'none' }
   | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
-  | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[]; undecided: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; refused: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; defects?: Array<{ kind: string; criterion?: string; message?: string }> };
+  | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[]; undecided: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; refused: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; defects?: Array<{ kind: string; criterion?: string; message?: string }> }
+  | { kind: 'refusal-rework'; refusals: RefusalReworkEvidence[]; findings: RecordedPrdAuditFinding[] };
 
 /**
  * One PRD-audit route result shared by the serial SHIP walk and the
@@ -1011,6 +1013,7 @@ type CurrentPrdAuditRoute =
   | { kind: 'record' }
   | { kind: 'plan-gap-halt'; route: Extract<PrdAuditPlanGapRoute, { kind: 'halt' }> }
   | { kind: 'over-scope-halt'; route: Extract<PrdAuditOverScopeRoute, { kind: 'halt' }> }
+  | { kind: 'over-scope-refusal-rework'; route: Extract<PrdAuditOverScopeRoute, { kind: 'refusal-rework' }> }
   // D8: the projection itself refused. Named, blocking, and ahead of every
   // other route — an unrenderable decision must not be settled as satisfied.
   | { kind: 'projection-halt'; reason: string };
@@ -1021,7 +1024,39 @@ type CurrentPrdAuditRoute =
  * locators for no-owner observations; their evidence and relation come from
  * the typed authority.
  */
-function routeTypedPrdAuditOverScope(
+/** All-blocking-refused evidence; a missing NC snapshot is a persistence fault. */
+function buildRefusalReworkEvidence(
+  refused: ReadonlyArray<{ criterion: string }>,
+  classifications: ReadonlyMap<string, PrdWideningClassification>,
+  decisions: readonly AcceptedWideningDecision[],
+): { ok: true; refusals: RefusalReworkEvidence[] } | { ok: false; criterion: string } {
+  const refusals: RefusalReworkEvidence[] = [];
+  for (const finding of refused) {
+    const classification = classifications.get(finding.criterion);
+    const decision = classification?.kind === 'refused'
+      ? decisions.find((candidate) => candidate.id === classification.decisionId)
+      : undefined;
+    if (!decision) return { ok: false, criterion: finding.criterion };
+    const key = finding.criterion;
+    const decisionId = decision.id;
+    const revision = decision.revision;
+    const rationale = decision.rationale;
+    if (isPrdAuditNoOwnerOrdinal(finding.criterion)) {
+      const caseId = decision.originalCaseId;
+      const snapshot = decision.originalSource?.snapshot;
+      // The planner's NC context must be able to read the persisted original
+      // offer snapshot; without it the refusal is not admissible as rework
+      // input and falls back to the record-specific persistence recovery.
+      if (caseId === undefined || snapshot === undefined) return { ok: false, criterion: finding.criterion };
+      refusals.push({ key, decisionId, revision, rationale, caseId, snapshot });
+    } else {
+      refusals.push({ key, decisionId, revision, rationale });
+    }
+  }
+  return { ok: true, refusals };
+}
+
+export function routeTypedPrdAuditOverScope(
   report: PrdAuditReport,
   relations: ReadonlyMap<string, IntentRelation>,
   decisions: readonly AcceptedWideningDecision[],
@@ -1105,6 +1140,23 @@ function routeTypedPrdAuditOverScope(
     });
     const pendingOffers = editable(undecided);
     const refusedOffers = editable(refused);
+    // Refusals with nothing left to decide and no projection defect route to
+    // bounded BUILD rework instead of re-halting (ADR D1). The evidence is
+    // derived from the durable decision; an NC refusal whose decision lacks
+    // its original-source snapshot is a persistence fault, not rework input.
+    if (undecided.length === 0 && defects.length === 0) {
+      const refusalEvidence = buildRefusalReworkEvidence(refused, classifications, decisions);
+      if (!refusalEvidence.ok) {
+        return {
+          kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS,
+          detail: renderPrdWideningRecovery('persistence-failed', [refusalEvidence.criterion]),
+          findings: recorded,
+          undecided: [],
+          refused: refusedOffers,
+        };
+      }
+      return { kind: 'refusal-rework', refusals: refusalEvidence.refusals, findings: recorded };
+    }
     return {
       kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS,
       detail: defects.length
@@ -4744,7 +4796,9 @@ export class Conductor {
     // D8: recorded decisions project into the verdict artifact whichever way
     // the route went. A halted route carries the same findings — including the
     // refusal that caused the halt — and previously persisted none of them.
-    if (route.kind === 'record' || route.kind === 'halt') {
+    // Refusal-rework carries the same recorded findings so the verdict keeps
+    // the effective disposition even when the round is routed to rework.
+    if (route.kind === 'record' || route.kind === 'halt' || route.kind === 'refusal-rework') {
       const updated = new Map(value.recordedDispositions.map((recorded) => [
         `${recorded.criterionId}\u0000${recorded.grade}`,
         recorded,
@@ -4780,7 +4834,7 @@ export class Conductor {
         // A record route must become a halt so completion cannot pass while
         // the decision is absent from the verdict artifact.
         const defects = [{ kind: 'unrenderable-decision', message: `recorded findings could not be persisted to ${PRD_AUDIT_VERDICT_PATH}` }];
-        if (route.kind === 'record') {
+        if (route.kind === 'record' || route.kind === 'refusal-rework') {
           return {
             kind: 'halt',
             haltClass: OVER_SCOPE_HALT_CLASS,
@@ -4833,6 +4887,7 @@ export class Conductor {
     }
     if (planGapRoute.kind === 'halt') return { kind: 'plan-gap-halt', route: planGapRoute };
     if (overScopeRoute?.kind === 'halt') return { kind: 'over-scope-halt', route: overScopeRoute };
+    if (overScopeRoute?.kind === 'refusal-rework') return { kind: 'over-scope-refusal-rework', route: overScopeRoute };
 
     return planGapRoute.kind === 'record' || overScopeRoute?.kind === 'record'
       ? { kind: 'record' }
