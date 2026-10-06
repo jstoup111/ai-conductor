@@ -38,6 +38,8 @@ export interface ProviderModelConfig {
   model_fallback_ladder?: string[];
   /** Pi-only opt-in to project-owned .pi files for unattended dispatches. */
   trust_project_files?: boolean;
+  /** Pi-only: load the operator-installed pi-subagents extension on writable dispatches. */
+  subagents?: boolean;
 }
 
 /**

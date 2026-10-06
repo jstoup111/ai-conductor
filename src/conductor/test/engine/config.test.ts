@@ -4192,6 +4192,23 @@ steps:
       });
     });
 
+    describe('subagents (pi-subagents delegation)', () => {
+      it('accepts a boolean llm_providers.pi.subagents and rejects any other type', () => {
+        expect(validateConfig({ llm_providers: { pi: { subagents: true } } })).toMatchObject({ ok: true });
+        expect(validateConfig({ llm_providers: { pi: { subagents: 'yes' } } })).toMatchObject({
+          ok: false,
+          error: { type: 'validation_error', message: 'llm_providers.pi.subagents must be a boolean' },
+        });
+      });
+
+      it.each(['claude', 'codex'])('rejects the key as not applicable to provider %s', (provider) => {
+        expect(validateConfig({ llm_providers: { [provider]: { subagents: true } } })).toMatchObject({
+          ok: false,
+          error: { type: 'validation_error', message: `llm_providers.${provider}.subagents is not applicable to provider ${provider}` },
+        });
+      });
+    });
+
     it.each([
       ['claude-opus-4-5', /steps\.build\.model.*provider\/model/i],
       ['anthropic/', /steps\.build\.model.*empty model segment/i],

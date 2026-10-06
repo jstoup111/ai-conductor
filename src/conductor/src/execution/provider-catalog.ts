@@ -90,6 +90,8 @@ interface BuiltInProviderDescriptorBase {
   readonly osSandbox: boolean;
   /** This provider has an explicit opt-in for project-owned provider files. */
   readonly projectFileTrust?: boolean;
+  /** This provider can load an operator-installed subagent extension for writable dispatches. */
+  readonly subagentExtension?: boolean;
   /** Provider-native mechanics for launching an interactive composer session. */
   readonly interactiveLaunch?: InteractiveLaunch;
   /** Known machine-envelope formats, ordered by the adapter's native output. */
@@ -238,6 +240,7 @@ export const BUILT_IN_PROVIDERS = [
     optInModelIds: [],
     osSandbox: false,
     projectFileTrust: true,
+    subagentExtension: true,
     capabilities: {
       selfHost: true,
       readOnlyReview: true,

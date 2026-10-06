@@ -861,6 +861,71 @@ describe('PiProvider trust_project_files', () => {
   });
 });
 
+describe('PiProvider subagents', () => {
+  const spawn = vi.fn<PiSubprocessFactory>();
+  const packageDir = '/home/agent/.pi/agent/npm/node_modules/pi-subagents';
+  let isolatedHome: string;
+  const installed = () => fakePiEnvironment({ files: ['/home/agent/.agents/skills/HARNESS.md', `${packageDir}/package.json`] }).environment;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    spawn.mockResolvedValue({ stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult);
+    isolatedHome = await mkdtemp(join(tmpdir(), 'pi-subagents-home-'));
+  });
+  afterEach(async () => {
+    await rm(isolatedHome, { recursive: true, force: true });
+  });
+
+  it('loads the installed extension, seeds the isolated home, and scopes its temp root there', async () => {
+    await new PiProvider('/resolved/pi', spawn, installed()).invoke({
+      ...invokeOptions,
+      subagents: true,
+      selfHost: { executable: '/resolved/pi', args: [], teardown: async () => {}, env: { PI_CODING_AGENT_DIR: isolatedHome } },
+    });
+
+    const [, args, options] = spawn.mock.calls[0]!;
+    expect(args.join(' ')).toContain(`-e ${packageDir} --exclude-tools subagents_enable`);
+    expect(JSON.parse(await readFile(join(isolatedHome, 'extensions', 'subagent', 'config.json'), 'utf8')))
+      .toEqual({ asyncByDefault: false, toolActivation: 'eager', maxSubagentDepth: 1 });
+    expect(JSON.parse(await readFile(join(isolatedHome, 'settings.json'), 'utf8')))
+      .toEqual({ subagents: { agentOverrides: { delegate: { model: 'inherit' } }, defaultThinking: 'xhigh' } });
+    expect((options.env as NodeJS.ProcessEnv).PI_SUBAGENTS_TEMP_ROOT).toBe(join(isolatedHome, 'subagents-tmp'));
+  });
+
+  it.each([
+    ['disabled', { subagents: false }],
+    ['a read-only review', { subagents: true, readOnlyReview: true }],
+    ['a schema-constrained dispatch', { subagents: true, nativeSchema: { name: 'x', schema: { type: 'object' } } }],
+  ])('does not load the extension when %s', async (_label, extra) => {
+    await new PiProvider('/resolved/pi', spawn, installed(), vi.fn(async () => '/asset.ts')).invoke({
+      ...invokeOptions,
+      ...extra,
+      nativeSchemaScratchHome: isolatedHome,
+      selfHost: { executable: '/resolved/pi', args: [], teardown: async () => {}, env: { PI_CODING_AGENT_DIR: isolatedHome } },
+    });
+
+    const args = spawn.mock.calls[0]?.[1] ?? [];
+    expect(args).not.toContain(packageDir);
+    expect(args).not.toContain('subagents_enable');
+  });
+
+  it('fails run-scoped provider-unavailable, naming the install command, when the package is missing', async () => {
+    const result = await new PiProvider('/resolved/pi', spawn, harnessedPiEnvironment()).invoke({ ...invokeOptions, subagents: true });
+
+    expect(result).toMatchObject({ success: false, providerUnavailable: true, providerUnavailableScope: 'run' });
+    expect(result.output).toContain('pi install npm:pi-subagents');
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('never writes into the operator agent dir when no isolated home is in force', async () => {
+    await new PiProvider('/resolved/pi', spawn, installed()).invoke({ ...invokeOptions, subagents: true });
+
+    const [, args, options] = spawn.mock.calls[0]!;
+    expect(args).toContain(packageDir);
+    expect((options.env as NodeJS.ProcessEnv).PI_SUBAGENTS_TEMP_ROOT).toBeUndefined();
+  });
+});
+
 describe('PiProvider read-only review argv', () => {
   const spawn = vi.fn<PiSubprocessFactory>();
   const asset = '/engine-home/.ai-conductor/pi/harness-extension-0123456789abcdef.ts';

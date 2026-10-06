@@ -191,6 +191,10 @@ llm_providers:
     model: openrouter/~deepseek/deepseek-pro-latest
     model_escalation_order: [openrouter/~deepseek/deepseek-pro-latest]
     model_fallback_ladder: [openrouter/deepseek/deepseek-v4-flash]
+    # Pi has no native subagent facility; the pipeline orchestrator delegates
+    # each task through the operator-installed pi-subagents extension
+    # (`pi install npm:pi-subagents`).
+    subagents: true
 
 conflict_check:
   adr_corpus: repo_wide

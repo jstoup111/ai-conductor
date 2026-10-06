@@ -1515,6 +1515,34 @@ describe('executeProviderCandidates', () => {
     ]);
   });
 
+  it('threads llm_providers.pi.subagents to the pi candidate only', async () => {
+    const seen: Array<{ provider: string; subagents: boolean | undefined; has: boolean }> = [];
+    const provider = (key: string, result: InvokeResult): LLMProvider => ({
+      invoke: vi.fn(async (options) => {
+        seen.push({ provider: key, subagents: options.subagents, has: 'subagents' in options });
+        return result;
+      }),
+    });
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['pi', 'claude'],
+      runtimes: new ProviderRuntimeSet([
+        { ...runtime('claude', provider('pi', { success: false, output: 'Pi unavailable', exitCode: 127, providerUnavailable: true, providerUnavailableScope: 'run' })), key: 'pi' },
+        runtime('claude', provider('claude', { success: true, output: 'Claude completed', exitCode: 0 })),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('subagents-session')),
+      config: { llm_providers: { pi: { subagents: true } } } as HarnessConfig,
+      options: { prompt: 'Build.', cwd: '/workspace' },
+    } as never);
+
+    expect(seen).toEqual([
+      { provider: 'pi', subagents: true, has: true },
+      { provider: 'claude', subagents: undefined, has: false },
+    ]);
+  });
+
   it('carries the active lifecycle permit to a supported candidate after an unsupported candidate', async () => {
     const fallbackPermit = vi.fn(() => ({ permitted: false as const, reason: 'revoked' as const }));
     const supportedInvoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> =>
