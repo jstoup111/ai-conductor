@@ -200,7 +200,9 @@ describe('task-status recovery after abrupt daemon death', () => {
       status: 'pending',
     });
     expect(await readFile(join(pipeline, 'events.jsonl'), 'utf8')).toBe(eventsBefore);
-    expect(await readFile(join(pipeline, 'conduct-state.json'), 'utf8')).toBe(stateBefore);
+    expect(await readFile(join(pipeline, 'conduct-state.json'), 'utf8')).toBe(
+      stateBefore.replace('\n}', ',\n  "applicability_declarations": []\n}'),
+    );
 
     const resumeIndex = findResumeIndex(resumedState, ALL_STEPS);
     expect(ALL_STEPS[resumeIndex]?.name).toBe('build');

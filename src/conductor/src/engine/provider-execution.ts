@@ -904,6 +904,9 @@ export async function executeProviderCandidates({
     let schemaScratchHome: string | undefined;
     let schemaScratchRunId: string | undefined;
     let nativeSchemaScratchFailure: unknown;
+    // Validation-group members run in parallel under one run id and attempt,
+    // so the step keys the schema home whenever no auxiliary member does.
+    const schemaScratchMember = auxiliaryMember ?? step;
     let invocationResult: Promise<InvokeResult> | undefined;
     const teardownCallbacks: Array<() => Promise<void>> = [];
     const supportsNativeSchemaCapability =
@@ -940,7 +943,7 @@ export async function executeProviderCandidates({
                     repository: nativeSchemaScratch.repository,
                     featureSlug: nativeSchemaScratch.featureSlug || basename(nativeSchemaScratch.worktreeRoot),
                     runId: schemaScratchRunId, attempt, provider: providerKey as SelfHostProviderId,
-                    member: auxiliaryMember,
+                    member: schemaScratchMember,
                   });
                 } catch (error) {
                   nativeSchemaScratchFailure = error;
@@ -1017,7 +1020,7 @@ export async function executeProviderCandidates({
                 const released = await releaseScratchHome({
                   worktreeRoot: nativeSchemaScratch!.worktreeRoot,
                   runId: schemaScratchRunId!, attempt, provider: providerKey as SelfHostProviderId,
-                  member: auxiliaryMember,
+                  member: schemaScratchMember,
                 });
                 if (released.kind === 'failed') {
                   nativeSchemaScratchFailure = new Error(`native schema scratch teardown failed: ${released.error}`);

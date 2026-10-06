@@ -61,6 +61,36 @@ describe('renderDashboardLines', () => {
     expect(text).toContain('→ Conflict Check');
   });
 
+  it('renders a feature-inapplicable skip with its dedicated icon and reason', () => {
+    const lines = renderDashboardLines({
+      manual_test: 'skipped',
+      feature_inapplicable: [{ step: 'manual_test', reason: 'no browser surface', decider: 'unknown' }],
+      prd: 'skipped',
+    }, ALL_STEPS, 'Test feature');
+    const text = lines.join('\n');
+    expect(text).toContain('⊘ Manual Test — no browser surface');
+    expect(text).toContain('→ PRD');
+  });
+
+  it('keeps ordinary skips and refused declarations on their status icons', () => {
+    const lines = renderDashboardLines({
+      conflict_check: 'skipped',
+      prd: 'skipped',
+      manual_test: 'failed',
+      feature_inapplicable: [{ step: 'manual_test', reason: 'no browser surface', decider: 'unknown' }],
+    }, ALL_STEPS, 'Test feature');
+    const text = lines.join('\n');
+
+    // Neither a tier/config skip nor a late-refused declaration is inapplicable.
+    expect(text).toContain('→ Conflict Check');
+    expect(text).toContain('→ PRD');
+    expect(text).toContain('✗ Manual Test');
+    expect(text).not.toContain('⊘ Conflict Check');
+    expect(text).not.toContain('⊘ PRD');
+    expect(text).not.toContain('⊘ Manual Test');
+    expect(text).not.toContain('Manual Test — no browser surface');
+  });
+
   it('shows failed icon for failed steps', () => {
     const state: ConductState = { build: 'failed' };
     const lines = renderDashboardLines(state, ALL_STEPS, 'Test feature');

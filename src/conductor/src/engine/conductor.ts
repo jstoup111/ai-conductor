@@ -154,6 +154,7 @@ import {
   resolveValidationConcurrency,
   RETRY_ROUTING_DEFAULTS,
 } from './config.js';
+import { resolveFeatureApplicabilityConfig } from './resolved-config.js';
 import {
   readDispatchAttribution,
   detectUnattributedDispatch,
@@ -196,6 +197,7 @@ import {
   shouldSkipForUpstreamSkip,
   getGroupForStep,
   getStepDefinition,
+  isFeatureDeclarable,
   VALIDATION_GROUP,
 } from './steps.js';
 import type { StepGroup } from '../types/index.js';
@@ -7675,6 +7677,37 @@ export class Conductor {
     // eligible to emit and the completion verdict unchanged.
     const emitAcceptanceRed = (ev: Extract<Parameters<typeof this.events.emit>[0], { type: 'acceptance_red' }>) =>
       emitTracked(ev).catch(() => undefined);
+    // Applicability is seeded by the daemon from the merged base.  The marker
+    // in the checkout is only a tamper/branch-local declaration detector; it
+    // never becomes an authority for a dispatch.
+    const applicabilityIgnoredReported = new Set<string>();
+    const reportApplicabilityIgnored = async (
+      cause: Extract<ConductorEvent, { type: 'step_inapplicable_ignored' }>,
+    ): Promise<void> => {
+      const key = `${cause.cause}:${cause.step ?? ''}`;
+      if (applicabilityIgnoredReported.has(key)) return;
+      applicabilityIgnoredReported.add(key);
+      await emitTracked(cause);
+    };
+    const applicabilityMarkerDisposition = async (): Promise<'base' | 'branch-only' | 'interactive'> => {
+      const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+      if (!slug) return 'base';
+      let content: string | undefined;
+      const undatedSlug = slug.replace(/^\d{4}-\d{2}-\d{2}-/, '');
+      try {
+        content = await readFile(join(this.projectRoot, '.docs', 'applicability', `${slug}.md`), 'utf8');
+      } catch {
+        if (undatedSlug === slug) return 'base';
+        try {
+          content = await readFile(join(this.projectRoot, '.docs', 'applicability', `${undatedSlug}.md`), 'utf8');
+        } catch {
+          return 'base';
+        }
+      }
+      if (state.applicability_declarations === undefined) return 'interactive';
+      const digest = `sha256:${createHash('sha256').update(content, 'utf8').digest('hex')}`;
+      return state.applicability_base_content_sha256 === digest ? 'base' : 'branch-only';
+    };
     let lastSettledUnit: SchedulingUnitRef | undefined;
     let parkedAtOperatorBoundary = false;
     const stopAtOperatorParkBoundary =
@@ -7712,6 +7745,29 @@ export class Conductor {
         parkedAtOperatorBoundary = true;
         return { kind: 'operator-parked', boundary };
       };
+    // Late declarations cannot reopen existing work, but their refusal must be
+    // visible even when resume/settled-state short circuits skip the step loop.
+    const refusedApplicabilitySteps = new Set<StepName>();
+    if (resolveFeatureApplicabilityConfig(this.config).enabled) {
+      const customStepNames = Object.keys(this.config?.steps ?? {}).filter(
+        (name) => !ALL_STEPS.some((candidate) => candidate.name === name),
+      );
+      for (const declaration of state.applicability_declarations ?? []) {
+        const priorStatus = getStepStatus(state, declaration.step);
+        if (
+          priorStatus !== 'pending' &&
+          !state.feature_inapplicable?.some((entry) => entry.step === declaration.step) &&
+          !this.config?.steps?.[declaration.step]?.disable &&
+          isFeatureDeclarable(declaration.step, customStepNames).ok
+        ) {
+          refusedApplicabilitySteps.add(declaration.step);
+          await emitTracked({
+            type: 'step_inapplicable_refused', step: declaration.step,
+            reason: declaration.reason, priorStatus,
+          });
+        }
+      }
+    }
     try {
       stepLoop: for (let i = startIndex; i < steps.length; i++) {
         const step = steps[i];
@@ -7889,6 +7945,70 @@ export class Conductor {
           );
           await emitTracked({ type: 'config_skip', step: step.name });
           continue;
+        }
+
+        // A daemon seeds declarations from the feature's merged base marker.
+        // Honor only a still-pending declared step, after the ordinary tier,
+        // track, config, and dependency skip authorities have had precedence.
+        const applicabilityEnabled = resolveFeatureApplicabilityConfig(this.config).enabled;
+        if (applicabilityEnabled && state.applicability_ignored) {
+          await reportApplicabilityIgnored({
+            type: 'step_inapplicable_ignored',
+            cause: state.applicability_ignored.cause,
+            ...(state.applicability_ignored.steps?.[0] !== undefined
+              ? { step: state.applicability_ignored.steps[0] }
+              : state.applicability_ignored.detail?.step === undefined ? {} : { step: state.applicability_ignored.detail.step as StepName }),
+            ...(state.applicability_ignored.detail === undefined ? {} : { detail: state.applicability_ignored.detail.kind }),
+          });
+        }
+        const markerDisposition = applicabilityEnabled ? await applicabilityMarkerDisposition() : 'base';
+        if (applicabilityEnabled && markerDisposition !== 'base') {
+          await reportApplicabilityIgnored({ type: 'step_inapplicable_ignored', cause: markerDisposition });
+        }
+        if (!applicabilityEnabled && state.applicability_ignored) {
+          await reportApplicabilityIgnored({
+            type: 'step_inapplicable_ignored',
+            cause: state.applicability_ignored.cause,
+            ...(state.applicability_ignored.steps?.[0] !== undefined
+              ? { step: state.applicability_ignored.steps[0] }
+              : state.applicability_ignored.detail?.step === undefined ? {} : { step: state.applicability_ignored.detail.step as StepName }),
+          });
+        }
+        let declaration = applicabilityEnabled && !this.config?.steps?.[step.name]?.disable && markerDisposition !== 'interactive' &&
+          (markerDisposition !== 'branch-only' || state.applicability_base_content_sha256 !== undefined)
+          ? state.applicability_declarations?.find((candidate) => candidate.step === step.name)
+          : undefined;
+        if (declaration) {
+          const customStepNames = Object.keys(this.config?.steps ?? {}).filter(
+            (name) => !ALL_STEPS.some((candidate) => candidate.name === name),
+          );
+          if (!isFeatureDeclarable(declaration.step, customStepNames).ok) {
+            await reportApplicabilityIgnored({ type: 'step_inapplicable_ignored', cause: 'invalid', step: declaration.step });
+            declaration = undefined;
+          }
+        }
+        const alreadyHonored = state.feature_inapplicable?.some((candidate) => candidate.step === step.name);
+        if (declaration && alreadyHonored) continue;
+        if (declaration && getStepStatus(state, step.name) === 'pending') {
+          await this.recordStepSkip(state, step, `inapplicable: ${declaration.reason}`);
+          await this.commitStateChanges(state, 'record feature inapplicable step', {
+            feature_inapplicable: [...(state.feature_inapplicable ?? []), declaration],
+          });
+          await emitTracked({
+            type: 'step_inapplicable',
+            step: declaration.step,
+            reason: declaration.reason,
+            decider: declaration.decider,
+            ...(declaration.commit === undefined ? {} : { commit: declaration.commit }),
+          });
+          continue;
+        }
+        if (declaration && getStepStatus(state, step.name) !== 'pending' && !refusedApplicabilitySteps.has(step.name)) {
+          refusedApplicabilitySteps.add(step.name);
+          await emitTracked({
+            type: 'step_inapplicable_refused', step: declaration.step,
+            reason: declaration.reason, priorStatus: getStepStatus(state, step.name),
+          });
         }
 
         // An autonomous forward walk must not author a DECIDE artifact merely

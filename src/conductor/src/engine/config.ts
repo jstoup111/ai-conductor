@@ -118,6 +118,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'stacked_prs', 'build_review', 'conflict_check',
     'prd_audit', 'architecture_review_as_built', 'ci_watch', 'build_progress_halt',
     'retry_routing', 'coverage_binding', 'wiring', 'kickback_escalation', 'cumulative_kickback_bound',
+    'feature_applicability',
     'gate_code_validity', 'daemon_verbose', 'reconcile_parked_auto_cleanup', 'reclaim_merged_worktrees',
     'step_heartbeat_stall_minutes', 'stale_claim_window_hours',
     'provider_preparation_timeout_minutes', 'teardown_timeout_seconds',
@@ -158,6 +159,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   retry_routing: ['enabled'],
   coverage_binding: ['judge'],
   'coverage_binding.judge': ['enabled', 'batch_size'],
+  feature_applicability: ['enabled'],
   otel: ['exporter', 'endpoint', 'file', 'protocol', 'headers', 'project_name', 'worker_name', 'attributes', 'provenance', 'spool'],
   'otel.spool': ['enabled', 'max_bytes'],
   markdown_viewer: ['preset', 'command', 'args', 'mode'],
@@ -1809,6 +1811,12 @@ export function validateConfig(
     }
   }
 
+  // feature_applicability — project-only, default-off feature-step opt-in.
+  {
+    const err = validateFeatureApplicabilityBlock(obj.feature_applicability);
+    if (err) return { ok: false, error: err };
+  }
+
   const modelIdSyntaxErr = validateProviderModelIdSyntax(obj as HarnessConfig);
   if (modelIdSyntaxErr) return { ok: false, error: modelIdSyntaxErr };
 
@@ -2862,6 +2870,30 @@ function validateCoverageBindingBlock(raw: unknown): ConfigError | null {
   return null;
 }
 
+function validateFeatureApplicabilityBlock(raw: unknown): ConfigError | null {
+  if (raw === undefined) return null;
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'feature_applicability must be an object' };
+  }
+  const block = raw as Record<string, unknown>;
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.feature_applicability);
+  for (const key of Object.keys(block)) {
+    if (!allowed.has(key)) {
+      return {
+        type: 'validation_error',
+        message: `Unknown key in feature_applicability: "${key}"`,
+      };
+    }
+  }
+  if (block.enabled !== undefined && typeof block.enabled !== 'boolean') {
+    return {
+      type: 'validation_error',
+      message: 'feature_applicability.enabled must be a boolean',
+    };
+  }
+  return null;
+}
+
 function resolveCoverageBindingBlock(raw: unknown): { judge: { enabled: boolean; batch_size: number } } {
   const block = isPlainObject(raw) ? raw as Record<string, unknown> : {};
   const judge = isPlainObject(block.judge) ? block.judge as Record<string, unknown> : {};
@@ -3308,9 +3340,10 @@ export async function loadMergedConfigForRead(
       error: { type: 'parse_error', message: `user config parse error: ${userResult.parseError}` },
     };
   }
+  const { feature_applicability: _ignoredFeatureApplicability, ...userConfig } = userResult.config;
   return {
     ok: true,
-    config: mergeConfigs(userResult.config, project as HarnessConfig) as Record<string, unknown>,
+    config: mergeConfigs(userConfig, project as HarnessConfig) as Record<string, unknown>,
   };
 }
 
@@ -3344,7 +3377,8 @@ export async function loadMergedConfig(
     pr_template_region_owners: templateRegionOwners,
     ...projectConfig
   } = projectResult.config;
-  const merged = mergeConfigs(userResult.config, projectConfig);
+  const { feature_applicability: _ignoredFeatureApplicability, ...userConfig } = userResult.config;
+  const merged = mergeConfigs(userConfig, projectConfig);
   // 'merged' source: the anti-leak guard already fired on the raw project file
   // inside loadProjectConfig above. Here a spec_owner can only have come from the USER
   // config, which is its legitimate home — so the guard must NOT reject it.

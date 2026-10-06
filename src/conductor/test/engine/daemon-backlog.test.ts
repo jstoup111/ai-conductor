@@ -2035,7 +2035,7 @@ describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
     });
   });
 
-  it('treats a failed recursive documentation enumeration as an absent documentation tree', async () => {
+  it('falls back to direct reads when recursive documentation enumeration fails', async () => {
     await writeCorpus(3);
     const blobInvocations: (readonly string[])[] = [];
     const runner: GitBlobBatchRunner = async (file, args, options) => {
@@ -2059,10 +2059,13 @@ describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
       }),
     });
 
-    expect(result).toEqual({ items: [], waiting: [], blocked: [], gated: [] });
+    expect(result.items).toHaveLength(3);
+    expect(result.waiting).toEqual([]);
+    expect(result.blocked).toEqual([]);
+    expect(result.gated).toEqual([]);
     expect(enumerationAttempts).toEqual([recursiveDocsEnumeration]);
     expect(blobInvocations).toEqual([]);
-    expect(gitInvocations.filter(([command, target]) => command === 'show' && target.startsWith(`${baseBranch}:.docs/`))).toEqual([]);
+    expect(gitInvocations.some(([command, target]) => command === 'show' && target.startsWith(`${baseBranch}:.docs/`))).toBe(true);
   });
 });
 

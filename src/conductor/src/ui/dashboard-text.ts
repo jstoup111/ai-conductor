@@ -11,6 +11,7 @@ const ICONS = {
   in_progress: chalk.cyan('▶'),
   pending: chalk.dim('⬚'),
   skipped: chalk.gray('→'),
+  inapplicable: chalk.magenta('⊘'),
   stale: chalk.yellow('⚠'),
   failed: chalk.red('✗'),
 } as const;
@@ -106,9 +107,10 @@ function formatStepList(snapshot: DashboardSnapshot): string[] {
 }
 
 function formatStep(step: StepSnapshot): string[] {
-  const icon = ICONS[step.status as keyof typeof ICONS] ?? ICONS.pending;
+  const icon = step.inapplicableReason ? ICONS.inapplicable : ICONS[step.status as keyof typeof ICONS] ?? ICONS.pending;
   const suffix = step.status === 'in_progress' ? chalk.dim(' — running...') : '';
-  const lines = [`    ${icon} ${step.label}${suffix}`];
+  const reason = step.inapplicableReason ? chalk.dim(` — ${step.inapplicableReason}`) : '';
+  const lines = [`    ${icon} ${step.label}${suffix}${reason}`];
   if (step.artifacts) {
     for (const a of step.artifacts) {
       lines.push(...renderArtifactPattern(a));

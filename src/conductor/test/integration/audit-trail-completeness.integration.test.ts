@@ -237,6 +237,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   ci_repair_diagnostic: 'not-audited-by-design',
   attribution_divergence: 'not-audited-by-design',
   acceptance_red: 'not-audited-by-design',
+  step_inapplicable: 'not-audited-by-design',
+  step_inapplicable_ignored: 'not-audited-by-design',
+  step_inapplicable_refused: 'not-audited-by-design',
   build_active_stall: 'not-audited-by-design',
 };
 
@@ -860,6 +863,13 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     state: 'required',
     step: 'acceptance_specs',
     viaException: false,
+  },
+  step_inapplicable: {
+    type: 'step_inapplicable', step: 'manual_test', reason: 'no UI', decider: 'unknown',
+  },
+  step_inapplicable_ignored: { type: 'step_inapplicable_ignored', cause: 'invalid', step: 'prd_audit' },
+  step_inapplicable_refused: {
+    type: 'step_inapplicable_refused', step: 'manual_test', reason: 'late', priorStatus: 'failed',
   },
 };
 

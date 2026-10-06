@@ -409,6 +409,11 @@ export interface CoverageBindingConfig {
   };
 }
 
+/** Per-project opt-in for declaring selected feature steps inapplicable. */
+export interface FeatureApplicabilityConfig {
+  enabled?: boolean;
+}
+
 /**
  * How harness self-host mode is decided (adr-2026-06-30-self-host-detection-seam):
  *   - 'auto'      → path-based auto-detection (build repo root == harness root)
@@ -629,6 +634,8 @@ export interface HarnessConfig {
   retry_routing?: RetryRoutingConfig;
   /** Pre-BUILD criterion-to-Done-when binding judge. Absent → disabled. */
   coverage_binding?: CoverageBindingConfig;
+  /** Per-project opt-in for declaring selected feature steps inapplicable. */
+  feature_applicability?: FeatureApplicabilityConfig;
   /**
    * Owner-gate (adr-2026-06-30-owner-gate-identity-resolution / FR-1): the
    * configured operator identity the daemon builds specs for. Wins over the

@@ -35,6 +35,7 @@ import {
   resolveSelfHostConfig,
   resolveTeardownTimeoutSeconds,
   resolveBuildReviewConfig,
+  resolveFeatureApplicabilityConfig,
 } from './engine/resolved-config.js';
 import {
   probeReadOnlyReviewCapability,
@@ -298,6 +299,9 @@ export function workOrderToBacklogItem(order: WorkOrder): BacklogItem {
     ...(order.track ? { track: order.track } : {}),
     ...(order.band ? { band: order.band } : {}),
     ...(order.resolutionMode ? { resolutionMode: order.resolutionMode } : {}),
+    ...(order.applicabilityDeclarations ? { applicabilityDeclarations: order.applicabilityDeclarations } : {}),
+    ...(order.applicabilityBaseContentSha256 ? { applicabilityBaseContentSha256: order.applicabilityBaseContentSha256 } : {}),
+    ...(order.applicabilityIgnored ? { applicabilityIgnored: order.applicabilityIgnored } : {}),
   };
 }
 
@@ -1813,7 +1817,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     worktreeLifecycle,
   });
   const createWorkOrder = async (item: BacklogItem) => {
-    const baseSha = await resolveDaemonBaseSha(projectRoot, baseBranch);
+    const baseSha = item.baseSha ?? await resolveDaemonBaseSha(projectRoot, baseBranch);
     if (!baseSha) {
       throw new Error(`daemon work claim ${item.slug} could not resolve pinned base SHA`);
     }
@@ -1831,6 +1835,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         track: item.track,
         band: item.band,
         resolutionMode: item.resolutionMode,
+        applicabilityDeclarations: item.applicabilityDeclarations,
+        applicabilityBaseContentSha256: item.applicabilityBaseContentSha256,
+        applicabilityIgnored: item.applicabilityIgnored,
       },
       workOrderGit,
     );
@@ -2024,7 +2031,26 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         () => fastForwardRoot(root, sourceLog),
         (reason) => log(`[daemon] root refresh deferred: ${reason}`),
       ),
-      discoverBacklog,
+      discoverBacklog: async (root, processed, discoveryLog, discoveryOpts) => {
+        const scanBaseBranch = discoveryOpts.baseBranch ?? baseBranch;
+        const baseSha = await resolveDaemonBaseSha(root, scanBaseBranch);
+        if (!baseSha) throw new Error('daemon backlog scan could not resolve pinned base SHA');
+        return discoverBacklog(
+          root,
+          processed,
+          discoveryLog,
+          {
+            ...discoveryOpts,
+            // The entire scan, including marker bytes and decider attribution,
+            // reads the immutable claim base rather than a moving branch name.
+            baseBranch: baseSha,
+            baseSha,
+            featureApplicabilityEnabled: resolveFeatureApplicabilityConfig(config).enabled,
+            featureApplicabilityCustomStepNames: Object.keys(config?.steps ?? {})
+              .filter((name) => !ALL_STEPS.some((step) => step.name === name)),
+          },
+        );
+      },
       resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
       readStamp: (slug) => readSpecOwnerStamp(ownerGit, baseBranch, slug),
       readMergeTime: (slug) =>
@@ -3072,6 +3098,15 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(
         `${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.field} status write refused: ${event.expected} → ${event.requested} (${event.intent})`)}`,
       );
+      break;
+    case 'step_inapplicable':
+      log(`${dot} ${chalk.magenta('⊘')} ${chalk.magenta(`${event.step} inapplicable: ${event.reason}`)}`);
+      break;
+    case 'step_inapplicable_ignored':
+      log(`${dot} ${chalk.yellow('⊘')} ${chalk.yellow(`step applicability ignored (${event.cause}${event.step ? `: ${event.step}` : ''})`)}`);
+      break;
+    case 'step_inapplicable_refused':
+      log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.step} applicability refused (${event.priorStatus}): ${event.reason}`)}`);
       break;
     case 'github_operation_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatGithubOperationRefusal(event))}`);

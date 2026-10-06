@@ -45,6 +45,8 @@ export interface HaltedEntry {
   prUrl?: string;
   /** Provider lifecycle evidence when this halt exhausted preparation recovery. */
   lifecycle?: ProviderLifecycleDiagnostic;
+  /** Feature-declared skips, distinct from tier/config skips. */
+  inapplicable?: Array<{ step: string; reason: string }>;
 }
 
 /** Lifecycle evidence surfaced from the feature's persisted provider events. */
@@ -94,6 +96,8 @@ export interface InProgressEntry {
   completionCondition?: string;
   /** Current provider preparation/running/recovery phase, if persisted. */
   lifecycle?: ProviderLifecycleDiagnostic;
+  /** Feature-declared skips, distinct from tier/config skips. */
+  inapplicable?: Array<{ step: string; reason: string }>;
 }
 
 /** A dashboard observation needs only a short current-activity window. */
@@ -338,6 +342,20 @@ function stateExtras(state: Record<string, unknown>): {
   const prUrl =
     typeof state.pr_url === 'string' && state.pr_url.length > 0 ? state.pr_url : undefined;
   return { tier, prUrl };
+}
+
+/**
+ * Project only declarations that the conductor actually honored. Ordinary
+ * tier/config skips have no durable feature_inapplicable record and must not
+ * be rendered as feature-declared inapplicability.
+ */
+function inapplicableEntries(
+  state: Record<string, unknown>,
+): Array<{ step: string; reason: string }> | undefined {
+  if (!Array.isArray(state.feature_inapplicable)) return undefined;
+  return state.feature_inapplicable
+    .filter(({ step }) => state[step] === 'skipped')
+    .map(({ step, reason }) => ({ step, reason }));
 }
 
 /**
@@ -629,6 +647,8 @@ export async function scanInheritedState(
           const { tier, prUrl } = stateExtras(state);
           if (tier) entry.tier = tier;
           if (prUrl) entry.prUrl = prUrl;
+          const inapplicable = inapplicableEntries(state);
+          if (inapplicable) entry.inapplicable = inapplicable;
         }
         const lifecycle = await readProviderLifecycleDiagnostic(wt, entry.step);
         if (lifecycle?.phase === 'halted') entry.lifecycle = lifecycle;
@@ -694,6 +714,8 @@ export async function scanInheritedState(
         const { tier, prUrl } = stateExtras(state);
         if (tier) entry.tier = tier;
         if (prUrl) entry.prUrl = prUrl;
+        const inapplicable = inapplicableEntries(state);
+        if (inapplicable) entry.inapplicable = inapplicable;
       }
       // Best-effort: a missing/malformed heartbeat file is "no heartbeat yet",
       // never a scan failure — same tolerance as every other worktree read here.
@@ -995,12 +1017,18 @@ export function renderDashboard(
   for (const h of halted) {
     const step = h.step ? ` @${h.step}` : '';
     lines.push(`  • ${h.slug}${tierTag(h.tier)}${step} — reason: ${h.reason}${lifecycleSuffix(h.lifecycle)}${prSuffix(h.prUrl)}; remedy: clear this row's .pipeline/HALT to resume`);
+    for (const entry of h.inapplicable ?? []) {
+      lines.push(`    inapplicable: ${entry.step} — ${entry.reason}`);
+    }
   }
 
   const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
   lines.push(`IN-PROGRESS (${inProgress.length})`);
   for (const p of inProgress) {
     lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${elapsedStepTimeSuffix(p.elapsedStepTimeMs)}${lastTestOutcomeSuffix(p.lastTestOutcome)}${childWorkSuffix(p)}${tokenBurnSuffix(p)}${prSuffix(p.prUrl)}`);
+    for (const entry of p.inapplicable ?? []) {
+      lines.push(`    inapplicable: ${entry.step} — ${entry.reason}`);
+    }
   }
 
   const retainedWorktrees = (state.retainedWorktrees ?? []).filter(

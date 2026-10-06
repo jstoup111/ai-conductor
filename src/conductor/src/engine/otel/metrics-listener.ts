@@ -102,6 +102,22 @@ export class MetricsListener {
       const kickback = event as Extract<OtelEvent, { type: 'kickback' }>;
       listener.feature(kickback)?.onKickback(kickback.from, kickback.to);
     },
+    step_inapplicable: (listener, event) => {
+      const inapplicable = event as Extract<OtelEvent, { type: 'step_inapplicable' }>;
+      (listener.feature(inapplicable) ?? listener.recorder).onStepApplicability({ event: inapplicable.type, step: inapplicable.step });
+    },
+    step_inapplicable_ignored: (listener, event) => {
+      const ignored = event as Extract<OtelEvent, { type: 'step_inapplicable_ignored' }>;
+      (listener.feature(ignored) ?? listener.recorder).onStepApplicability({
+        event: ignored.type, cause: ignored.cause, ...(ignored.step === undefined ? {} : { step: ignored.step }),
+      });
+    },
+    step_inapplicable_refused: (listener, event) => {
+      const refused = event as Extract<OtelEvent, { type: 'step_inapplicable_refused' }>;
+      (listener.feature(refused) ?? listener.recorder).onStepApplicability({
+        event: refused.type, step: refused.step, priorStatus: refused.priorStatus,
+      });
+    },
     loop_halt: (listener, event) => listener.closeFeature(event as Extract<OtelEvent, { type: 'loop_halt' }>, 'halted'),
   };
 

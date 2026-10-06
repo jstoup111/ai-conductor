@@ -407,6 +407,10 @@ For every in-progress feature it also prints a `PLAN GROWTH [<slug>]:` line read
 kickback ledger and resolved `prd_audit` cap: the plan's authored task count, the number of tasks added
 so far (broken down by the gate that added them, when any), and how many remain under the cap.
 
+For every halted or in-progress feature with an honored
+[per-feature applicability](steps.md#per-feature-applicability) declaration, it prints
+`inapplicable [<slug>]: <step> — <reason>`.
+
 Nine rendered states. `restart-pending` and `dead-pane` are overlays: they take precedence in the
 badge, but the underlying liveness and pause facts stay on the row.
 

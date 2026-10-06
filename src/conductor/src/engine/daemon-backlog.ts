@@ -2,7 +2,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { basename, join as pathJoin } from 'node:path';
 import { promisify } from 'node:util';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { BacklogItem } from './daemon.js';
 import {
   adrApprovalStatus,
@@ -13,6 +13,8 @@ import {
   parseTrack,
   planStem,
 } from './artifacts.js';
+import { validateApplicability } from './feature-applicability.js';
+import { resolveMarkerDecider } from './owner-gate/merge-time.js';
 import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import type { OwnerStamp } from './owner-gate/provenance.js';
@@ -73,7 +75,7 @@ export function gitTreeSource(
   baseBranch: string,
   options: GitTreeSourceOptions = {},
 ): BacklogTreeSource {
-  let prefetchedDocs: Promise<Map<string, string>> | undefined;
+  let prefetchedDocs: Promise<{ docs?: Map<string, string>; error?: unknown }> | undefined;
   const runGit = options.gitRunner ?? (async (args: string[]) => {
     const { stdout } = await execFile('git', args, { cwd: projectRoot });
     return { stdout: stdout.toString() };
@@ -85,9 +87,11 @@ export function gitTreeSource(
         const { stdout } = await runGit(['ls-tree', '-r', '-z', '--name-only', baseBranch, '--', '.docs']);
         const paths = stdout.split('\0').filter(Boolean);
         const blobs = await readGitBlobs(projectRoot, baseBranch, paths, { runner: options.blobRunner });
-        return new Map([...blobs].map(([path, content]) => [path, content.toString('utf8')]));
-      } catch {
-        return new Map<string, string>();
+        return { docs: new Map([...blobs].map(([path, content]) => [path, content.toString('utf8')])) };
+      } catch (error) {
+        // Applicability has an explicit fail-soft diagnostic at its caller.
+        // Retain the failure so that diagnostic remains reachable in production.
+        return { error };
       }
     })();
     return prefetchedDocs;
@@ -133,8 +137,14 @@ export function gitTreeSource(
       }
     },
     async readFile(relPath) {
-      const docs = await prefetchDocs();
-      if (relPath.startsWith('.docs/')) return docs.get(relPath) ?? null;
+      const prefetched = await prefetchDocs();
+      if (relPath.startsWith('.docs/')) {
+        if (prefetched.docs) return prefetched.docs.get(relPath) ?? null;
+        if (relPath.startsWith('.docs/applicability/')) throw prefetched.error;
+        // A failed batch must not make unrelated eligibility reads look absent.
+        // Preserve their historical direct-read behavior while applicability
+        // reports the original batch failure through discoverBacklog.
+      }
 
       try {
         const { stdout } = await runGit(['show', `${baseBranch}:${relPath}`]);
@@ -489,8 +499,16 @@ export async function fastForwardRoot(
 export interface DiscoverBacklogOpts {
   /** Branch whose committed tree is the build-ready source of truth (default 'main'). */
   baseBranch?: string;
+  /** Immutable commit resolved for this scan and carried into its work orders. */
+  baseSha?: string;
   /** Inject a tree source (tests); defaults to the git base-branch reader. */
   treeSource?: BacklogTreeSource;
+  /** Project-only resolved applicability toggle, supplied by daemon-cli. */
+  featureApplicabilityEnabled?: boolean;
+  /** Configured custom step names, supplied by daemon-cli for shared validation. */
+  featureApplicabilityCustomStepNames?: readonly string[];
+  /** Test seam for marker attribution at the same base ref used by the tree. */
+  resolveMarkerDecider?: typeof resolveMarkerDecider;
   /**
    * One-time skip-warning dedup. Every skip here is for a MERGED spec (the tree
    * source reads the committed base branch), so an un-buildable merged spec
@@ -830,7 +848,7 @@ export async function discoverBacklog(
   // case (pre-track/pre-complexity specs), and logging that on every poll for
   // every such spec would be pure noise.
   const warnMarkerDefault = async (
-    kind: 'tier' | 'track',
+    kind: 'tier' | 'track' | 'applicability',
     slug: string,
     lookup: { tried: string[]; ambiguous: boolean },
   ): Promise<void> => {
@@ -1162,23 +1180,78 @@ export async function discoverBacklog(
     const trackMarker = await readFeatureMarker('.docs/track', slug);
     const track = parseTrack(trackMarker.content);
 
+    // Like tier and track, the applicability marker is resolved only from the
+    // base tree and uses the same guarded dated-stem fallback. Its read is
+    // deliberately fail-soft: a bad tree adapter must not abort the rest of
+    // the backlog scan.
+    let applicabilityMarker: { content: string | null; tried: string[]; ambiguous: boolean };
+    try {
+      applicabilityMarker = await readFeatureMarker('.docs/applicability', slug);
+    } catch (err) {
+      const path = `.docs/applicability/${slug}.md`;
+      log(`${slug}: unable to read applicability marker (${path}): ${err instanceof Error ? err.message : String(err)}`);
+      applicabilityMarker = { content: null, tried: [path], ambiguous: false };
+    }
+    const applicabilityDeclarations: import('../types/state.js').FeatureApplicabilityDeclaration[] = [];
+    let applicabilityBaseContentSha256: string | undefined;
+    let applicabilityIgnored: import('../types/state.js').FeatureApplicabilityIgnored | undefined;
+    if (applicabilityMarker.content !== null) {
+      applicabilityBaseContentSha256 = `sha256:${createHash('sha256').update(applicabilityMarker.content, 'utf8').digest('hex')}`;
+      // Parse with the capability enabled first so a disabled marker retains
+      // the steps it would otherwise have declared for truthful reporting.
+      const validation = validateApplicability(applicabilityMarker.content, {
+        enabled: true,
+        customStepNames: opts.featureApplicabilityCustomStepNames ?? [],
+      });
+      if (!(opts.featureApplicabilityEnabled ?? false)) {
+        applicabilityIgnored = {
+          cause: 'toggle-off',
+          ...(validation.ok ? { steps: validation.declarations.map((entry) => entry.step as import('../types/steps.js').StepName) } : {}),
+        };
+      } else if (validation.ok) {
+        const decider = await (opts.resolveMarkerDecider ?? resolveMarkerDecider)(
+          projectRoot,
+          baseBranch,
+          applicabilityMarker.tried[applicabilityMarker.tried.length - 1],
+        );
+        const deciderLabel = 'decider' in decider
+          ? decider.decider
+          : { author: decider.author, committer: decider.committer };
+        for (const declaration of validation.declarations) {
+          applicabilityDeclarations.push({
+            step: declaration.step as import('../types/steps.js').StepName,
+            reason: declaration.reason,
+            decider: deciderLabel,
+            ...(decider.commit ? { commit: decider.commit } : {}),
+          });
+        }
+      } else {
+        applicabilityIgnored = { cause: 'invalid', detail: validation.error };
+      }
+    }
+
     // Observability for the two markers, emitted here — after every
     // skip/gate `continue` above — so only a spec that actually dispatches
     // reports its metadata resolution, and the owner-gate notices stay the
     // first line logged for a slug.
     if (!tier) await warnMarkerDefault('tier', slug, tierMarker);
     if (!track) await warnMarkerDefault('track', slug, trackMarker);
+    if (applicabilityMarker.ambiguous) await warnMarkerDefault('applicability', slug, applicabilityMarker);
 
     // A fresh worktree is cut from the (now fast-forwarded) default branch, so the
     // vetted stories/plan physically exist in it already — the item only needs to
     // carry the slug (+ tier + sourceRef + track); no working-tree paths to copy.
     items.push({
       slug,
+      ...(opts.baseSha ? { baseSha: opts.baseSha } : {}),
       planPath: planRel,
       storiesPath: storiesRel,
       tier,
       ...(sourceRef ? { sourceRef } : {}),
       ...(track ? { track } : {}),
+      applicabilityDeclarations,
+      ...(applicabilityBaseContentSha256 ? { applicabilityBaseContentSha256 } : {}),
+      ...(applicabilityIgnored ? { applicabilityIgnored } : {}),
     });
   }
 

@@ -4,6 +4,8 @@
 **Status:** APPROVED
 **Deciders:** operator (James Stoup), via composer DECIDE for #1789
 **Spec:** .docs/specs/step-applicability-is-fixed-repo-wide-decide-canno.md
+**Amended:** 2026-10-05 by operator (James Stoup) — decision 7 clarified: a refused late
+declaration only suppresses the skip; the step continues through normal dispatch (as-built AB-A9).
 
 ## Context
 
@@ -125,7 +127,10 @@ Verified facts this decision rests on:
 7. **Late declarations are refused.** At dispatch, a declared step whose observed status for this
    feature is anything other than `pending` is not skipped. That includes `in_progress`, `done`,
    `failed`, `refused`, and `stale`. Dispatch emits `step_inapplicable_refused { step, reason,
-   priorStatus }`, and the prior outcome stands. A step already recorded in
+   priorStatus }`. The declaration does not change the step's status: the step continues through
+   normal dispatch exactly as it would without the declaration, so a `failed` or `in_progress` step
+   is retried and must still pass its gate, and a `done` step stays done. Refusal suppresses only the
+   skip; it never freezes the step at its prior status. A step already recorded in
    `ConductState.feature_inapplicable` is exempt from refusal: it stays skipped across rewind,
    rebase, and post-rebase invalidation, which already preserve `skipped`. Removing a declaration
    from the base after it was honored does not reopen the step.

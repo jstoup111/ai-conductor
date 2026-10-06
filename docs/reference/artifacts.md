@@ -37,10 +37,11 @@ engine reads (resume probe) and excludes (self-host fingerprint) but never write
 
 ## `.docs/` — committed artifacts
 
-Nineteen entries. Alphabetized; the four with no code reference are marked.
+Twenty entries. Alphabetized; the four with no code reference are marked.
 
 | Entry | Naming | Written by | Read by / gate role |
 | --- | --- | --- | --- |
+| `applicability/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | DECIDE author, only when [`feature_applicability`](configuration.md#feature_applicability) is enabled | `land-spec` validates its `Inapplicable: <step> — <reason>` lines; daemon discovery reads the base-branch copy and seeds the feature's declarations — see [per-feature applicability](steps.md#per-feature-applicability) |
 | `architecture/` | `YYYY-MM-DD-<topic>.md`, plus fixed `system-context.md`, `containers.md`, `components.md`, `erd.md`, and a `sequences/` subdir | `architecture-diagram`, `architecture-review`, `bootstrap` | `architecture_diagram` completion glob; mermaid render check at land; non-Small artifacts require at least one fenced Mermaid block; protected-artifact seal |
 | `audit/` | free-form | manual | **no code reference** |
 | `audits/` | free-form JSON | a one-off backfill | `shipment-audit.ts` — one hardcoded path, nothing else |
@@ -755,7 +756,8 @@ no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` fo
 `halt_marker_write_failed`, `halt_record_written`, `halt_record_write_failed`, `halt_record_push_failed`,
 `shipment_evidence_refused`, `step_status_write_refused`, `rebase_changed`, `rebase_gate_preserved`,
 `rebase_gate_invalidated`, `rebase_merge_audit`, `rebase_conflict_halt`, `unattributed_progress`,
-`attribution_divergence`, `acceptance_red`, `rebase_citation_residue`, and `rebase_supersession_verdict`.
+`attribution_divergence`, `acceptance_red`, `step_inapplicable`, `step_inapplicable_ignored`,
+`step_inapplicable_refused`, `rebase_citation_residue`, and `rebase_supersession_verdict`.
 
 `rebase_merge_audit` records a flattened replay of a merge-bearing feature branch: the shas of
 flattened merges, the shas of dropped ancestry-only merges, and the count of side-lineage commits not

@@ -411,6 +411,39 @@ describe('engine/daemon-observe-cli', () => {
       return p;
     }
 
+    it('renders honored halted-feature inapplicability but excludes ordinary skipped steps', async () => {
+      const repo = join(root, 'repo-inapplicable-halt');
+      const declaredPipeline = join(repo, '.worktrees', 'declared-halt', '.pipeline');
+      const ordinaryPipeline = join(repo, '.worktrees', 'ordinary-skip-halt', '.pipeline');
+      await mkdir(declaredPipeline, { recursive: true });
+      await mkdir(ordinaryPipeline, { recursive: true });
+      await writeFile(join(declaredPipeline, 'HALT'), 'needs operator', 'utf8');
+      await writeFile(join(ordinaryPipeline, 'HALT'), 'needs operator', 'utf8');
+      await writeFile(
+        join(declaredPipeline, 'conduct-state.json'),
+        JSON.stringify({
+          manual_test: 'skipped',
+          feature_inapplicable: [{ step: 'manual_test', reason: 'no browser surface' }],
+        }),
+        'utf8',
+      );
+      await writeFile(
+        join(ordinaryPipeline, 'conduct-state.json'),
+        JSON.stringify({ manual_test: 'skipped', prd_audit: 'skipped' }),
+        'utf8',
+      );
+
+      const out: string[] = [];
+      await runDaemonStatus({
+        registryPath: await registry([record('repo-inapplicable-halt', repo)]),
+        out: (line) => out.push(line),
+      });
+
+      const output = out.join('\n');
+      expect(output).toContain('inapplicable [declared-halt]: manual_test — no browser surface');
+      expect(output).not.toContain('inapplicable [ordinary-skip-halt]');
+    });
+
     describe('read-only review capability (Task 12)', () => {
       it('renders the latest persisted capability result for each provider without probing', async () => {
         const repo = join(root, 'repo-capability');

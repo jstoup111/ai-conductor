@@ -245,6 +245,17 @@ export class MetricsRecorder {
   }
   onGateVerdict(step: string, outcome: 'pass' | 'fail'): void { this.instruments.gateVerdictsCounter.add(1, this.withIdentity({ step, outcome })); }
   onKickback(from: string, to: string): void { this.instruments.gateKickbacksCounter.add(1, this.withIdentity({ from, to })); }
+  /**
+   * Applicability occurrences carry only bounded labels. Reason, decider and
+   * commit text stay on the event spine and never become metric labels.
+   */
+  onStepApplicability(attrs: { event: string; step?: string; cause?: string; priorStatus?: string }): void {
+    const bounded: Attributes = { event: attrs.event };
+    if (attrs.step !== undefined) bounded.step = attrs.step;
+    if (attrs.cause !== undefined) bounded.cause = attrs.cause;
+    if (attrs.priorStatus !== undefined) bounded.priorStatus = attrs.priorStatus;
+    this.instruments.stepApplicabilityCounter.add(1, this.withIdentity(bounded));
+  }
   onStall(reason: string): void { this.instruments.daemonStallsCounter.add(1, this.withIdentity({ reason })); }
 
   private static readonly TOKEN_KINDS = ['input', 'output', 'cacheRead', 'cacheCreation'] as const;
@@ -276,6 +287,7 @@ interface MetricInstruments {
   daemonUpGauge: Gauge; daemonBlockedGauge: Gauge; daemonPollHistogram: Histogram; daemonStallsCounter: Counter;
   featureDispatchesCounter: Counter; featureHaltsCounter: Counter; featureShippedCounter: Counter;
   featureWallHistogram: Histogram; featureActiveHistogram: Histogram; gateVerdictsCounter: Counter; gateKickbacksCounter: Counter;
+  stepApplicabilityCounter: Counter;
 }
 
 function createInstruments(meter: Meter): MetricInstruments {
@@ -308,5 +320,6 @@ function createInstruments(meter: Meter): MetricInstruments {
     featureActiveHistogram: histogram('conductor.feature.duration.active', 'Feature active duration in milliseconds'),
     gateVerdictsCounter: counter('conductor.gate.verdicts', 'Gate verdicts'),
     gateKickbacksCounter: counter('conductor.gate.kickbacks', 'Gate kickbacks'),
+    stepApplicabilityCounter: counter('conductor.step.applicability', 'Step applicability declarations honored, ignored, or refused'),
   };
 }

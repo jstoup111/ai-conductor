@@ -12,6 +12,15 @@
 // git exit → `null` (indeterminate), which the gate treats as post-cutover.
 
 import type { GitRunner } from '../rebase.js';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFile = promisify(execFileCb);
+
+/** Attribution recorded for a marker's latest first-parent base commit. */
+export type MarkerDecider =
+  | { author: string; committer: string; commit: string }
+  | { decider: 'unknown'; commit?: string };
 
 /**
  * The ISO-8601 commit time at which `planPath` first appeared on `baseBranch`,
@@ -41,4 +50,42 @@ export async function firstAppearanceTime(
   if (lines.length === 0) return null;
 
   return lines[lines.length - 1];
+}
+
+/**
+ * Resolve the latest first-parent base commit that touched a feature marker.
+ *
+ * This is audit attribution only. An unavailable ref, absent history, malformed
+ * output, or git failure degrades to `unknown`; it never affects owner or
+ * authorization decisions.
+ */
+export async function resolveMarkerDecider(
+  projectRoot: string,
+  baseRef: string,
+  relPath: string,
+): Promise<MarkerDecider> {
+  try {
+    const { stdout } = await execFile(
+      'git',
+      [
+        'log',
+        '-1',
+        '--first-parent',
+        baseRef,
+        '--format=%H%x00%an <%ae>%x00%cn <%ce>',
+        '--',
+        relPath,
+      ],
+      { cwd: projectRoot },
+    );
+    const [commitRaw, authorRaw, committerRaw] = stdout.toString().split('\0');
+    const commit = commitRaw?.trim();
+    const author = authorRaw?.trim();
+    const committer = committerRaw?.trim();
+
+    if (commit && author && committer) return { author, committer, commit };
+    return commit ? { decider: 'unknown', commit } : { decider: 'unknown' };
+  } catch {
+    return { decider: 'unknown' };
+  }
 }

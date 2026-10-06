@@ -1,5 +1,24 @@
 import type { StepName, StepStatus, ComplexityTier, Track } from './steps.js';
 
+/** A base-tree applicability declaration seeded by the daemon before dispatch. */
+export interface FeatureApplicabilityDeclaration {
+  step: StepName;
+  reason: string;
+  decider: { author: string; committer: string } | 'unknown';
+  commit?: string;
+}
+
+/** A declaration the conductor has honored for this feature. */
+export type FeatureInapplicableRecord = FeatureApplicabilityDeclaration;
+
+/** A base marker which is retained for reporting but cannot be honored. */
+export interface FeatureApplicabilityIgnored {
+  cause: 'invalid' | 'toggle-off';
+  /** Parsed declarations retained when a marker is disabled by configuration. */
+  steps?: StepName[];
+  detail?: { kind: string; line: number; step?: string };
+}
+
 /**
  * Mode detected by the bootstrap skill when it first runs in a project.
  * Persisted to state so downstream steps (notably `assess`) can branch on
@@ -33,6 +52,14 @@ export type ConductState = {
    * missing track defaults to `product` (back-compat: pre-track specs are PRDs).
    */
   track?: Track;
+  /** Base-tree declarations; an empty array is a markerless daemon dispatch. */
+  applicability_declarations?: FeatureApplicabilityDeclaration[];
+  /** SHA-256 of the base-tree marker content when a marker was present. */
+  applicability_base_content_sha256?: string;
+  /** A base marker which dispatch must report as ignored. */
+  applicability_ignored?: FeatureApplicabilityIgnored;
+  /** Declarations honored by this feature's conductor dispatch. */
+  feature_inapplicable?: FeatureInapplicableRecord[];
   bootstrap_mode?: BootstrapMode;
   run_started_at?: number;
   /**

@@ -171,13 +171,13 @@ As an operator, I want a declaration that arrives after a step has started to be
 - Given manual_test skipped as inapplicable for a feature, when the feature is rebased onto a new base or rewound, then manual_test stays skipped as inapplicable and no refused event is emitted.
 
 #### Negative Paths
-- Given an enabled repository and manual_test failed for the feature, when a spec amendment declaring manual_test inapplicable is merged and the feature is re-dispatched, then manual_test is not skipped, its failed status stands, and a step_inapplicable_refused event naming manual_test with prior status failed is persisted.
+- Given an enabled repository and manual_test failed for the feature, when a spec amendment declaring manual_test inapplicable is merged and the feature is re-dispatched, then manual_test is not skipped, the declaration does not change its failed status, manual_test is retried through normal dispatch and must still pass its gate, and a step_inapplicable_refused event naming manual_test with prior status failed is persisted.
 - Given an enabled repository and manual_test in progress or halted for the feature, when a declaration for manual_test is merged and the feature is re-dispatched, then manual_test is not skipped and a step_inapplicable_refused event with that prior status is persisted.
 - Given an enabled repository and acceptance_specs already done for the feature, when a declaration for acceptance_specs is merged and the feature is re-dispatched, then acceptance_specs keeps its done status and a step_inapplicable_refused event with prior status done is persisted.
 
 ### Done When
 - [ ] Only steps whose status is pending at dispatch are skipped by a declaration.
-- [ ] Declarations for in-progress, failed, refused, done, or stale steps leave the prior status unchanged and persist a refused event naming the prior status.
+- [ ] Declarations for in-progress, failed, refused, done, or stale steps do not change the step's status — the step continues through normal dispatch, so a failed or in-progress step is retried and must pass its gate and a done step stays done — and persist a refused event naming the prior status.
 - [ ] A step already honored as inapplicable stays skipped across re-dispatch, rebase, and rewind without a refused event.
 
 ## Story 9: An inapplicable step is recorded distinctly
@@ -195,7 +195,7 @@ As an operator, I want a step skipped by a declaration to show as inapplicable, 
 
 #### Negative Paths
 - Given a feature whose step was tier-skipped or config-disabled, when the operator views the dashboard or daemon status, then that step is not shown as inapplicable and no step_inapplicable event exists for it.
-- Given a feature whose declared step was refused as late, when the operator views the dashboard, then the step shows its prior status, not inapplicable.
+- Given a feature whose declared step was refused as late, when the operator views the dashboard, then the step shows its current dispatch status (for example failed, in progress, or done after a successful retry), not inapplicable.
 
 ### Done When
 - [ ] An honored declaration persists a step_inapplicable event and exports it to telemetry.

@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { StepName, ComplexityTier } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -11,6 +11,7 @@ import {
   shouldSkipForTrack,
   shouldSkipForBootstrapMode,
   getSkippableSteps,
+  isFeatureDeclarable,
   isCheckpointStep,
   getPrerequisites,
   buildStepRegistry,
@@ -468,6 +469,45 @@ describe('engine/steps', () => {
         'acceptance_specs',
         'manual_test',
       ]);
+    });
+  });
+
+  describe('isFeatureDeclarable', () => {
+    it('allows exactly acceptance_specs and manual_test among built-in steps', () => {
+      for (const step of ALL_STEPS) {
+        expect(isFeatureDeclarable(step.name, [])).toEqual(
+          ['acceptance_specs', 'manual_test'].includes(step.name)
+            ? { ok: true }
+            : { ok: false, step: step.name, reason: 'not-declarable' },
+        );
+      }
+    });
+
+    it.each([
+      'test_suite',
+      'build_review',
+      'finish',
+      'prd_audit',
+      'architecture_review_as_built',
+      'coverage_binding',
+      'build',
+      'rebase',
+      'plan',
+      'stories',
+    ] as const)('rejects built-in %s as not declarable', (step) => {
+      expect(isFeatureDeclarable(step, [])).toEqual({
+        ok: false,
+        step,
+        reason: 'not-declarable',
+      });
+    });
+
+    it('rejects custom names before consulting built-in definitions', () => {
+      expect(isFeatureDeclarable('manual_test', ['manual_test'])).toEqual({
+        ok: false,
+        step: 'manual_test',
+        reason: 'not-declarable',
+      });
     });
   });
 

@@ -4198,6 +4198,57 @@ export function parseTrack(content: string | null): Track | undefined {
   return m[1].toLowerCase() as Track;
 }
 
+export interface ApplicabilityDeclaration {
+  step: string;
+  reason: string;
+  line: number;
+}
+
+export type ParseApplicabilityResult =
+  | { ok: true; declarations: ApplicabilityDeclaration[] }
+  | { ok: false; error: { kind: 'empty-reason' | 'malformed-line'; line: number } };
+
+/** Parse `Inapplicable:` declarations from a feature applicability marker. */
+export function parseApplicability(content: string): ParseApplicabilityResult {
+  const declarations: ApplicabilityDeclaration[] = [];
+
+  for (const [index, line] of content.split(/\r?\n/).entries()) {
+    if (!line.startsWith('Inapplicable:')) continue;
+
+    const body = line.slice('Inapplicable:'.length);
+    const emDashIndex = body.indexOf(' — ');
+    // The ordinary separator includes a space after the dash. A declaration
+    // ending in ` —` is the same separator with an empty (or whitespace-only)
+    // reason, and must retain the more useful empty-reason diagnostic.
+    const terminalEmDashIndex = body.trimEnd().endsWith(' —')
+      ? body.trimEnd().length - 2
+      : -1;
+    const separatorIndex = emDashIndex >= 0
+      ? emDashIndex
+      : terminalEmDashIndex >= 0
+        ? terminalEmDashIndex
+        : undefined;
+    const lineNumber = index + 1;
+
+    if (separatorIndex === undefined) {
+      return { ok: false, error: { kind: 'malformed-line', line: lineNumber } };
+    }
+
+    const reason = body.slice(separatorIndex + (emDashIndex >= 0 ? 3 : 2)).trim();
+    if (!reason) {
+      return { ok: false, error: { kind: 'empty-reason', line: lineNumber } };
+    }
+
+    declarations.push({
+      step: body.slice(0, separatorIndex).trim(),
+      reason,
+      line: lineNumber,
+    });
+  }
+
+  return { ok: true, declarations };
+}
+
 /** A PRD-audit gap-class. `unknown` = a blocking row whose class cell we could
  * not read; the daemon treats it conservatively (like a product/plan gap). */
 /** The only grades a criterion-level PRD-audit finding may carry. */

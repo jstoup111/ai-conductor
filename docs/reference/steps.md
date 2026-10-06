@@ -228,6 +228,46 @@ resolves to `product`, so nothing is track-skipped when the track is unknown.
 | Bootstrap mode | `bootstrap_mode: new` skips the step with a `mode_skip` event | `assess` only |
 | `configDisableAllowed` | Opt-in to `steps.<name>.disable: true`. Config validation rejects disabling any other gating or structural built-in | `manual_test` only |
 | `when:` | Per-step conditional expression in config. It has the same authority boundary as config disable: advisory steps and the opted-in built-in are allowed; other gating and structural steps are rejected | Advisory steps and `manual_test` |
+| `featureInapplicableAllowed` | Opt-in to a per-feature `Inapplicable:` declaration; see [per-feature applicability](#per-feature-applicability) | `acceptance_specs` and `manual_test` only |
+
+### Per-feature applicability
+
+With [`feature_applicability.enabled: true`](configuration.md#feature_applicability), a feature can
+declare a step inapplicable in `.docs/applicability/<slug>.md`. Each declaration is one line:
+
+```text
+Inapplicable: manual_test — no user-facing surface changes
+```
+
+The separator is ` — ` (an em dash with surrounding spaces) and the reason must be non-empty. Lines
+that do not start with `Inapplicable:` are treated as prose.
+
+Only built-ins with `featureInapplicableAllowed` are declarable: `acceptance_specs` and
+`manual_test`. Custom steps never are. `land-spec` refuses the marker with gate
+`applicability-invalid` for a malformed line, an empty reason, an unknown step, a non-declarable
+step, a duplicate step, or any marker while the capability is disabled. A marker whose stem is not
+the feature slug fails `artifact-stem-mismatch`.
+
+Rules at dispatch:
+
+- Only the marker on the daemon's pinned base commit counts. The daemon records its declarations,
+  its content hash, and the decider: the author and committer of the latest first-parent base commit
+  that touched the marker, or `unknown`.
+- An invalid base marker is ignored with `step_inapplicable_ignored` (`cause: invalid`).
+- A marker that exists only on the feature branch, or differs from the base copy, is ignored with
+  `cause: branch-only`. A run the daemon did not seed ignores a checkout marker with
+  `cause: interactive`.
+- Tier, track, `disable: true`, and dependency skips take precedence.
+- A still-`pending` declared step is marked `skipped`, recorded in the feature's
+  `feature_inapplicable` state, and reported as `step_inapplicable` with its reason and decider. A
+  skip verdict, when the step writes one, reads `skipped: inapplicable: <reason>`.
+- A declared step that already left `pending` keeps its outcome and emits
+  `step_inapplicable_refused` with its prior status.
+
+`ai-conductor daemon status` and the daemon dashboard list honored declarations as
+`inapplicable: <step> — <reason>`; the step dashboard shows them with a `⊘` icon and the reason.
+The OTel counter `conductor.step.applicability` counts all three events by `event`, `step`,
+`cause`, and `priorStatus`; reasons and deciders stay on the event spine.
 
 ## Step artifacts and gate behavior
 
@@ -267,7 +307,8 @@ unsatisfied. Durable verdicts are written to `.pipeline/gates/<step>.json`.
 A step the engine resolves by *skipping* never runs its predicate, but it still writes a verdict:
 `{"satisfied": true, "reason": "skipped: <cause>"}`. The `skipped: ` prefix marks a gate that was
 deliberately not run, so it is never mistaken for evidence that passed. This covers every skip —
-tier, track, bootstrap mode, upstream skip, `disable: true`, a false `when:`, and an advisory step
+tier, track, bootstrap mode, upstream skip, `disable: true`, a false `when:`, a per-feature
+inapplicable declaration, and an advisory step
 auto-skipped after a failed completion check (whose reason carries the failure). See
 [gates](../explanation/gates.md#what-a-gate-is).
 
