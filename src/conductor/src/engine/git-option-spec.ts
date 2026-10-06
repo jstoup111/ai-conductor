@@ -66,7 +66,7 @@ export const GIT_OPTION_SPEC: GitOptionSpec = {
       no('quiet', 'q'), no('no-refresh', undefined, false), no('refresh', undefined, false),
       no('mixed', undefined, false), no('soft', undefined, false), no('hard', undefined, false),
       no('merge', undefined, false), no('keep', undefined, false), optional('recurse-submodules'),
-      no('patch', 'p'), required('unified', 'U'), required('inter-hunk-context'), no('intent-to-add', 'N'),
+      no('patch', 'p'), no('auto-advance'), required('unified', 'U'), required('inter-hunk-context'), no('intent-to-add', 'N'),
       required('pathspec-from-file'), no('pathspec-file-nul'),
     ],
     branch: [
@@ -97,7 +97,7 @@ export const GIT_OPTION_SPEC: GitOptionSpec = {
       required('branch', 'b'), required('orphan'), no('guess'), no('overlay'), no('quiet', 'q'), optional('recurse-submodules'),
       no('progress'), no('merge', 'm'), required('conflict'), no('detach', 'd'), optional('track', 't'), no('force', 'f'),
       no('overwrite-ignore'), no('ignore-other-worktrees'), no('ours', '2'), no('theirs', '3'), no('patch', 'p'),
-      required('unified', 'U'), required('inter-hunk-context'), no('ignore-skip-worktree-bits'), required('pathspec-from-file'),
+      no('auto-advance'), required('unified', 'U'), required('inter-hunk-context'), no('ignore-skip-worktree-bits'), required('pathspec-from-file'),
       no('pathspec-file-nul'), { short: 'B', arity: 'required', negatable: false }, { short: 'l', arity: 'none', negatable: false },
     ],
     restore: [

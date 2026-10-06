@@ -38,6 +38,8 @@ describe('git option spec', () => {
     expect(optionFor('branch', '--force')?.short).toBe('f');
     expect(optionFor('push', '--force-with-lease')?.arity).toBe('optional');
     expect(optionFor('reset', '--hard')?.negatable).toBe(false);
+    expect(optionFor('reset', '--auto-advance')?.negatable).toBe(true);
+    expect(optionFor('checkout', '--auto-advance')?.negatable).toBe(true);
   });
 
   it('resolves every guarded option in the engine CLI argv table', async () => {
