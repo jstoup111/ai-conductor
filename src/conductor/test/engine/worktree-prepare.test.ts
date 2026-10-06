@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, chmod, readFile, stat, access, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -25,7 +26,12 @@ import {
   PRE_DISPATCH_HOOK,
   DOCS_GUARD_HOOK,
 } from '../../src/engine/session-hook-assets.js';
-import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
+import {
+  PREPARE_COMMIT_MSG_HOOK,
+  COMMIT_MSG_HOOK,
+  REFERENCE_TRANSACTION_HOOK,
+  PRE_PUSH_HOOK,
+} from '../../src/engine/git-hook-assets.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -952,6 +958,19 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
       expect(s2.mode & 0o111).not.toBe(0);
     });
 
+    it('provisions the reference-transaction and pre-push hook assets executable with their exported contents', async () => {
+      await prepareWorktree(worktreeDir);
+
+      for (const [name, contents] of [
+        ['reference-transaction', REFERENCE_TRANSACTION_HOOK],
+        ['pre-push', PRE_PUSH_HOOK],
+      ] as const) {
+        const path = join(worktreeDir, '.pipeline', 'git-hooks', name);
+        expect((await stat(path)).mode & 0o777).toBe(0o755);
+        await expect(readFile(path, 'utf8')).resolves.toBe(contents);
+      }
+    });
+
     it('sets worktree-scoped extensions.worktreeConfig and core.hooksPath to an absolute path', async () => {
       await prepareWorktree(worktreeDir);
 
@@ -995,6 +1014,18 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
 
       await chmod(pipelineDir, 0o700).catch(() => undefined);
 
+    });
+
+    it('rejects when the .pipeline/git-hooks directory is unwritable', async () => {
+      const hooksDir = join(worktreeDir, '.pipeline', 'git-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      await chmod(hooksDir, 0o500);
+
+      try {
+        await expect(prepareWorktree(worktreeDir)).rejects.toThrow(/preventive git hook installation failed/i);
+      } finally {
+        await chmod(hooksDir, 0o700).catch(() => undefined);
+      }
     });
 
     it('leaves the existing bin/setup + namespace contract unchanged when hooks are wired', async () => {

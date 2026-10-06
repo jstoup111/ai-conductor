@@ -187,6 +187,114 @@ export const PRE_COMMIT_HOOK = [
 ].join('\n');
 
 /**
+ * reference-transaction hook.
+ *
+ * Provisioned now so every prepared worktree has the complete hook surface;
+ * subsequent tasks add its preventive ref-deletion policy.
+ */
+export const REFERENCE_TRANSACTION_HOOK = [
+  '#!/bin/bash',
+  'set -u',
+  '',
+  'INPUT="$(mktemp)"',
+  'trap "rm -f \"$INPUT\"" EXIT',
+  'cat > "$INPUT"',
+  '',
+  '# Resolve the common hooks directory without invoking git on pass-through paths.',
+  'common_hooks_dir() {',
+  '  local common_relative',
+  '  if [[ -n "${GIT_DIR:-}" && -f "$GIT_DIR/commondir" ]]; then',
+  '    IFS= read -r common_relative < "$GIT_DIR/commondir"',
+  '    printf "%s/hooks\\n" "$(cd "$GIT_DIR/$common_relative" && pwd -P)"',
+  '  elif [[ -n "${GIT_DIR:-}" ]]; then',
+  '    printf "%s/hooks\\n" "$GIT_DIR"',
+  '  fi',
+  '}',
+  'chain_hook() {',
+  '  local chained_hook',
+  '  chained_hook="$(common_hooks_dir)"/reference-transaction',
+  '  [[ ! -x "$chained_hook" ]] || "$chained_hook" "$@" < "$INPUT"',
+  '}',
+  '',
+  '# Git invokes this hook for several stages. Only prepared can veto.',
+  '[[ "${1:-}" == "prepared" ]] || {',
+  '  chain_hook "$@"',
+  '  exit $?',
+  '}',
+  '',
+  'needs_decision=false',
+  "while IFS=' ' read -r _old new ref; do",
+  '  [[ "$ref" == refs/heads/* && "$new" =~ ^0+$ ]] && { needs_decision=true; break; }',
+  'done < "$INPUT"',
+  'if [[ "$needs_decision" == false ]]; then',
+  '  chain_hook "$@"',
+  '  exit $?',
+  'fi',
+  '',
+  'COMMON_DIR="$(git rev-parse --git-common-dir)"',
+  '[[ "$COMMON_DIR" = /* ]] || COMMON_DIR="$(git rev-parse --show-toplevel)/$COMMON_DIR"',
+  "while IFS=' ' read -r old new ref; do",
+  '  [[ "$ref" == refs/heads/* && "$new" =~ ^0+$ ]] || continue',
+  '  # pack-refs and gc remove a loose duplicate after recording the same tip.',
+  '  loose_ref="$COMMON_DIR/$ref"',
+  '  if [[ -f "$loose_ref" && -f "$COMMON_DIR/packed-refs" ]] && grep -Fqx "$old $ref" "$COMMON_DIR/packed-refs"; then',
+  '    continue',
+  '  fi',
+  '  tip="$(git rev-parse -q --verify "$ref" 2>/dev/null || true)"',
+  '  [[ -n "$tip" ]] || continue',
+  '  reachable=false',
+  '  while IFS= read -r other; do',
+  '    [[ "$other" == "$ref" ]] && continue',
+  '    if git merge-base --is-ancestor "$tip" "$other" >/dev/null 2>&1; then reachable=true; break; fi',
+  '  done < <(git for-each-ref --format="%(refname)" refs/heads refs/remotes)',
+  '  if [[ "$reachable" == false ]]; then',
+  "    printf 'refused branch deletion of %s: its commits would become unreachable. Safe alternatives: push or merge it first, or use git branch -d. To rename, create the new branch first and then delete the old one with git branch -d.\\n' \"$ref\" >&2",
+  '    exit 1',
+  '  fi',
+  'done < "$INPUT"',
+  '',
+  'CHAINED_HOOK="$COMMON_DIR/hooks/reference-transaction"',
+  '[[ ! -x "$CHAINED_HOOK" ]] || "$CHAINED_HOOK" "$@" < "$INPUT"',
+  'exit $?',
+  '',
+].join('\n');
+
+/**
+ * pre-push hook.
+ *
+ * Provisioned now so every prepared worktree has the complete hook surface;
+ * subsequent tasks add its preventive remote-update policy.
+ */
+export const PRE_PUSH_HOOK = [
+  '#!/bin/bash',
+  'set -u',
+  '',
+  'INPUT="$(mktemp)"',
+  'trap "rm -f \"$INPUT\"" EXIT',
+  'cat > "$INPUT"',
+  'remote="${1:-}"',
+  '',
+  "while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do",
+  '  # Remote deletion, branch creation, and fast-forwards cannot overwrite history.',
+  '  [[ "$local_sha" =~ ^0+$ || "$remote_sha" =~ ^0+$ ]] && continue',
+  '  if git merge-base --is-ancestor "$remote_sha" "$local_sha" >/dev/null 2>&1; then continue; fi',
+  '  branch="${remote_ref#refs/heads/}"',
+  '  tracked="$(git rev-parse -q --verify "refs/remotes/$remote/$branch" 2>/dev/null || true)"',
+  '  # A matching tracking ref is the local proof required by --force-with-lease.',
+  '  [[ "$tracked" == "$remote_sha" ]] && continue',
+  "  printf 'refused push to %s: it would overwrite remote history this worktree has not fetched. Safe alternatives: git fetch, then git push --force-with-lease.\\n' \"$remote_ref\" >&2",
+  '  exit 1',
+  'done < "$INPUT"',
+  '',
+  'COMMON_DIR="$(git rev-parse --git-common-dir)"',
+  '[[ "$COMMON_DIR" = /* ]] || COMMON_DIR="$(git rev-parse --show-toplevel)/$COMMON_DIR"',
+  'CHAINED_HOOK="$COMMON_DIR/hooks/pre-push"',
+  '[[ ! -x "$CHAINED_HOOK" ]] || "$CHAINED_HOOK" "$@" < "$INPUT"',
+  'exit $?',
+  '',
+].join('\n');
+
+/**
  * prepare-commit-msg hook
  * Stamps Task: <id> via git interpret-trailers only when the commit message
  * has no explicit Task: trailer. An explicit trailer is task-local telemetry

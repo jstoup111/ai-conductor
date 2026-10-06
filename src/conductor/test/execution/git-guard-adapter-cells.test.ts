@@ -1,5 +1,5 @@
 // Covers: task:7, task:8, task:9
-import { chmod, mkdtemp, rm, unlink } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +8,7 @@ import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
 import type { InvokeOptions, SelfHostInvocation } from '../../src/execution/llm-provider.js';
 import { gitGuardPath } from '../../src/engine/git-guard.js';
+import { PRE_PUSH_HOOK, REFERENCE_TRANSACTION_HOOK } from '../../src/engine/git-hook-assets.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 
@@ -212,5 +213,27 @@ describe('git guard adapter cells', () => {
     } finally {
       await chmod(bin, 0o755);
     }
+  });
+
+  it.each([
+    ['reference-transaction', REFERENCE_TRANSACTION_HOOK, 'deleted'],
+    ['reference-transaction', REFERENCE_TRANSACTION_HOOK, 'edited'],
+    ['pre-push', PRE_PUSH_HOOK, 'deleted'],
+    ['pre-push', PRE_PUSH_HOOK, 'edited'],
+  ] as const)('%s and %s dispatch only after repairing a %s hook', async (name, expected, damage) => {
+    for (const kind of ['claude', 'codex'] as const) {
+      const { root } = await preparedWorktree(); const hook = join(root, '.pipeline', 'git-hooks', name);
+      if (damage === 'deleted') await unlink(hook); else await writeFile(hook, 'edited\n');
+      const calls: CapturedSpawnOptions[] = []; const { provider } = makeProvider(kind, calls);
+      await provider.invoke(invokeOptions(root));
+      expect(calls).toHaveLength(1); const info = await lstat(hook); expect([await readFile(hook, 'utf8'), info.mode & 0o777]).toEqual([expected, 0o755]);
+    }
+  });
+
+  it.each(['claude', 'codex'] as const)('%s does not launch when pre-push cannot be restored', async (kind) => {
+    const { root } = await preparedWorktree(); const hook = join(root, '.pipeline', 'git-hooks', 'pre-push'); await unlink(hook); await mkdir(hook);
+    const calls: CapturedSpawnOptions[] = []; const { provider } = makeProvider(kind, calls);
+    const result = await provider.invoke(invokeOptions(root));
+    expect(result.success).toBe(false); expect(result.output).toContain(hook); expect(calls).toHaveLength(0);
   });
 });

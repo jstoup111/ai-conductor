@@ -7,7 +7,7 @@ import { execa } from 'execa';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ensureGitGuardForDispatch, gitGuardPath, resolveRealGit, writeGitGuard } from '../../src/engine/git-guard.js';
-import { GIT_GUARD_SCRIPT } from '../../src/engine/git-hook-assets.js';
+import { GIT_GUARD_SCRIPT, PRE_PUSH_HOOK, REFERENCE_TRANSACTION_HOOK } from '../../src/engine/git-hook-assets.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
@@ -102,6 +102,24 @@ describe('git guard provisioning primitives', () => {
     const guard = gitGuardPath(root);
     const info = await lstat(guard);
     expect([await readFile(guard, 'utf8'), info.mode & 0o777]).toEqual([GIT_GUARD_SCRIPT, 0o755]);
+  });
+
+  it.each([
+    ['reference-transaction', REFERENCE_TRANSACTION_HOOK, 'deleted'],
+    ['reference-transaction', REFERENCE_TRANSACTION_HOOK, 'edited'],
+    ['pre-push', PRE_PUSH_HOOK, 'deleted'],
+    ['pre-push', PRE_PUSH_HOOK, 'edited'],
+  ] as const)('repairs a %s %s hook before dispatch', async (name, content, damage) => {
+    const root = await mkdtemp(join(tmpdir(), 'git-guard-ref-hook-repair-'));
+    roots.push(root);
+    await initTestRepo(root); await prepareWorktree(root);
+    const hook = join(root, '.pipeline', 'git-hooks', name);
+    if (damage === 'deleted') await unlink(hook);
+    else await writeFile(hook, '#!/bin/sh\nexit 0\n');
+
+    await expect(ensureGitGuardForDispatch(root)).resolves.toBe(join(root, '.pipeline', 'bin'));
+    const info = await lstat(hook);
+    expect([await readFile(hook, 'utf8'), info.mode & 0o777]).toEqual([content, 0o755]);
   });
 
   it.each([
