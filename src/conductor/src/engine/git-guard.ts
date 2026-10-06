@@ -64,6 +64,11 @@ async function isRegularFile(path: string): Promise<boolean> {
   } catch { return false; }
 }
 
+async function worktreeConfigEnabled(cwd: string): Promise<boolean> {
+  const result = await execa('git', ['-C', cwd, 'config', '--type=bool', '--get', 'extensions.worktreeConfig'], { reject: false });
+  return result.exitCode === 0 && result.stdout.trim() === 'true';
+}
+
 export async function ensureGitGuardForDispatch(cwd: string | undefined): Promise<string | null> {
   if (!cwd) return null;
   const expectedHooks = join(pipeline(cwd), 'git-hooks');
@@ -74,6 +79,10 @@ export async function ensureGitGuardForDispatch(cwd: string | undefined): Promis
   let configured = '';
   try { configured = (await execa('git', ['-C', cwd, 'config', '--worktree', '--get', 'core.hooksPath'])).stdout.trim(); } catch (error) {
     if ((error as { exitCode?: number }).exitCode === 1) return null;
+    // A linked worktree the engine never prepared has no worktree-scoped config
+    // at all, and git refuses the `--worktree` read outright. prepareWorktree
+    // always enables the extension, so its absence means no guard was installed.
+    if (!await worktreeConfigEnabled(cwd)) return null;
     throw new Error(`unable to verify git guard ${gitGuardPath(cwd)}: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (configured !== expectedHooks) return null;
