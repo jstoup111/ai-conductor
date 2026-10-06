@@ -4,6 +4,17 @@ import { CodexProvider } from '../../src/execution/codex-provider.js';
 import { PiProvider } from '../../src/execution/pi-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { ManagedSessionContext } from '../../src/execution/managed-session-context.js';
+import type { PiEnvironment } from '../../src/execution/pi-provider.js';
+
+const piEnvironment: PiEnvironment = {
+  stat: async (path) => ({
+    isFile: () => path === '/test-home/.agents/skills/HARNESS.md',
+    isDirectory: () => false,
+  }),
+  env: {},
+  homeDir: () => '/test-home',
+  cwd: () => '/test-project',
+};
 
 const context: ManagedSessionContext = {
   projectRoot: '/project', worktreeRoot: '/project/worktree', producerRoot: '/project/worktree/.pipeline/session-events',
@@ -46,7 +57,7 @@ describe('managed session adapter environments', () => {
       const calls: Array<{ args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
       return { provider: new PiProvider('pi', ((_file: string, args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
         calls.push({ args, env: launch.env }); return Promise.resolve(completePi());
-      }) as never), calls };
+      }) as never, piEnvironment), calls };
     }],
   ] as const)('passes authoritative managed context to the %s subprocess after overlays', async (_provider, create) => {
     const { provider, calls } = create();

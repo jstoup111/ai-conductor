@@ -13,6 +13,17 @@ import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
 import { PiProvider } from '../../src/execution/pi-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import type { PiEnvironment } from '../../src/execution/pi-provider.js';
+
+const piEnvironment: PiEnvironment = {
+  stat: async (path) => ({
+    isFile: () => path === '/test-home/.agents/skills/HARNESS.md',
+    isDirectory: () => false,
+  }),
+  env: {},
+  homeDir: () => '/test-home',
+  cwd: () => '/test-project',
+};
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -105,7 +116,7 @@ describe('managed gh observation provisioning', () => {
     }) as never)],
     ['pi', (calls: NodeJS.ProcessEnv[]) => new PiProvider('pi', ((_file: string, _args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
       calls.push(launch.env ?? {}); return Promise.resolve({ stdout: JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } }), stderr: '', exitCode: 0, failed: false } as any);
-    }) as never)],
+    }) as never, piEnvironment)],
   ] as const)('adds the wrapper only to the prepared %s child environment', async (_provider, create) => {
     const managed = await context();
     const prepared = await prepareManagedGhObservation({ context: managed, environment: { PATH: '/operator/bin' }, resolveExecutable: async () => '/operator/bin/gh', observerModuleUrl: 'file:///observer.mjs' });
