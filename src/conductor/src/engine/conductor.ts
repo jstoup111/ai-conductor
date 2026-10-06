@@ -62,7 +62,11 @@ import {
   renderPrdWideningRecovery,
 } from './prd-widening-recovery.js';
 import { classifyPrdWideningProjection, type PrdWideningClassification } from './prd-widening-classification.js';
-import type { RefusalReworkEvidence } from './prd-widening-refusal-rework.js';
+import {
+  admitRefusalReworkPlan,
+  renderRefusalReworkContext,
+  type RefusalReworkEvidence,
+} from './prd-widening-refusal-rework.js';
 import type { RemediationCasePrdWideningRecord } from './remediation-case-store.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { createGithubTrackerClient } from './tracker-client.js';
@@ -999,7 +1003,13 @@ export type PrdAuditOverScopeRoute =
   | { kind: 'none' }
   | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
   | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[]; undecided: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; refused: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; defects?: Array<{ kind: string; criterion?: string; message?: string }> }
-  | { kind: 'refusal-rework'; refusals: RefusalReworkEvidence[]; findings: RecordedPrdAuditFinding[] };
+  | {
+    kind: 'refusal-rework';
+    refusals: RefusalReworkEvidence[];
+    findings: RecordedPrdAuditFinding[];
+    refused: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>;
+    detail: string;
+  };
 
 /**
  * One PRD-audit route result shared by the serial SHIP walk and the
@@ -1155,7 +1165,13 @@ export function routeTypedPrdAuditOverScope(
           refused: refusedOffers,
         };
       }
-      return { kind: 'refusal-rework', refusals: refusalEvidence.refusals, findings: recorded };
+      return {
+        kind: 'refusal-rework',
+        refusals: refusalEvidence.refusals,
+        findings: recorded,
+        refused: refusedOffers,
+        detail: `OVER_SCOPE visible behavior on ${refused.map((finding) => finding.criterion).join(', ')}.`,
+      };
     }
     return {
       kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS,
@@ -4937,6 +4953,10 @@ export class Conductor {
     // /remediate, so an accepted-only report neither consumes a repair lap nor
     // creates a synthetic repair obligation from stale routing state.
     let prdAuditVerdict: PersistedPrdAuditVerdict | undefined;
+    // A refusal-rework round re-derives its refused-block fallback from the
+    // fresh over-scope route, not from the (stale) caller hint. Keep the route
+    // hoisted so admission and rejection can render the same decision block.
+    let prdAuditOverScopeRoute: PrdAuditOverScopeRoute | undefined;
     if (hintSource.evidence?.some((provenance) => provenance.gate === 'prd_audit')) {
       // The rendered Markdown report is deliberately not a remediation input.
       // A legacy or corrupt report cannot invent a repair route after the
@@ -4963,6 +4983,7 @@ export class Conductor {
       }
       prdAuditVerdict = current.value;
       const overScopeRoute = await this.routeCurrentPrdAuditOverScope(state.feature_desc, state, this.currentRunId);
+      prdAuditOverScopeRoute = overScopeRoute;
       // Accepted-only scope closes the round. The scope router inspects only
       // OVER_SCOPE rows, so a recorded acceptance may coexist with FIXABLE or
       // PLAN_GAP findings, or with a sibling gate's findings on a validation-
@@ -5235,11 +5256,6 @@ export class Conductor {
     // plan growth, so they remain independently admissible.
     const admittedGaps: RemediationGap[] = [];
     const allTasks: Array<{ id: string; title: string }> = [];
-    // A `.pipeline/prd-audit.md` path alone is not evidence of a current
-    // criterion verdict. Preserve ordinary remediation routing for stale or
-    // missing audit artifacts; only validated FIXABLE findings consume this
-    // gate's bounded append allowance.
-    const prdAuditCapEnforced = prdAuditRemediation && prdAuditValidated;
     const prdAuditTasks: Array<{ id: string; title: string }> = [];
     const prdAuditGrowthTasks: Array<{ id: string; title: string }> = [];
     const asBuiltCapEnforced = asBuiltRemediation && asBuiltValidated;
@@ -5247,6 +5263,44 @@ export class Conductor {
     // attributed to prd_audit for the single shared plan-growth record.
     const asBuiltTasks: Array<{ id: string; title: string }> = [];
     const asBuiltGrowthTasks: Array<{ id: string; title: string }> = [];
+    // A refusal-rework round is prd_audit-bounded remediation exactly like a
+    // FIXABLE round: its planner gaps bind to `refusal-<decisionId>` and its
+    // tasks append as `rem-prd-audit-refusal-<decisionId>` through the same
+    // bounded append seam. Admission is checked here, before any append, so a
+    // planner that fails to bind every refusal writes the refused over-scope
+    // block instead of an unaddressable task.
+    const refusalReworkRoute = prdAuditOverScopeRoute?.kind === 'refusal-rework'
+      ? prdAuditOverScopeRoute
+      : undefined;
+    const admittedRefusalGapIds = new Set<string>();
+    if (refusalReworkRoute !== undefined) {
+      const admission = admitRefusalReworkPlan(plan, refusalReworkRoute.refusals);
+      if (admission.kind === 'rejected') {
+        // The refused block is the operator-facing authority for this round:
+        // the caller writes it under the over-scope class, never a generic
+        // needs-human prose that drops the decision block.
+        return {
+          kind: 'halt',
+          detail: renderPrdAuditScopeHalt(
+            refusalReworkRoute.detail,
+            renderOverScopeDecisionBlock(refusalReworkRoute.refused, refusalReworkRoute.refused, []),
+          ),
+        };
+      }
+      for (const gap of admission.gaps) {
+        admittedRefusalGapIds.add(gap.id);
+        appendGaps.push(gap);
+        admittedGaps.push(gap);
+        allTasks.push(...gap.tasks);
+        prdAuditTasks.push(...gap.tasks);
+        prdAuditGrowthTasks.push(...gap.tasks);
+      }
+    }
+    // A `.pipeline/prd-audit.md` path alone is not evidence of a current
+    // criterion verdict. Preserve ordinary remediation routing for stale or
+    // missing audit artifacts; only validated FIXABLE findings (or an admitted
+    // refusal-rework round) consume this gate's bounded append allowance.
+    const prdAuditCapEnforced = prdAuditRemediation && (prdAuditValidated || refusalReworkRoute !== undefined);
     // Task 2 records canonical plan ids here. Task 3 consumes the record when
     // it admits existing-task gaps without sending them through plan growth.
     const resolvedExistingTaskIdsByGapId = new Map<string, string[]>();
@@ -5263,6 +5317,10 @@ export class Conductor {
       asBuiltAdmits: asBuiltValidated && asBuiltFindings.has(gapId),
     });
     for (const gap of gaps) {
+      // Admitted refusal gaps were already bound above through their decision
+      // id; the criterion-id ladder below would re-admit them with the wrong
+      // gate source, so leave them to the refusal admission only.
+      if (admittedRefusalGapIds.has(gap.id)) continue;
       if (gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION) {
         const { prdAuditAdmits, asBuiltAdmits } = gateAdmissions(gap.id);
         // Unlike appended work's compatibility guard below, existing-task is
@@ -12016,6 +12074,7 @@ export class Conductor {
               if (
                 prdAuditRoute.kind === 'plan-gap-halt'
                 || prdAuditRoute.kind === 'over-scope-halt'
+                || prdAuditRoute.kind === 'over-scope-refusal-rework'
                 || prdAuditRoute.kind === 'projection-halt'
               ) {
                 const verdict = await readVerdict(this.projectRoot, 'prd_audit');
@@ -12061,6 +12120,92 @@ export class Conductor {
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await this.emitLoopHalt(reason, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+              if (prdAuditRoute.kind === 'over-scope-refusal-rework') {
+                const refusalRoute = prdAuditRoute.route;
+                const refusedHalt = {
+                  reason: renderPrdAuditScopeHalt(
+                    refusalRoute.detail,
+                    renderOverScopeDecisionBlock(refusalRoute.refused, refusalRoute.refused, []),
+                  ),
+                  haltClass: OVER_SCOPE_HALT_CLASS,
+                };
+                // The refusal-rework round consumes the same single-use
+                // kickback-to-build no-op baseline as the FIXABLE path below:
+                // a BUILD lap that changed nothing against an unchanged
+                // verdict must not silently spend another remediation round.
+                const refusalEscalation = await checkKickbackToBuildEscalation('prd_audit');
+                if (refusalEscalation.halt) {
+                  const reason = `prd_audit kickback-to-build no-op: ${refusalEscalation.reason}`;
+                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.emitLoopHalt(reason, prUrl);
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+                if (this.daemon && remediationRounds < prdAuditRemediationLapCap) {
+                  let outcome:
+                    | { kind: 'route'; target: StepName; hint: string; evidence: string }
+                    | { kind: 'halt'; detail: string; haltClass?: string; kickbackOutcome?: string }
+                    | { kind: 'none'; reason: string }
+                    | undefined;
+                  try {
+                    outcome = await this.planRemediation(
+                      state,
+                      steps,
+                      renderRefusalReworkContext(refusalRoute.refusals),
+                      {
+                        source: 'prd-audit',
+                        evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
+                      },
+                    );
+                  } catch {
+                    // Append-side mechanical faults (e.g. a decision id that
+                    // cannot reduce to an addressable H9 task id) must not
+                    // surface as a generic conductor error: keep the round
+                    // recoverable through the refused over-scope block below.
+                    outcome = undefined;
+                  }
+                  if (outcome?.kind === 'route') {
+                    const route = outcome;
+                    remediationRounds++;
+                    await emitTracked({
+                      type: 'kickback',
+                      from: 'prd_audit',
+                      to: route.target,
+                      evidence: route.evidence,
+                      count: remediationRounds,
+                    });
+                    pendingRetryHints.set(route.target, route.hint);
+                    if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                      return;
+                    }
+                    if (route.target === 'build') {
+                      await captureKickbackToBuildContext('prd_audit');
+                    }
+                    const nav = navigateBack(state, route.target, steps);
+                    state = nav.state;
+                    this.haltState = state;
+                    (state as Record<string, unknown>).prd_audit = 'stale';
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    i = nav.index - 1; // for-loop i++ lands on build
+                    continue stepLoop;
+                  }
+                  // A `halt` or `none` (or an append-side throw) from
+                  // planRemediation on a refusal round falls through to the
+                  // refused over-scope block below: the operator must see the
+                  // decision block, never a generic needs-human prose that
+                  // drops it.
+                }
+                await this.writeHaltMarker(refusedHalt.reason + '\n', refusedHalt.haltClass);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(refusedHalt.reason);
+                await this.emitLoopHalt(refusedHalt.reason, prUrl);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
