@@ -1,0 +1,7 @@
+# Track: Monitor guided sessions — choose provider, model, and effort
+
+Track: product
+
+Scope boundary: Balanced (operator-confirmed 2026-10-06). In scope: a monitor-scoped config block (`monitor: { llm_provider, model, effort }`) falling back to `llm_provider[0]`; `conduct monitor --provider/--model/--effort` overrides; harness-stated default model/effort per provider (taken from that provider's model policy for the `explore` step) when nothing is configured; the applied provider/model/effort printed in the monitor's launch output; effort validated strictly against a per-provider accepted set declared in the provider catalog, model validated for shape only (plus `modelCatalog` where one exists), each rejection naming the value and provider; monitor launches through the catalog's `interactiveLaunch` descriptor (extended with model/effort argv) and the private launch table in `execution/interactive-launch.ts` is retired. Excluded: making Pi interactively launchable (stays with #1007) — selecting Pi is refused with a clear message naming the unsupported capability; a strict model allowlist; changing the build's `llm_provider` semantics.
+
+Operator-visible config, CLI flags, launch output, and refusal messages warrant a PRD. Chosen approach B (catalog-owned interactive model/effort argv) over A (extend monitor's private launch table — a third copy of the flag mapping) and C (flags only — fails the persist-without-retyping outcome). Source: jstoup111/ai-conductor#2985.
