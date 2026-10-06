@@ -177,7 +177,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
-56 top-level keys are allow-listed (plus the retired compatibility key `wiring`, which emits a
+58 top-level keys are allow-listed (plus the retired compatibility key `wiring`, which emits a
 deprecation warning and event; see [build_review](#build_review)). Everything else fails the load.
 
 | Key | Type | Default | Section |
@@ -228,6 +228,7 @@ deprecation warning and event; see [build_review](#build_review)). Everything el
 | `build_progress_halt` | object | see section | [build_progress_halt](#build_progress_halt) |
 | `retry_routing` | object | `{ enabled: true }` | [retry_routing](#retry_routing) |
 | `coverage_binding` | object | `{ judge: { enabled: false, batch_size: 8 } }` | [coverage_binding](#coverage_binding) |
+| `feature_applicability` | object | `{ enabled: false }` | [feature_applicability](#feature_applicability) |
 | `kickback_escalation` | object | `{ enabled: true }` | [kickback_escalation](#kickback_escalation) |
 | `cumulative_kickback_bound` | object | `{ enabled: true }` | [cumulative_kickback_bound](#cumulative_kickback_bound) |
 | `gate_code_validity` | object | `{ enabled: true }` | [gate_code_validity](#gate_code_validity) |
@@ -1248,6 +1249,23 @@ satisfying a named task would necessarily violate it. Any `conflicts` verdict re
 the incompatible requirement — see
 [plan conflict refusal](../runbooks/stalled-or-stuck-feature.md#coverage_binding-refused-a-plan-conflict).
 When the judge is disabled, conflict claims are recorded as `unjudged`.
+
+## feature_applicability
+
+Project-only opt-in that lets a feature's merged DECIDE artifacts declare selected steps
+inapplicable to that feature.
+
+| Key | Type | Validation | Default |
+| --- | --- | --- | --- |
+| `feature_applicability.enabled` | boolean | Boolean, else hard error | `false` |
+
+`enabled` is the only accepted key; any other key fails the load. A `feature_applicability` block in
+the user-level config is ignored, so one operator's settings never change a project's pipeline.
+
+When enabled, `.docs/applicability/<slug>.md` may declare `acceptance_specs` or `manual_test`
+inapplicable — see [per-feature applicability](steps.md#per-feature-applicability). When disabled,
+any marker refuses `land-spec`, and a marker already on the base branch is ignored with a
+`step_inapplicable_ignored` (`cause: toggle-off`) event.
 
 ## gate_code_validity
 
