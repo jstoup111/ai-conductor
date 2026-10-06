@@ -11,6 +11,7 @@ import { HALT_CLASS_MARKER, HALT_MARKER, writeHaltMarker } from './halt-marker.j
 import { GATES_DIR } from './gate-verdicts.js';
 import { AS_BUILT_REPORT_PATH, AS_BUILT_VERDICT_PATH } from './as-built-verdict-store.js';
 import { PRD_AUDIT_REPORT_PATH, PRD_AUDIT_VERDICT_PATH } from './prd-audit-verdict-store.js';
+import { childStateExists, isRegionStep, parseChildId } from './child-context.js';
 import { join } from 'node:path';
 import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
 
@@ -286,6 +287,21 @@ export async function dispatchRewindCommand(
   cwd = process.cwd(),
   dependencies: RewindCommandDependencies = {},
 ): Promise<number> {
+  if (command.child !== undefined) {
+    const child = parseChildId(command.child);
+    if (child === undefined) {
+      console.error(`rewind: invalid child id "${command.child}" (expected 1-9)`);
+      return 1;
+    }
+    if (!(await childStateExists(cwd, child))) {
+      console.error(`rewind: child ${child} has no child state (.pipeline/children/${child}/ does not exist)`);
+      return 1;
+    }
+    if (!isRegionStep(command.target)) {
+      console.error('rewind: only acceptance_specs, build, test_suite and build_review can be rewound per child');
+      return 1;
+    }
+  }
   const statePath = join(cwd, '.pipeline', 'conduct-state.json');
   const read = dependencies.readState ?? readState;
   const observed = await read(statePath);
