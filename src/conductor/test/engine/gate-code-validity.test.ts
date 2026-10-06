@@ -1,5 +1,5 @@
 /**
- * Covers: task:2, task:7
+ * Covers: task:1, task:2, task:7
  *
  * Task 2 (gate-step-completion-validates-against-code-state-, #817): unit
  * tests for `gateVerdictStillValid`, the shared re-dispatch decision helper.
@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import {
   gateVerdictStillValid,
+  classifyRebaseOperation,
   currentPreservedJudgeIdentity,
   rebaseOperationPublicationBlocker,
   verdictProducedByRun,
@@ -137,6 +138,174 @@ async function writePrdAuditIdentity(dir: string, attemptId: string): Promise<vo
     recordedDispositions: [],
   }, { attemptId, codeStamp: null });
 }
+
+// Covers: task:1
+describe('classifyRebaseOperation', () => {
+  async function writeAppliedOperation(s: Scratch, gate: 'build_review' | 'prd_audit', id: string) {
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 150,
+      rebaseOperation: {
+        id,
+        status: 'applied',
+        appliedAt: 100,
+        transition: { preserved: [gate], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+  }
+
+  it('clears a preserved gate with replay-bound authority or a fresh satisfied re-judgement', async () => {
+    const stamped = await makeRepo();
+    const fresh = await makeRepo();
+    scratches.push(stamped.repo, fresh.repo);
+    await writeAppliedOperation(stamped, 'build_review', 'stamped-build-review');
+    await writeVerdict(stamped.repo, 'build_review', {
+      satisfied: true,
+      checkedAt: 50,
+      preservation: { gate: 'build_review', operationId: 'stamped-build-review' } as ReplayPreservationRecord,
+    });
+    await writeAppliedOperation(fresh, 'prd_audit', 'fresh-prd-audit');
+    await writeVerdict(fresh.repo, 'prd_audit', { satisfied: true, checkedAt: 200 });
+
+    await expect(classifyRebaseOperation(stamped.repo)).resolves.toEqual({ kind: 'clear' });
+    await expect(classifyRebaseOperation(fresh.repo)).resolves.toEqual({ kind: 'clear' });
+  });
+
+  it('classifies a post-rebase failed preserved verdict as its outstanding gate', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeAppliedOperation(s, 'prd_audit', 'post-rebase-prd-audit-failure');
+    await writeVerdict(s.repo, 'prd_audit', { satisfied: false, checkedAt: 200 });
+
+    await expect(classifyRebaseOperation(s.repo)).resolves.toEqual({
+      kind: 'outstanding-gate',
+      gate: 'prd_audit',
+    });
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBe(
+      'rebase transition still has an outstanding prd_audit repair or re-verification',
+    );
+  });
+
+  it('classifies a persisted applying operation', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 100,
+      rebaseOperation: {
+        id: 'still-applying',
+        status: 'applying',
+        transition: { preserved: [], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+
+    await expect(classifyRebaseOperation(s.repo)).resolves.toEqual({
+      kind: 'applying',
+      operation: {
+        id: 'still-applying',
+        status: 'applying',
+        transition: { preserved: [], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+  });
+
+  it.each([
+    [
+      'an inconsistent transition',
+      { transition: { preserved: ['build_review'], invalidated: ['build_review'], reverified: [] } },
+    ],
+    [
+      'an incomplete replay',
+      { replay: { preRebaseHead: '', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' } },
+    ],
+    [
+      'preservation evidence that does not match the transition',
+      {
+        preservationEvidence: [{
+          gate: 'build_review',
+          original: { artifactDigest: 'digest', attemptId: 'attempt', runId: 'run', codeStamp: 'stamp' },
+          originalVerdictDigest: `sha256:${'a'.repeat(64)}`,
+          relevantInputIdentities: [],
+        }],
+      },
+    ],
+  ] as const)('classifies an applying operation with %s as an integrity fault', async (_name, malformed) => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 100,
+      rebaseOperation: {
+        id: 'malformed-applying',
+        status: 'applying',
+        transition: { preserved: [], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+        ...malformed,
+      },
+    });
+
+    await expect(classifyRebaseOperation(s.repo)).resolves.toEqual({
+      kind: 'integrity-fault',
+      reason: 'malformed-record',
+    });
+  });
+
+  it('classifies a malformed persisted operation status as an integrity fault', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 100,
+      rebaseOperation: {
+        id: 'malformed-status',
+        status: 'appliyng' as unknown as 'applying',
+        transition: { preserved: [], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+
+    await expect(classifyRebaseOperation(s.repo)).resolves.toEqual({
+      kind: 'integrity-fault',
+      reason: 'malformed-record',
+    });
+  });
+
+  it.each([
+    ['missing preserved verdict', undefined, { kind: 'integrity-fault', gate: 'prd_audit', reason: 'missing-verdict' }],
+    ['failed verdict at applied-at time', { satisfied: false, checkedAt: 100 }, { kind: 'integrity-fault', gate: 'prd_audit', reason: 'pre-applied-unsatisfied' }],
+    ['unstamped satisfied verdict at applied-at time', { satisfied: true, checkedAt: 100 }, { kind: 'integrity-fault', gate: 'prd_audit', reason: 'missing-authority' }],
+  ] as const)('classifies %s as an integrity fault', async (_name, verdict, expected) => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeAppliedOperation(s, 'prd_audit', 'integrity-fault');
+    if (verdict) await writeVerdict(s.repo, 'prd_audit', verdict);
+
+    await expect(classifyRebaseOperation(s.repo)).resolves.toEqual(expected);
+  });
+
+  it('classifies a malformed operation record as an integrity fault', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 100,
+      rebaseOperation: {
+        id: 'malformed-transition',
+        status: 'applied',
+        transition: { preserved: ['build_review'], invalidated: ['build_review'], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+
+    await expect(classifyRebaseOperation(s.repo)).resolves.toEqual({
+      kind: 'integrity-fault',
+      reason: 'malformed-record',
+    });
+  });
+});
 
 // Covers: task:5
 describe('verdictProducedByRun', () => {
@@ -733,7 +902,9 @@ describe('gateVerdictStillValid', () => {
     });
 
     expect((await readVerdict(s.repo, 'rebase'))?.rebaseOperation).toEqual(applying);
-    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toContain('still applying');
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBe(
+      'rebase transition is still applying; reconcile the persisted rebase operation before publication',
+    );
   });
 
   it('refuses malformed, unapplied, superseded, unavailable, and post-replay preservation authority', async () => {

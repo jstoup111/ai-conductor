@@ -2,10 +2,38 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { ConductState, StateMutation, StepName } from '../types/index.js';
 import type { ConductStateStore } from './conduct-state-store.js';
-import type { PreservedJudgeIdentity, ReplayEvidence, RebaseOperationRecord } from './gate-verdicts.js';
+import type { GateVerdict, ReplayEvidence, RebaseOperationRecord, RebasePreservedCandidate } from './gate-verdicts.js';
 import { readVerdict, writeVerdict } from './gate-verdicts.js';
 import { readState } from './state.js';
 import { creditKickbackGateLaps, updateKickbackLedger } from './kickback-ledger.js';
+import { reverifyOrInvalidateRebaseGate, type RebasePreVerifier } from './rebase.js';
+
+function verdictDigest(verdict: unknown): string {
+  return `sha256:${createHash('sha256').update(JSON.stringify(verdict)).digest('hex')}`;
+}
+
+/**
+ * The only verdict mutation that can precede an interrupted operation's
+ * `applied` marker is its own fully-bound preservation stamp. Compare that
+ * shape as the original verdict, but never erase a different operation's
+ * stamp or any other concurrent mutation.
+ */
+function matchesCandidateVerdict(
+  verdict: GateVerdict,
+  candidate: RebasePreservedCandidate,
+  operation: RebaseOperationRecord,
+): boolean {
+  if (verdictDigest(verdict) === candidate.originalVerdictDigest) return true;
+  const preservation = verdict.preservation;
+  if (!preservation || typeof preservation !== 'object') return false;
+  const stamp = preservation;
+  if (stamp.gate !== candidate.gate || stamp.operationId !== operation.id ||
+    JSON.stringify(stamp.original) !== JSON.stringify(candidate.original) ||
+    JSON.stringify(stamp.replay) !== JSON.stringify(operation.replay) ||
+    JSON.stringify(stamp.relevantInputIdentities) !== JSON.stringify(candidate.relevantInputIdentities)) return false;
+  const { preservation: _preservation, ...unpreserved } = verdict;
+  return verdictDigest(unpreserved) === candidate.originalVerdictDigest;
+}
 
 /** The durable result consumed by the conductor and the re-kick path. */
 export interface AppliedRebaseTransition {
@@ -48,12 +76,7 @@ async function creditBuildReviewConvergence(projectRoot: string, operationId: st
  * re-discovers after writes have begun: a later ordinary verdict must never be
  * retroactively claimed as the original replayed PASS.
  */
-export interface RebasePreservedCandidate {
-  gate: StepName;
-  original: PreservedJudgeIdentity;
-  originalVerdictDigest: string;
-  relevantInputIdentities: readonly string[];
-}
+export type { RebasePreservedCandidate } from './gate-verdicts.js';
 
 export interface ApplyRebaseTransitionOptions {
   projectRoot: string;
@@ -73,6 +96,98 @@ export interface ApplyRebaseTransitionOptions {
   operationId?: string;
 }
 
+export interface CompleteInterruptedRebaseOperationOptions {
+  projectRoot: string;
+  stateFilePath?: string;
+  stateStore: ConductStateStore<ConductState>;
+  operation: RebaseOperationRecord;
+  /** The registry-derived gates after rebase, for a pre-transition recovery. */
+  downstreamSteps: readonly StepName[];
+  preVerify?: RebasePreVerifier;
+}
+
+/**
+ * Reconcile an interrupted applying descriptor from the candidate evidence it
+ * persisted before any state mutation. Candidates whose original verdict is
+ * no longer present use the same per-gate reverify-or-kickback writer as the
+ * normal rebase path; they can never be stamped as preserved retroactively.
+ */
+export async function completeInterruptedRebaseOperation(
+  options: CompleteInterruptedRebaseOperationOptions,
+): Promise<AppliedRebaseTransition> {
+  const provisional = options.operation.id.startsWith('preparing-') &&
+    options.operation.transition.preserved.length === 0 &&
+    options.operation.transition.invalidated.length === 0 &&
+    options.operation.transition.reverified.length === 0;
+  // A descriptor from before transition construction (or from before durable
+  // candidate evidence existed) cannot prove that any old PASS survived the
+  // replay.  Re-open every affected gate rather than reconstructing authority
+  // from the current tree.  The provisional form has no affected set yet, so
+  // its caller supplies the registry's complete downstream tail.
+  if (provisional || options.operation.preservationEvidence === undefined) {
+    const invalidated = [...new Set(provisional
+      ? options.downstreamSteps
+      : [...options.operation.transition.invalidated, ...options.operation.transition.preserved])];
+    for (const gate of invalidated) {
+      await reverifyOrInvalidateRebaseGate(
+        options.projectRoot,
+        gate,
+        undefined,
+        provisional
+          ? 'provisional rebase transition has no durable invalidation set'
+          : 'persisted rebase transition has no preservation evidence',
+      );
+    }
+    return applyRebaseTransition({
+      projectRoot: options.projectRoot,
+      ...(options.stateFilePath === undefined ? {} : { stateFilePath: options.stateFilePath }),
+      stateStore: options.stateStore,
+      replay: options.operation.replay,
+      invalidated,
+      preserved: [],
+      preservedCandidates: [],
+      reverified: [],
+      operationId: options.operation.id,
+    });
+  }
+  const candidates = options.operation.preservationEvidence ?? [];
+  const preserved: StepName[] = [];
+  const invalidated = [...options.operation.transition.invalidated];
+  const reverified = [...options.operation.transition.reverified];
+  const usableCandidates: RebasePreservedCandidate[] = [];
+
+  for (const candidate of candidates) {
+    const verdict = await readVerdict(options.projectRoot, candidate.gate);
+    const matchesOriginal = verdict?.satisfied === true && !verdict.kickback &&
+      matchesCandidateVerdict(verdict, candidate, options.operation);
+    if (matchesOriginal) {
+      preserved.push(candidate.gate);
+      usableCandidates.push(candidate);
+      continue;
+    }
+    const result = await reverifyOrInvalidateRebaseGate(
+      options.projectRoot,
+      candidate.gate,
+      options.preVerify,
+      'persisted rebase preservation candidate no longer matches its original verdict',
+    );
+    if (result.kind === 'reverified') reverified.push(candidate.gate);
+    else invalidated.push(candidate.gate);
+  }
+
+  return applyRebaseTransition({
+    projectRoot: options.projectRoot,
+    ...(options.stateFilePath === undefined ? {} : { stateFilePath: options.stateFilePath }),
+    stateStore: options.stateStore,
+    replay: options.operation.replay,
+    invalidated: [...new Set(invalidated)],
+    preserved,
+    preservedCandidates: usableCandidates,
+    reverified: [...new Set(reverified)],
+    operationId: options.operation.id,
+  });
+}
+
 /**
  * Apply the state half of a replay decision through the sole state mutation
  * port. Gate records are deliberately written around it: their `applying`
@@ -83,6 +198,9 @@ export async function applyRebaseTransition(
   options: ApplyRebaseTransitionOptions,
 ): Promise<AppliedRebaseTransition> {
   const statePath = options.stateFilePath ?? join(options.projectRoot, '.pipeline', 'conduct-state.json');
+  const preservationCandidates = new Map(
+    options.preservedCandidates.map((candidate) => [candidate.gate, candidate]),
+  );
   const operation: RebaseOperationRecord = {
     // The replay tuple is immutable. Its digest makes a resumed application
     // identify the same cross-file operation instead of reopening gates again.
@@ -99,6 +217,10 @@ export async function applyRebaseTransition(
       reverified: [...(options.reverified ?? [])],
     },
     replay: options.replay,
+    preservationEvidence: options.preserved.flatMap((gate) => {
+      const candidate = preservationCandidates.get(gate);
+      return candidate === undefined ? [] : [candidate];
+    }),
   };
   const priorRebase = await readVerdict(options.projectRoot, 'rebase');
   if (priorRebase?.rebaseOperation?.id === operation.id && priorRebase.rebaseOperation.status === 'applied') {
@@ -118,9 +240,6 @@ export async function applyRebaseTransition(
   // batch: another writer may have recorded a genuine later judgement in the
   // meantime, and attaching this replay to that newer authority would make it
   // look as though the old judgement survived it.
-  const preservationCandidates = new Map(
-    options.preservedCandidates.map((candidate) => [candidate.gate, candidate]),
-  );
   // A named preservation without its immutable original authority is not an
   // incomplete optimization; it is an inconsistent transition.  Refuse
   // before writing `applying` so no reader can publish a bare old PASS.
@@ -143,7 +262,7 @@ export async function applyRebaseTransition(
     if (!candidate) continue;
     const verdict = await readVerdict(options.projectRoot, gate);
     if (!verdict?.satisfied || verdict.kickback || !options.replay.expectedTree ||
-      createHash('sha256').update(JSON.stringify(verdict)).digest('hex') !== candidate.originalVerdictDigest) continue;
+      verdictDigest(verdict) !== candidate.originalVerdictDigest) continue;
     originalPreserved.set(gate, candidate);
   }
 
@@ -197,7 +316,7 @@ export async function applyRebaseTransition(
     // A newer ordinary verdict wins.  Do not overwrite it and do not add this
     // operation's preservation metadata to it.
     if (!verdict?.satisfied || verdict.kickback ||
-      createHash('sha256').update(JSON.stringify(verdict)).digest('hex') !== original.originalVerdictDigest) continue;
+      verdictDigest(verdict) !== original.originalVerdictDigest) continue;
     await writeVerdict(options.projectRoot, gate, {
       ...verdict,
       preservation: {

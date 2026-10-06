@@ -56,6 +56,14 @@ export interface PreservedJudgeIdentity {
   codeStamp: string;
 }
 
+/** Immutable authority needed to complete a preserved rebase after restart. */
+export interface RebasePreservedCandidate {
+  gate: StepName;
+  original: PreservedJudgeIdentity;
+  originalVerdictDigest: string;
+  relevantInputIdentities: readonly string[];
+}
+
 /**
  * Bounded authority attached to the preserved gate's existing verdict record.
  * It deliberately names the original judge rather than manufacturing a new one.
@@ -87,12 +95,18 @@ export interface RebaseOperationRecord {
   appliedAt?: number;
   transition: RebaseTransitionDescriptor;
   replay: ReplayEvidence;
+  /**
+   * Optional for descriptors written before resume could complete an applying
+   * operation. New descriptors persist every candidate before state changes.
+   */
+  preservationEvidence?: readonly RebasePreservedCandidate[];
 }
 
 /** The one structural contract used by both transition writers and finish
  * readers.  Unproved replay may continue, but cannot retain any review. */
 export function validRebaseOperationRecord(operation: RebaseOperationRecord | undefined): boolean {
   if (!operation || !operation.id || !operation.transition || !operation.replay) return false;
+  if (operation.status === 'applying' && operation.appliedAt !== undefined) return false;
   if (operation.appliedAt !== undefined &&
     (!Number.isFinite(operation.appliedAt) || operation.appliedAt <= 0)) return false;
   const { transition, replay } = operation;
@@ -101,6 +115,26 @@ export function validRebaseOperationRecord(operation: RebaseOperationRecord | un
   if (new Set(named).size !== named.length) return false;
   if (![replay.preRebaseHead, replay.mergeBase, replay.target, replay.completedHead]
     .every((value) => typeof value === 'string' && value.length > 0)) return false;
+  if (operation.preservationEvidence !== undefined) {
+    const evidence = operation.preservationEvidence as unknown;
+    if (!Array.isArray(evidence)) return false;
+    if (!evidence.every((entry) => {
+      if (!entry || typeof entry !== 'object') return false;
+      const candidate = entry as Partial<RebasePreservedCandidate>;
+      return typeof candidate.gate === 'string' &&
+        typeof candidate.original?.artifactDigest === 'string' && candidate.original.artifactDigest.length > 0 &&
+        typeof candidate.original.attemptId === 'string' && candidate.original.attemptId.length > 0 &&
+        typeof candidate.original.runId === 'string' && candidate.original.runId.length > 0 &&
+        typeof candidate.original.codeStamp === 'string' && candidate.original.codeStamp.length > 0 &&
+        typeof candidate.originalVerdictDigest === 'string' && /^sha256:[a-f0-9]{64}$/.test(candidate.originalVerdictDigest) &&
+        Array.isArray(candidate.relevantInputIdentities) &&
+        candidate.relevantInputIdentities.every((identity) => typeof identity === 'string');
+    })) return false;
+    const evidenceGates = evidence.map((entry) => (entry as RebasePreservedCandidate).gate);
+    if (evidenceGates.length !== transition.preserved.length ||
+      new Set(evidenceGates).size !== evidenceGates.length ||
+      evidenceGates.some((gate) => !transition.preserved.includes(gate))) return false;
+  }
   if (replay.kind === 'unproved') return transition.preserved.length === 0 && replay.expectedTree === undefined;
   return typeof replay.expectedTree === 'string' && replay.expectedTree.length > 0;
 }

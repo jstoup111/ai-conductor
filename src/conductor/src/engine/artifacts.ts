@@ -2645,21 +2645,43 @@ export async function readCurrentPrdAuditVerdict(
 export async function prdAuditBlockingFindings(
   dir: string,
   verdict: PersistedPrdAuditVerdict,
-): Promise<{ labels: readonly string[] }> {
+): Promise<{ labels: readonly string[]; awaitingDecisionOnly: boolean }> {
   const typed = prdAuditTypedRouteReport(verdict);
   const classifications = await classifyPrdAuditWideningProjection(dir, typed.relations, typed.report.findings);
   const settled = (id: string, grade: string, relation: IntentRelation | undefined) =>
     grade === 'OVER_SCOPE' && (relation === 'within' || relation === 'outside-harmless' || classifications.get(id)?.kind === 'accepted');
-  return {
-    labels: [
-      ...verdict.judgment.criterionJudgments
-        .filter((finding) => finding.grade !== 'PASS' && !settled(finding.criterionId, finding.grade, finding.intentRelation))
-        .map((finding) => `${finding.criterionId} (${finding.grade})`),
-      ...verdict.judgment.noOwnerObservations
-        .filter((finding) => !settled(finding.presentationOrdinal, finding.grade, finding.intentRelation))
-        .map((finding) => `${finding.presentationOrdinal} (${finding.grade})`),
-    ],
+  // An unresolved widening names why it still blocks; a missing decision is
+  // the operator's to record, so it reads as awaiting rather than a defect.
+  const unresolvedReason = (id: string): string | undefined => {
+    const classification = classifications.get(id);
+    if (classification?.kind !== 'unresolved') return undefined;
+    return classification.reason === 'missing-decision' ? 'awaiting-decision' : classification.reason;
   };
+  const label = (id: string, grade: string) => {
+    const reason = unresolvedReason(id);
+    return `${id} (${grade})${reason ? ` [${reason}]` : ''}`;
+  };
+  const blocking = [
+    ...verdict.judgment.criterionJudgments
+      .filter((finding) => finding.grade !== 'PASS' && !settled(finding.criterionId, finding.grade, finding.intentRelation))
+      .map((finding) => ({ id: finding.criterionId, grade: finding.grade })),
+    ...verdict.judgment.noOwnerObservations
+      .filter((finding) => !settled(finding.presentationOrdinal, finding.grade, finding.intentRelation))
+      .map((finding) => ({ id: finding.presentationOrdinal, grade: finding.grade })),
+  ];
+  return {
+    labels: blocking.map(({ id, grade }) => label(id, grade)),
+    awaitingDecisionOnly: blocking.length > 0
+      && blocking.every(({ id }) => unresolvedReason(id) === 'awaiting-decision'),
+  };
+}
+
+/** Renders the prd_audit gate reason for blocking findings. */
+export function prdAuditBlockingReason(blocking: { labels: readonly string[]; awaitingDecisionOnly: boolean }): string {
+  const grades = `prd-audit found blocking criterion grades: ${blocking.labels.join('; ')}`;
+  return blocking.awaitingDecisionOnly
+    ? `${grades} — record an explicit scope decision, then run ai-conductor halt clear and re-audit`
+    : `${grades} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`;
 }
 
 async function writeArchitectureReviewAsBuiltCodeStamp(
@@ -3303,7 +3325,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return {
         done: false,
         routeClass: 'named-route',
-        reason: `prd-audit found blocking criterion grades: ${blocking.labels.join('; ')} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`,
+        reason: prdAuditBlockingReason(blocking),
       };
     }
     if (!identity.codeStampStillValid && ctx.attemptRunId === undefined) {

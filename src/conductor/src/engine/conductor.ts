@@ -25,6 +25,7 @@ import {
   writeHaltMarker,
 } from './halt-marker.js';
 import { findDocumentationDelivery } from './documentation-delivery.js';
+import { renderRebaseFenceDecisionNote } from './rebase-fence-decision-note.js';
 import type { BuildReviewRepairProvenance } from './build-review-inputs.js';
 import {
   buildReviewConfidenceFloors,
@@ -397,7 +398,7 @@ import {
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
-import { rebaseOperationPublicationBlocker } from './gate-code-validity.js';
+import { classifyRebaseOperation } from './gate-code-validity.js';
 import {
   computeAndWriteVerdict,
   readAllVerdicts,
@@ -446,7 +447,12 @@ import {
   type CiFailureAttempt,
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
-import { applyRebaseTransition, clampRebaseContinuation, isRebaseCoverageRefresh } from './rebase-transition.js';
+import {
+  applyRebaseTransition,
+  clampRebaseContinuation,
+  completeInterruptedRebaseOperation,
+  isRebaseCoverageRefresh,
+} from './rebase-transition.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import {
   escalateBuildFailure as defaultEscalateBuildFailure,
@@ -6980,6 +6986,29 @@ export class Conductor {
     return parseNameStatus(r.stdout);
   }
 
+  /**
+   * The single objective reuse check for both a live rebase and resume-time
+   * completion of an interrupted rebase operation.  Recovery must not invent
+   * a second authority for whether a tree-attesting gate can remain closed.
+   */
+  private async preVerifyRebaseGate(state: ConductState, step: StepName) {
+    if (step === 'test_suite') {
+      const inspection = await this.fullSuiteVerifier.inspect();
+      if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
+        await this.recordFullSuitePreservation(inspection);
+      }
+      return inspection.status === 'PRESERVED_WITHIN_BUDGET'
+        ? { done: true, preservationBasis: 'test_suite_drift_budget' as const }
+        : { done: inspection.status === 'CURRENT' };
+    }
+    if (step !== 'build') return { done: false };
+    const ctx = await this.completionCtx(state);
+    if (!ctx.planPath) {
+      return { done: false, reason: 'no feature plan resolvable — evidence derivation not engaged; fail-closed' };
+    }
+    return checkStepCompletion(this.projectRoot, 'build', ctx);
+  }
+
   async run(): Promise<OperatorParkedTermination | undefined> {
     this.shutdownRequested = false;
     // #788 regression guard: the phase-active marker creates `.pipeline/`
@@ -7042,9 +7071,46 @@ export class Conductor {
       // A restarted process has no `lastRebaseOutcome`, so the durable
       // operation descriptor is the only authority that can prevent it from
       // selecting finish across an interrupted/inconsistent rebase write.
-      const rebaseBlocker = await rebaseOperationPublicationBlocker(this.projectRoot);
-      if (rebaseBlocker) {
-        await this.writeHaltMarker(`${rebaseBlocker}\n`, 'needs-human');
+      let rebaseClassification = await classifyRebaseOperation(this.projectRoot);
+      if (rebaseClassification.kind === 'applying') {
+        const rebaseIndex = indexOf('rebase');
+        const completion = await completeInterruptedRebaseOperation({
+          projectRoot: this.projectRoot,
+          stateFilePath: this.stateFilePath,
+          stateStore: this.stateStore,
+          operation: rebaseClassification.operation,
+          downstreamSteps: steps.slice(rebaseIndex + 1).map((step) => step.name),
+          preVerify: (step) => this.preVerifyRebaseGate(state, step),
+        });
+        if (completion.stateResult === 'refused') {
+          await this.writeHaltMarker(
+            'rebase continuation state transition was refused; inspect concurrent state updates before resuming\n',
+            'needs-human',
+          );
+          return;
+        }
+        for (const gate of completion.invalidated) {
+          if (state[gate] !== 'skipped') state[gate] = 'pending';
+        }
+        this.recordPersistedFields(completion.invalidated.map((gate) => ({
+          field: gate,
+          expected: undefined,
+          intent: 'complete interrupted rebase operation',
+          next: 'pending' as const,
+        })));
+        rebaseClassification = await classifyRebaseOperation(this.projectRoot);
+      }
+      if (rebaseClassification.kind === 'integrity-fault') {
+        const rebaseBlocker = rebaseClassification.reason === 'malformed-record'
+          ? 'rebase transition record is malformed or inconsistent; reconcile it before publication'
+          : rebaseClassification.reason === 'missing-authority'
+            ? `rebase transition preserved ${rebaseClassification.gate} without its replay-bound authority; re-run the ${rebaseClassification.gate} gate or reconcile the persisted rebase operation before resuming`
+            : `rebase transition still has an outstanding ${rebaseClassification.gate} repair or re-verification; re-run the ${rebaseClassification.gate} gate or reconcile the persisted rebase operation before resuming`;
+        const decisionNote = await renderRebaseFenceDecisionNote(this.projectRoot);
+        await this.writeHaltMarker(
+          `${rebaseBlocker}${decisionNote === '' ? '' : `\n${decisionNote}`}\n`,
+          'needs-human',
+        );
         return;
       }
       startIndex = this.findResumeIndex(state, steps);
@@ -8764,10 +8830,23 @@ export class Conductor {
                 state,
                 settledGroupRunIds.get('prd_audit'),
               );
+              // Re-score after reconciliation has published the current
+              // relation/decision projection. The initial objective verdict
+              // predates that publication, so retaining it would persist and
+              // emit an obsolete reason for this same audit lap.
+              const rescored = await computeAndWriteVerdict(
+                this.projectRoot,
+                'prd_audit',
+                dispatchCtx,
+                { retainReplayPreservation: false },
+              );
+              gateVerdicts.set('prd_audit', rescored);
               if (prdAuditRoute.kind === 'record') {
                 const verdict = gateVerdicts.get('prd_audit');
                 if (verdict) {
-                  gateVerdicts.set('prd_audit', { ...verdict, satisfied: true, reason: undefined });
+                  const accepted = { ...verdict, satisfied: true, reason: undefined };
+                  gateVerdicts.set('prd_audit', accepted);
+                  await writeVerdict(this.projectRoot, 'prd_audit', accepted);
                 }
               }
             }
@@ -11686,6 +11765,35 @@ export class Conductor {
             // forbidden class this ADR removes.
             if (step.name === 'prd_audit' && !handshake) {
               const prdAuditRoute = await this.routeCurrentPrdAudit(state, dispatchRunId);
+              // Reconciliation can publish a relation or decision projection
+              // while routing this very audit lap. Rewrite its objective gate
+              // verdict now, before the serial tail emits gate_verdict, so
+              // disk and telemetry describe the same post-route authority.
+              await computeAndWriteVerdict(
+                this.projectRoot,
+                'prd_audit',
+                await this.completionCtx(state),
+                { retainReplayPreservation: false },
+              );
+              // A routed PRD-audit halt exits before the ordinary tail emits
+              // its gate event. Publish the re-scored durable verdict here so
+              // the event spine and gate file describe this same audit lap.
+              // `none` and `record` continue to the tail, which emits it once.
+              if (
+                prdAuditRoute.kind === 'plan-gap-halt'
+                || prdAuditRoute.kind === 'over-scope-halt'
+                || prdAuditRoute.kind === 'projection-halt'
+              ) {
+                const verdict = await readVerdict(this.projectRoot, 'prd_audit');
+                if (verdict) {
+                  await emitTracked({
+                    type: 'gate_verdict',
+                    step: 'prd_audit',
+                    satisfied: verdict.satisfied,
+                    reason: verdict.reason,
+                  });
+                }
+              }
               if (prdAuditRoute.kind === 'projection-halt') {
                 const reason = renderPrdAuditProjectionHalt(prdAuditRoute.reason);
                 await this.writeHaltMarker(reason + '\n', 'needs-human');
@@ -15403,26 +15511,7 @@ export class Conductor {
     const ranManualTest =
       getStepStatus(state, 'manual_test') !== 'skipped';
 
-    // Task 7: Inject pre-verify capability for daemon build gate-first re-verify.
-    // Closure checks build completion objectively (via evidence) after file-changing rebase.
-    // Non-daemon call site (line 2872) keeps today's behavior with no preVerify.
-    const preVerify = async (step: StepName) => {
-      if (step === 'test_suite') {
-        const inspection = await this.fullSuiteVerifier.inspect();
-        if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
-          await this.recordFullSuitePreservation(inspection);
-        }
-        return inspection.status === 'PRESERVED_WITHIN_BUDGET'
-          ? { done: true, preservationBasis: 'test_suite_drift_budget' as const }
-          : { done: inspection.status === 'CURRENT' };
-      }
-      if (step !== 'build') return { done: false };
-      const ctx = await this.completionCtx(state);
-      if (!ctx.planPath) {
-        return { done: false, reason: 'no feature plan resolvable — evidence derivation not engaged; fail-closed' };
-      }
-      return checkStepCompletion(this.projectRoot, 'build', ctx);
-    };
+    const preVerify = (step: StepName) => this.preVerifyRebaseGate(state, step);
 
     // A completed BUILD is not an ordinary rebase invalidation candidate.
     // Its evidence is the only authority that says the task list can remain

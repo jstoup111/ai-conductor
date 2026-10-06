@@ -1264,6 +1264,43 @@ commands complete the rebase; they do not reconcile the daemon's pipeline marker
 The next dashboard snapshot should list the feature under ELIGIBLE or IN-PROGRESS rather than
 PARKED or HALTED. The daemon log should show `↻ resume <slug>` after dispatch.
 
+### Resume halted on the rebase transition record
+
+**Symptom:** a resumed feature halts `needs-human` before any step runs, and `.pipeline/HALT`
+begins with one of these lines:
+
+- `rebase transition record is malformed or inconsistent; reconcile it before publication`
+- `rebase transition preserved <gate> without its replay-bound authority; …`
+- `rebase transition still has an outstanding <gate> repair or re-verification; …`
+
+The body may append over-scope decision lines. These are read-only context: they report each
+recorded `accept` or `refuse`, each offered criterion still awaiting a decision, an unreadable
+entry in the cleared decisions block, or a decision store
+(`.pipeline/HALT.cleared`, `.pipeline/accepted-widenings.json`, `.pipeline/remediation-cases.json`)
+that cannot be read or is orphaned. Recorded decisions survive this halt; do not re-author them.
+
+**Diagnosis:** on resume, the engine classifies the `rebaseOperation` record stored in
+`.pipeline/gates/rebase.json`:
+
+| Record state | Resume behavior |
+|---|---|
+| Absent, or every preserved gate verified | Resumes normally. |
+| `applying` (the process stopped mid-transition) | Completes the transition, then resumes. A preserved gate whose verdict changed since the record was written is re-verified or invalidated. A record without preservation evidence invalidates every gate it named. |
+| A preserved gate failed its re-judgement after the rebase applied | Resumes at that gate; no halt. |
+| Malformed record, missing preserved verdict, a failure recorded before the rebase applied, or a pass without replay-bound authority | Halts with one of the lines above. |
+
+`rebase continuation state transition was refused; inspect concurrent state updates before
+resuming` means completion lost a race on `.pipeline/conduct-state.json`. Confirm that no other
+process is driving the feature, then clear the halt.
+
+**Recovery:** park the feature, re-run the named gate or reconcile the persisted rebase operation
+as the halt line directs, then clear the halt with
+[the resume procedure](#clear-a-halt-and-let-the-feature-resume). Finish keeps the full fence, so
+an outstanding gate still has to pass before publication.
+
+**Verification:** the daemon log shows `↻ resume <slug>` and the feature proceeds past `rebase`
+without re-writing the same halt.
+
 ### Clear a halt and let the feature resume
 
 **Blast radius:** clearing the halt makes the feature eligible for dispatch again on the next

@@ -45,7 +45,7 @@ import {
 } from './rebase-replay.js';
 import type { ReplayEvidence } from './gate-verdicts.js';
 import { currentPreservedJudgeIdentity, gateVerdictStillValid, isApplicableOriginalPass } from './gate-code-validity.js';
-import type { RebasePreservedCandidate } from './rebase-transition.js';
+import type { RebasePreservedCandidate } from './gate-verdicts.js';
 import {
   REBASE_REGRADE_GATES,
   computeOwnContributionDelta,
@@ -2345,15 +2345,57 @@ async function applicableOriginalPass(
  *                               back unsatisfied so the loop re-verifies.
  *   conflict_halt             → rebase NOT satisfied; caller writes HALT.
  */
+export type RebasePreVerifier = (step: StepName) => Promise<{
+  done: boolean;
+  reason?: string;
+  preservationBasis?: 'test_suite_drift_budget';
+}>;
+
+/**
+ * The one writer for a gate that lost replay preservation.  A tree-attesting
+ * completion check may replace it with fresh objective evidence; every other
+ * gate is re-opened with the ordinary rebase kickback record.
+ */
+export async function reverifyOrInvalidateRebaseGate(
+  projectRoot: string,
+  gate: StepName,
+  preVerify: RebasePreVerifier | undefined,
+  evidence: string,
+  invalidateOnFailure = true,
+): Promise<{ kind: 'reverified'; preservationBasis?: 'test_suite_drift_budget' } | { kind: 'invalidated' } | { kind: 'unverified' }> {
+  const definition = ALL_STEPS.find((step) => step.name === gate);
+  if (definition?.treeAttestingCompletion && preVerify) {
+    try {
+      const verification = await preVerify(gate);
+      if (verification.done) {
+        await writeVerdict(projectRoot, gate, {
+          satisfied: true,
+          reason: verification.preservationBasis === 'test_suite_drift_budget'
+            ? 're-verified mechanically after file-changing rebase — test-suite PASS preserved within drift budget'
+            : 're-verified mechanically after file-changing rebase — evidence remains intact',
+          checkedAt: Date.now(),
+        });
+        return { kind: 'reverified', ...(verification.preservationBasis === undefined ? {} : { preservationBasis: verification.preservationBasis }) };
+      }
+    } catch {
+      // An unavailable mechanical check falls through to the fail-closed rerun.
+    }
+  }
+  if (!invalidateOnFailure) return { kind: 'unverified' };
+  await writeVerdict(projectRoot, gate, {
+    satisfied: false,
+    reason: 'invalidated by file-changing rebase',
+    checkedAt: Date.now(),
+    kickback: { from: 'rebase', evidence },
+  });
+  return { kind: 'invalidated' };
+}
+
 export async function applyRebaseVerdicts(
   projectRoot: string,
   outcome: RebaseOutcome,
   ranManualTest: boolean,
-  preVerify?: (step: StepName) => Promise<{
-    done: boolean;
-    reason?: string;
-    preservationBasis?: 'test_suite_drift_budget';
-  }>,
+  preVerify?: RebasePreVerifier,
   git?: GitRunner,
   regrade?: {
     /** Provider boundary for the post-rebase regrade judgement. */
@@ -2464,23 +2506,13 @@ export async function applyRebaseVerdicts(
   const reverifiedGates = new Set<StepName>();
   if (preVerify && !documentOnly) {
     for (const gate of ALL_STEPS.filter((step) => step.treeAttestingCompletion)) {
-      try {
-        const verification = await preVerify(gate.name);
-        if (!verification.done) continue;
-        await writeVerdict(projectRoot, gate.name, {
-          satisfied: true,
-          reason: verification.preservationBasis === 'test_suite_drift_budget'
-            ? 're-verified mechanically after file-changing rebase — test-suite PASS preserved within drift budget'
-            : 're-verified mechanically after file-changing rebase — evidence remains intact',
-          checkedAt: Date.now(),
-        });
+      const rerun = await reverifyOrInvalidateRebaseGate(projectRoot, gate.name, preVerify, evidence, false);
+      if (rerun.kind === 'reverified') {
         reverified.push(gate.name);
         reverifiedGates.add(gate.name);
-        if (verification.preservationBasis === 'test_suite_drift_budget') {
-          preserved.push({ gate: gate.name, basis: verification.preservationBasis });
+        if (rerun.preservationBasis === 'test_suite_drift_budget') {
+          preserved.push({ gate: gate.name, basis: rerun.preservationBasis });
         }
-      } catch {
-        // Any pre-verify error fails closed through the kickback below.
       }
     }
   }
@@ -2585,7 +2617,7 @@ export async function applyRebaseVerdicts(
           preservedCandidates.push({
             gate,
             original: identity,
-            originalVerdictDigest: createHash('sha256').update(JSON.stringify(original)).digest('hex'),
+            originalVerdictDigest: `sha256:${createHash('sha256').update(JSON.stringify(original)).digest('hex')}`,
             // `activeInputs` is only the changed slice.  Bound every resolved
             // review document instead, so a later story/plan/coherence/ADR
             // edit cannot silently retain this replay authority.
@@ -2652,12 +2684,7 @@ export async function applyRebaseVerdicts(
         continue;
       }
     }
-    await writeVerdict(projectRoot, target, {
-      satisfied: false,
-      reason: 'invalidated by file-changing rebase',
-      checkedAt: Date.now(),
-      kickback: { from: 'rebase', evidence },
-    });
+    await reverifyOrInvalidateRebaseGate(projectRoot, target, undefined, evidence);
     kickedBack.push(target);
   }
   // A completed changed rebase without P/B/O is still a first-class,

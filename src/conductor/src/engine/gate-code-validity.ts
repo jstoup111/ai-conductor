@@ -16,7 +16,12 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { StepName } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
-import { validRebaseOperationRecord, type GateVerdict, type ReplayEvidence } from './gate-verdicts.js';
+import {
+  validRebaseOperationRecord,
+  type GateVerdict,
+  type RebaseOperationRecord,
+  type ReplayEvidence,
+} from './gate-verdicts.js';
 import {
   ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   MANUAL_TEST_CODE_STAMP,
@@ -79,6 +84,51 @@ async function persistedVerdict(projectRoot: string, gate: StepName): Promise<Ga
   }
 }
 
+export type RebaseOperationClassification =
+  | { kind: 'clear' }
+  | { kind: 'applying'; operation: RebaseOperationRecord }
+  | { kind: 'outstanding-gate'; gate: StepName }
+  | {
+    kind: 'integrity-fault';
+    gate?: StepName;
+    reason: 'malformed-record' | 'missing-verdict' | 'pre-applied-unsatisfied' | 'missing-authority';
+  };
+
+/**
+ * Classify the durable rebase-operation fence for resume and publication.
+ * Resume may continue past a post-application failed re-judgement, while
+ * publication retains the established full fence through the wrapper below.
+ */
+export async function classifyRebaseOperation(projectRoot: string): Promise<RebaseOperationClassification> {
+  const rebase = await persistedVerdict(projectRoot, 'rebase');
+  const operation = rebase?.rebaseOperation;
+  if (!operation) return { kind: 'clear' };
+  if (!validRebaseOperationRecord(operation)) {
+    return { kind: 'integrity-fault', reason: 'malformed-record' };
+  }
+  if (operation.status === 'applying') return { kind: 'applying', operation };
+  if (operation.status !== 'applied') {
+    return { kind: 'integrity-fault', reason: 'malformed-record' };
+  }
+
+  const appliedAtTime = operation.appliedAt ?? rebase.checkedAt;
+  for (const gate of operation.transition.preserved) {
+    const verdict = await persistedVerdict(projectRoot, gate);
+    if (!verdict) return { kind: 'integrity-fault', gate, reason: 'missing-verdict' };
+    if (!verdict.satisfied) {
+      return verdict.checkedAt > appliedAtTime
+        ? { kind: 'outstanding-gate', gate }
+        : { kind: 'integrity-fault', gate, reason: 'pre-applied-unsatisfied' };
+    }
+    const stamped = verdict.preservation?.gate === gate && verdict.preservation.operationId === operation.id;
+    const freshRejudgement = !verdict.kickback && !verdict.preservation && verdict.checkedAt > appliedAtTime;
+    if (!stamped && !freshRejudgement) {
+      return { kind: 'integrity-fault', gate, reason: 'missing-authority' };
+    }
+  }
+  return { kind: 'clear' };
+}
+
 /**
  * A rebase transition spans the gate records and conduct-state, so an
  * interrupted descriptor must be a publication fence even for consumers that
@@ -88,36 +138,19 @@ async function persistedVerdict(projectRoot: string, gate: StepName): Promise<Ga
  * `replayBoundAuthorityStillValid` above.
  */
 export async function rebaseOperationPublicationBlocker(projectRoot: string): Promise<string | null> {
-  const rebase = await persistedVerdict(projectRoot, 'rebase');
-  const operation = rebase?.rebaseOperation;
-  if (!operation) return null;
-  if (operation.status !== 'applied') {
+  const classification = await classifyRebaseOperation(projectRoot);
+  if (classification.kind === 'clear') return null;
+  if (classification.kind === 'applying') {
     return 'rebase transition is still applying; reconcile the persisted rebase operation before publication';
   }
-  if (!validRebaseOperationRecord(operation)) {
+  if (classification.kind === 'outstanding-gate' ||
+    classification.reason === 'missing-verdict' || classification.reason === 'pre-applied-unsatisfied') {
+    return `rebase transition still has an outstanding ${classification.gate} repair or re-verification`;
+  }
+  if (classification.reason === 'malformed-record') {
     return 'rebase transition record is malformed or inconsistent; reconcile it before publication';
   }
-  const { transition } = operation;
-  // This fence owns only preservation records: they are the cross-file
-  // authority that otherwise lets an old PASS survive the replay. Invalidated
-  // and reverified entries are lifecycle effects (not every step has a gate
-  // verdict file — notably `build` and disabled `coverage_binding`), and their
-  // normal completion predicates remain the authority at finish.
-  const named = transition.preserved;
-  const appliedAtTime = operation.appliedAt ?? rebase.checkedAt;
-  for (const gate of named) {
-    const verdict = await persistedVerdict(projectRoot, gate);
-    if (!verdict?.satisfied) {
-      return `rebase transition still has an outstanding ${gate} repair or re-verification`;
-    }
-    const stamped = verdict.preservation?.gate === gate && verdict.preservation.operationId === operation.id;
-    const freshRejudgement = verdict.satisfied && !verdict.kickback && !verdict.preservation &&
-      verdict.checkedAt > appliedAtTime;
-    if (!stamped && !freshRejudgement) {
-      return `rebase transition preserved ${gate} without its replay-bound authority`;
-    }
-  }
-  return null;
+  return `rebase transition preserved ${classification.gate} without its replay-bound authority`;
 }
 
 /**
