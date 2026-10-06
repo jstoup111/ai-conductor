@@ -107,6 +107,12 @@ branches never edit either file (see `docs/contributing/releases.md`).
 "${HARNESS_DIR}/bin/install" --update --providers=pi
 ```
 
+## Migration
+
+```bash migration
+"${HARNESS_DIR}/bin/install" --update --providers=pi
+```
+
 ## [1.5.0] - 2026-09-27
 
 ### Added
