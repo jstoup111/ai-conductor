@@ -54,6 +54,7 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    > and the halt names each rejected row and why; report-level faults (missing PRD marker or
    > Verdict Table) remain whole-report mechanical faults. Findings with no owning criterion
    > still never become work — they route only to the operator decision block.
+   > **Amended 2026-10-03 by #2931:** The exception is a finding the operator has explicitly *refused*. It may become bounded removal/rework through the existing append seam. The refusal decision id binds that task in place of an owning criterion or parent task. Unrefused no-owner findings still never become work. See adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework.
    > **Amended 2026-09-30 by #2521:** Decision 3's machine carrier is now the engine-validated
    > typed PRD verdict, with structured criterion/task/requirement references and explicit
    > intent relations. The Markdown tables become a human view, never a parser contract.
@@ -79,6 +80,7 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    > acceptance. A later acceptance overrides a refusal; a refusal is moot once the audit no
    > longer flags the criterion. See adr-2026-08-24-over-scope-decision-block-and-durable-refusals.
 > **Amended 2026-09-07 by #2429:** Explicit refusal revision and NC relationship authority now follow adr-2026-09-07-durable-prd-widening-decision-reconciliation D1-D4/D8. An old cleared acceptance cannot override a newer refusal; an explicit revision names the prior decision. The report-local NC key remains presentation, and valid original decisions are captured before current-report reconciliation. No NC case becomes a BUILD task, and the existing FIXABLE/PLAN_GAP routing and allowances below remain unchanged.
+> **Amended 2026-10-03 by #2931:** An operator-*refused* finding, NC or story-criterion, may now become bounded removal/rework through the existing remediation append seam, sharing decision 5's `gates.prd_audit` lap and growth caps. A finding that is not refused still never becomes work. See adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework.
 
 5. **Bounded kickback.** `FIXABLE` findings route to BUILD through the existing remediation append
    seam — the only plan appender — under engine-enforced caps: **one lap per feature**, at most

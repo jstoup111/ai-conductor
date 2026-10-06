@@ -90,13 +90,13 @@ without blocking.
 - Given a validated NC.1 finding with relation within or outside-harmless, when the prd_audit gate evaluates the report, then NC.1 is recorded and does not block
 
 #### Negative Paths
-- Given a refused decision for NC.1, when the next lap re-reports NC.1 with matching summary, then the halt names NC.1 as refused — rework required, and does not re-offer a pending entry for it
-- Given a validated NC finding of any relation, when routing computes follow-up work, then no plan task is appended and no kickback names the NC finding as work — it routes only to the operator decision block
+- Given a refused decision for NC.1 and no refusal rework admitted (allowance spent or `prd_audit` remediation unavailable), when the next lap re-reports NC.1 with matching summary, then the halt names NC.1 as refused — rework required, and does not re-offer a pending entry for it
+- Given a validated NC finding with no recorded refusal, when routing computes follow-up work, then no plan task is appended and no kickback names the NC finding as work — it routes only to the operator decision block; a refused NC finding may produce only the bounded removal/rework task bound to its refusal decision id
 
 ### Done When
 - [ ] `overScopeRelations` and `classifyOverScopeCriterion` accept NC keys with unchanged semantics for criterion keys
 - [ ] An end-to-end fixture drives typed result → validate → gate → halt block → cleared decision → recorded → next-lap non-blocking for an NC finding
-- [ ] No code path appends plan tasks or emits kickback work for an NC finding
+- [ ] No code path appends plan tasks or emits kickback work for an unrefused NC finding; refused NC rework is bound to the refusal decision id
 
 ## Story 6: The engine contract and reviewer responsibilities agree
 

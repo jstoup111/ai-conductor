@@ -83,12 +83,12 @@ same halt never reappears unchanged and refusal is not re-litigated every lap.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a recorded refuse decision for criterion S5.2 and no other blocking findings, when the conductor re-halts, then the halt body names S5.2 as refused — rework required — and offers an explicit revise-decision entry tied to the existing refusal with no default acceptance
+- Given a recorded refuse decision for criterion S5.2, no other blocking findings, and no refusal rework admitted (allowance spent or `prd_audit` remediation unavailable), when the conductor re-halts, then the halt body names S5.2 as refused — rework required — and offers an explicit revise-decision entry tied to the existing refusal with no default acceptance
 - Given one refused criterion and one new undecided outside-visible finding, when the halt renders, then the refused criterion appears in the refused prose and the new finding has a pending entry while any explicit revision entry for the refusal names the prior decision
 - Given a refused criterion that the next prd-audit report no longer flags OVER_SCOPE, when routing runs, then the stale refusal has no effect and does not block
 
 #### Negative Paths
-- Given a recorded refusal, when any routing or completion path runs, then no plan task is appended and no route to DECIDE is produced on account of the refusal
+- Given a recorded refusal, when any routing or completion path runs, then no route to DECIDE is produced on account of the refusal, and the only plan task that may be appended for it is a bounded `rem-prd-audit-*` removal/rework task admitted when every blocking finding is refused and the `prd_audit` remediation allowance is unspent (adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework); otherwise the refused halt is written
 - Given a refused criterion, when the identical report and refusal recur across laps over an unchanged tree, then the existing convergence bound still terminates the run rather than looping unboundedly
 
 ### Done When

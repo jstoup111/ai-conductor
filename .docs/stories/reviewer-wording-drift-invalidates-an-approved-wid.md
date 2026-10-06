@@ -42,11 +42,11 @@ As the operator, I want a refusal to persist until I explicitly revise it so ret
 - Given an old acceptance clear replayed after a newer refusal, when capture repeats, then the refusal remains effective
 - Given a supersession referring to another case or conflicting decision revision, when submitted, then it is rejected without changing either case authority
 - Given a refused finding absent on one lap and recurring later, when reconciled, then its historical refusal has not been erased
-- Given a currently refused NC finding, when routing follows the refusal branch, then no plan task, BUILD work order, or deferral issue is created
+- Given a currently refused NC finding, when routing follows the refusal branch, then no deferral issue is created and no plan task or BUILD work order is created other than a bounded removal/rework task bound to the refusal decision id (never to the report-local NC ordinal)
 
 ### Done When
 - [ ] Inspection shows the ordered supersession chain and one effective decision per decided identity
-- [ ] Restart and replay leave the same effective decision and no NC repair effects
+- [ ] Restart and replay leave the same effective decision and no NC repair effects beyond the idempotent refusal-rework task keyed by decision id
 
 ## Story 3: Recover existing decisions without silently losing evidence
 
