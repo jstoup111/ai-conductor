@@ -5,7 +5,15 @@ import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RewindCommandDependencies } from '../../src/engine/rewind.js';
-import { dispatchRewindCommand } from '../../src/engine/rewind.js';
+import { dispatchRewindCommand, rewindChildState } from '../../src/engine/rewind.js';
+import { parseChildId, pipelinePathFor } from '../../src/engine/child-context.js';
+import type {
+  ConductStateStore,
+  NamedAtomicStateMutationBatch,
+  PrivilegedStateReplacement,
+  StateMutation,
+  StateMutationResult,
+} from '../../src/engine/conduct-state-store.js';
 import type { ConductState } from '../../src/types/index.js';
 
 const completeState: ConductState = {
@@ -16,6 +24,23 @@ const completeState: ConductState = {
   prd_audit: 'done', architecture_review_as_built: 'done', rebase: 'done', finish: 'done',
   last_step: 'finish',
 };
+
+class RecordingStateStore implements ConductStateStore<ConductState> {
+  readonly batches: NamedAtomicStateMutationBatch<ConductState>[] = [];
+
+  async apply(_mutation: StateMutation<ConductState>): Promise<StateMutationResult> {
+    throw new Error('rewind must submit child demotions through one batch per state path');
+  }
+
+  async applyBatch(batch: NamedAtomicStateMutationBatch<ConductState>): Promise<StateMutationResult> {
+    this.batches.push(batch);
+    return { kind: 'applied' };
+  }
+
+  async replace(_replacement: PrivilegedStateReplacement<ConductState>): Promise<StateMutationResult> {
+    throw new Error('rewind must not replace conduct state');
+  }
+}
 
 async function pipelineFileBytes(root: string): Promise<Map<string, string>> {
   const pipeline = join(root, '.pipeline');
@@ -138,6 +163,128 @@ describe('rewind --child admission', () => {
       expect(log).toHaveBeenCalledWith('Rewound to build.');
     } finally {
       log.mockRestore();
+    }
+  });
+});
+
+describe('rewind --child demotions', () => {
+  let root: string;
+  let paths: string[];
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'rewind-child-demotions-'));
+    const flatState: ConductState = {
+      ...completeState,
+      coverage_binding: 'done',
+      last_step: 'prd_audit',
+    };
+    paths = [
+      ...[1, 2, 3].map((child) => pipelinePathFor(root, 'conduct-state.json', parseChildId(child)!)),
+      pipelinePathFor(root, 'conduct-state.json'),
+    ];
+    await Promise.all([
+      mkdir(join(root, '.pipeline'), { recursive: true }),
+      ...[1, 2, 3].map(async (child) => {
+        const path = pipelinePathFor(root, 'conduct-state.json', parseChildId(child)!);
+        await mkdir(join(path, '..'), { recursive: true });
+        await writeFile(path, `${JSON.stringify({
+          acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done', last_step: 'build_review',
+        }, null, 2)}\n`, 'utf-8');
+      }),
+    ]);
+    await writeFile(pipelinePathFor(root, 'conduct-state.json'), `${JSON.stringify(flatState, null, 2)}\n`, 'utf-8');
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('submits the target child, later children, and flat demotions through ordered state-store batches', async () => {
+    const stores = new Map<string, RecordingStateStore>();
+    const storeFor = (path: string): RecordingStateStore => {
+      let store = stores.get(path);
+      if (!store) {
+        store = new RecordingStateStore();
+        stores.set(path, store);
+      }
+      return store;
+    };
+    const before = await Promise.all(paths.map(async (path) => [path, await readFile(path, 'utf-8')] as const));
+
+    const result = await rewindChildState({
+      root,
+      config: {},
+      target: 'build',
+      child: parseChildId(2)!,
+      storeFor,
+      readCurrentState: async (path) => JSON.parse(await readFile(path, 'utf-8')) as ConductState,
+    });
+
+    const intent = 'operator rewind to build (child 2)';
+    expect([...stores.entries()].map(([path, store]) => [path, store.batches])).toEqual([
+      [paths[1], [{
+        name: 'operator rewind state',
+        mutations: [
+          { field: 'build', expected: 'done', intent, next: 'stale' },
+          { field: 'test_suite', expected: 'done', intent, next: 'stale' },
+          { field: 'build_review', expected: 'done', intent, next: 'stale' },
+          { field: 'last_step', expected: 'build_review', intent, next: 'acceptance_specs' },
+        ],
+      }]],
+      [paths[2], [{
+        name: 'operator rewind state',
+        mutations: [
+          { field: 'acceptance_specs', expected: 'done', intent, next: 'stale' },
+          { field: 'build', expected: 'done', intent, next: 'stale' },
+          { field: 'test_suite', expected: 'done', intent, next: 'stale' },
+          { field: 'build_review', expected: 'done', intent, next: 'stale' },
+          { field: 'last_step', expected: 'build_review', intent, next: 'coverage_binding' },
+        ],
+      }]],
+      [paths[3], [{
+        name: 'operator rewind state',
+        mutations: [
+          { field: 'manual_test', expected: 'done', intent, next: 'stale' },
+          { field: 'prd_audit', expected: 'done', intent, next: 'stale' },
+          { field: 'architecture_review_as_built', expected: 'done', intent, next: 'stale' },
+          { field: 'rebase', expected: 'done', intent, next: 'stale' },
+          { field: 'finish', expected: 'done', intent, next: 'stale' },
+          { field: 'last_step', expected: 'prd_audit', intent, next: 'build_review' },
+        ],
+      }]],
+    ]);
+    expect(result.demotions).toEqual([
+      { child: parseChildId(2), step: 'build' },
+      { child: parseChildId(2), step: 'test_suite' },
+      { child: parseChildId(2), step: 'build_review' },
+      { child: parseChildId(3), step: 'acceptance_specs' },
+      { child: parseChildId(3), step: 'build' },
+      { child: parseChildId(3), step: 'test_suite' },
+      { child: parseChildId(3), step: 'build_review' },
+      { step: 'manual_test' }, { step: 'prd_audit' }, { step: 'architecture_review_as_built' }, { step: 'rebase' }, { step: 'finish' },
+    ]);
+    await expect(Promise.all(paths.map(async (path) => [path, await readFile(path, 'utf-8')] as const))).resolves.toEqual(before);
+  });
+
+  it('refuses a target at or after the target child current step without changing the pipeline tree', async () => {
+    const childPath = paths[1]!;
+    const childState = JSON.parse(await readFile(childPath, 'utf-8')) as ConductState;
+    await writeFile(childPath, `${JSON.stringify({ ...childState, last_step: 'build' }, null, 2)}\n`, 'utf-8');
+    const before = await pipelineFileBytes(root);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const storeFor = vi.fn(() => new RecordingStateStore());
+    try {
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'test_suite', child: '2' }, root, {
+        storeFor,
+        preflightDerivedRecords: async () => {},
+        clearDerivedRecords: async () => {},
+        emit: async () => {},
+      })).resolves.toBe(1);
+      expect(error).toHaveBeenCalledWith('rewind: target "test_suite" must be earlier than child 2\'s current step "build"');
+      expect(storeFor).not.toHaveBeenCalled();
+      await expect(pipelineFileBytes(root)).resolves.toEqual(before);
+    } finally {
+      error.mockRestore();
     }
   });
 });

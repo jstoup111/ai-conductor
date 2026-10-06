@@ -1,5 +1,5 @@
 import type { ConductState, HarnessConfig } from '../types/index.js';
-import type { ConductStateStore, StateFieldDeletion, StateMutation } from './conduct-state-store.js';
+import type { ConductStateStore, NamedAtomicStateMutationBatch, StateFieldDeletion, StateMutation } from './conduct-state-store.js';
 import { buildStepRegistry } from './steps.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import { readState } from './state.js';
@@ -11,7 +11,15 @@ import { HALT_CLASS_MARKER, HALT_MARKER, writeHaltMarker } from './halt-marker.j
 import { GATES_DIR } from './gate-verdicts.js';
 import { AS_BUILT_REPORT_PATH, AS_BUILT_VERDICT_PATH } from './as-built-verdict-store.js';
 import { PRD_AUDIT_REPORT_PATH, PRD_AUDIT_VERDICT_PATH } from './prd-audit-verdict-store.js';
-import { childStateExists, isRegionStep, parseChildId } from './child-context.js';
+import {
+  CHILD_REGION_STEPS,
+  childStateExists,
+  isRegionStep,
+  listExistingChildren,
+  parseChildId,
+  pipelinePathFor,
+  type ChildId,
+} from './child-context.js';
 import { join } from 'node:path';
 import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
 
@@ -29,6 +37,34 @@ export interface RewindStateResult {
   demoted: string[];
 }
 
+export interface RewindChildDemotion {
+  child?: ChildId;
+  step: string;
+}
+
+export interface AppliedChildRewindBatch {
+  path: string;
+  originalState: ConductState;
+  batch: NamedAtomicStateMutationBatch<ConductState>;
+}
+
+export interface RewindChildStateInput {
+  root: string;
+  config: HarnessConfig;
+  target: string;
+  child: ChildId;
+  storeFor: (path: string) => ConductStateStore<ConductState>;
+  /** Reads a fresh snapshot only to make a refused port mutation actionable. */
+  readCurrentState: (path: string) => Promise<ConductState>;
+}
+
+export interface RewindChildStateResult {
+  target: string;
+  child: ChildId;
+  demotions: RewindChildDemotion[];
+  applied: AppliedChildRewindBatch[];
+}
+
 export type RewindDispatch = { kind: 'rewind'; target: string; child?: string };
 
 /** Test seams for the operator command boundary; production uses filesystem defaults. */
@@ -36,6 +72,7 @@ export interface RewindCommandDependencies {
   loadConfig?: typeof loadConfig;
   readState?: typeof readState;
   store?: ConductStateStore<ConductState>;
+  storeFor?: (path: string) => ConductStateStore<ConductState>;
   preflightDerivedRecords?: (root: string) => Promise<void>;
   clearDerivedRecords?: (root: string, demoted: string[]) => Promise<void>;
   markerFilesystem?: RewindMarkerFilesystem;
@@ -301,6 +338,32 @@ export async function dispatchRewindCommand(
       console.error('rewind: only acceptance_specs, build, test_suite and build_review can be rewound per child');
       return 1;
     }
+    const configResult = await (dependencies.loadConfig ?? loadConfig)(cwd);
+    if (!configResult.ok && configResult.error.type !== 'missing') {
+      console.error(`rewind: ${configResult.error.message}`);
+      return 1;
+    }
+    const config = configResult.ok ? configResult.config : {};
+    const storeFor = dependencies.storeFor
+      ?? ((path: string) => dependencies.store ?? createFilesystemConductStateStore(path));
+    try {
+      await rewindChildState({
+        root: cwd,
+        config,
+        target: command.target,
+        child,
+        storeFor,
+        readCurrentState: async (path) => {
+          const current = await readState(path);
+          return current.ok ? current.value : {};
+        },
+      });
+    } catch (error) {
+      console.error(`rewind: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
+    // Task 24 adds the shared derived-record clear, event, and rollback phase.
+    return 0;
   }
   const statePath = join(cwd, '.pipeline', 'conduct-state.json');
   const read = dependencies.readState ?? readState;
@@ -407,4 +470,110 @@ export async function rewindState({
   }
 
   return { target, demoted };
+}
+
+/**
+ * Demote the selected child, children above it, and the affected whole-feature
+ * tail through one intent-bearing batch per conduct-state file.
+ */
+export async function rewindChildState({
+  root,
+  config,
+  target,
+  child,
+  storeFor,
+  readCurrentState,
+}: RewindChildStateInput): Promise<RewindChildStateResult> {
+  const childPath = pipelinePathFor(root, 'conduct-state.json', child);
+  const observedChild = await readState(childPath);
+  if (!observedChild.ok) throw new Error(observedChild.error.message);
+
+  const steps = buildStepRegistry(config);
+  const targetIndex = steps.findIndex((step) => step.name === target);
+  if (targetIndex === -1) {
+    throw new Error(`Invalid rewind target "${target}". Valid steps: ${steps.map((step) => step.name).join(', ')}`);
+  }
+  const currentIndex = steps.findIndex((step) => step.name === observedChild.value.last_step);
+  if (currentIndex === -1) {
+    throw new Error('Cannot rewind without a current resolved step in child conduct state');
+  }
+  if (targetIndex >= currentIndex) {
+    throw new Error(`target "${target}" must be earlier than child ${child}'s current step "${observedChild.value.last_step}"`);
+  }
+  const regionTargetIndex = (CHILD_REGION_STEPS as readonly string[]).indexOf(target);
+  if (regionTargetIndex === -1) throw new Error(`Invalid child rewind target "${target}"`);
+
+  const intent = `operator rewind to ${target} (child ${child})`;
+  const demotions: RewindChildDemotion[] = [];
+  const applied: AppliedChildRewindBatch[] = [];
+  const apply = async (
+    path: string,
+    state: ConductState,
+    stepNames: readonly string[],
+    predecessor: NonNullable<ConductState['last_step']>,
+    demotionChild?: ChildId,
+  ): Promise<void> => {
+    const demotedSteps = stepNames.filter((step) => state[step as keyof ConductState] !== 'skipped');
+    const mutations: StateMutation<ConductState>[] = demotedSteps.map((step) => ({
+      field: step,
+      expected: state[step as keyof ConductState],
+      intent,
+      next: 'stale',
+    } as StateMutation<ConductState>));
+    if (mutations.length === 0) return;
+    mutations.push({
+      field: 'last_step',
+      expected: state.last_step,
+      intent,
+      next: predecessor,
+    });
+    const batch: NamedAtomicStateMutationBatch<ConductState> = { name: 'operator rewind state', mutations };
+    const result = await storeFor(path).applyBatch(batch);
+    if ('message' in result) {
+      if (result.kind === 'conflict') {
+        const current = await readCurrentState(path);
+        const refused = mutations.find((mutation) => current[mutation.field] !== mutation.expected);
+        if (refused) {
+          throw new Error(
+            `Operator rewind refused ${refused.field}: expected ${String(refused.expected)}, current ${String(current[refused.field])}`,
+          );
+        }
+      }
+      throw new Error(`Operator rewind mutation failed (${result.kind}): ${result.message}`);
+    }
+    demotions.push(...demotedSteps.map((step) => demotionChild === undefined ? { step } : { child: demotionChild, step }));
+    applied.push({ path, originalState: { ...state }, batch });
+  };
+
+  await apply(
+    childPath,
+    observedChild.value,
+    CHILD_REGION_STEPS.slice(regionTargetIndex),
+    steps[targetIndex - 1]!.name,
+    child,
+  );
+
+  const acceptanceSpecsIndex = steps.findIndex((step) => step.name === 'acceptance_specs');
+  if (acceptanceSpecsIndex <= 0) throw new Error('Cannot rewind child state without an acceptance_specs predecessor');
+  const laterChildren = (await listExistingChildren(root)).filter((candidate) => candidate > child);
+  for (const laterChild of laterChildren) {
+    const path = pipelinePathFor(root, 'conduct-state.json', laterChild);
+    const observed = await readState(path);
+    if (!observed.ok) throw new Error(observed.error.message);
+    await apply(path, observed.value, CHILD_REGION_STEPS, steps[acceptanceSpecsIndex - 1]!.name, laterChild);
+  }
+
+  const flatPath = pipelinePathFor(root, 'conduct-state.json');
+  const observedFlat = await readState(flatPath);
+  if (!observedFlat.ok) throw new Error(observedFlat.error.message);
+  const buildReviewIndex = steps.findIndex((step) => step.name === 'build_review');
+  if (buildReviewIndex === -1) throw new Error('Cannot rewind child state without build_review');
+  const flatSteps = steps.slice(buildReviewIndex + 1).map((step) => step.name);
+  const firstFlatDemotion = flatSteps.find((step) => observedFlat.value[step as keyof ConductState] !== 'skipped');
+  if (firstFlatDemotion !== undefined) {
+    const firstFlatIndex = steps.findIndex((step) => step.name === firstFlatDemotion);
+    await apply(flatPath, observedFlat.value, flatSteps, steps[firstFlatIndex - 1]!.name);
+  }
+
+  return { target, child, demotions, applied };
 }
