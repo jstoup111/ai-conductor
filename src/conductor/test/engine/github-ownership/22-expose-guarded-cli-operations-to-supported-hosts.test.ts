@@ -456,4 +456,216 @@ describe('github-operation CLI', () => {
     expect(shows.every((call) => call.endsWith(':.docs/intake/x.md'))).toBe(true);
     expect(gh.mock.calls.some(([args]) => args[0] === 'pr' && args[1] === 'edit')).toBe(true);
   });
+
+  it('refuses a child branch with no parent leaf before any write boundary', async () => {
+    const gitCalls: string[][] = [];
+    const git = vi.fn(async (args: string[]) => {
+      gitCalls.push([...args]);
+      if (args.join(' ') === 'branch --show-current') return { stdout: 'feat/c1/x\n' };
+      throw new Error(`ref not found: ${args.join(' ')}`);
+    });
+    const gh = vi.fn();
+    const remoteGit = vi.fn(async () => ({ kind: 'executed' as const, targets: [] }));
+    const write = vi.fn();
+
+    const exit = await dispatchGithubOperationCommand({ requestFile: '/child.json' }, {
+      cwd: '/fixture',
+      readRequest: readRequest({
+        operation: 'remote-ref.push', repository: 'acme/widgets',
+        resource: { kind: 'remote-ref', ref: 'refs/heads/feat/c1/x' },
+        context: { actor: 'alice', feature: 'x' },
+      }),
+      git, gh, remoteGit, write,
+    });
+
+    expect(exit).toBe(1);
+    expect(JSON.parse(write.mock.calls[0]?.[0] ?? '')).toMatchObject({ kind: 'refused', reason: 'invalid-target' });
+    expect(gitCalls).toEqual([
+      ['branch', '--show-current'],
+      ['show-ref', '--verify', '--quiet', 'refs/heads/feat/daemon-x'],
+      ['show-ref', '--verify', '--quiet', 'refs/remotes/origin/feat/daemon-x'],
+    ]);
+    expect(gh).not.toHaveBeenCalled();
+    expect(remoteGit).not.toHaveBeenCalled();
+  });
+
+  it('refuses a child branch whose request feature differs from its slug even when the leaf exists', async () => {
+    const gitCalls: string[][] = [];
+    const git = vi.fn(async (args: string[]) => {
+      gitCalls.push([...args]);
+      const joined = args.join(' ');
+      if (joined === 'branch --show-current') return { stdout: 'feat/c1/x\n' };
+      if (joined === 'show-ref --verify --quiet refs/heads/feat/daemon-x') return { stdout: '' };
+      throw new Error(`unexpected git command: ${joined}`);
+    });
+    const gh = vi.fn();
+    const remoteGit = vi.fn(async () => ({ kind: 'executed' as const, targets: [] }));
+    const write = vi.fn();
+
+    const exit = await dispatchGithubOperationCommand({ requestFile: '/child.json' }, {
+      cwd: '/fixture',
+      readRequest: readRequest({
+        operation: 'remote-ref.push', repository: 'acme/widgets',
+        resource: { kind: 'remote-ref', ref: 'refs/heads/feat/c1/x' },
+        context: { actor: 'alice', feature: 'y' },
+      }),
+      git, gh, remoteGit, write,
+    });
+
+    expect(exit).toBe(1);
+    expect(JSON.parse(write.mock.calls[0]?.[0] ?? '')).toMatchObject({ kind: 'refused', reason: 'invalid-target' });
+    expect(gitCalls).toEqual([
+      ['branch', '--show-current'],
+      ['show-ref', '--verify', '--quiet', 'refs/heads/feat/daemon-x'],
+    ]);
+    expect(gh).not.toHaveBeenCalled();
+    expect(remoteGit).not.toHaveBeenCalled();
+  });
+
+  it('refuses a child branch when the leaf probe errors, before any write', async () => {
+    const gitCalls: string[][] = [];
+    const git = vi.fn(async (args: string[]) => {
+      gitCalls.push([...args]);
+      if (args.join(' ') === 'branch --show-current') return { stdout: 'feat/c1/x\n' };
+      throw new Error(`git show-ref failed: ${args.join(' ')}`);
+    });
+    const gh = vi.fn();
+    const remoteGit = vi.fn(async () => ({ kind: 'executed' as const, targets: [] }));
+    const write = vi.fn();
+
+    const exit = await dispatchGithubOperationCommand({ requestFile: '/child.json' }, {
+      cwd: '/fixture',
+      readRequest: readRequest({
+        operation: 'remote-ref.push', repository: 'acme/widgets',
+        resource: { kind: 'remote-ref', ref: 'refs/heads/feat/c1/x' },
+        context: { actor: 'alice', feature: 'x' },
+      }),
+      git, gh, remoteGit, write,
+    });
+
+    expect(exit).toBe(1);
+    expect(JSON.parse(write.mock.calls[0]?.[0] ?? '')).toMatchObject({ kind: 'refused', reason: 'invalid-target' });
+    expect(gitCalls).toEqual([
+      ['branch', '--show-current'],
+      ['show-ref', '--verify', '--quiet', 'refs/heads/feat/daemon-x'],
+      ['show-ref', '--verify', '--quiet', 'refs/remotes/origin/feat/daemon-x'],
+    ]);
+    expect(gh).not.toHaveBeenCalled();
+    expect(remoteGit).not.toHaveBeenCalled();
+  });
+
+  it('refuses an owner-mismatched child branch exactly as its leaf branch', async () => {
+    const buildGit = (branch: string) => vi.fn(async (args: string[]) => {
+      const joined = args.join(' ');
+      if (joined === 'branch --show-current') return { stdout: `${branch}\n` };
+      if (args[0] === 'show-ref') {
+        if (joined === 'show-ref --verify --quiet refs/heads/feat/daemon-x') return { stdout: '' };
+        throw new Error('ref not found');
+      }
+      if (joined === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (joined === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
+      if (args[0] === 'show') {
+        if (args.some((arg) => arg.endsWith(':.docs/intake/x.md'))) return { stdout: 'Owner: bob\n' };
+        throw new Error(`fatal: path not found: ${joined}`);
+      }
+      throw new Error(`unexpected git read: ${joined}`);
+    });
+    const gh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ number: 7 }) };
+      return { stdout: '' };
+    });
+    const resolveMachineOwner = vi.fn(async () => ({ resolved: true as const, id: 'alice' }));
+    const request = {
+      operation: 'pull-request.edit', repository: 'acme/widgets',
+      resource: { kind: 'pull-request', number: 7 },
+      context: { actor: 'alice', feature: 'x' }, payload: { body: 'owner parity' },
+    };
+
+    const childWrite = vi.fn();
+    const childExit = await dispatchGithubOperationCommand({ requestFile: '/child.json' }, {
+      cwd: '/fixture', readRequest: readRequest(request), gh, git: buildGit('feat/c1/x'), resolveMachineOwner, write: childWrite,
+    });
+    const leafWrite = vi.fn();
+    const leafExit = await dispatchGithubOperationCommand({ requestFile: '/leaf.json' }, {
+      cwd: '/fixture', readRequest: readRequest(request), gh, git: buildGit('feat/daemon-x'), resolveMachineOwner, write: leafWrite,
+    });
+
+    expect(childExit).toBe(1);
+    expect(leafExit).toBe(1);
+    const childOutput = JSON.parse(childWrite.mock.calls[0]?.[0] ?? '');
+    const leafOutput = JSON.parse(leafWrite.mock.calls[0]?.[0] ?? '');
+    expect(childOutput).toMatchObject({ kind: 'refused', reason: 'other-owner' });
+    expect(childOutput).toEqual(leafOutput);
+  });
+
+  it('keeps an authorized child push on the child branch and binds its PR to the child head', async () => {
+    const gitCalls: string[][] = [];
+    const ghCalls: string[][] = [];
+    const git = vi.fn(async (args: string[]) => {
+      gitCalls.push([...args]);
+      const joined = args.join(' ');
+      if (joined === 'branch --show-current') return { stdout: 'feat/c1/x\n' };
+      if (args[0] === 'show-ref') {
+        if (joined === 'show-ref --verify --quiet refs/heads/feat/daemon-x') return { stdout: '' };
+        throw new Error('ref not found');
+      }
+      if (joined === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (joined === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
+      if (args[0] === 'show') {
+        if (args.some((arg) => arg.endsWith(':.docs/intake/x.md'))) return { stdout: 'Owner: alice\n' };
+        throw new Error(`fatal: path not found: ${joined}`);
+      }
+      throw new Error(`unexpected git read: ${joined}`);
+    });
+    const gh = vi.fn(async (args: string[]) => {
+      ghCalls.push([...args]);
+      if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ number: 7 }) };
+      return { stdout: '' };
+    });
+    const remoteGit = vi.fn(async () => ({ kind: 'executed' as const, targets: [] }));
+    const resolveMachineOwner = vi.fn(async () => ({ resolved: true as const, id: 'alice' }));
+    const write = vi.fn();
+
+    const pushExit = await dispatchGithubOperationCommand({ requestFile: '/push.json' }, {
+      cwd: '/fixture',
+      readRequest: readRequest({
+        operation: 'remote-ref.push', repository: 'acme/widgets',
+        resource: { kind: 'remote-ref', ref: 'refs/heads/feat/c1/x' },
+        context: { actor: 'alice', feature: 'x' },
+      }),
+      git, gh, remoteGit, resolveMachineOwner, write,
+    });
+    const prExit = await dispatchGithubOperationCommand({ requestFile: '/pr.json' }, {
+      cwd: '/fixture',
+      readRequest: readRequest({
+        operation: 'pull-request.edit', repository: 'acme/widgets',
+        resource: { kind: 'pull-request', number: 7 },
+        context: { actor: 'alice', feature: 'x' }, payload: { body: 'child head' },
+      }),
+      git, gh, resolveMachineOwner, write,
+    });
+
+    expect(pushExit).toBe(0);
+    expect(prExit).toBe(0);
+
+    const [remoteArgv, remoteOptions] = remoteGit.mock.calls[0] as unknown as [
+      readonly string[],
+      { mutation?: { provenance: { specBranch: string; target: { ref: string } } } },
+    ];
+    expect(remoteArgv).toEqual(['push', 'origin', 'HEAD:refs/heads/feat/c1/x']);
+    expect(remoteOptions.mutation?.provenance.specBranch).toBe('feat/c1/x');
+    expect(remoteOptions.mutation?.provenance.target.ref).toBe('refs/heads/feat/c1/x');
+    expect(ghCalls.some(([a0, a1, a2]) => a0 === 'pr' && a1 === 'view' && a2 === 'feat/c1/x')).toBe(true);
+
+    const everyRecordedArgv = [
+      ...gitCalls,
+      ...ghCalls,
+      remoteArgv as string[],
+    ];
+    for (const argv of everyRecordedArgv) {
+      const joined = argv.join(' ');
+      if (!joined.includes('feat/daemon-x')) continue;
+      expect(joined).toMatch(/^show-ref --verify --quiet refs\/(heads|remotes\/origin)\/feat\/daemon-x$/);
+    }
+  });
 });
