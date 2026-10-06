@@ -766,8 +766,9 @@ paths. See [merge-bearing feature branches](../guides/running-the-daemon.md#merg
 
 `build_done_when_unverified` records a BUILD that completed after its one review pass with `[test]`
 checks still closed as unverified; `checks` lists each `taskId` and `check`. The spent pass is stored
-in `.pipeline/engine-state.json` under `unverifiedDoneWhenNudges`, keyed by the run start stamp, so a
-restart does not grant a second pass. See [per-task evidence](../explanation/gates.md#per-task-done-when-evidence).
+in `.pipeline/engine-state.json` under `unverifiedDoneWhenNudges`, keyed by the run start stamp plus the
+summed `cumulative` kickback count from `kickback-ledger.json`, so a restart does not grant a second pass
+but each kickback back into BUILD starts a new lap with its own pass. See [per-task evidence](../explanation/gates.md#per-task-done-when-evidence).
 
 `rebase_supersession_verdict` records a successful mergeable-sweep test-only judgement: its choice,
 rationale, and declared superseded replay SHAs. `rebase_citation_residue` records the corresponding
