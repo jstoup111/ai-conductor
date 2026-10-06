@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-06T10:57:10.282Z
 Slug: step-applicability-is-fixed-repo-wide-decide-canno
 Class: plan-gap
 Halting step: prd_audit
