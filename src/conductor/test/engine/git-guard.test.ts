@@ -134,4 +134,30 @@ describe('git guard provisioning primitives', () => {
     const info = await lstat(guard);
     expect([await readFile(guard, 'utf8'), info.mode & 0o777]).toEqual([GIT_GUARD_SCRIPT, 0o755]);
   });
+
+  it('treats an unprepared linked worktree without worktreeConfig as unguarded instead of failing dispatch', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'git-guard-unprepared-linked-'));
+    roots.push(root);
+    const main = join(root, 'main');
+    const linked = join(root, 'linked');
+    await mkdir(main);
+    await initTestRepo(main);
+    await execa('git', ['-C', main, 'worktree', 'add', '-q', '-b', 'linked', linked]);
+
+    await expect(ensureGitGuardForDispatch(linked)).resolves.toBeNull();
+
+    const spawns: Array<{ env?: Record<string, string | undefined> }> = [];
+    const provider = new ClaudeProvider(undefined, ((_file: string, _args: string[], options: ExecaOptions) => {
+      spawns.push({ env: options.env });
+      return Promise.resolve({
+        stdout: JSON.stringify({ type: 'result', result: 'ok', usage: { input_tokens: 1, output_tokens: 1 } }),
+        stderr: '',
+        exitCode: 0,
+      }) as never;
+    }) as never);
+
+    await expect(provider.invoke({ prompt: 'no-op', sessionId: 'unprepared-linked', resume: false, cwd: linked }))
+      .resolves.toMatchObject({ success: true });
+    expect(spawns).toHaveLength(1);
+  });
 });
