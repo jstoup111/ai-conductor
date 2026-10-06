@@ -94,8 +94,11 @@ function planConflictBatches({ claims, previous, batchSize }: PlanCoverageBindin
       continue;
     }
     const hit = cached.get(digest) as { kind?: string; verdict?: string; taskIds?: readonly string[]; conflict?: string } | undefined;
-    if (hit?.kind === 'conflict' && hit.verdict !== 'unjudged' && hit.verdict !== undefined) {
-      entries.push(conflictEntryFor(claim, digest, hit.verdict as 'consistent' | 'conflicts' | 'not-applicable', hit.verdict === 'conflicts' && hit.taskIds && hit.conflict ? { taskIds: hit.taskIds, conflict: hit.conflict } : undefined));
+    // Only a passing verdict is reused. A cached conflict already halted the
+    // feature; reusing it after the operator clears that halt would re-halt
+    // without the judge ever looking again, leaving the clear no effect.
+    if (hit?.kind === 'conflict' && (hit.verdict === 'consistent' || hit.verdict === 'not-applicable')) {
+      entries.push(conflictEntryFor(claim, digest, hit.verdict));
     } else pending.push({ claim, claimDigest: digest });
   }
   const batches: PendingConflictClaim[][] = [];

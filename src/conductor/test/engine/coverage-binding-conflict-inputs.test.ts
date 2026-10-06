@@ -220,6 +220,26 @@ Task prose without a completion-check block.`;
     });
   });
 
+  it('carries every inherited amendment in the section into each decision claim, not only the preceding one', () => {
+    const scoped = '**Amended 2026-09-21 by owner/repo#2636 (spec `x`):**\nThis amendment narrows deletion.';
+    const trailing = '> **Amended 2026-10-03 by #2940:** Items 8 and 9 read "daemon-owned branch", which includes a child.';
+    const claims = assembleConflictClaims({
+      planText: plan,
+      storiesText: '',
+      subjectAdrs: [{
+        path: '.docs/decisions/adr-subject.md',
+        text: `# ADR\n\n## Decision\n\n8. Only feat/daemon-* branches are record-gated.\n\n${scoped}\n\n9. Ancestry alone never deletes.\n\n${trailing}\n\n## Consequences\n\nNone.`,
+      }],
+      amendmentClaims: [],
+    }).filter(({ kind }) => kind === 'adr-decision');
+
+    const trailingText = trailing.slice(2);
+    expect(claims.map(({ id, text }) => ({ id, text }))).toEqual([
+      { id: 'adr-subject#D8', text: `8. Only feat/daemon-* branches are record-gated.\n\n${scoped}\n\n${trailingText}` },
+      { id: 'adr-subject#D9', text: `9. Ancestry alone never deletes.\n\n${trailingText}\n\n${scoped}` },
+    ]);
+  });
+
   it('marks every claim not-applicable when no task has a Done when block', () => {
     expect(assembleConflictClaims({
       planText: '### Task 1: Legacy task\nTask prose only.',
