@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import type { StepName } from '../types/index.js';
 import {
@@ -7,6 +7,7 @@ import {
   type CompletionContext,
   type CompletionResult,
 } from './artifacts.js';
+import { isRegionStep, pipelinePathFor, type ChildId } from './child-context.js';
 
 /**
  * Objective completion check for a gate. Prefers the richer kickback-target
@@ -158,8 +159,19 @@ export interface GateVerdict {
 
 export const GATES_DIR = '.pipeline/gates';
 
-function verdictPath(dir: string, step: StepName): string {
-  return join(dir, GATES_DIR, `${step}.json`);
+/**
+ * Resolve the on-disk path for a gate verdict record. A flat `.pipeline/gates`
+ * file for the whole feature, or the per-region child path for a step that can
+ * run separately under each child branch.
+ */
+export function verdictPathFor(dir: string, step: StepName, child?: ChildId): string {
+  if (child === undefined) {
+    return join(dir, GATES_DIR, `${step}.json`);
+  }
+  if (isRegionStep(step)) {
+    return pipelinePathFor(dir, `gates/${step}.json`, child);
+  }
+  throw new Error(`gate verdict for whole-feature step "${step}" cannot be stored under a child`);
 }
 
 /**
@@ -196,9 +208,10 @@ export async function writeVerdict(
   dir: string,
   step: StepName,
   verdict: GateVerdict,
+  child?: ChildId,
 ): Promise<void> {
-  await mkdir(join(dir, GATES_DIR), { recursive: true });
-  const path = verdictPath(dir, step);
+  const path = verdictPathFor(dir, step, child);
+  await mkdir(dirname(path), { recursive: true });
   // A normal rebase completion write (notably a no-op after a daemon restart)
   // must not erase an in-flight cross-file transition.  The descriptor is the
   // durable publication fence and restart authority until the transition
@@ -270,9 +283,10 @@ export function isSkipVerdict(verdict: GateVerdict | null | undefined): boolean 
 export async function readVerdict(
   dir: string,
   step: StepName,
+  child?: ChildId,
 ): Promise<GateVerdict | null> {
   try {
-    const parsed = JSON.parse(await readFile(verdictPath(dir, step), 'utf-8'));
+    const parsed = JSON.parse(await readFile(verdictPathFor(dir, step, child), 'utf-8'));
     if (!parsed || typeof parsed.satisfied !== 'boolean') return null;
     return parsed as GateVerdict;
   } catch {
