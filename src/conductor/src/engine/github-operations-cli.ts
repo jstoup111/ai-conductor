@@ -16,7 +16,8 @@ import { executeSharedGithubOperation } from './github-shared-operations.js';
 import { createGithubIntakeAuthorization } from './engineer/intake/github-issues.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation, type RemoteGitCommandRunner } from './remote-git-operations.js';
 import { makeProductionGit, type GitRunner } from './pr-labels.js';
-import { DAEMON_BRANCH_PREFIX } from './daemon-halt-pr-operations.js';
+import { parseFeatureBranch, LEAF_PREFIX, SPEC_PREFIX } from './feature-branch-identity.js';
+import { leafRefExists } from './daemon-halt-pr-operations.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import {
   createGuardedGithubOperationRunner,
@@ -82,7 +83,29 @@ async function featureMutationForRequest(
   const { stdout } = await git(['branch', '--show-current'], { cwd: input.cwd });
   const branch = stdout.trim();
   if (!branch) return { kind: 'unavailable' };
-  const slug = branch.startsWith(DAEMON_BRANCH_PREFIX) ? branch.slice(DAEMON_BRANCH_PREFIX.length) : branch.replace(/^spec\//, '');
+  const identity = parseFeatureBranch(branch);
+  let slug: string;
+  if (identity.kind === 'child') {
+    // `leafRefExists` reads the probe's exit code, which the CLI's pr-labels
+    // `GitRunner` does not surface (it returns only `stdout` and throws on a
+    // non-zero exit). Bind a narrow adapter so a child branch's parent leaf
+    // existence is decided at the boundary the caller already holds.
+    const gitForCwd = async (args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
+      try {
+        const { stdout: probeStdout } = await git(args, { cwd: input.cwd });
+        return { exitCode: 0, stdout: probeStdout, stderr: '' };
+      } catch (error) {
+        return { exitCode: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error) };
+      }
+    };
+    const leaf = await leafRefExists(gitForCwd, identity.slug);
+    if (leaf !== 'present') {
+      return { kind: 'refused', reason: 'invalid-target' };
+    }
+    slug = identity.slug;
+  } else {
+    slug = branch.startsWith(LEAF_PREFIX) ? branch.slice(LEAF_PREFIX.length) : branch.startsWith(SPEC_PREFIX) ? branch.slice(SPEC_PREFIX.length) : branch;
+  }
   if (request.context.feature !== undefined && request.context.feature !== slug) {
     return { kind: 'refused', reason: 'invalid-target' };
   }

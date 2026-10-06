@@ -361,4 +361,99 @@ describe('github-operation CLI', () => {
     })).resolves.toBe(1);
     expect(refusedGh.mock.calls.filter(([args]) => args[0] === 'issue' && args[1] === 'close')).toEqual([]);
   });
+
+  it.each([
+    { branch: 'feat/daemon-x', proceeds: true },
+    { branch: 'spec/x', proceeds: true },
+    { branch: 'feature/x', proceeds: false },
+    { branch: 'feat/daemon-', proceeds: false },
+    { branch: 'spec/', proceeds: false },
+    { branch: 'main', proceeds: false },
+  ])('resolves the current branch "$branch" with context.feature "x" ($proceeds)', async ({ branch, proceeds }) => {
+    const shows: string[] = [];
+    const git = vi.fn(async (args: string[]) => {
+      const joined = args.join(' ');
+      if (joined === 'branch --show-current') return { stdout: `${branch}\n` };
+      if (joined === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (joined === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
+      if (args[0] === 'show') {
+        shows.push(joined);
+        if (args.some((arg) => arg.endsWith(':.docs/intake/x.md'))) return { stdout: 'Owner: alice\n' };
+        throw new Error(`fatal: path not found: ${joined}`);
+      }
+      throw new Error(`unexpected git read: ${joined}`);
+    });
+    const gh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ number: 7 }) };
+      return { stdout: '' };
+    });
+    const resolveMachineOwner = vi.fn(async () => ({ resolved: true as const, id: 'alice' }));
+    const write = vi.fn();
+    const request = {
+      operation: 'pull-request.edit', repository: 'acme/widgets',
+      resource: { kind: 'pull-request', number: 7 },
+      context: { actor: 'alice', feature: 'x' }, payload: { body: 'parity check' },
+    };
+
+    const exit = await dispatchGithubOperationCommand({ requestFile: '/request.json' }, {
+      cwd: '/fixture', readRequest: readRequest(request), gh, git, resolveMachineOwner, write,
+    });
+
+    if (proceeds) {
+      expect(exit, JSON.stringify(write.mock.calls)).toBe(0);
+      expect(resolveMachineOwner).toHaveBeenCalled();
+      expect(shows.length).toBeGreaterThan(0);
+      expect(shows.every((call) => call.endsWith(':.docs/intake/x.md'))).toBe(true);
+      expect(gh.mock.calls.some(([args]) => args[0] === 'pr' && args[1] === 'edit')).toBe(true);
+    } else {
+      expect(exit, JSON.stringify(write.mock.calls)).toBe(1);
+      expect(JSON.parse(write.mock.calls[0]?.[0] ?? '')).toMatchObject({ kind: 'refused', reason: 'invalid-target' });
+      expect(gh).not.toHaveBeenCalled();
+      expect(resolveMachineOwner).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    { name: 'local leaf ref is present', present: 'refs/heads/feat/daemon-x' },
+    { name: 'origin leaf ref is present', present: 'refs/remotes/origin/feat/daemon-x' },
+  ])('resolves a child branch through the leaf when only the $name', async ({ present }) => {
+    const shows: string[] = [];
+    const git = vi.fn(async (args: string[]) => {
+      const joined = args.join(' ');
+      if (joined === 'branch --show-current') return { stdout: 'feat/c1/x\n' };
+      if (args[0] === 'show-ref') {
+        if (joined === `show-ref --verify --quiet ${present}`) return { stdout: '' };
+        throw new Error('ref not found');
+      }
+      if (joined === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (joined === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
+      if (args[0] === 'show') {
+        shows.push(joined);
+        if (args.some((arg) => arg.endsWith(':.docs/intake/x.md'))) return { stdout: 'Owner: alice\n' };
+        throw new Error(`fatal: path not found: ${joined}`);
+      }
+      throw new Error(`unexpected git read: ${joined}`);
+    });
+    const gh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ number: 7 }) };
+      return { stdout: '' };
+    });
+    const resolveMachineOwner = vi.fn(async () => ({ resolved: true as const, id: 'alice' }));
+    const write = vi.fn();
+    const request = {
+      operation: 'pull-request.edit', repository: 'acme/widgets',
+      resource: { kind: 'pull-request', number: 7 },
+      context: { actor: 'alice', feature: 'x' }, payload: { body: 'child-to-leaf' },
+    };
+
+    const exit = await dispatchGithubOperationCommand({ requestFile: '/child.json' }, {
+      cwd: '/fixture', readRequest: readRequest(request), gh, git, resolveMachineOwner, write,
+    });
+
+    expect(exit, JSON.stringify(write.mock.calls)).toBe(0);
+    expect(resolveMachineOwner).toHaveBeenCalled();
+    expect(shows.length).toBeGreaterThan(0);
+    expect(shows.every((call) => call.endsWith(':.docs/intake/x.md'))).toBe(true);
+    expect(gh.mock.calls.some(([args]) => args[0] === 'pr' && args[1] === 'edit')).toBe(true);
+  });
 });
