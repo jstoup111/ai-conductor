@@ -13,7 +13,7 @@ import { boundedHeadTailExcerpt } from './build-review-test-quality-preflight.js
 import { createConductStateLease } from './conduct-state-lease.js';
 import type { ConductStateLeaseFailureKind } from './conduct-state-lease.js';
 import { isAsBuiltGoverningReference, type AsBuiltGoverningReference } from './as-built-contract.js';
-import { pipelinePathFor, type ChildId } from './child-context.js';
+import { listExistingChildren, pipelinePathFor, type ChildId } from './child-context.js';
 
 /** The latest infrastructure failure charged to a build-review rubric lap. */
 export interface KickbackLastMechanicalFault {
@@ -850,6 +850,11 @@ export async function clearKickbackLedger(projectRoot: string): Promise<void> {
   await withKickbackLedgerLease(projectRoot, async () => {
     await rm(join(projectRoot, KICKBACK_LEDGER_PATH), { force: true });
   });
+  for (const child of await listExistingChildren(projectRoot)) {
+    await withKickbackLedgerLease(projectRoot, async () => {
+      await rm(kickbackLedgerPathFor(projectRoot, child), { force: true });
+    }, child);
+  }
 }
 
 function withRemaining(growth: PlanGrowthRecord, cap: number): PlanGrowth {
