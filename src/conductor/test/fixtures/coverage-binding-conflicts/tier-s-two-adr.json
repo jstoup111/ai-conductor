@@ -1,0 +1,1 @@
+{"adrs":[["adr-enum-pin","1. YAML enum values must not be pinned."],["adr-roster","2. Registry rosters must not be transcribed."]],"tasks":[["6","Pin enum and roster","Pin the YAML enum list and transcribe registry tuples."]],"conflictTaskIds":["6"]}

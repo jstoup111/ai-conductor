@@ -277,6 +277,15 @@ sidecar log.
 > `coverage_binding_judged`'s criterion vocabulary is untouched. Refusals ride the existing
 > `step_refused` and `loop_halt` events. No sidecar log.
 
+> **Amended 2026-10-04 by #2750:** Operator DECIDE resolves the S2.12 halt: D18 includes
+> ADR amendment inputs at every complexity tier, including S. Only amendment blocks added by
+> this branch relative to its merge base become claims; inherited blocks remain excluded.
+> D17's structural ADR-obligation layer remains `not-applicable` at S. A new decision introduced
+> inside a branch amendment receives only its D18 amendment claim, never a D21 conflict claim.
+> D7 still controls dispatch: with the judge disabled the amendment is `unjudged`, with no
+> provider call or refusal. Task 14 owns the tier-S input correction and runner proof.
+> This correction was explicitly approved by the operator during daemon-triage recovery.
+
 > **Amended 2026-10-03 by #2750:** A plan whose tasks cannot be satisfied together with a sealed
 > story criterion, or with an approved ADR decision the plan is subject to, must refuse here before
 > any build task. A coverage claim shows the judge only the tasks its row cites, so an uncited task
@@ -312,11 +321,21 @@ sidecar log.
 > contributes its title only. A stories file with no extractable criteria, or a plan with no
 > `Done when` block in any task, records its conflict claims `not-applicable` (D8). This applies at
 > tier S, where D17's ADR-obligation layer stays `not-applicable`; "ADR layer" in D17 and in its
-> stories means that obligation layer only. Subject-ADR paths join this step's declared document
-> inputs for post-rebase invalidation
+> stories means that obligation layer only.
+>
+> **Amended 2026-10-04 (operator DECIDE on the AB-3 design halt):** the input-join clause below is
+> restricted to *cited* subject ADRs, per the 2026-10-03 hotfix amendment to
+> `adr-2026-07-20-post-rebase-delta-aware-invalidation` D1 ("An ADR the feature does not cite is
+> not an input") and the `citedDecisionStems` resolution that `rebase.ts` already implements;
+> binding DECIDE-set-only ADRs to the reopen inputs would have re-opened these gates on nearly
+> every rebase, the churn that hotfix removed.
+>
+> Cited subject-ADR paths join this step's declared document inputs for post-rebase invalidation
 > (`adr-2026-07-20-post-rebase-delta-aware-invalidation` D1 as amended) and for finish
 > mergeability (`adr-2026-09-11-finish-mergeability-respects-active-review-inputs` D3), so a base
-> that changes a subject ADR re-runs the step.
+> that changes a textually cited subject ADR re-runs the step. A subject ADR that is in the
+> DECIDE set but not textually cited remains a conflict-claim subject; it is not a re-run input
+> (D1 as amended).
 >
 > **D22 — The conflict verdict is closed and batch-validated.** Conflict claims are batched apart
 > from criterion and amendment claims under their own result schema. Each batch prompt carries the

@@ -307,6 +307,30 @@ export function parsePlanTaskBodies(text: string): Map<string, string> {
 }
 
 /**
+ * Returns the authored title for every recognized task heading.
+ *
+ * This deliberately uses TASK_HEADER_PATTERN and its matched prefix rather
+ * than a second title-specific heading expression: task ids and title
+ * boundaries therefore stay identical to parsePlanTaskBodies.
+ */
+export function parsePlanTaskTitles(text: string): Map<string, string> {
+  const result = new Map<string, string>();
+
+  for (const { line, fenced } of linesWithFenceState(text)) {
+    const headerMatch = fenced ? null : line.match(TASK_HEADER_PATTERN);
+    if (!headerMatch) continue;
+
+    const ids = expandTaskIds(
+      headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
+    );
+    const title = line.slice(headerMatch[0].length).trim();
+    for (const id of ids) result.set(id, title);
+  }
+
+  return result;
+}
+
+/**
  * Parses ordered, task-local `**Done when:**` checks.
  *
  * A missing block remains absent for compatibility with historical plans. A

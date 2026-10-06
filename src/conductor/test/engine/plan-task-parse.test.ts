@@ -11,6 +11,7 @@ import {
   planTaskDigests,
   parsePlanTaskPaths,
   parsePlanTaskDoneWhen,
+  parsePlanTaskTitles,
   parsePlanTaskStoryIds,
   TASK_HEADER_PATTERN,
   TASK_ID_PATTERN,
@@ -174,6 +175,26 @@ This section is not task text.
         bodyChangeIsIsolated: true,
         multiIdHeadingSharesDigest: true,
       });
+    });
+  });
+
+  describe('parsePlanTaskTitles', () => {
+    it('returns task titles using the same heading grammar as task bodies', () => {
+      const plan = `### Task 1, rem-build-review-2: Shared heading title
+Body.
+
+#### Task task_3 — Dash-delimited title
+Body.
+
+##### Task 4
+Body.`;
+
+      expect(parsePlanTaskTitles(plan)).toEqual(new Map([
+        ['1', 'Shared heading title'],
+        ['rem-build-review-2', 'Shared heading title'],
+        ['task_3', 'Dash-delimited title'],
+        ['4', ''],
+      ]));
     });
   });
 

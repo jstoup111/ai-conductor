@@ -1,8 +1,8 @@
 // Covers: task:4, task:10
 import { describe, expect, it } from 'vitest';
 
-import { planCoverageBindingBatches } from '../../src/engine/coverage-binding-batches.js';
-import { amendmentClaimDigest, claimDigest, type CoverageBindingEnvelopeEntry } from '../../src/engine/coverage-binding-envelope.js';
+import { CONFLICT_BATCH_PROMPT_BYTE_BUDGET, planCoverageBindingBatches, renderConflictBatchPrompt } from '../../src/engine/coverage-binding-batches.js';
+import { amendmentClaimDigest, claimDigest, conflictClaimDigest, type CoverageBindingEnvelopeEntry } from '../../src/engine/coverage-binding-envelope.js';
 
 function claim(index: number) {
   return {
@@ -35,6 +35,29 @@ function amendment(index: number) {
 }
 
 describe('planCoverageBindingBatches', () => {
+  it('keeps conflict claims separate, caches matching verdicts, and renders the task table once', () => {
+    const conflict = {
+      id: 'stories#criterion-1', kind: 'criterion' as const, text: 'Credential-only assertions are required.', applicability: 'applicable' as const,
+      taskTable: [{ id: '8', title: 'Endpoint assertion', doneWhen: ['Assert endpoint output.'] }],
+    };
+    const digest = conflictClaimDigest(conflict);
+    const cached = planCoverageBindingBatches({ claims: [conflict], previous: { version: 1, slug: 'x', runId: 'x', status: 'done', entries: [{ kind: 'conflict', digest, claimKind: 'criterion', claimId: conflict.id, verdict: 'consistent' } as unknown as CoverageBindingEnvelopeEntry] }, batchSize: 8 });
+    expect(cached).toMatchObject({ conflictBatches: [], conflictEntries: [{ kind: 'conflict', verdict: 'consistent' }] });
+    const planned = planCoverageBindingBatches({ claims: [conflict], previous: null, batchSize: 8 });
+    expect(planned.conflictBatches).toHaveLength(1);
+    const prompt = renderConflictBatchPrompt(planned.conflictBatches[0]!, conflict.taskTable, ['c1']);
+    expect(prompt).toContain('"taskTable"');
+    expect(prompt.match(/taskTable/g)).toHaveLength(1);
+    expect(prompt).toContain('"kind":"criterion"');
+    expect(prompt).toContain('Credential-only assertions');
+  });
+
+  it('keeps an oversize conflict claim intact in its own byte-bounded batch', () => {
+    const claim = { id: 'stories#criterion-1', kind: 'criterion' as const, text: 'x'.repeat(CONFLICT_BATCH_PROMPT_BYTE_BUDGET + 1), applicability: 'applicable' as const, taskTable: [{ id: '1', title: 'T', doneWhen: ['C'] }] };
+    const planned = planCoverageBindingBatches({ claims: [claim], previous: null, batchSize: 1 });
+    expect(planned.conflictBatches).toHaveLength(1);
+    expect(planned.conflictBatches[0]![0]!.claim.text).toBe(claim.text);
+  });
   it('chunks pending claims in claim order', () => {
     const claims = Array.from({ length: 20 }, (_, index) => claim(index + 1));
 

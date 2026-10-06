@@ -789,6 +789,15 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     expect(marker).toContain('Owner: bob');
   });
 
+  it('Task 13: accepts the existing passing land fixture with no new requirements', async () => {
+    const worktree = await seedValidWorktree();
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    await expect(
+      landSpec(target(), 'dep bump', worktree, undefined, { ownerConfig: {}, gh }),
+    ).resolves.toMatchObject({ branch: 'spec/dep-bump' });
+  });
+
   describe('#810: mermaid render hard gate', () => {
     const okGh: GhRunner = async () => ({ stdout: 'bob\n' });
     const seedDiagram = async (worktree: string) => {

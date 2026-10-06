@@ -49,6 +49,17 @@ of only issued completed task ids; do not include it otherwise.
 
 Do not read files, inspect a diff, use a transcript, or infer facts beyond the supplied pair.
 
+## Conflict claims
+
+Judge each conflict claim against the supplied plan task table. Return `conflicts` only when
+satisfying a named task's `Done when` checks would necessarily violate the claim. An uncovered or
+differently covered criterion is `consistent`; it is not a conflict.
+
+`conflicts` must list the conflicting task ids and state the incompatible requirement. Put those
+task ids in non-empty `taskIds` and that requirement in non-empty `conflict`. Return `consistent`
+when no named task's required outcome is incompatible with the claim. Do not infer a conflict from
+topical adjacency, implementation order, or a task that could be changed to cover the claim.
+
 ## Result contract
 
 Return exactly one JSON object and no surrounding prose:
@@ -59,3 +70,6 @@ Return exactly one JSON object and no surrounding prose:
 
 Return one entry per supplied claim, keyed by the supplied claim `id` copied exactly. `verdict` is closed to `asserts`
 or `does-not-assert`. Include a non-empty `missingAssertion` only with `does-not-assert`.
+
+For conflict claims, use `{ verdicts: [{ id, verdict, taskIds?, conflict? }] }`. `verdict` is
+`consistent` or `conflicts`; include non-empty `taskIds` and `conflict` only with `conflicts`.

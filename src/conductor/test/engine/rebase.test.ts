@@ -2733,4 +2733,15 @@ describe('engine/rebase — resolveReviewInputs decision scoping', () => {
     expect(classifyGateInvalidation(['.docs/decisions/adr-2026-01-01-cited.md'], [], true, inputs).invalidated.sort())
       .toEqual(['architecture_review_as_built', 'coverage_binding']);
   });
+
+  it('Task 13: treats a plan-cited ADR as a coverage-binding rebase input', async () => {
+    const { resolveReviewInputs } = await import('../../src/engine/rebase.js');
+    const citedAdr = '.docs/decisions/adr-2026-01-01-cited.md';
+
+    const inputs = await resolveReviewInputs(root, [citedAdr]);
+    const invalidation = classifyGateInvalidation([citedAdr], [], true, inputs);
+
+    expect(inputs).toContain(citedAdr);
+    expect(invalidation.invalidated).toContain('coverage_binding');
+  });
 });

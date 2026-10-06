@@ -4357,6 +4357,52 @@ describe('engine/artifacts', () => {
         expect(parsed.ids).toEqual(new Set(['4', '8']));
       }
     });
+
+    it('returns each citable decision passage and the whole Decision section', () => {
+      const parsed = parseAdrDecisions(
+        '# ADR\n\n## Decision\n\n' +
+          '### D4 — Retain the shared parser\n' +
+          'Its grammar remains the sole authority.\n\n' +
+          '> 5. **Strip quote markers.**\n' +
+          '> Keep quoted continuation text.\n\n' +
+          '## Consequences\n\nThis is outside the Decision section.\n',
+      );
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.passages).toEqual(new Map([
+          ['4', ['### D4 — Retain the shared parser\nIts grammar remains the sole authority.\n']],
+          ['5', ['5. **Strip quote markers.**\nKeep quoted continuation text.\n']],
+        ]));
+        expect(parsed.section).toBe(
+          '### D4 — Retain the shared parser\n' +
+            'Its grammar remains the sole authority.\n\n' +
+            '> 5. **Strip quote markers.**\n' +
+            '> Keep quoted continuation text.',
+        );
+      }
+    });
+
+    it('appends duplicate decision-id passages in source order', () => {
+      const parsed = parseAdrDecisions(
+        '# ADR\n\n## Decision\n\n' +
+          '4. **Original obligation.**\n' +
+          'Keep the original clause.\n\n' +
+          '> 4. **Amended obligation.**\n' +
+          '> The amendment is an additional passage.\n',
+      );
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toEqual(new Set(['4']));
+        expect(parsed.passages).toEqual(new Map([
+          ['4', [
+            '4. **Original obligation.**\nKeep the original clause.\n',
+            '4. **Amended obligation.**\nThe amendment is an additional passage.\n',
+          ]],
+        ]));
+      }
+    });
   });
 
   // Covers: task:8

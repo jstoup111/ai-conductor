@@ -485,6 +485,15 @@ export type ConductorEvent =
       taskIds: string[];
     }
   | {
+      /** One terminal judgement that a plan task can coexist with a sealed claim. */
+      type: 'coverage_binding_conflict_judged';
+      step: 'coverage_binding';
+      claimKind: 'criterion' | 'adr-decision';
+      claimId: string;
+      verdict: 'consistent' | 'conflicts' | 'not-applicable' | 'unjudged';
+      taskIds: string[];
+    }
+  | {
       /** The default-off coverage-binding judge completed without dispatching. */
       type: 'coverage_binding_disabled';
       step: 'coverage_binding';

@@ -42,7 +42,8 @@ export interface AssembleAmendmentClaimsInput {
     /**
      * The artifact at the feature's merge-base. Amendment blocks already
      * present there were landed by earlier features and are not this plan's
-     * obligation. Undefined (new file or unresolvable base) keeps every block.
+     * obligation. Undefined means the file is new at a resolved merge base,
+     * so every block is this branch's obligation.
      */
     readonly baseText?: string;
   }[];
@@ -55,7 +56,7 @@ function isAmendmentSource(path: string): boolean {
     /^\.docs\/decisions\/(?:architecture-review-|adr-)/.test(path);
 }
 
-function amendmentBlocks(text: string): string[] {
+export function amendmentBlocks(text: string): string[] {
   const lines = text.split('\n');
   const blocks: string[] = [];
 

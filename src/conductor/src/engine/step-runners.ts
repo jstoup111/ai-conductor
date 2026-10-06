@@ -78,6 +78,8 @@ import {
   amendmentClaimDigest,
   claimDigest,
   parseJudgeBatchPayload,
+  parseConflictBatchPayload,
+  conflictClaimDigest,
   issueJudgeClaimIds,
   readCoverageBindingEnvelope,
   writeCoverageBindingCodeStamp,
@@ -86,14 +88,17 @@ import {
   type CoverageBindingAdrLayerDisposition,
   type CoverageBindingEnvelopeEntry,
   type CoverageBindingEnvelopeFilesystem,
+  type CoverageBindingConflictEnvelopeEntry,
   type CoverageBindingSliceMembership,
 } from './coverage-binding-envelope.js';
 import {
+  amendmentBlocks,
   assembleAmendmentClaims,
   assembleCoverageBindingClaims,
   type CoverageBindingAmendmentClaim,
 } from './coverage-binding-inputs.js';
-import { planCoverageBindingBatches } from './coverage-binding-batches.js';
+import { assembleConflictClaims, resolveConflictSubjectAdrs, type CoverageBindingConflictClaim } from './coverage-binding-conflict-inputs.js';
+import { planCoverageBindingBatches, renderConflictBatchPrompt } from './coverage-binding-batches.js';
 import { REBASE_REGRADE_SKILL } from './rebase-regrade-judgement.js';
 import { admitAndRestageRepair } from './repair-restage.js';
 import { resolveTaskIds } from './task-progress.js';
@@ -116,6 +121,10 @@ function isCoverageBindingAmendmentEntry(
     (entry as { kind?: unknown }).kind === 'amendment' &&
     typeof (entry as { artifactPath?: unknown }).artifactPath === 'string' &&
     typeof (entry as { amendment?: unknown }).amendment === 'string';
+}
+
+function isCoverageBindingConflictEntry(entry: unknown): entry is CoverageBindingConflictEnvelopeEntry {
+  return typeof entry === 'object' && entry !== null && (entry as { kind?: unknown }).kind === 'conflict';
 }
 import {
   composeContainmentAdvisoryOutput,
@@ -4722,21 +4731,51 @@ export class DefaultStepRunner implements StepRunner {
         } else {
           // Amendments inherited from the default branch belong to the features
           // that landed them; only blocks this branch added are obligations.
-          const originRef = await resolveOriginRef(this.projectDir).catch(() => null);
-          const amendmentBase = originRef === null ? undefined : await this.gitRunner(['merge-base', originRef, 'HEAD'])
-            .then((result) => (result.exitCode === 0 && result.stdout.trim() ? result.stdout.trim() : undefined))
-            .catch(() => undefined);
-          const decideArtifacts = await Promise.all([...resolvedDecideSet.paths]
+          const amendmentPaths = [...resolvedDecideSet.paths]
             .filter((path) => path.startsWith('.docs/specs/') || /^\.docs\/decisions\/architecture-review-/.test(path) ||
-              (state.complexity_tier !== 'S' && /^\.docs\/decisions\/adr-/.test(path)))
-            .map(async (path) => ({
-              path,
-              text: await readFile(join(this.projectDir, path), 'utf8'),
-              baseText: amendmentBase === undefined ? undefined : await this.gitRunner(['show', `${amendmentBase}:${path}`])
-                .then((result) => (result.exitCode === 0 ? result.stdout : undefined))
-                .catch(() => undefined),
-            })));
-          amendmentClaims = assembleAmendmentClaims({ planText, decideArtifacts });
+              /^\.docs\/decisions\/adr-/.test(path));
+          if (amendmentPaths.length === 0) {
+            amendmentClaims = [];
+          } else {
+            const amendmentArtifacts = (await Promise.all(amendmentPaths.map(async (path) => {
+              try {
+                return { path, text: await readFile(join(this.projectDir, path), 'utf8') };
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+                throw error;
+              }
+            }))).flatMap((artifact) => artifact === undefined ? [] : [artifact])
+              .filter(({ text }) => amendmentBlocks(text).length > 0);
+            if (amendmentArtifacts.length === 0) {
+              amendmentClaims = [];
+            } else {
+              const originRef = await resolveOriginRef(this.projectDir).catch(() => null);
+              if (originRef === null) throw new Error('could not resolve the origin reference for DECIDE amendment inputs');
+              const mergeBase = await this.gitRunner(['merge-base', originRef, 'HEAD']);
+              const amendmentBase = mergeBase.exitCode === 0 && mergeBase.stdout.trim()
+                ? mergeBase.stdout.trim()
+                : (() => { throw new Error(`could not resolve merge base for DECIDE amendment inputs: ${mergeBase.stderr || mergeBase.stdout || originRef}`); })();
+              const decideArtifacts = await Promise.all(amendmentArtifacts.map(async ({ path, text }) => {
+                const basePath = `${amendmentBase}:${path}`;
+                const baseResult = await this.gitRunner(['show', basePath]);
+                let baseText: string | undefined;
+                if (baseResult.exitCode === 0) {
+                  baseText = baseResult.stdout;
+                } else {
+                  const existsAtBase = await this.gitRunner(['cat-file', '-e', basePath]);
+                  if (existsAtBase.exitCode === 0) {
+                    throw new Error(`could not read DECIDE amendment base input ${path}: ${baseResult.stderr || baseResult.stdout || 'git show failed'}`);
+                  }
+                }
+                return {
+                  path,
+                  text,
+                  baseText,
+                };
+              }));
+              amendmentClaims = assembleAmendmentClaims({ planText, decideArtifacts });
+            }
+          }
         }
       } catch (error) {
         const infrastructureFailure = new CoverageBindingPayloadError(
@@ -4746,6 +4785,18 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
 
+    let conflictClaims: CoverageBindingConflictClaim[] = [];
+    if (planText !== undefined) {
+      const resolvedDecideSet = await resolveDecideSet();
+      if (resolvedDecideSet) {
+        const storiesText = resolvedDecideSet.storiesPath === null
+          ? ''
+          : await readFile(join(this.projectDir, resolvedDecideSet.storiesPath), 'utf8').catch(() => '');
+        const subjectPaths = await resolveConflictSubjectAdrs({ projectRoot: this.projectDir, planText, decideSetAdrPaths: resolvedDecideSet.adrPaths });
+        const subjectAdrs = await Promise.all(subjectPaths.map(async (path) => ({ path, text: await readFile(join(this.projectDir, path), 'utf8') })));
+        conflictClaims = assembleConflictClaims({ planText, storiesText, subjectAdrs, amendmentClaims });
+      }
+    }
     const coherencePath = join(this.projectDir, '.docs', 'coherence', `${this.featureDesc}.md`);
     const coherenceText = await readFile(coherencePath, 'utf8').catch(() => null);
     const criterionClaims = planText === undefined ? [] : assembleCoverageBindingClaims({
@@ -4817,10 +4868,19 @@ export class DefaultStepRunner implements StepRunner {
       return undefined;
     };
 
+    const deferredReopens: { taskIds: readonly string[]; digest: string; instruction: string }[] = [];
     for (const claim of criterionClaims) {
       const digest = claimDigest(claim);
       if (previousCriterionReopenEligible && !previousDigests.has(digest)) {
-        const detail = await reopen(claim.taskIds, digest, 'Reconcile the completed task with the changed coverage-binding criterion.');
+        deferredReopens.push({ taskIds: claim.taskIds, digest, instruction: 'Reconcile the completed task with the changed coverage-binding criterion.' });
+      }
+    }
+
+    if (!judgeEnabled) {
+      // Conflict claims are deliberately unjudged when the gate is disabled,
+      // so they cannot take precedence over the established D19 reopen path.
+      for (const deferred of deferredReopens) {
+        const detail = await reopen(deferred.taskIds, deferred.digest, deferred.instruction);
         if (detail) {
           const output = `coverage_binding could not reopen contradicted work: ${detail.detail}`;
           return detail.capExceeded === undefined
@@ -4828,9 +4888,6 @@ export class DefaultStepRunner implements StepRunner {
             : { success: false, output, refusal: { kind: 'needs-human', reason: output } };
         }
       }
-    }
-
-    if (!judgeEnabled) {
       const entries: CoverageBindingEnvelopeEntry[] = [
         ...criterionClaims.map((claim) => ({
           digest: claimDigest(claim), criterion: claim.criterion, taskIds: claim.taskIds,
@@ -4841,6 +4898,7 @@ export class DefaultStepRunner implements StepRunner {
         digest: amendmentClaimDigest(claim), artifactPath: claim.artifactPath, amendment: claim.amendment,
         taskIds: claim.taskIds, doneWhen: claim.doneWhen, verdict: 'unjudged' as const,
         }) as unknown as CoverageBindingEnvelopeEntry),
+        ...conflictClaims.map((claim) => ({ kind: 'conflict' as const, digest: conflictClaimDigest(claim), claimKind: claim.kind, claimId: claim.id, verdict: 'unjudged' as const }) as unknown as CoverageBindingEnvelopeEntry),
       ];
       await writeEnvelope('disabled', entries);
       for (const claim of amendmentClaims) {
@@ -4855,14 +4913,17 @@ export class DefaultStepRunner implements StepRunner {
         };
         await this.events?.emit({ type: 'coverage_binding_amendment_judged', step: 'coverage_binding', verdict: amendment.verdict, digest: amendment.digest, artifactPath: amendment.artifactPath, taskIds: [...amendment.taskIds] });
       }
+      for (const claim of conflictClaims) {
+        await this.events?.emit({ type: 'coverage_binding_conflict_judged', step: 'coverage_binding', claimKind: claim.kind, claimId: claim.id, verdict: 'unjudged', taskIds: [] });
+      }
       await this.events?.emit({ type: 'coverage_binding_disabled', step: 'coverage_binding' });
       return { success: true, output: 'coverage_binding judge disabled' };
     }
 
     if (planText === undefined) return { success: false, output: 'coverage_binding could not resolve the feature plan' };
 
-    const planned = planCoverageBindingBatches({ claims, previous, batchSize });
-    const entries: CoverageBindingEnvelopeEntry[] = [...planned.entries];
+    const planned = planCoverageBindingBatches({ claims: [...claims, ...conflictClaims], previous, batchSize });
+    const entries: CoverageBindingEnvelopeEntry[] = [...planned.entries, ...planned.conflictEntries];
     const refused: CoverageBindingEnvelopeEntry[] = [];
     const resolved = this.resolvedConfigFor('coverage_binding');
     const llmProvider = this.config?.steps?.coverage_binding?.llm_provider
@@ -4895,6 +4956,9 @@ export class DefaultStepRunner implements StepRunner {
       if (isCoverageBindingAmendmentEntry(entry)) {
         const amendment = entry;
         await this.events?.emit({ type: 'coverage_binding_amendment_judged', step: 'coverage_binding', verdict: amendment.verdict, digest: amendment.digest, artifactPath: amendment.artifactPath, taskIds: [...amendment.taskIds] });
+      } else if (isCoverageBindingConflictEntry(entry)) {
+        const conflict = entry;
+        await this.events?.emit({ type: 'coverage_binding_conflict_judged', step: 'coverage_binding', claimKind: conflict.claimKind, claimId: conflict.claimId, verdict: conflict.verdict, taskIds: [...(conflict.taskIds ?? [])] });
       } else {
         const criterion = entry as CoverageBindingEnvelopeEntry;
         await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: criterion.verdict, digest: criterion.digest, taskIds: [...criterion.taskIds] });
@@ -4992,17 +5056,8 @@ export class DefaultStepRunner implements StepRunner {
             verdict: verdict.verdict,
             ...(verdict.verdict === 'not-carried' ? { missingObligation: verdict.missingObligation } : {}),
           } as unknown as CoverageBindingEnvelopeEntry;
-          const detail = await reopen(
-            verdict.contradictsCompleted ?? [],
-            digest,
-            'Reconcile the completed task with the accepted DECIDE amendment contradiction.',
-          );
-          if (detail) {
-            await writeEnvelope('failed', entries);
-            const output = `coverage_binding could not reopen contradicted work: ${detail.detail}`;
-            return detail.capExceeded === undefined
-              ? { success: false, output }
-              : { success: false, output, refusal: { kind: 'needs-human', reason: output } };
+          if ((verdict.contradictsCompleted?.length ?? 0) > 0) {
+            deferredReopens.push({ taskIds: verdict.contradictsCompleted!, digest, instruction: 'Reconcile the completed task with the accepted DECIDE amendment contradiction.' });
           }
           entries.push(entry);
           await emitEntry(entry);
@@ -5031,6 +5086,90 @@ export class DefaultStepRunner implements StepRunner {
         }
       }
       await writeEnvelope('partial', entries);
+    }
+
+    const conflictPlan = { entries: planned.conflictEntries, batches: planned.conflictBatches };
+    if (conflictPlan.entries.length > 0 || conflictPlan.batches.length > 0) await writeEnvelope('partial', entries);
+    for (const [batchIndex, batch] of conflictPlan.batches.entries()) {
+      const issuedIds = issueJudgeClaimIds(batch.map(({ claimDigest: digest }) => digest), 'criterion');
+      const ids = [...issuedIds.keys()];
+      const prompt = renderConflictBatchPrompt(batch, batch[0]!.claim.taskTable, ids);
+      const memberId = batch[0]!.claimDigest;
+      let result: { success: boolean; output?: string; providerSetupExhaustion?: ProviderExecutionResult['providerSetupExhaustion'] };
+      if (this.providerRuntimes && this.sessionStore) {
+        const dispatched = await this.dispatchProviderWithLifecycleSupervision(
+          'coverage_binding',
+          { prompt, cwd: this.projectDir, dangerouslySkipPermissions: true },
+          (options) => executeAuxiliaryProviderCandidates({
+            step: 'coverage_binding', memberId, policy: auxiliaryPolicy, executionContext,
+            runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch(`coverage-binding:${memberId}`),
+            config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
+            providerAvailability: this.providerExecutionContext?.providerAvailability,
+            tier: state.complexity_tier,
+            withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
+            onAttempt: this.providerAttempt, warn: this.providerWarn,
+            options,
+            optionsForCandidate: (providerKey) => ({ ...options, prompt: `${renderAuxiliarySkillInvocation('coverage-binding', providerKey)}\n\n${prompt}` }),
+          }),
+          undefined,
+          executionContext,
+        );
+        this.callCount++;
+        result = { success: dispatched.success, output: dispatched.output, providerSetupExhaustion: dispatched.providerSetupExhaustion };
+      } else {
+        const dispatched = await this.provider.invoke({
+          prompt: `${renderAuxiliarySkillInvocation('coverage-binding', this.providerKey)}\n\n${prompt}`,
+          sessionId: randomUUID(), resume: false, dangerouslySkipPermissions: true, cwd: this.projectDir,
+          model: auxiliaryPolicy.model, effort: auxiliaryPolicy.effort,
+        });
+        this.callCount++;
+        result = dispatched;
+      }
+      if (!result.success || typeof result.output !== 'string') {
+        await writeEnvelope('failed', entries);
+        const infrastructureFailure = new CoverageBindingPayloadError(`provider failed for conflict batch ${batchIndex + 1} of ${conflictPlan.batches.length}: ${result.output ?? memberId}`);
+        return {
+          success: false,
+          output: infrastructureFailure.message,
+          infrastructureFailure,
+          ...(result.providerSetupExhaustion ? { providerSetupExhaustion: result.providerSetupExhaustion } : {}),
+        };
+      }
+      const parsed = parseConflictBatchPayload(result.output, issuedIds, planText);
+      if (!parsed.ok) {
+        await writeEnvelope('failed', entries);
+        const infrastructureFailure = new CoverageBindingPayloadError(parsed.reason);
+        return { success: false, output: infrastructureFailure.message, infrastructureFailure };
+      }
+      for (const { claim, claimDigest: digest } of batch) {
+        const verdict = parsed.verdicts.get(digest)!;
+        const entry = { kind: 'conflict' as const, digest, claimKind: claim.kind, claimId: claim.id, verdict: verdict.verdict, ...(verdict.verdict === 'conflicts' ? { taskIds: verdict.taskIds, conflict: verdict.conflict } : {}) } as unknown as CoverageBindingEnvelopeEntry;
+        entries.push(entry);
+        await this.events?.emit({ type: 'coverage_binding_conflict_judged', step: 'coverage_binding', claimKind: claim.kind, claimId: claim.id, verdict: verdict.verdict, taskIds: [...(verdict.verdict === 'conflicts' ? verdict.taskIds : [])] });
+      }
+      await writeEnvelope('partial', entries);
+    }
+
+    const conflicts = entries.filter((entry) => isCoverageBindingConflictEntry(entry)) as unknown as CoverageBindingConflictEnvelopeEntry[];
+    const conflictingEntries = conflicts.filter((entry) => entry.verdict === 'conflicts');
+    if (conflictingEntries.length > 0) {
+      await writeEnvelope('refused', entries);
+      const detail = conflictingEntries.map((entry) => {
+        const claim = conflictClaims.find((candidate) => candidate.id === entry.claimId)!;
+        const tasks = claim.taskTable.filter((task) => entry.taskIds.includes(task.id));
+        return [`Claim: ${entry.claimId}`, `Text: ${claim.text}`, `Task ids: ${entry.taskIds.join(', ')}`, `Done when checks: ${tasks.flatMap((task) => task.doneWhen).join(' | ')}`, `Conflict: ${entry.conflict}`].join('\n');
+      }).join('\n\n');
+      const reason = `coverage_binding refused: plan tasks conflict with sealed criteria or ADR decisions.\n\n${detail}`;
+      return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
+    }
+
+    for (const deferred of deferredReopens) {
+      const detail = await reopen(deferred.taskIds, deferred.digest, deferred.instruction);
+      if (detail) {
+        await writeEnvelope('failed', entries);
+        const output = `coverage_binding could not reopen contradicted work: ${detail.detail}`;
+        return detail.capExceeded === undefined ? { success: false, output } : { success: false, output, refusal: { kind: 'needs-human', reason: output } };
+      }
     }
 
     if (refused.length > 0) {

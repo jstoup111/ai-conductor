@@ -4,11 +4,13 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   claimDigest,
   amendmentClaimDigest,
+  conflictClaimDigest,
   COVERAGE_BINDING_COMPLETION_STATUSES,
   COVERAGE_BINDING_ENVELOPE_STATUSES,
   coverageBindingEnvelopePath,
   parseCoverageBindingEnvelope,
   parseAmendmentBatchPayload,
+  parseConflictBatchPayload,
   parseJudgeBatchPayload,
   parseJudgePayload,
   issueJudgeClaimIds,
@@ -38,6 +40,70 @@ function memoryFilesystem(files: Record<string, string> = {}): CoverageBindingEn
 }
 
 describe('coverage binding envelope', () => {
+  it('round-trips closed conflict entries and preserves legacy envelopes', () => {
+    const envelope = {
+      version: 1,
+      slug: 'feature',
+      runId: 'run-1',
+      status: 'done',
+      entries: [
+        ...(['consistent', 'not-applicable', 'unjudged'] as const).map((verdict) => ({
+          kind: 'conflict' as const,
+          digest: `sha256:${verdict}`,
+          claimKind: 'criterion' as const,
+          claimId: `stories#${verdict}`,
+          verdict,
+        })),
+        {
+          kind: 'conflict' as const,
+          digest: 'sha256:conflicts',
+          claimKind: 'adr-decision' as const,
+          claimId: 'adr-boundary#D22',
+          verdict: 'conflicts' as const,
+          taskIds: ['8'],
+          conflict: 'Task 8 requires an endpoint assertion the decision forbids.',
+        },
+      ],
+    } as const;
+
+    expect([
+      parseCoverageBindingEnvelope(envelope),
+      parseCoverageBindingEnvelope({ version: 1, slug: 'legacy', runId: 'legacy-run', status: 'done', entries: [] }),
+      parseCoverageBindingEnvelope({
+        ...envelope,
+        entries: [{ ...envelope.entries[0], conflict: 'Unexpected field.' }],
+      }),
+    ]).toEqual([
+      envelope,
+      { version: 1, slug: 'legacy', runId: 'legacy-run', status: 'done', entries: [] },
+      null,
+    ]);
+    expect(COVERAGE_BINDING_COMPLETION_STATUSES).toEqual(['disabled', 'done']);
+  });
+
+  it('hashes conflict identity from claim text and the canonical full task table', () => {
+    const claim = {
+      text: 'A sealed criterion permits credential-only assertions.',
+      taskTable: [
+        { id: '3', title: 'Add credential checks', doneWhen: [['The credential assertion is present.']] },
+        { id: '8', title: 'Add endpoint checks', doneWhen: [['The endpoint assertion is present.']] },
+      ],
+    };
+    const unchanged = conflictClaimDigest(claim);
+
+    expect([
+      unchanged,
+      conflictClaimDigest(claim),
+      conflictClaimDigest({ ...claim, taskTable: [{ ...claim.taskTable[0], title: 'Rename credential checks' }, claim.taskTable[1]] }),
+      conflictClaimDigest({ ...claim, taskTable: [claim.taskTable[0], { ...claim.taskTable[1], doneWhen: [['A changed endpoint check is present.']] }] }),
+    ]).toEqual([
+      unchanged,
+      unchanged,
+      expect.not.stringMatching(new RegExp(`^${unchanged.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)),
+      expect.not.stringMatching(new RegExp(`^${unchanged.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)),
+    ]);
+  });
+
   it('hashes amendment identity from its path, exact text, and plan obligations', () => {
     const unchanged = amendmentClaimDigest({
       artifactPath: '.docs/decisions/adr-feature.md',
@@ -228,6 +294,52 @@ describe('coverage binding envelope', () => {
         ['sha256:not-carried', { verdict: 'not-carried', missingObligation: 'The task omits the amendment obligation.' }],
         ['sha256:no-obligation', { verdict: 'no-plan-obligation' }],
       ]),
+    });
+  });
+
+  it('resolves a closed conflict batch to issued digests and canonical plan task ids', () => {
+    const planText = [
+      '# Implementation Plan: conflict parser',
+      '',
+      '### Task 1: First task',
+      '',
+      '### Task 2: Second task',
+    ].join('\n');
+
+    expect(parseConflictBatchPayload(JSON.stringify({
+      verdicts: [
+        { id: 'x1', verdict: 'consistent' },
+        { id: 'x2', verdict: 'conflicts', taskIds: ['task-2'], conflict: 'Task 2 contradicts the sealed criterion.' },
+      ],
+    }), new Map([['x1', 'sha256:first'], ['x2', 'sha256:second']]), planText)).toEqual({
+      ok: true,
+      verdicts: new Map([
+        ['sha256:first', { verdict: 'consistent' }],
+        ['sha256:second', { verdict: 'conflicts', taskIds: ['2'], conflict: 'Task 2 contradicts the sealed criterion.' }],
+      ]),
+    });
+  });
+
+  it.each([
+    ['an unknown task id', { id: 'x1', verdict: 'conflicts', taskIds: ['99'], conflict: 'Unknown task.' }, 'taskIds'],
+    ['an empty task id list', { id: 'x1', verdict: 'conflicts', taskIds: [], conflict: 'Missing task.' }, 'taskIds'],
+    ['an empty conflict statement', { id: 'x1', verdict: 'conflicts', taskIds: ['1'], conflict: '' }, 'conflict'],
+    ['a missing issued id', { id: 'x1', verdict: 'consistent' }, 'is missing issued claim id x2'],
+    ['a foreign id', { id: 'x3', verdict: 'consistent' }, 'has unknown claim id x3'],
+    ['a duplicated id', { id: 'x1', verdict: 'consistent' }, 'repeats claim id x1'],
+    ['an out-of-vocabulary verdict', { id: 'x1', verdict: 'unjudged' }, 'verdict'],
+  ] as const)('rejects a conflict batch with %s', (_kind, entry, reason) => {
+    const verdicts = reason.includes('missing')
+      ? [entry]
+      : reason.includes('repeats')
+        ? [entry, entry]
+        : [entry, { id: 'x2', verdict: 'consistent' }];
+
+    expect(parseConflictBatchPayload(JSON.stringify({ verdicts }), new Map([
+      ['x1', 'sha256:first'], ['x2', 'sha256:second'],
+    ]), '### Task 1: First task\n\n### Task 2: Second task')).toEqual({
+      ok: false,
+      reason: expect.stringContaining(reason),
     });
   });
 

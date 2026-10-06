@@ -1051,7 +1051,7 @@ and only a delta that lands inside that surface invalidates it.
 | `manual_test` | all runtime source | any runtime source path, feature-owned or not |
 | `build_review` | the feature's own code and tests | the feature's own source **or** its own test files |
 | `prd_audit` | the feature's own runtime source, active stories, and PRD | the feature's own source, active story, or active PRD |
-| `coverage_binding` | the feature's own runtime source, active stories, PRD, plan, and coherence carrier | the feature's own source or one of those active review inputs |
+| `coverage_binding` | the feature's own runtime source, active stories, PRD, plan, coherence carrier, and ADRs the feature's documents cite | the feature's own source or one of those active review inputs |
 | `architecture_review_as_built` | the feature's own runtime source | the feature's own source |
 
 `build_review` grades the feature's own code and tests — currently only the opt-in `testQuality`

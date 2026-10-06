@@ -1,0 +1,1 @@
+{"criterion":"The forbidden provider candidate is absent from attempt records.","tasks":[["3","Keep the candidate absent","The forbidden provider candidate is absent."],["8","Emit provider_attempt","Emit a provider_attempt record for the forbidden candidate."],["20","Preserve absence","The forbidden provider candidate remains absent."]],"conflictTaskIds":["8"]}

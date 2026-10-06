@@ -36,6 +36,21 @@ describe('coverage-binding skill contract', () => {
     expect(policy).toMatch(/No claim's\s+verdict may be inferred from another claim\./);
   });
 
+  it('defines conflict claims as incompatible named-task obligations', async () => {
+    const policy = (await judgementPolicy()).replace(/\s+/g, ' ');
+
+    expect(policy).toMatch(/## Conflict claims/);
+    expect(policy).toMatch(/`conflicts` only when satisfying a named task's `Done when` checks would necessarily violate the claim/);
+    expect(policy).toMatch(/uncovered or differently covered criterion is `consistent`/);
+    expect(policy).toMatch(/`conflicts` must list the conflicting task ids and state the incompatible requirement/);
+  });
+
+  it('publishes the conflict-claim result contract', async () => {
+    const skill = await readFile(skillPath, 'utf8');
+
+    expect(skill).toContain('{ verdicts: [{ id, verdict, taskIds?, conflict? }] }');
+  });
+
   it('publishes an example payload the engine batch parser accepts', async () => {
     const { entries, issued } = await publishedExample();
 

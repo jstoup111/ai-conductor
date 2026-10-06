@@ -1240,6 +1240,15 @@ session evaluates an ordered batch of at most `batch_size` claims; a size of `1`
 per claim. The engine validates one verdict per claim and checkpoints accepted batches, so a later
 run reuses unchanged completed judgments and evaluates only pending claims.
 
+When enabled, the judge also checks the whole plan against each sealed story criterion and each
+decision in an approved or partially superseded ADR that the branch changes or the plan cites. Every
+plan task's Done when checks are judged together against each claim; a claim is `conflicts` only when
+satisfying a named task would necessarily violate it. Any `conflicts` verdict refuses the step as
+`needs-human` before any completed task is reopened, naming the claim, task ids, Done when checks, and
+the incompatible requirement — see
+[plan conflict refusal](../runbooks/stalled-or-stuck-feature.md#coverage_binding-refused-a-plan-conflict).
+When the judge is disabled, conflict claims are recorded as `unjudged`.
+
 ## gate_code_validity
 
 Kill-switch for reusing a previously passing gate verdict when its stamped code surface is unchanged,

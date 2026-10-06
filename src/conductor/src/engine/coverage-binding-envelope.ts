@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import { parsePlanTaskBodies, resolveCitedPlanTaskIds } from './plan-task-parse.js';
 
 export interface CoverageBindingDigestClaim {
   readonly criterion: string;
@@ -12,6 +13,18 @@ export interface CoverageBindingAmendmentDigestClaim {
   readonly doneWhen: readonly (readonly string[])[];
 }
 
+/** A complete plan task table row as presented to a conflict judge. */
+export interface CoverageBindingConflictTask {
+  readonly id: string;
+  readonly title: string;
+  readonly doneWhen: readonly string[] | readonly (readonly string[])[];
+}
+
+export interface CoverageBindingConflictDigestClaim {
+  readonly text: string;
+  readonly taskTable: readonly CoverageBindingConflictTask[];
+}
+
 export type CoverageBindingJudgeVerdict = 'asserts' | 'does-not-assert';
 
 export interface CoverageBindingJudgePayload {
@@ -21,6 +34,7 @@ export interface CoverageBindingJudgePayload {
 
 export type CoverageBindingEntryVerdict = CoverageBindingJudgeVerdict | 'not-applicable';
 export type CoverageBindingAmendmentVerdict = 'carried' | 'not-carried' | 'no-plan-obligation' | 'unjudged';
+export type CoverageBindingConflictVerdict = 'consistent' | 'conflicts' | 'not-applicable' | 'unjudged';
 export const COVERAGE_BINDING_ENVELOPE_STATUSES = ['disabled', 'done', 'failed', 'invalidated', 'partial', 'refused'] as const;
 export type CoverageBindingEnvelopeStatus = (typeof COVERAGE_BINDING_ENVELOPE_STATUSES)[number];
 export interface CoverageBindingAdrLayerDisposition {
@@ -72,10 +86,33 @@ export interface CoverageBindingAmendmentEnvelopeEntry {
   readonly missingObligation?: string;
 }
 
+interface CoverageBindingConflictEnvelopeEntryBase {
+  readonly kind: 'conflict';
+  readonly digest: string;
+  readonly claimKind: 'criterion' | 'adr-decision';
+  readonly claimId: string;
+}
+
+export type CoverageBindingConflictEnvelopeEntry =
+  | (CoverageBindingConflictEnvelopeEntryBase & {
+    readonly verdict: 'conflicts';
+    readonly taskIds: readonly string[];
+    readonly conflict: string;
+  })
+  | (CoverageBindingConflictEnvelopeEntryBase & {
+    readonly verdict: Exclude<CoverageBindingConflictVerdict, 'conflicts'>;
+    readonly taskIds?: never;
+    readonly conflict?: never;
+  });
+
 export type CoverageBindingAmendmentJudgeVerdict =
   | { readonly verdict: 'carried'; readonly taskIds: readonly string[]; readonly contradictsCompleted?: readonly string[] }
   | { readonly verdict: 'not-carried'; readonly missingObligation: string; readonly contradictsCompleted?: readonly string[] }
   | { readonly verdict: 'no-plan-obligation'; readonly contradictsCompleted?: readonly string[] };
+
+export type CoverageBindingConflictJudgeVerdict =
+  | { readonly verdict: 'consistent' }
+  | { readonly verdict: 'conflicts'; readonly taskIds: readonly string[]; readonly conflict: string };
 
 /** Session-fresh, engine-stamped completion evidence for coverage_binding. */
 export interface CoverageBindingEnvelope {
@@ -158,6 +195,27 @@ function parsePredecessor(value: unknown): CoverageBindingInvalidationPredecesso
 function parseEntry(value: unknown): CoverageBindingEnvelopeEntry | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
+  if (candidate.kind === 'conflict') {
+    const hasConflictDetails = candidate.taskIds !== undefined || candidate.conflict !== undefined;
+    if (!text(candidate.digest) || !text(candidate.claimId) ||
+      !(['criterion', 'adr-decision'] as const).includes(candidate.claimKind as 'criterion' | 'adr-decision') ||
+      !(['consistent', 'conflicts', 'not-applicable', 'unjudged'] as const).includes(candidate.verdict as CoverageBindingConflictVerdict)) {
+      return null;
+    }
+    if (candidate.verdict === 'conflicts') {
+      if (!exactKeys(candidate, ['kind', 'digest', 'claimKind', 'claimId', 'verdict', 'taskIds', 'conflict']) ||
+        !stringList(candidate.taskIds) || candidate.taskIds.length === 0 || !text(candidate.conflict)) return null;
+      return {
+        kind: 'conflict', digest: candidate.digest, claimKind: candidate.claimKind as 'criterion' | 'adr-decision',
+        claimId: candidate.claimId, verdict: 'conflicts', taskIds: candidate.taskIds, conflict: candidate.conflict,
+      } as unknown as CoverageBindingEnvelopeEntry;
+    }
+    if (hasConflictDetails || !exactKeys(candidate, ['kind', 'digest', 'claimKind', 'claimId', 'verdict'])) return null;
+    return {
+      kind: 'conflict', digest: candidate.digest, claimKind: candidate.claimKind as 'criterion' | 'adr-decision',
+      claimId: candidate.claimId, verdict: candidate.verdict as Exclude<CoverageBindingConflictVerdict, 'conflicts'>,
+    } as unknown as CoverageBindingEnvelopeEntry;
+  }
   if (candidate.kind === 'amendment') {
     const hasMissingObligation = candidate.missingObligation !== undefined;
     if (!exactKeys(candidate, ['kind', 'digest', 'artifactPath', 'amendment', 'taskIds', 'doneWhen', 'verdict', ...(hasMissingObligation ? ['missingObligation'] : [])]) ||
@@ -370,6 +428,74 @@ export function parseAmendmentBatchPayload(
   return { ok: true, verdicts };
 }
 
+function parseConflictJudgePayloadValue(
+  value: unknown,
+  planTaskIds: ReadonlySet<string>,
+): { ok: true; value: CoverageBindingConflictJudgeVerdict } | { ok: false; reason: string } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { ok: false, reason: 'conflict payload must be a JSON object' };
+  }
+  const candidate = value as Record<string, unknown>;
+  if (candidate.verdict === 'consistent') {
+    return exactKeys(candidate, ['verdict'])
+      ? { ok: true, value: { verdict: 'consistent' } }
+      : { ok: false, reason: 'consistent payload must contain only verdict' };
+  }
+  if (candidate.verdict !== 'conflicts') {
+    return { ok: false, reason: 'conflict payload verdict must be consistent or conflicts' };
+  }
+  if (!exactKeys(candidate, ['verdict', 'taskIds', 'conflict']) ||
+    !stringList(candidate.taskIds) || candidate.taskIds.length === 0 || !text(candidate.conflict)) {
+    return { ok: false, reason: 'conflicts payload requires non-empty taskIds and conflict' };
+  }
+  const resolution = resolveCitedPlanTaskIds(candidate.taskIds, planTaskIds);
+  if (resolution.kind !== 'resolved') {
+    return { ok: false, reason: 'conflicts payload taskIds must resolve against the plan' };
+  }
+  return { ok: true, value: { verdict: 'conflicts', taskIds: resolution.ids, conflict: candidate.conflict } };
+}
+
+/**
+ * Parses one complete conflict batch keyed by issued claim id, returning
+ * verdicts keyed by digest. Any malformed member rejects the whole batch.
+ */
+export function parseConflictBatchPayload(
+  payload: string,
+  issuedIds: ReadonlyMap<string, string>,
+  planText: string,
+): { ok: true; verdicts: ReadonlyMap<string, CoverageBindingConflictJudgeVerdict> } | { ok: false; reason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return { ok: false, reason: 'conflict batch payload is not valid JSON' };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed) ||
+    !exactKeys(parsed as Record<string, unknown>, ['verdicts']) || !Array.isArray((parsed as Record<string, unknown>).verdicts)) {
+    return { ok: false, reason: 'conflict batch payload must contain only a verdicts array' };
+  }
+
+  const planTaskIds = new Set(parsePlanTaskBodies(planText).keys());
+  const answered = new Set<string>();
+  const verdicts = new Map<string, CoverageBindingConflictJudgeVerdict>();
+  for (const entry of (parsed as { verdicts: unknown[] }).verdicts) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return { ok: false, reason: 'conflict batch verdict entry must be a JSON object' };
+    const candidate = entry as Record<string, unknown>;
+    if (!text(candidate.id)) return { ok: false, reason: 'conflict batch verdict entry requires a non-empty claim id' };
+    const digest = issuedIds.get(candidate.id);
+    if (digest === undefined) return { ok: false, reason: `conflict batch verdict has unknown claim id ${candidate.id}` };
+    if (answered.has(candidate.id)) return { ok: false, reason: `conflict batch verdict repeats claim id ${candidate.id}` };
+    const { id, ...verdictPayload } = candidate;
+    const verdict = parseConflictJudgePayloadValue(verdictPayload, planTaskIds);
+    if (!verdict.ok) return { ok: false, reason: `conflict batch verdict for claim id ${id as string}: ${verdict.reason}` };
+    if (!agreesWithRecorded(verdicts.get(digest), verdict.value)) return { ok: false, reason: `conflict batch verdict for claim id ${id as string} conflicts with another verdict for digest ${digest}` };
+    answered.add(candidate.id);
+    verdicts.set(digest, verdict.value);
+  }
+  for (const [id, digest] of issuedIds) if (!answered.has(id)) return { ok: false, reason: `conflict batch verdict is missing issued claim id ${id} (${digest})` };
+  return { ok: true, verdicts };
+}
+
 /** Identity is intentionally limited to the text the fresh judge receives. */
 export function claimDigest(claim: CoverageBindingDigestClaim): string {
   const canonical = JSON.stringify({
@@ -385,6 +511,20 @@ export function amendmentClaimDigest(claim: CoverageBindingAmendmentDigestClaim)
     artifactPath: claim.artifactPath,
     amendment: claim.amendment,
     doneWhen: claim.doneWhen.map((checks) => checks.map(normalized)),
+  });
+  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
+}
+
+/** Identity includes the claim text and every task the conflict judge sees. */
+export function conflictClaimDigest(claim: CoverageBindingConflictDigestClaim): string {
+  const taskTable = JSON.stringify(claim.taskTable.map((task) => ({
+    id: normalized(task.id),
+    title: normalized(task.title),
+    doneWhen: task.doneWhen.map((check) => typeof check === 'string' ? normalized(check) : check.map(normalized)),
+  })));
+  const canonical = JSON.stringify({
+    text: normalized(claim.text),
+    taskTableDigest: `sha256:${createHash('sha256').update(taskTable).digest('hex')}`,
   });
   return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
 }
