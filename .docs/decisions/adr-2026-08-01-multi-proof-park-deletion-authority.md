@@ -141,6 +141,12 @@ branches. Rejected on cost/benefit, not on correctness.
 >     sweep log line, as every other refusal is under Decision 3. No new event type or channel is
 >     added.
 
+> **Amended 2026-10-03 by #2940:** (adr-2026-10-03-stacked-child-plans-identity-and-state decisions 2 and 3) Amendment items 8 and 9 read "daemon-owned
+> branch" wherever they say a "`feat/daemon-*` branch". A child candidate is refused before either applies. A daemon-owned branch is a leaf `feat/daemon-<slug>` or a
+> stacked child `feat/c<k>/<slug>`, as decided by the shared feature-branch identity module. A child
+> branch is never a deletion candidate on the branch-listed or the branch-undefined path until #2945
+> defines stack teardown. This narrows deletion and adds no proof to the set, so decision 5 holds.
+
 ## Consequences
 
 - The governing record matches the code again, and the "one authority" sentence stops being a trap

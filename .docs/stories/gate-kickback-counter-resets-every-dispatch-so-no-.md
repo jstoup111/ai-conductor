@@ -66,8 +66,9 @@ dispatches, so a feature that cannot pass a gate stops instead of re-running for
 
 - Given `.pipeline/kickback-ledger.json` contains corrupt JSON, or `version` is not `1`
 - When the ledger is read
-- Then the document is treated as absent, a `console.warn` is emitted, and the run proceeds with a
-  fresh budget rather than crashing the dispatch.
+- Then the read fails closed: callers that spend from the ledger receive an unreadable result
+  (`kickback ledger is corrupt`, or `kickback ledger has an unsupported version`) and never spend
+  from a fresh budget, per `adr-2026-08-31-kickback-ledger-read-fails-closed`.
 
 - Given a genuinely fresh feature session (`state.run_started_at` is unset)
 - When the conductor starts

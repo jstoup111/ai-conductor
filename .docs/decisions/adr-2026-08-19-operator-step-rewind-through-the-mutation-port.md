@@ -87,6 +87,20 @@ typo fails by name rather than resolving to `findIndex`'s not-found sentinel —
 generalizes. A target at or after the feature's current position is refused: this verb only goes
 backward.
 
+> **Amended 2026-10-03 by #2940:** (adr-2026-10-03-stacked-child-plans-identity-and-state decision 13) The verb gains an optional child coordinate,
+> `rewind --to <step> --child <k>`. Without it, D1–D6 apply exactly as written. With it:
+> - **D1:** the target must be one of the region steps (`acceptance_specs`, `build`, `test_suite`,
+>   `build_review`), and `k` must be a valid child id whose `.pipeline/children/<k>/` already exists.
+>   Anything else is refused by name.
+> - **D3:** the demotion set is child k's region from the target onward, every region step of each
+>   existing child above k, and every downstream non-skipped whole-feature step. Children below k are
+>   never touched.
+> - **D2:** each demotion is still an authorized port mutation, against that child's
+>   `children/<k>/conduct-state.json` or the flat feature file as appropriate.
+> - **D4:** the cleared verdicts are the demoted steps' per-child or flat verdicts, and HALT clearing
+>   is unchanged.
+> - **D5:** `operator_rewind` carries the optional event `child` field.
+
 ### D2 — Every state change is an authorized port mutation, never a file write
 
 Each demotion is submitted to `ConductStateStore` with the current value as the expected value and an
