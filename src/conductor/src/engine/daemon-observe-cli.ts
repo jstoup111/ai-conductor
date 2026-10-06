@@ -630,7 +630,7 @@ async function renderInapplicableSection(repoPath: string, out: (line: string) =
     processedDir: join(repoPath, '.daemon', 'processed'),
     discover: async () => [],
   });
-  for (const feature of state.inProgress) {
+  for (const feature of [...state.halted, ...state.inProgress]) {
     for (const entry of feature.inapplicable ?? []) {
       out(`  inapplicable [${feature.slug}]: ${entry.step} — ${entry.reason}`);
     }

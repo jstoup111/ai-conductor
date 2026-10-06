@@ -646,6 +646,33 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect(state.inProgress).toEqual([]);
   });
 
+  it('renders honored inapplicability for halted features, but not ordinary skipped steps', async () => {
+    await makeHalted('declared-halt', 'needs operator');
+    await makeStateful('declared-halt', {
+      manual_test: 'skipped',
+      feature_inapplicable: [{ step: 'manual_test', reason: 'no browser surface' }],
+    });
+    await makeHalted('ordinary-skip-halt', 'needs operator');
+    await makeStateful('ordinary-skip-halt', {
+      manual_test: 'skipped',
+      prd_audit: 'skipped',
+    });
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+    const output = renderDashboard(state);
+
+    expect(state.halted.find((entry) => entry.slug === 'declared-halt')?.inapplicable).toEqual([
+      { step: 'manual_test', reason: 'no browser surface' },
+    ]);
+    expect(state.halted.find((entry) => entry.slug === 'ordinary-skip-halt')?.inapplicable).toBeUndefined();
+    expect(output).toContain("  • declared-halt @unknown — reason: needs operator; remedy: clear this row's .pipeline/HALT to resume\n    inapplicable: manual_test — no browser surface");
+    expect(output).not.toContain('inapplicable: prd_audit');
+  });
+
   it('excludes a halted/processed slug from ELIGIBLE', async () => {
     await makeHalted('h', 'parked');
     await makeProcessed('done1');

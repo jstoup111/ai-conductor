@@ -45,6 +45,8 @@ export interface HaltedEntry {
   prUrl?: string;
   /** Provider lifecycle evidence when this halt exhausted preparation recovery. */
   lifecycle?: ProviderLifecycleDiagnostic;
+  /** Feature-declared skips, distinct from tier/config skips. */
+  inapplicable?: Array<{ step: string; reason: string }>;
 }
 
 /** Lifecycle evidence surfaced from the feature's persisted provider events. */
@@ -343,6 +345,20 @@ function stateExtras(state: Record<string, unknown>): {
 }
 
 /**
+ * Project only declarations that the conductor actually honored. Ordinary
+ * tier/config skips have no durable feature_inapplicable record and must not
+ * be rendered as feature-declared inapplicability.
+ */
+function inapplicableEntries(
+  state: Record<string, unknown>,
+): Array<{ step: string; reason: string }> | undefined {
+  if (!Array.isArray(state.feature_inapplicable)) return undefined;
+  return state.feature_inapplicable
+    .filter(({ step }) => state[step] === 'skipped')
+    .map(({ step, reason }) => ({ step, reason }));
+}
+
+/**
  * Load a worktree's `conduct-state.json`. `present` distinguishes "no file on
  * disk" (skip the worktree) from "file exists but is malformed" (still counts as
  * in-progress, just with no step/tier/PR enrichment) — FR-3.
@@ -631,6 +647,8 @@ export async function scanInheritedState(
           const { tier, prUrl } = stateExtras(state);
           if (tier) entry.tier = tier;
           if (prUrl) entry.prUrl = prUrl;
+          const inapplicable = inapplicableEntries(state);
+          if (inapplicable) entry.inapplicable = inapplicable;
         }
         const lifecycle = await readProviderLifecycleDiagnostic(wt, entry.step);
         if (lifecycle?.phase === 'halted') entry.lifecycle = lifecycle;
@@ -696,11 +714,8 @@ export async function scanInheritedState(
         const { tier, prUrl } = stateExtras(state);
         if (tier) entry.tier = tier;
         if (prUrl) entry.prUrl = prUrl;
-        if (Array.isArray(state.feature_inapplicable)) {
-          entry.inapplicable = state.feature_inapplicable
-            .filter(({ step }) => state[step] === 'skipped')
-            .map(({ step, reason }) => ({ step, reason }));
-        }
+        const inapplicable = inapplicableEntries(state);
+        if (inapplicable) entry.inapplicable = inapplicable;
       }
       // Best-effort: a missing/malformed heartbeat file is "no heartbeat yet",
       // never a scan failure — same tolerance as every other worktree read here.
@@ -1002,6 +1017,9 @@ export function renderDashboard(
   for (const h of halted) {
     const step = h.step ? ` @${h.step}` : '';
     lines.push(`  • ${h.slug}${tierTag(h.tier)}${step} — reason: ${h.reason}${lifecycleSuffix(h.lifecycle)}${prSuffix(h.prUrl)}; remedy: clear this row's .pipeline/HALT to resume`);
+    for (const entry of h.inapplicable ?? []) {
+      lines.push(`    inapplicable: ${entry.step} — ${entry.reason}`);
+    }
   }
 
   const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
