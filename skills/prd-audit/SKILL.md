@@ -17,18 +17,10 @@ exists; the plan's stated outcome is also intent context. This is a finding-auth
 grounded judgement and do not implement, amend DECIDE artifacts, append remediation tasks, or choose
 the gate route. The engine owns those mechanical outcomes.
 
-Each finding carries exactly one grade: `PASS | FIXABLE | PLAN_GAP | OVER_SCOPE`. Verdict Table
-findings are keyed to active story criteria; no-owner OVER_SCOPE findings are keyed as `NC.<n>` in
-their dedicated section below. The engine rejects malformed rows with a diagnostic while retaining
-valid sibling rows. Never invent a key (`OS.1`, `SCOPE.2`) or write duplicate rows for one key.
-
-**Every Verdict Table key must be an id of an active story criterion.** Use the form
-`S<story>.<criterion>`; do not use `NC.<n>` in the Verdict Table. A well-formed story key that
-names no criterion in the active stories is also invalid.
-
-`<story>` is the story's heading id verbatim, not just its digits — `## Story 5a:` owns `S5a.1`,
-`S5a.2`, … and `## Story 2.1:` owns `S2.1.1`, `S2.1.2`, …, each distinct from Story 5's and Story
-2's. `<criterion>` is always the numeric ordinal. Keys are matched case-insensitively.
+Each criterion judgment carries exactly one grade: `PASS | FIXABLE | PLAN_GAP | OVER_SCOPE`.
+Judgments must concern supplied active story criteria. An actual unowned OVER_SCOPE finding belongs
+in a no-owner observation, not under an unrelated criterion. The engine validates references,
+deduplicates findings, and rejects malformed results while retaining valid sibling judgments.
 
 Per the `/verify-claims` protocol, cite concrete `file:line` evidence and give a confidence when
 evidence is ambiguous. Do not turn uncertainty into a PASS.
@@ -36,24 +28,32 @@ evidence is ambiguous. Do not turn uncertainty into a PASS.
 Run at SHIP alongside the other SHIP validators. The configured step decides whether it is enabled;
 this skill does not infer a skip from feature tier, track, or the absence of a PRD.
 
-## Inputs and authority
+## Managed review
 
-1. Resolve the feature's committed stories through the active plan's `**Stories:**` reference.
-   Read every happy and negative criterion. If criteria cannot be read, report a BLOCKED audit that
-   names the stories file; never pass by default.
-2. Read the active plan, including its stated outcome and task ownership. Where a committed
-   coherence mapping exists, use it to understand criterion-to-intent traceability.
-3. Read the matching non-`SUPERSEDED-` PRD when present. Its FRs explain intent; they do not replace
-   story criteria as the audit key. A PRD requirement without story coverage is a `PLAN_GAP` finding
-   against that requirement's missing criterion/traceability, not a silently omitted FR.
-4. Read the implementation, changed tests, and relevant BUILD `Scope:` trailers. Trace each
-   criterion to concrete behavior or its absence.
+When the engine dispatches this skill, it supplies the bounded, versioned evidence projection and
+the terminal native structured-result shape. Treat those as the complete machine contract. Judge the
+supplied criteria against the supplied intent, change, task, and history evidence, then return one
+terminal structured judgment that conforms to the supplied shape.
 
-Use focused context per criterion. A broad codebase search is warranted only when targeted evidence
-cannot establish whether that criterion was delivered.
+Do not recreate engine input collection, infer routing authority, or substitute a Markdown report
+for the terminal judgment. Do not write `.pipeline/prd-audit.json`, `.pipeline/prd-audit.md`,
+accepted-widening state, operator decisions, or any other verdict artifact. The engine validates,
+persists, renders, and routes the returned judgment.
+
+For every supplied criterion, return grounded evidence and rationale with exactly one allowed grade.
+A FIXABLE judgment names exactly one supplied owner. An OVER_SCOPE judgment supplies its closed
+intent relation. Use a no-owner observation only for an actual unowned OVER_SCOPE finding. Never
+self-accept or refuse a finding.
+
+## Standalone review
+
+When a human invokes this skill outside the managed engine step, inspect the available stories, plan,
+PRD, implementation, tests, and scope evidence and present a human-readable advisory judgment to
+the operator. It is not current managed gate evidence. Do not write managed verdict artifacts or
+operator-decision stores; the operator or engine owns any follow-up action.
 
 **Delegated evidence gathering.** This audit runs late in a long session, and the auditor's own
-context is what holds the verdict table. Push the reading into subagents through the host's
+context is what holds the judgment. Push the reading into subagents through the host's
 facility (Claude Code: the Agent tool; Codex: `collaboration.spawn_agent` / `collaboration.wait_agent`)
 and keep the auditor's window for grading:
 
@@ -63,7 +63,7 @@ and keep the auditor's window for grading:
   trailer), a candidate grade, and one sentence of rationale. Cap a digest at roughly two thousand
   words.
 - The auditor never re-reads what a digest already quotes. It grades from the digests, re-opens
-  only the lines needed to settle a disagreement, and owns every row of the Verdict Table.
+  only the lines needed to settle a disagreement, and owns every conclusion.
 - **Model tiers.** The auditor stays on this skill's pinned tier. Reading and extraction subagents
   run on the host's mid tier (Claude Code `model="sonnet"`; Codex uses its configured default).
   Step a subagent up to the auditor's tier only for adjudication of one contested criterion.
@@ -83,8 +83,8 @@ them **verbatim** in each subagent brief; a subagent that never received them is
    scripts. Evidence is what the source and committed artifacts say: `file:line`, test names read
    from test source, `git diff`/`git log` output, and `Scope:` trailers. If a criterion cannot be
    judged without running code, grade it from the evidence available and say so in the rationale;
-   never run it. The only files the validator writes are its own outputs — `.pipeline/prd-audit.md`
-   and `.pipeline/accepted-widenings.json`. Nothing else is written, staged, or committed.
+   never run it. The validator writes no managed verdict or operator-decision artifacts. Nothing is
+   written, staged, or committed.
 2. **Never yield with delegated work outstanding.** The validator MUST NOT end its turn while any
    subagent it spawned has not returned. Collect every digest before grading; if a subagent is slow,
    wait for it — do not summarize partial results and do not report progress in place of a verdict.
@@ -97,7 +97,8 @@ verdict artifact is written, and the engine's freshness handshake HALTs the feat
 
 ## Judge each criterion
 
-For every story criterion, record one row.
+For every supplied story criterion, return one criterion judgment. In standalone review, address
+each available story criterion in the advisory judgment.
 
 - **PASS** — the shipped behavior satisfies the criterion. Cite the code and/or behavioral proof.
 - **FIXABLE** — the criterion is unmet and an existing active-plan task owns the repair.
@@ -112,17 +113,14 @@ For every story criterion, record one row.
   and user-visible. Include any `Scope:` trailer rationale and operator-reseal rationale in the
   evidence. A reseal rationale that does not justify the protected-artifact change is an OVER_SCOPE
   finding; a rationale that does justify it is evidence for no finding.
-  **An unplanned change usually owns no story criterion.** Key the row to the criterion whose
-  behavior the change actually affects when one exists. When none does, do not force it into the
-  table or borrow an unrelated criterion's key. Report it under a `## Findings without an owning
-  criterion` section below the table. Its first column is `Finding` and each row's first cell must
-  be a unique `NC.<n>` key (for example, `NC.1`). `NC.<n>` keys belong only in this section, where
-  every row must be `OVER_SCOPE`; do not use another grade. Give each no-owner finding exactly one
-  row — duplicate `NC.<n>` keys are rejected. Include its judgement in Criterion detail as usual.
-  **Use durable history as judgment context, never report text.** Before authoring a no-owner row,
-  inspect the engine-rendered original decision history when present, then state the current evidence
-  in your own words. Do not copy a stored summary, rationale, or `NC.<n>` ordinal into the report.
-  Give the current finding an accurate current description and unique current key. The engine binds
+  **An unplanned change usually owns no story criterion.** Associate it with the criterion whose
+  behavior it actually affects when one exists. When none does, do not force it onto an unrelated
+  criterion: use a no-owner observation for an OVER_SCOPE finding. Describe each current finding
+  once, with its evidence, rationale, and intent relation.
+  **Use durable history as judgment context, never report text.** Before authoring a no-owner
+  observation, inspect the engine-rendered original decision history when present, then state the
+  current evidence in your own words. Do not copy a stored summary, rationale, or presentation
+  ordinal into the judgment. Give the current finding an accurate current description. The engine binds
   prior authority only after it reconciles immutable original evidence, current evidence, and case
   identity; a reviewer must never claim that wording alone proves the same behavior. If the relation
   is uncertain, describe the uncertainty and leave it unresolved.
@@ -133,70 +131,4 @@ the judged lap; do not raise a first-time finding against unchanged code unless 
 not have seen it, and say why.
 
 Do not conflate grades: an unmet criterion with an existing owner is FIXABLE even if another
-criterion is a PLAN_GAP. One row carries one grade.
-
-## Report
-
-Write `.pipeline/prd-audit.md` as current run evidence, overwriting the prior run. Declare whether a
-PRD was present, name all intent sources, and use the criterion-grade Verdict Table as the routing
-contract. Per-FR evidence may appear below the table, but never replaces the criterion rows.
-
-```markdown
-# PRD Audit: <Feature Name>
-**Date:** YYYY-MM-DD
-**PRD:** present
-**Intent sources:** stories: .docs/stories/<feature>.md; PRD: .docs/specs/<feature>.md | none; plan outcome: <outcome>
-**Overall:** PASS | BLOCKED
-
-## Verdict Table
-
-| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |
-| --- | --- | --- | --- | --- | --- |
-| S6.1 | PASS | — | FR-7 | — | src/engine/example.ts:42 — implements the criterion |
-| S6.2 | FIXABLE | 4 | FR-7 | — | src/engine/example.ts:58 — missing guard |
-| S6.3 | PLAN_GAP | — | FR-7 | — | No active task owns the missing behavior |
-| S9.2 | OVER_SCOPE | — | FR-9 | outside-visible | src/engine/example.ts:77 — outside intent, user-visible |
-
-## Findings without an owning criterion
-
-| Finding | Grade | Intent relation | Evidence |
-| --- | --- | --- | --- |
-| NC.1 | OVER_SCOPE | outside-visible | src/engine/unplanned.ts:12 — outside intent, user-visible behavior |
-
-## Criterion detail
-### S6.2 — <criterion summary>
-**Grade:** FIXABLE
-**Confidence:** 95% (verified)
-**Evidence:** `src/engine/example.ts:58` — <what it proves or lacks>
-**Rationale:** <why this grade follows from the criterion, its intent context, and task ownership>
-```
-
-The Verdict Table needs one row for every readable story criterion. Any row may cite a task present
-in the active plan; cite its bare task id with no annotation. When a criterion's evidence genuinely
-spans several tasks, cite them as a comma-separated list (`12, 13`) rather than narrowing to one —
-every id must still be declared by the active plan. Every FIXABLE row must cite its owning
-plan task, and exactly one: its repair is appended under that single parent, so a multi-task FIXABLE
-citation is rejected. Use `—` when there is no task. `PRD:` records the intent FR(s) when known and `none` when
-there is no PRD. `Intent relation` is machine-readable:
-every OVER_SCOPE row must use exactly one of `within`, `outside-harmless`, or `outside-visible`; use
-`—` for other grades. Do not encode this relation in Evidence prose. If report evidence is malformed
-or incomplete, surface it as BLOCKED rather than fabricating a grade.
-
-For OVER_SCOPE rows, add the intent judgement and reseal rationale to the detail: which source was
-consulted, whether the behavior is user-visible, and why any Scope/reseal rationale does or does not
-justify the widening. Do not self-accept, halt, or otherwise route the finding; the engine applies
-the policy to this evidence.
-
-## Verification
-
-- [ ] Active-plan stories loaded; each readable criterion has one Verdict Table row
-- [ ] Stories treated as authority; PRD FRs and plan outcome recorded only as intent context
-- [ ] `**PRD:** present | none` and the intent-sources line state what was available
-- [ ] Each row has exactly one of PASS, FIXABLE, PLAN_GAP, or OVER_SCOPE
-- [ ] Every FIXABLE row names its existing owning plan task and its criterion
-- [ ] Unreadable criteria and PRD-to-story coverage gaps are surfaced, never silently passed
-- [ ] Each finding cites `file:line` evidence and has calibrated confidence where ambiguous
-- [ ] Every OVER_SCOPE row carries an `Intent relation` of `within`, `outside-harmless`, or `outside-visible`; detail judges intent, user visibility, Scope trailers, and reseal rationale
-- [ ] Every Verdict Table key is an active story criterion id, each appearing on exactly one row; a finding owning no criterion is reported below the table as one unique `NC.<n>` OVER_SCOPE row, never keyed to an invented or unrelated id
-- [ ] No-owner evidence is current and independently written; stored decisions inform reconciliation but are never matched or copied by summary text
-- [ ] Report written to `.pipeline/prd-audit.md`; no implementation, plan mutation, or routing performed
+criterion is a PLAN_GAP. One criterion judgment carries one grade.

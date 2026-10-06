@@ -45,13 +45,19 @@ import type {
   LLMProvider,
 } from "../../src/execution/llm-provider.js";
 
-const { buildAsBuiltProjection } = vi.hoisted(() => ({
+const { buildAsBuiltProjection, buildPrdAuditProjection } = vi.hoisted(() => ({
   buildAsBuiltProjection: vi.fn(),
+  buildPrdAuditProjection: vi.fn(),
 }));
 
 vi.mock("../../src/engine/as-built-projection.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../src/engine/as-built-projection.js")>(),
   buildAsBuiltProjection,
+}));
+
+vi.mock("../../src/engine/prd-audit-projection.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../src/engine/prd-audit-projection.js")>(),
+  buildPrdAuditProjection,
 }));
 
 /** Explicit test-only observer for fixtures unrelated to lifecycle assertions. */
@@ -502,6 +508,17 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
           },
         },
       });
+      buildPrdAuditProjection.mockResolvedValue({
+        ok: true,
+        projection: {
+          version: 1,
+          plan: { intent: "Audit the typed verdict." },
+          criteria: [{ id: "S1.1", storyId: "1", kind: "happy", text: "The audit returns a typed verdict." }],
+          tasks: [], prd: { kind: "absent" }, coherence: { kind: "absent" },
+          changes: { base: "base", head: "head", changedFiles: [], excerpts: [], omittedFiles: [] },
+          history: { kind: "absent" },
+        },
+      });
       const deferred = <T>() => {
         let resolve!: (value: T) => void;
         const promise = new Promise<T>((done) => {
@@ -579,6 +596,9 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
             },
           },
           sessionStore: sessions,
+          gitRunner: async (args) => args[0] === 'rev-parse' && args[1] === 'HEAD'
+            ? { exitCode: 0, stdout: 'head\n', stderr: '' }
+            : { exitCode: 1, stdout: '', stderr: 'unexpected git command' },
           providerRuntimes: new ProviderRuntimeSet([
             {
               key: "claude",
@@ -656,7 +676,21 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         expect(manualDispatch).toHaveBeenCalledOnce();
         expect(prdDispatch).toHaveBeenCalledOnce();
       });
-      prdFirst.resolve({ success: true, output: "prd passed", exitCode: 0 });
+      prdFirst.resolve({
+        success: true,
+        output: "prd passed",
+        exitCode: 0,
+        finalStructuredResult: {
+          version: "v1",
+          criterionJudgments: [{
+            criterion: { storyId: "1", ordinal: 1 }, grade: "PASS",
+            evidence: "The fixture returns a valid terminal judgment.",
+            rationale: "The only active criterion is satisfied.",
+            requirementAssociations: [], evidenceTaskIds: [],
+          }],
+          noOwnerObservations: [],
+        },
+      });
       await prdPromise;
       manualFirst.resolve({
         success: false,
@@ -684,7 +718,9 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         effort: options.effort,
       }));
       const claudeCalls = claudeDispatch.mock.calls.map(([options]) => ({
-        prompt: options.prompt,
+        prompt: options.prompt.startsWith('/prd-audit\n\nPRD-AUDIT EVIDENCE')
+          ? '/prd-audit'
+          : options.prompt,
         sessionId: options.sessionId,
         resume: options.resume,
         cwd: options.cwd,
@@ -762,8 +798,8 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
             prompt: "/prd-audit",
             resume: false,
             cwd: "/tmp/project",
-            interactive: true,
-            dangerouslySkipPermissions: false,
+            interactive: false,
+            dangerouslySkipPermissions: true,
             model: "opus",
             effort: "high",
           },
@@ -795,6 +831,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
       });
     } finally {
       buildAsBuiltProjection.mockReset();
+      buildPrdAuditProjection.mockReset();
       await rm(pipelineDir, { recursive: true, force: true });
     }
   });

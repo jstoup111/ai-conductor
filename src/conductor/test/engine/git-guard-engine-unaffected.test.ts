@@ -24,6 +24,7 @@ describe('engine git guard boundary', () => {
     await initTestRepo(worktree);
     await prepareWorktree(worktree);
     const before = await resolveRealGit();
+    const processPathBeforeInvocation = process.env.PATH;
     const spawns: Array<{ env?: NodeJS.ProcessEnv }> = [];
     const provider = new ClaudeProvider(undefined, ((_file: string, _args: string[], options: ExecaOptions) => {
       spawns.push({ env: options.env });
@@ -35,7 +36,7 @@ describe('engine git guard boundary', () => {
     const after = await resolveRealGit();
 
     expect(spawns[0]?.env?.PATH).toContain(join(worktree, '.pipeline', 'bin'));
-    expect(process.env.PATH).not.toMatch(/(?:^|:)[^:]*\/\.pipeline\/bin(?::|$)/);
+    expect(process.env.PATH).toBe(processPathBeforeInvocation);
     expect(engineResult.exitCode).toBe(0);
     expect(after).toBe(before);
   });

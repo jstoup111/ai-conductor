@@ -21,15 +21,15 @@ import {
   ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   MANUAL_TEST_CODE_STAMP,
   MANUAL_TEST_FAIL_EVIDENCE,
-  PRD_AUDIT_CODE_STAMP,
 } from './artifacts.js';
 import { COVERAGE_BINDING_CODE_STAMP } from './coverage-binding-envelope.js';
 import type { GitRunner } from './rebase.js';
-import { originDefaultBranch, changedPathsBetween, resolveReviewInputs } from './rebase.js';
+import { makeGitRunner, originDefaultBranch, changedPathsBetween, resolveReviewInputs } from './rebase.js';
 import { featureTestPaths, GATE_SURFACE, partitionDelta, projectGateSurfaces } from './gate-invalidation.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { resolveThroughMap } from './rebase-translate.js';
 import { AS_BUILT_VERDICT_PATH, readAsBuiltVerdict } from './as-built-verdict-store.js';
+import { PRD_AUDIT_VERDICT_PATH, readPrdAuditVerdict } from './prd-audit-verdict-store.js';
 
 /** Minimal context the decision helper needs: an injected git runner rooted
  * at the project's working directory. Mirrors the `GitRunner` convention
@@ -137,7 +137,7 @@ const PRESERVED_GATE_ARTIFACTS: Partial<Record<StepName, string>> = {
   build_review: '.pipeline/build-review.json',
   test_suite: '.pipeline/test-suite-evidence.json',
   manual_test: '.pipeline/manual-test-results.md',
-  prd_audit: '.pipeline/prd-audit.md',
+  prd_audit: PRD_AUDIT_VERDICT_PATH,
   architecture_review_as_built: AS_BUILT_VERDICT_PATH,
 };
 
@@ -164,6 +164,16 @@ export async function currentPreservedJudgeIdentity(
         codeStamp: stored.value.codeStamp,
       };
     }
+    if (gate === 'prd_audit') {
+      const stored = await readPrdAuditVerdict(projectRoot);
+      if (stored.kind !== 'present' || !stored.value.codeStamp) return null;
+      return {
+        artifactDigest: `sha256:${createHash('sha256').update(artifact).digest('hex')}`,
+        attemptId: stored.value.attemptId,
+        runId: stored.value.attemptId,
+        codeStamp: stored.value.codeStamp,
+      };
+    }
     let codeStamp: unknown;
     let runId: unknown;
     if (gate === 'manual_test') {
@@ -173,10 +183,8 @@ export async function currentPreservedJudgeIdentity(
       ]);
       codeStamp = (JSON.parse(stamp) as { codeStamp?: unknown }).codeStamp;
       runId = (JSON.parse(identity) as { runId?: unknown }).runId;
-    } else if (gate === 'prd_audit' || gate === 'architecture_review_as_built') {
-      const sidecar = await readFile(join(projectRoot,
-        gate === 'prd_audit' ? PRD_AUDIT_CODE_STAMP : ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
-      ), 'utf-8');
+    } else if (gate === 'architecture_review_as_built') {
+      const sidecar = await readFile(join(projectRoot, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP), 'utf-8');
       const parsed = JSON.parse(sidecar) as { codeStamp?: unknown; runId?: unknown };
       codeStamp = parsed.codeStamp;
       runId = parsed.runId;
@@ -290,6 +298,7 @@ export function isApplicableOriginalPass(
 /** The identity comparison result for a SHIP-tail verdict sidecar. */
 export type VerdictRunIdentity =
   | { state: 'match'; runId: string }
+  | { state: 'invalidated-code-stamp'; runId: string; reason: 'gate-code-validity-rerun' }
   | {
       state: 'stale-run-identity';
       expectedRunId: string;
@@ -300,7 +309,7 @@ export type VerdictRunIdentity =
 function verdictRunIdentitySidecar(gate: StepName): string | undefined {
   switch (gate) {
     case 'prd_audit':
-      return PRD_AUDIT_CODE_STAMP;
+      return undefined;
     case 'architecture_review_as_built':
       return ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP;
     case 'manual_test':
@@ -314,9 +323,10 @@ function verdictRunIdentitySidecar(gate: StepName): string | undefined {
  * Answers whether a SHIP-tail gate's verdict was produced by `expectedRunId`.
  *
  * A valid engine stamp is authoritative: a matching stamp is current and a
- * different stamp is a typed stale identity. Missing, malformed, or legacy
- * sidecars deliberately remain `unstamped`, so callers retain their existing
- * mtime fallback unchanged.
+ * different stamp is a typed stale identity. PRD audit identity is retained
+ * even with code-validity preservation disabled; missing, malformed, or
+ * legacy sidecars for other gates deliberately remain `unstamped`, so callers
+ * retain their existing mtime fallback unchanged.
  */
 export async function verdictProducedByRun(
   dir: string,
@@ -324,8 +334,31 @@ export async function verdictProducedByRun(
   expectedRunId: string | undefined,
   config?: Pick<HarnessConfig, 'gate_code_validity'>,
 ): Promise<VerdictRunIdentity> {
-  if (!resolveGateCodeValidityConfig(config).enabled) return { state: 'unstamped' };
   if (!expectedRunId) return { state: 'unstamped' };
+
+  if (gate === 'prd_audit') {
+    const stored = await readPrdAuditVerdict(dir);
+    if (stored.kind !== 'present') return { state: 'unstamped' };
+    if (resolveGateCodeValidityConfig(config).enabled && stored.value.codeStamp !== null) {
+      const validity = await gateVerdictStillValid(
+        { projectRoot: dir, git: makeGitRunner(dir) },
+        'prd_audit',
+        stored.value.codeStamp,
+      ).catch(() => 'rerun' as const);
+      if (validity !== 'preserve') {
+        return {
+          state: 'invalidated-code-stamp',
+          runId: stored.value.attemptId,
+          reason: 'gate-code-validity-rerun',
+        };
+      }
+    }
+    return stored.value.attemptId === expectedRunId
+      ? { state: 'match', runId: stored.value.attemptId }
+      : { state: 'stale-run-identity', expectedRunId, foundRunId: stored.value.attemptId };
+  }
+
+  if (!resolveGateCodeValidityConfig(config).enabled) return { state: 'unstamped' };
 
   const sidecar = verdictRunIdentitySidecar(gate);
   if (!sidecar) return { state: 'unstamped' };

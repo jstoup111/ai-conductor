@@ -1,8 +1,6 @@
 // Covers: task:11, task:12
 import { describe, expect, it } from 'vitest';
 import { buildPrdWideningContext, prdWideningSourceId, PRD_WIDENING_CONTEXT_LIMITS } from '../../src/engine/prd-widening-context.js';
-import { parsePrdAuditReport } from '../../src/engine/artifacts.js';
-import { overScopeRelations } from '../../src/engine/accepted-widenings.js';
 import type { AcceptedWideningDecision } from '../../src/engine/accepted-widenings.js';
 import type { PrdAuditFinding } from '../../src/engine/artifacts.js';
 import type { RemediationCasePrdWideningRecord } from '../../src/engine/remediation-case-store.js';
@@ -47,92 +45,6 @@ describe('PRD widening context', () => {
     expect(result).toMatchObject({ ok: true, value: { cases: [], decisions: [] } });
   });
 
-  it('projects parser-normalized NC sources and only their matching history', () => {
-    const parsed = parsePrdAuditReport(`
-**PRD:** present
-
-## Verdict Table
-
-| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |
-| --- | --- | --- | --- | --- | --- |
-| S1.1 | OVER_SCOPE | — | FR-1 | outside-visible | Criterion-owned widening |
-| S1.2 | PASS | — | FR-2 | within | Covered criterion |
-
-## Findings without an owning criterion
-
-| Finding | Grade | Intent relation | Evidence |
-| --- | --- | --- | --- |
-| NC.7 | OVER_SCOPE | outside-visible | Renumbered current widening |
-| NC.9 | OVER_SCOPE | outside-visible | Independent current widening |
-| NC.8 | PASS | within | Malformed no-owner grade |
-`);
-    expect(parsed).toMatchObject({ ok: true });
-    if (!parsed.ok) throw new Error(parsed.error);
-
-    const prdCase = {
-      id: 'prd-case-1', domain: 'prd_widening' as const,
-      originalSources: [{ sourceId: 'prd-audit:NC.1', snapshot: 'Original approved widening.' }],
-      currentSources: [{ sourceId: 'prd-audit:NC.7', snapshot: 'Renumbered current widening.', recordedAt: '2026-09-09T00:00:00.000Z' }],
-      relationships: [{ currentSourceId: 'prd-audit:NC.7', kind: 'same-case' as const, caseId: 'prd-case-1', reason: 'Same behavior after wording drift.' }],
-    };
-    const result = buildPrdWideningContext(parsed.value, [prdCase], [
-      { id: 'criterion-decision', criterion: 'S1.1', authority: 'accept' as const, rationale: 'Criterion approval.', operator: 'operator', revision: 1 },
-      { id: 'accepted-nc', criterion: 'NC.1', authority: 'accept' as const, rationale: 'Original approval.', operator: 'operator', revision: 2, originalSource: { id: 'prd-audit:NC.1', snapshot: 'Original approved widening.' }, originalCaseId: 'prd-case-1', offerEntryId: 'offer-1' },
-      { id: 'refused-nc', criterion: 'NC.2', authority: 'refuse' as const, rationale: 'Original refusal.', operator: 'operator', revision: 3, originalSource: { id: 'prd-audit:NC.2', snapshot: 'Absent current widening.' }, originalCaseId: 'prd-case-2', offerEntryId: 'offer-2', supersedes: { id: 'accepted-nc', revision: 2 } },
-    ]);
-
-    expect(result).toMatchObject({
-      ok: true,
-      value: {
-        currentSources: [
-          { id: prdWideningSourceId(parsed.value.findings[2]!), criterion: 'NC.7', evidence: 'Renumbered current widening' },
-          { id: prdWideningSourceId(parsed.value.findings[3]!), criterion: 'NC.9', evidence: 'Independent current widening' },
-        ],
-        cases: [prdCase],
-        decisions: [
-          { id: 'accepted-nc', originalSource: { id: 'prd-audit:NC.1' } },
-          { id: 'refused-nc', supersedes: { id: 'accepted-nc', revision: 2 } },
-        ],
-        rejectedRows: [{ key: 'NC.8', reason: expect.stringContaining('only OVER_SCOPE') }],
-      },
-    });
-  });
-
-  it('retains each parsed NC intent relation for reconciliation', () => {
-    const reportText = `
-**PRD:** present
-
-## Verdict Table
-
-| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |
-| --- | --- | --- | --- | --- | --- |
-| S1.1 | PASS | — | FR-1 | within | Covered criterion |
-
-## Findings without an owning criterion
-
-| Finding | Grade | Intent relation | Evidence |
-| --- | --- | --- | --- |
-| NC.7 | OVER_SCOPE | within | Internal implementation detail |
-| NC.8 | OVER_SCOPE | outside-harmless | Harmless unplanned detail |
-| NC.9 | OVER_SCOPE | outside-visible | Visible unplanned behavior |
-`;
-    const parsed = parsePrdAuditReport(reportText);
-    expect(parsed).toMatchObject({ ok: true });
-    if (!parsed.ok) throw new Error(parsed.error);
-
-    const result = buildPrdWideningContext(parsed.value, [], [], overScopeRelations(reportText));
-
-    expect(result).toMatchObject({
-      ok: true,
-      value: {
-        currentSources: [
-          { id: prdWideningSourceId(parsed.value.findings[1]!), relation: 'within', evidence: 'Internal implementation detail' },
-          { id: prdWideningSourceId(parsed.value.findings[2]!), relation: 'outside-harmless', evidence: 'Harmless unplanned detail' },
-          { id: prdWideningSourceId(parsed.value.findings[3]!), relation: 'outside-visible', evidence: 'Visible unplanned behavior' },
-        ],
-      },
-    });
-  });
 
   it('rejects byte and count overflow without truncating the projected history', () => {
     const rows = Array.from({ length: PRD_WIDENING_CONTEXT_LIMITS.currentSources + 1 }, (_, index) => ({ ...finding, criterion: `NC.${index + 1}` }));

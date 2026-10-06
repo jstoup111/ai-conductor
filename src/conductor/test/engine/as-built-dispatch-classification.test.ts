@@ -1,4 +1,4 @@
-// Covers: task:11, task:12, task:15
+// Covers: task:11, task:12, task:15, task:16
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -282,16 +282,41 @@ describe('architecture_review_as_built dispatch classification', () => {
       events: new ConductorEventEmitter(),
     });
     const handshake = (conductor as unknown as {
-      verdictDispatchHandshake: (step: StepName, runId: string, startedAt: number, dispatchOutput?: string) => Promise<unknown>;
+      verdictDispatchHandshake: (step: StepName, runId: string, startedAt: number, dispatchOutput?: string) => Promise<{
+        done: false; routeClass: 'absent'; retrySignal?: string; reason: string;
+      } | undefined>;
     }).verdictDispatchHandshake;
 
     const rejection = 'structured-result-rejected: findings: not permitted for verdict APPROVED';
-    await expect(handshake.call(conductor, 'architecture_review_as_built', 'rejected-attempt', Date.now(), rejection))
-      .resolves.toEqual({
+    const result = await handshake.call(conductor, 'architecture_review_as_built', 'rejected-attempt', Date.now(), rejection);
+    expect(result).toMatchObject({
+      done: false,
+      routeClass: 'absent',
+      retrySignal: 'structured-result-rejected',
+    });
+    expect(result?.reason).toContain('architecture_review_as_built dispatch rejected-attempt produced no verdict');
+    expect(result?.reason).toContain('expected terminal typed output .pipeline/architecture-review-as-built.json');
+    expect(result?.reason).toContain('findings: not permitted for verdict APPROVED');
+  });
+
+  it('names the current attempt and expected typed output when a prose-only as-built dispatch has no verdict', async () => {
+    const projectDir = await tempDir('as-built-missing-handshake-');
+    const conductor = new Conductor({
+      projectRoot: projectDir,
+      stateFilePath: join(projectDir, '.pipeline', 'state.json'),
+      stepRunner: { run: vi.fn() } as never,
+      events: new ConductorEventEmitter(),
+    });
+    const handshake = (conductor as unknown as {
+      verdictDispatchHandshake: (step: StepName, runId: string, startedAt: number, dispatchOutput?: string) => Promise<unknown>;
+    }).verdictDispatchHandshake;
+
+    await expect(handshake.call(conductor, 'architecture_review_as_built', 'engine-attempt-19', Date.now(), 'structured-result-missing'))
+      .resolves.toMatchObject({
         done: false,
         routeClass: 'absent',
-        retrySignal: 'structured-result-rejected',
-        reason: rejection,
+        retrySignal: 'structured-result-missing',
+        reason: expect.stringMatching(/architecture_review_as_built dispatch engine-attempt-19 produced no verdict; expected terminal typed output \.pipeline\/architecture-review-as-built\.json/),
       });
   });
 });

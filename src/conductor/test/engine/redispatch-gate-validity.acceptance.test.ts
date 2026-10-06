@@ -63,6 +63,11 @@ import {
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import {
+  PRD_AUDIT_VERDICT_PATH,
+  persistPrdAuditVerdict,
+  readPrdAuditVerdict,
+} from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 const execFile = promisify(execFileCb);
@@ -190,11 +195,8 @@ async function writeBuildReviewVerdict(
 }
 
 /**
- * Writes a clean markdown report (backdated to OLD_MTIME, no inline stamp —
- * `prd_audit`/`architecture_review_as_built` never encode `codeStamp` in the
- * report body) plus, when a `codeStamp` is given, the matching JSON sidecar
- * (`sidecarRelPath`) real production code reads it from
- * (`PRD_AUDIT_CODE_STAMP` / `ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP`).
+ * Writes a clean typed PRD verdict backdated to OLD_MTIME. The Markdown
+ * report is derived by the verdict store and never acts as test authority.
  */
 async function writeMdVerdict(
   repo: string,
@@ -203,14 +205,24 @@ async function writeMdVerdict(
   codeStamp: string | undefined,
   sidecarRelPath: string,
 ): Promise<void> {
-  const path = join(repo, relPath);
-  await writeFile(path, body);
-  await utimes(path, OLD_MTIME, OLD_MTIME);
-  if (codeStamp) {
-    const sidecarPath = join(repo, sidecarRelPath);
-    await mkdir(join(sidecarPath, '..'), { recursive: true });
-    await writeFile(sidecarPath, JSON.stringify({ codeStamp }, null, 2));
-  }
+  void relPath;
+  void body;
+  void sidecarRelPath;
+  await persistPrdAuditVerdict(repo, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
+        evidence: 'foo.ts:1', rationale: 'fixture verdict',
+        requirementAssociations: [], evidenceTaskIds: [],
+      }],
+      noOwnerObservations: [],
+    },
+    diagnostics: [],
+    recordedDispositions: [],
+  }, { attemptId: 'fixture-run', codeStamp: codeStamp ?? null });
+  await utimes(join(repo, PRD_AUDIT_VERDICT_PATH), OLD_MTIME, OLD_MTIME);
 }
 
 /** Writes the engine-owned as-built authority; its report is derived only. */
@@ -384,6 +396,17 @@ describe('a prior run identity does not condemn a code-valid verdict (adr-2026-0
   }
 
   async function stampWithPriorRun(repo: string, sidecarRelPath: string, codeStamp: string): Promise<void> {
+    if (sidecarRelPath === PRD_AUDIT_CODE_STAMP) {
+      const stored = await readPrdAuditVerdict(repo);
+      if (stored.kind !== 'present') throw new Error('PRD verdict fixture missing');
+      await persistPrdAuditVerdict(repo, {
+        complete: stored.value.complete,
+        judgment: stored.value.judgment,
+        diagnostics: stored.value.diagnostics,
+        recordedDispositions: stored.value.recordedDispositions,
+      }, { attemptId: 'run-prior', codeStamp });
+      return;
+    }
     await writeFile(join(repo, sidecarRelPath), JSON.stringify({ codeStamp, runId: 'run-prior' }, null, 2));
   }
 
@@ -571,7 +594,10 @@ describe('sweepStaleReviewArtifacts spares a still-valid verdict, still deletes 
     await s.g(['commit', '--amend', '-q', '-m', 'init (amended)']);
 
     const removed = await sweepStaleReviewArtifacts(s.repo, 'prd_audit', Date.now());
-    expect(removed).toEqual([join(s.repo, '.pipeline/prd-audit.md')]);
+    expect(removed).toEqual([
+      join(s.repo, '.pipeline/prd-audit.json'),
+      join(s.repo, '.pipeline/prd-audit.md'),
+    ]);
 
     const result = await checkStepCompletion(s.repo, 'prd_audit', ctxFor(s.repo));
     expect(result.done).toBe(false);

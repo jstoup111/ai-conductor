@@ -64,6 +64,7 @@ import { voidCoverageBindingForDecideChange } from '../../src/engine/coverage-bi
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { rewindState } from '../../src/engine/rewind.js';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import {
   creditKickbackGateLaps,
   MAX_SUITE_INFRASTRUCTURE_RETRIES,
@@ -100,6 +101,12 @@ const NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER: GroupBranchLifecycleObserver = {
   onRetry: () => undefined,
   onSettled: () => undefined,
 };
+
+// These remediation fixtures exercise typed finding admission, not the
+// separate code-validity policy. Their persisted audit was reviewed at
+// `fixture-head`, and this runner proves that no gate-surface change occurred
+// after it.
+const PRESERVABLE_PRD_AUDIT_GIT = async () => ({ exitCode: 0, stdout: '', stderr: '' });
 
 function failingBuildReviewAggregate(summary: string) {
   const lapId = parseBuildReviewLapId('fixture-lap')!;
@@ -148,6 +155,40 @@ async function writeAsBuiltFixture(
     codeStamp: null,
     policy: AS_BUILT_FIXTURE_POLICY,
   });
+}
+
+/**
+ * Remediation fixtures must supply the current typed authority. The derived
+ * Markdown report deliberately is not an input to remediation routing.
+ */
+async function writePrdAuditFixableFixture(
+  projectRoot: string,
+  runId: string | undefined,
+  findings: readonly { criterionId: string; ownerTaskId: string }[] = [{ criterionId: 'S1.1', ownerTaskId: '1' }],
+): Promise<void> {
+  await persistPrdAuditVerdict(projectRoot, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: findings.map(({ criterionId, ownerTaskId }) => {
+        const match = /^S(.+)\.(\d+)$/.exec(criterionId);
+        if (!match) throw new Error(`Invalid fixture criterion: ${criterionId}`);
+        return {
+          criterion: { storyId: match[1], ordinal: Number(match[2]) },
+          criterionId,
+          grade: 'FIXABLE' as const,
+          evidence: `Fixture reports ${criterionId} as repairable.`,
+          rationale: 'Fixture remediation requires the active owning task.',
+          requirementAssociations: [],
+          evidenceTaskIds: [ownerTaskId],
+          ownerTaskId,
+        };
+      }),
+      noOwnerObservations: [],
+    },
+    diagnostics: [],
+    recordedDispositions: [],
+  }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: 'fixture-head' });
 }
 
 function asBuiltBlockedFixture(findings: readonly AsBuiltFinding[]) {
@@ -900,12 +941,7 @@ describe('engine/conductor', () => {
       await writeFile(planPath, authoredPlan);
       await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Existing work\n\n### Happy Path\n- Given work, when repaired, then it passes.\n');
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }));
-      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
-        '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
-        '| Criterion | Grade | Plan task | PRD: | Evidence |',
-        '|---|---|---|---|---|',
-        '| S1.1 | FIXABLE | 1 | FR-1 | x |',
-      ].join('\n'));
+      await writePrdAuditFixableFixture(dir, undefined);
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
@@ -913,7 +949,7 @@ describe('engine/conductor', () => {
             if (step === 'remediate') {
               await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
                 dispositions: [{
-                  id: 'FR-1', disposition: 'existing-task', category: null,
+                  id: 'S1.1', disposition: 'existing-task', category: null,
                   rationale: 'Task 1 already owns this repair.',
                   tasks: [{ id: '1', title: 'Existing work' }],
                 }],
@@ -924,6 +960,7 @@ describe('engine/conductor', () => {
         },
         events,
         projectRoot: dir,
+        git: PRESERVABLE_PRD_AUDIT_GIT,
       });
 
       const outcome = await (conductor as any).planRemediation(
@@ -950,12 +987,7 @@ describe('engine/conductor', () => {
       const planPath = join(dir, '.docs', 'plans', 'existing-task-bindings.md');
       await writeFile(planPath, '### Task 1: PRD work\n\n### Task 2: As-built work\n');
       await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Existing work\n\n### Happy Path\n- Given work, when repaired, then it passes.\n');
-      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
-        '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
-        '| Criterion | Grade | Plan task | PRD: | Evidence |',
-        '|---|---|---|---|---|',
-        '| S1.1 | FIXABLE | 1 | FR-1 | x |',
-      ].join('\n'));
+      await writePrdAuditFixableFixture(dir, undefined);
       await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('ARCH-1', '2', 'Repair task two'));
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: '1', status: 'completed' }, { id: '2', status: 'completed' }],
@@ -972,7 +1004,7 @@ describe('engine/conductor', () => {
             if (step === 'remediate') {
               await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
                 dispositions: [
-                  { id: 'FR-1', disposition: 'existing-task', category: null, rationale: 'Task 1 owns this repair.', tasks: [{ id: '1', title: 'PRD work' }] },
+                  { id: 'S1.1', disposition: 'existing-task', category: null, rationale: 'Task 1 owns this repair.', tasks: [{ id: '1', title: 'PRD work' }] },
                   { id: 'ARCH-1', disposition: 'existing-task', category: null, rationale: 'Task 2 owns this repair.', tasks: [{ id: '2', title: 'As-built work' }] },
                 ],
               }));
@@ -982,6 +1014,7 @@ describe('engine/conductor', () => {
         },
         events,
         projectRoot: dir,
+        git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
       });
 
@@ -1087,20 +1120,17 @@ describe('engine/conductor', () => {
       const authoredPlan = Array.from({ length: 4 }, (_, i) => `### Task ${i + 1}: Authored ${i + 1}`).join('\n');
       await writeFile(planPath, authoredPlan);
       await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Repair\n\n### Happy Path\n- Given repair work, when it is completed, then it passes.\n');
-      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
-        '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
-        '| Criterion | Grade | Plan task | PRD: | Evidence |',
-        '|---|---|---|---|---|', '| S1.1 | FIXABLE | 1 | FR-1 | x |',
-      ].join('\n'));
+      await writePrdAuditFixableFixture(dir, undefined);
       await writeKickbackLedger(dir, { version: 1, gates: {}, growth: { authored: 4, added: 0, byGate: {} } });
       const conductor = new Conductor({
         stateFilePath: statePath,
         projectRoot: dir,
         events,
+        git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { prd_audit: { max_remediation_laps: 2 } } as never,
         stepRunner: { run: async (step) => {
           if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: [{
-            id: 'FR-1', disposition: 'build', category: null, rationale: 'Append the repair.',
+            id: 'S1.1', disposition: 'build', category: null, rationale: 'Append the repair.',
             tasks: [{ id: 'rem-fr-1', title: 'Appended repair' }],
           }] }));
           return { success: true };
@@ -1135,14 +1165,11 @@ describe('engine/conductor', () => {
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: '2', status: 'completed' }, { id: '3', status: 'completed' }],
       }));
-      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
-        '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
-        '| Criterion | Grade | Plan task | PRD: | Evidence |',
-        '|---|---|---|---|---|',
-        '| S1.1 | FIXABLE | 1 | FR-1 | x |',
-        '| S1.2 | FIXABLE | 2 | FR-2 | x |',
-        '| S1.3 | FIXABLE | 3 | FR-3 | x |',
-      ].join('\n'));
+      await writePrdAuditFixableFixture(dir, undefined, [
+        { criterionId: 'S1.1', ownerTaskId: '1' },
+        { criterionId: 'S1.2', ownerTaskId: '2' },
+        { criterionId: 'S1.3', ownerTaskId: '3' },
+      ]);
       // Four authored tasks permit one appended remediation task. Start with
       // the allowance available so the bound existing tasks can be observed
       // re-staged before the second, exhausted mixed round checks its wording.
@@ -1156,6 +1183,7 @@ describe('engine/conductor', () => {
         stateFilePath: statePath,
         projectRoot: dir,
         events,
+        git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { prd_audit: { max_remediation_laps: 2 } } as never,
         stepRunner: { run: async (step) => {
           if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
@@ -1206,15 +1234,16 @@ describe('engine/conductor', () => {
       await writeFile(planPath, Array.from({ length: 8 }, (_, i) => `### Task ${i + 1}: Authored ${i + 1}`).join('\n'));
       await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Repair\n\n### Happy Path\n- Given repair work, when it is completed, then it passes.\n');
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '2', status: 'completed' }] }));
-      await writeFile(join(dir, '.pipeline', 'prd-audit.md'), '# PRD Audit\n\n**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | PRD: | Evidence |\n|---|---|---|---|---|\n| S1.1 | FIXABLE | 1 | FR-1 | x |\n');
+      await writePrdAuditFixableFixture(dir, undefined);
       await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('ARCH-1', '2', 'Existing repair'));
       await writeKickbackLedger(dir, { version: 1, gates: {}, growth: { authored: 8, added: 0, byGate: {} } });
       const conductor = new Conductor({
         stateFilePath: statePath, projectRoot: dir, events,
+        git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
         stepRunner: { run: async (step) => {
           if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: [
-            { id: 'FR-1', disposition: 'build', category: null, rationale: 'Append.', tasks: [{ id: 'rem-fr-1', title: 'Appended repair' }] },
+            { id: 'S1.1', disposition: 'build', category: null, rationale: 'Append.', tasks: [{ id: 'rem-s1-1', title: 'Appended repair' }] },
             { id: 'ARCH-1', disposition: 'existing-task', category: null, rationale: 'Already owned.', tasks: [{ id: '2', title: 'Authored 2' }] },
           ] }));
           return { success: true };
@@ -1490,7 +1519,7 @@ describe('engine/conductor', () => {
       await writeState(statePath, state);
       const dispatched: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step) => {
+        run: vi.fn(async (step, _state) => {
           dispatched.push(step);
           return { success: false, output: 'expected test boundary' };
         }),

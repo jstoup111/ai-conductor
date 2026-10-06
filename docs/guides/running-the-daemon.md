@@ -374,7 +374,7 @@ For
 ```text
 · build_review verdict build-review.json preserved — surface miss
 · ✗ build_review verdict build-review.json invalidated — stale verdict rejected
-· prd_audit verdict prd-audit.md rewritten — current
+· prd_audit verdict prd-audit.json rewritten — current
 ```
 
 `preserved` means the code changed outside the gate's judged surface, so the prior passing verdict

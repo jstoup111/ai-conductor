@@ -216,9 +216,8 @@ import {
   checkStepCompletion,
   CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
-  parsePrdAuditReport,
-  readActivePlanText,
-  isNoOwnerKey,
+  readCurrentPrdAuditVerdict,
+  prdAuditTypedRouteReport,
   extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
   readRemediationPlanResult,
@@ -253,7 +252,7 @@ import {
   isVerdictRunIdentityStep,
 } from './artifacts.js';
 import { resolveHeadSha, resolvePrDisposition } from './run-provenance.js';
-import { extractStoryCriterionIds } from './story-criteria.js';
+import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
 import {
   AS_BUILT_VERDICT_PATH,
   asBuiltFindingDetail,
@@ -263,6 +262,11 @@ import {
   readAsBuiltVerdict,
   type RecordedAsBuiltFinding,
 } from './as-built-verdict-store.js';
+import {
+  PRD_AUDIT_VERDICT_PATH,
+  persistPrdAuditVerdict,
+  type PersistedPrdAuditVerdict,
+} from './prd-audit-verdict-store.js';
 import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
 import type { AsBuiltGoverningReference } from './as-built-contract.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
@@ -278,10 +282,7 @@ import {
   type OverScopeHaltClass,
 } from './halt-classification.js';
 import {
-  classifyOverScopeCriterion,
-  overScopeRelations,
   renderOverScopeDecisionBlock,
-  type OverScopeDecision,
   type IntentRelation,
 } from './accepted-widenings.js';
 import type { ScopeTrailer } from './scope-trailer.js';
@@ -942,6 +943,7 @@ export interface RecordedPrdAuditFinding {
   accepted?: boolean;
   decision?: 'accept' | 'refuse';
   rationale?: string;
+  operator?: string;
 }
 
 /** A remediated as-built BLOCKED row retained after the rebuilt gate converges. */
@@ -959,7 +961,7 @@ function criterionStorySection(
   criterion: string,
 ): 'happy' | 'negative' | undefined {
   // The story id uses the stories parser's heading alphabet (`[A-Za-z0-9.-]`,
-  // see `story-criteria.ts`), mirroring `CRITERION_ID_RE` in artifacts.ts: the
+  // see `story-criteria.ts`): the
   // trailing `.<digits>` is the criterion ordinal and everything before it is
   // the heading id verbatim, so `S5a.3` and `S2.1.3` classify instead of
   // silently returning undefined (#2219 / PR #2222 fixed the sibling sites).
@@ -982,62 +984,6 @@ function criterionStorySection(
   return undefined;
 }
 
-/**
- * A PLAN_GAP on a main path needs an operator to amend the approved plan;
- * an edge-case gap is durable review information unless the feature opts in
- * to stopping on every plan gap. Unknown locations deliberately fail closed
- * as main-path gaps.
- */
-export function routePrdAuditPlanGaps(
-  reportText: string,
-  storiesText: string,
-  config: HarnessConfig,
-  activePlanText?: string,
-): PrdAuditPlanGapRoute {
-  // `activePlanText` is this parse's citation authority. Its absence is not
-  // permission to self-validate: the parser rejects a row citing a Plan task
-  // it cannot check, and the rejected-row guard below then declines to route.
-  const parsed = parsePrdAuditReport(reportText, activePlanText);
-  // A rejected row is a row the parser could not read, not a finding — it never
-  // appears in `parsed.value.findings`, so the `hasOtherBlockingGrade` scan
-  // below cannot see it. Without this guard a rejected row riding with a
-  // recordable negative-path PLAN_GAP returns `record`, and either SHIP path
-  // then overrides the gate as satisfied, so the row never blocks by name.
-  // Matches the sibling guard in `routePrdAuditOverScope`.
-  if (!parsed.ok || parsed.value.rejectedRows.length > 0) return { kind: 'none' };
-
-  const findings = parsed.value.findings
-    .filter((finding) => finding.grade === 'PLAN_GAP')
-    .map((finding) => ({
-      gate: 'prd_audit' as const,
-      grade: 'PLAN_GAP' as const,
-      criterion: finding.criterion,
-      summary: finding.evidence.trim() || `No approved plan task covers ${finding.criterion}.`,
-    }));
-  if (findings.length === 0) return { kind: 'none' };
-
-  const haltOnAnyPlanGap = (config as HarnessConfig & {
-    prd_audit?: { halt_on_any_plan_gap?: boolean };
-  }).prd_audit?.halt_on_any_plan_gap === true;
-  const blocking = findings.filter(
-    (finding) => haltOnAnyPlanGap || criterionStorySection(storiesText, finding.criterion) !== 'negative',
-  );
-  if (blocking.length > 0) {
-    return {
-      kind: 'halt',
-      haltClass: 'plan-gap',
-      detail: `PLAN_GAP on ${blocking.map((finding) => finding.criterion).join(', ')}.`,
-      findings,
-    };
-  }
-
-  const hasOtherBlockingGrade = parsed.value.findings.some(
-    (finding) => finding.grade !== 'PASS' && finding.grade !== 'PLAN_GAP',
-  );
-  return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings };
-}
-
-
 export type PrdAuditOverScopeRoute =
   | { kind: 'none' }
   | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
@@ -1059,82 +1005,26 @@ type CurrentPrdAuditRoute =
   // other route — an unrenderable decision must not be settled as satisfied.
   | { kind: 'projection-halt'; reason: string };
 
-/** Route OVER_SCOPE findings through intent relation and prior operator acceptance. */
-export function routePrdAuditOverScope(
-  reportText: string,
-  decisions: readonly OverScopeDecision[],
-  activePlanText?: string,
-): PrdAuditOverScopeRoute {
-  const parsed = parsePrdAuditReport(reportText, activePlanText);
-  if (!parsed.ok || parsed.value.rejectedRows.length > 0) return { kind: 'none' };
-  const relations = overScopeRelations(reportText);
-  const overScopeFindings = parsed.value.findings.filter((finding) => finding.grade === 'OVER_SCOPE');
-  if (overScopeFindings.some((finding) => !relations.has(finding.criterion))) return { kind: 'none' };
-  const findings = overScopeFindings
-    .map((finding) => {
-      const summary = finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`;
-      const relation = relations.get(finding.criterion) as IntentRelation;
-      const classification = classifyOverScopeCriterion(finding.criterion, summary, relations, decisions);
-      const durableDecision = decisions
-        .filter((entry) => {
-          if (entry.criterion !== finding.criterion) return false;
-          return !/^NC\.\d+$/i.test(finding.criterion) || entry.summary.trim() === summary.trim();
-        })
-        .at(-1);
-      return {
-        gate: 'prd_audit' as const,
-        grade: 'OVER_SCOPE' as const,
-        criterion: finding.criterion,
-        summary,
-        accepted: classification === 'accepted' || relation === 'within',
-        ...(durableDecision ? { decision: durableDecision.decision, rationale: durableDecision.rationale } : {}),
-        classification,
-        relation,
-      };
-    });
-  if (findings.length === 0) return { kind: 'none' };
-
-  const undecided = findings.filter((finding) => finding.classification === 'blocking-undecided');
-  const refused = findings.filter((finding) => finding.classification === 'blocking-refused');
-  const recorded = findings.map(({ relation: _relation, classification: _classification, ...finding }) => finding);
-  if (undecided.length > 0 || refused.length > 0) {
-    return {
-      kind: 'halt',
-      haltClass: OVER_SCOPE_HALT_CLASS,
-      detail: `OVER_SCOPE visible behavior on ${[...undecided, ...refused].map((finding) => finding.criterion).join(', ')}.`,
-      findings: recorded,
-      undecided: undecided.map(({ classification: _classification, ...finding }) => finding),
-      refused: refused.map(({ classification: _classification, ...finding }) => finding),
-    };
-  }
-  const hasOtherBlockingGrade = parsed.value.findings.some(
-    (finding) => finding.grade !== 'PASS' && finding.grade !== 'OVER_SCOPE',
-  );
-  return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings: recorded };
-}
-
 /**
- * The v2 route consumes only criterion keys, published relations, and durable
- * operator decisions.  In particular, no reviewer summary is ever used to
- * find authority for an NC row.
+ * Adapt the validated verdict to the existing widening domain without
+ * re-reading its derived Markdown report.  Presentation ordinals remain only
+ * locators for no-owner observations; their evidence and relation come from
+ * the typed authority.
  */
-export function routePrdAuditOverScopeV2(
-  reportText: string,
+function routeTypedPrdAuditOverScope(
+  report: PrdAuditReport,
+  relations: ReadonlyMap<string, IntentRelation>,
   decisions: readonly AcceptedWideningDecision[],
   cases: readonly RemediationCasePrdWideningRecord[],
-  activePlanText?: string,
 ): PrdAuditOverScopeRoute {
-  const parsed = parsePrdAuditReport(reportText, activePlanText);
-  if (!parsed.ok || parsed.value.rejectedRows.length > 0) return { kind: 'none' };
-  const relations = overScopeRelations(reportText);
-  const overScope = parsed.value.findings.filter((finding) => finding.grade === 'OVER_SCOPE');
+  const overScope = report.findings.filter((finding) => finding.grade === 'OVER_SCOPE');
   if (overScope.some((finding) => !relations.has(finding.criterion))) return { kind: 'none' };
   // Keep routing on the exact same freshness-aware projection as artifact
   // completion and rendered records.  This must not reconstruct freshness
   // from a source link here: that would let a stale relation pass one reader
   // while the other readers correctly reject it.
   const classifications = classifyPrdWideningProjection({
-    findings: parsed.value.findings,
+    findings: report.findings,
     decisions,
     cases,
   });
@@ -1144,12 +1034,12 @@ export function routePrdAuditOverScopeV2(
     if (relation !== 'outside-visible') {
       return { gate: 'prd_audit' as const, grade: 'OVER_SCOPE' as const, criterion: finding.criterion, summary, relation, accepted: true, classification: 'not-blocking' as const };
     }
-    if (!/^NC\.\d+$/i.test(finding.criterion)) {
+    if (!isPrdAuditNoOwnerOrdinal(finding.criterion)) {
       const decision = decisions.filter((candidate) => candidate.criterion === finding.criterion).at(-1);
       return {
         gate: 'prd_audit' as const, grade: 'OVER_SCOPE' as const, criterion: finding.criterion, summary, relation,
         accepted: decision?.authority === 'accept', classification: decision?.authority === 'accept' ? 'accepted' as const : decision?.authority === 'refuse' ? 'blocking-refused' as const : 'blocking-undecided' as const,
-        ...(decision ? { decision: decision.authority, rationale: decision.rationale } : {}),
+        ...(decision ? { decision: decision.authority, rationale: decision.rationale, operator: decision.operator } : {}),
       };
     }
     const sourceId = prdWideningSourceId(finding);
@@ -1172,7 +1062,7 @@ export function routePrdAuditOverScopeV2(
       gate: 'prd_audit' as const, grade: 'OVER_SCOPE' as const, criterion: finding.criterion, summary, relation,
       accepted: classification.kind === 'accepted',
       classification: classification.kind === 'refused' ? 'blocking-refused' as const : classification.kind === 'accepted' || classification.kind === 'not-blocking' ? 'accepted' as const : 'blocking-undecided' as const,
-      ...(decision ? { decision: decision.authority, rationale: decision.rationale } : {}),
+      ...(decision ? { decision: decision.authority, rationale: decision.rationale, operator: decision.operator } : {}),
       ...(offer && original ? {
         offerEntryId: offer.id,
         originalSource: { id: original.sourceId, snapshot: original.snapshot },
@@ -1188,7 +1078,7 @@ export function routePrdAuditOverScopeV2(
   if (undecided.length || refused.length) {
     const defects: Array<{ kind: string; criterion: string }> = [];
     const editable = (items: typeof findings) => items.flatMap(({ classification: _classification, ...finding }) => {
-      if (!/^NC\.\d+$/i.test(finding.criterion)) return [finding];
+      if (!isPrdAuditNoOwnerOrdinal(finding.criterion)) return [finding];
       const record = 'offerEntryId' in finding
         ? cases.find((candidate) => candidate.id === finding.offerEntryId)
         : undefined;
@@ -1216,7 +1106,7 @@ export function routePrdAuditOverScopeV2(
       ...(defects.length ? { defects } : {}),
     };
   }
-  const hasOtherBlockingGrade = parsed.value.findings.some((finding) => finding.grade !== 'PASS' && finding.grade !== 'OVER_SCOPE');
+  const hasOtherBlockingGrade = report.findings.some((finding) => finding.grade !== 'PASS' && finding.grade !== 'OVER_SCOPE');
   return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings: recorded };
 }
 
@@ -1237,98 +1127,6 @@ export function prdAuditScopeProjection(input: {
       rationale: resolveScopeWideningRationale(entry.path, input.scopeTrailers, '').rationale,
     })),
   };
-}
-
-/**
- * ADR adr-2026-08-24 D8 (with adr-2026-08-13 §6): a recorded decision that
- * cannot be rendered BLOCKS with a named reason — it never silently
- * disappears from the verdict artifact. Rendering is therefore a fail-closed
- * result, not a string: every finding must carry the fields the projection
- * promises, and the block must survive a JSON round-trip.
- */
-export type RecordedFindingsProjection =
-  | { ok: true; block: string }
-  | { ok: false; message: string };
-
-export function recordedFindingsBlock(
-  findings: readonly RecordedReviewFinding[],
-): RecordedFindingsProjection {
-  for (const finding of findings) {
-    if (finding.gate === 'architecture_review_as_built') {
-      const where = finding.finding?.trim() || '<finding missing>';
-      if (!finding.finding?.trim()) {
-        return { ok: false, message: 'a recorded as-built finding carries no finding id' };
-      }
-      if (finding.class !== 'REMEDIABLE') {
-        return { ok: false, message: `recorded as-built finding ${where} carries no REMEDIABLE class` };
-      }
-      if (!finding.governingClause?.trim()) {
-        return { ok: false, message: `recorded as-built finding ${where} carries no governingClause` };
-      }
-      if (!finding.summary?.trim()) {
-        return { ok: false, message: `recorded as-built finding ${where} carries no summary` };
-      }
-      if (finding.outcome !== 'remediated') {
-        return { ok: false, message: `recorded as-built finding ${where} carries no remediated outcome` };
-      }
-      continue;
-    }
-    const where = finding.criterion?.trim() || '<criterion missing>';
-    if (!finding.criterion?.trim()) {
-      return { ok: false, message: 'a recorded finding carries no criterion id' };
-    }
-    if (!finding.summary?.trim()) {
-      return { ok: false, message: `recorded finding ${where} carries no summary` };
-    }
-    if (finding.decision && !finding.rationale?.trim()) {
-      return {
-        ok: false,
-        message: `recorded decision ${finding.decision} on ${where} carries no rationale`,
-      };
-    }
-  }
-  let json: string;
-  try {
-    json = JSON.stringify({ findings }, null, 2);
-  } catch (error) {
-    return {
-      ok: false,
-      message: `recorded findings are not serializable: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-  if (typeof json !== 'string') {
-    return { ok: false, message: 'recorded findings rendered to no JSON body' };
-  }
-  return { ok: true, block: `## Recorded Findings\n\n\`\`\`json\n${json}\n\`\`\`` };
-}
-
-export function recordedPrdAuditFindingsBlock(
-  findings: readonly RecordedPrdAuditFinding[],
-): RecordedFindingsProjection {
-  return recordedFindingsBlock(findings);
-}
-
-async function persistRecordedFindings(
-  reportPath: string,
-  reportText: string,
-  findings: readonly RecordedReviewFinding[],
-): Promise<{ ok: true } | { ok: false; message: string }> {
-  const rendered = recordedFindingsBlock(findings);
-  // Fail closed: write nothing rather than a verdict artifact that omits a
-  // decision the operator authored.
-  if (!rendered.ok) return rendered;
-  const next = reportText.match(/^## Recorded Findings\s*$/im)
-    ? reportText.replace(/^## Recorded Findings\s*$[\s\S]*$/im, rendered.block)
-    : `${reportText.trimEnd()}\n\n${rendered.block}\n`;
-  try {
-    await writeFile(reportPath, next, 'utf8');
-  } catch (error) {
-    return {
-      ok: false,
-      message: `recorded findings could not be written to ${reportPath}: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-  return { ok: true };
 }
 
 /**
@@ -1426,6 +1224,8 @@ export interface StepRunResult {
   };
   /** Deterministic as-built input/capability failures never enter retries. */
   asBuiltFault?: { kind: 'input' | 'capability'; reason: string };
+  /** Deterministic PRD-audit input/capability failures never enter retries. */
+  prdAuditFault?: { kind: 'input' | 'capability'; reason: string };
   /** Provider routing identity and ordered candidate-attempt accounting. */
   preferredProvider?: string;
   actualProvider?: string;
@@ -3101,22 +2901,91 @@ export class Conductor {
     ) return undefined;
 
     try {
+      if (step === 'prd_audit') {
+        const absentReason =
+          `prd_audit dispatch ${expectedRunId ?? 'current attempt'} produced no verdict; ` +
+          `expected terminal typed output ${PRD_AUDIT_VERDICT_PATH}`;
+        if (dispatchOutput?.startsWith('structured-result-rejected:')) {
+          const diagnostics = dispatchOutput.slice('structured-result-rejected:'.length).trim();
+          return {
+            done: false,
+            routeClass: 'absent',
+            retrySignal: 'structured-result-rejected',
+            reason: `${absentReason}; incomplete judgment${diagnostics ? `: ${diagnostics}` : ''}`,
+          };
+        }
+        if (dispatchOutput === 'structured-result-missing') {
+          return { done: false, routeClass: 'absent', retrySignal: 'structured-result-missing', reason: absentReason };
+        }
+        const current = await readCurrentPrdAuditVerdict(this.projectRoot, {
+          attemptRunId: expectedRunId,
+          config: this.config,
+          git: this.prdAuditGit(),
+          // The dispatch just wrote this verdict. The handshake verifies its
+          // run identity and completeness; code-validity is for later reuse.
+          skipCodeValidity: true,
+        });
+        if (current.kind !== 'present') {
+          const staleRunIdentity =
+            current.kind === 'invalidated' && current.identity.staleRunIdentity;
+          return {
+            done: false,
+            routeClass: 'absent',
+            retrySignal: staleRunIdentity ? 'stale-run-identity' : 'structured-result-missing',
+            verdictFreshness: {
+              artifact: join(this.projectRoot, PRD_AUDIT_VERDICT_PATH),
+              floorSource: 'run-identity',
+              outcome: 'stale_invalidated',
+              fresh: false,
+            },
+            reason: `${absentReason}: ${current.reason}`,
+          };
+        }
+        if (!current.value.complete) {
+          return {
+            done: false,
+            routeClass: 'absent',
+            retrySignal: 'structured-result-rejected',
+            reason: `${absentReason}; incomplete judgment: ${current.value.diagnostics.join('; ')}`,
+          };
+        }
+        return undefined;
+      }
       if (step === 'architecture_review_as_built') {
+        const absentReason =
+          `architecture_review_as_built dispatch ${expectedRunId ?? 'current attempt'} produced no verdict; ` +
+          `expected terminal typed output ${AS_BUILT_VERDICT_PATH}`;
         // A rejected structured result persisted nothing; record the
         // rejection (and its named field) as its own absent outcome rather
         // than a generic missing file or a prior lap's verdict.
         if (dispatchOutput?.startsWith('structured-result-rejected:')) {
-          return { done: false, routeClass: 'absent', retrySignal: 'structured-result-rejected', reason: dispatchOutput };
+          const diagnostics = dispatchOutput.slice('structured-result-rejected:'.length).trim();
+          return {
+            done: false,
+            routeClass: 'absent',
+            retrySignal: 'structured-result-rejected',
+            reason: `${absentReason}; structured result rejected${diagnostics ? `: ${diagnostics}` : ''}`,
+          };
+        }
+        if (dispatchOutput === 'structured-result-missing') {
+          return { done: false, routeClass: 'absent', retrySignal: 'structured-result-missing', reason: absentReason };
         }
         const stored = await readAsBuiltVerdict(this.projectRoot);
         if (stored.kind !== 'present') {
-          return { done: false, routeClass: 'absent', reason: stored.kind === 'absent' ? `${AS_BUILT_VERDICT_PATH} is missing` : stored.reason };
+          return {
+            done: false,
+            routeClass: 'absent',
+            retrySignal: 'structured-result-missing',
+            reason: `${absentReason}: ${stored.kind === 'absent' ? 'artifact is missing' : stored.reason}`,
+          };
         }
         if (expectedRunId !== undefined && stored.value.attemptId !== expectedRunId) {
           return {
             done: false, routeClass: 'absent', retrySignal: 'stale-run-identity',
             verdictFreshness: { artifact: join(this.projectRoot, AS_BUILT_VERDICT_PATH), floorSource: 'run-identity', outcome: 'stale_invalidated', fresh: false },
-            reason: `${AS_BUILT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${expectedRunId}`,
+            reason:
+              `${absentReason}; ${AS_BUILT_VERDICT_PATH} was produced by run ` +
+              `${stored.value.attemptId}, not the current run ${expectedRunId}`,
           };
         }
         return undefined;
@@ -3136,7 +3005,7 @@ export class Conductor {
       const marker = sidecarPath[step] ?? `${step} verdict sidecar`;
       const foundRunId = identities.state === 'stale-run-identity'
         ? identities.foundRunId
-        : identities.state === 'match'
+        : identities.state === 'match' || identities.state === 'invalidated-code-stamp'
           ? identities.runId
           : 'unstamped';
       const failures: string[] = [];
@@ -3170,7 +3039,11 @@ export class Conductor {
         resolveGateCodeValidityConfig(this.config).enabled &&
         identities.state !== 'match'
       ) {
-        const identityState = identities.state === 'stale-run-identity' ? 'stale' : 'unstamped';
+        const identityState = identities.state === 'stale-run-identity'
+          ? 'stale'
+          : identities.state === 'invalidated-code-stamp'
+            ? 'code-stamp-invalidated'
+            : 'unstamped';
         failures.push(
           `${marker} is ${identityState} ` +
           `(expected run id ${expectedRunId ?? 'none'}; found run id ${foundRunId})`,
@@ -3185,7 +3058,7 @@ export class Conductor {
       return {
         done: false,
         routeClass: 'absent',
-        ...(identities.state === 'stale-run-identity'
+        ...(identities.state === 'stale-run-identity' || identities.state === 'invalidated-code-stamp'
           ? {
               retrySignal: 'stale-run-identity' as const,
               verdictFreshness: {
@@ -4282,35 +4155,103 @@ export class Conductor {
     return recordGateRepair(this.projectRoot, gate, { ...failure, observedAt: Date.now() });
   }
 
-  /** The active plan's text: the authority a prd_audit citation resolves against. */
-  private async activePlanText(featureDesc?: string): Promise<string | undefined> {
-    return readActivePlanText(this.projectRoot, undefined, featureDesc);
-  }
-
   /** Read the current verdict and its authoritative story sections as one route decision. */
-  private async routeCurrentPrdAuditPlanGaps(state: ConductState): Promise<PrdAuditPlanGapRoute> {
-    const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
-    if (!reportPath) return { kind: 'none' };
-
-    let reportText: string;
-    try {
-      reportText = await readFile(reportPath, 'utf8');
-    } catch {
+  private async routeCurrentPrdAuditPlanGaps(
+    state: ConductState,
+    attemptRunId = this.currentRunId,
+  ): Promise<PrdAuditPlanGapRoute> {
+    const current = await readCurrentPrdAuditVerdict(this.projectRoot, {
+      attemptRunId, config: this.config, git: this.prdAuditGit(),
+    });
+    if (current.kind === 'unreadable' || current.kind === 'invalidated') {
+      this.prdAuditProjectionRefusal = `Cannot route PRD-audit findings: ${current.reason}`;
       return { kind: 'none' };
     }
+    if (current.kind !== 'present' || !current.value.complete) return { kind: 'none' };
+    const { value } = current;
     const storiesPath = await resolveFeatureStoriesPath(this.projectRoot, state.feature_desc);
     const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
-    const route = routePrdAuditPlanGaps(
-      reportText,
-      storiesText,
-      this.config,
-      await this.activePlanText(state.feature_desc),
+    const findings = value.judgment.criterionJudgments
+      .filter((judgment) => judgment.grade === 'PLAN_GAP')
+      .map((judgment) => ({
+        gate: 'prd_audit' as const,
+        grade: 'PLAN_GAP' as const,
+        criterion: judgment.criterionId,
+        summary: judgment.evidence.trim() || `No approved plan task covers ${judgment.criterionId}.`,
+      }));
+    if (findings.length === 0) return { kind: 'none' };
+
+    const haltOnAnyPlanGap = (this.config as HarnessConfig & {
+      prd_audit?: { halt_on_any_plan_gap?: boolean };
+    }).prd_audit?.halt_on_any_plan_gap === true;
+    const blocking = findings.filter(
+      (finding) => haltOnAnyPlanGap || criterionStorySection(storiesText, finding.criterion) !== 'negative',
     );
-    if (route.kind === 'record') {
-      const projected = await persistRecordedFindings(reportPath, reportText, route.findings);
-      if (!projected.ok) this.prdAuditProjectionRefusal = projected.message;
+    if (blocking.length > 0) {
+      return {
+        kind: 'halt',
+        haltClass: 'plan-gap',
+        detail: `PLAN_GAP on ${blocking.map((finding) => finding.criterion).join(', ')}.`,
+        findings,
+      };
     }
-    return route;
+
+    const hasOtherBlockingGrade = value.judgment.criterionJudgments.some(
+      (judgment) => judgment.grade !== 'PASS' && judgment.grade !== 'PLAN_GAP',
+    ) || value.judgment.noOwnerObservations.length > 0;
+    if (hasOtherBlockingGrade) return { kind: 'none' };
+
+    const recordedDispositions = [
+      ...value.recordedDispositions,
+      ...findings
+        .filter((finding) => !value.recordedDispositions.some((recorded) =>
+          recorded.criterionId === finding.criterion && recorded.grade === finding.grade))
+        .map((finding) => ({
+          criterionId: finding.criterion,
+          grade: finding.grade,
+          decision: 'record' as const,
+          rationale: 'Negative-path PLAN_GAP is recordable under the active PRD-audit policy.',
+          authority: 'engine',
+        })),
+    ];
+    try {
+      await persistPrdAuditVerdict(this.projectRoot, {
+        complete: value.complete,
+        judgment: value.judgment,
+        diagnostics: value.diagnostics,
+        recordedDispositions,
+      }, { attemptId: value.attemptId, codeStamp: value.codeStamp });
+    } catch {
+      this.prdAuditProjectionRefusal = `Unable to record accepted PRD-audit PLAN_GAP findings in ${PRD_AUDIT_VERDICT_PATH}.`;
+      return { kind: 'none' };
+    }
+    return { kind: 'record', findings };
+  }
+
+  /**
+   * Adapt the conductor's PR-operation Git seam to the verdict-validity
+   * reader's richer result contract. The audit is always rooted at this
+   * worktree; a failed probe is represented as a non-zero result so the
+   * shared reader preserves its fail-closed rerun behavior.
+   */
+  private prdAuditGit(): RebaseGitRunner {
+    return async (args) => {
+      try {
+        const result = await this.git(args, { cwd: this.projectRoot });
+        const detailed = result as { stdout: string; stderr?: string; exitCode?: number };
+        return {
+          exitCode: detailed.exitCode ?? 0,
+          stdout: detailed.stdout,
+          stderr: detailed.stderr ?? '',
+        };
+      } catch (error) {
+        return {
+          exitCode: 1,
+          stdout: '',
+          stderr: error instanceof Error ? error.message : String(error),
+        };
+      }
+    };
   }
 
   /** Read OVER_SCOPE verdict rows after incorporating an operator-cleared halt acceptance. */
@@ -4320,18 +4261,17 @@ export class Conductor {
    * Fails closed: an unreadable or unparseable report never lets an accepted
    * scope decision swallow the rest of the round.
    */
-  private async prdAuditHasNonScopeBlockingFindings(featureDesc?: string): Promise<boolean> {
-    const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
-    if (!reportPath) return false;
-    let reportText: string;
-    try {
-      reportText = await readFile(reportPath, 'utf8');
-    } catch {
-      return true;
-    }
-    const parsed = parsePrdAuditReport(reportText, await this.activePlanText(featureDesc));
-    if (!parsed.ok) return true;
-    return parsed.value.findings.some(
+  private async prdAuditHasNonScopeBlockingFindings(
+    attemptRunId = this.currentRunId,
+  ): Promise<boolean> {
+    // The rendered report is deliberately not a routing input. An unavailable
+    // typed verdict is fail-closed so an accepted scope decision cannot hide a
+    // concurrent repair or plan blocker.
+    const current = await readCurrentPrdAuditVerdict(this.projectRoot, {
+      attemptRunId, config: this.config, git: this.prdAuditGit(),
+    });
+    if (current.kind !== 'present' || !current.value.complete) return true;
+    return current.value.judgment.criterionJudgments.some(
       (finding) => finding.grade === 'FIXABLE' || finding.grade === 'PLAN_GAP',
     );
   }
@@ -4487,9 +4427,10 @@ export class Conductor {
     relations: ReadonlyMap<string, IntentRelation>,
     reportText: string,
     state: ConductState | undefined,
+    attemptRunId = this.currentRunId,
   ): Promise<string | undefined> {
     const visible = report.findings.filter((finding) =>
-      finding.grade === 'OVER_SCOPE' && /^NC\.\d+$/i.test(finding.criterion) && relations.get(finding.criterion) === 'outside-visible',
+      finding.grade === 'OVER_SCOPE' && isPrdAuditNoOwnerOrdinal(finding.criterion) && relations.get(finding.criterion) === 'outside-visible',
     );
     if (!visible.length) return undefined;
     const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
@@ -4564,31 +4505,31 @@ export class Conductor {
     };
     const freshness = {
       sample: async () => {
-        const [currentReportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
-        let currentReport = reportText;
-        if (currentReportPath) {
-          try { currentReport = await readFile(currentReportPath, 'utf8'); } catch { /* compare supplied snapshot */ }
-        }
-        const parsedCurrent = parsePrdAuditReport(currentReport, await this.activePlanText(state.feature_desc));
-        const currentRelations = overScopeRelations(currentReport);
-        const currentSources = parsedCurrent.ok
-          ? parsedCurrent.value.findings
-            .filter((finding) => finding.grade === 'OVER_SCOPE' && /^NC\.\d+$/i.test(finding.criterion) && currentRelations.get(finding.criterion) === 'outside-visible')
+        const currentVerdict = await readCurrentPrdAuditVerdict(this.projectRoot, {
+          attemptRunId, config: this.config, git: this.prdAuditGit(),
+        });
+        const currentTyped = currentVerdict.kind === 'present' && currentVerdict.value.complete
+          ? prdAuditTypedRouteReport(currentVerdict.value)
+          : undefined;
+        const currentSources = currentTyped === undefined
+          ? []
+          : currentTyped.report.findings
+            .filter((finding) => finding.grade === 'OVER_SCOPE' && isPrdAuditNoOwnerOrdinal(finding.criterion) && currentTyped.relations.get(finding.criterion) === 'outside-visible')
             .map((finding) => ({ id: prdWideningSourceId(finding), evidence: finding.evidence, prdIds: finding.prdIds }))
-          : [];
+          ;
         const currentDecision = await decisionStore.read();
         return {
           // Persisted decision projection is engine-owned output, not reviewer
-          // input. Hash the parser's source-bearing result so recording a
-          // relation cannot invalidate its own exact replay.
-          reportDigest: createHash('sha256').update(JSON.stringify(parsedCurrent.ok
-            ? { findings: parsedCurrent.value.findings, rejectedRows: parsedCurrent.value.rejectedRows }
-            : { malformed: true })).digest('hex'),
+          // input. Hash the typed source-bearing result so rendering a report
+          // cannot invalidate its own exact replay.
+          reportDigest: createHash('sha256').update(JSON.stringify(currentTyped === undefined
+            ? { unavailable: currentVerdict.kind }
+            : { findings: currentTyped.report.findings, relations: [...currentTyped.relations] })).digest('hex'),
           sourceDigest: createHash('sha256').update(JSON.stringify(currentSources)).digest('hex'),
           codeDigest: await readCodeDigest(),
           feature: `${caseFeature.repository}\u0000${caseFeature.feature}`,
           decisionRevision: currentDecision.kind === 'valid' ? currentDecision.state.decisions.at(-1)?.revision ?? 0 : currentDecision.kind === 'absent' ? 0 : -1,
-          contractVersion: 'v1',
+          contractVersion: 'v2',
         };
       },
     };
@@ -4673,35 +4614,38 @@ export class Conductor {
     return undefined;
   }
 
-  private async routeCurrentPrdAuditOverScope(featureDesc?: string, state?: ConductState): Promise<PrdAuditOverScopeRoute> {
-    const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
-    if (!reportPath) return { kind: 'none' };
-    let reportText: string;
-    try {
-      reportText = await readFile(reportPath, 'utf8');
-    } catch {
+  private async routeCurrentPrdAuditOverScope(
+    _featureDesc?: string,
+    state?: ConductState,
+    attemptRunId = this.currentRunId,
+  ): Promise<PrdAuditOverScopeRoute> {
+    const current = await readCurrentPrdAuditVerdict(this.projectRoot, {
+      attemptRunId, config: this.config, git: this.prdAuditGit(),
+    });
+    if (current.kind === 'unreadable' || current.kind === 'invalidated') {
+      this.prdAuditProjectionRefusal = `Cannot route PRD-audit findings: ${current.reason}`;
       return { kind: 'none' };
     }
-    const relations = overScopeRelations(reportText);
-    const activePlanText = await this.activePlanText(featureDesc);
-    const parsedReport = parsePrdAuditReport(reportText, activePlanText);
-    if (parsedReport.ok) {
-      const recovery = await this.reconcileCurrentPrdWidening(parsedReport.value, relations, reportText, state);
-      if (recovery) {
-        return { kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS, detail: recovery, findings: [], undecided: [], refused: [] };
-      }
+    if (current.kind !== 'present' || !current.value.complete) return { kind: 'none' };
+    const { value } = current;
+    const typed = prdAuditTypedRouteReport(value);
+    const typedSnapshot = JSON.stringify({
+      judgment: value.judgment,
+      diagnostics: value.diagnostics,
+    });
+    const recovery = await this.reconcileCurrentPrdWidening(typed.report, typed.relations, typedSnapshot, state, attemptRunId);
+    if (recovery) {
+      return { kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS, detail: recovery, findings: [], undecided: [], refused: [] };
     }
     const blockingFindings = new Map(
-      parsedReport.ok
-        ? parsedReport.value.findings
-          .filter((finding) => finding.grade === 'OVER_SCOPE' && relations.get(finding.criterion) === 'outside-visible')
-          .map((finding) => [
-            finding.criterion,
-            finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`,
-          ])
-        : [],
+      typed.report.findings
+        .filter((finding) => finding.grade === 'OVER_SCOPE' && typed.relations.get(finding.criterion) === 'outside-visible')
+        .map((finding) => [
+          finding.criterion,
+          finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`,
+        ]),
     );
-    if (!parsedReport.ok || !parsedReport.value.findings.some((finding) => finding.grade === 'OVER_SCOPE')) {
+    if (!typed.report.findings.some((finding) => finding.grade === 'OVER_SCOPE')) {
       return { kind: 'none' };
     }
     const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
@@ -4714,23 +4658,51 @@ export class Conductor {
     if (!cases.ok || (decisions.kind !== 'absent' && decisions.kind !== 'valid')) {
       return { kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS, detail: renderPrdWideningRecovery('persistence-failed', [...blockingFindings.keys()]), findings: [], undecided: [], refused: [] };
     }
-    const route = routePrdAuditOverScopeV2(
-      reportText,
+    const route = routeTypedPrdAuditOverScope(
+      typed.report,
+      typed.relations,
       decisions.kind === 'valid' ? decisions.state.decisions : [],
       cases.state.version === 'v2' ? cases.state.prdWideningCases : [],
-      activePlanText,
     );
     // D8: recorded decisions project into the verdict artifact whichever way
     // the route went. A halted route carries the same findings — including the
     // refusal that caused the halt — and previously persisted none of them.
     if (route.kind === 'record' || route.kind === 'halt') {
-      const projected = await persistRecordedFindings(reportPath, reportText, route.findings);
-      if (!projected.ok) {
+      const updated = new Map(value.recordedDispositions.map((recorded) => [
+        `${recorded.criterionId}\u0000${recorded.grade}`,
+        recorded,
+      ]));
+      for (const finding of route.findings) {
+        const next: PersistedPrdAuditVerdict['recordedDispositions'][number] = {
+          criterionId: finding.criterion,
+          grade: finding.grade,
+          decision: finding.decision ?? 'record',
+          rationale: finding.rationale ?? 'The engine recorded this PRD-audit scope finding.',
+          authority: finding.decision === undefined ? 'engine' : finding.operator ?? 'operator',
+        };
+        const key = `${next.criterionId}\u0000${next.grade}`;
+        // A later durable decision is the effective disposition for this
+        // criterion/grade pair. Keep the reviewer judgment above intact, but
+        // always replace this derived handoff rather than preserving a stale
+        // accept/refuse decision or attribution from an earlier route.
+        updated.set(key, next);
+      }
+      const recordedDispositions: PersistedPrdAuditVerdict['recordedDispositions'] = [
+        ...updated.values(),
+      ];
+      try {
+        await persistPrdAuditVerdict(this.projectRoot, {
+          complete: value.complete,
+          judgment: value.judgment,
+          diagnostics: value.diagnostics,
+          recordedDispositions,
+        }, { attemptId: value.attemptId, codeStamp: value.codeStamp });
+      } catch {
         // D8's projection refusal is an evidentiary defect on the same
         // operator-facing over-scope route, never a generic side channel.
         // A record route must become a halt so completion cannot pass while
         // the decision is absent from the verdict artifact.
-        const defects = [{ kind: 'unrenderable-decision', message: projected.message }];
+        const defects = [{ kind: 'unrenderable-decision', message: `recorded findings could not be persisted to ${PRD_AUDIT_VERDICT_PATH}` }];
         if (route.kind === 'record') {
           return {
             kind: 'halt',
@@ -4764,13 +4736,16 @@ export class Conductor {
    * mirrors the serial baseline: a blocking PLAN_GAP is surfaced before an
    * OVER_SCOPE decision from the same report.
    */
-  private async routeCurrentPrdAudit(state: ConductState): Promise<CurrentPrdAuditRoute> {
+  private async routeCurrentPrdAudit(
+    state: ConductState,
+    attemptRunId = this.currentRunId,
+  ): Promise<CurrentPrdAuditRoute> {
     this.prdAuditProjectionRefusal = undefined;
-    const planGapRoute = await this.routeCurrentPrdAuditPlanGaps(state);
+    const planGapRoute = await this.routeCurrentPrdAuditPlanGaps(state, attemptRunId);
     const overScopeRoute =
       planGapRoute.kind === 'halt'
         ? undefined
-        : await this.routeCurrentPrdAuditOverScope(state.feature_desc, state);
+        : await this.routeCurrentPrdAuditOverScope(state.feature_desc, state, attemptRunId);
 
     // D8 first: a decision that could not be projected blocks with its own
     // named reason, whatever the content route would otherwise have done.
@@ -4829,8 +4804,33 @@ export class Conductor {
     // Re-evaluate the durable authority immediately before invoking
     // /remediate, so an accepted-only report neither consumes a repair lap nor
     // creates a synthetic repair obligation from stale routing state.
+    let prdAuditVerdict: PersistedPrdAuditVerdict | undefined;
     if (hintSource.evidence?.some((provenance) => provenance.gate === 'prd_audit')) {
-      const overScopeRoute = await this.routeCurrentPrdAuditOverScope(state.feature_desc, state);
+      // The rendered Markdown report is deliberately not a remediation input.
+      // A legacy or corrupt report cannot invent a repair route after the
+      // typed-verdict migration; normal lifecycle handling will request a
+      // current audit instead.
+      const current = await readCurrentPrdAuditVerdict(this.projectRoot, {
+        attemptRunId: this.currentRunId, config: this.config, git: this.prdAuditGit(),
+      });
+      if (current.kind === 'absent') {
+        return { kind: 'none', reason: `prd-audit has no current typed verdict at ${PRD_AUDIT_VERDICT_PATH}` };
+      }
+      if (current.kind === 'invalidated') {
+        return { kind: 'none', reason: `prd-audit needs a fresh audit: ${current.reason}` };
+      }
+      if (current.kind === 'unreadable') {
+        const detail = `PRD audit verdict mechanical fault: ${current.reason}`;
+        await reportRefusal(detail);
+        return { kind: 'halt', haltClass: 'mechanical', detail };
+      }
+      if (!current.value.complete) {
+        const detail = `PRD audit verdict is incomplete: ${current.value.diagnostics.join('; ')}`;
+        await reportRefusal(detail);
+        return { kind: 'halt', haltClass: 'mechanical', detail };
+      }
+      prdAuditVerdict = current.value;
+      const overScopeRoute = await this.routeCurrentPrdAuditOverScope(state.feature_desc, state, this.currentRunId);
       // Accepted-only scope closes the round. The scope router inspects only
       // OVER_SCOPE rows, so a recorded acceptance may coexist with FIXABLE or
       // PLAN_GAP findings, or with a sibling gate's findings on a validation-
@@ -4838,7 +4838,7 @@ export class Conductor {
       if (
         overScopeRoute.kind === 'record' &&
         hintSource.evidence.every((provenance) => provenance.gate === 'prd_audit') &&
-        !(await this.prdAuditHasNonScopeBlockingFindings(state.feature_desc))
+        !(await this.prdAuditHasNonScopeBlockingFindings(this.currentRunId))
       ) {
         return { kind: 'none', reason: 'the recorded prd-audit scope acceptance closes the only blocking finding' };
       }
@@ -5019,69 +5019,23 @@ export class Conductor {
     let asBuiltValidated = false;
     let activePlanText = '';
     let asBuiltTypedFindings: readonly import('./as-built-contract.js').AsBuiltFinding[] | undefined;
-    if (planPath && prdAuditRemediation) {
-      try {
-        activePlanText = await readFile(
-          isAbsolute(planPath) ? planPath : join(this.projectRoot, planPath),
-          'utf8',
-        );
-        const report = await readFile(join(this.projectRoot, prdAuditEvidenceFile), 'utf8');
-        const parsed = parsePrdAuditReport(report, activePlanText);
-        if (!parsed.ok) {
-          const detail = `PRD audit report mechanical fault: ${parsed.error}`;
-          await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
-          return { kind: 'halt', haltClass: 'mechanical', detail };
-        }
-        if (parsed.value.rejectedRows.length > 0) {
-          const detail = `PRD audit report rejected rows: ${parsed.value.rejectedRows
-            .map((row) => `${row.key ?? row.rowText} (${row.reason})`)
-            .join('; ')}`;
-          await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
-          return { kind: 'halt', haltClass: 'mechanical', detail };
-        }
-        const storiesPath = await resolveFeatureStoriesPath(this.projectRoot, state.feature_desc);
-        const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
-        // Derive the authoritative id set with the SAME function the prd_audit
-        // completion predicate uses (#2219 / PR #2222). This site used to
-        // re-derive ids from `extractAuthoritativeStoryCriteria` prose with
-        // `^Story\s+(\d+)\s+`, which reduced the heading id to its first digit
-        // run — `## Story 5a:` never matched at all, so every one of its
-        // criteria vanished from the expected set and the report's legitimate
-        // `S5A.*` rows were rejected as "absent from the active stories".
-        // Reported keys are upper-cased at parse time, so the expected set is
-        // too, exactly as `prdAuditStoryCoverageGap` does.
-        const criteria = new Set(
-          extractStoryCriterionIds(storiesText).map((id) => id.toUpperCase()),
-        );
-        const unresolvedCriteria = parsed.value.findings
-          .map((finding) => finding.criterion)
-          .filter((criterion) => !isNoOwnerKey(criterion) && !criteria.has(criterion));
-        if (criteria.size === 0 || unresolvedCriteria.length > 0) {
-          const detail = criteria.size === 0
-            ? 'PRD audit remediation cannot resolve the active story criteria.'
-            : `PRD audit report names criteria absent from the active stories: ${[...new Set(unresolvedCriteria)].join(', ')}.`;
-          await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
-          return { kind: 'halt', haltClass: 'mechanical', detail };
-        }
-        for (const finding of parsed.value.findings) {
-          if (finding.grade === 'FIXABLE' && finding.planTask !== undefined) {
-            const boundFinding = {
-              criterion: finding.criterion,
-              parentTask: finding.planTask,
-            };
-            // Planner gap ids are FR-N by contract; reports are criterion
-            // keyed. Bind both identities so every report association remains
-            // available for the cap and append authorization.
-            prdAuditFindings.set(finding.criterion.toUpperCase(), boundFinding);
-            for (const frId of finding.prdIds) prdAuditFindings.set(frId, boundFinding);
-          }
-        }
-        prdAuditValidated = true;
-      } catch (error) {
-        const detail = `PRD audit report could not be read for remediation authorization: ${error instanceof Error ? error.message : String(error)}`;
-        await this.events.emit({ type: 'gate_blocked', step: 'prd_audit', reason: detail });
-        return { kind: 'halt', haltClass: 'mechanical', detail };
+    if (planPath && prdAuditRemediation && prdAuditVerdict) {
+      activePlanText = await readFile(
+        isAbsolute(planPath) ? planPath : join(this.projectRoot, planPath),
+        'utf8',
+      );
+      for (const judgment of prdAuditVerdict.judgment.criterionJudgments) {
+        if (judgment.grade !== 'FIXABLE' || !judgment.ownerTaskId) continue;
+        const boundFinding = {
+          criterion: judgment.criterionId,
+          parentTask: judgment.ownerTaskId,
+        };
+        // Only an active criterion owns repair admission. Requirement
+        // associations remain traceability evidence; they never authorize an
+        // independent remediation gap.
+        prdAuditFindings.set(judgment.criterionId.toUpperCase(), boundFinding);
       }
+      prdAuditValidated = true;
     }
 
     if (planPath && asBuiltEvidenceExists) {
@@ -5265,10 +5219,9 @@ export class Conductor {
       ) {
         const prdAuditFinding = prdAuditFindings.get(gap.id.toUpperCase());
         const asBuiltFinding = asBuiltFindings.get(gap.id);
-        // A prd_audit repair may append only work owned by a parsed FIXABLE
-        // finding and its existing parent plan task.  The planner's FR-N id
-        // is associated above through the report's PRD: column. In a mixed
-        // validation group either validated gate may admit its own gap.
+        // A prd_audit repair may append only work owned by a typed FIXABLE
+        // criterion and its existing parent plan task. In a mixed validation
+        // group either validated gate may admit its own gap.
         const { prdAuditAdmits, asBuiltAdmits } = gateAdmissions(gap.id);
         // Appending retains this conditional guard for older direct callers
         // that do not carry either validated gate. Existing-task above does
@@ -6177,8 +6130,8 @@ export class Conductor {
     });
   }
 
-  /** Halt a deterministic as-built precondition fault identically in both dispatch paths. */
-  private async haltForAsBuiltFault(state: ConductState, reason: string): Promise<void> {
+  /** Halt a deterministic SHIP-validator precondition fault in either dispatch path. */
+  private async haltForValidatorFault(state: ConductState, reason: string): Promise<void> {
     await this.closeOpenExecutions();
     await this.writeHaltMarker(reason + '\n', 'mechanical');
     await this.persistPendingStateChanges(state, 'persist conductor transition');
@@ -8359,6 +8312,11 @@ export class Conductor {
                 }
               }
             };
+            // Retain this round's engine-minted branch identities until the
+            // join has consumed its PRD routing result. The branch-local map
+            // below cannot escape its fan-out closure, but D4 requires the
+            // post-join reader to receive that exact attempt identity.
+            let settledGroupRunIds = new Map<string, string>();
             const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
               // The validation join normally dispatches each member directly
               // through group-core, bypassing the serial `prd_audit` branch
@@ -8383,6 +8341,7 @@ export class Conductor {
               const branchRunIds = new Map(
                 members.map((member) => [member.name, randomUUID()] as const),
               );
+              settledGroupRunIds = branchRunIds;
               const roundChanges: Record<string, unknown> = {};
               for (const member of members) {
                 const syntheticKey = `${builtinGroup.name}__${member.name}`;
@@ -8509,6 +8468,7 @@ export class Conductor {
                             event.member as StepName,
                             branchRunIds.get(event.member),
                             branchDispatchStartedAt.get(event.member),
+                            memberAttemptResults.get(event.member)?.output,
                           );
                           if (handshake) branchHandshakeFailures.set(event.member, handshake);
                           else branchHandshakeFailures.delete(event.member);
@@ -8794,7 +8754,10 @@ export class Conductor {
               prdAuditOutcome.verdict === 'pass' &&
               !branchHandshakeFailures.get('prd_audit')
             ) {
-              prdAuditRoute = await this.routeCurrentPrdAudit(state);
+              prdAuditRoute = await this.routeCurrentPrdAudit(
+                state,
+                settledGroupRunIds.get('prd_audit'),
+              );
               if (prdAuditRoute.kind === 'record') {
                 const verdict = gateVerdicts.get('prd_audit');
                 if (verdict) {
@@ -8859,7 +8822,7 @@ export class Conductor {
                     `${err instanceof Error ? err.message : String(err)}`,
                 );
               }
-              await this.haltForAsBuiltFault(state, mechanicalFault.reason);
+              await this.haltForValidatorFault(state, mechanicalFault.reason);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -10009,11 +9972,6 @@ export class Conductor {
             step.name,
             state.session_started_at,
             this.config,
-            {
-              featureDesc: state.feature_desc,
-              featureIdentities: [],
-              changedPaths: new Set(),
-            },
           );
         }
 
@@ -10865,9 +10823,13 @@ export class Conductor {
           // The as-built projection and native-schema capability are engine
           // preconditions. A retry cannot make an unreadable input parse or add
           // a provider capability, so halt before ordinary retry accounting.
-          if (step.name === 'architecture_review_as_built' && result.asBuiltFault) {
-            const reason = result.asBuiltFault.reason;
-            await this.haltForAsBuiltFault(state, reason);
+          const validatorFault = step.name === 'architecture_review_as_built'
+            ? result.asBuiltFault
+            : step.name === 'prd_audit'
+              ? result.prdAuditFault
+              : undefined;
+          if (validatorFault) {
+            await this.haltForValidatorFault(state, validatorFault.reason);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -11636,6 +11598,7 @@ export class Conductor {
               step.name,
               dispatchRunId,
               this.currentAttemptStartedAt,
+              result.output,
             );
             if (handshake?.routeClass === 'absent' && handshake.reason) {
               lastVerdictHandshakeFailure = handshake.reason;
@@ -11685,7 +11648,7 @@ export class Conductor {
             // parse the PRIOR lap's report and can halt on it — the exact
             // forbidden class this ADR removes.
             if (step.name === 'prd_audit' && !handshake) {
-              const prdAuditRoute = await this.routeCurrentPrdAudit(state);
+              const prdAuditRoute = await this.routeCurrentPrdAudit(state, dispatchRunId);
               if (prdAuditRoute.kind === 'projection-halt') {
                 const reason = renderPrdAuditProjectionHalt(prdAuditRoute.reason);
                 await this.writeHaltMarker(reason + '\n', 'needs-human');
@@ -11796,6 +11759,7 @@ export class Conductor {
                     lastPrdAuditRunId,
                     this.config,
                     state.feature_desc,
+                    makeGitRunner(this.projectRoot),
                   );
                   prdAuditNonClean = cls.kind !== 'clean';
                 }
@@ -11817,7 +11781,7 @@ export class Conductor {
                 );
                 const retryInputSignature = runIdentity.state === 'unstamped'
                   ? `mtime:${artifactMtimeSignature}`
-                  : `run:${runIdentity.state === 'match' ? runIdentity.runId : runIdentity.foundRunId}`;
+                  : `run:${runIdentity.state === 'stale-run-identity' ? runIdentity.foundRunId : runIdentity.runId}`;
                 const inputsUnchanged =
                   priorRetryInputSignature !== undefined &&
                   headSha === priorHeadSha &&
@@ -11865,6 +11829,7 @@ export class Conductor {
                   lastPrdAuditRunId,
                   this.config,
                   state.feature_desc,
+                  makeGitRunner(this.projectRoot),
                 );
                 if (cls.kind !== 'clean') break;
               }
@@ -13438,6 +13403,7 @@ export class Conductor {
                 lastPrdAuditRunId,
                 this.config,
                 state.feature_desc,
+                makeGitRunner(this.projectRoot),
               );
               if (cls.kind === 'impl-only' && prdAuditSelfHeals < prdAuditRemediationLapCap) {
                 prdAuditSelfHeals++;
@@ -13482,7 +13448,9 @@ export class Conductor {
                 continue;
               }
               const reason =
-                cls.kind === 'impl-only'
+                cls.kind === 'invalid-evidence'
+                  ? `prd-audit halted: current typed output is unavailable — ${lastError ?? cls.summary}`
+                  : cls.kind === 'impl-only'
                   ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${prdAuditRemediationLapCap}): ${cls.summary}`
                   : `prd-audit halted: product/plan gap needs human DECIDE — ${cls.summary}`;
               // Both terminal branches now require an operator: product/plan

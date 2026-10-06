@@ -18,6 +18,7 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { PRD_AUDIT_CODE_STAMP } from '../../src/engine/artifacts.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState } from '../../src/types/index.js';
 
@@ -86,13 +87,13 @@ describe('verdict retry-input identity reader', () => {
       .map(([, , runId]) => runId);
 
     expect(stamped.runId).toMatch(/\S/);
-    // Both readers on this lap — the post-dispatch handshake and the
-    // retry-input classifier — see the stamped dispatch identity.
-    expect(expectedRunIds.length).toBeGreaterThanOrEqual(2);
+    // Missing typed evidence is classified directly by the current-dispatch
+    // handshake. It no longer falls back to the legacy Markdown reader.
+    expect(expectedRunIds.length).toBeGreaterThanOrEqual(1);
     expect(new Set(expectedRunIds)).toEqual(new Set([stamped.runId]));
   });
 
-  it('ignores a prior run identity during a serial prd-audit dispatch when gate validity is disabled', async () => {
+  it('uses the typed verdict attempt even when gate validity is disabled', async () => {
     const seedResult = await readState(statePath);
     const seed = (seedResult.ok ? seedResult.value : {}) as Record<string, unknown>;
     for (const step of ALL_STEPS) {
@@ -108,26 +109,24 @@ describe('verdict retry-input identity reader', () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
 
     const runner: StepRunner = {
-      run: vi.fn(async () => {
-        await writeFile(
-          join(dir, '.pipeline/prd-audit.md'),
-          [
-            '# PRD Audit',
-            '',
-            '**PRD:** none',
-            '',
-            '## Verdict Table',
-            '',
-            '| Criterion | Grade | Plan task | PRD: | Evidence |',
-            '|---|---|---|---|---|',
-            '| S1.1 | PASS | — | — | fixture.ts:1 |',
-            '',
-          ].join('\n'),
-        );
-        // The disabled branch must bypass run-identity matching entirely and
-        // retain the fresh report's mtime semantics. If it consulted the
-        // sidecar, this deliberately prior identity would make completion
-        // reject the report as stale.
+      run: vi.fn(async (_step, _state, options) => {
+        await persistPrdAuditVerdict(dir, {
+          complete: true,
+          judgment: {
+            version: 'v1',
+            criterionJudgments: [{
+              criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
+              evidence: 'The current typed verdict is complete.',
+              rationale: 'The current attempt remains the only completion authority.',
+              requirementAssociations: [], evidenceTaskIds: [],
+            }],
+            noOwnerObservations: [],
+          },
+          diagnostics: [],
+          recordedDispositions: [],
+        }, { attemptId: options?.runId ?? 'missing-run-id', codeStamp: 'fixture-head' });
+        // The legacy sidecar must not regain authority when gate-code validity
+        // is disabled: only the typed verdict's current attempt may complete.
         await writeFile(
           join(dir, PRD_AUDIT_CODE_STAMP),
           JSON.stringify({ runId: 'prior-run' }),

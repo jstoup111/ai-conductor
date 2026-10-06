@@ -67,10 +67,10 @@ import chalk from 'chalk';
 
 import {
   checkStepCompletion,
-  PRD_AUDIT_CODE_STAMP,
   MANUAL_TEST_FAIL_EVIDENCE,
 } from '../../src/engine/artifacts.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { PRD_AUDIT_VERDICT_PATH, persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
 import { AuditTrailWriter, type AuditRecord } from '../../src/engine/audit-trail.js';
@@ -244,22 +244,27 @@ async function writeBuildReviewVerdict(
   return path;
 }
 
-/** prd_audit / as_built keep their codeStamp in a SEPARATE sidecar, never in the report body. */
-async function writeMdVerdict(
+/** Writes typed PRD authority; its Markdown report is derived only. */
+async function writePrdAuditVerdict(
   repo: string,
-  relPath: string,
-  body: string,
-  codeStamp: string | undefined,
-  sidecarRelPath: string,
+  codeStamp = 'fixture-head',
 ): Promise<string> {
-  const path = join(repo, relPath);
-  await writeFile(path, body);
+  const path = join(repo, PRD_AUDIT_VERDICT_PATH);
+  await persistPrdAuditVerdict(repo, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
+        evidence: 'foo.ts:1', rationale: 'Fixture supplies typed audit evidence.',
+        requirementAssociations: [], evidenceTaskIds: [],
+      }],
+      noOwnerObservations: [],
+    },
+    diagnostics: [],
+    recordedDispositions: [],
+  }, { attemptId: 'fixture-run', codeStamp });
   await utimes(path, OLD_MTIME, OLD_MTIME);
-  if (codeStamp) {
-    const sidecarPath = join(repo, sidecarRelPath);
-    await mkdir(join(sidecarPath, '..'), { recursive: true });
-    await writeFile(sidecarPath, JSON.stringify({ codeStamp }, null, 2));
-  }
   return path;
 }
 
@@ -283,8 +288,6 @@ async function writeManualTestVerdict(repo: string, codeStamp?: string): Promise
   }
 }
 
-const PRD_HEADER = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n';
-const PRD_ALIGNED = PRD_HEADER + '| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n';
 const ARCH_APPROVED = '# As-Built Review\n\nVerdict: APPROVED\n';
 const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'test fixture' },
@@ -340,17 +343,17 @@ describe('Story 1: a preserve is reported as preserved_surface_miss, never as a 
   it('a genuinely fresh prd_audit ALIGNED report reports rewritten', async () => {
     const s = await makeRepo();
     await commit(s, { 'src/a.ts': 'a\n' }, 'init');
-    const artifact = await writeMdVerdict(
-      s.repo,
-      '.pipeline/prd-audit.md',
-      PRD_ALIGNED,
-      undefined,
-      PRD_AUDIT_CODE_STAMP,
-    );
+    const reviewedHead = await currentCommitSha(s.repo);
+    if (reviewedHead === null) throw new Error('scratch repository has no reviewed HEAD');
+    const artifact = await writePrdAuditVerdict(s.repo, reviewedHead);
     const freshMtime = new Date(Date.now() + 5000);
     await utimes(artifact, freshMtime, freshMtime);
 
-    const result = await checkStepCompletion(s.repo, 'prd_audit', ctxFor(s.repo));
+    const result = await checkStepCompletion(
+      s.repo,
+      'prd_audit',
+      ctxFor(s.repo, { config: { gate_code_validity: { enabled: false } } }),
+    );
 
     expect({ done: result.done, outcome: outcomeOf(result) }).toEqual({
       done: true,
@@ -377,7 +380,7 @@ describe('Story 1: a preserve is reported as preserved_surface_miss, never as a 
 
   it('prd_audit preserve populates the facet instead of returning a bare done:true', async () => {
     const { s, baseline } = await featureRepo();
-    await writeMdVerdict(s.repo, '.pipeline/prd-audit.md', PRD_ALIGNED, baseline, PRD_AUDIT_CODE_STAMP);
+    await writePrdAuditVerdict(s.repo, baseline);
     await pushForeignCommit(s as Scratch & { origin: string }, { 'foreign.ts': 'foreign1\n' }, 'foreign work');
 
     const result = await checkStepCompletion(s.repo, 'prd_audit', ctxFor(s.repo));
@@ -387,7 +390,7 @@ describe('Story 1: a preserve is reported as preserved_surface_miss, never as a 
     // nothing, so the preserve is invisible to every sink.
     expect(result.verdictFreshness).toBeDefined();
     expect(outcomeOf(result)).toBe('preserved_surface_miss');
-    expect(result.verdictFreshness?.artifact).toContain('prd-audit.md');
+    expect(result.verdictFreshness?.artifact).toContain('prd-audit.json');
   });
 
   it('architecture_review_as_built preserve populates the facet instead of a bare done:true', async () => {
@@ -440,7 +443,7 @@ describe('Story 2: every rejection reports stale_invalidated, and routing is unc
   it('prd_audit reports stale_invalidated on the plain mtime floor', async () => {
     const s = await makeRepo();
     await commit(s, { 'src/a.ts': 'a\n' }, 'init');
-    await writeMdVerdict(s.repo, '.pipeline/prd-audit.md', PRD_ALIGNED, undefined, PRD_AUDIT_CODE_STAMP);
+    await writePrdAuditVerdict(s.repo);
 
     const result = await checkStepCompletion(s.repo, 'prd_audit', ctxFor(s.repo));
 

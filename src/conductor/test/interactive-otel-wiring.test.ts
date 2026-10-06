@@ -75,9 +75,7 @@ describe('interactive OTel wiring', () => {
 
     try {
       const visualizers = buildInteractiveVisualizers(new PluginRegistry(), context.config, context);
-      for (let turn = 0; turn < 1_000 && errors.length === 0; turn += 1) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
+      await vi.waitFor(() => expect(errors).toHaveLength(1));
       await Promise.all(visualizers.map((visualizer) => visualizer.stop()));
 
       expect(errors).toEqual([
@@ -89,7 +87,8 @@ describe('interactive OTel wiring', () => {
   });
 
   it('carries valid configured attributes through both interactive OTel constructors and reports dropped keys once', async () => {
-    const pipelineDir = await mkdtemp(join(process.env.TMPDIR!, 'interactive-otel-'));
+    const project = await mkdtemp(join(process.env.TMPDIR!, 'interactive-otel-'));
+    const pipelineDir = join(project, '.pipeline');
     const emitter = new ConductorEventEmitter();
     const spanExporter = new InMemorySpanExporter();
     const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
@@ -104,6 +103,7 @@ describe('interactive OTel wiring', () => {
       otel: {
         exporter: 'otlp',
         endpoint: 'http://fake-collector:4318',
+        spool: { enabled: false },
         attributes: {
           'deployment.environment.name': ' staging ',
           'team.name': ' platform ',
@@ -117,7 +117,7 @@ describe('interactive OTel wiring', () => {
       emitter,
       startContext: {
         feature: 'interactive-feature',
-        project: '/interactive-project',
+        project,
         pipelineDir,
         branch: undefined,
         engineVersion: undefined,
@@ -161,7 +161,7 @@ describe('interactive OTel wiring', () => {
         },
       });
     } finally {
-      await rm(pipelineDir, { recursive: true, force: true });
+      await rm(project, { recursive: true, force: true });
     }
   });
 

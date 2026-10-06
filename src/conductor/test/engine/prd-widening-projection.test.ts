@@ -64,4 +64,17 @@ describe('PRD widening evidence projection', () => {
     expect(corrupt.get('NC.9')).toEqual({ kind: 'unresolved', reason: 'corrupt-case-store' });
     expect(unrenderable.get('NC.9')).toEqual({ kind: 'unresolved', reason: 'unrenderable-projection' });
   });
+
+  it('does not let a normal-criterion acceptance settle a no-owner OVER_SCOPE observation', () => {
+    const classifications = classifyPrdWideningProjection({
+      findings: [currentFinding],
+      // This deliberately shares the case id with the current relation: the
+      // criterion namespace, rather than an incidental case link, is the
+      // authority boundary for a no-owner observation.
+      decisions: [{ ...decision, criterion: 'S1.1', originalCaseId: caseRecord.id }],
+      cases: [caseRecord],
+    });
+
+    expect(classifications.get('NC.9')).toEqual({ kind: 'unresolved', reason: 'missing-decision' });
+  });
 });

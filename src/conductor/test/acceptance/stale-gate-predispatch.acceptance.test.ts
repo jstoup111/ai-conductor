@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import type { ConductState, StepName } from '../../src/types/index.js';
-import { ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP, checkStepCompletion, MANUAL_TEST_FAIL_EVIDENCE, PRD_AUDIT_CODE_STAMP } from '../../src/engine/artifacts.js';
+import { ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP, checkStepCompletion, MANUAL_TEST_FAIL_EVIDENCE } from '../../src/engine/artifacts.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
@@ -15,6 +15,7 @@ import { EventPersister } from '../../src/engine/event-persister.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 const activeGate = vi.hoisted(() => ({ name: 'prd_audit' }));
@@ -34,7 +35,6 @@ const roots: string[] = [];
 const OLD_MTIME = new Date(2000, 0, 1);
 const gates = ['prd_audit', 'architecture_review_as_built', 'build_review', 'manual_test'] as const;
 type Gate = typeof gates[number];
-const PRD_REPORT = '# PRD Audit\n\n**PRD:** none\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | Evidence |\n|---|---|---|---|\n| S1.1 | PASS | 1 | test |\n\n| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | n/a | test | — |\n';
 const MANUAL_REPORT = '# Manual Test Results\n\n## Attempt 1\n\n| Story | Result |\n|---|---|\n| S1 | PASS |\n';
 const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'test fixture' },
@@ -106,11 +106,25 @@ describe('acceptance: stale judged-gate pre-dispatch preservation (#2639)', () =
   async function seedEvidence(gate: Gate, options: { stamp?: boolean; clean?: boolean } = {}): Promise<string> {
     const stamp = options.stamp ?? true;
     const clean = options.clean ?? true;
-    const name = gate === 'prd_audit' ? 'prd-audit.md' : gate === 'architecture_review_as_built' ? 'architecture-review-as-built.md' : gate === 'build_review' ? 'build-review.json' : 'manual-test-results.md';
+    const name = gate === 'prd_audit' ? 'prd-audit.json' : gate === 'architecture_review_as_built' ? 'architecture-review-as-built.md' : gate === 'build_review' ? 'build-review.json' : 'manual-test-results.md';
     const file = join(root, '.pipeline', name);
     if (gate === 'prd_audit') {
-      await writeFile(file, clean ? PRD_REPORT : PRD_REPORT.replace('| S1.1 | PASS |', '| S1.1 | FIXABLE |'));
-      if (stamp) await writeFile(join(root, PRD_AUDIT_CODE_STAMP), JSON.stringify({ codeStamp: baseline }));
+      await persistPrdAuditVerdict(root, {
+        complete: true,
+        judgment: {
+          version: 'v1',
+          criterionJudgments: [{
+            criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1',
+            grade: clean ? 'PASS' : 'FIXABLE', evidence: 'feature.ts:1',
+            rationale: 'Fixture supplies typed audit evidence.',
+            requirementAssociations: [], evidenceTaskIds: [],
+            ...(clean ? {} : { ownerTaskId: '1' }),
+          }],
+          noOwnerObservations: [],
+        },
+        diagnostics: [],
+        recordedDispositions: [],
+      }, { attemptId: 'seeded-run', codeStamp: stamp ? baseline : null });
     } else if (gate === 'architecture_review_as_built') {
       await persistAsBuiltVerdict(root, clean
         ? { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] }

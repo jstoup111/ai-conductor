@@ -9,24 +9,10 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 
 const MANUAL_TEST_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| S1 | PASS |\n';
-const PRD_AUDIT_PASS = [
-  '# PRD Audit',
-  '',
-  '| FR | Verdict | Gap-class | Evidence | Accepted? |',
-  '|--|--|--|--|--|',
-  '| FR-1 | ALIGNED | | src/example.ts:1 | yes |',
-].join('\n');
 const AS_BUILT_PASS = '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n';
-const PRD_AUDIT_NEGATIVE_PLAN_GAP = [
-  '**PRD:** none',
-  '',
-  '## Verdict Table',
-  '| Criterion | Grade | Plan task | Evidence |',
-  '| --- | --- | --- | --- |',
-  '| S1.1 | PLAN_GAP | | The negative-path behavior has no approved plan task. |',
-].join('\n');
 const NEGATIVE_PATH_STORIES = [
   '# Stories',
   '',
@@ -74,11 +60,24 @@ describe('validation-group gate verdict observability', () => {
       persister.start();
 
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MANUAL_TEST_PASS);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await persistPrdAuditVerdict(dir, {
+              complete: true,
+              judgment: {
+                version: 'v1',
+                criterionJudgments: [{
+                  criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
+                  evidence: 'src/example.ts:1', rationale: 'Fixture records a passing typed audit.',
+                  requirementAssociations: [], evidenceTaskIds: [],
+                }],
+                noOwnerObservations: [],
+              },
+              diagnostics: [],
+              recordedDispositions: [],
+            }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: null });
           } else if (step === 'architecture_review_as_built') {
             await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), AS_BUILT_PASS);
           }
@@ -132,11 +131,24 @@ describe('validation-group gate verdict observability', () => {
       persister.start();
 
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MANUAL_TEST_PASS);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_NEGATIVE_PLAN_GAP);
+            await persistPrdAuditVerdict(dir, {
+              complete: true,
+              judgment: {
+                version: 'v1',
+                criterionJudgments: [{
+                  criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PLAN_GAP',
+                  evidence: 'src/example.ts:1', rationale: 'Fixture records a routed plan gap.',
+                  requirementAssociations: [], evidenceTaskIds: [],
+                }],
+                noOwnerObservations: [],
+              },
+              diagnostics: [],
+              recordedDispositions: [],
+            }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: null });
           } else if (step === 'architecture_review_as_built') {
             await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), AS_BUILT_PASS);
           }

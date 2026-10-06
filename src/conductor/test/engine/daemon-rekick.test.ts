@@ -38,6 +38,7 @@ import { initTestRepo } from '../fixtures/git-repo.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
 import type { ConductorEvent } from '../../src/types/events.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
@@ -356,13 +357,25 @@ describe('consumeResumeAuthorizations', () => {
       '# Stories', '', '## Story 2: remediation', '', '#### Happy Path',
       ...criteria.map((criterion) => `- Given ${criterion}, when repaired, then it holds.`),
     ].join('\n'));
-    await writeFile(join(worktree, '.pipeline', 'prd-audit.md'), [
-      '**PRD:** present', '', '## Verdict Table',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      ...criteria.map((criterion, index) =>
-        `| ${criterion} | FIXABLE | ${index + 1} | Missing ${criterion} behavior |`),
-    ].join('\n'));
+    await persistPrdAuditVerdict(worktree, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: criteria.map((criterion, index) => ({
+          criterion: { storyId: '2', ordinal: index + 1 },
+          criterionId: criterion,
+          grade: 'FIXABLE' as const,
+          evidence: `Missing ${criterion} behavior`,
+          rationale: `Fixture repair for ${criterion}.`,
+          requirementAssociations: [],
+          evidenceTaskIds: [String(index + 1)],
+          ownerTaskId: String(index + 1),
+        })),
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'growth-remediation-fixture', codeStamp: null });
 
     const conductor = new Conductor({
       stateFilePath: join(worktree, '.pipeline', 'conduct-state.json'),

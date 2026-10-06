@@ -121,6 +121,7 @@ require_pattern 'pipeline retains RED/DOMAIN/GREEN workflow gates' \
   "$HARNESS_DIR/skills/pipeline/SKILL.md"
 require_pattern 'code review retains fresh-context evaluator review' \
   'fresh context' "$HARNESS_DIR/skills/code-review/SKILL.md"
+prd_audit_skill="$HARNESS_DIR/skills/prd-audit/SKILL.md"
 require_pattern 'finish retains fresh verification before completion' \
   'fresh.*(verification|evidence)|verify.*fresh' "$HARNESS_DIR/skills/finish/SKILL.md"
 finish_skill="$HARNESS_DIR/skills/finish/SKILL.md"
@@ -618,6 +619,226 @@ for build_review_fixture in \
   esac
   expect_build_review_skill_prose_fixture_failure "$build_review_fixture" "$expected_pattern"
 done
+
+# PRD audit has a deliberately split contract. The engine supplies, validates,
+# and persists the managed machine contract; the skill supplies judgment
+# guidance. Standalone use may present the same judgment to a human, but has no
+# managed gate authority. Audit the two named sections so ordinary prose outside
+# this contract cannot create a false violation.
+prd_audit_section() {
+  local file=$1
+  local heading=$2
+
+  awk -v heading="$heading" '
+    $0 == heading { active = 1; next }
+    active && /^## / { exit }
+    active { print }
+  ' "$file"
+}
+
+section_matches() {
+  local section=$1
+  local pattern=$2
+
+  printf '%s\n' "$section" | tr '\n' ' ' | grep -qiE "$pattern"
+}
+
+# Managed-machine instructions may occur under any H2 except the standalone
+# presentation section itself. In particular, the shipped skill deliberately
+# resumes managed judgment guidance after standalone review.
+prd_audit_managed_body() {
+  local file=$1
+
+  awk '
+    $0 == "## Standalone review" { in_standalone = 1; next }
+    in_standalone && /^## / { in_standalone = 0 }
+    !in_standalone { print }
+  ' "$file"
+}
+
+prd_audit_skill_contract_audit() {
+  local file=$1
+  local managed
+  local standalone
+  local audit_body
+  local violations=0
+
+  managed=$(prd_audit_section "$file" '## Managed review')
+  standalone=$(prd_audit_section "$file" '## Standalone review')
+  audit_body=$(prd_audit_managed_body "$file")
+
+  if [ -z "$managed" ]; then
+    printf 'prd-audit contract rejected: %s is missing managed review\n' "$file"
+    violations=1
+  else
+    if ! section_matches "$managed" 'engine[^.]{0,180}(suppl(y|ies)|provide)[^.]{0,180}(bounded|versioned)[^.]{0,180}(evidence|projection)'; then
+      printf 'prd-audit contract rejected: %s does not assign bounded evidence to the engine\n' "$file"
+      violations=1
+    fi
+    if ! section_matches "$managed" 'engine[^.]{0,240}(terminal[^.]{0,100}(native|structured)|((native|structured)[^.]{0,100}terminal))'; then
+      printf 'prd-audit contract rejected: %s does not assign the terminal result shape to the engine\n' "$file"
+      violations=1
+    fi
+    if ! section_matches "$managed" 'engine[^.]{0,180}(validat|persist|render|route)'; then
+      printf 'prd-audit contract rejected: %s does not retain engine settlement ownership\n' "$file"
+      violations=1
+    fi
+    if ! section_matches "$managed" 'return[^.]{0,120}terminal[^.]{0,100}structured judgment'; then
+      printf 'prd-audit contract rejected: %s does not require a terminal structured judgment\n' "$file"
+      violations=1
+    fi
+
+    # A recipe is an operational instruction for assembling engine input, not
+    # an ordinary mention that the engine supplied evidence. Require its
+    # heading and an imperative step before treating it as a violation.
+    if printf '%s\n' "$audit_body" | awk '
+      /^#+[[:space:]]+.*(([Ee]ngine|[Mm]anaged)[[:space:]-]*([Ii]nput|[Ee]vidence)[[:space:]-]*([Rr]ecipe|[Ii]nstructions?)|[Ii]nputs?[[:space:]]+and[[:space:]]+[Aa]uthority)/ { recipe = 1; next }
+      recipe && /^[[:space:]]*([0-9]+\.|[-*])[[:space:]]+([Rr]ead|[Cc]ollect|[Oo]pen|[Aa]ssemble|[Pp]arse|[Rr]ender)/ { found = 1 }
+      END { exit !found }
+    '; then
+      printf 'prd-audit contract rejected: %s reintroduces an engine-owned input recipe\n' "$file"
+      violations=1
+    fi
+
+    # The old Markdown carrier paired a machine-table heading with a schema
+    # row. Requiring both avoids rejecting a normal sentence that mentions a
+    # table while still refusing an instruction that recreates the carrier.
+    if printf '%s\n' "$audit_body" | awk '
+      /^#+[[:space:]]+.*(([Mm]achine[- ]?[Oo]utput|[Vv]erdict)[[:space:]-]*[Tt]able|[Rr]eport)/ { table = 1; next }
+      table && /^\|[[:space:]]*([Cc]riterion|[Ff]inding|[Kk]ey)[[:space:]]*\|[[:space:]]*([Gg]rade|[Vv]erdict)[[:space:]]*\|/ { found = 1 }
+      END { exit !found }
+    '; then
+      printf 'prd-audit contract rejected: %s reintroduces machine-output table grammar\n' "$file"
+      violations=1
+    fi
+
+    # A negative prohibition remains valid guidance. Only a positive managed
+    # instruction that combines reviewer acceptance/refusal with a write is an
+    # authority leak.
+    if printf '%s\n' "$audit_body" \
+      | grep -viE '(^|[^[:alpha:]])(do not|never|must not|cannot|can not|without)([^[:alpha:]]|$)' \
+      | grep -qiE '\b(reviewer|auditor|validator)[^.]{0,140}\b(accept|refus)[a-z]*[^.]{0,140}\b(write|persist|record|store)[a-z]*\b'; then
+      printf 'prd-audit contract rejected: %s grants reviewer acceptance/refusal writes\n' "$file"
+      violations=1
+    fi
+
+    if printf '%s\n' "$audit_body" \
+      | grep -viE '(^|[^[:alpha:]])(do not|never|must not|cannot|can not|without)([^[:alpha:]]|$)' \
+      | grep -qiE '\b(write|author|produce|substitute)[a-z]*[^.]{0,140}(markdown[[:space:]]+)?report[^.]{0,140}(for|instead of|rather than|in place of)[^.]{0,140}(terminal|structured)[[:space:]]+judgment'; then
+      printf 'prd-audit contract rejected: %s substitutes report authoring for terminal judgment\n' "$file"
+      violations=1
+    fi
+  fi
+
+  if [ -z "$standalone" ] \
+    || ! section_matches "$standalone" '(human-readable|advisory)[^.]{0,160}judgment' \
+    || ! section_matches "$standalone" 'not current managed gate evidence'; then
+    printf 'prd-audit contract rejected: %s does not preserve standalone human presentation without gate authority\n' "$file"
+    violations=1
+  fi
+
+  [ "$violations" -eq 0 ]
+}
+
+expect_prd_audit_contract() {
+  local description=$1
+  local expected=$2
+  local file=$3
+  local expected_violation=${4:-}
+  local output
+  local status
+
+  set +e
+  output=$(prd_audit_skill_contract_audit "$file" 2>&1)
+  status=$?
+  set -e
+
+  if [ "$status" -eq "$expected" ] \
+    && { [ -z "$expected_violation" ] || [[ "$output" == *"$file"* && "$output" == *"$expected_violation"* ]]; }; then
+    pass "$description"
+  else
+    fail "$description"
+  fi
+}
+
+prd_audit_contract_fixture=$(mktemp)
+write_prd_audit_contract_fixture() {
+  cat > "$prd_audit_contract_fixture" <<'EOF'
+## Managed review
+
+The engine supplies the bounded, versioned evidence projection and terminal native structured-result shape.
+The engine validates, persists, renders, and routes the returned judgment.
+Use grounded evidence and return one terminal structured judgment.
+
+## Standalone review
+
+Present a human-readable advisory judgment. It is not current managed gate evidence.
+
+## Judge each criterion
+
+Use the supplied criterion evidence to explain the judgment.
+EOF
+}
+
+write_prd_audit_contract_fixture
+expect_prd_audit_contract 'prd-audit contract permits judgment guidance and standalone human presentation' 0 "$prd_audit_contract_fixture"
+expect_prd_audit_contract 'prd-audit skill keeps the engine-owned managed machine contract' 0 "$prd_audit_skill"
+
+write_prd_audit_contract_fixture
+sed -i '/^## Standalone review$/i\
+The managed reviewer may accept a finding and write the accepted decision to the operator store.\
+' "$prd_audit_contract_fixture"
+expect_prd_audit_contract 'prd-audit contract rejects reviewer acceptance writes' 1 "$prd_audit_contract_fixture" 'acceptance/refusal writes'
+
+write_prd_audit_contract_fixture
+sed -i '/^## Judge each criterion$/a\
+The managed reviewer may accept a finding and write the accepted decision to the operator store.\
+' "$prd_audit_contract_fixture"
+expect_prd_audit_contract 'prd-audit contract rejects reviewer grants after standalone review' 1 "$prd_audit_contract_fixture" 'acceptance/refusal writes'
+
+write_prd_audit_contract_fixture
+sed -i '/^## Standalone review$/i\
+The managed reviewer may refuse a finding and persist the refusal to the operator store.\
+' "$prd_audit_contract_fixture"
+expect_prd_audit_contract 'prd-audit contract rejects reviewer refusal writes' 1 "$prd_audit_contract_fixture" 'acceptance/refusal writes'
+
+write_prd_audit_contract_fixture
+sed -i '/^## Standalone review$/i\
+The managed reviewer may author a Markdown report instead of the terminal structured judgment.\
+' "$prd_audit_contract_fixture"
+expect_prd_audit_contract 'prd-audit contract rejects report authoring substituted for terminal judgment' 1 "$prd_audit_contract_fixture" 'substitutes report authoring'
+
+write_prd_audit_contract_fixture
+sed -i '/^## Judge each criterion$/a\
+### Engine input recipe\
+1. Read the plan and assemble a replacement evidence projection.\
+' "$prd_audit_contract_fixture"
+expect_prd_audit_contract 'prd-audit contract rejects engine-input recipes after standalone review' 1 "$prd_audit_contract_fixture" 'engine-owned input recipe'
+
+write_prd_audit_contract_fixture
+sed -i '/^## Judge each criterion$/a\
+## Verdict Table\
+| Criterion | Grade | Plan task |\
+' "$prd_audit_contract_fixture"
+expect_prd_audit_contract 'prd-audit contract rejects machine-output tables after standalone review' 1 "$prd_audit_contract_fixture" 'machine-output table grammar'
+
+write_prd_audit_contract_fixture
+sed -i '/^## Judge each criterion$/i\
+### Standalone evidence gathering\
+### Engine input recipe\
+1. Read the plan and assemble an advisory evidence summary.\
+' "$prd_audit_contract_fixture"
+expect_prd_audit_contract 'prd-audit contract ignores engine-input prose inside standalone review' 0 "$prd_audit_contract_fixture"
+
+write_prd_audit_contract_fixture
+sed -i '/^## Standalone review$/i\
+## Inputs and authority\
+1. Read the plan and assemble a replacement evidence projection.\
+## Report\
+| Criterion | Grade | Plan task |\
+' "$prd_audit_contract_fixture"
+expect_prd_audit_contract 'prd-audit contract rejects top-level recipes and table grammar' 1 "$prd_audit_contract_fixture" 'engine-owned input recipe'
+rm -f "$prd_audit_contract_fixture"
 
 for provider_contract_file in \
   "$HARNESS_DIR/HARNESS.md" \

@@ -10,6 +10,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 // Acceptance coverage for .docs/stories/ship-tail-parallel-validation-serial-
@@ -32,6 +33,10 @@ describe('SHIP-tail publication fence (#922)', () => {
       codeStamp: null,
       policy: asBuiltPolicy,
     });
+  }
+
+  async function writePrdAuditPass(dir: string, options?: StepRunOptions): Promise<void> {
+    await persistPrdAuditVerdict(dir, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'src/fence.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: 'fixture-head' });
   }
 
   function stateAtPublicationWithMissingAsBuiltEvidence(): ConductState {
@@ -166,6 +171,7 @@ describe('SHIP-tail publication fence (#922)', () => {
         fromStep: 'finish',
         maxRetries: 1,
         verifyArtifacts: true,
+        config: { gate_code_validity: { enabled: false } },
       });
 
       await conductor.run();
@@ -207,6 +213,7 @@ describe('SHIP-tail publication fence (#922)', () => {
               join(dir, '.pipeline/prd-audit.md'),
               '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | src/fence.ts:1 |\n',
             );
+            await writePrdAuditPass(dir, options);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltApproval(dir, options);
           }
@@ -224,6 +231,7 @@ describe('SHIP-tail publication fence (#922)', () => {
         fromStep: 'finish',
         maxRetries: 1,
         verifyArtifacts: true,
+        config: { gate_code_validity: { enabled: false } },
       });
 
       await conductor.run();
@@ -277,6 +285,7 @@ describe('SHIP-tail publication fence (#922)', () => {
               join(dir, '.pipeline/prd-audit.md'),
               '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | src/fence.ts:1 |\n',
             );
+            await writePrdAuditPass(dir, options);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltApproval(dir, options);
           }

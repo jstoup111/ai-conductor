@@ -111,21 +111,26 @@ function createFixtureAgentFake(
       };
     }
 
-    if (options.prompt.includes('You are running step: PRD Audit.')) {
-      mkdirSync(join(worktreeDir, '.pipeline'), { recursive: true });
-      writeFileSync(
-        join(worktreeDir, '.pipeline/prd-audit.md'),
-        '**PRD:** none\n\n'
-          + '## Verdict Table\n\n'
-          + '| Criterion | Grade | Plan task | Evidence |\n'
-          + '| --- | --- | --- | --- |\n'
-          + '| S1.1 | PASS | 1 | test/fixtures/daemon-e2e/touched.txt |\n',
-        'utf-8',
-      );
+    if (options.prompt.includes('PRD-AUDIT EVIDENCE (engine-owned, versioned):')) {
       return {
         success: true,
         output: 'fixture prd audit recorded aligned evidence',
         exitCode: 0,
+        finalStructuredResult: {
+          version: 'v1',
+          criterionJudgments: [{
+            criterion: { storyId: '1', ordinal: 1 }, grade: 'PASS',
+            evidence: 'test/fixtures/daemon-e2e/touched.txt was touched.',
+            rationale: 'The fixture task delivers its sole declared criterion.',
+            requirementAssociations: [], evidenceTaskIds: ['1'],
+          }, {
+            criterion: { storyId: '1', ordinal: 2 }, grade: 'PASS',
+            evidence: 'Task 1 records the fixture change in its trailered commit.',
+            rationale: 'The fixture retains an auditable negative-path criterion.',
+            requirementAssociations: [], evidenceTaskIds: ['1'],
+          }],
+          noOwnerObservations: [],
+        },
       };
     }
 
@@ -284,7 +289,10 @@ describe('daemon E2E fixture', () => {
           + '**Requirements:** FR-1\n\n'
           + '### Happy Path\n\n'
           + '- Given the fixture feature is dispatched, when Task 1 runs, then the agent touches '
-          + '`test/fixtures/daemon-e2e/touched.txt`.\n',
+          + '`test/fixtures/daemon-e2e/touched.txt`.\n\n'
+          + '### Negative Paths\n\n'
+          + '- Given task evidence is inspected, when Task 1 omits its trailer, then the fixture '
+          + 'rejects the commit.\n',
       );
       await copyFile(
         fixtureTouchedPath,
@@ -418,7 +426,6 @@ describe('daemon E2E fixture', () => {
         prd_audit?: string;
         finish?: string;
       };
-      const prdAuditReport = await readFile(join(pipelineDir, 'prd-audit.md'), 'utf-8');
       const { stdout: commitBody } = await execa('git', ['log', '-1', '--format=%B'], {
         cwd: worktreeDir,
       });
@@ -431,8 +438,7 @@ describe('daemon E2E fixture', () => {
         buildReview: state.build_review,
         prdAudit: state.prd_audit,
         finish: state.finish,
-        prdAuditPrompt: fake.calls.some((call) => call.prompt.includes('You are running step: PRD Audit.')),
-        prdAuditReport,
+        prdAuditPrompt: fake.calls.some((call) => call.prompt.includes('PRD-AUDIT EVIDENCE (engine-owned, versioned):')),
         commitBody: commitBody.trim(),
         done: existsSync(join(pipelineDir, 'DONE')),
         halt: existsSync(join(pipelineDir, 'HALT')),
@@ -447,7 +453,6 @@ describe('daemon E2E fixture', () => {
         prdAudit: 'done',
         finish: 'done',
         prdAuditPrompt: true,
-        prdAuditReport: expect.stringMatching(/\*\*PRD:\*\* none[\s\S]*\| S1\.1 \| PASS \| 1 \|/),
         commitBody: 'test: complete fixture task\n\nTask: 1',
         done: true,
         halt: false,

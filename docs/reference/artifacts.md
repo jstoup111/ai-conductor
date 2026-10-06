@@ -332,7 +332,7 @@ Every pattern declares one lifecycle scope:
 | `build_review` | `.pipeline/build-review.json` | run |
 | `test_suite` | `.pipeline/test-suite-evidence.json` | run |
 | `manual_test` | `.pipeline/manual-test-results.md` | run |
-| `prd_audit` | `.pipeline/prd-audit.md` | run |
+| `prd_audit` | `.pipeline/prd-audit.json` | run |
 | `architecture_review_as_built` | `.pipeline/architecture-review-as-built.md` | run |
 | `rebase` | *(none — verdict computed from git state)* | — |
 | `finish` | *(none)* | — |
@@ -428,7 +428,7 @@ decision:
 `HALT`, `HALT.class`, `HALT.cleared`, `QUARANTINE`, `REKICK`, `DONE`, `halt-user-input-required`,
 `finish-choice`, `version-approval`, `conduct-state.json`, `gates/*.json`, `protected-artifact-seal.json`,
 and every verdict/evidence artifact in the two tables below (`build-review.json`,
-`test-suite-evidence.json`, `acceptance-specs-red.json`, `manual-test-results.md`, `prd-audit.md`,
+`test-suite-evidence.json`, `acceptance-specs-red.json`, `manual-test-results.md`, `prd-audit.json`, `prd-audit.md`,
 `architecture-review-as-built.md`, …). Losing one of these re-runs its step
 or restarts its phase; that cost is correct. `events.jsonl`, `otel.jsonl`, and the audit trail are
 append-only history — also never reconstructed, because a fabricated history is worse than none.
@@ -476,8 +476,9 @@ Agent-authored, engine-validated. Alphabetized.
 | `manual-test-fail-evidence.json` | Failure detail for the above | engine |
 | `manual-test-code-stamp.json` | The HEAD sha the manual test was formed against when available, plus the engine-stamped `runId` for its latest dispatch | engine |
 | `per-task-floor.json` | Per-task commit-floor telemetry | `step-runners.ts` |
-| `prd-audit.md` | A `## Verdict Table` with one graded row per story acceptance criterion: `Criterion`, `Grade` (`PASS`\|`FIXABLE`\|`PLAN_GAP`\|`OVER_SCOPE`), `Plan task` (required for `FIXABLE`; any grade may cite one or a comma-separated list, and every cited id must be declared by the active plan — a `FIXABLE` row must cite exactly one, because its repair is appended under that single parent task), `FR`, `Intent relation` (required for `OVER_SCOPE`: `within`\|`outside-harmless`\|`outside-visible`), `Evidence`. The grade is read from the verdict **cell**, not from anywhere else in the row. Every `Criterion` key must be an active story criterion id, each on exactly one row. A finding that owns no criterion (typically an unplanned change) is a unique `NC.<n>` `OVER_SCOPE` row in `## Findings without an owning criterion`, with `Finding`, `Grade`, `Intent relation`, and `Evidence`. For a visible NC widening, its offer/decision binds immutable original evidence; a later rewording is classified only through a fresh durable relationship, never summary similarity. Invalid or duplicate rows are rejected individually, but any rejected row blocks the audit with its diagnostic. | `prd-audit` skill |
-| `prd-audit-code-stamp.json` | The HEAD sha the audit was formed against, plus the engine-stamped `runId` for its latest dispatch | engine |
+| `prd-audit.json` | Gate authority: `{ attemptId, codeStamp, complete, judgment, diagnostics[], recordedDispositions[] }`. `judgment` is the validated reviewer result, contract `version: 'v1'`: `criterionJudgments[]` (`criterion: { storyId, ordinal }`, engine-resolved `criterionId`, `grade` `PASS`\|`FIXABLE`\|`PLAN_GAP`\|`OVER_SCOPE`, `evidence`, `rationale`, `requirementAssociations[] { path, requirementId }`, `evidenceTaskIds[]`, plus `ownerTaskId` for `FIXABLE` or `intentRelation` `within`\|`outside-harmless`\|`outside-visible` for `OVER_SCOPE`) and `noOwnerObservations[]` (`OVER_SCOPE` only, with an engine-minted `NC-N` `presentationOrdinal`). `complete: false` keeps rejected-judgment `diagnostics`. `codeStamp` is the reviewed `HEAD`; `attemptId` is the dispatch's run identity. `recordedDispositions` are engine-derived routing projections, never reviewer or operator authority. Exact keys are enforced on read; an unknown version or envelope reads as unreadable. Written atomically. | engine (`prd_audit` step) |
+| `prd-audit.md` | Human-readable rendering of `prd-audit.json`: status, attempt, code stamp, criterion judgments, no-owner observations, diagnostics, and recorded dispositions. No reader treats it as a verdict. | engine |
+| `prd-audit-code-stamp.json` | The engine-stamped `runId` of the latest `prd_audit` dispatch. Freshness is decided from `prd-audit.json`'s `attemptId` and `codeStamp`, not this sidecar | engine |
 | `protected-artifact-seal.json` | See above | `protected-artifact-seal.ts` |
 | `rebase-residue.json` | `[{ sha, citingTaskIds[], reason }]` — citations a rebase could not translate | `rebase-translate.ts` |
 | `rebase-rewrites.json` | Pre-to-post rebase sha map, merged transitively; atomic temp plus rename | `rebase-translate.ts` |

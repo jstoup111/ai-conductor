@@ -507,7 +507,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   hooks and must not be hand-edited.
 - **Read-only SHIP verdicts** — BUILD sessions, including remediation retries and every implementer
   dispatch, may read but never write, delete, rename, or recreate the SHIP validator verdict artifacts
-  (`prd-audit.md`, `architecture-review-as-built.md`/`.json`) or their code-stamp sidecars. Only the
+  (`prd-audit.md`/`.json`, `architecture-review-as-built.md`/`.json`) or their code-stamp sidecars. Only the
   validator's next dispatch produces a new verdict; a fixed finding is proven through
   [`ai-conductor task done <id> --done-when <n>=<evidence>`](cli.md#ai-conductor-task).
 - **Gate role** — blocking. Evaluator dispatch at each batch boundary is mandatory; a missing or empty
@@ -681,22 +681,30 @@ the aggregate gate. Scoped success alone never satisfies that gate.
 - **Engine step** — `prd_audit` (index 17, SHIP, prerequisite `manual_test`). Loop gate; runs on every
   feature, at every tier and on both tracks — the skill does not infer a skip from tier, track, or the
   absence of a PRD.
-- **Inputs** — the feature's committed stories (the audit key) via the active plan's `**Stories:**`
-  reference; the active plan and any coherence mapping; the matching non-`SUPERSEDED-` PRD when present
-  (context, not the key); the implementation, changed tests, and BUILD `Scope:` trailers; operator
-  reseal and `Scope:` trailer rationales as immutable `OVER_SCOPE` intent evidence;
-  `.pipeline/accepted-widenings.json` when present — durable operator authority, including immutable
-  original evidence and case/offer references. The engine may apply that authority to later wording
-  only after it records a fresh relation; the auditor does not preserve it by copying a summary.
-- **Outputs** — `.pipeline/prd-audit.md`, overwritten each run; a code-stamp sidecar on the pass path.
-- **Gate role** — blocking. Each finding carries exactly one grade — `PASS`, `FIXABLE`, `PLAN_GAP`, or
-  `OVER_SCOPE` — and the report needs exactly one graded verdict row per acceptance criterion. A
-  `FIXABLE` row must name its owning plan task. `FIXABLE` findings appends a bounded remediation lap
-  (capped tasks, see [configuration](configuration.md#prd_audit)); exceeding the cap, needing a second
-  lap, a happy-path `PLAN_GAP`, or a user-visible out-of-intent `OVER_SCOPE` halts for the operator.
-  A negative-path or edge-scenario `PLAN_GAP`, and an `OVER_SCOPE` widening within intent or with no
-  user-visible effect, are recorded in the verdict and the shipped record and the feature ships.
-- **Dispatches** — `agents/prd-auditor.md`, one dispatch for the whole audit.
+- **Inputs** — in a managed run, an engine-built, versioned, size-bounded evidence projection: the
+  active story criteria (the audit key), the active plan's intent and task ids, the matching
+  non-`SUPERSEDED-` PRD's requirements when present (context, not the key), any coherence mapping,
+  the reviewed change (merge-base-to-`HEAD` file stats and diff excerpts), and widening decision
+  history from `.pipeline/accepted-widenings.json` and `.pipeline/remediation-cases.json`. A section
+  over its byte limit (`plan-intent`, `plan-tasks`, `criteria`, `prd-intent`, `coherence`, `history`,
+  or `total`), unavailable git changes, or corrupt, foreign, or unsupported history fails the
+  dispatch with an `input projection fault` naming the dimension. Standalone use reads the same
+  sources directly and is advisory only.
+- **Outputs** — none written by the skill. It returns one terminal structured judgment conforming to
+  the engine-owned schema (contract `v1`). The engine validates it against the projection, then
+  writes `.pipeline/prd-audit.json` (gate authority) and renders `.pipeline/prd-audit.md` (view only).
+- **Gate role** — blocking. Each criterion judgment carries exactly one grade — `PASS`, `FIXABLE`,
+  `PLAN_GAP`, or `OVER_SCOPE` — and must reference a supplied criterion. A `FIXABLE` judgment names
+  exactly one supplied owner task; an `OVER_SCOPE` judgment carries an intent relation. A finding
+  that owns no criterion is a no-owner `OVER_SCOPE` observation. `FIXABLE` findings append a bounded
+  remediation lap (capped tasks, see [configuration](configuration.md#prd_audit)); exceeding the cap,
+  needing a second lap, a happy-path `PLAN_GAP`, or a user-visible out-of-intent `OVER_SCOPE` halts
+  for the operator. A negative-path or edge-scenario `PLAN_GAP`, and an `OVER_SCOPE` widening within
+  intent or with no user-visible effect, are recorded in the verdict and the shipped record and the
+  feature ships.
+- **Dispatches** — one provider-native, schema-constrained one-shot. A candidate provider must declare
+  `nativeSchemaCapability.nativeOutputSchema`; otherwise the step fails with a capability fault naming
+  the recovery action.
 
 ### remediate
 
