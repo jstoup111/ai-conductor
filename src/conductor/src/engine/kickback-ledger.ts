@@ -13,6 +13,7 @@ import { boundedHeadTailExcerpt } from './build-review-test-quality-preflight.js
 import { createConductStateLease } from './conduct-state-lease.js';
 import type { ConductStateLeaseFailureKind } from './conduct-state-lease.js';
 import { isAsBuiltGoverningReference, type AsBuiltGoverningReference } from './as-built-contract.js';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 
 /** The latest infrastructure failure charged to a build-review rubric lap. */
 export interface KickbackLastMechanicalFault {
@@ -182,6 +183,14 @@ interface PersistedKickbackLedger {
 
 export const KICKBACK_LEDGER_PATH = '.pipeline/kickback-ledger.json';
 
+/**
+ * Resolve the on-disk path for a kickback ledger record: today's flat
+ * `.pipeline/kickback-ledger.json`, or the per-child path for a child branch.
+ */
+export function kickbackLedgerPathFor(root: string, child?: ChildId): string {
+  return pipelinePathFor(root, 'kickback-ledger.json', child);
+}
+
 /** A feature-local ledger mutation could not obtain its exclusive lease. */
 export class KickbackLedgerLeaseError extends Error {
   constructor(readonly kind: ConductStateLeaseFailureKind, message: string) {
@@ -198,8 +207,9 @@ export class KickbackLedgerLeaseError extends Error {
 export async function withKickbackLedgerLease<T>(
   projectRoot: string,
   operation: () => Promise<T>,
+  child?: ChildId,
 ): Promise<T> {
-  const lease = createConductStateLease(join(projectRoot, KICKBACK_LEDGER_PATH), {
+  const lease = createConductStateLease(kickbackLedgerPathFor(projectRoot, child), {
     label: 'kickback-ledger',
   });
   let acquired = await lease.acquire();
@@ -699,8 +709,11 @@ function requireReadableGate(ledger: KickbackLedger, gate: string): void {
  * failure is typed so callers retain their existing needs-human boundary rather
  * than accidentally treating damaged accounting as fresh allowance.
  */
-export async function readKickbackLedgerResult(projectRoot: string): Promise<KickbackLedgerReadResult> {
-  const ledgerPath = join(projectRoot, KICKBACK_LEDGER_PATH);
+export async function readKickbackLedgerResult(
+  projectRoot: string,
+  child?: ChildId,
+): Promise<KickbackLedgerReadResult> {
+  const ledgerPath = kickbackLedgerPathFor(projectRoot, child);
 
   try {
     const parsed: unknown = JSON.parse(await readFile(ledgerPath, 'utf-8'));
@@ -740,9 +753,9 @@ export async function readPendingAsBuiltRemediationFindings(
 }
 
 /** Read durable state while retaining valid sibling gates for diagnostics. */
-export async function readKickbackLedger(projectRoot: string): Promise<KickbackLedger> {
-  const ledgerPath = join(projectRoot, KICKBACK_LEDGER_PATH);
-  const result = await readKickbackLedgerResult(projectRoot);
+export async function readKickbackLedger(projectRoot: string, child?: ChildId): Promise<KickbackLedger> {
+  const ledgerPath = kickbackLedgerPathFor(projectRoot, child);
+  const result = await readKickbackLedgerResult(projectRoot, child);
   if (result.kind === 'ok') {
     if (result.ledger.unreadable) {
       console.warn(`[kickback-ledger] corrupt ledger gate entry at ${ledgerPath}; retaining sibling counts`);

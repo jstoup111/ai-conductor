@@ -1,12 +1,13 @@
 // Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:rem-as-built-rem-ab4-1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { applyRebaseTransition } from '../../src/engine/rebase-transition.js';
 import { prdAuditAppendCap, readRemediationGateAppendBudget } from '../../src/engine/conductor.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -45,6 +46,9 @@ import {
   refundBuildReviewKickback,
   stageKickbackBudgetAdjustment,
   applyKickbackBudgetAdjustment,
+  kickbackLedgerPathFor,
+  readKickbackLedgerResult,
+  withKickbackLedgerLease,
   type KickbackGateEntry,
   type KickbackLedger,
   type PendingRepair,
@@ -1836,6 +1840,100 @@ describe('kickback-ledger', () => {
     const after = await readKickbackLedger(dir);
     expect(after.gates.build_review.cumulative).toBe(2);
     expect(after.gates.prd_audit.effectiveLapCap).toBe(3);
+  });
+
+  describe('kickback ledger at a child path', () => {
+    const child = parseChildId('2')!;
+    const childLedgerPath = () => join(dir, '.pipeline/children/2/kickback-ledger.json');
+
+    it('resolves the flat and child ledger paths through pipelinePathFor', () => {
+      expect(kickbackLedgerPathFor(dir)).toBe(join(dir, '.pipeline/kickback-ledger.json'));
+      expect(kickbackLedgerPathFor(dir, child)).toBe(childLedgerPath());
+    });
+
+    it('reads a valid child ledger with the same schema, parser and defaults', async () => {
+      const entry = {
+        count: 3,
+        treeHash: '0123456789abcdef0123456789abcdef01234567',
+        lastReason: 'child lost its gate',
+        priorVerdict: false,
+        resolvedBefore: 1,
+      };
+      await mkdir(join(dir, '.pipeline/children/2'), { recursive: true });
+      await writeFile(childLedgerPath(), JSON.stringify({ version: 1, gates: { test_suite: entry } }));
+
+      await expect(readKickbackLedger(dir, child)).resolves.toEqual({
+        version: 1,
+        gates: { test_suite: { ...entry, cumulative: 0, mechanicalFaults: 0 } },
+      });
+      // The flat ledger is a disjoint path and stays absent.
+      await expect(readKickbackLedgerResult(dir)).resolves.toEqual({ kind: 'absent' });
+    });
+
+    it('holds its lease beside the child ledger and leaves the flat ledger byte-unchanged', async () => {
+      await writeKickbackLedger(dir, { version: 1, gates: {} });
+      const flatPath = join(dir, '.pipeline/kickback-ledger.json');
+      const flatBefore = await readFile(flatPath, 'utf8');
+
+      let seenChildLease = false;
+      await withKickbackLedgerLease(dir, async () => {
+        seenChildLease = true;
+        await expect(access(`${childLedgerPath()}.lease`)).resolves.toBeUndefined();
+        await mkdir(join(dir, '.pipeline/children/2'), { recursive: true });
+        await writeFile(childLedgerPath(), JSON.stringify({
+          version: 1,
+          gates: { build: { count: 1, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 } },
+        }));
+      }, child);
+
+      expect(seenChildLease).toBe(true);
+      expect(await readFile(flatPath, 'utf8')).toBe(flatBefore);
+      expect(JSON.parse(await readFile(childLedgerPath(), 'utf8'))).toMatchObject({ version: 1 });
+    });
+
+    it('refuses a live foreign child-ledger lease without touching the flat ledger', async () => {
+      const childLeasePath = `${childLedgerPath()}.lease`;
+      await mkdir(childLeasePath, { recursive: true });
+      await writeFile(join(childLeasePath, 'owner.json'), `${JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        token: 'foreign-owner',
+        acquiredAt: new Date().toISOString(),
+      })}\n`);
+
+      await expect(withKickbackLedgerLease(dir, async () => {}, child)).rejects.toMatchObject({
+        name: 'KickbackLedgerLeaseError',
+        kind: 'timeout',
+        message: expect.stringContaining('kickback-ledger'),
+      });
+      // The flat ledger lease is independent of the child's.
+      await expect(withKickbackLedgerLease(dir, async () => {})).resolves.toBeUndefined();
+    });
+
+    it('fails closed with a child-path warning when the child ledger is corrupt', async () => {
+      await mkdir(join(dir, '.pipeline/children/2'), { recursive: true });
+      await writeFile(childLedgerPath(), JSON.stringify({ version: 1, gates: 'not-an-object' }));
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        await expect(readKickbackLedgerResult(dir, child)).resolves.toEqual({
+          kind: 'unreadable',
+          reason: 'kickback ledger is corrupt',
+        });
+        const ledger = await readKickbackLedger(dir, child);
+        expect(ledger).toEqual({ version: 1, gates: {} });
+        expect(isUnreadableKickbackLedger(ledger)).toBe(true);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(childLedgerPath()));
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('reads a missing child ledger as absent without creating anything', async () => {
+      await expect(readKickbackLedgerResult(dir, child)).resolves.toEqual({ kind: 'absent' });
+      await expect(readKickbackLedger(dir, child)).resolves.toEqual({ version: 1, gates: {} });
+      await expect(readFile(childLedgerPath(), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
   });
 });
 
