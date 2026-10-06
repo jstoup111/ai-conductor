@@ -40,6 +40,21 @@ export type CriterionBoundRemediationGap = RemediationGap & {
 /** H9 id grammar — must stay in lockstep with autoheal.ts TASK_ID_PATTERN. */
 const ID_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
 
+/** Prefix on refusal-rework gap ids whose decision segment is sanitized on its own. */
+const REFUSAL_GAP_PREFIX = 'refusal-';
+
+/**
+ * Derive the H9 base segment for a refusal-rework gap. The decision id after
+ * the `refusal-` prefix is sanitized on its own BEFORE the prefix is re-added,
+ * so an empty or all-non-H9 decision id throws the named id error instead of
+ * collapsing to `refusal` (an unaddressable mutation of the refusal's identity).
+ */
+function refusalGapBaseId(gap: CriterionBoundRemediationGap): string | undefined {
+  if (!gap.id.startsWith(REFUSAL_GAP_PREFIX)) return undefined;
+  const decisionId = gap.id.slice(REFUSAL_GAP_PREFIX.length);
+  return `${REFUSAL_GAP_PREFIX}${sanitizeSegment(decisionId, 'refusal decision id')}`;
+}
+
 /** True when an id carries the `rem-` signal accepted by either engine writer. */
 export function isEngineAppendedRemediationTaskId(id: string): boolean {
   return id.startsWith('rem-')
@@ -177,7 +192,11 @@ export function appendRemediationTasks(
     const gapTasks = gap.tasks.length > 0 ? gap.tasks : [{ id: gap.id, title: gap.rationale }];
 
     for (const t of gapTasks) {
-      const base = sanitizeSegment(t.id !== '' ? t.id : gap.id, 'gap task id');
+      // A refusal gap binds the task id to the decision id carried in the gap,
+      // never to the planner's (arbitrary) task id — renumbering the finding
+      // must not change the addressable id.
+      const base = refusalGapBaseId(gap)
+        ?? sanitizeSegment(t.id !== '' ? t.id : gap.id, 'gap task id');
       const canonical = `rem-${source}-${base}`;
       const title = collapseToOneLine(t.title) ?? collapseToOneLine(gap.rationale) ?? '';
 

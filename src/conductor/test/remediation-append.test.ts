@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:3
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -163,5 +163,71 @@ describe('prd_audit remediation append', () => {
     );
     expect(second.ids).toEqual(first.ids);
     expect(second.planText).toBe(first.planText);
+  });
+});
+
+describe('refusal-rework append', () => {
+  const decisionId = 'dec-abc-123';
+  const key = 'NC.2';
+  const revision = 7;
+
+  const admittedRefusalGap = (): CriterionBoundRemediationGap => ({
+    id: `refusal-${decisionId}`,
+    disposition: 'build',
+    category: null,
+    rationale: 'The operator refused the widening offer.',
+    criterion: key,
+    governingClause: `Refused ${key} (decision ${decisionId} r${revision})`,
+    gateSource: PRD_AUDIT_REMEDIATION_GATE_SOURCE,
+    tasks: [{ id: 'remove-offer', title: 'Remove the refused offer from the plan' }],
+  });
+
+  it('heads an admitted refusal gap by its decision-derived id and cites the binding', () => {
+    const existingPlan = '### Task 4: Existing work\n';
+    const result = appendRemediationTasks(
+      existingPlan,
+      [admittedRefusalGap()],
+      PRD_AUDIT_REMEDIATION_GATE_SOURCE,
+    );
+
+    expect(result.ids).toEqual([`rem-prd-audit-refusal-${decisionId}`]);
+    expect(result.planText).toContain(
+      `### Task rem-prd-audit-refusal-${decisionId}: Remove the refused offer from the plan`,
+    );
+    expect(result.planText).toContain(`**Criterion:** ${key}`);
+    expect(result.planText).toContain(
+      `**Governing clause:** Refused ${key} (decision ${decisionId} r${revision})`,
+    );
+    expect(result.planText).toContain(
+      `- Refused ${key} (decision ${decisionId} r${revision}) is satisfied by this task.`,
+    );
+  });
+
+  it('throws the named H9 id error for a refusal gap with an empty decision id', () => {
+    const plan = '### Task 4: Existing work\n';
+    const gap: CriterionBoundRemediationGap = {
+      ...admittedRefusalGap(),
+      id: 'refusal-',
+      governingClause: 'Refused NC.2 (decision  r0)',
+    };
+
+    expect(() => appendRemediationTasks(plan, [gap], PRD_AUDIT_REMEDIATION_GATE_SOURCE)).toThrow(
+      /does not reduce to a non-empty deterministic id/,
+    );
+    expect(plan).toBe('### Task 4: Existing work\n');
+  });
+
+  it('throws the named H9 id error for a refusal gap whose decision id is all non-H9', () => {
+    const plan = '### Task 4: Existing work\n';
+    const gap: CriterionBoundRemediationGap = {
+      ...admittedRefusalGap(),
+      id: 'refusal-!!!@@@',
+      governingClause: 'Refused NC.2 (decision !!!@@@ r0)',
+    };
+
+    expect(() => appendRemediationTasks(plan, [gap], PRD_AUDIT_REMEDIATION_GATE_SOURCE)).toThrow(
+      /does not reduce to a non-empty deterministic id/,
+    );
+    expect(plan).toBe('### Task 4: Existing work\n');
   });
 });
