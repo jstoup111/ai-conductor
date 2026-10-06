@@ -1,4 +1,20 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// The engine mints `executionContext.executionId` via `node:crypto.randomUUID`
+// (there is no runId injection seam on ConductorOptions/Conductor.run()). Make
+// it deterministic here so the golden fixtures can pin real bytes instead of
+// normalizing execution ids away. Distinct values per call preserve any
+// uniqueness assumptions in the run; the counter is deterministic because the
+// bounded run is serial.
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  let counter = 0;
+  return {
+    ...actual,
+    randomUUID: () => `00000000-0000-4000-8000-${String(counter++).padStart(12, '0')}`,
+  };
+});
+
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,109 +28,9 @@ import { writeState } from '../../src/engine/state.js';
 import { bumpKickbackGateInLedger } from '../../src/engine/kickback-ledger.js';
 import { runTaskStart } from '../../src/engine/task-cli.js';
 import { loadConfig } from '../../src/engine/config.js';
+import { CELLS, RECORD, expectGolden, readAndNormalize } from './n1-golden-shared.js';
 
 const execFile = promisify(execFileCb);
-
-interface Cell {
-  name: string;
-  configYaml: string;
-  planMd: string;
-}
-
-const CELLS: Cell[] = [
-  {
-    name: 'flag-off-unsliced',
-    configYaml: 'stacked_prs:\n  enabled: false\n',
-    planMd: `# Implementation Plan: n1-golden
-
-### Task 1: Setup
-**Story:** Story 1
-**Dependencies:** none
-**Done when:** Setup complete.
-
-### Task 2: Implement
-**Story:** Story 1
-**Dependencies:** none
-**Done when:** Implementation complete.
-
-### Task 3: Verify
-**Story:** Story 1
-**Dependencies:** none
-**Done when:** Verification complete.
-`,
-  },
-  {
-    name: 'flag-on-unsliced',
-    configYaml: 'stacked_prs:\n  enabled: true\n',
-    planMd: `# Implementation Plan: n1-golden
-
-### Task 1: Setup
-**Story:** Story 1
-**Dependencies:** none
-**Done when:** Setup complete.
-
-### Task 2: Implement
-**Story:** Story 1
-**Dependencies:** none
-**Done when:** Implementation complete.
-
-### Task 3: Verify
-**Story:** Story 1
-**Dependencies:** none
-**Done when:** Verification complete.
-`,
-  },
-  {
-    name: 'flag-off-sliced',
-    configYaml: 'stacked_prs:\n  enabled: false\n',
-    planMd: `# Implementation Plan: n1-golden
-
-## Slices
-
-| Slice | Title | Tasks |
-| --- | --- | --- |
-| 1 | First | 1 |
-| 2 | Second | 2 |
-| 3 | Third | 3 |
-
-### Task 1: Setup
-**Story:** Story 1
-**Dependencies:** none
-**Done when:** Setup complete.
-
-### Task 2: Implement
-**Story:** Story 1
-**Dependencies:** Task 1
-**Done when:** Implementation complete.
-
-### Task 3: Verify
-**Story:** Story 1
-**Dependencies:** Task 2
-**Done when:** Verification complete.
-`,
-  },
-];
-
-const BASE_SHA = '14a615c678ab0df4bb467fa0313bcb24434ef68f';
-const RECORD = process.env.N1_GOLDEN_RECORD === '1';
-
-async function expectGolden(fixtureName: string, actual: string): Promise<void> {
-  const fixturePath = join(import.meta.dirname, '..', 'fixtures', 'n1-golden', `${fixtureName}.golden`);
-  if (RECORD) {
-    await mkdir(join(import.meta.dirname, '..', 'fixtures', 'n1-golden'), { recursive: true });
-    await writeFile(fixturePath, `<!-- Recorded from ${BASE_SHA} -->\n${actual}`);
-    return;
-  }
-  const goldenRaw = await readFile(fixturePath, 'utf8');
-  const golden = goldenRaw.replace(/^<!-- Recorded from [a-f0-9]+ -->\n/, '');
-  const actualLines = actual.split('\n');
-  const goldenLines = golden.split('\n');
-  for (let i = 0; i < Math.max(actualLines.length, goldenLines.length); i++) {
-    if (actualLines[i] !== goldenLines[i]) {
-      throw new Error(`golden mismatch in ${fixtureName}: line ${i + 1}\n  expected: ${JSON.stringify(goldenLines[i])}\n  actual:   ${JSON.stringify(actualLines[i])}`);
-    }
-  }
-}
 
 describe('N=1 golden state', () => {
   const roots: string[] = [];
@@ -241,70 +157,12 @@ describe('N=1 golden state', () => {
     });
     await runTaskStart(root, '2');
 
-    // Normalize and compare files
-    function normalizeTimestamp(value: unknown): unknown {
-      if (typeof value === 'string') {
-        if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
-          return '<TIMESTAMP>';
-        }
-        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
-          return '<UUID>';
-        }
-        return value.replaceAll(root, '<ROOT>');
-      }
-      if (typeof value === 'number' && value > 946684800000) {
-        return '<EPOCH>';
-      }
-      if (typeof value === 'object' && value !== null) {
-        if (Array.isArray(value)) {
-          return value.map(normalizeTimestamp);
-        }
-        const entries = Object.entries(value);
-        if (entries.length === 0) return value;
-        const result: Record<string, unknown> = {};
-        for (const [k, v] of entries) {
-          if (k === 'observedIntervals' || k === 'activeInterval') continue;
-          if (['ts', 'at', 'checkedAt', 'run_started_at', 'session_started_at', 'startedAtMs', 'appliedAt', 'committedAt'].includes(k)) {
-            result[k] = '<TIMESTAMP>';
-          } else if (k === 'executionId') {
-            result[k] = '<UUID>';
-          } else {
-            result[k] = normalizeTimestamp(v);
-          }
-        }
-        return result;
-      }
-      return value;
-    }
-
-    async function readAndNormalize(path: string): Promise<string> {
-      const content = await readFile(path, 'utf8');
-      try {
-        const parsed = JSON.parse(content);
-        return JSON.stringify(normalizeTimestamp(parsed), null, 2);
-      } catch {
-        let lines = content.split('\n');
-        // Normalize root path in text files
-        lines = lines.map((l) => l.replaceAll(root, '<ROOT>'));
-        // Try to parse JSON lines (events.jsonl)
-        const jsonLines = lines.map((line) => {
-          try {
-            const parsed = JSON.parse(line);
-            return JSON.stringify(normalizeTimestamp(parsed));
-          } catch {
-            return line;
-          }
-        });
-        return jsonLines.join('\n');
-      }
-    }
-
     // Compare state files
-    const stateContent = await readAndNormalize(statePath);
+    const stateContent = await readAndNormalize(statePath, root);
     await expectGolden(`${cell.name}-conduct-state`, stateContent);
 
     const taskStatusPath = join(pipeline, 'task-status.json');
-    const taskStatusContent = await readAndNormalize(taskStatusPath);
+    const taskStatusContent = await readAndNormalize(taskStatusPath, root);
     await expectGolden(`${cell.name}-task-status`, taskStatusContent);
 
     const currentTaskPath = join(pipeline, 'current-task');
@@ -322,7 +180,7 @@ describe('N=1 golden state', () => {
     }
     const gateContents = await Promise.all(
       gatePaths.map(async (p) => {
-        const content = await readAndNormalize(join(gateDir, p));
+        const content = await readAndNormalize(join(gateDir, p), root);
         return `--- ${p} ---\n${content}`;
       }),
     );
@@ -331,11 +189,11 @@ describe('N=1 golden state', () => {
       await expectGolden(`${cell.name}-gate-${gatePaths[i].replace('.json', '')}`, gateContents[i]);
     }
 
-    const eventsContent = await readAndNormalize(ledgerPath);
+    const eventsContent = await readAndNormalize(ledgerPath, root);
     await expectGolden(`${cell.name}-events`, eventsContent);
 
     const kickbackPath = join(pipeline, 'kickback-ledger.json');
-    const kickbackContent = await readAndNormalize(kickbackPath);
+    const kickbackContent = await readAndNormalize(kickbackPath, root);
     await expectGolden(`${cell.name}-kickback-ledger`, kickbackContent);
 
     // Assert no children directory and no "child" in events
