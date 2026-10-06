@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-06T12:39:32.276Z
 Slug: engine-prompts-direct-daemon-sessions-to-ai-conduc
 Class: needs-human
 Halting step: unknown
