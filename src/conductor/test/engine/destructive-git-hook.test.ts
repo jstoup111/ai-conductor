@@ -75,11 +75,12 @@ describe('block-destructive-git hook force-push protection', () => {
     expect(denial.hookSpecificOutput?.permissionDecisionReason).toMatch(/force.*push/i);
   }
 
-  function branchCheckStub(mergedBranch: string): string {
+  function branchCheckStub(...mergedBranches: string[]): string {
+    const mergedBranchCondition = mergedBranches.map((branch) => `"$3" == ${JSON.stringify(branch)}`).join(' || ');
     return `#!/usr/bin/env bash
 if [[ "$1" == "symbolic-ref" ]]; then exit 1; fi
 if [[ "$1" == "rev-parse" ]]; then printf '%s\\n' main; exit 0; fi
-if [[ "$1" == "merge-base" && "$3" == ${JSON.stringify(mergedBranch)} ]]; then exit 0; fi
+if [[ "$1" == "merge-base" && ( ${mergedBranchCondition} ) ]]; then exit 0; fi
 exit 1
 `;
   }
@@ -359,6 +360,18 @@ exit 1
     expect(result.status).toBe(0);
   });
 
+  it.each([
+    'git branch -D m1 m2',
+    'git branch -D m1 && git branch -D m2',
+  ])('allows all merged branch-delete operands: %s', (command) => {
+    const result = invoke(command, {
+      git: branchCheckStub('m1', 'm2'),
+      gh: '#!/usr/bin/env bash\nexit 0\n',
+    });
+
+    expect(result.status).toBe(0);
+  });
+
   it('aggregates branch deletions and blocks the unmerged operand', () => {
     const result = invoke('git branch -D merged && git branch -D unmerged', {
       git: branchCheckStub('merged'),
@@ -367,6 +380,7 @@ exit 1
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('unmerged');
+    expect(result.stderr).not.toMatch(/branch\(es\):[^.]*\bmerged\b/);
   });
 
   it('continues past an allowed branch deletion to block a force push', () => {
