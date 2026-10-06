@@ -31,6 +31,7 @@ import { writeState } from '../../src/engine/state.js';
 import { buildStepRegistry } from '../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { persistPrdWideningOffers } from '../../src/engine/prd-widening-offers.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
 import type { ConductState, StepDefinition, StepName } from '../../src/types/index.js';
 import type { RebasePreservedCandidate } from '../../src/engine/gate-verdicts.js';
@@ -48,6 +49,21 @@ const report = [
   '| --- | --- | --- | --- |',
   '| NC.1 | OVER_SCOPE | outside-visible | The original user-visible widening. |',
 ].join('\n');
+
+/** The typed judgment the managed prd_audit dispatch persists for {@link report}. */
+const judgment = {
+  version: 'v1' as const,
+  criterionJudgments: [{
+    criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS' as const,
+    evidence: 'Planned behavior is present.', rationale: 'Fixture pass.',
+    requirementAssociations: [], evidenceTaskIds: [],
+  }],
+  noOwnerObservations: [{
+    presentationOrdinal: 'NC.1', grade: 'OVER_SCOPE' as const,
+    evidence: 'The original user-visible widening.', rationale: 'Fixture widening.',
+    intentRelation: 'outside-visible' as const,
+  }],
+};
 
 const sourceId = prdWideningSourceId({
   criterion: 'NC.1', grade: 'OVER_SCOPE',
@@ -166,7 +182,9 @@ describe('integration/rebase-fence-over-scope-resume (#2983)', () => {
               expect.objectContaining({ criterion: 'NC.1' }),
             ]));
           }
-          await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), report);
+          await persistPrdAuditVerdict(projectRoot, {
+            complete: true, judgment, diagnostics: [], recordedDispositions: [],
+          } as never, { attemptId: options?.runId ?? 'fixture-run', codeStamp: 'head' });
           return { success: true };
         }
         if (step === 'remediate') {
