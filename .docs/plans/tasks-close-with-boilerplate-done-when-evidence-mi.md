@@ -131,7 +131,7 @@ Thirteen tasks make a `[test]`-tagged Done-when check close only on a verified t
 **Dependencies:** Task 5
 
 **Steps:**
-1. Write failing tests on a `Verify-only: yes` task with one tagged and one untagged check: unverified close completes; no evidence for the tagged check is refused; a verified tagged check lets the untagged check close by the prove-closed path.
+1. Write failing tests on a `Verify-only: yes` task with one tagged and one untagged check: unverified close completes; no evidence for the tagged check is refused naming only that check, and the untagged check still closes by the prove-closed path once the tagged check has evidence; a verified tagged check lets the untagged check close by the prove-closed path.
 2. Verify they fail (RED).
 3. Implement in `completeTaskDoneWhen`: under `verifyOnly`, still require a verified reference or an unverified close for `[test]` checks, and stamp untagged checks `verify-only` as today.
 4. Verify they pass (GREEN).
@@ -139,7 +139,7 @@ Thirteen tasks make a `[test]`-tagged Done-when check close only on a verified t
 
 **Done when:**
 - On a `Verify-only: yes` task, `conduct task done --unverified 1=<reason>` for its tagged check completes the task and records that check with source `unverified`, as asserted by the verify-only unverified test.
-- On a `Verify-only: yes` task, `conduct task done` with no evidence for its tagged check exits non-zero naming the check and leaves the task not completed, as asserted by the verify-only refusal test.
+- On a `Verify-only: yes` task with one tagged and one untagged check, `conduct task done` with no evidence for its tagged check exits non-zero naming the check and leaves the task not completed, and its refusal neither names the untagged check nor requires evidence for it; re-running the close with evidence for only the tagged check completes the task with the untagged check recorded with evidence `prove-closed` and source `verify-only`, as asserted by the verify-only refusal test.
 - On a `Verify-only: yes` task whose tagged check is closed with a verified reference, its untagged check is recorded with source `verify-only` without supplied evidence, as asserted by the verify-only prove-closed test.
 
 **Files:** `src/conductor/src/engine/task-progress.ts`, `src/conductor/test/engine/task-progress.test.ts`
@@ -375,3 +375,11 @@ Task 13 <- Tasks 3, 5
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-ab2-1: task-cli.ts:386-402 runTaskPlanGap — after resolving `check`, refuse with exit 1 and write no HALT when the check starts with TEST_DONE_WHEN_TAG (plan-task-parse.ts). The message names the check index and says to write or cite the test or use --unverified <n>=<reason>. This covers both callers at :282 and :302. Add task-cli.test.ts cases: --plan-gap on a [test] check exits 1, writes no .pipeline/HALT, and leaves the task in_progress. Keep the existing untagged plan-gap HALT tests passing (task 5 refusal-wording coverage preserved).
+**Gate:** as-built
+**Rationale:** REMEDIABLE (verified): task-cli.ts:282 and :302 call runTaskPlanGap before any tag check, and runTaskPlanGap at :386 checks only that the indexed check exists before writing a plan-gap HALT at :402. This violates adr-2026-08-22-done-when-evidence-at-task-close D7: a refused tagged check is never a plan-gap. The fix is conforming implementation drift in task-cli.ts (task 5's file) and needs no architecture decision. No Done-when check explicitly admits rejecting --plan-gap for a tagged index; task 5's check 3 covers only refusal wording. So this routes to build with an appended task, not to existing-task. Plan-gap reports for untagged checks must keep working, along with their existing tests.
+**Governing clause:** adr-2026-08-22-done-when-evidence-at-task-close decision 7
+**Done when:**
+- adr-2026-08-22-done-when-evidence-at-task-close decision 7 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-1 is complete.

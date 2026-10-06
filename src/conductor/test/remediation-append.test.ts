@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   appendRemediationTasks,
+  PRD_AUDIT_REMEDIATION_GATE_SOURCE,
   type CriterionBoundRemediationGap,
 } from '../src/engine/remediation-append.js';
 import type { RemediationGap } from '../src/engine/artifacts.js';
@@ -29,7 +30,7 @@ describe('prd_audit remediation append', () => {
           parentTask: 4,
           tasks: [{ id: 'criterion-parent', title: 'Implement the missing behavior' }],
         },
-        checks: ['S2.1 is satisfied by this task.'],
+        checks: ['[test] S2.1 is satisfied by this task.'],
         metadata: ['**Criterion:** S2.1', '**Parent task:** 4'],
       },
       {
@@ -57,7 +58,7 @@ describe('prd_audit remediation append', () => {
           governingClause: 'adr-example decision 2',
           tasks: [{ id: 'both-fields', title: 'Render both obligations' }],
         },
-        checks: ['S2.2 is satisfied by this task.', 'adr-example decision 2 is satisfied by this task.'],
+        checks: ['[test] S2.2 is satisfied by this task.', 'adr-example decision 2 is satisfied by this task.'],
         metadata: [
           '**Criterion:** S2.2',
           '**Governing clause:** adr-example decision 2',
@@ -75,7 +76,7 @@ describe('prd_audit remediation append', () => {
           parentTask: 4,
           tasks: [{ id: 'multiline', title: '  Render\n  single-line checks  ' }],
         },
-        checks: ['S2.3 observable behavior is satisfied by this task.'],
+        checks: ['[test] S2.3 observable behavior is satisfied by this task.'],
         metadata: ['**Criterion:** S2.3 observable behavior', '**Parent task:** 4'],
       },
       {
@@ -101,8 +102,8 @@ describe('prd_audit remediation append', () => {
     }>;
 
     for (const { name, gap, checks, metadata } of cases) {
-      const first = appendRemediationTasks(existingPlan, [gap], 'prd-audit');
-      const second = appendRemediationTasks(first.planText, [gap], 'prd-audit');
+      const first = appendRemediationTasks(existingPlan, [gap], PRD_AUDIT_REMEDIATION_GATE_SOURCE);
+      const second = appendRemediationTasks(first.planText, [gap], PRD_AUDIT_REMEDIATION_GATE_SOURCE);
       const appended = first.planText.slice(existingPlan.length);
       const renderedChecks = [...appended.matchAll(/^- (.+)$/gm)].map((match) => match[1]);
 
@@ -131,11 +132,11 @@ describe('prd_audit remediation append', () => {
       tasks: [{ id: 'rem-s2-1', title: 'Implement the missing behavior' }],
     } satisfies RemediationGap & { criterion: string; parentTask: number };
 
-    const result = appendRemediationTasks('### Task 4: Existing work\n', [gap], 'prd-audit');
+    const result = appendRemediationTasks('### Task 4: Existing work\n', [gap], PRD_AUDIT_REMEDIATION_GATE_SOURCE);
 
     expect(result.planText).toContain('**Criterion:** S2.1');
     expect(result.planText).toContain('**Parent task:** 4');
-    expect(result.planText).toContain('**Done when:**\n- S2.1 is satisfied by this task.');
+    expect(result.planText).toContain('**Done when:**\n- [test] S2.1 is satisfied by this task.');
   });
 
   it('renders and idempotently upserts as-built tasks with their governing clause', () => {

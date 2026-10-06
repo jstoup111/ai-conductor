@@ -117,6 +117,7 @@ import {
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import { redactSafetyText } from './safety-diagnostics.js';
 import { createEngineStateStore } from './engine-state-store.js';
+import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
 import { createRepairObligationStore } from './repair-obligations.js';
 import { admitAndRestageRepair } from './repair-restage.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
@@ -276,6 +277,7 @@ import { verdictProducedByRun } from './gate-code-validity.js';
 import {
   appendRemediationTasks as appendCriterionBoundRemediationTasks,
   buildRemediationDoneWhenChecks,
+  PRD_AUDIT_REMEDIATION_GATE_SOURCE,
   type CriterionBoundRemediationGap,
 } from './remediation-append.js';
 import {
@@ -2149,6 +2151,20 @@ function projectExecutionSummaryEntries(
   return entries.map(({ index, result, durationMs }) => ({ index, result, durationMs }));
 }
 
+/** Whether a failed BUILD attempt made no task or commit progress. */
+export function isNoTaskProgressBuildStall(input: {
+  attempt: number;
+  resolvedTasksBefore: number;
+  resolvedTasksAfter: number;
+  headMovedThisAttempt: boolean;
+  completionReason?: string;
+}): boolean {
+  return input.attempt >= 2 &&
+    input.resolvedTasksAfter <= input.resolvedTasksBefore &&
+    !input.headMovedThisAttempt &&
+    !input.completionReason?.startsWith('unverified Done-when checks require one BUILD review pass:');
+}
+
 export class Conductor {
   private stateFilePath: string;
   /** Current run state, retained so terminal events can be step-stamped. */
@@ -2841,7 +2857,45 @@ export class Conductor {
         this.retainedFullSuiteInspection = undefined;
         return retained ?? this.fullSuiteVerifier.inspect();
       },
+      unverifiedDoneWhenNudgeSpent: await this.unverifiedDoneWhenNudgeSpent(state),
     };
+  }
+
+  /**
+   * Durable BUILD-lap identity for the unverified Done-when nudge. The
+   * feature-run stamp survives restarts and the durable kickback total advances
+   * on every route back into BUILD.
+   */
+  private async unverifiedDoneWhenNudgeLapKey(state: ConductState): Promise<string> {
+    const ledger = await readKickbackLedger(this.projectRoot);
+    const kickbackCount = Object.values(ledger.gates)
+      .reduce((total, gate) => total + gate.cumulative, 0);
+    return `${state.run_started_at ?? state.session_started_at ?? 'unknown'}:${kickbackCount}`;
+  }
+
+  /** Durable once-per-BUILD-lap nudge marker; engine-state is the restart seam. */
+  private async unverifiedDoneWhenNudgeSpent(state: ConductState): Promise<boolean> {
+    const key = await this.unverifiedDoneWhenNudgeLapKey(state);
+    const read = await createEngineStateStore(join(this.projectRoot, '.pipeline', 'engine-state.json')).read();
+    if (!read.ok) return false;
+    const laps = read.value.unverifiedDoneWhenNudges;
+    return typeof laps === 'object' && laps !== null && !Array.isArray(laps)
+      && (laps as Record<string, unknown>)[key] === true;
+  }
+
+  private async recordUnverifiedDoneWhenNudge(state: ConductState): Promise<void> {
+    const key = await this.unverifiedDoneWhenNudgeLapKey(state);
+    const store = createEngineStateStore(join(this.projectRoot, '.pipeline', 'engine-state.json'));
+    const result = await store.update((current) => ({
+      ...current,
+      unverifiedDoneWhenNudges: {
+        ...(typeof current.unverifiedDoneWhenNudges === 'object' && current.unverifiedDoneWhenNudges !== null && !Array.isArray(current.unverifiedDoneWhenNudges)
+          ? current.unverifiedDoneWhenNudges
+          : {}),
+        [key]: true,
+      },
+    }));
+    if (!result.ok) throw new Error(`Failed to persist unverified Done-when nudge (${result.kind}): ${result.message}`);
   }
 
   /**
@@ -5258,7 +5312,7 @@ export class Conductor {
           // A single planner gap can name both findings. Preserve both
           // rendered bindings, but charge its one appended task to the PRD
           // source that owns mixed-source plan growth.
-          gateSource: prdAuditAdmits ? 'prd-audit' : 'as-built',
+          gateSource: prdAuditAdmits ? PRD_AUDIT_REMEDIATION_GATE_SOURCE : 'as-built',
         };
         appendGaps.push(admittedGap);
         admittedGaps.push(admittedGap);
@@ -5394,7 +5448,7 @@ export class Conductor {
           ...(prdAuditRemediation || (asBuiltRemediation && asBuiltValidated)
             ? {
                 criterionBoundGaps: appendGaps,
-                gateSource: prdAuditRemediation ? 'prd-audit' : 'as-built',
+                gateSource: prdAuditRemediation ? PRD_AUDIT_REMEDIATION_GATE_SOURCE : 'as-built',
               }
             : {}),
         });
@@ -11981,6 +12035,21 @@ export class Conductor {
               });
             }
 
+            if (step.name === 'build' && completion.done && await this.unverifiedDoneWhenNudgeSpent(state)) {
+              try {
+                const status = JSON.parse(await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8'));
+                const checks = collectUnverifiedDoneWhenChecks(status);
+                if (checks.length > 0) {
+                  await this.events.emit({
+                    type: 'build_done_when_unverified',
+                    checks: checks.map(({ taskId, check }) => ({ taskId, check })),
+                  });
+                }
+              } catch {
+                // Missing legacy task status means there is no event to emit.
+              }
+            }
+
             if (!completion.done) {
               lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
               if (
@@ -11999,6 +12068,13 @@ export class Conductor {
                 completion.missing,
                 join(this.projectRoot, '.pipeline'),
               );
+              if (
+                step.name === 'build' &&
+                attempt < stepMaxRetries &&
+                completion.reason?.startsWith('unverified Done-when checks require one BUILD review pass:')
+              ) {
+                await this.recordUnverifiedDoneWhenNudge(state);
+              }
 
               // #646: rerun-vs-route classifier. Generalizes the original
               // prd_audit-only short-circuit (retained verbatim below when
@@ -12111,12 +12187,9 @@ export class Conductor {
               // ADR: adr-2026-07-23-trailer-union-build-step-routing.md (#859)
               // — `resolvedTasksAfter` below is `countResolvedTasks`, which
               // unions task-status.json rows with Task:-trailered commits.
-              // Any attempt where every plan task id is trailer-resolved
-              // exits via the completion check above (`completion.done`)
-              // BEFORE this block runs at all, so a build that is genuinely
-              // 100% complete can never misread the attempt ceiling as a
-              // stall here — only a real, unresolved-task stall reaches this
-              // breaker.
+              // All-resolved unverified Done-when state gets one bounded
+              // completion nudge. That intentionally not-done attempt is
+              // not a no-task-progress stall, even at retry two or later.
               let stalled: 'no_task_progress' | 'halt_marker' | null = null;
               // T4: set true when this attempt made real forward progress
               // and is still under the progress-attempt ceiling — signals
@@ -12146,11 +12219,13 @@ export class Conductor {
                   headShaAttemptEnd !== headShaAttemptStart;
                 if (markerSet) {
                   stalled = 'halt_marker';
-                } else if (
-                  attempt >= 2 &&
-                  resolvedTasksAfter <= resolvedTasksBefore &&
-                  !headMovedThisAttempt
-                ) {
+                } else if (isNoTaskProgressBuildStall({
+                  attempt,
+                  resolvedTasksBefore,
+                  resolvedTasksAfter,
+                  headMovedThisAttempt,
+                  completionReason: completion.reason,
+                })) {
                   stalled = 'no_task_progress';
                   // #569 Task 5: record a distinct, actionable reason for
                   // the terminal HALT fallback in case this build step
@@ -16402,6 +16477,13 @@ export function buildRetryHint(
       return (
         `Previous attempt did not satisfy the completion check: ${r}. ` +
         'Commit the uncommitted paths, then re-run the build step.'
+      );
+    }
+    if (/^unverified Done-when checks require one BUILD review pass:/i.test(r)) {
+      return (
+        `Previous attempt did not satisfy the completion check: ${r}. ` +
+        'Review each named check: add or cite its covering test when possible, or confirm the recorded unverified reason. ' +
+        'Then complete the BUILD step.'
       );
     }
     if (/tasks? not completed/i.test(r)) {

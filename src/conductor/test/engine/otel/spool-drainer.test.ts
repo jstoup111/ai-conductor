@@ -520,6 +520,8 @@ describe('SpoolDrainer', () => {
     let releaseFirstTraceRetry: (() => void) | undefined;
     let signalFirstTraceRetry!: () => void;
     const firstTraceRetry = new Promise<void>((resolve) => { signalFirstTraceRetry = resolve; });
+    let signalMetricsDelivered!: () => void;
+    const metricsDelivered = new Promise<void>((resolve) => { signalMetricsDelivered = resolve; });
     const store = new SpoolStore(await temporaryDirectory(), { now: () => now });
     await store.write('traces', Buffer.from('oldest-trace'));
     now += 1;
@@ -542,6 +544,7 @@ describe('SpoolDrainer', () => {
         // The metrics loop is independent, but it must not win the shared
         // sleep seam before the trace retry has installed its test barrier.
         await firstTraceRetry;
+        signalMetricsDelivered();
         return new Response(undefined, { status: 200 });
       },
       now: () => now,
@@ -561,9 +564,7 @@ describe('SpoolDrainer', () => {
     const draining = drainer.drainUntilStopped();
 
     try {
-      for (let turns = 0; turns < 50 && (!releaseFirstTraceRetry || !received.includes('/v1/metrics:independent-metric')); turns += 1) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
+      await Promise.all([firstTraceRetry, metricsDelivered]);
       expect(received.filter((entry) => entry.startsWith('/v1/traces:'))).toEqual(['/v1/traces:oldest-trace']);
       expect(await store.list('traces')).toHaveLength(2);
       expect(await store.list('metrics')).toEqual([]);

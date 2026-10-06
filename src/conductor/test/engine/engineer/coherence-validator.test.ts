@@ -2492,6 +2492,18 @@ Document the steps-only evidence before completion.
     expect(checkCriterionCoverage(valid, doneWhenStories, doneWhenPlan)).toEqual({ ok: true });
   });
 
+  it('accepts an untagged fragment quoted from a [test]-tagged Done when check', () => {
+    const taggedPlan = doneWhenPlan.replace(
+      '- The widget is shipped with   arrival tracking.',
+      '- [test] The widget is shipped with   arrival tracking.',
+    );
+    const valid = rows([
+      `| criterion | ${doneWhenCriterion} | task-3 | covered | "The widget is shipped with arrival tracking." | diff-local |`,
+    ]);
+
+    expect(checkCriterionCoverage(valid, doneWhenStories, taggedPlan)).toEqual({ ok: true });
+  });
+
   it('accepts a quote from any cited task Done when check', () => {
     const valid = rows([
       `| criterion | ${doneWhenCriterion} | task-3, task-5 | covered | "The alternate task records the shipping confirmation." | diff-local |`,

@@ -775,7 +775,7 @@ file. Use `config read conductor.<key>` or `config read spec_owner` to inspect t
 
 ```bash
 ai-conductor task start <id>
-ai-conductor task done <id> [--done-when <n>=<evidence>]...
+ai-conductor task done <id> [--done-when <n>=<evidence>]... [--unverified <n>=<reason>]...
 ai-conductor task done <id> --plan-gap <n> --reason <text>
 ```
 
@@ -790,7 +790,12 @@ the valid ids); or when either write fails.
 `done` reads `.pipeline/current-task`, but the stamp is attribution telemetry rather than close
 authority. With or without a stamp, a task whose active plan declares `Done when:` checks records
 the supplied evidence for every check and marks its row `completed`; missing evidence refuses the
-close and names the check. Without a stamp, re-closing an already `completed` or `skipped` row with
+close and names the check. A check tagged `[test]` needs `--done-when <n>=test:<path>::<title>`: the
+file must exist at `HEAD`, contain the title, and carry a `Covers:` marker for the task or one of its
+cited story criteria; otherwise the close is refused and names the failing part. A tagged check that no
+test can verify may close with `--unverified <n>=<reason>` instead; the reason must be non-empty, and an
+untagged check refuses the flag. `--plan-gap` refuses a tagged check. Both verbs resolve the
+repository root first, so they work from a nested directory. Without a stamp, re-closing an already `completed` or `skipped` row with
 no open repair exits 0 without rewriting `task-status.json`. `--plan-gap <n> --reason <text>` halts
 the task with or without a stamp; when no active plan is recorded, it resolves the plan from the
 feature slug. A legacy task with no `Done when:` checks keeps its prior

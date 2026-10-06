@@ -61,6 +61,7 @@ import { createEngineStateStore } from './engine-state-store.js';
 import {
   parsePlanTaskStoryIds,
 } from './plan-task-parse.js';
+import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
 import {
   deriveEffectiveBuildReviewVerdict,
   parseBuildReviewAggregate,
@@ -1197,6 +1198,11 @@ export async function recordPrBodyRegenAttempt(dir: string, prUrl: string): Prom
 
 /** Context threaded through completion predicates. Optional fields fail open. */
 export interface CompletionContext {
+  /**
+   * Whether this BUILD lap has already spent its one retry for explicit
+   * unverified Done-when closes. Task 9 persists and supplies this flag.
+   */
+  unverifiedDoneWhenNudgeSpent?: boolean;
   /**
    * Completion is being checked only to decide whether an existing verdict can
    * be preserved before dispatch. Predicates must not update evidence in this
@@ -2691,6 +2697,21 @@ async function writeArchitectureReviewAsBuiltCodeStamp(
   await writeGateCodeStamp(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP, ctx);
 }
 
+function unverifiedDoneWhenNudgeCompletion(
+  status: unknown,
+  ctx: CompletionContext,
+): CompletionResult | undefined {
+  if (ctx.unverifiedDoneWhenNudgeSpent) return undefined;
+  const checks = collectUnverifiedDoneWhenChecks(status);
+  if (checks.length === 0) return undefined;
+  return {
+    done: false,
+    reason: `unverified Done-when checks require one BUILD review pass: ${checks
+      .map(({ taskId, check }) => `Task ${taskId}: ${check}`)
+      .join('; ')}`,
+  };
+}
+
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
   Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
 > = {
@@ -2878,9 +2899,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           reason: 'missing .pipeline/task-status.json — the pipeline skill must create it',
         };
       }
+      let status: unknown;
       let statusRows: TaskEntry[];
       try {
-        statusRows = extractTasks(JSON.parse(raw));
+        status = JSON.parse(raw);
+        statusRows = extractTasks(status);
       } catch {
         return { done: false, reason: 'invalid JSON in .pipeline/task-status.json' };
       }
@@ -2918,6 +2941,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
 
       const dirtyWorktree = await dirtyWorktreeCompletionOrNull(ctx);
       if (dirtyWorktree) return dirtyWorktree;
+      const unverifiedNudge = unverifiedDoneWhenNudgeCompletion(status, ctx);
+      if (unverifiedNudge) return unverifiedNudge;
       return { done: true };
     }
 
@@ -2955,6 +2980,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     const dirtyWorktree = await dirtyWorktreeCompletionOrNull(ctx);
     if (dirtyWorktree) return dirtyWorktree;
+    const unverifiedNudge = unverifiedDoneWhenNudgeCompletion(parsed, ctx);
+    if (unverifiedNudge) return unverifiedNudge;
     return { done: true };
   },
 

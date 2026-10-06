@@ -1188,6 +1188,11 @@ export type ConductorEvent =
       | { disposition: 'none_warranted' | 'no_join'; repairCount?: never }
     ))
   | { type: 'mode_skip'; step: StepName; mode: BootstrapMode; reason: string }
+  /** BUILD completed after its one review pass with explicit test-proof exceptions. */
+  | {
+      type: 'build_done_when_unverified';
+      checks: readonly { readonly taskId: string; readonly check: string }[];
+    }
   | {
       type: 'build_stall';
       step: StepName;

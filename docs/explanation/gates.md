@@ -190,7 +190,7 @@ from specs that would waste a build.
 | mermaid render | a diagram that does not render — previously prose guidance, now enforced |
 | diagram presence | a non-Small architecture artifact with no fenced Mermaid block |
 | protected-target plan | a task that directs BUILD to amend another feature's sealed DECIDE artifact |
-| plan completion checks | a task with no `Done when:` block, a blank check, fewer than two checks, or more than five checks; fenced-code examples are ignored |
+| plan completion checks | a task with no `Done when:` block, a blank check (including a bare `[test]`), fewer than two checks, more than five checks, or a malformed test tag — a leading bracketed token starting with `test` that is not exactly `[test]`; fenced-code examples are ignored |
 | plan task count | a plan with 41 or more parsed tasks unless it has exactly one `**Scope-exception:**` declaration with a non-empty rationale; 21–40 tasks are a plan-authoring warning, not a land refusal |
 | architecture obligation coverage | a decision in a changed land-accepted ADR (`APPROVED` or `SUPERSEDED`) with no unique disposition, an invented decision, an invalid disposition, a nonexistent task, or task evidence absent from the cited task's `Done when:` block |
 
@@ -506,6 +506,17 @@ Per-task delivery is evidenced at `build` when a task closes: each `Done when:` 
 plan must be shown true before the task counts as complete (FR-6). A check that cannot be made true under
 the approved plan is reported as a plan gap, not repaired off-plan. A plan authored before this change —
 with no `Done when:` blocks — closes tasks on the prior evidence rule instead (FR-21).
+
+A check that begins with the exact tag `[test]` closes only on a committed covering test: a
+`test:<path>::<title>` reference whose file exists at `HEAD`, contains the title, and carries a
+`Covers:` marker for the task or one of its cited story criteria. Prose evidence does not close it.
+When no test can verify the check, the builder records it as unverified with a reason; a missing test
+is never a plan gap. Unverified closes cost one extra BUILD pass per lap: the first otherwise-complete
+attempt is refused so the builder can add a test or confirm each reason, and that refusal does not
+count as a no-progress stall. A BUILD that then completes with unverified checks emits
+`build_done_when_unverified`, and `prd_audit` receives the checks and reasons as audit input.
+Criterion-bound `prd_audit` remediation tasks tag their first check `[test]`. Command syntax:
+[`ai-conductor task`](../reference/cli.md#ai-conductor-task).
 
 ### Bounded plan growth
 

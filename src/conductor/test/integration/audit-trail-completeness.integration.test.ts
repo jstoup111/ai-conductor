@@ -241,6 +241,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   step_inapplicable_ignored: 'not-audited-by-design',
   step_inapplicable_refused: 'not-audited-by-design',
   build_active_stall: 'not-audited-by-design',
+  build_done_when_unverified: 'not-audited-by-design',
 };
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
@@ -857,6 +858,10 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     resolved: 2,
     total: 5,
     action: 'warn',
+  },
+  build_done_when_unverified: {
+    type: 'build_done_when_unverified',
+    checks: [{ taskId: '1', check: '[test] proves the outcome' }],
   },
   acceptance_red: {
     type: 'acceptance_red',

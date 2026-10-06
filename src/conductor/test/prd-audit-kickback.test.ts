@@ -955,7 +955,7 @@ describe('prd_audit kickback', () => {
     for (const [criterion, parentTask] of [['S2.1', 4], ['S2.2', 5], ['S2.3', 6]] as const) {
       expect(appendedPlan).toContain(`**Criterion:** ${criterion}`);
       expect(appendedPlan).toContain(`**Parent task:** ${parentTask}`);
-      expect(appendedPlan).toContain(`**Done when:**\n- ${criterion} is satisfied by this task.`);
+      expect(appendedPlan).toContain(`**Done when:**\n- [test] ${criterion} is satisfied by this task.`);
     }
     const ledger = await readKickbackLedger(root);
     expect((ledger.gates.prd_audit as { laps?: number } | undefined)?.laps ?? 0).toBe(0);

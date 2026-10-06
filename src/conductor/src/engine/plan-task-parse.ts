@@ -14,6 +14,22 @@ import { PROTECTED_ARTIFACT_DIRECTORIES, namesOwnFeature } from './protected-art
 // grammar instead of re-deriving a narrower ad hoc regex.)
 export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
 
+/** Exact inline marker for a Done-when check that requires test evidence. */
+export const TEST_DONE_WHEN_TAG = '[test]';
+
+/**
+ * A check may opt into test evidence only with the exact, lowercase tag.
+ * Other bracketed tokens beginning with "test" look like an attempted tag and
+ * must be rejected at land rather than silently treated as untagged prose.
+ */
+export function isMalformedTestTag(check: string): boolean {
+  const trimmed = check.trimStart();
+  const token = trimmed.match(/^\[([^\]]+)\]/)?.[1];
+  return token !== undefined
+    && token.toLowerCase().startsWith('test')
+    && !trimmed.startsWith(TEST_DONE_WHEN_TAG);
+}
+
 /**
  * The commit-message line shape the build evidence reader treats as task
  * routing telemetry: a flush-left `Task: <id>`, optionally followed by

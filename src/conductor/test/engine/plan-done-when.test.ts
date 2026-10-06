@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validatePlanDoneWhen } from '../../src/engine/plan-done-when.js';
+import { parsePlanTaskDoneWhen, TEST_DONE_WHEN_TAG } from '../../src/engine/plan-task-parse.js';
 
 describe('validatePlanDoneWhen', () => {
   it('accepts plan tasks carrying between two and five nonblank Done-when criteria', () => {
@@ -59,5 +60,41 @@ describe('validatePlanDoneWhen', () => {
       { taskId: 'blank', reason: 'blank' },
       { taskId: 'too-many', reason: 'too-many' },
     ]);
+  });
+
+  it('accepts an exact [test] tag but rejects malformed test-like tags with their check text', () => {
+    const taggedPlan = `### Task valid: Exact tag
+**Done when:**
+- [test] The focused test proves the result.
+- The documentation names the result.
+`;
+    expect(TEST_DONE_WHEN_TAG).toBe('[test]');
+    expect(parsePlanTaskDoneWhen(taggedPlan).get('valid')).toEqual([
+      '[test] The focused test proves the result.',
+      'The documentation names the result.',
+    ]);
+    expect(validatePlanDoneWhen(taggedPlan)).toEqual([]);
+
+    expect(validatePlanDoneWhen(`### Task plural: Malformed tag
+**Done when:**
+- [tests] The focused test proves the result.
+- The documentation names the result.
+
+### Task case: Malformed tag
+**Done when:**
+- [Test] The focused test proves the result.
+- The documentation names the result.
+`)).toEqual([
+      { taskId: 'plural', reason: 'malformed-test-tag', check: '[tests] The focused test proves the result.' },
+      { taskId: 'case', reason: 'malformed-test-tag', check: '[Test] The focused test proves the result.' },
+    ]);
+  });
+
+  it('reports a bare [test] check as blank', () => {
+    expect(validatePlanDoneWhen(`### Task empty-tag: Empty tag
+**Done when:**
+- [test]
+- The documentation names the result.
+`)).toEqual([{ taskId: 'empty-tag', reason: 'blank' }]);
   });
 });

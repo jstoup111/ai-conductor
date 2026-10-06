@@ -613,6 +613,201 @@ describe('runTaskDone', () => {
     expect(await resolveTaskIds(dir, ['7'])).toEqual(new Set(['7']));
   });
 
+  describe('tagged Done when evidence from HEAD', () => {
+    async function prepareTaggedTask(options: {
+      testText: string;
+      check?: string;
+      storyText?: string;
+    }): Promise<void> {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@example.test'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Task CLI Test'], { cwd: dir });
+      await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.mkdir(join(dir, 'test'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+        '# Plan',
+        '',
+        '**Stories:** .docs/stories/feature.md',
+        '',
+        '### Task 3: Verify the close',
+        '**Story:** 2',
+        '**Done when:**',
+        `- ${options.check ?? '[test] the committed test proves the close.'}`,
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(dir, '.docs', 'stories', 'feature.md'), options.storyText ?? [
+        '## Story 2: Test evidence',
+        '### Happy Path',
+        '- Given a task, when it closes, then it records evidence.',
+        '### Negative Paths',
+        '- Given invalid evidence, when it closes, then it refuses.',
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '3', status: 'pending' }],
+      }));
+      await fsPromises.writeFile(join(dir, 'test', 'close.test.ts'), options.testText);
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed committed test'], { cwd: dir });
+      await expect(runTaskStart(dir, '3')).resolves.toBe(0);
+    }
+
+    async function close(evidence: string, cwd = dir): Promise<number> {
+      return dispatchTaskCommand(detectTaskCommand([
+        'node', 'conduct', 'task', 'done', '3', '--done-when', `1=${evidence}`,
+      ])!, cwd);
+    }
+
+    it('closes a tagged check from a committed task-marked test and records verified', async () => {
+      await prepareTaggedTask({
+        testText: '// Covers: task:3\nit(\'closes the tagged task\', () => {});\n',
+      });
+
+      expect(await close("test:test/close.test.ts::closes the tagged task")).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0]).toMatchObject({
+        status: 'completed',
+        doneWhen: [{ source: 'verified' }],
+      });
+    });
+
+    // Covers: task:5
+    it('closes task 5 check 2 as unverified with its per-check reason and no HALT', async () => {
+      await prepareTaggedTask({
+        check: '[test] first committed outcome\n- [test] second committed outcome',
+        testText: '// Covers: task:3\nit(\'proves the first committed outcome\', () => {});\n',
+      });
+
+      const command = detectTaskCommand([
+        'node', 'conduct', 'task', 'done', '3',
+        '--done-when', '1=test:test/close.test.ts::proves the first committed outcome',
+        '--unverified', '2=the integration environment is unavailable',
+      ]);
+
+      expect(command).not.toBeNull();
+      expect(await dispatchTaskCommand(command!, dir)).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0]).toMatchObject({
+        status: 'completed',
+        doneWhen: [
+          { source: 'verified' },
+          {
+            source: 'unverified',
+            reason: 'the integration environment is unavailable',
+          },
+        ],
+      });
+      await expect(fsPromises.access(join(dir, '.pipeline', 'HALT'))).rejects.toThrow();
+    });
+
+    // Covers: task:5
+    it('refuses an empty unverified reason for task 5 check 2', async () => {
+      await prepareTaggedTask({
+        check: '[test] first committed outcome\n- [test] second committed outcome',
+        testText: '// Covers: task:3\nit(\'proves the first committed outcome\', () => {});\n',
+      });
+
+      const command = detectTaskCommand([
+        'node', 'conduct', 'task', 'done', '3',
+        '--done-when', '1=test:test/close.test.ts::proves the first committed outcome',
+        '--unverified', '2=',
+      ]);
+
+      expect(command).not.toBeNull();
+      expect(await dispatchTaskCommand(command!, dir)).toBe(1);
+      expect(stdErr.join('\n')).toContain('check 2');
+      expect(stdErr.join('\n')).toContain('non-empty reason');
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0].status).toBe('in_progress');
+    });
+
+    it('refuses --unverified for an untagged check', async () => {
+      await prepareTaggedTask({
+        check: 'an untagged observable outcome',
+        testText: '// Covers: task:3\nit(\'does not matter\', () => {});\n',
+      });
+
+      const command = detectTaskCommand([
+        'node', 'conduct', 'task', 'done', '3',
+        '--unverified', '1=not a test check',
+      ]);
+
+      expect(command).not.toBeNull();
+      expect(await dispatchTaskCommand(command!, dir)).toBe(1);
+      expect(stdErr.join('\n')).toContain('not a tagged Done when check');
+    });
+
+    it('closes from a criterion marker and a test committed before the feature branch', async () => {
+      await prepareTaggedTask({
+        testText: '// Covers: S2.1\nit(\'proves the criterion\', () => {});\n',
+      });
+      await execa('git', ['branch', 'feature'], { cwd: dir });
+      await execa('git', ['checkout', 'feature'], { cwd: dir });
+
+      expect(await close('test:test/close.test.ts::proves the criterion')).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0].doneWhen).toEqual(expect.arrayContaining([
+        expect.objectContaining({ source: 'verified' }),
+      ]));
+    });
+
+    it('resolves the repository root when the CLI runs from a worktree subdirectory', async () => {
+      await prepareTaggedTask({
+        testText: '// Covers: task:3\nit(\'proves from a subdirectory\', () => {});\n',
+      });
+      await fsPromises.mkdir(join(dir, 'nested', 'work'), { recursive: true });
+
+      expect(await close('test:test/close.test.ts::proves from a subdirectory', join(dir, 'nested', 'work'))).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0].doneWhen[0]).toMatchObject({ source: 'verified' });
+    });
+
+    // Covers: task:5
+    it.each([
+      ['free text', 'a generic success sentence', 'not-a-test-reference'],
+      ['absent path', 'test:test/missing.test.ts::missing test', 'test/missing.test.ts'],
+      ['missing title', 'test:test/close.test.ts::a title not in the blob', 'a title not in the blob'],
+      ['missing marker', 'test:test/close.test.ts::closes without a marker', 'Covers:'],
+    ])('refuses %s and names the check and failed part', async (_name, evidence, expected) => {
+      await prepareTaggedTask({
+        testText: '// no marker\nit(\'closes without a marker\', () => {});\n',
+      });
+
+      expect(await close(evidence)).toBe(1);
+      expect(stdErr.join('\n')).toContain('check 1');
+      expect(stdErr.join('\n')).toContain('[test] the committed test proves the close.');
+      expect(stdErr.join('\n')).toContain(expected);
+      expect(stdErr.join('\n')).toContain('write or cite the test, or use --unverified 1=<reason>.');
+      expect(stdErr.join('\n')).not.toContain('--plan-gap');
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0].status).toBe('in_progress');
+    });
+
+    it('refuses a test file that is present only in the working tree', async () => {
+      await prepareTaggedTask({ testText: '// Covers: task:3\n' });
+      await fsPromises.writeFile(join(dir, 'test', 'uncommitted.test.ts'),
+        '// Covers: task:3\nit(\'uncommitted proof\', () => {});\n');
+
+      expect(await close('test:test/uncommitted.test.ts::uncommitted proof')).toBe(1);
+      expect(stdErr.join('\n')).toContain('check 1');
+      expect(stdErr.join('\n')).toContain('test/uncommitted.test.ts');
+      expect(stdErr.join('\n')).toContain('absent at HEAD');
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0].status).toBe('in_progress');
+    });
+
+    // Covers: task:5
+    it('lists --unverified <n>=<reason> in task command usage', async () => {
+      expect(await dispatchTaskCommand({ kind: 'guide' }, dir)).toBe(2);
+      expect(stdErr.join('\n')).toContain('--unverified <n>=<reason>');
+    });
+  });
+
   describe('happy path — done 7 after start 7', () => {
     it('removes current-task stamp and exits 0', async () => {
       // Setup: seed task-status.json and stamp
@@ -808,6 +1003,35 @@ describe('runTaskDone', () => {
       await expect(fsPromises.readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('plan-gap');
       const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'));
       expect(status.tasks[0].status).not.toBe('completed');
+    });
+
+    it('refuses a plan gap for a tagged check without writing a HALT or completing the row', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, 'plan.md'), [
+        '### Task 7: Repair the sweep',
+        '**Done when:**',
+        '- [test] the focused test proves the repair',
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: 'plan.md',
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '7', status: 'in_progress' }],
+      }));
+
+      expect(await runTaskDone(
+        dir,
+        '7',
+        [],
+        { index: 1, reason: 'The approved plan cannot satisfy this check.' },
+      )).toBe(1);
+
+      expect(stdErr.join('\n')).toContain('check 1');
+      expect(stdErr.join('\n')).toContain('write or cite the test, or use --unverified 1=<reason>.');
+      await expect(fsPromises.access(join(dir, '.pipeline', 'HALT'))).rejects.toThrow();
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'));
+      expect(status.tasks[0].status).toBe('in_progress');
     });
 
     it('leaves a row byte-identical when its plan task has no Done when checks', async () => {

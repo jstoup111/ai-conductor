@@ -187,7 +187,8 @@ amendment itself (`chore(plan): record appended remediation tasks`) — the appe
 bookkeeping, not builder work, and leaving it uncommitted would fail the build step's clean-tree
 completion check. Each appended task includes one valid `Done when:` block with two to three
 single-line, nonblank checks: the cited criterion, governing clause, rationale, or title as
-available, plus a check to re-run the gate. The engine also records every appended task id in
+available, plus a check to re-run the gate. A criterion-bound `prd_audit` remediation task tags its
+first check `[test]`. The engine also records every appended task id in
 `.pipeline/engine-state.json` (`appendedRemediationTaskIds`), and the build completion predicate
 refuses completion while any recorded id's `### Task <id>` heading is missing from the plan:
 deleting a remediation task never completes it. The guard disarms only when the engine-state file is
@@ -749,7 +750,7 @@ no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` fo
 `feature_complete`, `dashboard_refresh`, `protected_artifact_rebaseline`,
 `protected_artifact_rebaseline_refused`, `auto_heal`, `remediation_sealed_artifact_redirect`,
 `remediation_disposition_rejected`,
-`verdict_freshness`, `build_review_repair_context`, `mode_skip`, `build_stall`, `build_progress`,
+`verdict_freshness`, `build_review_repair_context`, `mode_skip`, `build_done_when_unverified`, `build_stall`, `build_progress`,
 `build_no_progress`, `build_active_stall`, `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`,
 `parallel_failure`, `gate_verdict`, `test_suite_verification`, `build_member_evidence_reused`,
 `build_member_evidence_recomputed`, `kickback`, `loop_halt`, `over_scope_decision`,
@@ -764,6 +765,12 @@ flattened merges, the shas of dropped ancestry-only merges, and the count of sid
 replayed individually. When a flattened merge blocks the replay, `rebase_conflict_halt` carries an
 optional `mergeAudit` field naming that merge, its parents, its flattened sha, and the conflicting
 paths. See [merge-bearing feature branches](../guides/running-the-daemon.md#merge-bearing-feature-branches).
+
+`build_done_when_unverified` records a BUILD that completed after its one review pass with `[test]`
+checks still closed as unverified; `checks` lists each `taskId` and `check`. The spent pass is stored
+in `.pipeline/engine-state.json` under `unverifiedDoneWhenNudges`, keyed by the run start stamp plus the
+summed `cumulative` kickback count from `kickback-ledger.json`, so a restart does not grant a second pass
+but each kickback back into BUILD starts a new lap with its own pass. See [per-task evidence](../explanation/gates.md#per-task-done-when-evidence).
 
 `rebase_supersession_verdict` records a successful mergeable-sweep test-only judgement: its choice,
 rationale, and declared superseded replay SHAs. `rebase_citation_residue` records the corresponding

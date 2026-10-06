@@ -7,13 +7,15 @@
 
 import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { execa } from 'execa';
 import {
   completeTaskDoneWhen,
   openRepairForTask,
   type DoneWhenEvidenceInput,
+  type DoneWhenUnverifiedInput,
 } from './task-progress.js';
 import { writeHaltMarker } from './halt-marker.js';
-import { parsePlanTaskDoneWhen } from './plan-task-parse.js';
+import { parsePlanTaskDoneWhen, TEST_DONE_WHEN_TAG } from './plan-task-parse.js';
 import { startOperatorEventSpine } from './event-persister.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
 
@@ -28,6 +30,7 @@ export type TaskDispatch =
       kind: 'done';
       id: string;
       doneWhen?: DoneWhenEvidenceInput[];
+      unverified?: DoneWhenUnverifiedInput[];
       planGap?: PlanGapInput;
     }
   | { kind: 'guide' };
@@ -58,6 +61,7 @@ export function detectTaskCommand(argv: string[]): TaskDispatch | null {
   if (verb === 'start') return { kind: 'start', id };
 
   const doneWhen: DoneWhenEvidenceInput[] = [];
+  const unverified: DoneWhenUnverifiedInput[] = [];
   let planGapIndex: number | undefined;
   let planGapReason: string | undefined;
   for (let index = 5; index < argv.length;) {
@@ -68,6 +72,10 @@ export function detectTaskCommand(argv: string[]): TaskDispatch | null {
       const match = value.match(/^(\d+)=(.+)$/);
       if (!match || Number(match[1]) < 1 || !match[2].trim()) return { kind: 'guide' };
       doneWhen.push({ index: Number(match[1]), evidence: match[2] });
+    } else if (flag === '--unverified') {
+      const match = value.match(/^(\d+)=(.*)$/);
+      if (!match || Number(match[1]) < 1) return { kind: 'guide' };
+      unverified.push({ index: Number(match[1]), reason: match[2] });
     } else if (flag === '--plan-gap') {
       if (planGapIndex !== undefined || !/^\d+$/.test(value) || Number(value) < 1) {
         return { kind: 'guide' };
@@ -83,13 +91,15 @@ export function detectTaskCommand(argv: string[]): TaskDispatch | null {
   }
 
   if (planGapIndex !== undefined || planGapReason !== undefined) {
-    if (planGapIndex === undefined || planGapReason === undefined || doneWhen.length > 0) {
+    if (planGapIndex === undefined || planGapReason === undefined || doneWhen.length > 0 || unverified.length > 0) {
       return { kind: 'guide' };
     }
     return { kind: 'done', id, planGap: { index: planGapIndex, reason: planGapReason } };
   }
 
-  return doneWhen.length > 0 ? { kind: 'done', id, doneWhen } : { kind: 'done', id };
+  return doneWhen.length > 0 || unverified.length > 0
+    ? { kind: 'done', id, doneWhen: doneWhen.length > 0 ? doneWhen : undefined, unverified: unverified.length > 0 ? unverified : undefined }
+    : { kind: 'done', id };
 }
 
 /**
@@ -107,8 +117,9 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
         '  Start or resume task <id> (H9 grammar [A-Za-z0-9._-]+). Prompts for\n' +
         '  confirmation and updates task-status.json.\n' +
         '\n' +
-        'conduct task done <id> [--done-when <n>=<evidence>]...\n' +
+        'conduct task done <id> [--done-when <n>=<evidence>]... [--unverified <n>=<reason>]...\n' +
         '  Close task <id>. Tasks with a Done when block require evidence for every check.\n' +
+        '  A tagged [test] check may instead be recorded as unverified with a reason.\n' +
         '  The engine records that evidence and clears the current-task stamp when one is present.\n' +
         '\n' +
         'conduct task done <id> --plan-gap <n> --reason <text>\n' +
@@ -117,16 +128,29 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
     return 2;
   }
 
+  const projectRoot = await resolveTaskProjectRoot(cwd);
+
   if (cmd.kind === 'start') {
-    return runTaskStart(cwd, cmd.id);
+    return runTaskStart(projectRoot, cmd.id);
   }
 
   if (cmd.kind === 'done') {
-    return runTaskDone(cwd, cmd.id, cmd.doneWhen ?? [], cmd.planGap);
+    return runTaskDone(projectRoot, cmd.id, cmd.doneWhen ?? [], cmd.planGap, cmd.unverified ?? []);
   }
 
   // Should never reach here
   return 2;
+}
+
+/** CLI commands may begin in a nested worktree directory; non-Git fixtures
+ * retain their supplied directory so the existing direct-file contract stays intact. */
+async function resolveTaskProjectRoot(cwd: string): Promise<string> {
+  try {
+    const result = await execa('git', ['rev-parse', '--show-toplevel'], { cwd, reject: false });
+    return result.exitCode === 0 && result.stdout.trim() ? result.stdout.trim() : cwd;
+  } catch {
+    return cwd;
+  }
 }
 
 /**
@@ -237,6 +261,7 @@ export async function runTaskDone(
   id: string,
   doneWhen: DoneWhenEvidenceInput[] = [],
   planGap?: PlanGapInput,
+  unverified: DoneWhenUnverifiedInput[] = [],
 ): Promise<number> {
   const pipelineDir = join(projectRoot, '.pipeline');
   const stampPath = join(pipelineDir, 'current-task');
@@ -260,7 +285,7 @@ export async function runTaskDone(
     if (repair.kind === 'none' && await hasTerminalTaskStatus(projectRoot, id)) {
       return 0;
     }
-    const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen);
+    const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen, unverified);
     if (completion.kind === 'refused') {
       console.error(completion.message);
       return 1;
@@ -278,7 +303,7 @@ export async function runTaskDone(
     return runTaskPlanGap(projectRoot, id, planGap);
   }
 
-  const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen);
+  const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen, unverified);
   if (completion.kind === 'refused') {
     console.error(completion.message);
     return 1;
@@ -362,6 +387,13 @@ async function runTaskPlanGap(
   if (!check) {
     console.error(
       `[task-cli] cannot report a plan gap for task ${id}: Done when check ${planGap.index} is not declared`,
+    );
+    return 1;
+  }
+  if (check.startsWith(TEST_DONE_WHEN_TAG)) {
+    console.error(
+      `[task-cli] cannot report a plan gap for task ${id}: Done when check ${planGap.index} requires a test; ` +
+        `write or cite the test, or use --unverified ${planGap.index}=<reason>.`,
     );
     return 1;
   }

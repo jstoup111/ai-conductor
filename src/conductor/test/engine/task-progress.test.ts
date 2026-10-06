@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:5, task:6
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import {
   countResolvedTasks,
   resolveTaskIds,
   resolveTaskIdsWithDiagnostics,
+  completeTaskDoneWhen,
   haltMarkerExists,
   clearHaltMarker,
   haltMarkerPath,
@@ -732,7 +733,7 @@ describe('task-progress', () => {
       return status.tasks.find((task) => task.id === id) ?? {};
     }
 
-    it('records all supplied Done when evidence and completes the task', async () => {
+    it('closes an untagged check with free-text evidence as reported', async () => {
       await prepareTaskClose(`### Task 1: evidence required
 
 **Done when:**
@@ -756,6 +757,122 @@ describe('task-progress', () => {
           { check: 'second observable outcome', evidence: 'proved second', source: 'reported' },
           { check: 'third observable outcome', evidence: 'proved third', source: 'reported' },
         ],
+      });
+    });
+
+    it('closes a mixed task with verified tagged evidence and reported untagged evidence', async () => {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(
+        join(dir, 'test', 'mixed-close.test.ts'),
+        '// Covers: task:1\n\nit(\'closes the tagged outcome\', () => {});\n',
+      );
+      await execa('git', ['add', 'test/mixed-close.test.ts'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed tagged test'], { cwd: dir });
+      await prepareTaskClose(`### Task 1: mixed evidence
+
+**Done when:**
+- [test] tagged observable outcome
+- untagged configuration outcome`);
+
+      const command = detectTaskCommand([
+        'node', 'conduct', 'task', 'done', '1',
+        '--done-when', '1=test:test/mixed-close.test.ts::closes the tagged outcome',
+        '--done-when', '2=configuration was applied',
+      ]);
+
+      expect(command).not.toBeNull();
+      expect(await dispatchTaskCommand(command!, dir)).toBe(0);
+      expect(await taskRow()).toMatchObject({
+        status: 'completed',
+        doneWhen: [
+          {
+            check: '[test] tagged observable outcome',
+            evidence: 'test:test/mixed-close.test.ts::closes the tagged outcome',
+            source: 'verified',
+          },
+          {
+            check: 'untagged configuration outcome',
+            evidence: 'configuration was applied',
+            source: 'reported',
+          },
+        ],
+      });
+    });
+
+    it('records the per-check reason when the engine closes a tagged check as unverified', async () => {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await prepareTaskClose(`### Task 1: unverified test evidence
+
+**Done when:**
+- [test] a test must prove this outcome`);
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed task state'], { cwd: dir });
+
+      await expect(completeTaskDoneWhen(dir, '1', [], [{
+        index: 1,
+        reason: 'the required service is unavailable in this environment',
+      }])).resolves.toEqual({ kind: 'completed' });
+      expect(await taskRow()).toMatchObject({
+        status: 'completed',
+        doneWhen: [{
+          check: '[test] a test must prove this outcome',
+          evidence: 'the required service is unavailable in this environment',
+          source: 'unverified',
+          reason: 'the required service is unavailable in this environment',
+        }],
+      });
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).rejects.toThrow();
+    });
+
+    it('closes every task in a tag-free plan with the same free-text evidence', async () => {
+      await prepareTaskClose(`### Task 1: first legacy-compatible close
+
+**Done when:**
+- first untagged outcome
+
+### Task 2: second legacy-compatible close
+
+**Done when:**
+- second untagged outcome`);
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'in_progress' },
+            { id: '2', status: 'pending' },
+          ],
+        }),
+      );
+      for (const id of ['1', '2']) {
+        if (id === '2') expect(await runTaskStart(dir, id)).toBe(0);
+        const command = detectTaskCommand([
+          'node', 'conduct', 'task', 'done', id,
+          '--done-when', '1=the same free-text evidence',
+        ]);
+        expect(command).not.toBeNull();
+        expect(await dispatchTaskCommand(command!, dir)).toBe(0);
+      }
+
+      expect(await taskRow('1')).toMatchObject({
+        status: 'completed',
+        doneWhen: [{
+          check: 'first untagged outcome',
+          evidence: 'the same free-text evidence',
+          source: 'reported',
+        }],
+      });
+      expect(await taskRow('2')).toMatchObject({
+        status: 'completed',
+        doneWhen: [{
+          check: 'second untagged outcome',
+          evidence: 'the same free-text evidence',
+          source: 'reported',
+        }],
       });
     });
 
@@ -811,6 +928,86 @@ describe('task-progress', () => {
         { check: 'first verified outcome', evidence: 'prove-closed', source: 'verify-only' },
         { check: 'second verified outcome', evidence: 'prove-closed', source: 'verify-only' },
       ]);
+    });
+
+    it('requires tagged verify-only checks to be verified or explicitly unverified while prove-closing untagged checks', async () => {
+      await prepareTaskClose(`### Task 1: verify existing behavior with a test
+
+**Verify-only:** yes
+
+**Done when:**
+- [test] tagged behavior remains covered
+- untagged behavior remains closed`);
+
+      const refusal = await completeTaskDoneWhen(dir, '1', []);
+      expect(refusal).toMatchObject({
+        kind: 'refused',
+        message: expect.stringContaining('check 1: [test] tagged behavior remains covered'),
+      });
+      expect(refusal.kind === 'refused' && refusal.message).not.toContain('untagged behavior remains closed');
+      expect(await taskRow()).toMatchObject({ status: 'in_progress' });
+
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(
+        join(dir, 'test', 'verify-only.test.ts'),
+        '// Covers: task:1\n\nit(\'keeps tagged behavior covered\', () => {});\n',
+      );
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed verify-only reference'], { cwd: dir });
+
+      await expect(completeTaskDoneWhen(dir, '1', [{
+        index: 1,
+        evidence: 'test:test/verify-only.test.ts::keeps tagged behavior covered',
+      }])).resolves.toEqual({ kind: 'completed' });
+      expect(await taskRow()).toMatchObject({
+        status: 'completed',
+        doneWhen: [
+          {
+            check: '[test] tagged behavior remains covered',
+            evidence: 'test:test/verify-only.test.ts::keeps tagged behavior covered',
+            source: 'verified',
+          },
+          {
+            check: 'untagged behavior remains closed',
+            evidence: 'prove-closed',
+            source: 'verify-only',
+          },
+        ],
+      });
+    });
+
+    it('allows an explicit unverified close for a tagged verify-only check', async () => {
+      await prepareTaskClose(`### Task 1: cannot verify existing behavior
+
+**Verify-only:** yes
+
+**Done when:**
+- [test] tagged behavior needs an explicit close
+- untagged behavior remains closed`);
+
+      await expect(completeTaskDoneWhen(dir, '1', [], [{
+        index: 1,
+        reason: 'the required dependency is unavailable',
+      }])).resolves.toEqual({ kind: 'completed' });
+      expect(await taskRow()).toMatchObject({
+        status: 'completed',
+        doneWhen: [
+          {
+            check: '[test] tagged behavior needs an explicit close',
+            evidence: 'the required dependency is unavailable',
+            source: 'unverified',
+            reason: 'the required dependency is unavailable',
+          },
+          {
+            check: 'untagged behavior remains closed',
+            evidence: 'prove-closed',
+            source: 'verify-only',
+          },
+        ],
+      });
     });
   });
 
