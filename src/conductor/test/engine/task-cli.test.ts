@@ -9,6 +9,7 @@ import {
 import * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execa } from 'execa';
 import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
 import { resolveTaskIds } from '../../src/engine/task-progress.js';
 
@@ -512,6 +513,76 @@ describe('runTaskDone', () => {
 
   afterEach(async () => {
     await fsPromises.rm(dir, { recursive: true, force: true });
+  });
+
+  it('closes a plan_amendment repair with current Done when evidence', async () => {
+    await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+    await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+      '### Task 7: Repair current evidence',
+      '**Done when:**',
+      '- Current evidence is recorded.',
+      '',
+    ].join('\n'));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+      activePlanPath: '.docs/plans/feature.md',
+    }));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: [{ id: '7', status: 'in_progress' }],
+    }));
+    const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+    const admitted = await repairs.admitOrReplay('plan-amendment-done-when', {
+      id: 'plan-amendment-done-when', planPath: '.docs/plans/feature.md', taskIds: ['7'],
+      source: { findingId: 'changed-task-digest', authority: 'plan_amendment', instruction: 'repair' },
+      baseline: { head: 'unavailable', tree: 'tree', resolvedTaskIds: [] },
+    });
+    if (!admitted.ok) throw new Error(admitted.message);
+
+    await expect(runTaskDone(dir, '7', [{ index: 1, evidence: 'current proof' }])).resolves.toBe(0);
+    expect(await resolveTaskIds(dir, ['7'])).toEqual(new Set(['7']));
+
+    const state = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8'));
+    expect(state.repairObligations.records['plan-amendment-done-when'].tasks['7']).toMatchObject({
+      status: 'resolved',
+      evidence: { kind: 'current-done-when' },
+    });
+  });
+
+  it('keeps a legacy plan_amendment close unresolved until a post-boundary Task trailer', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+    await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), '### Task 7: Legacy repair\n');
+    await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+      activePlanPath: '.docs/plans/feature.md',
+    }));
+    const originalStatus = JSON.stringify({ tasks: [{ id: '7', status: 'completed' }] }, null, 2);
+    await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), originalStatus);
+    await fsPromises.writeFile(join(dir, 'original.txt'), 'original\n');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'original implementation\n\nTask: 7'], { cwd: dir });
+    const boundary = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+
+    const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+    const admitted = await repairs.admitOrReplay('plan-amendment-legacy', {
+      id: 'plan-amendment-legacy', planPath: '.docs/plans/feature.md', taskIds: ['7'],
+      source: { findingId: 'changed-task-digest', authority: 'plan_amendment', instruction: 'repair' },
+      baseline: { head: boundary, tree: 'tree', resolvedTaskIds: ['7'] },
+    });
+    if (!admitted.ok) throw new Error(admitted.message);
+
+    // No Done when block makes this a legacy close: it cannot close the repair or revive old evidence.
+    await expect(runTaskDone(dir, '7')).resolves.toBe(0);
+    await expect(fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8')).resolves.toBe(originalStatus);
+    expect(await resolveTaskIds(dir, ['7'])).toEqual(new Set());
+
+    await fsPromises.writeFile(join(dir, 'repair.txt'), 'repair\n');
+    await execa('git', ['add', 'repair.txt'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'repair legacy task\n\nTask: 7'], { cwd: dir });
+
+    expect(await resolveTaskIds(dir, ['7'])).toEqual(new Set(['7']));
   });
 
   it('closes the current repair only after current Done when evidence is accepted', async () => {

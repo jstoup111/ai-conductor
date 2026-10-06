@@ -787,8 +787,9 @@ Do not re-run the tasks. Make the work visible instead:
    that commit is invisible to the stall breaker.
 2. Flip the corresponding rows in `.worktrees/<slug>/.pipeline/task-status.json` to
    `"status": "completed"`. **What it changes:** the routing input for the build gate. A row
-   already marked `completed` or `skipped` is preserved verbatim across every re-seed, so this
-   edit survives.
+   already marked `completed` or `skipped` is preserved across every re-seed, so this edit
+   survives — unless that task's plan text changed, which reopens it as `pending`
+   ([rewritten plan tasks](../reference/artifacts.md#reconstruction-what-self-heals-and-what-must-not)).
 3. Confirm the gate now sees them:
    ```bash
    ai-conductor inline --diagnose

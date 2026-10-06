@@ -4,6 +4,7 @@
 // evidence-derivation logic. This standalone module remains the stable home
 // for the shared grammar/parser; autoheal.ts re-exports it for backward
 // compatibility with its existing call sites.
+import { createHash } from 'node:crypto';
 import { PROTECTED_ARTIFACT_DIRECTORIES, namesOwnFeature } from './protected-artifact-seal.js';
 
 // Task ID pattern: alphanumeric + dots, underscores, hyphens
@@ -206,6 +207,67 @@ function* linesWithFenceState(text: string): Generator<{ line: string; fenced: b
     }
     yield { line, fenced: openMarker !== null };
   }
+}
+
+const MARKDOWN_HEADING = /^(#{1,6})(?:\s|$)/;
+
+function normalizedTaskDigestText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function taskHeadingTitle(line: string, headerMatch: RegExpMatchArray): string {
+  const rawIds = headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4];
+  const heading = line.replace(/^#{1,6}\s+/, '');
+  const idEnd = heading.indexOf(rawIds) + rawIds.length;
+  return heading.slice(idEnd).replace(/^\s*(?::|[—–])?\s*/, '');
+}
+
+/**
+ * Returns a versioned content digest for every task's heading title and body.
+ *
+ * A task owns text only until the next Markdown heading at its level or above,
+ * so plan-level trailing sections cannot change the final task's identity.
+ */
+export function planTaskDigests(text: string): Map<string, string> {
+  interface TaskSpan {
+    ids: string[];
+    title: string;
+    level: number;
+    bodyLines: string[];
+  }
+
+  const result = new Map<string, string>();
+  const active: TaskSpan[] = [];
+  const save = (task: TaskSpan) => {
+    const canonical = JSON.stringify({
+      title: normalizedTaskDigestText(task.title),
+      body: normalizedTaskDigestText(task.bodyLines.join('\n')),
+    });
+    const digest = `v1:sha256:${createHash('sha256').update(canonical).digest('hex')}`;
+    for (const id of task.ids) result.set(id, digest);
+  };
+
+  for (const { line, fenced } of linesWithFenceState(text)) {
+    const heading = fenced ? null : line.match(MARKDOWN_HEADING);
+    if (heading) {
+      const level = heading[1].length;
+      while (active.length > 0 && active.at(-1)!.level >= level) save(active.pop()!);
+    }
+
+    for (const task of active) task.bodyLines.push(line);
+
+    const headerMatch = fenced ? null : line.match(TASK_HEADER_PATTERN);
+    if (!headerMatch) continue;
+    active.push({
+      ids: expandTaskIds(headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4]),
+      title: taskHeadingTitle(line, headerMatch),
+      level: line.match(MARKDOWN_HEADING)![1].length,
+      bodyLines: [],
+    });
+  }
+
+  while (active.length > 0) save(active.pop()!);
+  return result;
 }
 
 /**

@@ -17,7 +17,7 @@ import {
   readStaleHaltTitle,
 } from './halt-pr-rehabilitation.js';
 import { readRegionCaptures } from './pr-body-region-store.js';
-import { seedTaskStatus } from './task-seed.js';
+import { seedTaskStatus, TaskReopenError } from './task-seed.js';
 import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
 import {
@@ -2740,7 +2740,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         );
         return {
           done: false,
-          reason: `failed to seed task-status from plan: ${err instanceof Error ? err.message : 'unknown error'}`,
+          reason: `${err instanceof TaskReopenError ? 'task reopen failed' : 'failed to seed task-status from plan'}: ${err instanceof Error ? err.message : 'unknown error'}`,
         };
       }
 
@@ -2790,24 +2790,19 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // Task 10 (#773, extended by #859): the build predicate no longer gates
     // on the per-task evidence-ledger (the derivation engine + createTaskEvidence's
     // evidenceStamps; the derivation engine itself was deleted in Task 11).
-    // Final completion authority lives solely in the build_review step's
-    // completeness rubric (a fail-closed, default-on grader verdict) plus
-    // the existing outcome gates — this predicate never grants final
-    // acceptance itself. Its job is routing: task-status.json rows are one
+    // This predicate's job is routing: task-status.json rows are one
     // input, and per adr-2026-07-23-trailer-union-build-step-routing.md
     // (#859) they are unioned with the set of task ids resolved from
     // `Task:` commit trailers before the row/skip check below, so a task
     // committed with a valid trailer but not yet reflected in the row
     // (or reflected as stale/absent) still routes the build step forward
     // into build_review instead of stalling. Widening this union can only
-    // ever hand the build off to build_review sooner — it cannot forge
-    // final completion, because build_review independently re-judges the
-    // real diff on every pass regardless of how this predicate resolved.
+    // ever hand the build forward sooner; a current repair obligation still
+    // takes precedence over historical trailer evidence.
     // It intentionally no longer cross-checks rows against an independently
     // re-derived evidence sidecar — the H6/H7/H8 anti-forgery check ("a
     // completed row with no evidenceStamps entry is never counted") is
-    // retired for the same reason: build_review, not this predicate, is
-    // the backstop against a forged or stale row. The derivation engine
+    // retired. The derivation engine
     // that used to re-derive task-status.json from git evidence
     // (autoheal.ts's deriveCompletion/applyDerivedCompletion, wired from
     // conductor.ts's auto-heal call) was deleted entirely (feature #773,
@@ -2861,8 +2856,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           reason: 'missing .pipeline/task-status.json — the pipeline skill must create it',
         };
       }
+      let statusRows: TaskEntry[];
       try {
-        JSON.parse(raw);
+        statusRows = extractTasks(JSON.parse(raw));
       } catch {
         return { done: false, reason: 'invalid JSON in .pipeline/task-status.json' };
       }
@@ -2876,14 +2872,24 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       const unresolved = planTaskIds.filter((id) => !resolvedIds.has(id));
 
       if (unresolved.length > 0) {
-        const names = unresolved.slice(0, 3).join(', ');
-        const more = unresolved.length > 3 ? ` (+${unresolved.length - 3} more)` : '';
+        const { parsePlanTasks } = await import('./autoheal.js');
+        const planTasks = parsePlanTasks(planText!);
+        const statusNames = new Map(
+          statusRows.flatMap((task) => task.id && task.name ? [[task.id, task.name]] : []),
+        );
+        const ids = unresolved.join(', ');
+        const titles = unresolved
+          .map((id) => {
+            const title = planTasks.get(id)?.name ?? statusNames.get(id);
+            return title ? `${id} "${title}"` : id;
+          })
+          .join('; ');
         const repairReason = unresolved
           .map((id) => taskResolution.unavailableReasons.get(id))
           .find((reason): reason is string => Boolean(reason));
         return {
           done: false,
-          reason: `${unresolved.length}/${planTaskIds.length} tasks pending/not completed: ${names}${more}` +
+          reason: `${unresolved.length}/${planTaskIds.length} tasks pending/not completed: ${ids} — ${titles}` +
             (repairReason ? `; ${repairReason}` : ''),
         };
       }
@@ -4771,6 +4777,7 @@ function splitOnHeadings(text: string, headingRe: RegExp): string[] {
 
 interface TaskEntry {
   id?: string;
+  name?: string;
   status?: string;
 }
 
@@ -4783,11 +4790,19 @@ function extractTasks(parsed: unknown): TaskEntry[] {
   if (Array.isArray(container)) {
     return container
       .filter((t): t is Record<string, unknown> => typeof t === 'object' && t !== null)
-      .map((t) => ({ id: t.id as string | undefined, status: t.status as string | undefined }));
+      .map((t) => ({
+        id: t.id as string | undefined,
+        name: t.name as string | undefined,
+        status: t.status as string | undefined,
+      }));
   }
   if (container && typeof container === 'object') {
     return Object.entries(container).map(([id, v]) => ({
       id,
+      name:
+        v && typeof v === 'object' && 'name' in v
+          ? ((v as Record<string, unknown>).name as string | undefined)
+          : undefined,
       status:
         v && typeof v === 'object' && 'status' in v
           ? ((v as Record<string, unknown>).status as string | undefined)

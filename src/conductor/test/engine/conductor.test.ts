@@ -88,6 +88,9 @@ import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltFinding } from '../../src/engine/as-built-contract.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
+import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
+import { recordTaskDigests } from '../../src/engine/task-digests.js';
+import { planTaskDigests } from '../../src/engine/plan-task-parse.js';
 import {
   AggregationTemporality,
   InMemoryMetricExporter,
@@ -218,6 +221,30 @@ function createMockStepRunner(result: StepRunResult = { success: true }): StepRu
   };
 }
 
+function buildBoundaryState(featureDesc = 'feature'): ConductState {
+  return {
+    ...Object.fromEntries(
+      ALL_STEPS
+        .slice(0, ALL_STEPS.findIndex((step) => step.name === 'build'))
+        .map((step) => [step.name, 'done']),
+    ),
+    feature_desc: featureDesc,
+    build: 'pending',
+  } as ConductState;
+}
+
+function stopAtFirstBuild(hints: string[]): StepRunner {
+  return {
+    run: vi.fn(async (step, _state, options) => {
+      if (step === 'build') {
+        hints.push(options?.retryReason ?? '');
+        return { success: false, error: 'sentinel: stop after first BUILD prompt' };
+      }
+      return { success: true };
+    }),
+  };
+}
+
 import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
 
 describe('engine/conductor', () => {
@@ -234,6 +261,103 @@ describe('engine/conductor', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  // Covers: rem-prd-audit-rem-prd-audit-t8-restart-prompt
+  it('restores every plan-amendment reopen into the first BUILD prompt after a restart without losing a coexisting gate repair', async () => {
+    const planPath = '.docs/plans/feature.md';
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, planPath), [
+      '# Plan',
+      '',
+      '### Task 1: Restore request authorization',
+      '',
+      '### Task 2: Preserve audit provenance',
+      '',
+    ].join('\n'));
+    await writeState(statePath, buildBoundaryState());
+
+    const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+    const admissions = [
+      {
+        id: 'plan-amendment-1',
+        taskIds: ['1'],
+        source: {
+          findingId: 'digest-1', authority: 'plan_amendment' as const,
+          instruction: 'Task 1 (Restore request authorization) plan text changed since it was implemented; reopen it in BUILD.',
+        },
+      },
+      {
+        id: 'plan-amendment-2',
+        taskIds: ['2'],
+        source: {
+          findingId: 'digest-2', authority: 'plan_amendment' as const,
+          instruction: 'Task 2 (Preserve audit provenance) plan text changed since it was implemented; reopen it in BUILD.',
+        },
+      },
+      {
+        id: 'gate-repair-1',
+        taskIds: ['1'],
+        source: {
+          findingId: 'ARCH-1', authority: 'architecture_review_as_built' as const,
+          instruction: 'ARCH-1 requires Task 1 to restore the approved authorization guard.',
+        },
+      },
+    ];
+    for (const admission of admissions) {
+      const result = await repairs.admitOrReplay(admission.id, {
+        ...admission,
+        planPath,
+        baseline: { head: '', tree: 'fixture-tree', resolvedTaskIds: [] },
+      });
+      if (!result.ok) throw new Error(result.message);
+      const settled = await repairs.markSettled({ planPath, obligationId: result.obligation.id });
+      if (!settled.ok) throw new Error(settled.message);
+    }
+
+    const hints: string[] = [];
+    await new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: stopAtFirstBuild(hints),
+      events,
+      fromStep: 'build',
+      mode: 'auto',
+      maxRetries: 1,
+      verifyArtifacts: false,
+    }).run();
+
+    expect(hints).toHaveLength(1);
+    expect(hints[0]).toContain('Task 1 (Restore request authorization) plan text changed since it was implemented; reopen it in BUILD.');
+    expect(hints[0]).toContain('Task 2 (Preserve audit provenance) plan text changed since it was implemented; reopen it in BUILD.');
+    expect(hints[0]).toContain('ARCH-1 requires Task 1 to restore the approved authorization guard.');
+  });
+
+  // Covers: rem-prd-audit-rem-prd-audit-t8-restart-prompt
+  it('adds a plan-amendment reopen seeded before the first BUILD dispatch to that prompt without a restart', async () => {
+    const planPath = '.docs/plans/feature.md';
+    const originalPlan = '# Plan\n\n### Task 1: Validate callback signatures\n';
+    const amendedPlan = '# Plan\n\n### Task 1: Validate signed callback signatures\n';
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, planPath), originalPlan);
+    await recordTaskDigests(dir, planPath, Object.fromEntries(planTaskDigests(originalPlan)));
+    await writeFile(join(dir, planPath), amendedPlan);
+    await writeState(statePath, buildBoundaryState());
+
+    const hints: string[] = [];
+    await new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: stopAtFirstBuild(hints),
+      events,
+      fromStep: 'build',
+      mode: 'auto',
+      maxRetries: 1,
+      verifyArtifacts: false,
+    }).run();
+
+    expect(hints).toHaveLength(1);
+    expect(hints[0]).toContain('Task 1 (Validate signed callback signatures) plan text changed since it was implemented; reopen it in BUILD.');
   });
 
 

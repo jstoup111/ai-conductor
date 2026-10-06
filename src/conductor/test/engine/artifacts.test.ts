@@ -2359,6 +2359,61 @@ describe('engine/artifacts', () => {
         expect(result.reason).toMatch(/pending|not completed/i);
       });
 
+      it('names every unresolved task id before pairing each with its plan title', async () => {
+        await writePlan([
+          '### Task 1: First task', '### Task 2: Second task', '### Task 3: Third task',
+          '### Task 4: Fourth task', '### Task 5: Fifth task', '### Task 6: Sixth task',
+        ].join('\n\n'));
+        await writeTasks(Array.from({ length: 6 }, (_, index) => ({
+          id: String(index + 1), name: `Row ${index + 1}`, status: 'pending',
+        })));
+
+        const result = await checkStepCompletion(dir, 'build', {
+          projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md'),
+        });
+
+        expect(result.reason).toBe(
+          '6/6 tasks pending/not completed: 1, 2, 3, 4, 5, 6 — 1 "First task"; 2 "Second task"; 3 "Third task"; 4 "Fourth task"; 5 "Fifth task"; 6 "Sixth task"',
+        );
+        if (result.reason === undefined) {
+          throw new Error('expected incomplete build result to include a reason');
+        }
+        for (const id of ['1', '2', '3', '4', '5', '6']) {
+          expect(result.reason.indexOf(id)).toBeLessThan(result.reason.indexOf('"First task"'));
+        }
+      });
+
+      it('keeps unresolved plan tasks in the reason when only an appended remediation task is resolved', async () => {
+        await writePlan([
+          '### Task 1: First task', '### Task 2: Second task', '### Task 3: Third task',
+          '### Task 4: Fourth task', '### Task 5: Fifth task', '### Task 6: Sixth task',
+          '### Task rem-1: Repair task',
+        ].join('\n\n'));
+        await writeTasks([
+          ...Array.from({ length: 6 }, (_, index) => ({
+            id: String(index + 1), name: `Row ${index + 1}`, status: 'pending',
+          })),
+          { id: 'rem-1', name: 'Repair task', status: 'completed' },
+        ]);
+
+        const result = await checkStepCompletion(dir, 'build', {
+          projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md'),
+        });
+
+        expect(result.reason).toContain('1 "First task"; 2 "Second task"; 3 "Third task"; 4 "Fourth task"; 5 "Fifth task"; 6 "Sixth task"');
+      });
+
+      it('uses the task-status row name when a pending task heading has no title', async () => {
+        await writePlan('### Task 1\n');
+        await writeTasks([{ id: '1', name: 'Status row title', status: 'pending' }]);
+
+        const result = await checkStepCompletion(dir, 'build', {
+          projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md'),
+        });
+
+        expect(result.reason).toContain('1 "Status row title"');
+      });
+
       // Task 10 (#773): the build predicate demotes the per-task
       // evidence-ledger gate (deriveCompletion/createTaskEvidence/
       // evidenceStamps) to telemetry. It still trusts task-status.json row
@@ -2471,6 +2526,87 @@ describe('engine/artifacts', () => {
         expect(sidecar.evidenceStamps['1']).toBeUndefined();
 
         await rm(bareDir, { recursive: true, force: true });
+      });
+
+      it('#2014: reopens rewritten tasks through the production build predicate despite pre-boundary trailers', async () => {
+        await execa('git', ['init', '-b', 'main'], { cwd: dir });
+        await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+        await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+        await writeFile(join(dir, 'README.md'), '# Test\n');
+        await execa('git', ['add', 'README.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
+
+        const planPath = join(dir, '.docs/plans/phase-1.md');
+        const originalPlan = [
+          '### Task 1: First task',
+          '**Story:** 1',
+          'Implement the original first behavior.',
+          '',
+          '### Task 2: Second task',
+          '**Story:** 1',
+          'Implement the original second behavior.',
+          '',
+        ].join('\n');
+        await writePlan(originalPlan);
+        await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'docs: add original plan'], { cwd: dir });
+
+        await mkdir(join(dir, 'src'), { recursive: true });
+        await writeFile(join(dir, 'src/first.ts'), 'export const first = true;\n');
+        await execa('git', ['add', 'src/first.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: implement first\n\nTask: 1\n'], { cwd: dir });
+        await writeFile(join(dir, 'src/second.ts'), 'export const second = true;\n');
+        await execa('git', ['add', 'src/second.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: implement second\n\nTask: 2\n'], { cwd: dir });
+
+        const ctx = { projectRoot: dir, planPath };
+        // The initial seed reconstructs both completed rows from their Task:
+        // trailers and records the digest baseline that the amendment changes.
+        expect(await checkStepCompletion(dir, 'build', ctx)).toEqual({ done: true });
+
+        await writePlan(originalPlan
+          .replace('Implement the original first behavior.', 'Implement the rewritten first behavior.')
+          .replace('Implement the original second behavior.', 'Implement the rewritten second behavior.'));
+        await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'docs: rewrite both task descriptions'], { cwd: dir });
+        const amendmentHead = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+
+        const result = await checkStepCompletion(dir, 'build', ctx);
+
+        expect(result).toMatchObject({ done: false });
+        expect(result.reason).toContain('1, 2');
+        expect(result.reason).toContain('1 "First task"');
+        expect(result.reason).toContain('2 "Second task"');
+
+        const status = JSON.parse(await readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+        expect(status.tasks).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: '1', status: 'pending' }),
+          expect.objectContaining({ id: '2', status: 'pending' }),
+        ]));
+
+        const state = JSON.parse(await readFile(join(dir, '.pipeline/engine-state.json'), 'utf8'));
+        const obligations = Object.values(state.repairObligations.records) as Array<{
+          source: { authority: string };
+          baseline: { head: string };
+          settlement: string;
+          tasks: Record<string, { status: string }>;
+        }>;
+        expect(obligations).toHaveLength(2);
+        for (const taskId of ['1', '2']) {
+          expect(obligations).toContainEqual(expect.objectContaining({
+            source: expect.objectContaining({ authority: 'plan_amendment' }),
+            baseline: expect.objectContaining({ head: amendmentHead }),
+            settlement: 'settled',
+            tasks: { [taskId]: { status: 'open' } },
+          }));
+        }
+
+        // The only trailers remain before each repair boundary, so neither
+        // historic trailer can revive the reopened task.
+        expect(await checkStepCompletion(dir, 'build', ctx)).toMatchObject({
+          done: false,
+          reason: expect.stringContaining('1, 2'),
+        });
       });
 
       // #859: bug fix — the build predicate previously computed `unresolved`
@@ -2850,7 +2986,7 @@ describe('engine/artifacts', () => {
           expect(result.reason).not.toMatch(/\b3\b,/);
         });
 
-        it('truncates with "(+N more)" when all 5 ids are unresolved', async () => {
+        it('names every unresolved id and title when all 5 ids are unresolved', async () => {
           await initRepo();
           await writePlan(
             '### Task 1: First task\n**Story:** 1\n\n' +
@@ -2875,8 +3011,9 @@ describe('engine/artifacts', () => {
 
           expect(result.done).toBe(false);
           expect(result.reason).toMatch(/^5\/5 tasks/);
-          expect(result.reason).toContain('1, 2, 3');
-          expect(result.reason).toContain('(+2 more)');
+          expect(result.reason).toContain('1, 2, 3, 4, 5');
+          expect(result.reason).toContain('1 "First task"; 2 "Second task"; 3 "Third task"; 4 "Fourth task"; 5 "Fifth task"');
+          expect(result.reason).not.toContain('more)');
         });
 
         // Documented semantics (verified from task-progress.ts's

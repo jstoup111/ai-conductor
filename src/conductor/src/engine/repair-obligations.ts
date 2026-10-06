@@ -193,6 +193,23 @@ export function createRepairObligationStore(
           settlement: 'unsettled',
           tasks: Object.fromEntries(taskIds.map((taskId) => [taskId, { status: 'open' as const }])),
         };
+        // A rewritten plan task supersedes only an earlier rewrite of that
+        // same task.  Review/gate obligations deliberately remain open: the
+        // resolver folds every open record, rather than treating this index as
+        // the sole source of authority.
+        if (admission.source.authority === 'plan_amendment') {
+          for (const prior of Object.values(section.records)) {
+            if (prior.planIdentity !== planIdentity || prior.source.authority !== 'plan_amendment') continue;
+            for (const taskId of taskIds) {
+              if (prior.tasks[taskId]?.status === 'open') {
+                prior.tasks[taskId] = {
+                  status: 'resolved',
+                  evidence: { kind: 'superseded-by-plan-amendment', value: admission.id },
+                };
+              }
+            }
+          }
+        }
         section.records[obligation.id] = obligation;
         if (admissionKey !== undefined) {
           section.admissionsByPlan[planIdentity] = {
@@ -286,9 +303,21 @@ export function createRepairObligationStore(
           result = { ok: false, kind: 'missing', message: 'Repair obligation or bound task is missing' };
           return current as EngineState;
         }
-        if (section.currentByPlan[planIdentity]?.[taskId] !== input.obligationId) {
-          result = { ok: false, kind: 'stale', message: 'Repair obligation has been superseded for this task' };
+        if (obligation.planIdentity !== planIdentity) {
+          result = { ok: false, kind: 'stale', message: 'Repair obligation belongs to a different plan' };
           return current as EngineState;
+        }
+        const currentId = section.currentByPlan[planIdentity]?.[taskId];
+        // A later finding from a different authority shares the task's row
+        // but does not supersede this repair: both obligations need their
+        // own closure evidence. Only a newer admission from the same
+        // authority makes the old record stale (notably plan amendments).
+        if (currentId !== input.obligationId) {
+          const currentRecord = currentId === undefined ? undefined : section.records[currentId];
+          if (!currentRecord || currentRecord.source.authority === obligation.source.authority) {
+            result = { ok: false, kind: 'stale', message: 'Repair obligation has been superseded for this task' };
+            return current as EngineState;
+          }
         }
         if (obligation.tasks[taskId].status === 'open') {
           obligation.tasks[taskId] = { status: 'resolved', evidence: clone(input.evidence) };

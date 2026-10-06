@@ -7333,33 +7333,39 @@ export class Conductor {
       const activePlanIdentity = planBinding.kind === 'bound' ? planBinding.identity : null;
       if (restored.ok && activePlanIdentity !== null) {
         const ledger = await readKickbackLedger(this.projectRoot);
-        for (const obligation of Object.values(restored.value.records)) {
+        const buildHints: string[] = [];
+        for (const obligation of Object.values(restored.value.records).sort((a, b) => a.id.localeCompare(b.id))) {
           if (obligation.planIdentity !== activePlanIdentity) continue;
           const isCurrent = obligation.taskIds.some(
             (taskId) => restored.value.currentByPlan[obligation.planIdentity]?.[taskId] === obligation.id,
           );
           const hasOpenTask = Object.values(obligation.tasks).some((task) => task.status === 'open');
-          if (!isCurrent || !hasOpenTask || obligation.settlement !== 'settled') continue;
+          if (!hasOpenTask || obligation.settlement !== 'settled') continue;
 
-          const receiptGates = ledger.settlementReceipts?.[obligation.id]?.gates ?? [];
-          for (const gate of receiptGates) {
-            if (steps.some((step) => step.name === gate)) {
-              this.pendingNoOpBaselines.set(gate as StepName, {
-                treeHash: obligation.baseline.tree || null,
-                resolvedCount: obligation.baseline.resolvedCount ?? 0,
-              });
+          // Gate baseline bookkeeping remains current-obligation-only. It is
+          // distinct from BUILD context, where every still-open obligation is
+          // authoritative after a restart.
+          if (isCurrent) {
+            const receiptGates = ledger.settlementReceipts?.[obligation.id]?.gates ?? [];
+            for (const gate of receiptGates) {
+              if (steps.some((step) => step.name === gate)) {
+                this.pendingNoOpBaselines.set(gate as StepName, {
+                  treeHash: obligation.baseline.tree || null,
+                  resolvedCount: obligation.baseline.resolvedCount ?? 0,
+                });
+              }
             }
           }
           // The build step is the only target of an existing-task repair.
-          // Preserve the actionable finding rather than inventing a new
-          // planner route or silently dropping the original instruction.
-          if (!pendingRetryHints.has('build')) {
-            pendingRetryHints.set(
-              'build',
-              `Resume admitted repair ${obligation.id}: ${obligation.source.findingId}. ` +
-                `${obligation.source.instruction}`,
-            );
-          }
+          // Preserve every actionable finding rather than choosing a
+          // first-wins subset after a process restart.
+          buildHints.push(
+            `Resume admitted repair ${obligation.id}: ${obligation.source.findingId}. ` +
+              `${obligation.source.instruction}`,
+          );
+        }
+        if (buildHints.length > 0) {
+          pendingRetryHints.set('build', buildHints.join('\n'));
         }
       }
     } catch {
@@ -10353,6 +10359,37 @@ export class Conductor {
               this.projectRoot,
               state.feature_desc ?? this.featureDesc ?? '',
             );
+            // `seedBuildTaskTelemetry` can admit a plan-amendment repair on
+            // this very first BUILD attempt. The startup recovery above has
+            // already run, so fold that newly durable instruction into the
+            // prompt now rather than making the agent wait for a restart.
+            if (attempt === 1) {
+              try {
+                const repairs = createRepairObligationStore(
+                  this.projectRoot,
+                  join(this.projectRoot, '.pipeline', 'engine-state.json'),
+                );
+                const restored = await repairs.read();
+                const planBinding = await resolveRepairPlanBinding(this.projectRoot);
+                if (restored.ok && planBinding.kind === 'bound') {
+                  for (const obligation of Object.values(restored.value.records).sort((a, b) => a.id.localeCompare(b.id))) {
+                    const hasOpenTask = Object.values(obligation.tasks).some((task) => task.status === 'open');
+                    if (
+                      obligation.planIdentity !== planBinding.identity ||
+                      obligation.source.authority !== 'plan_amendment' ||
+                      obligation.settlement !== 'settled' ||
+                      !hasOpenTask
+                    ) continue;
+                    const hint = `Resume admitted repair ${obligation.id}: ${obligation.source.findingId}. ` +
+                      obligation.source.instruction;
+                    if (!retryHint?.includes(hint)) retryHint = [retryHint, hint].filter(Boolean).join('\n');
+                  }
+                }
+              } catch {
+                // Task seeding and the build predicate own malformed repair
+                // state. Prompt enrichment must not weaken their refusal.
+              }
+            }
           }
 
           // Build-step-only watcher (Task 9, adr-2026-07-10-intra-step-build-progress-events):
@@ -11890,7 +11927,9 @@ export class Conductor {
                   // #569 Task 5: record a distinct, actionable reason for
                   // the terminal HALT fallback in case this build step
                   // ultimately exhausts retries after this stall.
-                  lastBuildStallReason = `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))`;
+                  lastBuildStallReason =
+                    `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))` +
+                    (completion.reason ? `\nCompletion gate: ${completion.reason}` : '');
                 } else if (
                   attempt >= 2 &&
                   resolvedTasksAfter <= resolvedTasksBefore &&
@@ -12094,7 +12133,7 @@ export class Conductor {
                     const progressPart =
                       `Build stall: no forward progress (resolved ` +
                       `${resolvedTasksBefore} → ${resolvedTasksAfter} tasks).`;
-                    const synthesized = `${progressPart} ${reasonPart}.`;
+                    const synthesized = `${lastBuildStallReason ?? progressPart}\n${reasonPart}.`;
                     effectiveQuestion = await writeStallQuestionEvidence(
                       this.projectRoot,
                       synthesized,

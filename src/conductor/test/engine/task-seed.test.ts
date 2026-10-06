@@ -3,9 +3,68 @@ import * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
+import { planTaskDigests } from '../../src/engine/plan-task-parse.js';
 import * as autoheal from '../../src/engine/autoheal.js';
 // Covers: task:1, task:2, task:3, task:4, task:5
 import { seedTaskStatus } from '../../src/engine/task-seed.js';
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { completeTaskDoneWhen, resolveTaskIds } from '../../src/engine/task-progress.js';
+import { admitAndRestageRepair } from '../../src/engine/repair-restage.js';
+
+const reopenObservation = vi.hoisted(() => ({
+  active: false,
+  events: [] as string[],
+  statusPath: '',
+  statusAtDigestWrite: '' as string | undefined,
+  restageCalls: 0,
+}));
+
+vi.mock('../../src/engine/repair-obligations.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/repair-obligations.js')>();
+  return {
+    ...actual,
+    createRepairObligationStore: (...args: Parameters<typeof actual.createRepairObligationStore>) => {
+      const store = actual.createRepairObligationStore(...args);
+      if (!reopenObservation.active) return store;
+      return {
+        ...store,
+        admitOrReplay: async (...admission: Parameters<typeof store.admitOrReplay>) => {
+          reopenObservation.events.push('admitOrReplay');
+          return store.admitOrReplay(...admission);
+        },
+        markSettled: async (...input: Parameters<typeof store.markSettled>) => {
+          reopenObservation.events.push('markSettled');
+          return store.markSettled(...input);
+        },
+      };
+    },
+  };
+});
+
+vi.mock('../../src/engine/repair-restage.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/repair-restage.js')>();
+  return {
+    ...actual,
+    admitAndRestageRepair: async (...args: Parameters<typeof actual.admitAndRestageRepair>) => {
+      reopenObservation.restageCalls += 1;
+      return actual.admitAndRestageRepair(...args);
+    },
+  };
+});
+
+vi.mock('../../src/engine/task-digests.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/task-digests.js')>();
+  return {
+    ...actual,
+    recordTaskDigests: async (...args: Parameters<typeof actual.recordTaskDigests>) => {
+      reopenObservation.events.push('recordTaskDigests');
+      if (reopenObservation.statusPath) {
+        reopenObservation.statusAtDigestWrite = await fsPromises.readFile(reopenObservation.statusPath, 'utf8');
+      }
+      return actual.recordTaskDigests(...args);
+    },
+  };
+});
 
 vi.mock('../../src/engine/autoheal.js', { spy: true });
 
@@ -1324,6 +1383,407 @@ Content
 
       // Seed should succeed regardless of stamp file state
       await expect(seedTaskStatus(dir, planPath)).resolves.not.toThrow();
+    });
+  });
+
+  describe('Task 3: rewritten plan tasks reopen through repair obligations', () => {
+    it.each([
+      ['absent taskDigests', undefined],
+      ['an unknown digest prefix', { '1': 'v99:legacy-digest' }],
+    ])('records a fresh baseline without repair admission for %s', async (_caseName, priorDigests) => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      const planText = '# Plan\n\n## Task 1: Already completed\nCurrent plan text.\n';
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const statePath = join(dir, '.pipeline/engine-state.json');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(planPath, planText);
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [{ id: '1', name: 'Already completed', status: 'completed', commit: 'finished' }],
+      }));
+      await fsPromises.writeFile(statePath, JSON.stringify({
+        activePlanPath: planPath,
+        ...(priorDigests === undefined ? {} : {
+          taskDigests: { version: 1, byPlan: { '.docs/plans/test.md': priorDigests } },
+        }),
+      }));
+
+      reopenObservation.active = true;
+      reopenObservation.events = [];
+      try {
+        await seedTaskStatus(dir, planPath);
+      } finally {
+        reopenObservation.active = false;
+      }
+
+      const state = JSON.parse(await fsPromises.readFile(statePath, 'utf8'));
+      expect(reopenObservation.events).toEqual(['recordTaskDigests']);
+      expect(state.repairObligations).toBeUndefined();
+      expect(state.taskDigests).toEqual({
+        version: 1,
+        byPlan: { '.docs/plans/test.md': Object.fromEntries(planTaskDigests(planText)) },
+      });
+      expect(JSON.parse(await fsPromises.readFile(statusPath, 'utf8')).tasks).toEqual([
+        expect.objectContaining({ id: '1', status: 'completed', commit: 'finished' }),
+      ]);
+    });
+
+    it('recreates trailer-completed worktree state and records a fresh baseline without repair admission', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      const planText = '# Plan\n\n## Task 1: Completed before recreation\n';
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'task-seed@example.test'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Task Seed Test'], { cwd: dir });
+      await fsPromises.writeFile(planPath, planText);
+      await execa('git', ['add', '.docs/plans/test.md'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'initial plan'], { cwd: dir });
+      // A local ref is enough to model origin/main for the fail-closed
+      // merge-base range used by trailer restoration.
+      await execa('git', ['branch', 'origin/main'], { cwd: dir });
+      await fsPromises.writeFile(join(dir, 'completed.txt'), 'completed\n');
+      await execa('git', ['add', 'completed.txt'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'complete task\n\nTask: 1'], { cwd: dir });
+
+      reopenObservation.active = true;
+      reopenObservation.events = [];
+      try {
+        await seedTaskStatus(dir, planPath);
+      } finally {
+        reopenObservation.active = false;
+      }
+
+      const state = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/engine-state.json'), 'utf8'));
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(reopenObservation.events).toEqual(['recordTaskDigests']);
+      expect(state.repairObligations).toBeUndefined();
+      expect(state.taskDigests).toEqual({
+        version: 1,
+        byPlan: { '.docs/plans/test.md': Object.fromEntries(planTaskDigests(planText)) },
+      });
+      expect(status.tasks).toEqual([
+        expect.objectContaining({ id: '1', status: 'completed', restored_from: 'task-trailer' }),
+      ]);
+    });
+
+    it('fails closed with the neutral seed reason when taskDigests has an incompatible version', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(planPath, '# Plan\n\n## Task 1: Current task\n');
+      await fsPromises.writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: planPath,
+        taskDigests: { version: 2, byPlan: {} },
+      }));
+
+      await expect(seedTaskStatus(dir, planPath)).rejects.toThrow('taskDigests section is incompatible');
+      const result = await checkStepCompletion(dir, 'build', { projectRoot: dir, planPath });
+      expect(result).toEqual(expect.objectContaining({
+        done: false,
+        reason: expect.stringContaining('failed to seed task-status from plan'),
+      }));
+      expect(result.reason).not.toContain('task reopen failed');
+    });
+
+    it('is idempotent across A-to-B-to-A rewrites, leaves the ledger alone, and closes every coexisting repair', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      const statePath = join(dir, '.pipeline/engine-state.json');
+      const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+      const planA = '# Plan\n\n## Task 1: Rewritten task\nOriginal text.\n\n**Done when:**\n1. The reopened task is complete.\n';
+      const planB = '# Plan\n\n## Task 1: Rewritten task\nChanged text.\n\n**Done when:**\n1. The reopened task is complete.\n';
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(planPath, planA);
+      await seedTaskStatus(dir, planPath);
+      await fsPromises.writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
+        tasks: [{ id: '1', status: 'completed' }],
+      }));
+      const ledger = JSON.stringify({
+        version: 1, gates: {}, growth: { authored: 0, added: 0, byGate: {} },
+      }, null, 2);
+      await fsPromises.writeFile(ledgerPath, ledger);
+
+      await fsPromises.writeFile(planPath, planB);
+      await seedTaskStatus(dir, planPath);
+      await fsPromises.writeFile(planPath, planA);
+      await seedTaskStatus(dir, planPath);
+      const afterSecondRewrite = JSON.parse(await fsPromises.readFile(statePath, 'utf8'));
+      const amendments = Object.values(afterSecondRewrite.repairObligations.records) as Array<{
+        id: string; source: { authority: string }; baseline: unknown; tasks: Record<string, { status: string; evidence?: unknown }>;
+      }>;
+      const openAmendments = amendments.filter((record) =>
+        record.source.authority === 'plan_amendment' && record.tasks['1']?.status === 'open',
+      );
+      expect(openAmendments).toHaveLength(1);
+      expect(amendments.find((record) => record.id !== openAmendments[0].id && record.source.authority === 'plan_amendment'))
+        .toMatchObject({ tasks: { '1': { status: 'resolved', evidence: { kind: 'superseded-by-plan-amendment' } } } });
+
+      // Two additional BUILD entries reconstruct their stores from disk. They
+      // must replay, not manufacture new repairs or move the boundary.
+      const baseline = openAmendments[0].baseline;
+      await seedTaskStatus(dir, planPath);
+      await seedTaskStatus(dir, planPath);
+      const afterTripleSeed = JSON.parse(await fsPromises.readFile(statePath, 'utf8'));
+      const replayedOpen = (Object.values(afterTripleSeed.repairObligations.records) as typeof amendments)
+        .filter((record) => record.source.authority === 'plan_amendment' && record.tasks['1']?.status === 'open');
+      expect(replayedOpen).toEqual([expect.objectContaining({ baseline })]);
+      await expect(fsPromises.readFile(ledgerPath, 'utf8')).resolves.toBe(ledger);
+
+      await expect(admitAndRestageRepair({
+        projectRoot: dir, planPath, taskIds: ['1'], findingIds: ['coverage-claim'],
+        sourceAuthority: 'coverage_binding', instruction: 'Reconcile coverage.', gates: ['coverage_binding'],
+      })).resolves.toMatchObject({ kind: 'restaged' });
+      const chargedLedger = JSON.parse(await fsPromises.readFile(ledgerPath, 'utf8'));
+      expect(chargedLedger).toMatchObject({ gates: { coverage_binding: { laps: 1 } } });
+      expect(chargedLedger.pendingRepair).toBeUndefined();
+
+      await expect(completeTaskDoneWhen(dir, '1', [{ index: 1, evidence: 'completed after rewrite' }]))
+        .resolves.toEqual({ kind: 'completed' });
+      expect(await resolveTaskIds(dir, ['1'])).toEqual(new Set(['1']));
+    });
+
+    it('admits and settles before recording the new digest, then restages the completed row without repair-restage', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const originalPlan = `# Plan
+
+## Task 1: Rewritten task
+The original implementation plan text.
+`;
+      const rewrittenPlan = `# Plan
+
+## Task 1: Rewritten task
+The plan text changed after implementation.
+`;
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'task-seed@example.test'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Task Seed Test'], { cwd: dir });
+      await fsPromises.writeFile(planPath, originalPlan);
+      await execa('git', ['add', '.docs/plans/test.md'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'initial plan'], { cwd: dir });
+      const baselineHead = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+      await fsPromises.writeFile(planPath, rewrittenPlan);
+      const originalDigest = planTaskDigests(originalPlan).get('1')!;
+      const rewrittenDigest = planTaskDigests(rewrittenPlan).get('1')!;
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [{ id: '1', name: 'Rewritten task', status: 'completed', commit: 'before-rewrite' }],
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: planPath,
+        taskDigests: { version: 1, byPlan: { '.docs/plans/test.md': { '1': originalDigest } } },
+      }));
+
+      reopenObservation.active = true;
+      reopenObservation.events = [];
+      reopenObservation.statusPath = statusPath;
+      reopenObservation.statusAtDigestWrite = undefined;
+      reopenObservation.restageCalls = 0;
+      try {
+        await seedTaskStatus(dir, planPath);
+      } finally {
+        reopenObservation.active = false;
+      }
+
+      expect(reopenObservation.events).toEqual(['admitOrReplay', 'markSettled', 'recordTaskDigests']);
+      expect(reopenObservation.restageCalls).toBe(0);
+      expect(JSON.parse(reopenObservation.statusAtDigestWrite ?? '{}').tasks).toEqual([
+        expect.objectContaining({ id: '1', status: 'completed' }),
+      ]);
+      const engineState = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/engine-state.json'), 'utf8'));
+      const repairSection = engineState.repairObligations;
+      const obligationId = repairSection.currentByPlan['.docs/plans/test.md']['1'];
+      expect(repairSection.records[obligationId]).toEqual(expect.objectContaining({
+        id: obligationId,
+        planIdentity: '.docs/plans/test.md',
+        taskIds: ['1'],
+        source: expect.objectContaining({ authority: 'plan_amendment', findingId: rewrittenDigest }),
+        baseline: expect.objectContaining({ head: baselineHead }),
+        settlement: 'settled',
+        tasks: { '1': { status: 'open' } },
+      }));
+      const status = JSON.parse(await fsPromises.readFile(statusPath, 'utf8'));
+      expect(status.tasks).toEqual([expect.objectContaining({ id: '1', status: 'pending' })]);
+    });
+
+    it('admits independent plan-amendment obligations for identical rewritten tasks in separate plans', async () => {
+      reopenObservation.statusPath = '';
+      const firstPath = join(dir, '.docs/plans/first.md');
+      const secondPath = join(dir, '.docs/plans/second.md');
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const statePath = join(dir, '.pipeline/engine-state.json');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const original = '# Plan\n\n## Task 1: Shared task\nOriginal text.\n';
+      const rewritten = '# Plan\n\n## Task 1: Shared task\nRewritten text.\n';
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'task-seed@example.test'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Task Seed Test'], { cwd: dir });
+      await fsPromises.writeFile(firstPath, original);
+      await fsPromises.writeFile(secondPath, original);
+      await execa('git', ['add', '.docs/plans'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'initial plans'], { cwd: dir });
+      const originalDigest = planTaskDigests(original).get('1')!;
+      await fsPromises.writeFile(firstPath, rewritten);
+      await fsPromises.writeFile(secondPath, rewritten);
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [{ id: '1', name: 'Shared task', status: 'completed', commit: 'before-rewrite' }],
+      }));
+      await fsPromises.writeFile(statePath, JSON.stringify({
+        activePlanPath: firstPath,
+        taskDigests: { version: 1, byPlan: {
+          '.docs/plans/first.md': { '1': originalDigest },
+          '.docs/plans/second.md': { '1': originalDigest },
+        } },
+      }));
+
+      await seedTaskStatus(dir, firstPath);
+      const afterFirst = JSON.parse(await fsPromises.readFile(statePath, 'utf8'));
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [{ id: '1', name: 'Shared task', status: 'completed', commit: 'before-rewrite' }],
+      }));
+      await fsPromises.writeFile(statePath, JSON.stringify({ ...afterFirst, activePlanPath: secondPath }));
+      await seedTaskStatus(dir, secondPath);
+
+      const state = JSON.parse(await fsPromises.readFile(statePath, 'utf8'));
+      const repairs = state.repairObligations;
+      const firstId = repairs.currentByPlan['.docs/plans/first.md']['1'];
+      const secondId = repairs.currentByPlan['.docs/plans/second.md']['1'];
+      expect(firstId).not.toBe(secondId);
+      expect(repairs.records[firstId]).toMatchObject({
+        planIdentity: '.docs/plans/first.md', settlement: 'settled', tasks: { '1': { status: 'open' } },
+      });
+      expect(repairs.records[secondId]).toMatchObject({
+        planIdentity: '.docs/plans/second.md', settlement: 'settled', tasks: { '1': { status: 'open' } },
+      });
+    });
+  });
+
+  describe('Task 13: resolved matching-digest builds stay closed', () => {
+    it('completes without an obligation, then remains closed after an unchanged rewind-to-build re-seed', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const planText = `# Plan
+
+### Task 1: First completed task
+**Story:** 3
+
+### Task 2: Second completed task
+**Story:** 3
+`;
+      const digests = Object.fromEntries(planTaskDigests(planText));
+
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(planPath, planText);
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [
+          { id: '1', name: 'First completed task', status: 'completed', commit: 'already-complete' },
+          { id: '2', name: 'Second completed task', status: 'skipped', commit: 'already-complete' },
+        ],
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: planPath,
+        taskDigests: { version: 1, byPlan: { '.docs/plans/test.md': digests } },
+      }));
+
+      reopenObservation.active = true;
+      reopenObservation.events = [];
+      reopenObservation.restageCalls = 0;
+      try {
+        await seedTaskStatus(dir, planPath);
+        expect(await checkStepCompletion(dir, 'build', {
+          projectRoot: dir,
+          planPath,
+        })).toEqual({ done: true });
+
+        // A plain rewind to BUILD changes orchestration state, not plan text
+        // or task status. BUILD entry therefore re-seeds this same state.
+        await seedTaskStatus(dir, planPath);
+        expect(await checkStepCompletion(dir, 'build', {
+          projectRoot: dir,
+          planPath,
+        })).toEqual({ done: true });
+      } finally {
+        reopenObservation.active = false;
+      }
+
+      // The predicate re-seeds at each BUILD entry as well; every observed
+      // repair-store interaction must therefore still be absent.
+      expect(reopenObservation.events).toHaveLength(4);
+      expect(reopenObservation.events).toEqual(
+        Array.from({ length: 4 }, () => 'recordTaskDigests'),
+      );
+      expect(reopenObservation.restageCalls).toBe(0);
+      expect(JSON.parse(await fsPromises.readFile(statusPath, 'utf8')).tasks).toEqual([
+        expect.objectContaining({ id: '1', status: 'completed' }),
+        expect.objectContaining({ id: '2', status: 'skipped' }),
+      ]);
+    });
+  });
+
+  describe('presentation-only plan edits do not reopen completed tasks', () => {
+    it.each([
+      ['whitespace', (plan: string) => plan.replace('First completed task', '  First   completed task  ')],
+      ['line wrapping', (plan: string) => plan.replace('Keep the implementation boundary stable.', 'Keep the implementation\nboundary stable.')],
+      ['blank line', (plan: string) => plan.replace('Keep the implementation boundary stable.', 'Keep the implementation\n\nboundary stable.')],
+      ['trailing risks section', (plan: string) => `${plan}\n## Risks\nThis plan-level note changes after the final task.\n`],
+    ] as const)('does not reopen completed tasks after a %s edit', async (_kind, edit) => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const baselinePlan = `# Plan
+
+### Task 1: First completed task
+Keep the implementation boundary stable.
+
+### Task 2: Second completed task
+Keep the other boundary stable.
+`;
+
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'task-seed@example.test'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Task Seed Test'], { cwd: dir });
+      await fsPromises.writeFile(planPath, baselinePlan);
+      await fsPromises.writeFile(join(dir, 'completed.txt'), 'completed\n');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'initial plan'], { cwd: dir });
+      await fsPromises.writeFile(join(dir, 'completed.txt'), 'completed tasks\n');
+      await execa('git', ['add', 'completed.txt'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'complete tasks\n\nTask: 1\nTask: 2'], { cwd: dir });
+
+      await fsPromises.writeFile(planPath, edit(baselinePlan));
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [
+          { id: '1', name: 'First completed task', status: 'completed' },
+          { id: '2', name: 'Second completed task', status: 'completed' },
+        ],
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: planPath,
+        taskDigests: { version: 1, byPlan: { '.docs/plans/test.md': Object.fromEntries(planTaskDigests(baselinePlan)) } },
+      }));
+
+      await seedTaskStatus(dir, planPath);
+
+      const state = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/engine-state.json'), 'utf8'));
+      expect(state.repairObligations).toBeUndefined();
+      expect(JSON.parse(await fsPromises.readFile(statusPath, 'utf8')).tasks).toEqual([
+        expect.objectContaining({ id: '1', status: 'completed' }),
+        expect.objectContaining({ id: '2', status: 'completed' }),
+      ]);
+
+      // Prove the build predicate remains closed through the independent
+      // Task:-trailer authority rather than the retained terminal rows.
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [
+          { id: '1', status: 'pending' },
+          { id: '2', status: 'pending' },
+        ],
+      }));
+      expect(await checkStepCompletion(dir, 'build', { projectRoot: dir, planPath })).toEqual({ done: true });
     });
   });
 

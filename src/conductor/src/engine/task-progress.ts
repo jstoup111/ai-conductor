@@ -339,7 +339,17 @@ export async function completeTaskDoneWhen(
     return { kind: 'refused', message: `[task-cli] cannot close task ${id}: ${repairState.message}` };
   }
   const canonicalId = canonicalTaskId(id);
-  const currentObligationId = repairState.value.currentByPlan[repairPlanIdentity(projectRoot, activePlanPath)]?.[canonicalId];
+  const planIdentity = repairPlanIdentity(projectRoot, activePlanPath);
+  // `currentByPlan` selects the newest row for legacy single-repair callers,
+  // but a task can carry independent findings from more than one authority.
+  // A successful Done-when close is current evidence for every still-open
+  // obligation on that task; leaving an older authority open would let it
+  // override the just-completed status on the next resolution fold.
+  const openObligationIds = Object.values(repairState.value.records)
+    .filter((obligation) =>
+      obligation.planIdentity === planIdentity && obligation.tasks[canonicalId]?.status === 'open',
+    )
+    .map((obligation) => obligation.id);
   const evidenceByIndex = new Map<number, string>();
   for (const entry of suppliedEvidence) {
     if (entry.index > 0 && entry.evidence.trim()) {
@@ -395,11 +405,11 @@ export async function completeTaskDoneWhen(
     source: verifyOnly ? 'verify-only' : 'reported',
   }));
 
-  if (currentObligationId !== undefined) {
+  for (const obligationId of openObligationIds) {
     const closure = await repairs.close({
       planPath: activePlanPath,
       taskId: id,
-      obligationId: currentObligationId,
+      obligationId,
       evidence: { kind: 'current-done-when', value: JSON.stringify(doneWhenRecords) },
     });
     if (!closure.ok) {

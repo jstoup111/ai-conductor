@@ -116,6 +116,111 @@ describe('repair obligations', () => {
     });
   });
 
+  it('keeps a plan-amendment replay immutable across reconstructed stores', async () => {
+    const { projectRoot, statePath } = await createStatePath();
+    const firstStore = createRepairObligationStore(projectRoot, statePath);
+    const first = await firstStore.admitOrReplay('plan-amendment:1:digest-b', admission({
+      id: 'plan-amendment:1:digest-b',
+      taskIds: ['1'],
+      source: { findingId: 'digest-b', authority: 'plan_amendment', instruction: 'Reopen task 1.' },
+      baseline: { head: 'baseline-head', tree: 'baseline-tree', resolvedTaskIds: ['1'] },
+    }));
+    if (!first.ok) throw new Error(first.message);
+
+    // A daemon restart rebuilds the store from its durable state. Replays must
+    // not manufacture a new repair boundary from the later invocation.
+    const recreatedStore = createRepairObligationStore(projectRoot, statePath);
+    const replays = await Promise.all(Array.from({ length: 2 }, () => recreatedStore.admitOrReplay(
+      'plan-amendment:1:digest-b',
+      admission({
+        id: 'ignored-replay-id', taskIds: ['1'],
+        source: { findingId: 'other', authority: 'plan_amendment', instruction: 'Ignored.' },
+        baseline: { head: 'later-head', tree: 'later-tree', resolvedTaskIds: [] },
+      }),
+    )));
+
+    expect(replays).toEqual(replays.map(() => expect.objectContaining({
+      ok: true, replayed: true,
+      obligation: expect.objectContaining({ id: first.obligation.id, baseline: first.obligation.baseline }),
+    })));
+    const state = await recreatedStore.read();
+    expect(state).toMatchObject({
+      ok: true,
+      value: {
+        records: {
+          'plan-amendment:1:digest-b': expect.objectContaining({ baseline: first.obligation.baseline }),
+        },
+      },
+    });
+    if (state.ok) {
+      expect(Object.values(state.value.records).filter((record) =>
+        record.source.authority === 'plan_amendment' && record.tasks['1']?.status === 'open',
+      )).toHaveLength(1);
+    }
+  });
+
+  it('supersedes only prior plan amendments and lets coexisting prd-audit work settle independently', async () => {
+    const { projectRoot, statePath } = await createStatePath();
+    const repairs = createRepairObligationStore(projectRoot, statePath);
+    const prdAudit = await repairs.admitOrReplay('prd-audit:1', admission({
+      id: 'prd-audit:1', taskIds: ['1'],
+      source: { findingId: 'PRD-1', authority: 'prd_audit', instruction: 'Repair the audit finding.' },
+    }));
+    const amendmentA = await repairs.admitOrReplay('plan-amendment:1:digest-a', admission({
+      id: 'plan-amendment:1:digest-a', taskIds: ['1'],
+      source: { findingId: 'digest-a', authority: 'plan_amendment', instruction: 'Reopen A.' },
+    }));
+    const amendmentB = await repairs.admitOrReplay('plan-amendment:1:digest-b', admission({
+      id: 'plan-amendment:1:digest-b', taskIds: ['1'],
+      source: { findingId: 'digest-b', authority: 'plan_amendment', instruction: 'Reopen B.' },
+    }));
+    if (!prdAudit.ok || !amendmentA.ok || !amendmentB.ok) throw new Error('expected admissions');
+
+    const afterRewrite = await repairs.read();
+    expect(afterRewrite).toMatchObject({ ok: true, value: { records: {
+      'prd-audit:1': { tasks: { '1': { status: 'open' } } },
+      'plan-amendment:1:digest-a': { tasks: { '1': {
+        status: 'resolved', evidence: { kind: 'superseded-by-plan-amendment', value: 'plan-amendment:1:digest-b' },
+      } } },
+      'plan-amendment:1:digest-b': { tasks: { '1': { status: 'open' } } },
+    } } });
+
+    await expect(repairs.close({
+      planPath: '.docs/plans/current.md', taskId: '1', obligationId: prdAudit.obligation.id,
+      evidence: { kind: 'current-done-when', value: 'prd proof' },
+    })).resolves.toMatchObject({ ok: true, obligation: { tasks: { '1': { status: 'resolved' } } } });
+    await expect(repairs.close({
+      planPath: '.docs/plans/current.md', taskId: '1', obligationId: amendmentB.obligation.id,
+      evidence: { kind: 'current-done-when', value: 'amendment proof' },
+    })).resolves.toMatchObject({ ok: true, obligation: { tasks: { '1': { status: 'resolved' } } } });
+  });
+
+  it('refuses to close an obligation through a different plan that reuses its task id', async () => {
+    const { projectRoot, statePath } = await createStatePath();
+    const repairs = createRepairObligationStore(projectRoot, statePath);
+    const planA = await repairs.admitOrReplay('plan-a:1', admission({
+      id: 'plan-a:1', taskIds: ['1'],
+      planPath: '.docs/plans/a.md',
+      source: { findingId: 'A-1', authority: 'prd_audit', instruction: 'Repair plan A.' },
+    }));
+    const planB = await repairs.admitOrReplay('plan-b:1', admission({
+      id: 'plan-b:1', taskIds: ['1'],
+      planPath: '.docs/plans/b.md',
+      source: { findingId: 'B-1', authority: 'plan_amendment', instruction: 'Repair plan B.' },
+    }));
+    if (!planA.ok || !planB.ok) throw new Error('expected plan-scoped admissions');
+
+    await expect(repairs.close({
+      planPath: '.docs/plans/b.md', taskId: '1', obligationId: planA.obligation.id,
+      evidence: { kind: 'current-done-when', value: 'wrong plan' },
+    })).resolves.toMatchObject({ ok: false, kind: 'stale' });
+
+    await expect(repairs.read()).resolves.toMatchObject({ ok: true, value: { records: {
+      'plan-a:1': { tasks: { '1': { status: 'open' } } },
+      'plan-b:1': { tasks: { '1': { status: 'open' } } },
+    } } });
+  });
+
   it('isolates plan identities, retains prior rounds, and rejects a stale closure after a later repair', async () => {
     const { projectRoot, statePath } = await createStatePath();
     const repairs = createRepairObligationStore(projectRoot, statePath);

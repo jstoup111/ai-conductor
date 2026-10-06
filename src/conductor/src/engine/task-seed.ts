@@ -9,8 +9,29 @@ import {
   resolveOriginRef,
 } from './autoheal.js';
 import { createTaskEvidence } from './task-evidence.js';
-import { parsePlanTaskPaths } from './plan-task-parse.js';
+import { planTaskDigests, parsePlanTaskPaths } from './plan-task-parse.js';
 import { createRepairObligationStore, repairPlanIdentity } from './repair-obligations.js';
+import { readTaskDigests, readTaskDigestsLeniently, recordTaskDigests } from './task-digests.js';
+import { currentCommitSha, currentTreeHash } from './project-prelude.js';
+import { resolveTaskIds } from './task-progress.js';
+/** A seed failure that occurred while reopening a task whose plan text changed. */
+export class TaskReopenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TaskReopenError';
+  }
+}
+
+/**
+ * The admission key and durable record id must have exactly the same identity
+ * components.  In particular, task ids are only unique within a plan: using
+ * the digest alone let an identical task in another plan replay this plan's
+ * obligation.
+ */
+function planAmendmentObligationId(planIdentity: string, taskId: string, digest: string): string {
+  return `plan_amendment:${planIdentity}:${canonicalTaskId(taskId)}:${digest}`;
+}
+
 export interface TaskStatusRecord {
   id: string;
   name?: string;
@@ -235,17 +256,97 @@ export async function seedTaskStatus(
 
     const planTasks = parsePlanTasks(planText);
     const planTaskPaths = parsePlanTaskPaths(planText);
+    const currentDigests = Object.fromEntries(planTaskDigests(planText));
+    const recordedDigests = await readTaskDigests(projectRoot, resolvedPlanPath);
+    if (recordedDigests.kind === 'incompatible') {
+      // Repair obligations are the durable authority that excludes historic
+      // Task trailers after a plan amendment.  If that section is malformed,
+      // a rewritten task cannot safely be reopened; report a reopen failure
+      // only when a recorded digest shows a task actually changed, so a seed
+      // that needed no reopen keeps the neutral seed-failure reason.
+      if (recordedDigests.message.includes('repairObligations')) {
+        const lenient = await readTaskDigestsLeniently(projectRoot, resolvedPlanPath);
+        const reopenDue = lenient.kind === 'present' && Object.entries(currentDigests).some(([taskId, digest]) => {
+          const recorded = lenient.digests[taskId];
+          return recorded?.startsWith('v1:') === true && recorded !== digest;
+        });
+        if (reopenDue) {
+          throw new TaskReopenError(`Unable to read repair obligations while reopening plan tasks: ${recordedDigests.message}`);
+        }
+      }
+      throw new Error(`Unable to seed task status from task digests: ${recordedDigests.message}`);
+    }
+    if (recordedDigests.kind === 'present') {
+      const changedTaskIds = Object.entries(currentDigests)
+        .filter(([taskId, digest]) => {
+          const recorded = recordedDigests.digests[taskId];
+          // Missing or unrecognised digest versions are a migration baseline,
+          // never evidence that already-completed work changed.
+          return recorded?.startsWith('v1:') === true && recorded !== digest;
+        })
+        .map(([taskId]) => taskId);
+      if (changedTaskIds.length > 0) {
+        const [head, tree, resolvedTaskIds] = await Promise.all([
+          currentCommitSha(projectRoot),
+          currentTreeHash(projectRoot),
+          resolveTaskIds(projectRoot, Array.from(planTasks.keys())),
+        ]);
+        const repairStore = createRepairObligationStore(projectRoot, engineStatePath);
+        const planIdentity = repairPlanIdentity(projectRoot, resolvedPlanPath);
+        for (const taskId of changedTaskIds) {
+          const digest = currentDigests[taskId];
+          const obligationId = planAmendmentObligationId(planIdentity, taskId, digest);
+          const admission = await repairStore.admitOrReplay(
+            obligationId,
+            {
+              id: obligationId,
+              planPath: resolvedPlanPath,
+              taskIds: [taskId],
+              source: {
+                findingId: digest,
+                authority: 'plan_amendment',
+                instruction: `Task ${taskId}${planTasks.get(taskId)?.name ? ` (${planTasks.get(taskId)!.name})` : ''} plan text changed since it was implemented; reopen it in BUILD.`,
+              },
+              baseline: {
+                head: head ?? '',
+                tree: tree ?? '',
+                resolvedTaskIds: Array.from(resolvedTaskIds),
+              },
+            },
+          );
+          if (!admission.ok) {
+            throw new TaskReopenError(`Unable to admit plan amendment repair for task ${taskId}: ${admission.message}`);
+          }
+          const settled = await repairStore.markSettled({
+            planPath: resolvedPlanPath,
+            obligationId: admission.obligation.id,
+          });
+          if (!settled.ok) {
+            throw new TaskReopenError(`Unable to settle plan amendment repair for task ${taskId}: ${settled.message}`);
+          }
+        }
+      }
+    }
+    // Existing v1 digests keep Task 3's ordering: admission is durable before
+    // the replacement digest, and both happen before the row is re-staged.
+    // A missing/legacy baseline differs: reconstruct trailer-backed rows
+    // first, then write the initial baseline below.
+    const hasUsableRecordedBaseline = recordedDigests.kind === 'present' &&
+      Object.values(recordedDigests.digests).every((digest) => digest.startsWith('v1:'));
+    if (hasUsableRecordedBaseline) {
+      await recordTaskDigests(projectRoot, resolvedPlanPath, currentDigests);
+    }
+
     const repairs = await createRepairObligationStore(projectRoot, engineStatePath).read();
     if (!repairs.ok) {
       throw new Error(`Unable to seed task status from repair state (${repairs.kind}): ${repairs.message}`);
     }
     const planIdentity = repairPlanIdentity(projectRoot, resolvedPlanPath);
     const openRepairTaskIds = new Set(
-      Object.entries(repairs.value.currentByPlan[planIdentity] ?? {})
-        .flatMap(([taskId, obligationId]) =>
-          repairs.value.records[obligationId]?.tasks[taskId]?.status === 'open'
-            ? [canonicalTaskId(taskId)]
-            : []),
+      Object.values(repairs.value.records)
+        .filter((obligation) => obligation.planIdentity === planIdentity)
+        .flatMap((obligation) => Object.entries(obligation.tasks)
+          .flatMap(([taskId, task]) => task.status === 'open' ? [canonicalTaskId(taskId)] : [])),
     );
 
     // Load existing task-status.json.
@@ -351,11 +452,9 @@ export async function seedTaskStatus(
         // build predicate no longer cross-checks task-status.json rows
         // against the evidence ledger (the derivation engine +
         // createTaskEvidence's evidenceStamps; the derivation engine itself
-        // was deleted in Task 11) — that anti-forgery check is retired, since
-        // build_review's completeness rubric now independently judges the
-        // real diff on every pass. A row already marked completed/skipped
-        // stays that way across re-seeds regardless of whether an evidence
-        // stamp exists for it.
+        // was deleted in Task 11). A row already marked completed/skipped
+        // stays that way across re-seeds unless a current repair obligation
+        // explicitly reopens it.
         if (existing.status === 'completed' || existing.status === 'skipped') {
           continue;
         }
@@ -374,9 +473,8 @@ export async function seedTaskStatus(
         // wiped/recreated worktree or interrupted write does not redo finished,
         // committed work. This is a RESTORE, not a grant: `resolveTaskIds` already treats the same
         // trailer as resolving the task for build-step routing
-        // (adr-2026-07-23, #859), and `build_review`'s completeness rubric
-        // still re-judges the real diff, so no unearned work can pass a gate
-        // through this row.
+        // (adr-2026-07-23, #859), while current repair obligations take
+        // precedence over that historic trailer evidence.
         const provenSha = provenCompletions.get(canonicalId);
         const newTask: TaskStatusRecord = provenSha
           ? {
@@ -453,6 +551,10 @@ export async function seedTaskStatus(
         `task-status.json did not persist: expected ${tasks.length} row(s) at ` +
           `${statusPath}, re-read ${Array.isArray(reread.tasks) ? reread.tasks.length : 'a non-array'}`,
       );
+    }
+
+    if (!hasUsableRecordedBaseline) {
+      await recordTaskDigests(projectRoot, resolvedPlanPath, currentDigests);
     }
 
     // Write task evidence
