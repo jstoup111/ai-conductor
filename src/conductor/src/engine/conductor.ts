@@ -12396,6 +12396,19 @@ export class Conductor {
                     i = nav.index - 1; // for-loop i++ lands on build
                     continue stepLoop;
                   }
+                  // A budget refusal is already a complete, operator-facing
+                  // terminal result.  Do not replace it with the generic
+                  // refusal block: that loses the cap class and the durable
+                  // criterion list carried by the pending-repair boundary.
+                  if (outcome?.kind === 'halt' && outcome.haltClass === KICKBACK_CAP_HALT_CLASS) {
+                    await this.writeHaltMarker(outcome.detail + '\n', KICKBACK_CAP_HALT_CLASS);
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    const prUrl = await this.surfaceRemediationPr(outcome.detail);
+                    await this.emitLoopHalt(outcome.detail, prUrl);
+                    process.off('SIGINT', sigintHandler);
+                    process.off('SIGTERM', sigterm);
+                    return;
+                  }
                   // A `halt` or `none` (or an append-side throw) from
                   // planRemediation on a refusal round falls through to the
                   // refused over-scope block below: the operator must see the
