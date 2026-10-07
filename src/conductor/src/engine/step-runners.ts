@@ -278,6 +278,7 @@ import {
   AS_BUILT_VERDICT_SCHEMA,
   renderAsBuiltVerdictShape,
   resolveAsBuiltReferences,
+  stampAsBuiltFindingIds,
   validateAsBuiltVerdict,
 } from './as-built-contract.js';
 import {
@@ -1481,8 +1482,9 @@ export class DefaultStepRunner implements StepRunner {
           }
           const head = await this.gitRunner(['rev-parse', 'HEAD']);
           const codeStamp = head.exitCode === 0 && head.stdout.trim().length > 0 ? head.stdout.trim() : null;
-          await persistAsBuiltVerdict(this.projectDir, references.verdict, {
-            attemptId: opts?.runId ?? this.runId,
+          const attemptId = opts?.runId ?? this.runId;
+          await persistAsBuiltVerdict(this.projectDir, stampAsBuiltFindingIds(references.verdict, attemptId), {
+            attemptId,
             codeStamp,
             policy: projection.projection.policy,
           });

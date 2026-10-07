@@ -79,10 +79,25 @@ function runner(
 
 function approvedVerdict() {
   return {
-    version: 'v1',
+    version: 'v2',
     verdict: 'APPROVED',
     reachability: [],
     driftNotes: [],
+  };
+}
+
+function blockedVerdict() {
+  return {
+    version: 'v2',
+    verdict: 'BLOCKED',
+    reachability: [],
+    driftNotes: [],
+    findings: [
+      { class: 'DESIGN', summary: 'The same finding is reported twice.' },
+      { class: 'DESIGN', summary: 'The same finding is reported twice.' },
+    ],
+    violations: 'The implementation is blocked.',
+    resolution: 'Repair the implementation.',
   };
 }
 
@@ -235,6 +250,57 @@ describe('architecture_review_as_built native-schema dispatch', () => {
       nativeSchema: AS_BUILT_VERDICT_SCHEMA,
       interactive: [false, false],
     });
+  });
+
+  it('stamps identical provider findings with distinct attempt-qualified ids', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'as-built-finding-stamps-'));
+    dirs.push(projectDir);
+    buildProjection.mockResolvedValue({ ok: true, projection });
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true, output: 'review complete', exitCode: 0, finalStructuredResult: blockedVerdict(),
+    }));
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke,
+    };
+
+    await runner(projectDir, 'claude', provider).run(
+      'architecture_review_as_built', { complexity_tier: 'M' }, { runId: 'attempt:one' },
+    );
+
+    const persisted = JSON.parse(await readFile(join(projectDir, '.pipeline', 'architecture-review-as-built.json'), 'utf8'));
+    expect(persisted.verdict.findings).toEqual([
+      { id: 'as-built:attempt%3Aone:1', class: 'DESIGN', summary: 'The same finding is reported twice.' },
+      { id: 'as-built:attempt%3Aone:2', class: 'DESIGN', summary: 'The same finding is reported twice.' },
+    ]);
+  });
+
+  it('stamps equal finding ordinals differently in separate attempts', async () => {
+    const firstDir = await mkdtemp(join(tmpdir(), 'as-built-first-attempt-'));
+    const secondDir = await mkdtemp(join(tmpdir(), 'as-built-second-attempt-'));
+    dirs.push(firstDir, secondDir);
+    buildProjection.mockResolvedValue({ ok: true, projection });
+    const provider = (): LLMProvider => ({
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke: vi.fn(async (): Promise<InvokeResult> => ({
+        success: true, output: 'review complete', exitCode: 0, finalStructuredResult: blockedVerdict(),
+      })),
+    });
+
+    await runner(firstDir, 'claude', provider()).run(
+      'architecture_review_as_built', { complexity_tier: 'M' }, { runId: 'attempt-one' },
+    );
+    await runner(secondDir, 'claude', provider()).run(
+      'architecture_review_as_built', { complexity_tier: 'M' }, { runId: 'attempt-two' },
+    );
+
+    const first = JSON.parse(await readFile(join(firstDir, '.pipeline', 'architecture-review-as-built.json'), 'utf8'));
+    const second = JSON.parse(await readFile(join(secondDir, '.pipeline', 'architecture-review-as-built.json'), 'utf8'));
+    expect(first.verdict.findings[0].id).toBe('as-built:attempt-one:1');
+    expect(second.verdict.findings[0].id).toBe('as-built:attempt-two:1');
+    expect(first.verdict.findings[0].id).not.toBe(second.verdict.findings[0].id);
   });
 
   it('returns a projection fault without invoking a provider', async () => {
