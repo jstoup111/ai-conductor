@@ -1,3 +1,4 @@
+// Covers: task:4
 import { describe, expect, it } from 'vitest';
 
 import { CONFIG_CONSUMER_KEY_SETS, validateConfig } from '../../src/engine/config.js';
