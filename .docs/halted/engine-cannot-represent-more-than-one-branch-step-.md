@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-07T01:51:07.359Z
 Slug: engine-cannot-represent-more-than-one-branch-step-
 Class: needs-human
 Halting step: unknown
