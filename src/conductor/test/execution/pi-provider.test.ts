@@ -751,6 +751,22 @@ describe('PiProvider native output schema', () => {
   });
   afterEach(async () => { await rm(worktree, { recursive: true, force: true }); });
 
+  it('writes a self-host schema when the invocation cwd is a review checkout other than the home owner', async () => {
+    const reviewCheckout = await mkdtemp(join(tmpdir(), 'pi-self-host-schema-review-checkout-'));
+    try {
+      await schemaInvoke({
+        cwd: reviewCheckout,
+        nativeSchemaScratchHome: undefined,
+        nativeSchemaScratchRoot: undefined,
+        selfHost: { executable: '/resolved/pi', args: [], teardown: async () => {}, env: { PI_HOME: scratchHome }, scratchRoot: worktree },
+      });
+
+      expect(JSON.parse(await readFile(join(scratchHome, 'output-schema.json'), 'utf8'))).toEqual(schema);
+    } finally {
+      await rm(reviewCheckout, { recursive: true, force: true });
+    }
+  });
+
   it('writes the schema into the scratch home and passes -e «asset» plus the schema flag', async () => {
     await schemaInvoke();
 

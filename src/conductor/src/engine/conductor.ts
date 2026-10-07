@@ -6688,7 +6688,7 @@ export class Conductor {
               member: identity.member,
             });
             ownershipTransferred = true;
-            return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), originalCatalogHome: providerHome, teardown: async () => { try { await verify(); } finally { await home.teardown(); } } });
+            return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), originalCatalogHome: providerHome, scratchRoot: this.projectRoot, teardown:async () => { try { await verify(); } finally { await home.teardown(); } } });
           }
           const sandbox = await this.guardrails.provisionSandbox({
             worktreeRoot: this.projectRoot,
@@ -6705,6 +6705,7 @@ export class Conductor {
             env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
             args: [],
             originalCatalogHome: providerHome,
+            scratchRoot: this.projectRoot,
             teardown: async () => { try { await verify(); } finally { await sandbox.teardown(); } },
           });
         } finally {
