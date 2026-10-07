@@ -741,6 +741,7 @@ async function runRefusalReworkRun(input: {
   decisionId?: string;
   lapCap?: number;
   mode?: 'auto' | 'default';
+  manualTestFail?: boolean;
   asBuilt?: 'approved' | 'blocked-remediable';
   /** Model the planner's `.pipeline/remediation.json` output for its one call. */
   remediationMode?: 'default' | 'absent' | 'stale' | 'unparseable';
@@ -819,7 +820,9 @@ async function runRefusalReworkRun(input: {
       if (step === 'manual_test') {
         await writeFile(
           join(root, '.pipeline', 'manual-test-results.md'),
-          '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+          input.manualTestFail
+            ? '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n'
+            : '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
         );
       } else if (step === 'prd_audit') {
         const report = input.reports[Math.min(prdAuditDispatches++, input.reports.length - 1)]
@@ -1263,6 +1266,28 @@ describe('prd_audit kickback', () => {
     await expectRefusedReworkFallback(fixture);
   });
 
+  it('halts with the refused finding key when refusal tasks exceed the remaining growth allowance', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      plannerGaps: () => [
+        { id: 'refusal-dec-refuse-s21', disposition: 'build', rationale: 'Remove S2.1.', tasks: [
+          { id: 'remove-s21-a', title: 'Remove S2.1 behavior' },
+          { id: 'remove-s21-b', title: 'Remove S2.1 wiring' },
+          { id: 'remove-s21-c', title: 'Remove S2.1 tests' },
+        ] },
+      ],
+    });
+
+    expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+    expect(fixture.calls).not.toContain('build');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('kickback-cap');
+    const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Findings: S2.1');
+    expect(halt).not.toMatch(/Findings:.*rem-prd-audit-refusal-/);
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toContain('rem-prd-audit-refusal-dec-refuse-s21');
+    expect(fixture.state.ok && fixture.state.value.build).not.toBe('done');
+  });
+
   it.each([
     ['a malformed prd_audit gate with readable growth', JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: { authored: 8, added: 0, byGate: {} } })],
     ['a malformed prd_audit gate with unreadable growth', JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: 'bad' })],
@@ -1281,11 +1306,15 @@ describe('prd_audit kickback', () => {
     ['spent durable allowance', async (root: string) => writeKickbackLedger(root, {
       version: 1, gates: { prd_audit: { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0, laps: 1 } },
     })],
-    ['malformed durable allowance', async (root: string) => writeFile(
+    ['a malformed prd_audit record with readable growth', async (root: string) => writeFile(
       join(root, '.pipeline', 'kickback-ledger.json'),
-      JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } } }),
+      JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: { authored: 8, added: 0, byGate: {} } }),
     )],
-  ])('uses the refused grouped fallback for %s before dispatch', async (_name, beforeRun) => {
+    ['a malformed prd_audit record with unreadable growth', async (root: string) => writeFile(
+      join(root, '.pipeline', 'kickback-ledger.json'),
+      JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: 'bad' }),
+    )],
+  ])('uses the byte-identical serial refused fallback for grouped %s before dispatch', async (_name, beforeRun) => {
     const fixture = await runRefusalReworkRun({
       reports: [overScopeReport('S2.1', 'outside-visible')], mode: 'auto', beforeRun,
     });
@@ -1293,6 +1322,23 @@ describe('prd_audit kickback', () => {
     expect(fixture.calls).not.toContain('remediate');
     expect(fixture.calls).not.toContain('build');
     await expectRefusedReworkFallback(fixture);
+  });
+
+  it.each([false, true])('uses the serial refused halt before grouped manual-test fallback when its round cap is exhausted (manual FAIL: %s)', async (manualTestFail) => {
+    const serial = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')], lapCap: 0,
+    });
+    const grouped = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')], mode: 'auto', lapCap: 0, manualTestFail,
+    });
+
+    expect(grouped.calls).not.toContain('remediate');
+    expect(grouped.calls).not.toContain('build');
+    await expect(readFile(join(grouped.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('over-scope');
+    await expect(readFile(join(grouped.root, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(
+      await readFile(join(serial.root, '.pipeline', 'HALT'), 'utf8'),
+    );
+    await expect(readFile(grouped.planPath, 'utf8')).resolves.not.toContain('rem-prd-audit-refusal-');
   });
 
   it('uses a raised durable allowance in the validation join', async () => {
