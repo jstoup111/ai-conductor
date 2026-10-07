@@ -3,7 +3,11 @@ import {
   REMEDIATION_HALT_CATEGORIES,
   REMEDIATION_PUBLICATION_DISPOSITION,
   REMEDIATION_TARGET_STEPS,
+  remediationDispositionStep,
+  type RemediationDisposition,
+  type RemediationHaltCategory,
 } from './artifacts.js';
+import type { RemediationProjection, RemediationRequiredReference } from './remediation-projection.js';
 
 /** The versioned, engine-owned output contract for remediation gap plans. */
 export const REMEDIATION_PLAN_CONTRACT_VERSION = 'v1' as const;
@@ -78,6 +82,162 @@ function deepFreeze<Value>(value: Value): Value {
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+export interface AcceptedRemediationPlanDisposition {
+  readonly reference: { readonly kind: 'stall' | 'test'; readonly id: string } | RemediationRequiredReference;
+  /** Present only when this answer accounts for an engine-projected typed reference. */
+  readonly requiredReference?: RemediationRequiredReference;
+  readonly disposition: RemediationDisposition;
+  readonly targetStep: string;
+  readonly category: RemediationHaltCategory | null;
+  readonly rationale: string;
+  readonly tasks: readonly { readonly id: string; readonly title: string }[];
+  readonly boundTaskIds: readonly string[];
+}
+
+export type ValidateRemediationPlanResult =
+  | { readonly kind: 'accepted'; readonly dispositions: readonly AcceptedRemediationPlanDisposition[] }
+  | { readonly kind: 'rejected'; readonly diagnostics: readonly string[] };
+
+function nonEmptyText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).length === keys.length && Object.keys(value).every((key) => keys.includes(key));
+}
+
+function referenceKey(kind: string, id: string): string {
+  return `${kind}:${kind === 'prd-criterion' ? id.toLowerCase() : id}`;
+}
+
+function typedReference(
+  kind: string,
+  id: string,
+  projection: RemediationProjection,
+): RemediationRequiredReference | undefined {
+  const key = referenceKey(kind, id);
+  return projection.requiredReferences.find((reference) => referenceKey(reference.kind, reference.id) === key);
+}
+
+function isDisposition(value: unknown): value is RemediationDisposition {
+  return typeof value === 'string' && (REMEDIATION_DISPOSITIONS as readonly string[]).includes(value);
+}
+
+function isHaltCategory(value: unknown): value is RemediationHaltCategory {
+  return typeof value === 'string' && (REMEDIATION_HALT_CATEGORIES as readonly string[]).includes(value);
+}
+
+function untypedReferenceMatchesSource(kind: string, id: string, source: RemediationProjection['source']): boolean {
+  if (kind === 'stall') return source === 'build-stall' && /^stall:[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id);
+  if (kind === 'test') return source === 'finish-verification' && /^test:[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id);
+  return false;
+}
+
+/**
+ * Validates a provider's remediation plan against the engine-prepared projection.
+ * A typed answer is linked to the exact reference object projected for this attempt;
+ * untyped stall and test answers are grammar-checked without completeness accounting.
+ */
+export function validateRemediationPlan(raw: unknown, projection: RemediationProjection): ValidateRemediationPlanResult {
+  const diagnostics: string[] = [];
+  if (!record(raw) || !exactKeys(raw, ['version', 'dispositions'])) {
+    return { kind: 'rejected', diagnostics: ['root requires exactly version and dispositions'] };
+  }
+  if (raw.version !== REMEDIATION_PLAN_CONTRACT_VERSION) {
+    return { kind: 'rejected', diagnostics: [`version must be ${REMEDIATION_PLAN_CONTRACT_VERSION}`] };
+  }
+  if (!Array.isArray(raw.dispositions)) {
+    return { kind: 'rejected', diagnostics: ['dispositions must be an array'] };
+  }
+
+  const dispositions: AcceptedRemediationPlanDisposition[] = [];
+  const answeredTypedReferences = new Set<string>();
+  for (const [index, candidate] of raw.dispositions.entries()) {
+    const field = `dispositions[${index}]`;
+    if (!record(candidate) || !exactKeys(candidate, ['reference', 'disposition', 'category', 'rationale', 'tasks', 'boundTaskIds'])) {
+      diagnostics.push(`${field} requires exactly reference, disposition, category, rationale, tasks, and boundTaskIds`);
+      continue;
+    }
+    if (!record(candidate.reference) || !exactKeys(candidate.reference, ['kind', 'id']) ||
+      !nonEmptyText(candidate.reference.kind) || !nonEmptyText(candidate.reference.id)) {
+      diagnostics.push(`${field}.reference requires non-empty kind and id`);
+      continue;
+    }
+    if (!isDisposition(candidate.disposition)) {
+      diagnostics.push(`${field}.disposition must be one of ${REMEDIATION_DISPOSITIONS.join(', ')}`);
+      continue;
+    }
+    if (candidate.category !== null && !isHaltCategory(candidate.category)) {
+      diagnostics.push(`${field}.category must be null or one of ${REMEDIATION_HALT_CATEGORIES.join(', ')}`);
+      continue;
+    }
+    if (candidate.disposition === 'halt' && candidate.category === null) {
+      diagnostics.push(`${field}.category is required for halt`);
+      continue;
+    }
+    if (!nonEmptyText(candidate.rationale)) {
+      diagnostics.push(`${field}.rationale must be non-empty`);
+      continue;
+    }
+    if (!Array.isArray(candidate.tasks) || !candidate.tasks.every((task) =>
+      record(task) && exactKeys(task, ['id', 'title']) && nonEmptyText(task.id) && nonEmptyText(task.title))) {
+      diagnostics.push(`${field}.tasks must contain only non-empty id and title pairs`);
+      continue;
+    }
+    if (!Array.isArray(candidate.boundTaskIds) || !candidate.boundTaskIds.every(nonEmptyText)) {
+      diagnostics.push(`${field}.boundTaskIds must be an array of non-empty task ids`);
+      continue;
+    }
+    if (candidate.disposition === 'build' && candidate.tasks.length === 0 && projection.source !== 'build-stall') {
+      diagnostics.push(`${field}.tasks requires at least one task for build`);
+      continue;
+    }
+
+    const { kind, id } = candidate.reference;
+    const requiredReference = typedReference(kind, id, projection);
+    if (requiredReference !== undefined) {
+      const key = referenceKey(requiredReference.kind, requiredReference.id);
+      if (answeredTypedReferences.has(key)) {
+        diagnostics.push(`${field}.reference duplicates required reference ${requiredReference.kind}:${requiredReference.id}`);
+        continue;
+      }
+      answeredTypedReferences.add(key);
+      dispositions.push({
+        reference: requiredReference,
+        requiredReference,
+        disposition: candidate.disposition,
+        targetStep: remediationDispositionStep(candidate.disposition),
+        category: candidate.category,
+        rationale: candidate.rationale,
+        tasks: candidate.tasks.map((task) => ({ id: task.id as string, title: task.title as string })),
+        boundTaskIds: [...candidate.boundTaskIds] as string[],
+      });
+      continue;
+    }
+    if (untypedReferenceMatchesSource(kind, id, projection.source)) {
+      dispositions.push({
+        reference: { kind: kind as 'stall' | 'test', id },
+        disposition: candidate.disposition,
+        targetStep: remediationDispositionStep(candidate.disposition),
+        category: candidate.category,
+        rationale: candidate.rationale,
+        tasks: candidate.tasks.map((task) => ({ id: task.id as string, title: task.title as string })),
+        boundTaskIds: [...candidate.boundTaskIds] as string[],
+      });
+      continue;
+    }
+    diagnostics.push(`${field}.reference does not resolve required reference ${kind}:${id}`);
+  }
+
+  for (const reference of projection.requiredReferences) {
+    const key = referenceKey(reference.kind, reference.id);
+    if (!answeredTypedReferences.has(key)) diagnostics.push(`required reference ${reference.kind}:${reference.id} is missing`);
+  }
+  return diagnostics.length === 0
+    ? { kind: 'accepted', dispositions }
+    : { kind: 'rejected', diagnostics };
 }
 
 /** Render the provider-visible result shape by walking its own JSON Schema. */

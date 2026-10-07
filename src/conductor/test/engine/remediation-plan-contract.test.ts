@@ -10,7 +10,9 @@ import {
   REMEDIATION_PLAN_CONTRACT_VERSION,
   REMEDIATION_PLAN_SCHEMA,
   renderRemediationPlanShape,
+  validateRemediationPlan,
 } from '../../src/engine/remediation-plan-contract.js';
+import type { RemediationProjection, RemediationRequiredReference } from '../../src/engine/remediation-projection.js';
 
 const expectedDispositions = [
   ...REMEDIATION_TARGET_STEPS,
@@ -18,6 +20,37 @@ const expectedDispositions = [
   REMEDIATION_EXISTING_TASK_DISPOSITION,
   'halt',
 ];
+
+function projection(
+  source: RemediationProjection['source'],
+  requiredReferences: readonly RemediationRequiredReference[],
+): RemediationProjection {
+  return {
+    version: 1,
+    source,
+    requiredReferences,
+    tasks: [{ id: '7', title: 'Repair the finding', doneWhen: [] }],
+    pendingAsBuiltFindings: [],
+    priorLaps: [],
+    refusals: [],
+    vocabulary: {
+      dispositions: expectedDispositions,
+      haltCategories: REMEDIATION_HALT_CATEGORIES,
+    },
+  };
+}
+
+function disposition(reference: { kind: string; id: string }, overrides: Record<string, unknown> = {}) {
+  return {
+    reference,
+    disposition: 'build',
+    category: null,
+    rationale: 'The evidence identifies the repair.',
+    tasks: [{ id: 'repair', title: 'Implement the repair.' }],
+    boundTaskIds: [],
+    ...overrides,
+  };
+}
 
 describe('remediation plan contract', () => {
   // Covers: task:1
@@ -93,5 +126,96 @@ describe('remediation plan contract', () => {
     for (const category of REMEDIATION_HALT_CATEGORIES) expect(rendered).toContain(category);
     expect(changed).not.toContain('"plan"');
     expect(changed).toContain('"build"');
+  });
+
+  // Covers: task:2
+  it('accepts a complete PRD plan and links the disposition to its typed reference', () => {
+    const required: RemediationRequiredReference = {
+      kind: 'prd-criterion', id: 'S1.2', sourceGate: 'prd_audit', ownerTaskId: '7', summary: 'The criterion is unmet.',
+    };
+
+    const result = validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'prd-criterion', id: 'S1.2' })],
+    }, projection('prd-audit', [required]));
+
+    expect(result).toEqual({
+      kind: 'accepted',
+      dispositions: [expect.objectContaining({
+        requiredReference: required,
+        disposition: 'build',
+        targetStep: 'build',
+        category: null,
+        rationale: 'The evidence identifies the repair.',
+        tasks: [{ id: 'repair', title: 'Implement the repair.' }],
+      })],
+    });
+  });
+
+  // Covers: task:2
+  it('accounts for the shuffled union of PRD and as-built typed references', () => {
+    const prd: RemediationRequiredReference = {
+      kind: 'prd-criterion', id: 'S1.2', sourceGate: 'prd_audit', ownerTaskId: '7', summary: 'The criterion is unmet.',
+    };
+    const asBuilt: RemediationRequiredReference = {
+      kind: 'as-built-finding', id: 'as-built:attempt:1', sourceGate: 'architecture_review_as_built',
+      reference: { kind: 'plan-task', taskId: '7' }, summary: 'The boundary is not reached.',
+    };
+    const raw = {
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [
+        disposition({ kind: 'as-built-finding', id: 'as-built:attempt:1' }),
+        disposition({ kind: 'prd-criterion', id: 'S1.2' }),
+      ],
+    };
+    const context = projection('validation-group', [prd, asBuilt]);
+
+    expect(validateRemediationPlan(raw, context)).toMatchObject({
+      kind: 'accepted',
+      dispositions: [
+        { requiredReference: asBuilt, targetStep: 'build' },
+        { requiredReference: prd, targetStep: 'build' },
+      ],
+    });
+    expect(validateRemediationPlan({ ...raw, dispositions: raw.dispositions.slice(1) }, context)).toMatchObject({
+      kind: 'rejected', diagnostics: expect.arrayContaining(['required reference as-built-finding:as-built:attempt:1 is missing']),
+    });
+  });
+
+  // Covers: task:2
+  it('matches a typed PRD criterion under the shared lower-case normalization', () => {
+    const required: RemediationRequiredReference = {
+      kind: 'prd-criterion', id: 'S1.AbC', sourceGate: 'prd_audit', ownerTaskId: '7', summary: 'The criterion is unmet.',
+    };
+
+    expect(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'prd-criterion', id: 's1.abc' })],
+    }, projection('prd-audit', [required]))).toMatchObject({
+      kind: 'accepted', dispositions: [{ requiredReference: required }],
+    });
+  });
+
+  // Covers: task:2
+  it('accepts grammar-valid untyped stall and test plans without completeness accounting', () => {
+    const stall = validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'stall', id: 'stall:task-progress' }, { tasks: [] })],
+    }, projection('build-stall', []));
+    const test = validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'test', id: 'test:engine-contract' }, {
+        disposition: 'halt', category: 'unanswerable', tasks: [], rationale: 'The test evidence is insufficient.',
+      })],
+    }, projection('finish-verification', []));
+
+    expect(stall).toMatchObject({
+      kind: 'accepted',
+      dispositions: [{ reference: { kind: 'stall', id: 'stall:task-progress' }, targetStep: 'build', tasks: [] }],
+    });
+    expect(test).toMatchObject({
+      kind: 'accepted',
+      dispositions: [{ reference: { kind: 'test', id: 'test:engine-contract' }, targetStep: 'halt', category: 'unanswerable' }],
+    });
   });
 });
