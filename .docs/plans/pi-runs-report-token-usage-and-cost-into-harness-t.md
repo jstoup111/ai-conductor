@@ -104,6 +104,13 @@ Fix the Pi adapter so that a completed Pi dispatch records the tokens Pi actuall
 
 **Files:** `src/conductor/src/execution/pi-provider.ts`, `src/conductor/test/execution/pi-provider-usage.test.ts`, `src/conductor/test/fixtures/pi/error-stop-live-capture.jsonl`
 
+> **Amendment — 2026-10-07.** Task 4's "failed Pi runs record no usage" contract is superseded by
+> [adr-2026-10-07-provider-cost-includes-failed-attempts](../decisions/adr-2026-10-07-provider-cost-includes-failed-attempts.md):
+> a failed or killed Pi run now records the usage of every completed `message_end` on the existing
+> `provider_attempt` event, so the existing cost totals are success + failure. When the agent loop
+> never settled, the tokens are kept but unpriced (cost-unmetered). The malformed-line and
+> never-zero rules stand.
+
 **Dependencies:** Task 3
 
 ### Task 5: Use Pi-reported cost when every token-bearing message is priced

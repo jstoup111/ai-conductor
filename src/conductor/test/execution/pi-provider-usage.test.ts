@@ -307,7 +307,7 @@ describe('PiProvider usage', () => {
     expect(result.tokenUsage?.costUsd).toBeCloseTo(0.0001445, 12);
   });
 
-  it('does not report usage or attribution for an unsuccessful worked-stream dispatch', async () => {
+  it('records the complete usage of a settled worked stream whose process exited non-zero', async () => {
     const stdout = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 1 });
     const provider = new PiProvider('/resolved/pi', spawn, environment);
@@ -315,7 +315,57 @@ describe('PiProvider usage', () => {
     const result = await provider.invoke(invokeOptions);
 
     expect(result).toMatchObject({ success: false });
+    expect(result.tokenUsage).toMatchObject({
+      input: 200, output: 65, cacheRead: 700, cacheCreation: 50, numTurns: 2,
+      attributedModel: 'openai/gpt-5.6-luna', costSource: 'provider',
+    });
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.0035, 12);
+    expect(classifyMetering(result.tokenUsage)).toBe('fully-metered');
+  });
+
+  it('records completed-message tokens, unpriced, when the run is killed mid-message', async () => {
+    const worked = (await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8')).split('\n');
+    // Through the second assistant message's start and partial update; no message_end, no agent_end.
+    const stdout = worked.slice(0, 12).join('\n');
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: null, signal: 'SIGKILL' });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result).toMatchObject({ success: false });
+    // Only the completed first message counts; the in-flight message's partial usage never does.
+    expect(result.tokenUsage).toMatchObject({ input: 120, output: 40, cacheRead: 300, cacheCreation: 50 });
+    // The in-flight message's spend is unseen, so the price is withheld: cost-unmetered, not a partial $.
+    expect(result.tokenUsage).not.toHaveProperty('costUsd');
+    expect(classifyMetering(result.tokenUsage)).toBe('cost-unmetered');
+  });
+
+  it('records no usage, so the cost stays unknown, when killed before any message completed', async () => {
+    const worked = (await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8')).split('\n');
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout: worked.slice(0, 7).join('\n'), stderr: '', exitCode: 1 });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result).toMatchObject({ success: false });
     expect(result).not.toHaveProperty('tokenUsage');
+    expect(classifyMetering(result.tokenUsage)).toBe('unmetered');
+  });
+
+  it('records the completed-message tokens of an aborted run, unpriced', async () => {
+    const worked = (await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8')).split('\n');
+    const controller = new AbortController();
+    const spawn = vi.fn<PiSubprocessFactory>().mockImplementation(async () => {
+      controller.abort();
+      return { stdout: worked.slice(0, 10).join('\n'), stderr: '', exitCode: null, signal: 'SIGTERM' };
+    });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    const result = await provider.invoke({ ...invokeOptions, abortSignal: controller.signal });
+
+    expect(result).toMatchObject({ success: false, output: 'Pi invocation aborted.' });
+    expect(result.tokenUsage).toMatchObject({ input: 120, output: 40 });
+    expect(classifyMetering(result.tokenUsage)).toBe('cost-unmetered');
   });
 
   it('attributes and prices zero-cost usage with each message response model', async () => {
@@ -624,24 +674,41 @@ describe('PiProvider usage', () => {
     expect(event).not.toHaveProperty('tokenUsage');
   });
 
-  it.each([
-    {
-      name: 'a non-zero exit after a usage-bearing stream',
-      stdout: () => readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8'),
-      exitCode: 1,
-      output: undefined,
-    },
-    {
-      name: 'an error stop with an otherwise successful process exit',
-      stdout: () => readFile(new URL('../fixtures/pi/error-stop-live-capture.jsonl', import.meta.url), 'utf8'),
-      exitCode: 0,
-      output: 'Free tier request failed.',
-    },
-  ])('fails $name without recording token usage in the conductor provider attempt', async ({ stdout, exitCode, output }) => {
-    const { result, event } = await providerAttemptFor(await stdout(), exitCode);
+  it('records the spend of a non-zero exit after a usage-bearing stream in the failed conductor provider attempt', async () => {
+    const stdout = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
 
-    expect(result).toMatchObject({ success: false, ...(output === undefined ? {} : { output }) });
+    const { result, event } = await providerAttemptFor(stdout, 1);
+
+    expect(result).toMatchObject({ success: false });
+    expect(event).toMatchObject({ outcome: 'failure', tokenUsage: { input: 200, output: 65, costSource: 'provider' } });
+    expect(event.tokenUsage?.costUsd).toBeCloseTo(0.0035, 12);
+  });
+
+  it('records the turns billed before a terminal error stop (a credit failure after real work)', async () => {
+    const worked = (await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8')).split('\n');
+    const errorStop = (await readFile(new URL('../fixtures/pi/error-stop-live-capture.jsonl', import.meta.url), 'utf8'))
+      .split('\n')
+      .filter((line) => line.includes('"role":"assistant"') && (line.includes('"message_start"') || line.includes('"message_end"')));
+    // First worked turn, then a turn whose request the provider refused, then the agent loop ends.
+    const stdout = [...worked.slice(0, 10), ...errorStop, '{"type":"agent_end","messages":[]}'].join('\n');
+
+    const { result, event } = await providerAttemptFor(stdout, 0);
+
+    expect(result).toMatchObject({ success: false, output: 'Free tier request failed.' });
+    expect(event).toMatchObject({ outcome: 'failure', tokenUsage: { input: 120, output: 40, numTurns: 2, costSource: 'provider' } });
+    expect(event.tokenUsage?.costUsd).toBeCloseTo(0.0021, 12);
+    expect(classifyMetering(event.tokenUsage)).toBe('fully-metered');
+  });
+
+  it('leaves an error stop that billed nothing unmetered rather than recording a $0 cost', async () => {
+    const stdout = await readFile(new URL('../fixtures/pi/error-stop-live-capture.jsonl', import.meta.url), 'utf8');
+
+    const { result, event } = await providerAttemptFor(stdout, 0);
+
+    expect(result).toMatchObject({ success: false, output: 'Free tier request failed.' });
+    expect(event).toMatchObject({ outcome: 'failure', invoked: true });
     expect(event).not.toHaveProperty('tokenUsage');
+    expect(classifyMetering(event.tokenUsage)).toBe('unmetered');
   });
 
   it('skips malformed JSONL records while retaining usage from terminal assistant messages', async () => {

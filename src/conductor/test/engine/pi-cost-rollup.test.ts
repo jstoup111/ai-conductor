@@ -130,8 +130,22 @@ describe('Pi cost rollup integration', () => {
     expect(rollup.byDimension?.find((bucket) => bucket.provider === 'pi')?.costUsd).toBeCloseTo(0.0035, 12);
   });
 
-  it('keeps an invoked failed Pi attempt visible as unmetered', async () => {
+  it('counts an invoked failed Pi attempt\'s billed usage in the feature cost rollup', async () => {
     const piAttempt = await executePi(await workedStream(), { exitCode: 1 });
+    const rollup = await computeCostRollup(worktreeDir);
+
+    expect(piAttempt).toMatchObject({ outcome: 'failure', tokenUsage: { input: 200, output: 65 } });
+    expect(rollup).toMatchObject({
+      dispatches: 1,
+      tokens: { input: 200, output: 65, cacheRead: 700, cacheCreation: 50 },
+      unmetered: { count: 0 },
+    });
+    expect(rollup.costUsd).toBeCloseTo(0.0035, 12);
+  });
+
+  it('keeps an invoked failed Pi attempt with no completed message visible as unmetered', async () => {
+    const killedEarly = (await workedStream()).split('\n').slice(0, 7).join('\n');
+    const piAttempt = await executePi(killedEarly, { exitCode: 1 });
     const rollup = await computeCostRollup(worktreeDir);
 
     expect(piAttempt).not.toHaveProperty('tokenUsage');

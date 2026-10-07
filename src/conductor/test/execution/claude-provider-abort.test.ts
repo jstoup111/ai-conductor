@@ -26,6 +26,40 @@ function successfulProcess(): ResultPromise {
 }
 
 describe('ClaudeProvider abort handling', () => {
+  it.each([
+    {
+      name: 'with its terminal result record already written',
+      stdout: [
+        JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 500, output_tokens: 500 } } }),
+        JSON.stringify({ type: 'result', result: 'done', total_cost_usd: 0.9, usage: { input_tokens: 30, output_tokens: 6 } }),
+      ].join('\n'),
+      expected: { input: 30, output: 6, costUsd: 0.9, costSource: 'provider' },
+    },
+    {
+      name: 'before its terminal result record',
+      stdout: JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 500, output_tokens: 500 } } }),
+      expected: undefined,
+    },
+  ])('records usage of a cancelled run only $name', async ({ stdout, expected }) => {
+    const controller = new AbortController();
+    const factory = vi.fn((_file: string, _args: string[], options: ExecaOptions) =>
+      new Promise((_resolve, reject) => {
+        options.cancelSignal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('canceled'), { isCanceled: true, stdout }));
+        }, { once: true });
+      }) as unknown as ResultPromise,
+    );
+    const provider = new ClaudeProvider(undefined, factory as ClaudeSubprocessFactory);
+
+    const invocation = provider.invoke({ ...invokeOptions, abortSignal: controller.signal });
+    await vi.waitFor(() => expect(factory).toHaveBeenCalledOnce());
+    controller.abort();
+    const result = await invocation;
+
+    expect(result).toMatchObject({ success: false, output: 'Claude invocation aborted.' });
+    expect(result.tokenUsage).toEqual(expected);
+  });
+
   it('passes an abort signal to execa and returns an ordinary failure immediately when canceled', async () => {
     const controller = new AbortController();
     let rejectProcess: (error: Error & { isCanceled?: boolean }) => void = () => {};

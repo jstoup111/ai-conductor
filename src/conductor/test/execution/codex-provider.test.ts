@@ -297,8 +297,12 @@ describe('CodexProvider', () => {
 
   it.each([
     {
-      name: 'non-zero streaming exit with an otherwise valid envelope',
-      stdout: jsonlMessage('partial completion'),
+      name: 'non-zero streaming exit whose only turn failed',
+      stdout: [
+        JSON.stringify({ type: 'thread.started', thread_id: 'thread-123' }),
+        JSON.stringify({ type: 'turn.started' }),
+        JSON.stringify({ type: 'turn.failed', error: { message: 'stream disconnected' } }),
+      ].join('\n'),
       exitCode: 1,
     },
     {
@@ -324,6 +328,32 @@ describe('CodexProvider', () => {
     expect(result.tokenUsage).toBeUndefined();
     expect(classifyMetering(result.tokenUsage)).toBe('unmetered');
     if (expectedMessage) expect(result.output).toContain(expectedMessage);
+  });
+
+  it('records completed-turn usage after a non-zero exit', async () => {
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('partial completion'), stderr: '', exitCode: 1, failed: true } as any);
+
+    const result = await provider.invoke({ ...baseOptions, interactive: false });
+
+    expect(result.success).toBe(false);
+    expect(result.tokenUsage).toEqual({ input: 8, output: 7, cacheRead: 4, numTurns: 1 });
+  });
+
+  it('keeps completed-turn tokens unpriced when a later turn failed without reporting usage', async () => {
+    const stdout = [
+      JSON.stringify({ type: 'turn.started' }),
+      JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 12, cached_input_tokens: 4, output_tokens: 7 } }),
+      JSON.stringify({ type: 'turn.started' }),
+      JSON.stringify({ type: 'turn.failed', error: { message: 'usage limit' } }),
+    ].join('\n');
+    mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode: 1, failed: true } as any);
+
+    const result = await provider.invoke({ ...baseOptions, interactive: false });
+
+    expect(result.success).toBe(false);
+    // Counted once (stdout and the live stream see the same record); unpriced because a turn's spend is unseen.
+    expect(result.tokenUsage).toEqual({ input: 8, output: 7, cacheRead: 4, numTurns: 1 });
+    expect(classifyMetering(result.tokenUsage)).toBe('cost-unmetered');
   });
 
   it('rejects malformed successful machine output when interactive is omitted', async () => {

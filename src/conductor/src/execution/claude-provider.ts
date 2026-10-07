@@ -455,49 +455,74 @@ export function detectsModelUnavailable(output: string): boolean {
  * Parse a terminal result object selected from `claude --print --output-format
  * stream-json` stdout. Falls back to raw stdout passthrough on any parse
  * failure — never fabricates a zero-cost tokenUsage.
+ *
+ * Usage is read even from a terminal record that has no `result` text (an
+ * `error_max_turns` / `error_during_execution` record): Claude's terminal
+ * record carries the session's whole billed usage and `total_cost_usd`
+ * whether or not the run succeeded.
  */
 export function parseJsonResult(
   stdout: string,
 ): { output: string; tokenUsage?: TokenUsage; numTurns?: number } {
   try {
     const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    if (typeof parsed !== 'object' || parsed === null) return { output: stdout, tokenUsage: undefined };
     if (typeof parsed.result !== 'string') {
-      return { output: stdout, tokenUsage: undefined };
+      return { output: stdout, tokenUsage: terminalRecordUsage(parsed) };
     }
     const output = parsed.result;
-    const usageRaw = parsed.usage as Record<string, unknown> | undefined;
     const numTurns = typeof parsed.num_turns === 'number' ? parsed.num_turns : undefined;
-    let tokenUsage: TokenUsage | undefined;
-    if (
-      usageRaw &&
-      typeof usageRaw.input_tokens === 'number' &&
-      typeof usageRaw.output_tokens === 'number'
-    ) {
-      tokenUsage = {
-        input: usageRaw.input_tokens,
-        output: usageRaw.output_tokens,
-      };
-      if (typeof usageRaw.cache_read_input_tokens === 'number') {
-        tokenUsage.cacheRead = usageRaw.cache_read_input_tokens;
-      }
-      if (typeof usageRaw.cache_creation_input_tokens === 'number') {
-        tokenUsage.cacheCreation = usageRaw.cache_creation_input_tokens;
-      }
-      if (typeof parsed.total_cost_usd === 'number') {
-        tokenUsage.costUsd = parsed.total_cost_usd;
-        tokenUsage.costSource = 'provider';
-      }
-      if (numTurns !== undefined) {
-        tokenUsage.numTurns = numTurns;
-      }
-      if (typeof parsed.duration_ms === 'number') {
-        tokenUsage.durationMs = parsed.duration_ms;
-      }
-    }
-    return { output, tokenUsage, ...(numTurns === undefined ? {} : { numTurns }) };
+    return { output, tokenUsage: terminalRecordUsage(parsed), ...(numTurns === undefined ? {} : { numTurns }) };
   } catch {
     return { output: stdout, tokenUsage: undefined };
   }
+}
+
+/** Usage and cost from one parsed terminal result record, when well-formed. */
+function terminalRecordUsage(parsed: Record<string, unknown>): TokenUsage | undefined {
+  const usageRaw = parsed.usage as Record<string, unknown> | undefined;
+  if (
+    !usageRaw ||
+    typeof usageRaw.input_tokens !== 'number' ||
+    typeof usageRaw.output_tokens !== 'number'
+  ) {
+    return undefined;
+  }
+  const tokenUsage: TokenUsage = {
+    input: usageRaw.input_tokens,
+    output: usageRaw.output_tokens,
+  };
+  if (typeof usageRaw.cache_read_input_tokens === 'number') {
+    tokenUsage.cacheRead = usageRaw.cache_read_input_tokens;
+  }
+  if (typeof usageRaw.cache_creation_input_tokens === 'number') {
+    tokenUsage.cacheCreation = usageRaw.cache_creation_input_tokens;
+  }
+  if (typeof parsed.total_cost_usd === 'number') {
+    tokenUsage.costUsd = parsed.total_cost_usd;
+    tokenUsage.costSource = 'provider';
+  }
+  if (typeof parsed.num_turns === 'number') {
+    tokenUsage.numTurns = parsed.num_turns;
+  }
+  if (typeof parsed.duration_ms === 'number') {
+    tokenUsage.durationMs = parsed.duration_ms;
+  }
+  return tokenUsage;
+}
+
+function usageField(tokenUsage: TokenUsage | undefined): { tokenUsage?: TokenUsage } {
+  return tokenUsage === undefined ? {} : { tokenUsage };
+}
+
+/**
+ * A cancelled run keeps its usage only when Claude had already written its
+ * terminal result record; mid-stream assistant records are never summed.
+ */
+function abortedTerminalUsage(stdout: unknown): { tokenUsage?: TokenUsage } {
+  if (typeof stdout !== 'string') return {};
+  const terminalResult = selectTerminalResult(stdout);
+  return terminalResult === undefined ? {} : usageField(parseJsonResult(terminalResult).tokenUsage);
 }
 
 /** Return the final terminal result record from completed stream-json stdout. */
@@ -712,7 +737,11 @@ export class ClaudeProvider implements LLMProvider {
         }),
       );
       if (options.abortSignal?.aborted || isCanceledError(observed.value)) {
-        return { ...abortedInvocationResult(), gitGuardInstalled: guardDir !== null };
+        return {
+          ...abortedInvocationResult(),
+          ...(hasMachineEnvelope ? abortedTerminalUsage(observed.value.stdout) : {}),
+          gitGuardInstalled: guardDir !== null,
+        };
       }
 
       return { ...this.classifyCompletion(
@@ -726,7 +755,11 @@ export class ClaudeProvider implements LLMProvider {
       ), gitGuardInstalled: guardDir !== null };
     } catch (error) {
       if (options.abortSignal?.aborted || isCanceledError(error)) {
-        return { ...abortedInvocationResult(), gitGuardInstalled: guardDir !== null };
+        return {
+          ...abortedInvocationResult(),
+          ...(hasMachineEnvelope ? abortedTerminalUsage((error as { stdout?: unknown }).stdout) : {}),
+          gitGuardInstalled: guardDir !== null,
+        };
       }
       throw error;
     }
@@ -756,6 +789,11 @@ export class ClaudeProvider implements LLMProvider {
     const parsed = jsonOutput
       ? parseJsonResult(terminalResult ?? stdout)
       : { output: stdout, tokenUsage: undefined };
+    // Only Claude's terminal result record is authoritative for usage. It
+    // covers the whole session's spend on success and failure alike, so it is
+    // recorded whatever the exit code; a stream without one (killed before it
+    // was written) has no attributable usage and stays unmetered.
+    const terminalUsage = terminalResult === undefined ? {} : usageField(parsed.tokenUsage);
 
     // Combine stdout + stderr so the caller has full context
     const output = stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
@@ -786,6 +824,7 @@ export class ClaudeProvider implements LLMProvider {
           ? `${claudeDisplayName()} provider parse failure: missing terminal result record.`
           : `${claudeDisplayName()} provider parse failure: terminal result record is missing its result field.`,
         exitCode,
+        ...terminalUsage,
         observedIntervals: [observedInterval],
       };
     }
@@ -829,6 +868,7 @@ export class ClaudeProvider implements LLMProvider {
           : `${claudeDisplayName()} provider parse failure: terminal result record is missing its structured result.`,
         exitCode,
         structuredResultFailure: structuredResult.kind === 'absent' ? 'missing' : 'malformed',
+        ...terminalUsage,
         observedIntervals: [observedInterval],
       };
     }
@@ -855,7 +895,7 @@ export class ClaudeProvider implements LLMProvider {
       modelUnavailable: modelUnavailable || undefined,
       commandUnresolved: commandUnresolvedName !== undefined || undefined,
       commandUnresolvedName,
-      tokenUsage: !strictMachineEnvelope || exitCode === 0 ? parsed.tokenUsage : undefined,
+      tokenUsage: terminalUsage.tokenUsage,
       waitSeconds,
       deadline,
       observedIntervals: [observedInterval],

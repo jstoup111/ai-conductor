@@ -101,13 +101,12 @@ describe('ClaudeProvider', () => {
 
   it.each([
     {
-      name: 'non-zero streaming exit with an otherwise valid envelope',
-      stdout: JSON.stringify({
-        type: 'result',
-        result: 'partial completion',
-        usage: { input_tokens: 12, output_tokens: 7 },
-      }),
-      exitCode: 1,
+      name: 'non-zero streaming exit killed before its terminal result record',
+      stdout: [
+        JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 40, output_tokens: 9 } } }),
+        JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 41, output_tokens: 3 } } }),
+      ].join('\n'),
+      exitCode: 137,
     },
     {
       name: 'unparseable streaming stdout',
@@ -129,6 +128,51 @@ describe('ClaudeProvider', () => {
     expect(result.tokenUsage).toBeUndefined();
     expect(classifyMetering(result.tokenUsage)).toBe('unmetered');
     if (expectedMessage) expect(result.output).toContain(expectedMessage);
+  });
+
+  it.each([
+    {
+      name: 'a non-zero exit',
+      record: { type: 'result', subtype: 'success', is_error: true, result: 'partial completion' },
+      exitCode: 1,
+    },
+    {
+      name: 'an error terminal record without result text',
+      record: { type: 'result', subtype: 'error_max_turns', is_error: true },
+      exitCode: 1,
+    },
+  ])('records the terminal record usage and cost after $name', async ({ record, exitCode }) => {
+    const stdout = [
+      JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 999, output_tokens: 999 } } }),
+      JSON.stringify({
+        ...record,
+        num_turns: 14,
+        total_cost_usd: 3.25,
+        usage: { input_tokens: 12, output_tokens: 7, cache_read_input_tokens: 400 },
+      }),
+    ].join('\n');
+    mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode, failed: true } as any);
+
+    const result = await provider.invoke({ ...baseOptions, interactive: false });
+
+    expect(result.success).toBe(false);
+    // Only the terminal record counts: the mid-stream assistant usage is never added to it.
+    expect(result.tokenUsage).toEqual({
+      input: 12, output: 7, cacheRead: 400, costUsd: 3.25, costSource: 'provider', numTurns: 14,
+    });
+    expect(classifyMetering(result.tokenUsage)).toBe('fully-metered');
+  });
+
+  it('records the terminal record usage when a native-schema result is missing', async () => {
+    const stdout = JSON.stringify({
+      type: 'result', result: 'prose', total_cost_usd: 0.5, usage: { input_tokens: 3, output_tokens: 2 },
+    });
+    mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode: 0, failed: false } as any);
+
+    const result = await provider.invoke({ ...baseOptions, interactive: false, nativeSchema: { type: 'object' } });
+
+    expect(result).toMatchObject({ success: false, structuredResultFailure: 'missing' });
+    expect(result.tokenUsage).toMatchObject({ input: 3, output: 2, costUsd: 0.5 });
   });
 
   it('rejects malformed successful machine output when interactive is omitted', async () => {
@@ -811,7 +855,7 @@ describe('ClaudeProvider', () => {
       expect(repl.tokenUsage).toBeUndefined();
     });
 
-    it('returns the unsuccessful subprocess interval without changing output or provider usage', async () => {
+    it('returns the unsuccessful subprocess interval and the terminal record usage without changing output', async () => {
       const readings = [3_000, 3_055];
       const clock: IntervalClock = {
         nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
@@ -838,7 +882,7 @@ describe('ClaudeProvider', () => {
         authFailure: true,
         rateLimited: undefined,
         modelUnavailable: undefined,
-        tokenUsage: undefined,
+        tokenUsage: { input: 17, output: 4, durationMs: 45 },
         waitSeconds: undefined,
         deadline: undefined,
         observedIntervals: [{ startedAtMs: 3_000, durationMs: 55 }],

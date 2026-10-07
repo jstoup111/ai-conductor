@@ -1,5 +1,6 @@
 import type { LLMProvider, InvokeOptions, InvokeResult } from "../execution/llm-provider.js";
 import { v4 as uuidv4 } from "uuid";
+import { combineTokenUsage } from "../execution/token-usage.js";
 import { CLAUDE_MODEL_POLICY } from "./provider-model-policy.js";
 import type { ProviderModelPolicy } from "./provider-model-policy-defaults.js";
 
@@ -187,10 +188,14 @@ export class ModelAvailability {
         ? 'not-started'
         : undefined;
 
+    // Every rung was a separate invocation the provider may have billed; the
+    // attempt reports their sum, never only the last rung's spend.
+    const tokenUsage = combineTokenUsage(result.tokenUsage, resolved.result.tokenUsage);
     return {
       ...resolved,
       result: {
         ...resolvedResult,
+        ...(tokenUsage ? { tokenUsage } : {}),
         ...(observedIntervals.length ? { observedIntervals } : {}),
         ...(executionDisposition ? { executionDisposition } : {}),
       },

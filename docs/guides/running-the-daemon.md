@@ -266,6 +266,10 @@ necessarily the repo default.
   are counted as unmetered for the same reason. The line is best-effort: a feature never fails to
   ship because its cost could not be computed.
 
+  The totals include failed provider attempts: a run that billed real work and then failed (a
+  credit error, a kill, a non-zero exit) contributes the usage its provider reported. See
+  [failed attempts are costed too](../reference/configuration.md#failed-attempts-are-costed-too).
+
 `daemon status` does not yet carry the provider for a step that is still in flight
 ([#1081](https://github.com/jstoup111/ai-conductor/issues/1081)).
 

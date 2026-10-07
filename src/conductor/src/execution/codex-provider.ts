@@ -15,6 +15,7 @@ import type {
   TokenUsage,
 } from './llm-provider.js';
 import { applyRateCard, loadRateCard, type RateCardLoader } from './rate-card.js';
+import { withholdCost } from './token-usage.js';
 import {
   epochAnchoredMonotonicClock,
   observeInterval,
@@ -169,10 +170,19 @@ export function parseCodexJsonl(stdout: string): {
   output: string;
   tokenUsage?: TokenUsage;
   hasTerminalResult: boolean;
+  /**
+   * A turn started (or failed) without a `turn.completed` record. Codex reports
+   * usage only on `turn.completed`, so that turn's spend is unseen: the
+   * completed turns' tokens are kept, but the dispatch is left unpriced.
+   */
+  hasUnsettledTurn: boolean;
 } {
   let output: string | undefined;
   let tokenUsage: TokenUsage | undefined;
   let hasTerminalResult = false;
+  let turnsStarted = 0;
+  let turnsCompleted = 0;
+  let turnFailed = false;
 
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -182,8 +192,11 @@ export function parseCodexJsonl(stdout: string): {
         const text = event.item.text ?? event.item.content?.map((part) => part.text ?? '').join('');
         if (text) output = text;
       }
+      if (event.type === 'turn.started') turnsStarted += 1;
+      if (event.type === 'turn.failed') turnFailed = true;
       if (event.type === 'turn.completed') {
         hasTerminalResult = true;
+        turnsCompleted += 1;
       }
       if (event.type === 'turn.completed' && event.usage) {
         const input = event.usage.input_tokens;
@@ -223,7 +236,13 @@ export function parseCodexJsonl(stdout: string): {
     }
   }
 
-  return { output: output ?? stdout, tokenUsage, hasTerminalResult };
+  const hasUnsettledTurn = turnFailed || turnsStarted > turnsCompleted;
+  return {
+    output: output ?? stdout,
+    tokenUsage,
+    hasTerminalResult,
+    hasUnsettledTurn,
+  };
 }
 
 function accumulateTokenUsage(current: TokenUsage | undefined, observed: TokenUsage): TokenUsage {
@@ -386,11 +405,13 @@ export class CodexProvider implements LLMProvider {
       interval = observed.interval;
     } catch (error) {
       if (options.abortSignal?.aborted || (error as { isCanceled?: unknown }).isCanceled === true) {
-        return { ...abortedInvocationResult(), gitGuardInstalled: guardDir !== null };
+        return { ...abortedInvocationResult(), ...this.abortedUsage(streamedTokenUsage), gitGuardInstalled: guardDir !== null };
       }
       throw error;
     }
-    if (options.abortSignal?.aborted) return { ...abortedInvocationResult(), gitGuardInstalled: guardDir !== null };
+    if (options.abortSignal?.aborted) {
+      return { ...abortedInvocationResult(), ...this.abortedUsage(streamedTokenUsage), gitGuardInstalled: guardDir !== null };
+    }
 
     this.logDiagnostics(result, options.diagnosticLog);
 
@@ -405,17 +426,28 @@ export class CodexProvider implements LLMProvider {
       options.nativeSchema !== undefined,
       options.diagnosticLog,
     );
-    const tokenUsage = !repl && completion.success && completion.tokenUsage === undefined && streamedTokenUsage !== undefined
-      ? applyRateCard(
-          streamedTokenUsage,
-          options.model,
-          this.loadRates(options.cwd ?? process.cwd()),
-        )
+    // The live stream saw the same completed-turn records; it backs the
+    // envelope when stdout yielded none. On failure the stream cannot show
+    // whether a later turn went unreported, so those tokens stay unpriced.
+    const tokenUsage = !repl && completion.tokenUsage === undefined && streamedTokenUsage !== undefined
+      ? completion.success
+        ? applyRateCard(streamedTokenUsage, options.model, this.loadRates(options.cwd ?? process.cwd()))
+        : streamedTokenUsage
       : completion.tokenUsage;
     const structured = options.nativeSchema !== undefined && completion.finalStructuredResult !== undefined
       ? { finalStructuredResult: fromCodexStrictResult(options.nativeSchema, completion.finalStructuredResult) }
       : {};
     return { ...completion, ...structured, tokenUsage, observedIntervals: [interval], gitGuardInstalled: guardDir !== null };
+  }
+
+  /**
+   * A cancelled run was still billed for every turn it completed before the
+   * kill. Record those streamed tokens; the cancelled turn's spend is unseen,
+   * so no price is applied (cost-unmetered). None streamed stays unmetered.
+   */
+  private abortedUsage(streamed: TokenUsage | undefined): { tokenUsage?: TokenUsage } {
+    const usage = withholdCost(streamed);
+    return usage === undefined ? {} : { tokenUsage: usage };
   }
 
   /**
@@ -575,17 +607,24 @@ export class CodexProvider implements LLMProvider {
           output: stdout,
           tokenUsage: undefined as TokenUsage | undefined,
           hasTerminalResult: true,
+          hasUnsettledTurn: false,
         };
     // Price at DISPATCH time so the rate in force when the run happened is
     // baked into the event log. Nothing re-prices history: a later card
     // revision would silently drift every past feature's reported cost.
     const parsed = {
       output: parsedRaw.output,
-      tokenUsage: !strictMachineEnvelope || exitCode === 0 ? applyRateCard(
-        parsedRaw.tokenUsage,
-        pricing?.model,
-        this.loadRates(pricing?.cwd ?? process.cwd()),
-      ) : undefined,
+      // Every completed turn is billed whether or not the run later failed, so
+      // its usage is recorded on failure too. A turn that never completed
+      // leaves its spend unseen; the tokens stay but no price is applied, so
+      // the dispatch reads as cost-unmetered rather than a complete cost.
+      tokenUsage: parsedRaw.hasUnsettledTurn
+        ? parsedRaw.tokenUsage
+        : applyRateCard(
+          parsedRaw.tokenUsage,
+          pricing?.model,
+          this.loadRates(pricing?.cwd ?? process.cwd()),
+        ),
     };
     const rawOutput =
       stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
@@ -668,6 +707,7 @@ export class CodexProvider implements LLMProvider {
         exitCode,
         authentication,
         structuredResultFailure: 'malformed',
+        ...(parsed.tokenUsage === undefined ? {} : { tokenUsage: parsed.tokenUsage }),
       };
     }
     return {

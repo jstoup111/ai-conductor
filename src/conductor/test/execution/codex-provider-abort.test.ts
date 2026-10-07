@@ -1,5 +1,6 @@
 // Covers: task:12
 import { describe, expect, it, vi } from 'vitest';
+import { PassThrough } from 'node:stream';
 import { execa, type Options as ExecaOptions, type Result as ExecaResult, type ResultPromise } from 'execa';
 import { CodexProvider, type CodexDoctorRunner } from '../../src/execution/codex-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
@@ -60,6 +61,31 @@ describe('CodexProvider abort handling', () => {
       cancelSignal: controller.signal,
       forceKillAfterDelay: undefined,
     });
+  });
+
+  it('records the tokens of turns completed before an abort, unpriced', async () => {
+    const controller = new AbortController();
+    const stdout = new PassThrough();
+    const subprocessFactory = vi.fn((_file: string, _args: readonly string[], options: ExecaOptions) =>
+      Object.assign(new Promise<ExecaResult>((_resolve, reject) => {
+        options.cancelSignal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('cancelled'), { isCanceled: true }));
+        }, { once: true });
+      }), { stdout, stderr: new PassThrough(), kill: () => true }) as unknown as ResultPromise,
+    );
+    const invocation = provider(subprocessFactory).invoke({ ...invokeOptions, abortSignal: controller.signal });
+    await vi.waitFor(() => expect(subprocessFactory).toHaveBeenCalledOnce());
+    stdout.write(`${JSON.stringify({ type: 'turn.started' })}\n`);
+    stdout.write(`${JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 50, cached_input_tokens: 10, output_tokens: 5 } })}\n`);
+    stdout.write(`${JSON.stringify({ type: 'turn.started' })}\n`);
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+
+    const result = await invocation;
+
+    expect(result).toMatchObject({ success: false, output: 'Codex invocation aborted.' });
+    // The cancelled turn's spend is unseen, so no price is applied: cost-unmetered, never $0.
+    expect(result.tokenUsage).toEqual({ input: 40, output: 5, cacheRead: 10, numTurns: 1 });
   });
 
   it('does not spawn when already aborted', async () => {
