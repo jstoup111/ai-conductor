@@ -70,10 +70,8 @@ attribution_audit_sample_pct: 10
 build_progress_halt:
   enabled: true
 
-# Per-rubric build-review routing: the judgement-heavy pair runs on Claude
-# opus, the mechanical pair on Codex, halving review load per provider and
-# putting counterfactual/plan-holistic judgement on the strongest reasoner.
-# rootCause inherits the engine's medium-effort default (narrowest rubric).
+# Per-rubric build-review routing is split across providers: testQuality and
+# security run on Claude opus, eventSpine on Codex.
 build_review:
   # Enable this repository's advisory containment recordings. The shipped
   # default remains false, so consumer repositories must opt in explicitly.
@@ -106,13 +104,15 @@ build_review:
       # kickback charge each while rarely surviving a second look.
       min_confidence: 60
   # Repository-local guard against bypassing this repository's event spine.
+  # Routed to Codex terra 2026-10-07 (operator order) to split rubrics across
+  # providers without paying for astra.
   custom_rubrics:
     eventSpine:
       enabled: true
       skill: event-spine
       source: project
-      llm_provider: claude
-      model: sonnet
+      llm_provider: codex
+      model: gpt-5.6-terra
       effort: low
       question: "Does the frozen feature diff add an observation or coordination channel outside ConductorEventEmitter → .pipeline/events.jsonl?"
 
