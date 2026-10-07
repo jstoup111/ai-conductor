@@ -252,6 +252,7 @@ describe('architecture_review_as_built native-schema dispatch', () => {
     });
   });
 
+  // Covers: task:12
   it('stamps identical provider findings with distinct attempt-qualified ids', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'as-built-finding-stamps-'));
     dirs.push(projectDir);
@@ -276,6 +277,7 @@ describe('architecture_review_as_built native-schema dispatch', () => {
     ]);
   });
 
+  // Covers: task:12
   it('stamps equal finding ordinals differently in separate attempts', async () => {
     const firstDir = await mkdtemp(join(tmpdir(), 'as-built-first-attempt-'));
     const secondDir = await mkdtemp(join(tmpdir(), 'as-built-second-attempt-'));

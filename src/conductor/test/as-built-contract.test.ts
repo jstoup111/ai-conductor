@@ -133,6 +133,7 @@ describe('as-built verdict contract', () => {
     expect(rendered).not.toContain('notInTheSchema');
   });
 
+  // Covers: task:12
   it('publishes a frozen, closed schema with only the accepted verdict and finding-reference vocabularies', () => {
     const schema = object(AS_BUILT_VERDICT_SCHEMA);
     const verdict = object(object(schema.properties).verdict);
@@ -237,6 +238,7 @@ describe('as-built verdict contract', () => {
     });
   });
 
+  // Covers: task:12
   it('rejects a provider-supplied finding id as an unsupported schema field', () => {
     expect(validateAsBuiltVerdict({
       version: AS_BUILT_VERDICT_CONTRACT_VERSION,
