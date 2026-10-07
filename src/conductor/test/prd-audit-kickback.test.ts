@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:5, S5.1, S5.2, S5.3, S5.4
+// Covers: task:1, task:3, task:5, task:6, S5.1, S5.2, S5.3, S5.4
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
@@ -739,6 +739,8 @@ async function runRefusalReworkRun(input: {
   reports: string[];
   decisionId?: string;
   lapCap?: number;
+  mode?: 'auto' | 'default';
+  asBuilt?: 'approved' | 'blocked-remediable';
   /** Model the planner's `.pipeline/remediation.json` output for its one call. */
   remediationMode?: 'default' | 'absent' | 'stale' | 'unparseable';
   /** Last-chance fixture mutation before `conductor.run()`. */
@@ -844,7 +846,15 @@ async function runRefusalReworkRun(input: {
         }];
         await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: gaps }));
       } else if (step === 'architecture_review_as_built') {
-        await persistAsBuiltVerdict(root, {
+        await persistAsBuiltVerdict(root, input.asBuilt === 'blocked-remediable' ? {
+          version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+          findings: [{
+            id: 'AB-1', class: 'REMEDIABLE',
+            reference: { kind: 'plan-task', taskId: '1' },
+            summary: 'Restore the approved architecture boundary.',
+          }],
+          violations: 'fixture violations', resolution: 'fixture resolution',
+        } : {
           version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
         }, {
           attemptId: options?.runId ?? 'test-run',
@@ -872,7 +882,7 @@ async function runRefusalReworkRun(input: {
     stepRunner: runner,
     events,
     projectRoot: root,
-    mode: 'default',
+    mode: input.mode ?? 'default',
     daemon: true,
     verifyArtifacts: true,
     maxRetries: 1,
@@ -1070,6 +1080,85 @@ describe('prd_audit kickback', () => {
         })],
       },
     });
+  });
+
+  it('routes an all-refused validation group through one refusal-context remediation dispatch', async () => {
+    const serial = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+    });
+    const grouped = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      mode: 'auto',
+    });
+
+    expect(grouped.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+    expect(grouped.retryReasons).toEqual([expect.stringContaining(serial.retryReasons[0]!)]);
+    await expect(readFile(join(grouped.root, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain(
+      'Refused — rework required',
+    );
+  });
+
+  it('preserves the serial refused-plus-pending halt body in the validation join', async () => {
+    const report = [
+      '**PRD:** present', '', '## Verdict Table',
+      '| Criterion | Grade | Plan task | Evidence | Intent relation |',
+      '| --- | --- | --- | --- | --- |',
+      '| S2.1 | OVER_SCOPE | | Refused behavior. | outside-visible |',
+      '| S2.2 | OVER_SCOPE | | Pending behavior. | outside-visible |',
+    ].join('\n');
+    const serial = await runRefusalReworkRun({ reports: [report] });
+    const grouped = await runRefusalReworkRun({ reports: [report], mode: 'auto' });
+
+    expect(serial.calls).not.toContain('remediate');
+    expect(grouped.calls).not.toContain('remediate');
+    await expect(readFile(join(grouped.root, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(
+      await readFile(join(serial.root, '.pipeline', 'HALT'), 'utf8'),
+    );
+  });
+
+  it('merges refused prd_audit and remediable as-built evidence into one remediation dispatch', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      mode: 'auto',
+      asBuilt: 'blocked-remediable',
+      plannerGaps: () => [{
+        id: 'refusal-dec-refuse-s21', disposition: 'build', category: null,
+        rationale: 'Remove the refused behavior.',
+        tasks: [{ id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' }],
+      }, {
+        id: 'AB-1', disposition: 'build', category: null,
+        rationale: 'Restore the approved architecture boundary.',
+        tasks: [{ id: 'restore-boundary', title: 'Restore the approved architecture boundary' }],
+      }],
+    });
+
+    expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+    expect(fixture.retryReasons).toHaveLength(1);
+    expect(fixture.retryReasons[0]).toContain(fixture.decisionId);
+    expect(fixture.retryReasons[0]).toContain('.pipeline/prd-audit.md');
+    expect(fixture.retryReasons[0]).toContain('.pipeline/architecture-review-as-built.json');
+  });
+
+  it.each([
+    ['an empty-rationale refusal', 'refuse', ''],
+    ['an acceptance revising a prior refusal', 'accept', 'Keep this behavior in scope.'],
+  ])('does not dispatch grouped remediation for %s', async (_caseName, authority, rationale) => {
+    const fixture = await runGroupedPrdAudit(
+      overScopeReport('S2.1', 'outside-visible'),
+      storiesWithCriterion('Happy Path'),
+      async (root) => {
+        await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
+          version: 2,
+          feature: { version: 1, repository: '/fixture/repository', feature: 'prd-audit-kickback' },
+          decisions: [{
+            id: 'dec-s21', criterion: 'S2.1', authority, rationale,
+            operator: 'operator@example.test', revision: 2,
+          }],
+        }));
+      },
+    );
+
+    expect(fixture.calls).not.toContain('remediate');
   });
 
   it('records one remediation dispatch for a refusal riding with a FIXABLE row', async () => {

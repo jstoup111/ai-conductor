@@ -9352,6 +9352,19 @@ export class Conductor {
               return;
             }
 
+            // A fully refused over-scope round is bounded BUILD rework, not
+            // an operator halt. Keep its engine-derived evidence attached to
+            // the existing group remediation calls below so the group keeps
+            // one planner dispatch and one merged rewind.
+            const refusalReworkContext =
+              prdAuditRoute?.kind === 'over-scope-refusal-rework'
+                ? renderRefusalReworkContext(prdAuditRoute.route.refusals)
+                : undefined;
+            const withRefusalReworkContext = (dispatchContext: string): string =>
+              refusalReworkContext === undefined
+                ? dispatchContext
+                : `${dispatchContext}\n\n${refusalReworkContext}`;
+
             if (allGreen) {
               const projectionRefusal = await this.projectPendingAsBuiltRemediationFindings();
               if (projectionRefusal !== undefined) {
@@ -9506,10 +9519,11 @@ export class Conductor {
                   gate: 'architecture_review_as_built',
                   evidenceFile: AS_BUILT_VERDICT_PATH,
                 });
-                const dispatchContext =
+                const dispatchContext = withRefusalReworkContext(
                   `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
                   'Plan remediation per the /remediate skill and write ' +
-                  '.pipeline/remediation.json.';
+                  '.pipeline/remediation.json.',
+                );
                 remediationRounds++;
                 const remediationOutcome = await this.planRemediation(
                   state,
@@ -9604,9 +9618,11 @@ export class Conductor {
                 await this.planRemediation(
                   state,
                   steps,
-                  'Blocking validation-group gaps at .pipeline/prd-audit.md and ' +
+                  withRefusalReworkContext(
+                    'Blocking validation-group gaps at .pipeline/prd-audit.md and ' +
                     `${AS_BUILT_VERDICT_PATH}. Plan remediation per the ` +
                     '/remediate skill and write .pipeline/remediation.json.',
+                  ),
                   {
                     source: 'validation-group',
                     consolidatedManualTestFail: manualTestFailRows.length > 0,
@@ -9765,10 +9781,11 @@ export class Conductor {
                     evidenceFile: AS_BUILT_VERDICT_PATH,
                   });
                 }
-                const dispatchContext =
+                const dispatchContext = withRefusalReworkContext(
                   `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
                   'Plan remediation per the /remediate skill and write ' +
-                  '.pipeline/remediation.json.';
+                  '.pipeline/remediation.json.',
+                );
 
                 remediationRounds++;
                 const remediationOutcome = await this.planRemediation(state, steps, dispatchContext, {
@@ -9933,10 +9950,11 @@ export class Conductor {
                     evidenceFile: AS_BUILT_VERDICT_PATH,
                   });
                 }
-                const dispatchContext =
+                const dispatchContext = withRefusalReworkContext(
                   `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
                   'Plan remediation per the /remediate skill and write ' +
-                  '.pipeline/remediation.json.';
+                  '.pipeline/remediation.json.',
+                );
 
                 remediationRounds++;
                 const remediationOutcome = await this.planRemediation(state, steps, dispatchContext, {
