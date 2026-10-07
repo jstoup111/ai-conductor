@@ -27,6 +27,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Operators receive PRD audits with bounded evidence and validated typed verdicts. ([implementation PR #2897](https://github.com/jstoup111/ai-conductor/pull/2897)).
 - Feature cost totals, the shipped-record Cost block, --report and OTel cost metrics now include failed provider attempts for Claude, Codex and Pi, recorded through the existing cost telemetry. A failed attempt with no usable record is reported as unmetered, never as $0. ([implementation PR #3027](https://github.com/jstoup111/ai-conductor/pull/3027)).
+- Maintainers can classify confirmed maintenance changes and skip unnecessary acceptance specifications. ([implementation PR #3029](https://github.com/jstoup111/ai-conductor/pull/3029)).
 
 ### Fixed
 
