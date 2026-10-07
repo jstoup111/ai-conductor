@@ -280,4 +280,59 @@ describe('remediation plan contract', () => {
       `dispositions[0].reference does not resolve required reference ${reference.kind}:${reference.id}`,
     ]));
   });
+
+  // Covers: task:4
+  it('rejects a reference with a missing kind at its precise field path', () => {
+    const diagnostics = expectRejected(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'stall', id: 'stall:task-progress' }, {
+        reference: { id: 'stall:task-progress' },
+      })],
+    }, projection('build-stall', [])));
+
+    expect(diagnostics).toContain('dispositions[0].reference.kind must be non-empty');
+  });
+
+  // Covers: task:4
+  it('rejects a reference with an empty id at its precise field path', () => {
+    const diagnostics = expectRejected(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'stall', id: '' }, { tasks: [] })],
+    }, projection('build-stall', [])));
+
+    expect(diagnostics).toContain('dispositions[0].reference.id must be non-empty');
+  });
+
+  // Covers: task:4
+  it('rejects a stall reference whose id does not match the stall key grammar', () => {
+    const diagnostics = expectRejected(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'stall', id: 'stall:' }, { tasks: [] })],
+    }, projection('build-stall', [])));
+
+    expect(diagnostics).toContain('dispositions[0].reference.id must match stall:<slug>');
+  });
+
+  // Covers: task:4
+  it('rejects a test reference whose id does not match the test key grammar', () => {
+    const diagnostics = expectRejected(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'test', id: 'test:bad/key' })],
+    }, projection('finish-verification', [])));
+
+    expect(diagnostics).toContain('dispositions[0].reference.id must match test:<stem>');
+  });
+
+  // Covers: task:4
+  it('rejects an otherwise valid untyped reference when the source is typed', () => {
+    const required: RemediationRequiredReference = {
+      kind: 'prd-criterion', id: 'S1.2', sourceGate: 'prd_audit', ownerTaskId: '7', summary: 'The criterion is unmet.',
+    };
+    const diagnostics = expectRejected(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'stall', id: 'stall:task-progress' })],
+    }, projection('prd-audit', [required])));
+
+    expect(diagnostics).toContain('dispositions[0].reference is only valid for build-stall source');
+  });
 });

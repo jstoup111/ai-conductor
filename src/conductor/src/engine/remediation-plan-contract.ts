@@ -21,6 +21,8 @@ const REMEDIATION_DISPOSITIONS = [
 
 const NON_BLANK_STRING = { type: 'string', minLength: 1 } as const;
 
+const REMEDIATION_REFERENCE_KINDS = ['prd-criterion', 'as-built-finding', 'refusal', 'stall', 'test'] as const;
+
 const remediationReferenceSchema = {
   type: 'object',
   additionalProperties: false,
@@ -28,7 +30,7 @@ const remediationReferenceSchema = {
   properties: {
     kind: {
       type: 'string',
-      enum: ['prd-criterion', 'as-built-finding', 'refusal', 'stall', 'test'],
+      enum: REMEDIATION_REFERENCE_KINDS,
     },
     id: NON_BLANK_STRING,
   },
@@ -129,10 +131,9 @@ function isHaltCategory(value: unknown): value is RemediationHaltCategory {
   return typeof value === 'string' && (REMEDIATION_HALT_CATEGORIES as readonly string[]).includes(value);
 }
 
-function untypedReferenceMatchesSource(kind: string, id: string, source: RemediationProjection['source']): boolean {
-  if (kind === 'stall') return source === 'build-stall' && /^stall:[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id);
-  if (kind === 'test') return source === 'finish-verification' && /^test:[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id);
-  return false;
+function untypedReferenceMatchesSource(kind: 'stall' | 'test', source: RemediationProjection['source']): boolean {
+  return (kind === 'stall' && source === 'build-stall') ||
+    (kind === 'test' && source === 'finish-verification');
 }
 
 /**
@@ -160,9 +161,24 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
       diagnostics.push(`${field} requires exactly reference, disposition, category, rationale, tasks, and boundTaskIds`);
       continue;
     }
-    if (!record(candidate.reference) || !exactKeys(candidate.reference, ['kind', 'id']) ||
-      !nonEmptyText(candidate.reference.kind) || !nonEmptyText(candidate.reference.id)) {
-      diagnostics.push(`${field}.reference requires non-empty kind and id`);
+    if (!record(candidate.reference)) {
+      diagnostics.push(`${field}.reference must be an object`);
+      continue;
+    }
+    if (!nonEmptyText(candidate.reference.kind)) {
+      diagnostics.push(`${field}.reference.kind must be non-empty`);
+      continue;
+    }
+    if (!nonEmptyText(candidate.reference.id)) {
+      diagnostics.push(`${field}.reference.id must be non-empty`);
+      continue;
+    }
+    if (!exactKeys(candidate.reference, ['kind', 'id'])) {
+      diagnostics.push(`${field}.reference requires exactly kind and id`);
+      continue;
+    }
+    if (!(REMEDIATION_REFERENCE_KINDS as readonly string[]).includes(candidate.reference.kind)) {
+      diagnostics.push(`${field}.reference.kind must be one of ${REMEDIATION_REFERENCE_KINDS.join(', ')}`);
       continue;
     }
     if (!isDisposition(candidate.disposition)) {
@@ -196,6 +212,17 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
     }
 
     const { kind, id } = candidate.reference;
+    if (kind === 'stall' || kind === 'test') {
+      const grammar = kind === 'stall' ? /^stall:[A-Za-z0-9][A-Za-z0-9._-]*$/ : /^test:[A-Za-z0-9][A-Za-z0-9._-]*$/;
+      if (!grammar.test(id)) {
+        diagnostics.push(`${field}.reference.id must match ${kind}:${kind === 'stall' ? '<slug>' : '<stem>'}`);
+        continue;
+      }
+      if (!untypedReferenceMatchesSource(kind, projection.source)) {
+        diagnostics.push(`${field}.reference is only valid for ${kind === 'stall' ? 'build-stall' : 'finish-verification'} source`);
+        continue;
+      }
+    }
     const requiredReference = typedReference(kind, id, projection);
     if (requiredReference !== undefined) {
       const key = referenceKey(requiredReference.kind, requiredReference.id);
@@ -216,7 +243,7 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
       });
       continue;
     }
-    if (untypedReferenceMatchesSource(kind, id, projection.source)) {
+    if (kind === 'stall' || kind === 'test') {
       dispositions.push({
         reference: { kind: kind as 'stall' | 'test', id },
         disposition: candidate.disposition,
