@@ -171,6 +171,8 @@ type PiJsonEvent = {
   result?: { details?: unknown };
   message?: {
     role?: unknown;
+    toolName?: unknown;
+    details?: unknown;
     provider?: unknown;
     model?: unknown;
     responseModel?: unknown;
@@ -224,6 +226,59 @@ function terminalAssistantText(content: unknown): string {
     .join('');
 }
 
+type PiMessage = NonNullable<PiJsonEvent['message']>;
+
+function finiteCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/**
+ * Usage the `pi-subagents` extension reports for a `subagent` tool result beyond what Pi
+ * already attached to that `toolResult` message.
+ *
+ * The extension puts its direct children's own usage on the tool result, which Pi copies
+ * onto the `toolResult` message that the main loop already sums. `details.totalCost`
+ * (`{inputTokens, outputTokens, costUsd}`) rolls up those same children plus every nested
+ * foreground child. Only the difference is added: direct children are never counted twice,
+ * and nested children are no longer dropped.
+ */
+function subagentRollupRemainder(message: PiMessage): { input: number; output: number; costUsd: number } | undefined {
+  if (message.toolName !== 'subagent' || !isRecord(message.details)) return undefined;
+  const totalCost = message.details.totalCost;
+  if (!isRecord(totalCost)) return undefined;
+  const totalInput = finiteCount(totalCost.inputTokens);
+  const totalOutput = finiteCount(totalCost.outputTokens);
+  const totalUsd = finiteCount(totalCost.costUsd);
+  if (totalInput === undefined || totalOutput === undefined || totalUsd === undefined) return undefined;
+  const remainder = {
+    input: Math.max(0, totalInput - (finiteCount(message.usage?.input) ?? 0)),
+    output: Math.max(0, totalOutput - (finiteCount(message.usage?.output) ?? 0)),
+    costUsd: Math.max(0, totalUsd - (finiteCount(message.usage?.cost?.total) ?? 0)),
+  };
+  return remainder.input !== 0 || remainder.output !== 0 || remainder.costUsd !== 0 ? remainder : undefined;
+}
+
+/** The background run a `subagent` tool result launched; its usage never reaches that result. */
+function launchedAsyncRunId(message: PiMessage): string | undefined {
+  if (message.toolName !== 'subagent' || !isRecord(message.details)) return undefined;
+  const asyncId = message.details.asyncId;
+  return typeof asyncId === 'string' && asyncId !== '' ? asyncId : undefined;
+}
+
+/** Background runs whose terminal usage a wait result delivered (`details.completions[].runId`). */
+function completedAsyncRunIds(message: PiMessage): string[] {
+  if (!isRecord(message.details) || !Array.isArray(message.details.completions)) return [];
+  return message.details.completions.flatMap((completion) => (
+    isRecord(completion) && typeof completion.runId === 'string' && completion.runId !== ''
+      ? [completion.runId]
+      : []
+  ));
+}
+
 /** Extract Pi's authoritative terminal assistant message and sum its final per-message usage. */
 export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
   output: string;
@@ -246,6 +301,8 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
   let allTokenBearingMessagesPriced = true;
   let allTokenBearingMessagesRateCardPriced = true;
   let attributedModel: string | undefined;
+  const launchedAsyncRuns = new Set<string>();
+  const completedAsyncRuns = new Set<string>();
 
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -326,9 +383,37 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
           };
         }
       }
+      if (event.type === 'message_end' && event.message?.role === 'toolResult') {
+        const asyncRunId = launchedAsyncRunId(event.message);
+        if (asyncRunId !== undefined) launchedAsyncRuns.add(asyncRunId);
+        for (const runId of completedAsyncRunIds(event.message)) completedAsyncRuns.add(runId);
+        const remainder = subagentRollupRemainder(event.message);
+        if (remainder !== undefined) {
+          hasTokenBearingMessage = true;
+          // The rollup names no child model, so it can never be rate-card priced.
+          allTokenBearingMessagesRateCardPriced = false;
+          if (remainder.costUsd > 0) {
+            providerCostUsd += remainder.costUsd;
+          } else {
+            allTokenBearingMessagesPriced = false;
+          }
+          tokenUsage = {
+            ...tokenUsage,
+            input: (tokenUsage?.input ?? 0) + remainder.input,
+            output: (tokenUsage?.output ?? 0) + remainder.output,
+          };
+        }
+      }
     } catch {
       // Pi reserves stdout for JSONL, but retain valid records when a diagnostic leaks into it.
     }
+  }
+
+  // A background subagent run reports its usage only to a later wait result. When the stream
+  // never delivered it, that spend is real but unseen: never claim a complete cost.
+  if ([...launchedAsyncRuns].some((runId) => !completedAsyncRuns.has(runId))) {
+    allTokenBearingMessagesPriced = false;
+    allTokenBearingMessagesRateCardPriced = false;
   }
 
   if (tokenUsage && (tokenUsage.input !== 0
