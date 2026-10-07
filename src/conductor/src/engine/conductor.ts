@@ -279,7 +279,7 @@ import {
   type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
 import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
-import type { AsBuiltGoverningReference } from './as-built-contract.js';
+import { AS_BUILT_VERDICT_CONTRACT_VERSION, type AsBuiltGoverningReference } from './as-built-contract.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
 import {
   appendRemediationTasks as appendCriterionBoundRemediationTasks,
@@ -3125,11 +3125,16 @@ export class Conductor {
         }
         const stored = await readAsBuiltVerdict(this.projectRoot);
         if (stored.kind !== 'present') {
+          const absence = stored.kind === 'absent'
+            ? 'artifact is missing'
+            : stored.kind === 'prior-version'
+              ? `artifact has prior contract version ${stored.version}; a fresh ${AS_BUILT_VERDICT_CONTRACT_VERSION} verdict is required`
+              : stored.reason;
           return {
             done: false,
             routeClass: 'absent',
             retrySignal: 'structured-result-missing',
-            reason: `${absentReason}: ${stored.kind === 'absent' ? 'artifact is missing' : stored.reason}`,
+            reason: `${absentReason}: ${absence}`,
           };
         }
         if (expectedRunId !== undefined && stored.value.attemptId !== expectedRunId) {

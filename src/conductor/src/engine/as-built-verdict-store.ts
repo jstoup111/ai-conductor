@@ -35,6 +35,8 @@ export interface PersistedAsBuiltVerdict {
 
 export type ReadAsBuiltVerdictResult =
   | { readonly kind: 'absent' }
+  /** A valid v1 envelope is stale authority, not a malformed v2 verdict. */
+  | { readonly kind: 'prior-version'; readonly version: 'v1' }
   | { readonly kind: 'unreadable'; readonly reason: string }
   | { readonly kind: 'present'; readonly value: PersistedAsBuiltVerdict };
 
@@ -54,6 +56,10 @@ function validRecordedFinding(value: unknown): value is RecordedAsBuiltFinding {
     typeof value.outcome !== 'string' || (value.class !== 'REMEDIABLE' && value.class !== 'DESIGN')) return false;
   if (value.class === 'REMEDIABLE') return value.reference !== undefined && isAsBuiltGoverningReference(value.reference);
   return value.reference === undefined || isAsBuiltGoverningReference(value.reference);
+}
+
+function isPriorAsBuiltVerdict(value: unknown): value is { readonly version: 'v1' } {
+  return isRecord(value) && value.version === 'v1' && value.version !== AS_BUILT_VERDICT_CONTRACT_VERSION;
 }
 
 type PersistedVerdictValidation =
@@ -178,6 +184,9 @@ export async function readAsBuiltVerdict(worktree: string): Promise<ReadAsBuiltV
     (raw.codeStamp !== null && typeof raw.codeStamp !== 'string') || !validPolicy(raw.policy) || !Array.isArray(raw.recordedFindings)) {
     return { kind: 'unreadable', reason: `${AS_BUILT_VERDICT_PATH} has an invalid persisted envelope` };
   }
+  // D1.2: a prior contract is stale evidence. Reading it must be side-effect
+  // free so only the next reviewer dispatch can author the replacement v2 verdict.
+  if (isPriorAsBuiltVerdict(raw.verdict)) return { kind: 'prior-version', version: 'v1' };
   const checked = validatePersistedAsBuiltVerdict(raw.verdict, raw.attemptId);
   if (!checked.ok) return { kind: 'unreadable', reason: `${AS_BUILT_VERDICT_PATH} has invalid verdict field ${checked.field}: ${checked.requirement}` };
   if (!raw.recordedFindings.every(validRecordedFinding)) {
