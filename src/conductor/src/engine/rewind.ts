@@ -457,7 +457,7 @@ export async function dispatchRewindCommand(
   const store = dependencies.store ?? createFilesystemConductStateStore(statePath);
   const preflight = dependencies.preflightDerivedRecords ?? preflightDerivedRecords;
   const clear = dependencies.clearDerivedRecords
-    ?? ((root, demoted) => clearDerivedRecords(root, demoted.map((step) => ({ step })), dependencies.markerFilesystem));
+    ?? ((root, demoted) => clearDerivedRecords(root, demoted, dependencies.markerFilesystem));
   const originalState = { ...observed.value };
   let result: RewindStateResult | undefined;
   try {
@@ -466,7 +466,7 @@ export async function dispatchRewindCommand(
       const current = await read(statePath);
       return current.ok ? current.value : {};
     } });
-    await clear(cwd, result.demoted);
+    await clear(cwd, result.demoted.map((step) => ({ step })));
   } catch (error) {
     console.error(`rewind: ${error instanceof Error ? error.message : String(error)}`);
     if (result) {
