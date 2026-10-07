@@ -34,7 +34,8 @@ import { admitBuildReviewCustomSourceRegions } from './build-review-source-regio
 import { BuildReviewScopeSource } from './build-review-scope-source.js';
 import type { HarnessConfig, EffortLevel, BuildReviewRubricId } from '../types/config.js';
 import { prdAuditScopeProjection, remediationLapCapForGate } from './conductor.js';
-import { REMEDIATION_PLAN_SCHEMA, renderRemediationPlanShape } from './remediation-plan-contract.js';
+import { REMEDIATION_PLAN_SCHEMA, renderRemediationPlanShape, validateRemediationPlan } from './remediation-plan-contract.js';
+import { persistRemediationPlan, type RemediationPlanStoreFilesystem } from './remediation-plan-store.js';
 import type {
   ComplexityAssessment,
   StepRunner,
@@ -695,6 +696,8 @@ export interface StepRunnerOptions {
   events?: ConductorEventEmitter;
   /** Test-only envelope filesystem seam for coverage-binding checkpoints. */
   coverageBindingFilesystem?: CoverageBindingEnvelopeFilesystem;
+  /** Test-only atomic filesystem seam for gap-plan authority persistence. */
+  remediationPlanStoreFilesystem?: RemediationPlanStoreFilesystem;
   /** Provider-aware session authority. Omitted by legacy scalar callers. */
   sessionStore?: ProviderSessionStore;
   /** Registry key for the captured provider when sessionStore is present. */
@@ -995,6 +998,7 @@ export class DefaultStepRunner implements StepRunner {
   private buildReviewPolicyCapture: typeof captureInstalledReviewPolicyBundle;
   private events?: ConductorEventEmitter;
   private coverageBindingFilesystem?: CoverageBindingEnvelopeFilesystem;
+  private remediationPlanStoreFilesystem?: RemediationPlanStoreFilesystem;
   private sessionStore?: ProviderSessionStore;
   private readonly runId: string;
   private providerKey: string;
@@ -1067,6 +1071,7 @@ export class DefaultStepRunner implements StepRunner {
     this.buildReviewPolicyCapture = options?.buildReviewPolicyCapture ?? captureInstalledReviewPolicyBundle;
     this.events = options?.events;
     this.coverageBindingFilesystem = options?.coverageBindingFilesystem;
+    this.remediationPlanStoreFilesystem = options?.remediationPlanStoreFilesystem;
     this.sessionStore =
       options?.sessionStore ?? options?.providerExecution?.sessions;
     this.providerRuntimes =
@@ -1556,6 +1561,36 @@ export class DefaultStepRunner implements StepRunner {
               }
               if (gapPlan && result.success && result.finalStructuredResult === undefined) {
                 return { ...this.toStepRunResult(step, result), success: false, output: 'structured-result-missing' };
+              }
+              if (gapPlan && result.success) {
+                const validated = validateRemediationPlan(result.finalStructuredResult, gapPlan.projection);
+                if (validated.kind === 'rejected') {
+                  const rejections = validated.rejected === undefined
+                    ? ''
+                    : `; rejections: ${JSON.stringify(validated.rejected)}`;
+                  return {
+                    ...this.toStepRunResult(step, result),
+                    success: false,
+                    output: `structured-result-rejected: ${validated.diagnostics.join('; ')}${rejections}`,
+                    finalStructuredResult: undefined,
+                  };
+                }
+                const persisted = await persistRemediationPlan(this.projectDir, {
+                  attemptId: opts?.runId ?? this.runId,
+                  source: gapPlan.projection.source,
+                  requiredReferences: gapPlan.projection.requiredReferences,
+                  dispositions: validated.dispositions,
+                }, this.remediationPlanStoreFilesystem === undefined
+                  ? undefined
+                  : { filesystem: this.remediationPlanStoreFilesystem });
+                if (persisted.kind === 'persistence-fault') {
+                  return {
+                    ...this.toStepRunResult(step, result),
+                    success: false,
+                    output: `persistence-fault: ${persisted.reason}`,
+                    finalStructuredResult: undefined,
+                  };
+                }
               }
               return this.toStepRunResult(step, result);
             }
