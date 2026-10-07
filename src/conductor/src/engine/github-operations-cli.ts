@@ -95,7 +95,10 @@ async function featureMutationForRequest(
         const { stdout: probeStdout } = await git(args, { cwd: input.cwd });
         return { exitCode: 0, stdout: probeStdout, stderr: '' };
       } catch (error) {
-        return { exitCode: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error) };
+        if (args[0] === 'show-ref' && (error as { code?: unknown }).code === 1) {
+          return { exitCode: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error) };
+        }
+        throw error;
       }
     };
     const leaf = await leafRefExists(gitForCwd, identity.slug);

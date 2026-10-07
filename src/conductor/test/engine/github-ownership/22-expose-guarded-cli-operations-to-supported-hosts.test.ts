@@ -423,7 +423,7 @@ describe('github-operation CLI', () => {
       if (joined === 'branch --show-current') return { stdout: 'feat/c1/x\n' };
       if (args[0] === 'show-ref') {
         if (joined === `show-ref --verify --quiet ${present}`) return { stdout: '' };
-        throw new Error('ref not found');
+        throw Object.assign(new Error('ref not found'), { code: 1 });
       }
       if (joined === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/widgets.git\n' };
       if (joined === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
@@ -462,7 +462,7 @@ describe('github-operation CLI', () => {
     const git = vi.fn(async (args: string[]) => {
       gitCalls.push([...args]);
       if (args.join(' ') === 'branch --show-current') return { stdout: 'feat/c1/x\n' };
-      throw new Error(`ref not found: ${args.join(' ')}`);
+      throw Object.assign(new Error(`ref not found: ${args.join(' ')}`), { code: 1 });
     });
     const gh = vi.fn();
     const remoteGit = vi.fn(async () => ({ kind: 'executed' as const, targets: [] }));
@@ -522,12 +522,16 @@ describe('github-operation CLI', () => {
     expect(remoteGit).not.toHaveBeenCalled();
   });
 
-  it('refuses a child branch when the leaf probe errors, before any write', async () => {
+  it('refuses a child branch when its local leaf probe throws even if the origin probe would succeed', async () => {
     const gitCalls: string[][] = [];
     const git = vi.fn(async (args: string[]) => {
       gitCalls.push([...args]);
       if (args.join(' ') === 'branch --show-current') return { stdout: 'feat/c1/x\n' };
-      throw new Error(`git show-ref failed: ${args.join(' ')}`);
+      if (args.join(' ') === 'show-ref --verify --quiet refs/heads/feat/daemon-x') {
+        throw new Error('local git transport unavailable');
+      }
+      if (args.join(' ') === 'show-ref --verify --quiet refs/remotes/origin/feat/daemon-x') return { stdout: '' };
+      throw new Error(`unexpected git command: ${args.join(' ')}`);
     });
     const gh = vi.fn();
     const remoteGit = vi.fn(async () => ({ kind: 'executed' as const, targets: [] }));
@@ -548,7 +552,6 @@ describe('github-operation CLI', () => {
     expect(gitCalls).toEqual([
       ['branch', '--show-current'],
       ['show-ref', '--verify', '--quiet', 'refs/heads/feat/daemon-x'],
-      ['show-ref', '--verify', '--quiet', 'refs/remotes/origin/feat/daemon-x'],
     ]);
     expect(gh).not.toHaveBeenCalled();
     expect(remoteGit).not.toHaveBeenCalled();

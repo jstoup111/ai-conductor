@@ -325,20 +325,31 @@ async function rollbackChildRewindState(
   config: HarnessConfig,
   storeFor: (path: string) => ConductStateStore<ConductState>,
 ): Promise<void> {
+  const failures: unknown[] = [];
   for (const applied of [...result.applied].reverse()) {
-    const lastStep = applied.batch.mutations.find((mutation) => mutation.field === 'last_step');
-    if (!lastStep) throw new Error(`Cannot restore child rewind state without last_step for ${applied.path}`);
-    await rollbackRewindState(
-      applied.originalState,
-      config,
-      {
-        target: result.target,
-        demoted: applied.batch.mutations
-          .filter((mutation) => mutation.field !== 'last_step')
-          .map((mutation) => String(mutation.field)),
-      },
-      storeFor(applied.path),
-      lastStep.next as NonNullable<ConductState['last_step']>,
+    try {
+      const lastStep = applied.batch.mutations.find((mutation) => mutation.field === 'last_step');
+      if (!lastStep) throw new Error(`Cannot restore child rewind state without last_step for ${applied.path}`);
+      await rollbackRewindState(
+        applied.originalState,
+        config,
+        {
+          target: result.target,
+          demoted: applied.batch.mutations
+            .filter((mutation) => mutation.field !== 'last_step')
+            .map((mutation) => String(mutation.field)),
+        },
+        storeFor(applied.path),
+        lastStep.next as NonNullable<ConductState['last_step']>,
+      );
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      `Failed to restore ${failures.length} child rewind state ${failures.length === 1 ? 'store' : 'stores'}`,
     );
   }
 }
@@ -610,35 +621,61 @@ export async function rewindChildState({
     applied.push({ path, originalState: { ...state }, batch });
   };
 
-  try {
-    await apply(
-      childPath,
-      observedChild.value,
-      CHILD_REGION_STEPS.slice(regionTargetIndex),
-      steps[targetIndex - 1]!.name,
+  const acceptanceSpecsIndex = steps.findIndex((step) => step.name === 'acceptance_specs');
+  if (acceptanceSpecsIndex <= 0) throw new Error('Cannot rewind child state without an acceptance_specs predecessor');
+  const laterChildren = (await listExistingChildren(root)).filter((candidate) => candidate > child);
+  const laterStates = await Promise.all(laterChildren.map(async (laterChild) => {
+    const path = pipelinePathFor(root, 'conduct-state.json', laterChild);
+    const observed = await readState(path);
+    if (!observed.ok) throw new Error(observed.error.message);
+    return { path, child: laterChild, state: observed.value };
+  }));
+
+  const flatPath = pipelinePathFor(root, 'conduct-state.json');
+  const observedFlat = await readState(flatPath);
+  if (!observedFlat.ok) throw new Error(observedFlat.error.message);
+  const buildReviewIndex = steps.findIndex((step) => step.name === 'build_review');
+  if (buildReviewIndex === -1) throw new Error('Cannot rewind child state without build_review');
+  const flatSteps = steps.slice(buildReviewIndex + 1).map((step) => step.name);
+  const firstFlatDemotion = flatSteps.find((step) => observedFlat.value[step as keyof ConductState] !== 'skipped');
+  const flatPredecessor = firstFlatDemotion === undefined
+    ? undefined
+    : steps[steps.findIndex((step) => step.name === firstFlatDemotion) - 1]!.name;
+  const planned = [
+    {
+      path: childPath,
+      state: observedChild.value,
+      stepNames: CHILD_REGION_STEPS.slice(regionTargetIndex),
+      predecessor: steps[targetIndex - 1]!.name,
       child,
-    );
-
-    const acceptanceSpecsIndex = steps.findIndex((step) => step.name === 'acceptance_specs');
-    if (acceptanceSpecsIndex <= 0) throw new Error('Cannot rewind child state without an acceptance_specs predecessor');
-    const laterChildren = (await listExistingChildren(root)).filter((candidate) => candidate > child);
-    for (const laterChild of laterChildren) {
-      const path = pipelinePathFor(root, 'conduct-state.json', laterChild);
-      const observed = await readState(path);
-      if (!observed.ok) throw new Error(observed.error.message);
-      await apply(path, observed.value, CHILD_REGION_STEPS, steps[acceptanceSpecsIndex - 1]!.name, laterChild);
+    },
+    ...laterStates.map(({ path, child: laterChild, state }) => ({
+      path,
+      state,
+      stepNames: CHILD_REGION_STEPS as readonly string[],
+      predecessor: steps[acceptanceSpecsIndex - 1]!.name,
+      child: laterChild,
+    })),
+    ...(flatPredecessor === undefined ? [] : [{
+      path: flatPath,
+      state: observedFlat.value,
+      stepNames: flatSteps,
+      predecessor: flatPredecessor,
+      child: undefined,
+    }]),
+  ];
+  for (const plan of planned) {
+    if (
+      plan.stepNames.some((step) => plan.state[step as keyof ConductState] !== 'skipped')
+      && !plan.state.last_step
+    ) {
+      throw new Error(`Cannot rewind state without a prior last step for ${plan.path}`);
     }
+  }
 
-    const flatPath = pipelinePathFor(root, 'conduct-state.json');
-    const observedFlat = await readState(flatPath);
-    if (!observedFlat.ok) throw new Error(observedFlat.error.message);
-    const buildReviewIndex = steps.findIndex((step) => step.name === 'build_review');
-    if (buildReviewIndex === -1) throw new Error('Cannot rewind child state without build_review');
-    const flatSteps = steps.slice(buildReviewIndex + 1).map((step) => step.name);
-    const firstFlatDemotion = flatSteps.find((step) => observedFlat.value[step as keyof ConductState] !== 'skipped');
-    if (firstFlatDemotion !== undefined) {
-      const firstFlatIndex = steps.findIndex((step) => step.name === firstFlatDemotion);
-      await apply(flatPath, observedFlat.value, flatSteps, steps[firstFlatIndex - 1]!.name);
+  try {
+    for (const plan of planned) {
+      await apply(plan.path, plan.state, plan.stepNames, plan.predecessor, plan.child);
     }
   } catch (error) {
     throw new RewindChildStateFailure(error, { target, child, demotions, applied });

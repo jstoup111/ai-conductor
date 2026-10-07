@@ -405,6 +405,20 @@ describe('rewind --child derived records, event, and rollback', () => {
     }
   });
 
+  it('refuses an empty later-child state before applying any child or flat demotion', async () => {
+    const { child3 } = await writeFixture();
+    await rm(child3);
+    const before = await pipelineFileBytes(root);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build', child: '2' }, root)).resolves.toBe(1);
+      expect(error).toHaveBeenCalledWith(`rewind: Cannot rewind state without a prior last step for ${child3}`);
+      await expect(pipelineFileBytes(root)).resolves.toEqual(before);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('rolls back every applied state file and restores staged records when clearing fails', async () => {
     const { child2, child3, flat } = await writeFixture();
     const before = await Promise.all([child2, child3, flat].map(async (path) => [path, await readFile(path, 'utf-8')] as const));
@@ -432,6 +446,45 @@ describe('rewind --child derived records, event, and rollback', () => {
       await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf-8')).resolves.toBe('operator action required\n');
       await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human\n');
       expect(error).toHaveBeenCalledWith('rewind: staged verdict removal failed');
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('continues rollback after one state store fails so the other applied stores are restored', async () => {
+    const { child2, child3, flat } = await writeFixture();
+    const before = await Promise.all([child2, child3, flat].map(async (path) => [path, await readFile(path, 'utf-8')] as const));
+    const stores = new Map<string, ConductStateStore<ConductState>>();
+    const storeFor = (path: string): ConductStateStore<ConductState> => {
+      let store = stores.get(path);
+      if (!store) {
+        const filesystemStore = createFilesystemConductStateStore(path);
+        store = path === child3
+          ? {
+              ...filesystemStore,
+              async applyBatch(batch) {
+                if (batch.name === 'rollback failed operator rewind state') {
+                  return { kind: 'persistence', message: 'forced child rollback failure' };
+                }
+                return filesystemStore.applyBatch(batch);
+              },
+            }
+          : filesystemStore;
+        stores.set(path, store);
+      }
+      return store;
+    };
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build', child: '2' }, root, {
+        storeFor,
+        clearDerivedRecords: async () => { throw new Error('derived-record cleanup failed'); },
+      })).resolves.toBe(1);
+
+      await expect(Promise.all([child2, flat].map(async (path) => [path, await readFile(path, 'utf-8')] as const)))
+        .resolves.toEqual([before[0], before[2]]);
+      await expect(readFile(child3, 'utf-8')).resolves.not.toBe(before[1]![1]);
+      expect(error).toHaveBeenCalledWith('rewind: rollback failed: Failed to restore 1 child rewind state store');
     } finally {
       error.mockRestore();
     }
