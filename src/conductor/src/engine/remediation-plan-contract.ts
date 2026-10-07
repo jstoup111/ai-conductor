@@ -233,7 +233,9 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
 
   for (const reference of projection.requiredReferences) {
     const key = referenceKey(reference.kind, reference.id);
-    if (!answeredTypedReferences.has(key)) diagnostics.push(`required reference ${reference.kind}:${reference.id} is missing`);
+    if (!answeredTypedReferences.has(key)) {
+      diagnostics.push(`dispositions missing required reference ${reference.kind}:${reference.id}`);
+    }
   }
   return diagnostics.length === 0
     ? { kind: 'accepted', dispositions }
