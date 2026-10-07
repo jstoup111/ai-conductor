@@ -24,8 +24,8 @@ afterEach(async () => {
 describe('provider lifecycle episode store', () => {
   const store = providerLifecycleEpisodeStore.createProviderLifecycleEpisodeStore();
 
-  it('exports only the production factory API', () => {
-    expect(Object.keys(providerLifecycleEpisodeStore).sort()).toEqual(['createProviderLifecycleEpisodeStore']);
+  it('exports only the production factory API and its episode path', () => {
+    expect(Object.keys(providerLifecycleEpisodeStore).sort()).toEqual(['createProviderLifecycleEpisodeStore', 'providerLifecycleEpisodeRelativePath']);
   });
 
   it('denies fresh recovery authority for malformed current lifecycle evidence', async () => {

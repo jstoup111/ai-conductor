@@ -51,8 +51,13 @@ const defaultFileOperations: ProviderLifecycleEpisodeStoreFileOperations = {
   rm,
 };
 
+/** Project-relative path of a logical step's recovery episode. */
+export function providerLifecycleEpisodeRelativePath(logicalStep: string): string {
+  return `.pipeline/provider-lifecycle-${logicalStep}.json`;
+}
+
 function episodePath(projectRoot: string, logicalStep: string): string {
-  return join(projectRoot, '.pipeline', `provider-lifecycle-${logicalStep}.json`);
+  return join(projectRoot, providerLifecycleEpisodeRelativePath(logicalStep));
 }
 
 export function createProviderLifecycleEpisodeStore(

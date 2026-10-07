@@ -124,6 +124,20 @@ describe('engine/build-review-input-integrity', () => {
     });
   });
 
+  it('ignores the build_review provider-lifecycle episode a rubric dispatch clears mid-lap, but not another step\'s', async () => {
+    const tree: FileTree = {
+      ...initialTree,
+      '/evidence/provider-lifecycle-build_review.json': '{"version":1}\n',
+      '/evidence/provider-lifecycle-build.json': '{"version":1}\n',
+    };
+    const excluded = { ...roots(), evidenceRootExcludes: BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES };
+    const before = await captureBuildReviewInputDigest(excluded, filesystem(tree));
+    const { '/evidence/provider-lifecycle-build_review.json': _cleared, '/evidence/provider-lifecycle-build.json': _removed, ...after } = tree;
+
+    await expect(diffBuildReviewInputDigests(before, await captureBuildReviewInputDigest(excluded, filesystem(after))))
+      .resolves.toEqual(['evidenceRoot:provider-lifecycle-build.json']);
+  });
+
   it('excludes the engine-owned in-lap writes while prior-lap build-review evidence stays hashed', async () => {
     const tree: FileTree = {
       ...initialTree,

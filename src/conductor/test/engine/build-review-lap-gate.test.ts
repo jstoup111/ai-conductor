@@ -36,4 +36,36 @@ describe('BuildReviewLapGate.registerPolicy', () => {
     expect(settlement.records.map((record) => record.roots.capturedPolicyMaterial)).toContain(retryMaterial);
     expect(settlement.changedInputs.length).toBeGreaterThan(0);
   });
+
+  it('seals a package root its owner deletes before settlement, yet still reports an edit made before the seal', async () => {
+    const { firstMaterial, retryMaterial, packageRoot } = await policyDirs();
+    const editedRoot = join(dir!, 'edited-skill');
+    await mkdir(editedRoot, { recursive: true });
+    await writeFile(join(editedRoot, 'SKILL.md'), 'policy\n');
+    const gate = await BuildReviewLapGate.begin({ roots, maxParallel: 1, members: ['moneySafety'] });
+    await gate.registerPolicy(firstMaterial, packageRoot);
+    await gate.registerPolicy(retryMaterial, editedRoot);
+
+    await writeFile(join(editedRoot, 'SKILL.md'), 'edited while the reviewer ran\n');
+    await gate.sealPolicyPackage(packageRoot);
+    await gate.sealPolicyPackage(editedRoot);
+    await rm(packageRoot, { recursive: true });
+    await rm(editedRoot, { recursive: true });
+    await writeFile(join(firstMaterial, 'SKILL.md'), 'material still settles at lap end\n');
+
+    const settlement = await gate.settle();
+    expect(settlement.changedInputs).toEqual(['capturedPolicyMaterial:SKILL.md', 'installedPolicyPackage:SKILL.md']);
+    expect(settlement.records.map((record) => record.changedInputs)).toEqual([
+      [], ['capturedPolicyMaterial:SKILL.md'], ['installedPolicyPackage:SKILL.md'],
+    ]);
+  });
+
+  it('still reports a package root deleted without a seal', async () => {
+    const { firstMaterial, packageRoot } = await policyDirs();
+    const gate = await BuildReviewLapGate.begin({ roots, maxParallel: 1, members: ['moneySafety'] });
+    await gate.registerPolicy(firstMaterial, packageRoot);
+    await rm(packageRoot, { recursive: true });
+
+    await expect(gate.settle()).resolves.toMatchObject({ changedInputs: ['installedPolicyPackage:SKILL.md'] });
+  });
 });

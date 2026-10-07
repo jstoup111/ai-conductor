@@ -3,7 +3,7 @@ import { MISSING_PIPELINE_ROOT_WARNING } from './pr-body-region-store.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { execa } from 'execa';
 import { isUtf8 } from 'node:buffer';
-import { basename, dirname, join, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import type {
@@ -717,6 +717,24 @@ export interface StepRunnerOptions {
  * discovery occurs in the selected candidate's prepared environment, never in
  * the parent process that happens to start the conductor.
  */
+/**
+ * Whether a resolved review-policy package lives inside the candidate's
+ * prepared (throwaway) provider home. Self-host preparation copies `skills/`
+ * into that home and the candidate's teardown deletes it, so such a package
+ * must be sealed in the lap gate before teardown rather than re-read at lap
+ * settlement, where its absence would read as a mutated review input.
+ */
+export function packageLivesInPreparedHome(
+  prepared: { readonly env?: NodeJS.ProcessEnv } | undefined,
+  homeVariable: string,
+  packageRoot: string,
+): boolean {
+  const home = prepared?.env?.[homeVariable];
+  if (home === undefined || home === '') return false;
+  const fromHome = relative(home, packageRoot);
+  return fromHome !== '' && !fromHome.startsWith('..') && !isAbsolute(fromHome);
+}
+
 export function productionBuildReviewPolicyCatalog(
   projectDir: string,
   deps: {
@@ -3502,6 +3520,10 @@ export class DefaultStepRunner implements StepRunner {
         const policy = { ...resolved.policy, declaredDependencies: [...new Set([...resolved.policy.declaredDependencies, ...entry.resources])] };
         const bundle = await this.buildReviewPolicyCapture(policy, { materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY) });
         await lapGate?.registerPolicy(bundle.materialPath, policy.packageRoot);
+        // No reviewer runs in this baseline home; the executor tears it down next.
+        if (packageLivesInPreparedHome(prepared, catalogProvider.homeVariable, policy.packageRoot)) {
+          await lapGate?.sealPolicyPackage(policy.packageRoot);
+        }
       } } : {}),
       preparedCandidateOperation: async (context) => {
         const missingPolicyCatalog = unavailableReviewCapabilityResult(context.candidate.providerKey, 'reviewPolicyCatalog');
@@ -3640,6 +3662,10 @@ export class DefaultStepRunner implements StepRunner {
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: detail } };
         }
         await lapGate?.registerPolicy(bundle.materialPath, policy.packageRoot);
+        const sealingGate = lapGate;
+        if (sealingGate !== undefined && packageLivesInPreparedHome(context.prepared, catalogProvider.homeVariable, policy.packageRoot)) {
+          context.onTeardown(() => sealingGate.sealPolicyPackage(policy.packageRoot));
+        }
         const candidateEngine = await this.resolveBuildReviewEngineIdentity();
         const policyProvenance = {
           inputDigest: inputs.sourceSnapshot.contentDigest,
@@ -4284,6 +4310,10 @@ export class DefaultStepRunner implements StepRunner {
               if (resolved.kind === 'failure') return;
               const bundle = await this.buildReviewPolicyCapture(resolved.policy, { materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY) });
               await lapGate?.registerPolicy(bundle.materialPath, resolved.policy.packageRoot);
+              // No reviewer runs in this baseline home; the executor tears it down next.
+              if (packageLivesInPreparedHome(prepared, catalogProvider.homeVariable, resolved.policy.packageRoot)) {
+                await lapGate?.sealPolicyPackage(resolved.policy.packageRoot);
+              }
             } } : {}),
             preparedCandidateOperation: async (context) => {
               // Built-in peers participate in a custom-policy lap's exact
@@ -4363,6 +4393,11 @@ export class DefaultStepRunner implements StepRunner {
                     materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY),
                   });
                   await lapGate?.registerPolicy(builtinBundle.materialPath, builtinPolicy.packageRoot);
+                  const sealingGate = lapGate;
+                  if (sealingGate !== undefined && packageLivesInPreparedHome(context.prepared, catalogProvider.homeVariable, builtinPolicy.packageRoot)) {
+                    const sealedRoot = builtinPolicy.packageRoot;
+                    context.onTeardown(() => sealingGate.sealPolicyPackage(sealedRoot));
+                  }
                 } catch (error) {
                   return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: `build_review candidate policy load failed: ${error instanceof Error ? error.message : String(error)}` } };
                 }
