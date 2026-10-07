@@ -15,6 +15,10 @@ otel:
 # automatically: worktree removed, branch deleted, unparked.
 reconcile_parked_auto_cleanup: true
 
+# #1790: merged maintenance specs may declare acceptance_specs/manual_test inapplicable.
+feature_applicability:
+  enabled: true
+
 # Feature-executor pool width. Above 1 the daemon warns at startup: more rebase
 # kickbacks as siblings land first, and provider spend scales with the width.
 daemon_concurrency: 3
