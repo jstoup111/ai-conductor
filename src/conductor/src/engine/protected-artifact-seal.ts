@@ -211,7 +211,13 @@ export interface VerifyProtectedArtifactSealOptions {
 }
 
 export type ProtectedArtifactSealVerdict =
-  | { ok: true; seal: ProtectedArtifactSeal; selfAmendments: ProtectedArtifactSelfAmendment[] }
+  | {
+      ok: true;
+      seal: ProtectedArtifactSeal;
+      selfAmendments: ProtectedArtifactSelfAmendment[];
+      /** Base-branch removals that a later seal writer may prune atomically. */
+      inheritedDeletions: { path: string; deletedBy: string }[];
+    }
   | { ok: false; reason: string };
 
 export interface ActiveStepArtifactExceptionInput {
@@ -1033,6 +1039,57 @@ function attributionLine(
   return 'Attribution: provenance undeterminable';
 }
 
+type InheritedFromBaseResult = {
+  inheritance: ProtectedArtifactInheritance;
+  mergeBase?: string;
+  headTouchedPath: boolean | 'indeterminate';
+};
+
+type DeletedProtectedArtifactClassification =
+  | { kind: 'inherited'; path: string; deletedBy: string }
+  | { kind: 'refused'; verdict: ProtectedArtifactSealVerdict };
+
+/**
+ * Classifies a missing sealed path without mutating the seal. The deleting
+ * commit is deliberately resolved only after provenance establishes that the
+ * base branch — rather than this feature — removed the path.
+ */
+async function classifyDeletedProtectedArtifact(
+  path: string,
+  probe: {
+    inheritedFromBase: (path: string) => Promise<InheritedFromBaseResult>;
+    missingBaseRef: () => Promise<string | undefined>;
+    deletingBaseCommit: (path: string) => Promise<string | undefined>;
+    undeterminableProvenance: (path: string, missingRef: string) => ProtectedArtifactSealVerdict;
+    noMergeBase: (path: string) => ProtectedArtifactSealVerdict;
+    failedInheritanceProbe: (path: string) => ProtectedArtifactSealVerdict;
+  },
+): Promise<DeletedProtectedArtifactClassification> {
+  const inheritance = await probe.inheritedFromBase(path);
+  if (inheritance.inheritance === 'inherited') {
+    const deletedBy = await probe.deletingBaseCommit(path);
+    if (deletedBy) return { kind: 'inherited', path, deletedBy };
+    return {
+      kind: 'refused',
+      verdict: {
+        ok: false,
+        reason: `Protected artifact provenance undeterminable: ${path}\nDeleting base commit not found.\n${attributionLine('diff-probe-failed')}`,
+      },
+    };
+  }
+  const missingRef = await probe.missingBaseRef();
+  if (missingRef) return { kind: 'refused', verdict: probe.undeterminableProvenance(path, missingRef) };
+  if (inheritance.inheritance === 'no-merge-base') return { kind: 'refused', verdict: probe.noMergeBase(path) };
+  if (inheritance.inheritance === 'diff-probe-failed') return { kind: 'refused', verdict: probe.failedInheritanceProbe(path) };
+  return {
+    kind: 'refused',
+    verdict: {
+      ok: false,
+      reason: `Protected artifact deleted: ${path}\n${attributionLine(inheritance.inheritance, inheritance)}`,
+    },
+  };
+}
+
 async function inspectSeal(
   projectRoot: string,
   seal: ProtectedArtifactSeal,
@@ -1066,9 +1123,7 @@ async function inspectSeal(
     ok: false,
     reason: `Protected artifact provenance undeterminable: ${path}\nInheritance probe failed: git diff.\nVerify Git access and retry.\n${attributionLine('diff-probe-failed')}`,
   });
-  const inheritedFromBase = async (path: string): Promise<
-    { inheritance: ProtectedArtifactInheritance; mergeBase?: string; headTouchedPath: boolean | 'indeterminate' }
-  > => {
+  const inheritedFromBase = async (path: string): Promise<InheritedFromBaseResult> => {
     const ref = await baseRef();
     if (ref === undefined) return { inheritance: 'diff-probe-failed', headTouchedPath: 'indeterminate' };
     if (await matchesBaseTip(projectRoot, ref, path)) {
@@ -1076,6 +1131,15 @@ async function inspectSeal(
     }
     const { inheritance, provenance } = await branchUntouchedInheritance(projectRoot, ref, path);
     return { inheritance, ...provenance, headTouchedPath: provenance.headTouchedPath ?? 'indeterminate' };
+  };
+  const deletingBaseCommit = async (path: string): Promise<string | undefined> => {
+    const ref = await baseRef();
+    if (!ref) return undefined;
+    const deleted = await execa('git', ['log', '-1', '--diff-filter=D', '--format=%H', ref, '--', path], {
+      cwd: projectRoot,
+      reject: false,
+    }).catch(() => undefined);
+    return deleted?.exitCode === 0 && deleted.stdout.length > 0 ? deleted.stdout : undefined;
   };
 
   const expected = new Map(seal.protectedArtifacts.map((artifact) => [artifact.path, artifact.fingerprint]));
@@ -1139,13 +1203,23 @@ async function inspectSeal(
     }
   }
 
+  const inheritedDeletions: { path: string; deletedBy: string }[] = [];
   for (const path of expected.keys()) {
     if (excludedPaths?.has(path)) continue;
     if (!actualPaths.includes(path)) {
-      return { ok: false, reason: `Protected artifact deleted: ${path}` };
+      const classification = await classifyDeletedProtectedArtifact(path, {
+        inheritedFromBase,
+        missingBaseRef,
+        deletingBaseCommit,
+        undeterminableProvenance,
+        noMergeBase: (deletedPath) => noMergeBase(deletedPath, baseBranch!),
+        failedInheritanceProbe,
+      });
+      if (classification.kind === 'refused') return classification.verdict;
+      inheritedDeletions.push({ path: classification.path, deletedBy: classification.deletedBy });
     }
   }
-  return { ok: true, seal, selfAmendments };
+  return { ok: true, seal, selfAmendments, inheritedDeletions };
 }
 
 /**
@@ -1286,7 +1360,7 @@ async function applyPermittedProtectedArtifactSealRotation(
     includedEngineAppendedPaths,
     onRebaseline: options.onRebaseline,
   });
-  return { ok: true, seal: rotated, selfAmendments: [] };
+  return { ok: true, seal: rotated, selfAmendments: [], inheritedDeletions: [] };
 }
 
 async function verifyExistingProtectedArtifactSeal(

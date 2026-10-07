@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:5
+// Covers: task:1, task:2, task:3, task:5
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
@@ -515,6 +515,7 @@ describe('createProtectedArtifactSeal', () => {
       ok: true,
       seal,
       selfAmendments: [],
+      inheritedDeletions: [],
     });
   });
 
@@ -543,6 +544,7 @@ describe('createProtectedArtifactSeal', () => {
       ok: true,
       seal,
       selfAmendments: [],
+      inheritedDeletions: [],
     });
   });
 
@@ -680,6 +682,7 @@ describe('resealProtectedArtifactSeal', () => {
         ok: true,
         seal: resealed,
         selfAmendments: [],
+        inheritedDeletions: [],
       },
     });
   });
@@ -828,7 +831,7 @@ describe('resealProtectedArtifactSeal', () => {
       await rm(join(repo, '.docs/plans/p2.md'));
       await git(repo, ['add', '-A']);
       await git(repo, ['commit', '-q', '-m', 'correct p1 and delete p2']);
-    }, undefined, 'Protected artifact deleted: .docs/plans/p2.md'],
+    }, undefined, 'Protected artifact provenance undeterminable: .docs/plans/p2.md\nMissing base ref: no base branch was supplied.\nProvide the base ref, then rebase onto it.'],
     ['a non-inherited added artifact', async (repo: string) => {
       await git(repo, ['checkout', '-q', '-b', 'feature']);
       await writeProjectFile(repo, '.docs/plans/p1.md', 'corrected plan\n');
@@ -871,9 +874,7 @@ describe('resealProtectedArtifactSeal', () => {
     }).toEqual({
       rejection: reason.startsWith('Protected artifact provenance undeterminable')
         ? `${reason}\nAttribution: provenance undeterminable`
-        : reason.startsWith('Protected artifact deleted')
-          ? reason
-          : `${reason}\nAttribution: feature-authored (committed on this branch since merge-base ${await git(repo, ['merge-base', baseBranch!, 'HEAD'])})`,
+        : `${reason}\nAttribution: feature-authored (committed on this branch since merge-base ${await git(repo, ['merge-base', baseBranch!, 'HEAD'])})`,
       persistedBytes: originalBytes,
     });
   });
@@ -2021,7 +2022,7 @@ describe('verifyProtectedArtifactSeal', () => {
 
   it.each([
     ['deleted', async (repo: string) => rm(join(repo, '.docs/plans/feature.md')),
-      'Protected artifact deleted: .docs/plans/feature.md'],
+      'Protected artifact deleted: .docs/plans/feature.md\nAttribution: uncommitted workspace change'],
     ['recreated', async (repo: string) => {
       await rm(join(repo, '.docs/plans/feature.md'));
       await writeProjectFile(repo, '.docs/plans/feature.md', 'recreated plan\n');
@@ -2053,7 +2054,7 @@ describe('verifyProtectedArtifactSeal', () => {
       baseBranch: 'main',
     });
 
-    expect(verdict).toEqual({ ok: false, reason: 'Protected artifact deleted: .docs/plans/feature.md' });
+    expect(verdict).toEqual({ ok: false, reason: 'Protected artifact deleted: .docs/plans/feature.md\nAttribution: uncommitted workspace change' });
   });
 
   describe('own-feature self-amendment durable reporting behavior', () => {
@@ -2177,7 +2178,10 @@ describe('verifyProtectedArtifactSeal', () => {
 
       await expect(
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature' }),
-      ).resolves.toEqual({ ok: false, reason: 'Protected artifact deleted: .docs/plans/feature.md' });
+      ).resolves.toEqual({
+        ok: false,
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/feature.md\nMissing base ref: no base branch was supplied.\nProvide the base ref, then rebase onto it.\nAttribution: provenance undeterminable',
+      });
     });
   });
 
@@ -2453,7 +2457,7 @@ describe('verifyProtectedArtifactSeal', () => {
       });
     });
 
-    it('still HALTS on a deletion even when the base branch tip also lacks the file', async () => {
+    it('tolerates a deletion inherited from the base branch tip', async () => {
       const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
       await createProtectedArtifactSeal({
         projectRoot: repo,
@@ -2462,14 +2466,201 @@ describe('verifyProtectedArtifactSeal', () => {
       await rm(join(repo, '.docs/plans/other-feature.md'));
       await git(repo, ['add', '-A']);
       await git(repo, ['commit', '-q', '-m', 'base removes the plan']);
+      const deletedBy = await git(repo, ['rev-parse', 'HEAD']);
 
-      // Deliberately out of scope for this fix — see the follow-up intake.
       await expect(
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
-      ).resolves.toEqual({
-        ok: false,
-        reason: 'Protected artifact deleted: .docs/plans/other-feature.md',
+      ).resolves.toMatchObject({
+        ok: true,
+        inheritedDeletions: [{ path: '.docs/plans/other-feature.md', deletedBy }],
       });
+    });
+  });
+
+  describe('inherited base deletion (#1752/#1676)', () => {
+    async function sealThenRebaseAcrossBaseDeletion(path: string): Promise<{
+      repo: string;
+      baselineCommit: string;
+      deletedBy: string;
+    }> {
+      const repo = await makeRepo({ '.gitignore': '.pipeline/\n', [path]: 'approved artifact\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'feature']);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      await git(repo, ['checkout', '-q', 'main']);
+      await rm(join(repo, path));
+      await git(repo, ['add', '-A']);
+      await git(repo, ['commit', '-q', '-m', 'retire approved artifact']);
+      const deletedBy = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', 'feature']);
+      await git(repo, ['rebase', '-q', 'main']);
+      await rm(join(repo, '.pipeline/protected-artifact-seal.json'));
+      return { repo, baselineCommit, deletedBy };
+    }
+
+    it('reports a rebased base deletion as an inherited deletion with its deleting commit', async () => {
+      const path = '.docs/plans/retired.md';
+      const { repo, baselineCommit, deletedBy } = await sealThenRebaseAcrossBaseDeletion(path);
+      const before = await readFile(join(repo, '.pipeline/protected-artifact-seal.json')).catch(() => Buffer.alloc(0));
+
+      await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baselineCommit, baseBranch: 'main' }))
+        .resolves.toMatchObject({ ok: true, inheritedDeletions: [{ path, deletedBy }] });
+      await expect(readFile(join(repo, '.pipeline/protected-artifact-seal.json')).catch(() => Buffer.alloc(0))).resolves.toEqual(before);
+    });
+
+    it('refuses a committed feature deletion with feature-authored attribution', async () => {
+      const path = '.docs/stories/own.md';
+      const repo = await makeRepo({ [path]: 'approved story\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'feature']);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+      const before = await readFile(sealPath);
+      await rm(join(repo, path));
+      await git(repo, ['add', '-A']);
+      await git(repo, ['commit', '-q', '-m', 'delete own story']);
+      const mergeBase = await git(repo, ['merge-base', 'main', 'HEAD']);
+
+      await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' })).resolves.toEqual({
+        ok: false,
+        reason: `Protected artifact deleted: ${path}\nAttribution: feature-authored (committed on this branch since merge-base ${mergeBase})`,
+      });
+      await expect(readFile(sealPath)).resolves.toEqual(before);
+    });
+
+    it('refuses an uncommitted deletion with workspace attribution', async () => {
+      const path = '.docs/plans/uncommitted.md';
+      const repo = await makeRepo({ [path]: 'approved plan\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+      const before = await readFile(sealPath);
+      await rm(join(repo, path));
+
+      await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' })).resolves.toEqual({
+        ok: false,
+        reason: `Protected artifact deleted: ${path}\nAttribution: uncommitted workspace change`,
+      });
+      await expect(readFile(sealPath)).resolves.toEqual(before);
+    });
+
+    it('refuses a feature deletion even when the base later deleted the same path without a rebase', async () => {
+      const path = '.docs/plans/retired.md';
+      const repo = await makeRepo({ [path]: 'approved plan\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'feature']);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+      const before = await readFile(sealPath);
+      await rm(join(repo, path));
+      await git(repo, ['add', '-A']);
+      await git(repo, ['commit', '-q', '-m', 'feature deletes plan']);
+      const mergeBase = await git(repo, ['merge-base', 'main', 'HEAD']);
+      await git(repo, ['checkout', '-q', 'main']);
+      await rm(join(repo, path));
+      await git(repo, ['add', '-A']);
+      await git(repo, ['commit', '-q', '-m', 'base also deletes plan']);
+      await git(repo, ['checkout', '-q', 'feature']);
+
+      const verdict = await verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' });
+      expect(verdict).toEqual({ ok: false, reason: `Protected artifact deleted: ${path}\nAttribution: feature-authored (committed on this branch since merge-base ${mergeBase})` });
+      expect(verdict).not.toHaveProperty('inheritedDeletions');
+      await expect(readFile(sealPath)).resolves.toEqual(before);
+    });
+
+    it('does not look up a deleting base commit when the base still has the feature-deleted path', async () => {
+      const path = '.docs/plans/kept.md';
+      const repo = await makeRepo({ [path]: 'approved plan\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'feature']);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      await rm(join(repo, path));
+      await git(repo, ['add', '-A']);
+      await git(repo, ['commit', '-q', '-m', 'feature deletes kept plan']);
+      const bin = join(repo, '.test-git-bin');
+      const calls = join(repo, '.git-calls');
+      const realGit = (await execFile('which', ['git'])).stdout.trim();
+      await mkdir(bin, { recursive: true });
+      await writeFile(join(bin, 'git'), `#!/bin/sh\nprintf '%s\\n' \"$*\" >> '${calls}'\nexec '${realGit}' \"$@\"\n`);
+      await chmod(join(bin, 'git'), 0o755);
+      const priorPath = process.env.PATH;
+      process.env.PATH = `${bin}:${priorPath ?? ''}`;
+      try {
+        const verdict = await verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' });
+        expect(verdict).toMatchObject({ ok: false, reason: expect.stringContaining(`Protected artifact deleted: ${path}\nAttribution: feature-authored`) });
+      } finally {
+        if (priorPath === undefined) delete process.env.PATH;
+        else process.env.PATH = priorPath;
+      }
+      await expect(readFile(calls, 'utf8').catch(() => '')).resolves.not.toContain(`log -1 --diff-filter=D --format=%H main -- ${path}`);
+    });
+
+    it('refuses missing base refs and absent merge-bases for deletions without changing the seal', async () => {
+      const path = '.docs/plans/missing.md';
+      const repo = await makeRepo({ [path]: 'approved plan\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+      const before = await readFile(sealPath);
+      await rm(join(repo, path));
+      await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'no-such-base' })).resolves.toMatchObject({
+        ok: false, reason: expect.stringContaining(`Protected artifact provenance undeterminable: ${path}\nMissing base ref: neither origin/no-such-base nor no-such-base resolves.`),
+      });
+      await expect(readFile(sealPath)).resolves.toEqual(before);
+
+      await git(repo, ['checkout', '-q', '--orphan', 'unrelated']);
+      await git(repo, ['rm', '-q', '-rf', '.']);
+      await git(repo, ['commit', '--allow-empty', '-q', '-m', 'unrelated history']);
+      await rm(sealPath);
+      await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baselineCommit, baseBranch: 'main' })).resolves.toMatchObject({
+        ok: false, reason: expect.stringContaining(`Protected artifact provenance undeterminable: ${path}\nNo merge-base exists between HEAD and main.`),
+      });
+    });
+
+    it('refuses an inherited deletion when its deleting base commit cannot be found', async () => {
+      const path = '.docs/plans/retired.md';
+      const { repo, baselineCommit } = await sealThenRebaseAcrossBaseDeletion(path);
+      const bin = join(repo, '.test-git-bin');
+      const realGit = (await execFile('which', ['git'])).stdout.trim();
+      await mkdir(bin, { recursive: true });
+      await writeFile(join(bin, 'git'), `#!/bin/sh\nif [ \"$1\" = log ]; then exit 0; fi\nexec '${realGit}' \"$@\"\n`);
+      await chmod(join(bin, 'git'), 0o755);
+      const priorPath = process.env.PATH;
+      process.env.PATH = `${bin}:${priorPath ?? ''}`;
+      try {
+        await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baselineCommit, baseBranch: 'main' })).resolves.toEqual({
+          ok: false,
+          reason: `Protected artifact provenance undeterminable: ${path}\nDeleting base commit not found.\nAttribution: provenance undeterminable`,
+        });
+      } finally {
+        if (priorPath === undefined) delete process.env.PATH;
+        else process.env.PATH = priorPath;
+      }
+    });
+
+    it('tolerates inherited changes and deletions but names only a separate workspace edit', async () => {
+      const deleted = '.docs/plans/retired.md';
+      const changed = '.docs/plans/inherited.md';
+      const edited = '.docs/plans/edited.md';
+      const repo = await makeRepo({ [deleted]: 'retired\n', [changed]: 'old\n', [edited]: 'approved\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'feature']);
+      await git(repo, ['checkout', '-q', 'main']);
+      await rm(join(repo, deleted));
+      await writeProjectFile(repo, changed, 'new\n');
+      await git(repo, ['add', '-A']);
+      await git(repo, ['commit', '-q', '-m', 'base changes and retires artifacts']);
+      await git(repo, ['checkout', '-q', 'feature']);
+      await git(repo, ['rebase', '-q', 'main']);
+
+      await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baselineCommit, baseBranch: 'main' })).resolves.toMatchObject({ ok: true });
+      await writeProjectFile(repo, edited, 'workspace edit\n');
+      const verdict = await verifyProtectedArtifactSeal({ projectRoot: repo, baselineCommit, baseBranch: 'main' });
+      expect(verdict).toMatchObject({ ok: false, reason: expect.stringContaining(edited) });
+      if (!verdict.ok) {
+        expect(verdict.reason).not.toContain(deleted);
+        expect(verdict.reason).not.toContain(changed);
+      }
     });
   });
 
