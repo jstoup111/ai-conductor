@@ -69,6 +69,7 @@ import {
 } from './prd-widening-refusal-rework.js';
 import type { RemediationCasePrdWideningRecord } from './remediation-case-store.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
+import type { RemediationProjection } from './remediation-projection.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
@@ -1509,6 +1510,10 @@ export interface StepRunOptions {
     readonly mode: 'prd-widening-reconciliation';
     readonly projection: string;
     readonly nativeSchema: Readonly<Record<string, unknown>>;
+  } | {
+    /** Engine-owned input for a provider-native remediation disposition plan. */
+    readonly mode: 'gap-plan';
+    readonly projection: RemediationProjection;
   };
   /**
    * This dispatch's engine-owned run identity, passed INTO the provider

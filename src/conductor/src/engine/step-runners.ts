@@ -34,6 +34,7 @@ import { admitBuildReviewCustomSourceRegions } from './build-review-source-regio
 import { BuildReviewScopeSource } from './build-review-scope-source.js';
 import type { HarnessConfig, EffortLevel, BuildReviewRubricId } from '../types/config.js';
 import { prdAuditScopeProjection, remediationLapCapForGate } from './conductor.js';
+import { REMEDIATION_PLAN_SCHEMA, renderRemediationPlanShape } from './remediation-plan-contract.js';
 import type {
   ComplexityAssessment,
   StepRunner,
@@ -1505,23 +1506,45 @@ export class DefaultStepRunner implements StepRunner {
       if (this.providerRuntimes && branchSessionId === undefined) {
         if (step === 'remediate') {
           try {
-            const reconciliation = opts?.remediationRequest;
+            const remediationRequest = opts?.remediationRequest;
+            const reconciliation = remediationRequest?.mode === 'prd-widening-reconciliation'
+              ? remediationRequest
+              : undefined;
+            const gapPlan = remediationRequest?.mode === 'gap-plan'
+              ? remediationRequest
+              : undefined;
+            if (gapPlan) {
+              const schemaCandidates = this.configuredProviders.filter(
+                (provider) => this.providerRuntimes!.nativeSchemaCapabilityFor(provider)?.nativeOutputSchema === true,
+              );
+              if (schemaCandidates.length === 0) {
+                return {
+                  success: false,
+                  output: `remediate gap-plan cannot enforce its native output schema: candidate set [${this.configuredProviders.join(', ')}] has no provider declaring nativeSchemaCapability.nativeOutputSchema. Recovery action: select or update a candidate that declares nativeSchemaCapability.nativeOutputSchema.`,
+                };
+              }
+            }
             const reconciliationInput = reconciliation === undefined
               ? undefined
               : `PRD WIDENING RECONCILIATION INPUT (engine-owned):\n${reconciliation.projection}`;
+            const gapPlanInput = gapPlan === undefined
+              ? undefined
+              : `REMEDIATION GAP-PLAN INPUT (engine-owned):\n${JSON.stringify(gapPlan.projection)}\n\nTerminal remediation-plan shape (engine-owned): ${renderRemediationPlanShape()}`;
             const result = await this.executeProviderAwareSkillOneShot(
               step,
               {
                 // executeProviderAwareSkillOneShot prepends the selected
                 // provider's skill invocation for a schema request. Keep the
                 // supplied projection separate so that command appears once.
-                prompt: reconciliationInput ?? prompt,
+                prompt: reconciliationInput ?? gapPlanInput ?? prompt,
                 systemPrompt: reconciliation
                   ? `${systemPrompt}\n\nJudge only semantic same/different/uncertain relations. Do not grant authority or create BUILD work.`
                   : systemPrompt,
                 cwd: this.projectDir,
                 dangerouslySkipPermissions: true,
-                ...(reconciliation ? { nativeSchema: reconciliation.nativeSchema } : {}),
+                ...(reconciliation
+                  ? { nativeSchema: reconciliation.nativeSchema }
+                  : gapPlan ? { nativeSchema: REMEDIATION_PLAN_SCHEMA } : {}),
               },
               state.complexity_tier,
               opts,
@@ -1530,6 +1553,9 @@ export class DefaultStepRunner implements StepRunner {
               this.callCount++;
               if (reconciliation && result.success && result.finalStructuredResult === undefined) {
                 return { success: false, output: 'PRD widening reconciliation returned no native structured result.' };
+              }
+              if (gapPlan && result.success && result.finalStructuredResult === undefined) {
+                return { ...this.toStepRunResult(step, result), success: false, output: 'structured-result-missing' };
               }
               return this.toStepRunResult(step, result);
             }
