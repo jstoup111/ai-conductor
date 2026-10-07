@@ -4629,7 +4629,7 @@ export function remediationDispositionAppendsToPlan(
 }
 export type RemediationHaltCategory = 'architectural-clarity' | 'product-scope' | 'unanswerable';
 
-const REMEDIATION_HALT_CATEGORIES: readonly RemediationHaltCategory[] = [
+export const REMEDIATION_HALT_CATEGORIES: readonly RemediationHaltCategory[] = [
   'architectural-clarity',
   'product-scope',
   'unanswerable',
