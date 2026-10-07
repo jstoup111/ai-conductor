@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-07T02:30:46.676Z
 Slug: engine-cannot-represent-more-than-one-branch-step-
 Class: needs-human
 Halting step: unknown
