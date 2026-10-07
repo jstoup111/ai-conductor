@@ -111,6 +111,38 @@ export const TASK_HEADER_PATTERN =
 const PATH_EXTENSIONS = /\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|yml|yaml|sh|rb|py|go|rs|html|css|scss|vue|toml)$/i;
 const BACKTICK_TOKEN = /`([^`\s]+)`/g;
 const STORY_LINE = /^[ \t]*\*\*Story:\*\*[ \t]*(?:(?:story|epic)\b[-\t ]+)?(n\/a|[A-Za-z0-9.-]+)/i;
+const STORY_LINE_VALUE = /^[ \t]*\*\*Story:\*\*[ \t]*(.*)$/i;
+const NON_STORY_VALUE = /^(?:n\/a|none|prerequisite|all)$/i;
+
+/**
+ * Returns every normalized story id for each `**Story:**` line in task text.
+ *
+ * Unlike `parsePlanTaskStoryIds`, which intentionally keeps the legacy
+ * first-id behavior for unsliced plans, this preserves each line's full list
+ * so sliced-plan validation can refuse multi-id declarations.
+ */
+export function parsePlanTaskStoryLineIds(text: string): string[][] {
+  const storyLines: string[][] = [];
+  for (const line of text.split('\n')) {
+    const match = line.match(STORY_LINE_VALUE);
+    if (!match) continue;
+
+    const withoutAnnotations = match[1]
+      .replace(/\([^)]*\)/g, '')
+      .replace(/\s(?:—|–|-)\s.*|:\s.*/, '')
+      .trim();
+    if (NON_STORY_VALUE.test(withoutAnnotations)) {
+      storyLines.push([]);
+      continue;
+    }
+
+    storyLines.push(withoutAnnotations
+      .split(/[,;&+]|(?<!n)\/(?!a)|\band\b/i)
+      .map((token) => token.trim().replace(/^(?:story|stories|epic)\b[-\t ]*/i, '').trim())
+      .filter((token) => token.length > 0));
+  }
+  return storyLines;
+}
 
 /** Returns unique story ids cited by leading `**Story:**` lines in a task block. */
 export function parsePlanTaskStoryIds(text: string): string[] {

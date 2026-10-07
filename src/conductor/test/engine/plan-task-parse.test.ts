@@ -12,6 +12,7 @@ import {
   parsePlanTaskPaths,
   parsePlanTaskDoneWhen,
   parsePlanTaskTitles,
+  parsePlanTaskStoryLineIds,
   parsePlanTaskStoryIds,
   TASK_HEADER_PATTERN,
   TASK_ID_PATTERN,
@@ -41,6 +42,41 @@ describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)'
 
     it('rejects a Story marker embedded in surrounding prose', () => {
       expect(parsePlanTaskStoryIds('Prose mentions **Story:** 3 but is not a metadata line.')).toEqual([]);
+    });
+  });
+
+  describe('parsePlanTaskStoryLineIds', () => {
+    it.each([
+      ['1, 2', [['1', '2']]],
+      ['FR-1 and FR-2', [['FR-1', 'FR-2']]],
+      ['Story 1', [['1']]],
+      ['FR-14 (source=a, status=b) — happy path', [['FR-14']]],
+      ['1/2', [['1', '2']]],
+      ['1 & 2', [['1', '2']]],
+      ['1; 2', [['1', '2']]],
+      ['1 + 2', [['1', '2']]],
+      ['Stories 1, 2', [['1', '2']]],
+      ['1-3', [['1-3']]],
+      ['1 – note', [['1']]],
+      ['1 - note', [['1']]],
+      ['1: note', [['1']]],
+      ['epic E-2', [['E-2']]],
+    ])('returns every id from %s', (reference, expected) => {
+      expect(parsePlanTaskStoryLineIds(`**Story:** ${reference}`)).toEqual(expected);
+    });
+
+    it.each(['n/a', 'N/A', 'none', 'prerequisite', 'all'])(
+      'keeps the sentinel %s as a Story-line entry with no ids',
+      (reference) => {
+        expect(parsePlanTaskStoryLineIds(`**Story:** ${reference}`)).toEqual([[]]);
+      },
+    );
+
+    it('keeps non-story values mixed with ids and preserves Story-line boundaries', () => {
+      expect(parsePlanTaskStoryLineIds(['**Story:** 1, n/a', '**Story:** 2'].join('\n'))).toEqual([
+        ['1', 'n/a'],
+        ['2'],
+      ]);
     });
   });
 
