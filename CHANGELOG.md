@@ -21,6 +21,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon operators gain observable, enforced managed-session command boundaries. ([implementation PR #2920](https://github.com/jstoup111/ai-conductor/pull/2920)).
 - Pi builds can delegate each task to a same-model sub-agent: set `llm_providers.pi.subagents: true` after `pi install npm:pi-subagents`. ([implementation PR #3017](https://github.com/jstoup111/ai-conductor/pull/3017)).
 - Operators can select a child’s workflow state with --child when managing stacked features. ([implementation PR #3019](https://github.com/jstoup111/ai-conductor/pull/3019)).
+- Guided monitor sessions let operators choose their provider, model, and reasoning effort. ([implementation PR #3030](https://github.com/jstoup111/ai-conductor/pull/3030)).
 
 ### Changed
 
