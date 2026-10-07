@@ -1,3 +1,4 @@
+// Covers: task:3
 import { describe, expect, it } from 'vitest';
 import { parseStackedDeliverySignoff } from '../../src/engine/artifacts.js';
 
