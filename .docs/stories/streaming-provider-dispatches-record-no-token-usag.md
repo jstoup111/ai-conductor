@@ -41,6 +41,11 @@ its token usage so that the reported figure covers the work that actually ran.
 ### Done When
 - [ ] A test dispatching a streaming step through the engine asserts a non-undefined `tokenUsage` on the resulting `provider_attempt` event.
 - [ ] A test asserts that a non-zero-exit streaming dispatch yields no `tokenUsage` and classifies as `unmetered`.
+
+> **Amendment — 2026-10-07.** A non-zero exit no longer suppresses usage that a complete provider
+> record reports (Claude's terminal result record, Codex's `turn.completed`); see
+> [adr-2026-10-07-provider-cost-includes-failed-attempts](../decisions/adr-2026-10-07-provider-cost-includes-failed-attempts.md).
+> A dispatch that exits before emitting any such record still yields no `tokenUsage` and stays `unmetered`.
 - [ ] A test asserts an unparseable streaming stdout produces a parse/provider failure rather than a usage record.
 
 ## Story 2: The engine reaches every provider through one dispatch member

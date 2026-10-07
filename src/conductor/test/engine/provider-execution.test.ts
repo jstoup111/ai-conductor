@@ -683,6 +683,27 @@ describe('executeProviderCandidates', () => {
     expect(claudeInvoke).toHaveBeenCalled();
   });
 
+  it('records the billed usage of an invocation whose candidate teardown then throws', async () => {
+    const billed = { input: 900, output: 120, costUsd: 1.75, costSource: 'provider' as const };
+    const codexInvoke = vi.fn(async () => ({ success: true, output: 'done', exitCode: 0, tokenUsage: billed }));
+    const onAttempt = vi.fn();
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    await expect(executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      prepareCandidateSelfHost: async () => ({ executable: 'fake', env: {}, args: [], teardown: async () => { throw new Error('cleanup failed'); } }),
+      onAttempt,
+      options: { prompt: 'build', cwd: '/workspace' },
+    })).rejects.toThrow('cleanup failed');
+
+    expect(onAttempt).toHaveBeenCalledTimes(1);
+    expect(onAttempt).toHaveBeenCalledWith('build', expect.objectContaining({
+      provider: 'codex', invoked: true, outcome: 'failure', tokenUsage: billed,
+    }));
+  });
+
   it('does not advance after cleanup or safety failure, but does preserve typed setup exhaustion for auxiliary callers', async () => {
     const codexInvoke = vi.fn();
     const claudeInvoke = vi.fn(async () => ({ success: true, output: 'must not run', exitCode: 0 }));
@@ -3709,7 +3730,7 @@ describe('executeProviderCandidates', () => {
           success: true,
           output: 'native ladder recovered',
           exitCode: 0,
-          tokenUsage: { input: 22, output: 11 },
+          tokenUsage: { input: 23, output: 11 }, // the refused sol rung (1) + the terra rung (22)
           preferredProvider: 'codex',
           actualProvider: 'codex',
           resolvedModel: 'gpt-5.6-terra',
@@ -3720,7 +3741,7 @@ describe('executeProviderCandidates', () => {
               preferredProvider: 'codex',
               model: 'gpt-5.6-terra',
               effort: 'medium',
-              tokenUsage: { input: 22, output: 11 },
+              tokenUsage: { input: 23, output: 11 },
               outcome: 'success',
               invoked: true,
             },
@@ -3769,7 +3790,7 @@ describe('executeProviderCandidates', () => {
               preferredProvider: 'codex',
               model: 'gpt-5.6-luna',
               effort: 'medium',
-              tokenUsage: { input: 3, output: 0 },
+              tokenUsage: { input: 6, output: 0 }, // every refused rung: 1 + 2 + 3
               outcome: 'unavailable',
               reason: 'model unavailable: gpt-5.6-luna',
               fallbackReason: 'model unavailable: gpt-5.6-luna',

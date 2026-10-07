@@ -147,3 +147,9 @@ adr-2026-07-27-additive-cost-block-evolution-and-split-aggregates.
   type.
 - **C3.** Every negative path asserts *absence*, never zero: no usage arriving, a failed run, an
   error stop, and Pi cost 0 with tokens and no card entry.
+
+  > **Amendment — 2026-10-07.** "A failed run" and "an error stop" no longer assert absence: per
+  > [adr-2026-10-07-provider-cost-includes-failed-attempts](adr-2026-10-07-provider-cost-includes-failed-attempts.md)
+  > they record the usage of their completed messages in the existing cost telemetry (no new
+  > fields). Absence (never zero) still holds when no complete record exists, and for Pi cost 0
+  > with tokens and no card entry.

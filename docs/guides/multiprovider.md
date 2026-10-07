@@ -204,6 +204,7 @@ records the exhausted provider and deadline; see [artifacts](../reference/artifa
 | Project-local `.pi` files | n/a | n/a | ignored (`-na`) unless `llm_providers.pi.trust_project_files: true` |
 | Subagent delegation (`build` orchestration) | native Agent tool | native | none built in; `llm_providers.pi.subagents: true` loads the `pi-subagents` extension |
 | Cost reporting | provider-reported `total_cost_usd` | token counts only; priced from the [rate card](../reference/configuration.md#rate-card-ai-conductorrate-cardjson) | per-message provider cost, with rate-card fallback; see the [rate card](../reference/configuration.md#rate-card-ai-conductorrate-cardjson) |
+| Failed-attempt cost | terminal result record, on any exit | every completed turn | every completed message (see [failed attempts are costed too](../reference/configuration.md#failed-attempts-are-costed-too)) |
 | Provider-specific features | self-host and custom build-review policies | self-host and custom build-review policies | self-host (see [Pi self-host credential](self-hosting.md#pi-self-host-credential)); custom build-review policies are unsupported and the engine refuses before spawning |
 
 Codex and Pi share the `~/.agents/skills` catalog; Claude reads the same skills from

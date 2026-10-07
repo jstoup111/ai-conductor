@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import type { TokenUsage } from '../execution/llm-provider.js';
 import { EFFORT_ORDER, MODEL_TIER_ORDER } from './escalation.js';
 import { resolveExecutionIdentity } from './execution-identity.js';
+import { DispatchMeteringTracker } from './dispatch-metering.js';
 
 /**
  * Thrown when events.jsonl cannot be found or read.
@@ -193,12 +194,19 @@ export interface TokenTotals {
   cacheCreation: number;
 }
 
-/** Sum token spend across all step_completed events that carried tokenUsage. */
+/**
+ * Sum token spend across every metered provider dispatch — failed attempts as
+ * well as successful ones. Dispatch selection is the cost rollup's own
+ * (`DispatchMeteringTracker`), so a success recorded as both a
+ * `provider_attempt` and its `step_completed` counts once.
+ */
 export function aggregateTokens(events: ParsedEvent[]): TokenTotals {
   const totals: TokenTotals = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+  const tracker = new DispatchMeteringTracker();
   for (const evt of events) {
-    if (evt.type === 'step_completed' && evt.step && evt.tokenUsage) {
-      const u = evt.tokenUsage;
+    const dispatch = tracker.observe(evt);
+    if (dispatch?.step && dispatch.tokenUsage) {
+      const u = dispatch.tokenUsage;
       totals.input += u.input ?? 0;
       totals.output += u.output ?? 0;
       totals.cacheRead += u.cacheRead ?? 0;
@@ -297,7 +305,8 @@ export function aggregateHalts(events: ParsedEvent[]): HaltEntry[] {
  * Parse events.jsonl and render three summary tables:
  * 1. Step Durations — sorted descending by duration_ms
  * 2. Retry Hotspots — count per step, most common reason
- * 3. Token Spend    — per step from step_completed.tokenUsage
+ * 3. Token Spend    — per provider dispatch (successful or failed), selected
+ *                     exactly as the cost rollup selects them
  */
 export function renderReport(eventsJsonlPath: string): string {
   let raw: string;
@@ -634,11 +643,13 @@ interface TokenRow {
 
 function renderTokenSpend(events: ParsedEvent[]): string {
   const rows: TokenRow[] = [];
+  const tracker = new DispatchMeteringTracker();
 
   for (const evt of events) {
+    const dispatch = tracker.observe(evt);
     const identity = renderedEventIdentity(evt);
-    if (evt.type === 'step_completed' && identity && evt.tokenUsage) {
-      const usage = evt.tokenUsage;
+    if (dispatch && identity && dispatch.tokenUsage) {
+      const usage = dispatch.tokenUsage;
       rows.push({
         step: identity.subjectLabel,
         preferredProvider:
@@ -648,7 +659,7 @@ function renderTokenSpend(events: ParsedEvent[]): string {
         actualProvider:
           typeof evt.actualProvider === 'string'
             ? evt.actualProvider
-            : undefined,
+            : dispatch.provider,
         input: usage.input,
         output: usage.output,
         cacheRead: usage.cacheRead ?? 0,

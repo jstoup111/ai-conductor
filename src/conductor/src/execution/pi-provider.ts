@@ -21,6 +21,7 @@ import { scrubTmuxEnvironment } from './child-environment.js';
 import { materializePiHarnessExtension } from './pi-harness-extension.js';
 import { preparePiSelfHostAuth, type PiSelfHostAuthRunner } from './pi-self-host-auth.js';
 import { applyRateCard, loadRateCard, type RateCard, type RateCardLoader } from './rate-card.js';
+import { withholdCost } from './token-usage.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
@@ -287,6 +288,12 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
   terminalAssistantStopReason?: string;
   terminalAssistantErrorMessage?: string;
   finalStructuredResult?: unknown;
+  /**
+   * The agent loop ended (`agent_end` / `agent_settled`) with no assistant
+   * message left open. Only then does the summed per-message usage cover the
+   * whole run; otherwise spend after the last completed message is unseen.
+   */
+  streamSettled: boolean;
 } {
   let output = '';
   let tokenUsage: TokenUsage | undefined;
@@ -303,6 +310,8 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
   let attributedModel: string | undefined;
   const launchedAsyncRuns = new Set<string>();
   const completedAsyncRuns = new Set<string>();
+  let agentEnded = false;
+  let openAssistantMessages = 0;
 
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -311,7 +320,10 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
       if (event.type === 'tool_execution_end' && event.toolName === 'submit_result' && event.isError === false) {
         finalStructuredResult = event.result?.details;
       }
+      if (event.type === 'agent_end' || event.type === 'agent_settled') agentEnded = true;
+      if (event.type === 'message_start' && event.message?.role === 'assistant') openAssistantMessages += 1;
       if (event.type === 'message_end' && event.message?.role === 'assistant') {
+        openAssistantMessages = Math.max(0, openAssistantMessages - 1);
         hasTerminalAssistantMessage = true;
         assistantTurns += 1;
         output = terminalAssistantText(event.message.content);
@@ -438,6 +450,7 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
     output,
     tokenUsage,
     hasTerminalAssistantMessage,
+    streamSettled: agentEnded && openAssistantMessages === 0,
     ...(terminalAssistantStopReason ? { terminalAssistantStopReason } : {}),
     ...(terminalAssistantErrorMessage ? { terminalAssistantErrorMessage } : {}),
     ...(finalStructuredResult === undefined ? {} : { finalStructuredResult }),
@@ -609,12 +622,20 @@ export class PiProvider implements LLMProvider {
     } finally {
       abortSignal?.removeEventListener('abort', abort);
     }
-    if (aborted || abortSignal?.aborted) return abortedInvocationResult();
+    const stdout = typeof result.stdout === 'string' ? result.stdout : '';
+    const parsed = parsePiJsonl(stdout, this.loadRates(options.cwd ?? process.cwd()));
+    // A failed, killed, or aborted run still billed every completed message it
+    // streamed, so its usage is recorded like a successful run's. When the
+    // agent loop never settled, spend after the last completed message is
+    // unseen: the tokens are kept but the price is withheld (cost-unmetered).
+    const failedAttemptUsage = parsed.streamSettled
+      ? parsed.tokenUsage
+      : withholdCost(parsed.tokenUsage);
+    const failedUsage = failedAttemptUsage === undefined ? {} : { tokenUsage: failedAttemptUsage };
+    if (aborted || abortSignal?.aborted) return { ...abortedInvocationResult(), ...failedUsage };
     const exitFacts = deriveProviderExitFacts(result);
     const exitCode = result.exitCode ?? 1;
-    const stdout = typeof result.stdout === 'string' ? result.stdout : '';
     const stderr = typeof result.stderr === 'string' ? result.stderr : '';
-    const parsed = parsePiJsonl(stdout, this.loadRates(options.cwd ?? process.cwd()));
 
     // Missing-binary classification is anchored to structural process signals.
     // Never infer provider-wide unavailability from arbitrary stderr prose.
@@ -635,10 +656,11 @@ export class PiProvider implements LLMProvider {
         success: false,
         output: `${piDisplayName()} provider parse failure: missing terminal assistant message.`,
         exitCode,
+        ...failedUsage,
       };
     }
     if (exitCode === 0 && options.nativeSchema !== undefined && parsed.finalStructuredResult === undefined) {
-      return { success: false, output: `${piDisplayName()} provider parse failure: missing structured result.`, exitCode: 1 };
+      return { success: false, output: `${piDisplayName()} provider parse failure: missing structured result.`, exitCode: 1, ...failedUsage };
     }
 
     if (exitCode === 0 && parsed.terminalAssistantStopReason === 'error') {
@@ -646,6 +668,7 @@ export class PiProvider implements LLMProvider {
         success: false,
         output: parsed.terminalAssistantErrorMessage || `${piDisplayName()} reported an error stop with no message`,
         exitCode,
+        ...failedUsage,
       };
     }
 
@@ -663,7 +686,9 @@ export class PiProvider implements LLMProvider {
       output,
       exitCode,
       ...(modelUnavailable ? { modelUnavailable: true } : {}),
-      ...(exitCode === 0 && parsed.tokenUsage !== undefined ? { tokenUsage: parsed.tokenUsage } : {}),
+      ...(exitCode === 0
+        ? (parsed.tokenUsage === undefined ? {} : { tokenUsage: parsed.tokenUsage })
+        : failedUsage),
       ...(exitCode === 0 && parsed.finalStructuredResult !== undefined ? { finalStructuredResult: parsed.finalStructuredResult } : {}),
       ...(genericUnclassifiedFailure ? { exitFacts } : {}),
     };

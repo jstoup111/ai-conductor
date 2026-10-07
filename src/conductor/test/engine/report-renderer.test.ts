@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { renderReport, ReportError, parseEvents, aggregateDurations, aggregateHalts, aggregateKickbacks, aggregateRetryHotspots, summarizeKickbacks } from '../../src/engine/report-renderer.js';
+import { renderReport, ReportError, parseEvents, aggregateDurations, aggregateTokens, aggregateHalts, aggregateKickbacks, aggregateRetryHotspots, summarizeKickbacks } from '../../src/engine/report-renderer.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { computeCostRollup } from '../../src/engine/cost-rollup.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
@@ -652,6 +652,39 @@ describe('report-renderer', () => {
     expect(report).toMatch(
       /Step\s+Preferred Provider\s+Actual Provider\s+Input\s+Output[\s\S]*plan\s+codex\s+claude\s+100\s+20[\s\S]*build\s+codex\s+codex\s+50\s+10[\s\S]*legacy\s+—\s+—\s+10\s+5/,
     );
+  });
+
+  it('includes failed provider attempts in Token Spend and counts a success once', async () => {
+    const content = makeLines([
+      {
+        event: {
+          type: 'provider_attempt', step: 'build', provider: 'pi', outcome: 'failure', invoked: true,
+          tokenUsage: { input: 9000, output: 800, costUsd: 48.5, costSource: 'provider' },
+        },
+        ts: '2026-01-01T00:00:01.000Z',
+      },
+      {
+        event: {
+          type: 'provider_attempt', step: 'build', provider: 'claude', outcome: 'success', invoked: true,
+          tokenUsage: { input: 300, output: 40, costUsd: 1.25, costSource: 'provider' },
+        },
+        ts: '2026-01-01T00:00:04.000Z',
+      },
+      {
+        event: {
+          type: 'step_completed', step: 'build', status: 'done', actualProvider: 'claude',
+          tokenUsage: { input: 300, output: 40, costUsd: 1.25, costSource: 'provider' },
+        },
+        ts: '2026-01-01T00:00:05.000Z',
+      },
+    ]);
+    await writeFile(eventsPath, content, 'utf-8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toMatch(/build\s+—\s+pi\s+9000\s+800/);
+    expect(report.match(/build\s+—\s+claude\s+300\s+40/g)).toHaveLength(1);
+    expect(aggregateTokens(parseEvents(content))).toEqual({ input: 9300, output: 840, cacheRead: 0, cacheCreation: 0 });
   });
 
   it('shows "No token data recorded" when no step_completed has tokenUsage', async () => {

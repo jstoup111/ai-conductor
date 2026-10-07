@@ -1187,13 +1187,44 @@ export async function executeProviderCandidates({
               ? await withCandidateSafety(candidate, invoke)
               : await invoke();
     } catch (error) {
-      if (nativeSchemaScratchFailure === undefined) throw error;
+      // A teardown that throws after the provider ran must not erase what the
+      // provider billed: the completed invocation's usage stays on the attempt.
+      const billedUsage = (invocation as { result?: InvokeResult } | undefined)?.result?.tokenUsage;
+      if (nativeSchemaScratchFailure === undefined) {
+        if (billedUsage !== undefined) {
+          const abandoned = buildProviderAttemptMetadata({
+            providerKey,
+            executionContext,
+            taskId,
+            taskAttributionDiagnostic,
+            result: {
+              success: false,
+              exitCode: 1,
+              output: redactSafetyText(`Provider attempt abandoned after invocation: ${error instanceof Error ? error.message : String(error)}`),
+              tokenUsage: billedUsage,
+            },
+            preferredProvider,
+            resolvedModel: resolved.model,
+            resolvedEffort: resolved.effort,
+            tier,
+            invokedModel: (invocation as { invokedModel?: string } | undefined)?.invokedModel,
+            auxiliaryMember,
+          });
+          try {
+            await onAttempt?.(step, abandoned);
+          } catch {
+            // Attempt metadata is observational; the original error still owns the outcome.
+          }
+        }
+        throw error;
+      }
       result = {
         success: false,
         exitCode: 1,
         output: `${CODEX_DISPLAY_NAME} native schema scratch home failed: ${nativeSchemaScratchFailure instanceof Error
           ? nativeSchemaScratchFailure.message
           : String(nativeSchemaScratchFailure)}`,
+        ...(billedUsage ? { tokenUsage: billedUsage } : {}),
       };
     }
     // A prepared cache hit or cancellation did not consult provider availability.

@@ -68,7 +68,7 @@ money — so without a rate card every codex dispatch classifies as *cost-unmete
 and a mixed-provider feature reports all-provider token volume beside Claude-only dollars.
 
 Pi reports usage per message. The adapter sums the `usage` of every assistant and tool-result
-`message_end` event in a successful run (exit `0`) and prices the total in this order:
+`message_end` event in a run, successful or failed, and prices the total in this order:
 
 1. Every token-bearing message carries a positive `usage.cost.total`: `costUsd` is their sum,
    `costSource: provider`.
@@ -79,6 +79,25 @@ Pi reports usage per message. The adapter sums the `usage` of every assistant an
 
 A Pi run that reports all-zero token counts records no usage. `TokenUsage.attributedModel` records
 the last assistant message's canonical `provider/model`.
+
+### Failed attempts are costed too
+
+A failed provider attempt records the usage its provider reported in complete records, on the same
+`provider_attempt` event a successful attempt uses, so every existing total (the feature cost
+rollup, `finish: total usage`, the shipped-record `## Cost` block, `--report`, and the OTel
+`conductor.feature.cost` metrics) is success + failure. No separate field marks failed spend.
+
+| Provider | What a failed attempt records |
+|---|---|
+| Claude | The terminal `result` record's `usage` and `total_cost_usd`, on any exit code, including an `error_*` record with no `result` text and a cancelled run that had already written it. Mid-stream assistant usage is never summed. |
+| Codex | Every `turn.completed` record's usage, priced from the rate card. |
+| Pi | Every completed assistant and tool-result `message_end`, including turns billed before a terminal `stopReason: "error"`. |
+
+When an attempt ended without a record covering all of its spend — a Pi agent loop that never
+settled, a Codex turn that never completed, a cancelled Codex run — its tokens are counted but no
+price is applied, so it reads as *cost-unmetered*. An attempt that failed before any complete
+record keeps no usage and reads as *unmetered*. Neither is ever counted as a complete $0. When a
+model-fallback rung is followed by the next rung, the attempt reports their summed usage.
 
 ```json
 {
