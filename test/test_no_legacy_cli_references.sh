@@ -65,6 +65,10 @@ while IFS= read -r hit; do
       ;;
     'src/conductor/src/engine/session-command-audit.ts:const COMMAND_PREFIX = /(?<![.\w/-])(?:ai-conductor|conduct-ts)\b/;')
       ;;
+    # Claude read-only review denies every observed launcher, compatibility
+    # alias included; it names the alias only to refuse it.
+    "src/conductor/src/execution/claude-read-only-review-policy.ts:export const OBSERVED_COMMANDS = ['gh', 'ai-conductor', 'conduct', 'conduct-ts'] as const;")
+      ;;
     # The canonical launcher's own compatibility warning is necessarily named
     # after the deprecated invocation.
     'bin/conduct-ts:')

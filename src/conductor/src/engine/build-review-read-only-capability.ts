@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { CLAUDE_PROVIDER, CODEX_PROVIDER, PI_PROVIDER, providerDescriptor, resolveProviderExecutable } from '../execution/provider-catalog.js';
 import { materializePiHarnessExtension } from '../execution/pi-harness-extension.js';
+import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from '../execution/claude-read-only-review-policy.js';
 
 /** Process boundary for the provider-owned read-only review capability probe. */
 export type ReadOnlyReviewCapabilityProcess = (
@@ -97,6 +98,7 @@ const CLAUDE_READ_ONLY_FLAGS = [
   '--restricted',
   '--tools',
   '--allowedTools',
+  '--disallowedTools',
   '--strict-mcp-config',
 ] as const;
 
@@ -180,9 +182,16 @@ async function probeClaude(options: ProbeReadOnlyReviewCapabilityOptions): Promi
   if (result.exitCode !== 0) return unavailable(options, exitedReason(CLAUDE_PROVIDER, result.exitCode, result.stderr));
 
   const missing = CLAUDE_READ_ONLY_FLAGS.find((flag) => !result.stdout.includes(flag));
-  return missing === undefined
-    ? { provider: options.provider, platform: options.platform, status: 'available' }
-    : unavailable(options, `${providerDescriptor(CLAUDE_PROVIDER).displayName} help does not list ${missing}`);
+  if (missing !== undefined) {
+    return unavailable(options, `${providerDescriptor(CLAUDE_PROVIDER).displayName} help does not list ${missing}`);
+  }
+  // Dispatch admits a Claude review without an observation-destination proof
+  // only when its launch policy reaches no observed command (#3022); status
+  // must report the same verdict dispatch will reach.
+  if (claudeLaunchObservedCommandReach(claudeReadOnlyReviewPolicyArgs()) !== 'none') {
+    return unavailable(options, 'read-only review policy can reach an observed command, and narrow observation access cannot be proven');
+  }
+  return { provider: options.provider, platform: options.platform, status: 'available' };
 }
 
 const PI_READ_ONLY_FLAGS = ['--tools', '--no-extensions', '--extension', '--no-approve'] as const;

@@ -37,6 +37,7 @@ import {
 } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
 import { providerDescriptor } from './provider-catalog.js';
+import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from './claude-read-only-review-policy.js';
 
 function claudeDisplayName(): string {
   return providerDescriptor('claude').displayName;
@@ -59,18 +60,6 @@ function isCanceledError(error: unknown): boolean {
 /** Print-mode sessions must not leave background tasks outstanding (#2599). */
 const FOREGROUND_ONLY_ENV = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } as const;
 
-const READ_ONLY_REVIEW_TOOLS = 'Read,Grep,Glob,Bash';
-const READ_ONLY_REVIEW_ALLOWED_TOOLS = [
-  'Bash(git show:*)',
-  'Bash(git diff:*)',
-  'Bash(git log:*)',
-  'Bash(git ls-tree:*)',
-  'Bash(git ls-files:*)',
-  'Bash(git cat-file:*)',
-  'Bash(git rev-parse:*)',
-  'Bash(git blame:*)',
-  'Bash(git grep:*)',
-].join(',');
 
 // Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
 // Patterns: "rate limit", "429", "overloaded"
@@ -565,6 +554,23 @@ export class ClaudeProvider implements LLMProvider {
     return this.oauthToken ? 'oauth-token' : 'missing';
   }
 
+  /**
+   * Whether the read-only review launch this adapter would make can reach an
+   * observed command. Derived from the real `buildArgs` output (including any
+   * self-host args), so widening the review allowlist flips the verdict.
+   */
+  readOnlyReviewObservedCommandReach(
+    options: Pick<InvokeOptions, 'selfHost' | 'systemPrompt' | 'model' | 'nativeSchema' | 'sessionName' | 'interactive'>,
+  ): 'none' | 'possible' {
+    return claudeLaunchObservedCommandReach(this.buildArgs({
+      ...options,
+      prompt: '',
+      sessionId: '00000000-0000-4000-8000-000000000000',
+      resume: false,
+      readOnlyReview: true,
+    }));
+  }
+
   /** Restore the construction-time Claude credential in an isolated child home. */
   async prepareSelfHostAuth(_context: SelfHostAuthContext): Promise<SelfHostAuthPreparation> {
     return {
@@ -896,12 +902,7 @@ export class ClaudeProvider implements LLMProvider {
     }
 
     if (options.readOnlyReview) {
-      args.push(
-        '--restricted',
-        '--tools', READ_ONLY_REVIEW_TOOLS,
-        '--allowedTools', READ_ONLY_REVIEW_ALLOWED_TOOLS,
-        '--strict-mcp-config',
-      );
+      args.push(...claudeReadOnlyReviewPolicyArgs());
     }
 
     if (options.sessionName) {

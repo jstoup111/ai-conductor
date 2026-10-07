@@ -99,7 +99,7 @@ describe('probeReadOnlyReviewCapability', () => {
   it('proves Claude is available from help listing every read-only review flag without a model call', async () => {
     const runProcess = vi.fn(async () => ({
       exitCode: 0,
-      stdout: '--restricted\n--tools <tools>\n--allowedTools <rules>\n--strict-mcp-config\n',
+      stdout: '--restricted\n--tools <tools>\n--allowedTools <rules>\n--disallowedTools <rules>\n--strict-mcp-config\n',
       stderr: '',
     }));
 
@@ -112,7 +112,7 @@ describe('probeReadOnlyReviewCapability', () => {
   it('reports the missing Claude read-only flag', async () => {
     const runProcess = vi.fn(async () => ({
       exitCode: 0,
-      stdout: '--restricted\n--tools <tools>\n--allowedTools <rules>\n',
+      stdout: '--restricted\n--tools <tools>\n--allowedTools <rules>\n--disallowedTools <rules>\n',
       stderr: '',
     }));
 
