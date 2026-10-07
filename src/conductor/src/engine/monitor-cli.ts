@@ -40,7 +40,7 @@ export function detectMonitorCommand(argv: readonly string[]): MonitorDispatch |
   const overrides: { provider?: string; model?: string; effort?: EffortLevel } = {};
   for (let index = 4; index < argv.length; index += 2) {
     const flag = argv[index]; const value = argv[index + 1];
-    if (!value || (flag !== '--provider' && flag !== '--model' && flag !== '--effort') || Object.hasOwn(overrides, flag.slice(2))) return { kind: 'guide' };
+    if (value === undefined || (flag !== '--provider' && flag !== '--model' && flag !== '--effort') || Object.hasOwn(overrides, flag.slice(2))) return { kind: 'guide' };
     if (flag === '--provider') overrides.provider = value;
     if (flag === '--model') overrides.model = value;
     if (flag === '--effort') overrides.effort = value as EffortLevel;

@@ -10,6 +10,7 @@ import {
   dispatchMonitorCommand,
 } from '../../src/engine/monitor-cli.js';
 import { guardDaemonSessionInvocation } from '../../src/execution/daemon-session.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import type { ProjectHalt } from '../../src/engine/monitor/halt-inventory.js';
 import type { HaltIssueReconciliationOutcome } from '../../src/engine/monitor/loop.js';
 
@@ -47,6 +48,29 @@ describe('Task 20 — monitor pre-boot command', () => {
 
   it('returns guidance for malformed monitor input instead of falling through', () => {
     expect(detectMonitorCommand(argv('monitor', 'all', 'extra'))).toEqual({ kind: 'guide' });
+  });
+
+  it.each([
+    ['a configured empty model', { kind: 'run' } as const, { monitor: { model: '' } } as HarnessConfig],
+    ['a per-run empty model', detectMonitorCommand(argv('monitor', 'all', '--model', ''))!, {} as HarnessConfig],
+  ])('refuses %s before queue processing or session launch', async (_description, command, config) => {
+    const errors: string[] = [];
+    const deriveQueueMembership = vi.fn();
+    const openGuidedSession = vi.fn();
+
+    const code = await dispatchMonitorCommand(command, '/projects/operator', {
+      loadConfig: async () => ({ ok: true, config, warnings: [] }),
+      deriveQueueMembership,
+      openGuidedSession,
+      printError: (line) => errors.push(line),
+    });
+
+    expect({ code, errors, queueCalls: deriveQueueMembership.mock.calls.length, launchCalls: openGuidedSession.mock.calls.length }).toEqual({
+      code: 1,
+      errors: ['monitor: model "" is not a valid model id for provider claude.'],
+      queueCalls: 0,
+      launchCalls: 0,
+    });
   });
 
   it('passes the selected project into the queue-driving loop without launching a real session', async () => {

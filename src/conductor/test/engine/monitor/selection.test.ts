@@ -29,6 +29,8 @@ describe('guided-session selection', () => {
     [{ config: {}, overrides: { effort: 'turbo' as any } }, 'monitor: effort "turbo" is not accepted by provider claude.'],
     [{ config: {}, overrides: { model: '--bad' } }, 'monitor: model "--bad" is not a valid model id for provider claude.'],
     [{ config: {}, overrides: { model: 'opus high' } }, 'monitor: model "opus high" is not a valid model id for provider claude.'],
+    [{ config: {}, overrides: { model: 'opus\u007f' } }, 'monitor: model "opus\u007f" is not a valid model id for provider claude.'],
+    [{ config: {}, overrides: { model: 'opus\u0085' } }, 'monitor: model "opus\u0085" is not a valid model id for provider claude.'],
   ])('refuses invalid guided-session input', (input, message) => {
     expect(resolveGuidedSessionSelection(input)).toEqual({ kind: 'refused', message });
   });

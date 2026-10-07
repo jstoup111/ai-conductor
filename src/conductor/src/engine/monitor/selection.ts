@@ -27,7 +27,7 @@ export function resolveGuidedSessionSelection(input: GuidedSessionSelectionInput
   const effort = overrides.effort ?? (useConfig ? input.config.monitor?.effort : undefined) ?? descriptor.modelPolicy.stepEfforts.explore;
   if (!descriptor.interactiveLaunch.acceptedEfforts.includes(effort)) return { kind: 'refused', message: `monitor: effort "${effort}" is not accepted by provider ${provider}.` };
   const model = overrides.model ?? (useConfig ? input.config.monitor?.model : undefined) ?? descriptor.modelPolicy.stepModels.explore;
-  if (!model || /^-|[\s\u0000-\u001f]/.test(model)) return { kind: 'refused', message: `monitor: model "${model}" is not a valid model id for provider ${provider}.` };
+  if (!model || /^-|[\s\u0000-\u001f\u007f-\u009f]/.test(model)) return { kind: 'refused', message: `monitor: model "${model}" is not a valid model id for provider ${provider}.` };
   if (descriptor.modelCatalog && !(deps.listCatalogModels?.(descriptor) ?? []).includes(model)) return { kind: 'refused', message: `monitor: model "${model}" is not in provider ${provider}'s model catalog.` };
   return { kind: 'selected', provider, model, effort, sources: {
     provider: providerSource,
