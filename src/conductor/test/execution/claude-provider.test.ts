@@ -1257,6 +1257,8 @@ describe('ClaudeProvider', () => {
         'Bash(git grep:*)',
       ].join(','));
       expect(allowedTools).not.toMatch(/Edit|Write|NotebookEdit|mcp|Bash\((?!git (?:show|diff|log|ls-tree|ls-files|cat-file|rev-parse|blame|grep):)/i);
+      expect(readOnlyArgs[readOnlyArgs.indexOf('--disallowedTools') + 1])
+        .toBe('Bash(gh:*),Bash(ai-conductor:*),Bash(conduct:*),Bash(conduct-ts:*)');
       expect(readOnlyArgs).toContain('--strict-mcp-config');
       expect(readOnlyArgs).not.toContain('--dangerously-skip-permissions');
       expect(readOnlyOptions.env).toEqual(ordinaryOptions.env);

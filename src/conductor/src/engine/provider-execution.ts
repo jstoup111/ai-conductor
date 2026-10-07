@@ -1033,27 +1033,39 @@ export async function executeProviderCandidates({
           : ownedCandidateOptions.providerStreamObserverForCandidate?.(providerKey);
         try {
           selfHost = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index, member: auxiliaryMember });
+          // ADR daemon-session-command-contracts D6 (#3022): a read-only
+          // review whose real launch argv can reach no observed command can
+          // write no observation record, so it is provisioned no destination
+          // and needs no narrow-access proof. The adapter derives this from its
+          // own launch args; an adapter that cannot answer keeps the proof.
+          const observationNotNeeded = ownedCandidateOptions.readOnlyReview === true
+            && runtime.provider.readOnlyReviewObservedCommandReach?.({
+              ...ownedCandidateOptions,
+              ...(selfHost ? { selfHost } : {}),
+            }) === 'none';
           // Only a native provider adapter owns a managed child process. Test
           // runtimes and policy-only providers receive the context as data but
           // must not acquire a filesystem wrapper as a side effect.
-          managedGhObservationCoverage = await prepareNativeManagedGhObservation(
-            runtime.provider,
-            ownedCandidateOptions.managedSessionContext,
-          );
-          if (ownedCandidateOptions.readOnlyReview && ownedCandidateOptions.managedSessionContext && prepareManagedSessionObservation) {
-            await prepareManagedSessionObservation({
-              provider: providerKey,
-              context: ownedCandidateOptions.managedSessionContext,
-              readOnlyReview: true,
-              ...(selfHost?.executable ? { executable: selfHost.executable } : {}),
-            });
-          } else if (ownedCandidateOptions.readOnlyReview && ownedCandidateOptions.managedSessionContext) {
-            throw new ProviderSetupUnavailableError({
-              provider: providerKey,
-              capability: 'managed-observation-destination',
-              reason: 'native read-only review is available, but narrow observation access was not proven for this candidate.',
-              recoveryAction: 'Configure a provider review policy that proves the per-dispatch observation destination is writable while protected paths remain refused.',
-            });
+          if (!observationNotNeeded) {
+            managedGhObservationCoverage = await prepareNativeManagedGhObservation(
+              runtime.provider,
+              ownedCandidateOptions.managedSessionContext,
+            );
+            if (ownedCandidateOptions.readOnlyReview && ownedCandidateOptions.managedSessionContext && prepareManagedSessionObservation) {
+              await prepareManagedSessionObservation({
+                provider: providerKey,
+                context: ownedCandidateOptions.managedSessionContext,
+                readOnlyReview: true,
+                ...(selfHost?.executable ? { executable: selfHost.executable } : {}),
+              });
+            } else if (ownedCandidateOptions.readOnlyReview && ownedCandidateOptions.managedSessionContext) {
+              throw new ProviderSetupUnavailableError({
+                provider: providerKey,
+                capability: 'managed-observation-destination',
+                reason: 'native read-only review is available, but narrow observation access was not proven for this candidate.',
+                recoveryAction: 'Configure a provider review policy that proves the per-dispatch observation destination is writable while protected paths remain refused.',
+              });
+            }
           }
         } catch (error) {
           setupUnavailable = normalizeProviderSetupUnavailable(error, providerKey);

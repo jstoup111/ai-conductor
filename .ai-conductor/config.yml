@@ -84,21 +84,18 @@ build_review:
     #
     # No retired key is declared here. A consumer config that still names one
     # loads as a no-op with a one-time notice (FR-20) rather than failing.
-    # Routed to codex 2026-10-06 (hotfix): the managed observation-destination
-    # probe added in #2920 only proves codex's read-only policy, so claude
-    # build_review members fail setup-unavailable. Revert once claude is provable.
     testQuality:
       enabled: true
-      llm_provider: codex
-      model: gpt-6-astra
+      llm_provider: claude
+      model: opus
       effort: low
     # Security judges the whole frozen feature diff for concrete, changed-hunk-
     # anchored defects (#2568). Judgement-heavy like testQuality, so it takes the
-    # same routing as testQuality. Enabled 2026-09-18.
+    # same Claude opus routing. Enabled 2026-09-18.
     security:
       enabled: true
-      llm_provider: codex
-      model: gpt-6-astra
+      llm_provider: claude
+      model: opus
       effort: low
       # Findings the reviewer scores below 60 are suppressed, not kicked back:
       # low-confidence security findings (35-55) cost a 30-minute lap and a
@@ -110,8 +107,8 @@ build_review:
       enabled: true
       skill: event-spine
       source: project
-      llm_provider: codex
-      model: gpt-5.6-terra
+      llm_provider: claude
+      model: sonnet
       effort: low
       question: "Does the frozen feature diff add an observation or coordination channel outside ConductorEventEmitter → .pipeline/events.jsonl?"
 

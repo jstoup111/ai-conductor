@@ -88,7 +88,7 @@ describe('custom build-review compatibility routing', () => {
     const fixtureDir = join(root, 'bin');
     const probeLog = join(root, 'claude-probe.log');
     await mkdir(fixtureDir, { recursive: true });
-    await writeFile(join(fixtureDir, 'claude'), `#!/bin/sh\nprintf '%s\\n' \"$*\" >> '${probeLog}'\nprintf '%s\\n' --restricted --tools --allowedTools --strict-mcp-config\n`);
+    await writeFile(join(fixtureDir, 'claude'), `#!/bin/sh\nprintf '%s\\n' \"$*\" >> '${probeLog}'\nprintf '%s\\n' --restricted --tools --allowedTools --disallowedTools --strict-mcp-config\n`);
     await chmod(join(fixtureDir, 'claude'), 0o755);
     vi.stubEnv('PATH', `${fixtureDir}:${process.env.PATH}`);
 
@@ -160,7 +160,7 @@ describe('custom build-review compatibility routing', () => {
     roots.push(root);
     const fixtureDir = join(root, 'bin');
     await mkdir(fixtureDir, { recursive: true });
-    await writeFile(join(fixtureDir, 'claude'), "#!/bin/sh\nprintf '%s\\n' '--tools' '--allowedTools' '--strict-mcp-config'\n");
+    await writeFile(join(fixtureDir, 'claude'), "#!/bin/sh\nprintf '%s\\n' '--tools' '--allowedTools' '--disallowedTools' '--strict-mcp-config'\n");
     await chmod(join(fixtureDir, 'claude'), 0o755);
     vi.stubEnv('PATH', `${fixtureDir}:${process.env.PATH}`);
 

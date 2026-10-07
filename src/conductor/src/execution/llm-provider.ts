@@ -437,4 +437,13 @@ export interface LLMProvider {
   prepareSelfHostAuth?(context: SelfHostAuthContext): Promise<SelfHostAuthPreparation>;
   /** Resolve the provider executable before a child home overrides provider state. */
   resolveSelfHostExecutable?(): Promise<string>;
+  /**
+   * Optional: whether this adapter's real read-only review launch can invoke a
+   * command the managed session observes. Only `'none'` exempts the launch from
+   * the observation-destination proof (ADR daemon-session-command-contracts D6);
+   * an absent method keeps that proof mandatory.
+   */
+  readOnlyReviewObservedCommandReach?(
+    options: Pick<InvokeOptions, 'selfHost' | 'systemPrompt' | 'model' | 'nativeSchema' | 'sessionName' | 'interactive'>,
+  ): 'none' | 'possible';
 }
