@@ -48,6 +48,12 @@ export interface CoverageBindingSliceMembership {
   readonly titles: readonly string[];
 }
 
+/** The recorded feature baseline narrowed to one child, without rewriting it. */
+export interface CoverageBindingChildOwnershipProjection {
+  readonly taskIds: readonly string[];
+  readonly storyIds: readonly string[];
+}
+
 /**
  * Provenance retained when a completed envelope is invalidated. It makes the
  * old judgement's eligibility explicit without changing the v1 envelope shape
@@ -554,6 +560,25 @@ export function conflictClaimDigest(claim: CoverageBindingConflictDigestClaim): 
 
 export function coverageBindingEnvelopePath(projectRoot: string): string {
   return join(projectRoot, ENVELOPE_DIRECTORY, ENVELOPE_FILENAME);
+}
+
+/**
+ * Select one child's recorded tasks and stories from the feature-scoped
+ * baseline. This intentionally has no filesystem dependency and does not
+ * modify the envelope it reads.
+ */
+export function projectChildOwnership(
+  envelope: CoverageBindingEnvelope,
+  position: number,
+): CoverageBindingChildOwnershipProjection {
+  return {
+    taskIds: Object.entries(envelope.sliceMembership?.taskSlices ?? {})
+      .filter(([, taskPosition]) => taskPosition === position)
+      .map(([taskId]) => taskId),
+    storyIds: Object.entries(envelope.storyOwnership ?? {})
+      .filter(([, storyPosition]) => storyPosition === position)
+      .map(([storyId]) => storyId),
+  };
 }
 
 export function parseCoverageBindingEnvelope(value: unknown): CoverageBindingEnvelope | null {

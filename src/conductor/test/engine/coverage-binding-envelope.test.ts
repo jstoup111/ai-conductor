@@ -9,6 +9,7 @@ import {
   COVERAGE_BINDING_ENVELOPE_STATUSES,
   coverageBindingEnvelopePath,
   parseCoverageBindingEnvelope,
+  projectChildOwnership,
   parseAmendmentBatchPayload,
   parseConflictBatchPayload,
   parseJudgeBatchPayload,
@@ -220,6 +221,31 @@ describe('coverage binding envelope', () => {
       true,
       true,
     ]);
+  });
+
+  it('projects a child\'s recorded tasks and stories without mutating the feature baseline', () => {
+    const envelope = {
+      version: 1,
+      slug: 'feature',
+      runId: 'run-1',
+      status: 'done',
+      entries: [],
+      sliceMembership: {
+        taskSlices: { '1': 1, '2': 1, '3': 2 },
+        titles: ['Foundation', 'Delivery'],
+      },
+      storyOwnership: { 'FR-1': 1, 'FR-2': 2 },
+    } as const;
+    const baseline = JSON.stringify({
+      sliceMembership: envelope.sliceMembership,
+      storyOwnership: envelope.storyOwnership,
+    });
+
+    expect(projectChildOwnership(envelope, 1)).toEqual({ taskIds: ['1', '2'], storyIds: ['FR-1'] });
+    expect(JSON.stringify({
+      sliceMembership: envelope.sliceMembership,
+      storyOwnership: envelope.storyOwnership,
+    })).toBe(baseline);
   });
 
   it('round-trips amendment verdict entries and defaults legacy entries to criterion', () => {
