@@ -85,6 +85,7 @@ describe('as-built review requirement', () => {
     expect(await asBuiltReviewRequired(dir)).toBe(true);
   });
 
+  // Covers: task:13
   it('treats a prior-version verdict as stale authority, reruns once, and then reuses the v2 verdict', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'as-built-review-required-'));
     dirs.push(dir);
