@@ -24,12 +24,13 @@ const expectedDispositions = [
 function projection(
   source: RemediationProjection['source'],
   requiredReferences: readonly RemediationRequiredReference[],
+  tasks: RemediationProjection['tasks'] = [{ id: '7', title: 'Repair the finding', doneWhen: [] }],
 ): RemediationProjection {
   return {
     version: 1,
     source,
     requiredReferences,
-    tasks: [{ id: '7', title: 'Repair the finding', doneWhen: [] }],
+    tasks,
     pendingAsBuiltFindings: [],
     priorLaps: [],
     refusals: [],
@@ -396,5 +397,103 @@ describe('remediation plan contract', () => {
     }, projection('prd-audit', [required])));
 
     expect(diagnostics).toContain('dispositions[0].reference is only valid for build-stall source');
+  });
+
+  // Covers: task:6
+  it('accepts an existing-task disposition bound to its typed finding owner with canonical ids', () => {
+    const required: RemediationRequiredReference = {
+      kind: 'prd-criterion', id: 'S1.2', sourceGate: 'prd_audit', ownerTaskId: '7', summary: 'The criterion is unmet.',
+    };
+
+    const result = validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'prd-criterion', id: 'S1.2' }, {
+        disposition: REMEDIATION_EXISTING_TASK_DISPOSITION,
+        tasks: [],
+        boundTaskIds: ['7 (landed)'],
+      })],
+    }, projection('prd-audit', [required]));
+
+    expect(result).toMatchObject({
+      kind: 'accepted',
+      dispositions: [{ requiredReference: required, boundTaskIds: ['7'] }],
+    });
+  });
+
+  // Covers: task:6
+  it('accepts an existing-task disposition bound to an as-built plan-task owner with canonical ids', () => {
+    const required: RemediationRequiredReference = {
+      kind: 'as-built-finding', id: 'as-built:lap-1:1', sourceGate: 'architecture_review_as_built',
+      reference: { kind: 'plan-task', taskId: '7' }, summary: 'The boundary is not reached.',
+    };
+
+    const result = validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'as-built-finding', id: 'as-built:lap-1:1' }, {
+        disposition: REMEDIATION_EXISTING_TASK_DISPOSITION,
+        tasks: [],
+        boundTaskIds: ['7 (landed)'],
+      })],
+    }, projection('as-built', [required]));
+
+    expect(result).toMatchObject({
+      kind: 'accepted',
+      dispositions: [{ requiredReference: required, boundTaskIds: ['7'] }],
+    });
+  });
+
+  // Covers: task:6
+  it.each([
+    ['a non-owner alone', ['8']],
+    ['a non-owner alongside the owner', ['7', '8']],
+  ])('rejects an existing-task disposition binding %s even beside a valid sibling', (_description, boundTaskIds) => {
+    const required: RemediationRequiredReference = {
+      kind: 'prd-criterion', id: 'S1.2', sourceGate: 'prd_audit', ownerTaskId: '7', summary: 'The criterion is unmet.',
+    };
+    const sibling: RemediationRequiredReference = {
+      kind: 'prd-criterion', id: 'S1.3', sourceGate: 'prd_audit', ownerTaskId: '7', summary: 'The sibling criterion is unmet.',
+    };
+    const diagnostics = expectRejected(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [
+        disposition({ kind: 'prd-criterion', id: 'S1.2' }, {
+          disposition: REMEDIATION_EXISTING_TASK_DISPOSITION, tasks: [], boundTaskIds,
+        }),
+        disposition({ kind: 'prd-criterion', id: 'S1.3' }, {
+          disposition: REMEDIATION_EXISTING_TASK_DISPOSITION, tasks: [], boundTaskIds: ['7'],
+        }),
+      ],
+    }, projection('prd-audit', [required, sibling], [
+      { id: '7', title: 'Owns the repair', doneWhen: [] },
+      { id: '8', title: 'Does not own the repair', doneWhen: [] },
+    ])));
+
+    expect(diagnostics).toContain('dispositions[0].boundTaskIds must not bind non-owner task 8; owner is 7');
+  });
+
+  // Covers: task:6
+  it.each([
+    ['an absent task id', ['99'], 'dispositions[0].boundTaskIds does not resolve active task 99'],
+    ['an empty binding', [], 'dispositions[0].boundTaskIds requires at least one task id for existing-task'],
+  ])('rejects an existing-task disposition with %s even beside a valid sibling', (_description, boundTaskIds, diagnostic) => {
+    const required: RemediationRequiredReference = {
+      kind: 'prd-criterion', id: 'S1.2', sourceGate: 'prd_audit', ownerTaskId: '7', summary: 'The criterion is unmet.',
+    };
+    const sibling: RemediationRequiredReference = {
+      kind: 'prd-criterion', id: 'S1.3', sourceGate: 'prd_audit', ownerTaskId: '7', summary: 'The sibling criterion is unmet.',
+    };
+    const diagnostics = expectRejected(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [
+        disposition({ kind: 'prd-criterion', id: 'S1.2' }, {
+          disposition: REMEDIATION_EXISTING_TASK_DISPOSITION, tasks: [], boundTaskIds,
+        }),
+        disposition({ kind: 'prd-criterion', id: 'S1.3' }, {
+          disposition: REMEDIATION_EXISTING_TASK_DISPOSITION, tasks: [], boundTaskIds: ['7'],
+        }),
+      ],
+    }, projection('prd-audit', [required, sibling])));
+
+    expect(diagnostics).toContain(diagnostic);
   });
 });

@@ -8,6 +8,7 @@ import {
   type RemediationDispositionRejection,
   type RemediationHaltCategory,
 } from './artifacts.js';
+import { resolvePlanTaskReference } from './plan-task-parse.js';
 import type { RemediationProjection, RemediationRequiredReference } from './remediation-projection.js';
 
 /** The versioned, engine-owned output contract for remediation gap plans. */
@@ -147,6 +148,14 @@ function untypedReferenceMatchesSource(kind: 'stall' | 'test', source: Remediati
     (kind === 'test' && source === 'finish-verification');
 }
 
+function owningTaskId(reference: RemediationRequiredReference): string | undefined {
+  if (reference.kind === 'prd-criterion') return reference.ownerTaskId;
+  if (reference.kind === 'as-built-finding' && reference.reference.kind === 'plan-task') {
+    return reference.reference.taskId;
+  }
+  return undefined;
+}
+
 /**
  * Validates a provider's remediation plan against the engine-prepared projection.
  * A typed answer is linked to the exact reference object projected for this attempt;
@@ -254,6 +263,36 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
         diagnostics.push(`${field}.reference duplicates required reference ${requiredReference.kind}:${requiredReference.id}`);
         continue;
       }
+      const ownerTaskId = owningTaskId(requiredReference);
+      let boundTaskIds = [...candidate.boundTaskIds] as string[];
+      if (candidate.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION && ownerTaskId !== undefined) {
+        if (boundTaskIds.length === 0) {
+          diagnostics.push(`${field}.boundTaskIds requires at least one task id for existing-task`);
+          continue;
+        }
+        const resolution = resolvePlanTaskReference(
+          boundTaskIds.join(','),
+          new Set(projection.tasks.map((task) => task.id)),
+        );
+        if (resolution.kind === 'malformed') {
+          diagnostics.push(`${field}.boundTaskIds must use the shared active-plan task-id grammar`);
+          continue;
+        }
+        if (resolution.kind === 'unresolvable') {
+          diagnostics.push(`${field}.boundTaskIds does not resolve active task ${resolution.ids.join(', ')}`);
+          continue;
+        }
+        const nonOwnerTaskId = resolution.ids.find((taskId) => taskId !== ownerTaskId);
+        if (nonOwnerTaskId !== undefined) {
+          diagnostics.push(`${field}.boundTaskIds must not bind non-owner task ${nonOwnerTaskId}; owner is ${ownerTaskId}`);
+          continue;
+        }
+        if (!resolution.ids.includes(ownerTaskId)) {
+          diagnostics.push(`${field}.boundTaskIds must bind owner task ${ownerTaskId}`);
+          continue;
+        }
+        boundTaskIds = resolution.ids;
+      }
       answeredTypedReferences.add(key);
       dispositions.push({
         reference: requiredReference,
@@ -263,7 +302,7 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
         category: candidate.category,
         rationale: candidate.rationale,
         tasks: candidate.tasks.map((task) => ({ id: task.id as string, title: task.title as string })),
-        boundTaskIds: [...candidate.boundTaskIds] as string[],
+        boundTaskIds,
       });
       continue;
     }
