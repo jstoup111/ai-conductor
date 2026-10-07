@@ -57,6 +57,42 @@ effect. Do not create BUILD work, amend a plan, write a remediation artifact, or
 from markdown/prose. For every other mode, including `build_review` `case-v1`/`case-v2` and legacy gap
 planning, skip this branch and follow the existing instructions unchanged.
 
+## Engine-selected refusal-rework mode
+
+Use this branch **only when the engine-stamped dispatch context carries refusal evidence** for a
+SHIP `prd_audit` over-scope report whose blocking outside-visible findings were all refused by the
+operator. It is one removal/rework judgement by the existing `remediate` planner — not a new skill,
+a second dispatch, or a new store. For every other context — a mixed refused+pending report, a
+projection defect, or an all-accepted report — the engine never reaches this branch; follow the
+gap-plan instructions unchanged.
+
+### Refusal evidence block
+
+The engine supplies one refusal evidence entry per refused finding. Each entry names:
+
+- the finding's current presentation key (`S<story>.<ordinal>` or `NC.<n>`);
+- the durable refusal decision id and revision (`decision <id> (r<rev>)`);
+- the operator's recorded refusal rationale;
+- for an NC finding, the persisted original-source snapshot (and its case id).
+
+Identity comes from the decision and case records, never from report prose or the report-local
+`NC.<n>` ordinal.
+
+### Required gap id
+
+Each refusal entry names a required remediation gap id of exactly `refusal-<decisionId>`, derived
+from the durable decision id only — never from the presentation key, which may renumber between
+laps. To satisfy an entry, emit one `build` disposition whose `id` is that exact
+`refusal-<decisionId>` gap id, with one or more concrete, file-scoped removal/rework tasks.
+
+### Removal-only rule
+
+A refusal gap is removal-only. Every emitted task must remove the refused behavior or rework it to
+fit within the recorded decision; no task may introduce new capability, and no new behavior may be
+introduced. If the planner cannot produce such tasks — or returns a human/deferral disposition or
+an empty, unbound task list — the engine writes the existing refused HALT, never a generic
+needs-human halt that drops the decision.
+
 ## Engine-selected build_review case-v1 mode
 
 Use this branch **only when this engine context is the engine-stamped `build_review` `case-v1` case context declaring `domain: "build_review"` and `mode: "case-v1"` or `"case-v2"`**. It is one judgement by

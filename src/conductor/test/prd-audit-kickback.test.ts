@@ -1,7 +1,7 @@
-// Covers: task:1, task:3, task:5, S5.1, S5.2, S5.3, S5.4
+// Covers: task:1, task:3, task:5, task:6, task:7, task:9, task:rem-prd-audit-rem-s33-1, task:rem-prd-audit-rem-s34-1, S3.3, S3.4, S5.1, S5.2, S5.3, S5.4
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -24,6 +24,7 @@ vi.mock('../src/engine/owner-gate/machine-identity.js', async (importOriginal) =
 
 import {
   Conductor,
+  readRemediationGateAppendBudget,
   remediationLapCapForGate,
   validationJoinRemediationRoundCap,
   type StepRunner,
@@ -32,6 +33,7 @@ import {
   AcceptedWideningDecisionStore,
   renderOverScopeDecisionBlock,
 } from '../src/engine/accepted-widenings.js';
+import { renderPrdAuditScopeHalt } from '../src/engine/prd-widening-recovery.js';
 import type { PrdAuditFinding, PrdAuditGrade } from '../src/engine/artifacts.js';
 import { prdWideningSourceId } from '../src/engine/prd-widening-context.js';
 import { readGrowth, readKickbackLedger } from '../src/engine/kickback-ledger.js';
@@ -110,6 +112,18 @@ function overScopeReport(
     header,
     separator,
     row,
+  ].join('\n');
+}
+
+function refusedFixableReport() {
+  return [
+    '**PRD:** present',
+    '',
+    '## Verdict Table',
+    '| Criterion | Grade | Plan task | Evidence | Intent relation |',
+    '| --- | --- | --- | --- | --- |',
+    '| S2.1 | OVER_SCOPE | | The change adds behavior beyond the approved plan. | outside-visible |',
+    '| S2.2 | FIXABLE | 2 | Missing S2.2 behavior | within |',
   ].join('\n');
 }
 
@@ -579,6 +593,318 @@ async function createAsBuiltRemediationCapFixture(input: {
   return { outcome, plan, planPath, findings, root };
 }
 
+/**
+ * Drive `planRemediation` directly against an all-refused S2.1 report whose
+ * durable decision binds the planner's rework gap. The serial SHIP tail is
+ * exercised separately; this isolates the planRemediation admission/append
+ * seam the refusal route shares with FIXABLE rounds.
+ */
+async function createRefusalReworkRemediationFixture(input?: {
+  decisionId?: string;
+  plannerGaps?: Array<{
+    id: string;
+    disposition: string;
+    category?: string | null;
+    rationale?: string;
+    tasks?: Array<{ id: string; title: string }>;
+  }>;
+}) {
+  const root = await mkdtemp(join(tmpdir(), 'refusal-rework-remediation-'));
+  dirs.push(root);
+  const planPath = join(root, '.docs', 'plans', 'feature.md');
+  await mkdir(join(root, '.pipeline'), { recursive: true });
+  await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(root, '.docs', 'stories'), { recursive: true });
+  await writeFile(planPath, '### Task 1: authored plan work\n');
+  await writeFile(join(root, '.docs', 'stories', 'feature.md'), [
+    '# Stories', '', '## Story 2: the criterion', '', '#### Happy Path',
+    '- Given input, when exercised, then the criterion behavior holds.',
+  ].join('\n'));
+  await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+  const decisionId = input?.decisionId ?? 'dec-refuse-s21';
+  await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
+    version: 2,
+    feature: { version: 1, repository: '/fixture/repository', feature: 'prd-audit-kickback' },
+    decisions: [{
+      id: decisionId,
+      criterion: 'S2.1',
+      authority: 'refuse',
+      rationale: 'Rethink the refused behavior.',
+      operator: 'operator@example.test',
+      revision: 1,
+    }],
+  }));
+  await persistGroupedPrdAuditVerdict(
+    root,
+    overScopeReport('S2.1', 'outside-visible'),
+    'fixture-refusal-rework',
+  );
+
+  const runner: StepRunner = {
+    run: async () => {
+      await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
+        dispositions: input?.plannerGaps ?? [{
+          id: `refusal-${decisionId}`,
+          disposition: 'build',
+          category: null,
+          rationale: 'Remove the refused behavior.',
+          tasks: [{ id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' }],
+        }],
+      }));
+      return { success: true };
+    },
+  };
+  const conductor = new Conductor({
+    stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+    stepRunner: runner,
+    events: new ConductorEventEmitter(),
+    projectRoot: root,
+    featureSlug: 'prd-audit-kickback',
+    mode: 'auto',
+    daemon: true,
+    verifyArtifacts: false,
+    maxRetries: 1,
+    config: { prd_audit: { max_remediation_laps: 1 } } as never,
+  });
+
+  const outcome = await (conductor as unknown as {
+    planRemediation: (
+      state: ConductState,
+      steps: typeof ALL_STEPS,
+      dispatchContext: string,
+      hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
+    ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
+  }).planRemediation(
+    { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+    ALL_STEPS,
+    'prd audit refused block',
+    { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+  );
+
+  return { outcome, planPath, root, decisionId };
+}
+
+function passReport(criterion: string) {
+  return [
+    '**PRD:** present',
+    '',
+    '## Verdict Table',
+    '| Criterion | Grade | Plan task | Evidence |',
+    '| --- | --- | --- | --- |',
+    `| ${criterion} | PASS | | Covered behavior |`,
+  ].join('\n');
+}
+
+const OVER_SCOPE_SUMMARY = 'The change adds behavior beyond the approved plan.';
+
+/**
+ * The refused-over-scope fallback body the serial tail writes when a refusal-
+ * rework round falls back to the operator block instead of dispatching
+ * remediation. Built from the same renderers the production route uses, so a
+ * fixture can assert byte-identity rather than substring drift.
+ */
+function refusedReworkFallbackBody(criterion: string, summary = OVER_SCOPE_SUMMARY): string {
+  const refused = { criterion, summary, relation: 'outside-visible' as const };
+  return renderPrdAuditScopeHalt(
+    `OVER_SCOPE visible behavior on ${criterion}.`,
+    renderOverScopeDecisionBlock([refused], [refused], []),
+  );
+}
+
+/**
+ * Shared assertions for every refusal-rework fallback: the run writes the
+ * operator refused-over-scope block under the `over-scope` class, appends no
+ * `rem-prd-audit-refusal-*` task, and never re-dispatches BUILD.
+ */
+async function expectRefusedReworkFallback(
+  fixture: { root: string; calls: StepName[]; planPath: string },
+  criterion = 'S2.1',
+): Promise<void> {
+  await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('over-scope');
+  await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(
+    `${refusedReworkFallbackBody(criterion)}\n`,
+  );
+  await expect(readFile(fixture.planPath, 'utf8')).resolves.not.toContain('rem-prd-audit-refusal-');
+  expect(fixture.calls).not.toContain('build');
+}
+
+/**
+ * Drive the daemon serial SHIP tail for a refusal-rework round. `reports` is
+ * the ordered sequence of typed PRD-audit verdicts the step runner publishes
+ * on successive `prd_audit` dispatches. The BUILD rewind is the observation
+ * boundary: the step runner terminates it with an injected sentinel failure,
+ * so the fixture never drags the whole BUILD→finish happy path into the
+ * assertion (write-tests §3).
+ */
+async function runRefusalReworkRun(input: {
+  reports: string[];
+  decisionId?: string;
+  lapCap?: number;
+  mode?: 'auto' | 'default';
+  manualTestFail?: boolean;
+  asBuilt?: 'approved' | 'blocked-remediable';
+  /** Model the planner's `.pipeline/remediation.json` output for its one call. */
+  remediationMode?: 'default' | 'absent' | 'stale' | 'unparseable';
+  /** Last-chance fixture mutation before `conductor.run()`. */
+  beforeRun?: (root: string) => Promise<void>;
+  plannerGaps?: (retryReason: string) => Array<{
+    id: string;
+    disposition: string;
+    category?: string | null;
+    rationale?: string;
+    tasks?: Array<{ id: string; title: string }>;
+  }>;
+}) {
+  const root = await mkdtemp(join(tmpdir(), 'refusal-rework-run-'));
+  dirs.push(root);
+  const planPath = join(root, '.docs', 'plans', 'feature.md');
+  const statePath = join(root, '.pipeline', 'conduct-state.json');
+  await mkdir(join(root, '.pipeline'), { recursive: true });
+  await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(root, '.docs', 'stories'), { recursive: true });
+  // Growth allowance is config-derived (min(5, 25% of authored tasks)); a
+  // 1-task plan floors that to zero and falsely exhausts the allowance at the
+  // BUILD dispatch boundary. Author enough tasks for the single appended
+  // refusal task to fit under the default cap.
+  const authoredTasks = Array.from(
+    { length: 8 },
+    (_, index) => `### Task ${index + 1}: authored work ${index + 1}\n`,
+  ).join('');
+  await writeFile(planPath, authoredTasks);
+  await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+  await writeFile(join(root, '.docs', 'stories', 'feature.md'), storiesWithCriterion('Happy Path'));
+  await writeFile(
+    join(root, '.pipeline', 'task-status.json'),
+    JSON.stringify({
+      tasks: Array.from({ length: 8 }, (_, index) => ({
+        id: `task-${index + 1}`, status: 'completed',
+      })),
+    }),
+  );
+  const decisionId = input.decisionId ?? 'dec-refuse-s21';
+  const acceptedWidenings = JSON.stringify({
+    version: 2,
+    feature: { version: 1, repository: '/fixture/repository', feature: 'prd-audit-kickback' },
+    decisions: [{
+      id: decisionId,
+      criterion: 'S2.1',
+      authority: 'refuse',
+      rationale: 'Rethink the refused behavior.',
+      operator: 'operator@example.test',
+      revision: 1,
+    }],
+  });
+  await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), acceptedWidenings);
+
+  const state: Record<string, unknown> = {
+    feature_desc: 'feature',
+    complexity_tier: 'M',
+    track: 'product',
+    run_started_at: Date.now() - 1_000,
+    rebase: 'done',
+    finish: 'done',
+  };
+  for (const step of ALL_STEPS) {
+    if (step.name === 'manual_test') break;
+    state[step.name] = 'done';
+  }
+  await writeState(statePath, state as ConductState);
+
+  const calls: StepName[] = [];
+  const retryReasons: string[] = [];
+  const kickbacks: Array<{ from: string; to: string; count: number; evidence?: string }> = [];
+  let prdAuditDispatches = 0;
+  const runner: StepRunner = {
+    run: async (step, _state, options) => {
+      calls.push(step);
+      if (step === 'manual_test') {
+        await writeFile(
+          join(root, '.pipeline', 'manual-test-results.md'),
+          input.manualTestFail
+            ? '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n'
+            : '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+        );
+      } else if (step === 'prd_audit') {
+        const report = input.reports[Math.min(prdAuditDispatches++, input.reports.length - 1)]
+          ?? input.reports[input.reports.length - 1];
+        await persistGroupedPrdAuditVerdict(root, report, options?.runId);
+      } else if (step === 'remediate') {
+        retryReasons.push(options?.retryReason ?? '');
+        if (input.remediationMode === 'absent') {
+          return { success: true };
+        }
+        if (input.remediationMode === 'stale') {
+          // Leave the pre-written stale remediation.json untouched.
+          return { success: true };
+        }
+        if (input.remediationMode === 'unparseable') {
+          await writeFile(join(root, '.pipeline', 'remediation.json'), '{ not valid json');
+          return { success: true };
+        }
+        const gaps = input.plannerGaps?.(options?.retryReason ?? '') ?? [{
+          id: `refusal-${decisionId}`,
+          disposition: 'build',
+          category: null,
+          rationale: 'Remove the refused behavior.',
+          tasks: [{ id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' }],
+        }];
+        await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: gaps }));
+      } else if (step === 'architecture_review_as_built') {
+        await persistAsBuiltVerdict(root, input.asBuilt === 'blocked-remediable' ? {
+          version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+          findings: [{
+            id: 'AB-1', class: 'REMEDIABLE',
+            reference: { kind: 'plan-task', taskId: '1' },
+            summary: 'Restore the approved architecture boundary.',
+          }],
+          violations: 'fixture violations', resolution: 'fixture resolution',
+        } : {
+          version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+        }, {
+          attemptId: options?.runId ?? 'test-run',
+          codeStamp: null,
+          policy: AS_BUILT_FIXTURE_POLICY,
+        });
+      } else if (step === 'build') {
+        // The serial-tail observation ends at the BUILD rewind: routing the
+        // refusal already proved its kickback target. Terminating with an
+        // injected sentinel keeps the fixture from dragging the whole
+        // BUILD→finish happy path into the assertion (write-tests §3).
+        return { success: false, error: 'sentinel: refusal rework reached BUILD dispatch' };
+      }
+      return { success: true };
+    },
+  };
+  const events = new ConductorEventEmitter();
+  events.on('kickback', (event) => {
+    if (event.type === 'kickback') {
+      kickbacks.push({ from: event.from, to: event.to, count: event.count, evidence: event.evidence });
+    }
+  });
+  const conductor = new Conductor({
+    stateFilePath: statePath,
+    stepRunner: runner,
+    events,
+    projectRoot: root,
+    mode: input.mode ?? 'default',
+    daemon: true,
+    verifyArtifacts: true,
+    maxRetries: 1,
+    fromStep: 'manual_test',
+    config: { prd_audit: { max_remediation_laps: input.lapCap ?? 1 } } as never,
+    gh: async () => ({ stdout: 'operator@example.test\n' }),
+  });
+  if (input.remediationMode === 'stale') {
+    const path = join(root, '.pipeline', 'remediation.json');
+    await writeFile(path, JSON.stringify({ dispositions: [] }));
+    const old = new Date(Date.now() - 60_000);
+    await utimes(path, old, old);
+  }
+  await input.beforeRun?.(root);
+  await conductor.run();
+  return { root, planPath, calls, retryReasons, kickbacks, state: await readState(statePath), acceptedWidenings, decisionId };
+}
+
 describe('prd_audit kickback', () => {
   afterEach(async () => {
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -639,12 +965,17 @@ describe('prd_audit kickback', () => {
     const route = await (conductor as unknown as {
       routeCurrentPrdAuditOverScope: () => Promise<{
         kind: string;
+        refusals?: Array<{ key: string; decisionId: string; revision: number; rationale: string }>;
         refused?: Array<{ criterion: string }>;
         defects?: Array<{ kind: string; criterion?: string }>;
       }>;
     }).routeCurrentPrdAuditOverScope();
 
-    expect(route.kind).toBe('halt');
+    expect(route.kind).toBe('refusal-rework');
+    expect(route.refusals).toEqual([expect.objectContaining({
+      key: 'S3.1',
+      rationale: 'Rework it inside scope.',
+    })]);
     expect(route.refused).toEqual([expect.objectContaining({ criterion: 'S3.1' })]);
     expect(route.defects).toBeUndefined();
 
@@ -656,6 +987,460 @@ describe('prd_audit kickback', () => {
         })],
       },
     });
+  });
+
+  it('admits an all-refused report as a decision-bound prd_audit rework task', async () => {
+    const { outcome, planPath, decisionId } = await createRefusalReworkRemediationFixture();
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    const plan = await readFile(planPath, 'utf8');
+    expect(plan).toContain(`### Task rem-prd-audit-refusal-${decisionId}: Remove the refused S2.1 behavior`);
+    expect(plan).toContain(`**Governing clause:** Refused S2.1 (decision ${decisionId} r1)`);
+    expect(plan).toContain('**Criterion:** S2.1');
+  });
+
+  it('halts with the refused over-scope block when the planner leaves a refusal unbound', async () => {
+    const { outcome, planPath } = await createRefusalReworkRemediationFixture({
+      plannerGaps: [{
+        id: 'refusal-other-decision',
+        disposition: 'build',
+        category: null,
+        rationale: 'Binds a different decision.',
+        tasks: [{ id: 'wrong-bind', title: 'Unrelated work' }],
+      }],
+    });
+
+    expect(outcome).toMatchObject({ kind: 'halt' });
+    expect((outcome as { detail?: string }).detail).toContain('user-visible scope requires operator acceptance');
+    expect((outcome as { detail?: string }).detail).toContain('Refused — rework required: S2.1.');
+    const plan = await readFile(planPath, 'utf8');
+    expect(plan).not.toContain('rem-prd-audit-refusal-');
+  });
+
+  it('writes the refused over-scope block instead of dispatching rework for a non-daemon run', async () => {
+    const fixture = await runGroupedPrdAudit(
+      overScopeReport('S2.1', 'outside-visible'),
+      storiesWithCriterion('Happy Path'),
+      async (root) => {
+        await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
+          version: 2,
+          feature: { version: 1, repository: '/fixture/repository', feature: 'prd-audit-kickback' },
+          decisions: [{
+            id: 'dec-s21',
+            criterion: 'S2.1',
+            authority: 'refuse',
+            rationale: 'Rethink the refused behavior.',
+            operator: 'operator@example.test',
+            revision: 1,
+          }],
+        }));
+      },
+      { mode: 'default', daemon: false },
+    );
+
+    expect(fixture.calls).not.toContain('remediate');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('over-scope');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('Refused — rework required: S2.1.');
+  });
+
+  it('dispatches refusal rework through the serial SHIP tail to BUILD', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible'), passReport('S2.1')],
+    });
+
+    expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+    expect(fixture.retryReasons).toHaveLength(1);
+    expect(fixture.retryReasons[0]).toContain(`refusal-${fixture.decisionId}`);
+    expect(fixture.retryReasons[0]).toContain(fixture.decisionId);
+    expect(fixture.retryReasons[0]).toContain('.pipeline/prd-audit.md');
+    const plan = await readFile(fixture.planPath, 'utf8');
+    expect(plan).toContain(`### Task rem-prd-audit-refusal-${fixture.decisionId}: Remove the refused S2.1 behavior`);
+    expect(fixture.kickbacks).toContainEqual(expect.objectContaining({
+      from: 'prd_audit', to: 'build', count: 1,
+    }));
+    const remediateIndex = fixture.calls.indexOf('remediate');
+    expect(remediateIndex).toBeGreaterThanOrEqual(0);
+    expect(fixture.calls[remediateIndex + 1]).toBe('build');
+    // The refusal route routed to remediation instead of writing the refused
+    // operator block. The sentinel that stops the fixture at BUILD dispatch
+    // leaves a needs-human marker, but never the over-scope fallback.
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.not.toBe('over-scope');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain('Refused — rework required');
+    // Routing reads the durable refusal but never mutates it: the store is
+    // byte-identical after the round and still returns the same decision.
+    expect(await readFile(join(fixture.root, '.pipeline', 'accepted-widenings.json'), 'utf8'))
+      .toBe(fixture.acceptedWidenings);
+    const store = new AcceptedWideningDecisionStore(fixture.root, {
+      version: 1,
+      repository: '/fixture/repository',
+      feature: 'prd-audit-kickback',
+    });
+    await expect(store.read()).resolves.toMatchObject({
+      kind: 'valid',
+      state: {
+        decisions: [expect.objectContaining({
+          id: fixture.decisionId,
+          authority: 'refuse',
+          revision: 1,
+        })],
+      },
+    });
+  });
+
+  it('charges admitted refusal rework to the existing prd_audit lap and growth ledger', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+    });
+
+    const ledger = await readKickbackLedger(fixture.root);
+    expect(ledger.gates.prd_audit).toMatchObject({ laps: 1 });
+    expect(ledger.growth).toMatchObject({ added: 1, byGate: { prd_audit: 1 } });
+  });
+
+  it('appends and charges every task in an admitted multi-task refusal gap', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      plannerGaps: () => [{
+        id: 'refusal-dec-refuse-s21', disposition: 'build', category: null,
+        rationale: 'Remove the refused behavior.',
+        tasks: [
+          { id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' },
+          { id: 'remove-refused-wiring', title: 'Remove the refused S2.1 wiring' },
+        ],
+      }],
+    });
+
+    const plan = await readFile(fixture.planPath, 'utf8');
+    expect(plan).toContain(`### Task rem-prd-audit-refusal-${fixture.decisionId}: Remove the refused S2.1 behavior`);
+    expect(plan).toContain(`### Task rem-prd-audit-refusal-${fixture.decisionId}-2: Remove the refused S2.1 wiring`);
+    const ledger = await readKickbackLedger(fixture.root);
+    expect(ledger.growth).toMatchObject({ added: 2, byGate: { prd_audit: 2 } });
+  });
+
+  it('re-admits refusal work when a raised prd_audit lap cap has capacity', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'raised-refusal-rework-budget-'));
+    dirs.push(root);
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeKickbackLedger(root, {
+      version: 1,
+      gates: {
+        prd_audit: {
+          count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true,
+          resolvedBefore: 0, laps: 1, effectiveLapCap: 2,
+        },
+      },
+    });
+
+    await expect(readRemediationGateAppendBudget(
+      root, { prd_audit: { max_remediation_laps: 1 } } as never,
+      'prd_audit', 1, 1, 1, 8,
+    )).resolves.toMatchObject({ priorLaps: 1, lapCap: 2, taskCount: 1, growthTaskCount: 1 });
+  });
+
+  it('routes an all-refused validation group through one refusal-context remediation dispatch', async () => {
+    const serial = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+    });
+    const grouped = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      mode: 'auto',
+    });
+
+    expect(grouped.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+    expect(grouped.retryReasons).toEqual([expect.stringContaining(serial.retryReasons[0]!)]);
+    await expect(readFile(join(grouped.root, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain(
+      'Refused — rework required',
+    );
+  });
+
+  it('preserves the serial refused-plus-pending halt body in the validation join', async () => {
+    const report = [
+      '**PRD:** present', '', '## Verdict Table',
+      '| Criterion | Grade | Plan task | Evidence | Intent relation |',
+      '| --- | --- | --- | --- | --- |',
+      '| S2.1 | OVER_SCOPE | | Refused behavior. | outside-visible |',
+      '| S2.2 | OVER_SCOPE | | Pending behavior. | outside-visible |',
+    ].join('\n');
+    const serial = await runRefusalReworkRun({ reports: [report] });
+    const grouped = await runRefusalReworkRun({ reports: [report], mode: 'auto' });
+
+    expect(serial.calls).not.toContain('remediate');
+    expect(grouped.calls).not.toContain('remediate');
+    await expect(readFile(join(grouped.root, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(
+      await readFile(join(serial.root, '.pipeline', 'HALT'), 'utf8'),
+    );
+  });
+
+  it('merges refused prd_audit and remediable as-built evidence into one remediation dispatch', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      mode: 'auto',
+      asBuilt: 'blocked-remediable',
+      plannerGaps: () => [{
+        id: 'refusal-dec-refuse-s21', disposition: 'build', category: null,
+        rationale: 'Remove the refused behavior.',
+        tasks: [{ id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' }],
+      }, {
+        id: 'AB-1', disposition: 'build', category: null,
+        rationale: 'Restore the approved architecture boundary.',
+        tasks: [{ id: 'restore-boundary', title: 'Restore the approved architecture boundary' }],
+      }],
+    });
+
+    expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+    expect(fixture.retryReasons).toHaveLength(1);
+    expect(fixture.retryReasons[0]).toContain(fixture.decisionId);
+    expect(fixture.retryReasons[0]).toContain('.pipeline/prd-audit.md');
+    expect(fixture.retryReasons[0]).toContain('.pipeline/architecture-review-as-built.json');
+  });
+
+  it.each([
+    ['an empty-rationale refusal', 'refuse', ''],
+    ['an acceptance revising a prior refusal', 'accept', 'Keep this behavior in scope.'],
+  ])('does not dispatch grouped remediation for %s', async (_caseName, authority, rationale) => {
+    const fixture = await runGroupedPrdAudit(
+      overScopeReport('S2.1', 'outside-visible'),
+      storiesWithCriterion('Happy Path'),
+      async (root) => {
+        await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
+          version: 2,
+          feature: { version: 1, repository: '/fixture/repository', feature: 'prd-audit-kickback' },
+          decisions: [{
+            id: 'dec-s21', criterion: 'S2.1', authority, rationale,
+            operator: 'operator@example.test', revision: 2,
+          }],
+        }));
+      },
+    );
+
+    expect(fixture.calls).not.toContain('remediate');
+  });
+
+  it('records one remediation dispatch for a refusal riding with a FIXABLE row', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [refusedFixableReport()],
+      plannerGaps: () => [
+        {
+          id: 'refusal-dec-refuse-s21',
+          disposition: 'build',
+          category: null,
+          rationale: 'Remove the refused behavior.',
+          tasks: [{ id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' }],
+        },
+        {
+          id: 'S2.2',
+          disposition: 'build',
+          category: null,
+          rationale: 'Repair the FIXABLE row.',
+          tasks: [{ id: 'rem-s2.2', title: 'Repair S2.2' }],
+        },
+      ],
+    });
+
+    // Both the refusal and the FIXABLE finding ride the same single
+    // remediation dispatch, charged as one prd_audit lap (kickback count 1).
+    expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+    expect(fixture.retryReasons).toHaveLength(1);
+    expect(fixture.retryReasons[0]).toContain(`refusal-${fixture.decisionId}`);
+    expect(fixture.retryReasons[0]).toContain(fixture.decisionId);
+    expect(fixture.retryReasons[0]).toContain('.pipeline/prd-audit.md');
+    expect(fixture.retryReasons[0]).toContain('S2.2');
+    expect(fixture.kickbacks).toContainEqual(expect.objectContaining({
+      from: 'prd_audit', to: 'build', count: 1,
+    }));
+    // The provenance still points at the rendered prd-audit verdict carrying
+    // the FIXABLE row, alongside the refused block.
+    await expect(readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8')).resolves.toContain('FIXABLE');
+    const plan = await readFile(fixture.planPath, 'utf8');
+    expect(plan).toContain(`### Task rem-prd-audit-refusal-${fixture.decisionId}: Remove the refused S2.1 behavior`);
+    expect(plan).toContain('**Criterion:** S2.2');
+  });
+
+  it('writes the refused over-scope block when the prd_audit lap is already spent', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      lapCap: 0,
+    });
+
+    expect(fixture.calls).not.toContain('remediate');
+    await expectRefusedReworkFallback(fixture);
+  });
+
+  it('halts with the refused finding key when refusal tasks exceed the remaining growth allowance', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      plannerGaps: () => [
+        { id: 'refusal-dec-refuse-s21', disposition: 'build', rationale: 'Remove S2.1.', tasks: [
+          { id: 'remove-s21-a', title: 'Remove S2.1 behavior' },
+          { id: 'remove-s21-b', title: 'Remove S2.1 wiring' },
+          { id: 'remove-s21-c', title: 'Remove S2.1 tests' },
+        ] },
+      ],
+    });
+
+    expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+    expect(fixture.calls).not.toContain('build');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('kickback-cap');
+    const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Findings: S2.1');
+    expect(halt).not.toMatch(/Findings:.*rem-prd-audit-refusal-/);
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toContain('rem-prd-audit-refusal-dec-refuse-s21');
+    expect(fixture.state.ok && fixture.state.value.build).not.toBe('done');
+  });
+
+  it.each([
+    ['a malformed prd_audit gate with readable growth', JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: { authored: 8, added: 0, byGate: {} } })],
+    ['a malformed prd_audit gate with unreadable growth', JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: 'bad' })],
+  ])('fails closed to the refused block for %s', async (_name, ledger) => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      beforeRun: async (root) => writeFile(join(root, '.pipeline', 'kickback-ledger.json'), ledger),
+    });
+
+    expect(fixture.calls).not.toContain('remediate');
+    expect(fixture.calls).not.toContain('build');
+    await expectRefusedReworkFallback(fixture);
+  });
+
+  it.each([
+    ['spent durable allowance', async (root: string) => writeKickbackLedger(root, {
+      version: 1, gates: { prd_audit: { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0, laps: 1 } },
+    })],
+    ['a malformed prd_audit record with readable growth', async (root: string) => writeFile(
+      join(root, '.pipeline', 'kickback-ledger.json'),
+      JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: { authored: 8, added: 0, byGate: {} } }),
+    )],
+    ['a malformed prd_audit record with unreadable growth', async (root: string) => writeFile(
+      join(root, '.pipeline', 'kickback-ledger.json'),
+      JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: 'bad' }),
+    )],
+  ])('uses the byte-identical serial refused fallback for grouped %s before dispatch', async (_name, beforeRun) => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')], mode: 'auto', beforeRun,
+    });
+
+    expect(fixture.calls).not.toContain('remediate');
+    expect(fixture.calls).not.toContain('build');
+    await expectRefusedReworkFallback(fixture);
+  });
+
+  it.each([false, true])('uses the serial refused halt before grouped manual-test fallback when its round cap is exhausted (manual FAIL: %s)', async (manualTestFail) => {
+    const serial = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')], lapCap: 0,
+    });
+    const grouped = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')], mode: 'auto', lapCap: 0, manualTestFail,
+    });
+
+    expect(grouped.calls).not.toContain('remediate');
+    expect(grouped.calls).not.toContain('build');
+    await expect(readFile(join(grouped.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('over-scope');
+    await expect(readFile(join(grouped.root, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(
+      await readFile(join(serial.root, '.pipeline', 'HALT'), 'utf8'),
+    );
+    await expect(readFile(grouped.planPath, 'utf8')).resolves.not.toContain('rem-prd-audit-refusal-');
+  });
+
+  it('uses a raised durable allowance in the validation join', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')], mode: 'auto',
+      beforeRun: async (root) => writeKickbackLedger(root, {
+        version: 1,
+        gates: { prd_audit: { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0, laps: 1, effectiveLapCap: 2 } },
+      }),
+    });
+
+    expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+  });
+
+  it('writes the refused over-scope block when admission rejects the planner output', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      plannerGaps: () => [{
+        id: 'refusal-other-decision',
+        disposition: 'build',
+        category: null,
+        rationale: 'Binds a different decision.',
+        tasks: [{ id: 'wrong-bind', title: 'Unrelated work' }],
+      }],
+    });
+
+    // The planner ran once, bound nothing, and the tail fell back to the
+    // refused block instead of re-dispatching remediation.
+    expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+    await expectRefusedReworkFallback(fixture);
+  });
+
+  it('writes the refused over-scope block when the planner wrote no remediation plan', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      remediationMode: 'absent',
+    });
+
+    expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+    await expectRefusedReworkFallback(fixture);
+  });
+
+  it('writes the refused over-scope block when the planner plan is stale', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      remediationMode: 'stale',
+    });
+
+    expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+    await expectRefusedReworkFallback(fixture);
+  });
+
+  it('writes the refused over-scope block when the planner plan is unparseable', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      remediationMode: 'unparseable',
+    });
+
+    expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+    await expectRefusedReworkFallback(fixture);
+  });
+
+  it('writes the refused over-scope block when the refusal task id cannot be addressed', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      decisionId: '!!!',
+    });
+
+    expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+    await expectRefusedReworkFallback(fixture);
+  });
+
+  it('escalates a no-op BUILD lap to the kickback-to-build no-op halt on an unchanged verdict', async () => {
+    // Seed the single-use baseline a prior kickback would have captured: same
+    // tree and resolved count, `priorVerdict: false`. The refusal route's
+    // escalation check then sees no progress on the unchanged verdict.
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      beforeRun: async (root) => {
+        await writeKickbackLedger(root, {
+          version: 1,
+          gates: {
+            prd_audit: {
+              count: 0,
+              cumulative: 0,
+              treeHash: null,
+              lastReason: '',
+              priorVerdict: false,
+              resolvedBefore: 8,
+            },
+          },
+        });
+      },
+    });
+
+    // The escalation fires before any remediation dispatch.
+    expect(fixture.calls).not.toContain('remediate');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'prd_audit kickback-to-build no-op',
+    );
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.not.toContain('rem-prd-audit-refusal-');
   });
 
   it('halts with the named serialization refusal and leaves the verdict unwritten', async () => {
@@ -764,7 +1549,7 @@ describe('prd_audit kickback', () => {
     report: string,
     stories: string,
     setup?: (root: string) => Promise<void>,
-    options?: { root?: string; mode?: 'auto' | 'default' },
+    options?: { root?: string; mode?: 'auto' | 'default'; daemon?: boolean },
   ) {
     const root = options?.root ?? await mkdtemp(join(tmpdir(), 'prd-audit-group-route-'));
     if (!options?.root) dirs.push(root);
@@ -850,7 +1635,7 @@ describe('prd_audit kickback', () => {
       events,
       projectRoot: root,
       mode: options?.mode ?? 'auto',
-      daemon: true,
+      daemon: options?.daemon ?? true,
       verifyArtifacts: true,
       maxRetries: 1,
       fromStep: 'manual_test',

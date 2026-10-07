@@ -196,8 +196,8 @@ describe('typed PRD-audit scope routing', () => {
 
     const entry = conductor() as unknown as {
       routeCurrentPrdAuditOverScope(): Promise<{
-        kind: 'halt';
-        undecided: unknown[];
+        kind: 'halt' | 'refusal-rework';
+        undecided?: unknown[];
         refused: unknown[];
       }>;
     };
@@ -224,9 +224,8 @@ describe('typed PRD-audit scope routing', () => {
 
     const refusedRoute = await entry.routeCurrentPrdAuditOverScope();
     expect(refusedRoute).toMatchObject({
-      kind: 'halt',
-      undecided: [],
-        refused: [expect.objectContaining({ criterion: 'NC-1', kind: 'revise-decision', decision: 'refuse' })],
+      kind: 'refusal-rework',
+      refused: [expect.objectContaining({ criterion: 'NC-1', kind: 'revise-decision', decision: 'refuse' })],
     });
   });
 });

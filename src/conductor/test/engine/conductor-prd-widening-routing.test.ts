@@ -1,4 +1,4 @@
-// Covers: task:21, task:25
+// Covers: task:21, task:25, task:4
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -20,13 +20,13 @@ vi.mock('../../src/engine/owner-gate/machine-identity.js', async (importOriginal
   readMachineOwnerConfig: vi.fn(async () => ({ spec_owner: 'fixture-operator' })),
 }));
 
-import { Conductor, type PrdAuditOverScopeRoute, type StepRunner } from '../../src/engine/conductor.js';
-import { AcceptedWideningDecisionStore, renderOverScopeDecisionBlock } from '../../src/engine/accepted-widenings.js';
+import { Conductor, routeTypedPrdAuditOverScope, type PrdAuditOverScopeRoute, type StepRunner } from '../../src/engine/conductor.js';
+import { AcceptedWideningDecisionStore, renderOverScopeDecisionBlock, type AcceptedWideningDecision, type IntentRelation } from '../../src/engine/accepted-widenings.js';
 import { capturePrdWideningDecisions } from '../../src/engine/prd-widening-capture.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import { persistPrdWideningOffers } from '../../src/engine/prd-widening-offers.js';
-import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
+import { RemediationCaseStore, type RemediationCasePrdWideningRecord } from '../../src/engine/remediation-case-store.js';
 import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { validatePrdAuditJudgment } from '../../src/engine/prd-audit-contract.js';
@@ -36,6 +36,207 @@ import * as coordinatorModule from '../../src/engine/prd-widening-coordinator.js
 
 const sourceId = (evidence: string, criterion = 'NC.1') =>
   prdWideningSourceId({ criterion, grade: 'OVER_SCOPE', evidence, prdIds: [] });
+
+describe('routeTypedPrdAuditOverScope refusal projection', () => {
+  const relation = (criteria: readonly string[]): ReadonlyMap<string, IntentRelation> =>
+    new Map(criteria.map((criterion): [string, IntentRelation] => [criterion, 'outside-visible']));
+
+  const finding = (criterion: string, evidence: string) => ({
+    criterion,
+    grade: 'OVER_SCOPE' as const,
+    prdIds: [] as readonly string[],
+    evidence,
+  });
+
+  const ncCase = (
+    caseId: string,
+    sourceId: string,
+    evidence: string,
+    offeredCriterion = 'NC.1',
+  ): RemediationCasePrdWideningRecord => ({
+    id: caseId,
+    domain: 'prd_widening',
+    offeredCriterion,
+    originalSources: [{ sourceId: 'src-original', snapshot: 'The original user-visible widening.' }],
+    currentSources: [{ sourceId, snapshot: evidence, recordedAt: '2026-01-01T00:00:00.000Z' }],
+    relationships: [{ currentSourceId: sourceId, kind: 'same-case', caseId, reason: 'same behavior' }],
+    reconciliationDigest: 'digest-1',
+  });
+
+  const refuseDecision = (
+    criterion: string,
+    overrides: Partial<AcceptedWideningDecision> = {},
+  ): AcceptedWideningDecision => ({
+    id: 'dec-1',
+    criterion,
+    authority: 'refuse',
+    rationale: 'The operator refused this behavior.',
+    operator: 'operator',
+    revision: 1,
+    ...overrides,
+  });
+
+  it('emits refusal-rework with decision-and-case evidence for an all-refused, defect-free set', () => {
+    const storyEvidence = 'The story behavior lies outside the approved intent.';
+    const ncEvidence = 'The original user-visible widening.';
+    const ncId = prdWideningSourceId({ criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: ncEvidence, prdIds: [] });
+
+    const route = routeTypedPrdAuditOverScope(
+      { prd: 'present', findings: [finding('S1.1', storyEvidence), finding('NC.1', ncEvidence)], rejectedRows: [] },
+      relation(['S1.1', 'NC.1']),
+      [
+        refuseDecision('S1.1', { id: 'dec-story-1' }),
+        refuseDecision('NC.1', {
+          id: 'dec-nc-1',
+          originalSource: { id: 'src-original', snapshot: 'The original user-visible widening.' },
+          originalCaseId: 'case-1',
+        }),
+      ],
+      [ncCase('case-1', ncId, ncEvidence)],
+    );
+
+    if (route.kind !== 'refusal-rework') throw new Error(`expected refusal-rework, got ${route.kind}`);
+    expect(route.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ criterion: 'S1.1', decision: 'refuse', accepted: false }),
+      expect.objectContaining({ criterion: 'NC.1', decision: 'refuse', accepted: false }),
+    ]));
+    expect(route.refusals).toEqual([
+      { key: 'S1.1', decisionId: 'dec-story-1', revision: 1, rationale: 'The operator refused this behavior.' },
+      {
+        key: 'NC.1', decisionId: 'dec-nc-1', revision: 1, rationale: 'The operator refused this behavior.',
+        caseId: 'case-1', snapshot: 'The original user-visible widening.',
+      },
+    ]);
+  });
+
+  it('keeps a refused + pending set on the existing halt', () => {
+    const ncRefused = 'The original user-visible widening.';
+    const ncPending = 'A second undecided visible behavior.';
+    const refusedId = prdWideningSourceId({ criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: ncRefused, prdIds: [] });
+    const pendingId = prdWideningSourceId({ criterion: 'NC.2', grade: 'OVER_SCOPE', evidence: ncPending, prdIds: [] });
+
+    const route = routeTypedPrdAuditOverScope(
+      { prd: 'present', findings: [finding('NC.1', ncRefused), finding('NC.2', ncPending)], rejectedRows: [] },
+      relation(['NC.1', 'NC.2']),
+      [refuseDecision('NC.1', {
+        originalSource: { id: 'src-original', snapshot: 'The original user-visible widening.' },
+        originalCaseId: 'case-1',
+      })],
+      [
+        ncCase('case-1', refusedId, ncRefused, 'NC.1'),
+        ncCase('case-2', pendingId, ncPending, 'NC.2'),
+      ],
+    );
+
+    if (route.kind !== 'halt') throw new Error(`expected halt, got ${route.kind}`);
+    expect(route.undecided.map((entry) => entry.criterion)).toEqual(['NC.2']);
+    expect(route.refused.map((entry) => entry.criterion)).toEqual(['NC.1']);
+  });
+
+  it('records an all-accepted set as before', () => {
+    const ncEvidence = 'The original user-visible widening.';
+    const ncId = prdWideningSourceId({ criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: ncEvidence, prdIds: [] });
+
+    const route = routeTypedPrdAuditOverScope(
+      { prd: 'present', findings: [finding('NC.1', ncEvidence)], rejectedRows: [] },
+      relation(['NC.1']),
+      [{
+        ...refuseDecision('NC.1', {
+          originalSource: { id: 'src-original', snapshot: 'The original user-visible widening.' },
+          originalCaseId: 'case-1',
+        }),
+        authority: 'accept',
+        rationale: 'The operator accepted this behavior.',
+      }],
+      [ncCase('case-1', ncId, ncEvidence)],
+    );
+
+    if (route.kind !== 'record') throw new Error(`expected record, got ${route.kind}`);
+    expect(route.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ criterion: 'NC.1', decision: 'accept', accepted: true }),
+    ]));
+  });
+
+  it('halts with persistence-failed when a refused NC decision lacks its snapshot', () => {
+    const ncEvidence = 'The original user-visible widening.';
+    const ncId = prdWideningSourceId({ criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: ncEvidence, prdIds: [] });
+
+    const route = routeTypedPrdAuditOverScope(
+      { prd: 'present', findings: [finding('NC.1', ncEvidence)], rejectedRows: [] },
+      relation(['NC.1']),
+      [refuseDecision('NC.1', { id: 'dec-nc-1', originalCaseId: 'case-1' })],
+      [ncCase('case-1', ncId, ncEvidence)],
+    );
+
+    if (route.kind !== 'halt') throw new Error(`expected halt, got ${route.kind}`);
+    expect(route.detail).toContain('persistence-failed');
+    expect(route.detail).toContain('NC.1');
+  });
+
+  it('keeps the projection-failed halt when a defect accompanies refusals', () => {
+    const ncEvidence = 'The original user-visible widening.';
+    const ncId = prdWideningSourceId({ criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: ncEvidence, prdIds: [] });
+    const legacyCase: RemediationCasePrdWideningRecord = {
+      id: 'case-1',
+      domain: 'prd_widening',
+      originalSources: [{ sourceId: 'src-original', snapshot: 'The original user-visible widening.' }],
+      currentSources: [{ sourceId: ncId, snapshot: ncEvidence, recordedAt: '2026-01-01T00:00:00.000Z' }],
+      relationships: [{ currentSourceId: ncId, kind: 'same-case', caseId: 'case-1', reason: 'same behavior' }],
+      reconciliationDigest: 'digest-1',
+    };
+
+    const route = routeTypedPrdAuditOverScope(
+      { prd: 'present', findings: [finding('NC.1', ncEvidence)], rejectedRows: [] },
+      relation(['NC.1']),
+      [refuseDecision('NC.1', {
+        originalSource: { id: 'src-original', snapshot: 'The original user-visible widening.' },
+        originalCaseId: 'case-1',
+      })],
+      [legacyCase],
+    );
+
+    if (route.kind !== 'halt') throw new Error(`expected halt, got ${route.kind}`);
+    expect(route.detail).toContain('projection-failed');
+    expect(route.detail).toContain('NC.1');
+  });
+
+  it('classifies a later accept revision as accepted rather than refusal-rework', () => {
+    const ncEvidence = 'The original user-visible widening.';
+    const ncId = prdWideningSourceId({ criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: ncEvidence, prdIds: [] });
+    const source = { id: 'src-original', snapshot: 'The original user-visible widening.' };
+
+    const route = routeTypedPrdAuditOverScope(
+      { prd: 'present', findings: [finding('NC.1', ncEvidence)], rejectedRows: [] },
+      relation(['NC.1']),
+      [
+        refuseDecision('NC.1', { id: 'dec-refuse-1', originalSource: source, originalCaseId: 'case-1', revision: 1 }),
+        { ...refuseDecision('NC.1', { id: 'dec-accept-1', originalSource: source, originalCaseId: 'case-1', revision: 2 }), authority: 'accept', rationale: 'The operator reversed the refusal.', supersedes: { id: 'dec-refuse-1', revision: 1 } },
+      ],
+      [ncCase('case-1', ncId, ncEvidence)],
+    );
+
+    if (route.kind !== 'record') throw new Error(`expected record, got ${route.kind}`);
+    expect(route.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ criterion: 'NC.1', decision: 'accept', accepted: true }),
+    ]));
+  });
+
+  it('keeps an all-pending machine-cleared set as the same halt without refusal-rework', () => {
+    const ncEvidence = 'The original user-visible widening.';
+    const ncId = prdWideningSourceId({ criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: ncEvidence, prdIds: [] });
+
+    const route = routeTypedPrdAuditOverScope(
+      { prd: 'present', findings: [finding('NC.1', ncEvidence)], rejectedRows: [] },
+      relation(['NC.1']),
+      [],
+      [ncCase('case-1', ncId, ncEvidence)],
+    );
+
+    if (route.kind !== 'halt') throw new Error(`expected halt, got ${route.kind}`);
+    expect(route.undecided.map((entry) => entry.criterion)).toEqual(['NC.1']);
+    expect(route.refused).toEqual([]);
+  });
+});
 
 describe('typed PRD widening routing', () => {
   it('routes a complete typed OVER_SCOPE judgment when its derived report is altered', async () => {
@@ -212,16 +413,24 @@ describe('typed PRD widening routing', () => {
     await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
     await writeTypedOverScope('Reworded current behavior.', 'NC.2');
     const route = await entry.routeCurrentPrdAuditOverScope(feature.feature, { feature_desc: feature.feature } as ConductState);
-    if (route.kind !== 'halt') throw new Error('expected an operator offer');
+    if (route.kind === 'none') throw new Error('expected a findings-bearing route');
     expect(route.findings).toEqual(expect.arrayContaining([expect.objectContaining({ criterion: 'NC.2' })]));
-    const rendered = renderOverScopeDecisionBlock([...route.undecided, ...route.refused]);
-    const cleared = rendered.replaceAll('"decision": "pending"', '"decision": "accept", "rationale": "Explicit operator reversal."');
-    const result = await capturePrdWideningDecisions(cleared, {
-      operator: 'operator', offerStore: caseStore,
-      decisionStore: new AcceptedWideningDecisionStore(projectRoot, { ...feature, version: 1 }),
-    });
-    expect(result.defects).toEqual([]);
-    expect(result.captured).toEqual([expect.objectContaining({ authority: 'accept' })]);
+    if (kind === 'same-case') {
+      // An all-refused set routes to BUILD rework, so it no longer renders an
+      // editable operator offer.
+      if (route.kind !== 'refusal-rework') throw new Error(`expected refusal-rework, got ${route.kind}`);
+      expect(route.refusals).toHaveLength(1);
+    } else {
+      if (route.kind !== 'halt') throw new Error('expected an operator offer');
+      const rendered = renderOverScopeDecisionBlock([...route.undecided, ...route.refused]);
+      const cleared = rendered.replaceAll('"decision": "pending"', '"decision": "accept", "rationale": "Explicit operator reversal."');
+      const result = await capturePrdWideningDecisions(cleared, {
+        operator: 'operator', offerStore: caseStore,
+        decisionStore: new AcceptedWideningDecisionStore(projectRoot, { ...feature, version: 1 }),
+      });
+      expect(result.defects).toEqual([]);
+      expect(result.captured).toEqual([expect.objectContaining({ authority: 'accept' })]);
+    }
     expect(runner.run).toHaveBeenCalledTimes(1);
   });
 
@@ -461,5 +670,69 @@ describe('typed PRD widening routing', () => {
     }));
     expect(runner.run).toHaveBeenCalledTimes(expectedAttempts);
     coordinate.mockRestore();
+  });
+
+  it('harvests an empty-rationale refusal as pending, never as refusal-rework', async () => {
+    const clearPath = join(projectRoot, '.pipeline', 'HALT.cleared');
+    await writeFile(clearPath, (await readFile(clearPath, 'utf8'))
+      .replace('"accept"', '"refuse"')
+      .replace('The operator accepted the original behavior.', ''));
+
+    const decisionStore = new AcceptedWideningDecisionStore(projectRoot, {
+      version: 1, repository: '/fixture/repository', feature: 'prd-widening-routing',
+    });
+    const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+    const entry = new Conductor({ projectRoot, stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter() }) as unknown as {
+      preparePrdWideningBeforeAudit(): Promise<string | undefined>;
+      routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<PrdAuditOverScopeRoute>;
+    };
+
+    const prepared = await entry.preparePrdWideningBeforeAudit();
+    expect(prepared).toBeDefined();
+    await writeTypedOverScope('The original user-visible widening.', 'NC.1');
+    const route = await entry.routeCurrentPrdAuditOverScope('prd-widening-routing', { feature_desc: 'prd-widening-routing' } as ConductState);
+
+    if (route.kind !== 'halt') throw new Error(`expected pending halt, got ${route.kind}`);
+    expect(route.undecided.map((entry) => entry.criterion)).toEqual(['NC.1']);
+    expect(route.refused).toEqual([]);
+    const decisions = await decisionStore.read();
+    expect(decisions.kind === 'valid' ? decisions.state.decisions : []).toEqual([]);
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it('surfaces refusal-rework through routeCurrentPrdAudit as over-scope-refusal-rework', async () => {
+    const clearPath = join(projectRoot, '.pipeline', 'HALT.cleared');
+    await writeFile(clearPath, (await readFile(clearPath, 'utf8')).replace('"accept"', '"refuse"'));
+
+    const caseStore = new RemediationCaseStore(projectRoot, {
+      version: 'v1', repository: '/fixture/repository', feature: 'prd-widening-routing',
+    });
+    const stored = await caseStore.read();
+    if (!stored.ok || stored.state.version !== 'v2') throw new Error('expected v2 fixture store');
+    const originalCaseId = stored.state.prdWideningCases[0]!.id;
+    const state = { session_started_at: Date.now(), feature_desc: 'prd-widening-routing' } as ConductState;
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => step === 'remediate'
+        ? {
+            success: true,
+            finalStructuredResult: {
+              version: 'v1',
+              results: [{ sourceId: sourceId('The original user-visible widening.', 'NC.1'), kind: 'same-case', caseId: originalCaseId, reason: 'Fixture semantic judgement.' }],
+            },
+          }
+        : { success: true }),
+    };
+    const entry = new Conductor({ projectRoot, stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter() }) as unknown as {
+      preparePrdWideningBeforeAudit(): Promise<string | undefined>;
+      routeCurrentPrdAudit(state: ConductState): Promise<{ kind: string; route?: { refusals?: readonly unknown[] } }>;
+    };
+
+    await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
+    await writeTypedOverScope('The original user-visible widening.', 'NC.1');
+    const route = await entry.routeCurrentPrdAudit(state);
+
+    expect(route.kind).toBe('over-scope-refusal-rework');
+    expect(route.route?.refusals).toHaveLength(1);
+    expect(runner.run).toHaveBeenCalledTimes(1);
   });
 });

@@ -87,7 +87,7 @@ describe('PRD-audit recorded disposition projection', () => {
     });
     if (!reversal.ok) throw new Error(`reversal decision failed: ${reversal.reason}`);
     await expect(route.routeCurrentPrdAuditOverScope()).resolves.toMatchObject({
-      kind: 'halt', findings: [{ criterion: 'S1.1', decision: 'refuse' }],
+      kind: 'refusal-rework', findings: [{ criterion: 'S1.1', decision: 'refuse' }],
     });
 
     const stored = await readPrdAuditVerdict(projectRoot);

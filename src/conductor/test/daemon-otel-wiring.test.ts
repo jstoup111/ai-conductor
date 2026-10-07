@@ -354,9 +354,11 @@ describe('daemon OTel visualizer wiring', () => {
     const actualWire = await vi.importActual<typeof import('../src/engine/otel/wire.js')>(
       '../src/engine/otel/wire.js',
     );
+    const mainRoot = await mkdtemp(join(tmpdir(), 'daemon-otel-root-'));
+    dirs.push(mainRoot);
     const daemonOtel = actualWire.wireDaemonOtel(config, {
-      mainRoot: '/tmp/daemon-otel-root',
-      project: '/tmp/daemon-otel-project',
+      mainRoot,
+      project: join(mainRoot, 'project'),
       projectName: 'daemon-otel-project',
       rootEvents,
     });
@@ -460,9 +462,11 @@ describe('daemon OTel visualizer wiring', () => {
     const actualWire = await vi.importActual<typeof import('../src/engine/otel/wire.js')>(
       '../src/engine/otel/wire.js',
     );
+    const mainRoot = await mkdtemp(join(tmpdir(), 'daemon-otel-root-'));
+    dirs.push(mainRoot);
     const daemonOtel = actualWire.wireDaemonOtel(config, {
-      mainRoot: '/tmp/daemon-otel-root',
-      project: '/tmp/daemon-otel-project',
+      mainRoot,
+      project: join(mainRoot, 'project'),
       projectName: 'daemon-otel-project',
       harnessVersion: '1.5.0',
       rootEvents,
@@ -560,9 +564,11 @@ describe('daemon OTel visualizer wiring', () => {
       const actualWire = await vi.importActual<typeof import('../src/engine/otel/wire.js')>(
         '../src/engine/otel/wire.js',
       );
+      const mainRoot = await mkdtemp(join(tmpdir(), 'daemon-otel-root-'));
+      dirs.push(mainRoot);
       const daemonOtel = actualWire.wireDaemonOtel(config, {
-        mainRoot: '/tmp/daemon-otel-root',
-        project: '/tmp/daemon-otel-project',
+        mainRoot,
+        project: join(mainRoot, 'project'),
         projectName: 'daemon-otel-project',
         rootEvents,
       });

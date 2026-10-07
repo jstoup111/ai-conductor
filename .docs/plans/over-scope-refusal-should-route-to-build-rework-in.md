@@ -325,3 +325,119 @@ Task 1 ──┬─> Task 2 ──> Task 3 ──┐
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-s14-1: conductor.ts serial over-scope-refusal-rework branch (~12172): build the planRemediation dispatch context as the same 'Blocking prd_audit gaps at .pipeline/prd-audit.md … Plan remediation per the /remediate skill and write .pipeline/remediation.json.' base context the FIXABLE serial path uses, then append renderRefusalReworkContext(refusals); extract one shared helper used by both this branch and the validation-group withRefusalReworkContext (conductor.ts:9362) so serial and grouped contexts stay identical (Task 6 parity test keeps passing)
+**Gate:** prd-audit
+**Rationale:** Serial refusal branch (conductor.ts ~12172) dispatches planRemediation with renderRefusalReworkContext(refusals) only, so a refused+FIXABLE report never names .pipeline/prd-audit.md or the FIXABLE row, and REWORK_ONLY_SENTENCE (prd-widening-refusal-rework.ts:77) forbids new behavior for 'every task in this round', including the FIXABLE repair. Plan Task 5 Done-when (provenance cites .pipeline/prd-audit.md carrying the FIXABLE row) admits the fix; the grouped join's withRefusalReworkContext (conductor.ts:9362) is the matched counterpart and must share one helper so the two shapes cannot drift (Task 6 parity). Preserves Task 5's existing serial-tail and fallback tests.
+**Criterion:** S1.4
+**Parent task:** 5
+**Done when:**
+- [test] S1.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s14-1 is complete.
+
+### Task rem-prd-audit-rem-s14-2: prd-widening-refusal-rework.ts:77 REWORK_ONLY_SENTENCE: scope the removal/rework-only restriction to the refusal-<decisionId> gaps listed below it (not 'every task in this remediation round'), keeping the sentence text asserted by prd-widening-refusal-rework.test.ts and remediate-skill-contract.test.ts (Tasks 1, 10) in sync; then in prd-audit-kickback.test.ts 'records one remediation dispatch for a refusal riding with a FIXABLE row' assert the retryReason contains '.pipeline/prd-audit.md' and the FIXABLE criterion id (e.g. S2.2), so the fixture planner no longer masks the missing pointer
+**Gate:** prd-audit
+**Rationale:** Serial refusal branch (conductor.ts ~12172) dispatches planRemediation with renderRefusalReworkContext(refusals) only, so a refused+FIXABLE report never names .pipeline/prd-audit.md or the FIXABLE row, and REWORK_ONLY_SENTENCE (prd-widening-refusal-rework.ts:77) forbids new behavior for 'every task in this round', including the FIXABLE repair. Plan Task 5 Done-when (provenance cites .pipeline/prd-audit.md carrying the FIXABLE row) admits the fix; the grouped join's withRefusalReworkContext (conductor.ts:9362) is the matched counterpart and must share one helper so the two shapes cannot drift (Task 6 parity). Preserves Task 5's existing serial-tail and fallback tests.
+**Criterion:** S1.4
+**Parent task:** 5
+**Done when:**
+- [test] S1.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s14-2 is complete.
+
+### Task rem-prd-audit-rem-s33-1: prd-audit-kickback.test.ts: add the Task 7(b) over-cap refusal fixture — planner returns more refusal tasks than the remaining prd_audit growth allowance; assert .pipeline/HALT class kickback-cap whose body contains 'Findings:' listing every refused key (story key and NC key), contains no bare rem-prd-audit-refusal-* id list in place of the keys, and build remains not done in conduct state
+**Gate:** prd-audit
+**Rationale:** Task 7 Done-when requires an over-cap fixture whose kickback-cap HALT names every refused key; the diff has none and the BUILD-boundary formatter (conductor.ts ~10265) prints 'Pending remediation tasks: rem-prd-audit-refusal-…' because prdAuditCriteriaForGapIds (conductor.ts:5163) misses refusal gap ids. The implementation fix is tasked under AB-4; this task adds the Task 7(b) test.
+**Criterion:** S3.3
+**Parent task:** 7
+**Done when:**
+- [test] S3.3 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s33-1 is complete.
+
+### Task rem-prd-audit-rem-s34-1: prd-audit-kickback.test.ts: add Task 7(c) malformed-ledger fixtures for the serial refusal branch — (a) gates.prd_audit with a malformed lap record and readable growth, (b) malformed record with unreadable growth; each asserts .pipeline/HALT class over-scope with body byte-identical to renderPrdAuditScopeHalt(detail, renderOverScopeDecisionBlock(refused, refused, [])), zero remediate and zero build dispatches, and no appended rem-prd-audit-refusal-* task
+**Gate:** prd-audit
+**Rationale:** Task 7 Done-when requires a malformed gates.prd_audit fixture writing the refused over-scope HALT with zero remediate/build dispatches; today planRemediation dispatches remediate (conductor.ts:5012) before reading the ledger (:5544), and an unreadable-growth record returns an exhausted-looking budget without throwing (conductor.ts:930-940), reaching a needs-human 'allowance unavailable' halt. The pre-dispatch fail-closed read is tasked under AB-3; this task adds both malformed-ledger fixtures.
+**Criterion:** S3.4
+**Parent task:** 7
+**Done when:**
+- [test] S3.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s34-1 is complete.
+
+### Task rem-as-built-rem-adr-ab1-1: prd-widening-refusal-rework.ts renderRefusalReworkContext (~:88): when refusal.caseId is defined push '- Original case id: <caseId>' into the refusal block; extend prd-widening-refusal-rework.test.ts two-refusal renderer test to assert the NC block contains its case id (and the story block has no case line), and the prd-audit-kickback.test.ts serial and grouped refusal tests to assert retryReason contains the NC case id
+**Gate:** as-built
+**Rationale:** prd-widening-refusal-rework.ts:83-96 renderRefusalReworkContext emits key, decision id, revision, gap id, rationale and snapshot but never refusal.caseId (field declared at :23), so both SHIP shapes dispatch without the durable case identity ADR adr-2026-10-03 decision 2 requires; the fix is within Task 1's renderer and preserves its existing assertions.
+**Governing clause:** adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 2
+**Done when:**
+- adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 2 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-ab1-1 is complete.
+
+### Task rem-as-built-rem-adr-ab2-1: conductor.ts validation-group join: when prdAuditRoute.kind === 'over-scope-refusal-rework', wrap every grouped planRemediation call (:9525, :9617, :9790, :9959) in the same try/catch as the serial branch, and route every non-'route' outcome (rejected plan :9581/:9856/:10008, unusable/absent remediation.json :9597/:9646/:9871, exhausted or unavailable remediation :10062) to one shared helper that writes renderPrdAuditScopeHalt(detail, renderOverScopeDecisionBlock(refused, refused, [])) under OVER_SCOPE_HALT_CLASS — the same helper the serial branch's refusedHalt uses — leaving non-refusal grouped halts unchanged
+**Gate:** as-built
+**Rationale:** ADR decision 6 requires the grouped join to fall back exactly like the serial refused over-scope HALT, but in conductor.ts rejected plans reach generic halts at :9581/:9856/:10008, unusable plans reach alternate fallbacks at :9597/:9646/:9871/:10062, and planner calls at :9525/:9617/:9790/:9959 lack the serial try/catch (conductor.ts ~12190); Task 6 admits grouped parity. All grouped call sites are swept here; the serial branch is the reference behavior and stays unchanged.
+**Governing clause:** adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 6
+**Done when:**
+- adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 6 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-ab2-1 is complete.
+
+### Task rem-as-built-rem-adr-ab2-2: prd-audit-kickback.test.ts: extend the Task 6 serial/grouped parametrized test with fallback fixtures (admission rejected, planner throws, missing/unparseable remediation.json, lap/remediation exhausted) asserting the grouped shape writes .pipeline/HALT class over-scope with a body byte-identical to the serial shape's refused HALT and appends no rem-prd-audit-refusal-* task
+**Gate:** as-built
+**Rationale:** ADR decision 6 requires the grouped join to fall back exactly like the serial refused over-scope HALT, but in conductor.ts rejected plans reach generic halts at :9581/:9856/:10008, unusable plans reach alternate fallbacks at :9597/:9646/:9871/:10062, and planner calls at :9525/:9617/:9790/:9959 lack the serial try/catch (conductor.ts ~12190); Task 6 admits grouped parity. All grouped call sites are swept here; the serial branch is the reference behavior and stays unchanged.
+**Governing clause:** adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 6
+**Done when:**
+- adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 6 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-ab2-2 is complete.
+
+### Task rem-as-built-rem-adr-ab3-1: conductor.ts serial refusal branch (~12168) and grouped refusal path: before calling planRemediation, read the durable gates.prd_audit allowance from the kickback ledger (priorLaps vs ledger effectiveLapCap ?? remediationLapCapForGate('prd_audit'), growth remaining); a malformed record (including unreadable growth, conductor.ts:930-940) or exhausted laps/growth takes the refused over-scope HALT with no remediate dispatch; replace the process-local `remediationRounds < prdAuditRemediationLapCap` refusal guard with this durable check so a raised allowance (Task 9 test) still admits
+**Gate:** as-built
+**Rationale:** ADR decision 5 requires admission-time refused HALT on exhausted durable allowance, but the serial guard (conductor.ts:12168) compares process-local remediationRounds with configured prdAuditRemediationLapCap, planRemediation dispatches at :5012 before reading the ledger at :5544, and :5575 appends without comparing priorLaps to effectiveLapCap (readRemediationGateAppendBudget :910-950). Task 7 step 3 admits the pre-dispatch read; Task 9 (raised cap re-admits) must keep passing, so the guard must use effectiveLapCap rather than config. Sibling: the grouped join refusal path is swept into the same helper.
+**Governing clause:** adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 5
+**Done when:**
+- adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-ab3-1 is complete.
+
+### Task rem-as-built-rem-adr-ab4-1: conductor.ts planRemediation: record each admitted refusal gap's current key (gap.criterion from admitRefusalReworkPlan) and make prdAuditCriteriaForGapIds (:5163) resolve refusal-<decisionId> gap ids to that key as well as FIXABLE ids, so recordPendingRepair's prdAuditCriteria (:5676) carries every refused key and the BUILD-boundary cap halt (:10266) prints them under 'Findings:'
+**Gate:** as-built
+**Rationale:** conductor.ts:5163 prdAuditCriteriaForGapIds resolves criteria only via prdAuditFindings (FIXABLE map, :5180), so refusal gap ids lose their keys in the pending receipt (:5676) and the growth-overflow formatter (:10266) lists task ids instead of every refused key, contrary to ADR decision 5 and Task 7 Done-when; the test is tasked under S3.3.
+**Governing clause:** adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 5
+**Done when:**
+- adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-ab4-1 is complete.
+
+### Task rem-as-built-rem-adr-ab5-1: remediation-append.ts appendRemediationTasks (~:198-225): when refusalGapBaseId(gap) is defined and the canonical rem-prd-audit-refusal-<decisionId> id already exists in the plan, push the existing canonical id and continue regardless of title (no ordinal bump, plan text unchanged); keep title-drift ordinal bumping for non-refusal gaps; add a remediation-append.test.ts case appending the same decision with a reworded title and asserting one heading and the same returned id
+**Gate:** as-built
+**Rationale:** remediation-append.ts:203-213 derives the decision-bound id via refusalGapBaseId but then compares titles, bumping to an -<ordinal> suffix when the planner rewords the same decision's task, so recurrence duplicates work instead of upserting by durable identity (ADR decision 4; Task 8 Done-when requires exactly one block). Non-refusal gaps keep the existing title-drift ordinal behavior, which remediation-append.test.ts already covers.
+**Governing clause:** adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 4
+**Done when:**
+- adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 4 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-ab5-1 is complete.
+
+### Task rem-as-built-rem-adr-ab6-1: conductor.ts planRemediation: exclude refusal tasks whose decision-bound id rem-prd-audit-refusal-<decisionId> already exists in activePlanText from prdAuditGrowthTasks (:5296) before the budget read (:5550), so the pending-repair growth charge (:5669) counts only newly appended tasks; extend the Task 8 renumbered-NC test in prd-audit-kickback.test.ts to assert gates.prd_audit growth added totals 1 across both rounds, with a reworded second-round title
+**Gate:** as-built
+**Rationale:** conductor.ts:5296 pushes every requested refusal task into prdAuditGrowthTasks, :5550 passes that count to readRemediationGateAppendBudget and :5669 charges it in the receipt, although appendRemediationTasks (remediation-append.ts:204) returns existing ids for no-op appends, so recurrence charges growth for no added task (ADR decision 4; Task 8 Done-when: growth total equals one task across both rounds).
+**Governing clause:** adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 4
+**Done when:**
+- adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 4 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-ab6-1 is complete.
+
+### Task rem-as-built-rem-adr-ab2-3: conductor.ts validation-group join: when prdAuditRoute.kind === 'over-scope-refusal-rework' and grouped planning is excluded (guard :9688 false, guard :9862 false before the manual-test fallback :9983, guard :10005 false before the generic group halt :10160-10168), call haltGroupedRefusalRework() (:9436, the writeRefusalReworkHalt helper the serial branch uses at :12334) and return before the manual-test fallback or generic needs-human HALT; extend the Task 6 serial/grouped parity test in src/conductor/test/prd-audit-kickback.test.ts with a round-cap-exhausted grouped fixture (with and without manual_test FAIL rows) asserting .pipeline/HALT class over-scope byte-identical to the serial refused HALT, zero remediate dispatches, and no appended rem-prd-audit-refusal-* task
+**Gate:** as-built
+**Rationale:** ADR adr-2026-10-03 decision 6: the grouped refusal join still bypasses haltGroupedRefusalRework (conductor.ts:9436) when planning is excluded. That happens at the process-local guard at :9688 and the round-cap guards at :9862 and :10005, and their else-paths fall to the manual-test fallback at :9983 and the generic needs-human halt at :10160-10168. The serial branch (:12334 writeRefusalReworkHalt) is the reference and stays unchanged. Planner throw/reject handling at :9611, :9704, :9884 and :10059 is already repaired and preserved (Task 6, rem-as-built-rem-adr-ab2-1/ab2-2 coverage kept). Non-refusal grouped halts are found and excluded: no plan task admits changing them.
+**Governing clause:** adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 6
+**Done when:**
+- adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 6 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-ab2-3 is complete.
+
+### Task rem-as-built-rem-adr-ab3-2: conductor.ts validation-group join: when prdAuditRoute.kind === 'over-scope-refusal-rework', call refusalReworkAllowanceAvailable() (:7591, same predicate as serial :12267) before each grouped planRemediation call (:9611, :9704, :9884, :10059) and on false call haltGroupedRefusalRework() with no remediate dispatch; replace the refusal-path use of the process-local `remediationRounds < prdAuditRemediationLapCap` guard at :9688 with that durable check so a raised effectiveLapCap re-admits (Task 9 test keeps passing); add grouped fixtures to src/conductor/test/prd-audit-kickback.test.ts for a spent prd_audit lap, a malformed gates.prd_audit record, and a raised cap, asserting refused over-scope HALT with zero remediate for the first two and one remediate dispatch for the third
+**Gate:** as-built
+**Rationale:** ADR adr-2026-10-03 decision 5: the durable allowance check refusalReworkAllowanceAvailable (conductor.ts:7591) gates only the serial branch (:12267). Grouped planRemediation calls at :9611, :9704, :9884 and :10059 reach dispatch (:5041) before the budget read (:5582), and the guard at :9688 compares process-local remediationRounds with the configured prdAuditRemediationLapCap, ignoring a raised effectiveLapCap. Plan Task 7 step 3 and Task 9 admit the pre-dispatch durable read. It is the same predicate the serial branch uses, so the serial and grouped sides share one source and cannot drift.
+**Governing clause:** adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 5
+**Done when:**
+- adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-ab3-2 is complete.
+
+### Task rem-as-built-rem-adr-ab7-1: remediation-append.ts appendRemediationTasks (~:195-210): derive refusal task ids per task position — index 0 keeps rem-prd-audit-refusal-<decisionId>, index k>=1 uses rem-prd-audit-refusal-<decisionId>-<k+1> — via one exported helper (e.g. refusalTaskIds(gap)) so each position upserts on recurrence regardless of title and no task is skipped; in conductor.ts planRemediation (:5326-5334) use that same helper to count growth only for task ids absent from activePlanText, so prdAuditGrowthTasks feeds the budget read (:5588) and receipt charge (:5705) the actually appended count; keep the existing reworded-title upsert test (rem-as-built-rem-adr-ab5-1) and Task 8 renumbered-NC growth-total-1 test, and add a remediation-append.test.ts case plus a prd-audit-kickback.test.ts case where a two-task refusal appends two headings and charges gates.prd_audit growth 2, and a second identical round appends nothing and charges 0 growth
+**Gate:** as-built
+**Rationale:** ADR adr-2026-10-03 decision 4: remediation-append.ts:198 gives every task in a refusal gap the same canonical id, so the :204-209 upsert branch drops task 2..n. Meanwhile conductor.ts:5329-5334 tests only the gap-level canonical heading, and :5588 and :5705 charge growth for every requested task, so a two-task refusal appends one task and charges two. The fix keeps the AB-5/Task 8 guarantees: the first task id stays rem-prd-audit-refusal-<decisionId>, and a renamed or retitled recurrence upserts without growth (the rem-as-built-rem-adr-ab5-1 and ab6-1 tests are kept). The id derivation in remediation-append.ts and the existence regex in conductor.ts are a matched pair, so both are derived from one exported helper.
+**Governing clause:** adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 4
+**Done when:**
+- adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework decision 4 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-ab7-1 is complete.
