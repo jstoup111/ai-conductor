@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:6
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,7 +11,8 @@ import {
   parseChildId,
   pipelinePathFor,
 } from '../../src/engine/child-context.js';
-import { MAX_PLAN_SLICES } from '../../src/engine/plan-slices.js';
+import { validateConfig } from '../../src/engine/config.js';
+import { validatePlanSlices } from '../../src/engine/plan-slices.js';
 
 describe('parseChildId', () => {
   it('accepts string child ids 1..9', () => {
@@ -36,9 +37,24 @@ describe('parseChildId', () => {
   });
 });
 
-describe('MAX_PLAN_SLICES bound', () => {
-  it('keeps the plan slice count within the child id range', () => {
-    expect(MAX_PLAN_SLICES).toBeLessThanOrEqual(MAX_CHILD_ID);
+describe('child-id bound drift', () => {
+  it('keeps both the grammar and the largest accepted stacked config bound within the child id range', () => {
+    const rows = Array.from(
+      { length: MAX_CHILD_ID + 1 },
+      (_, index) => `| ${index + 1} | Slice ${index + 1} | ${index + 1} |`,
+    );
+    const tasks = Array.from(
+      { length: MAX_CHILD_ID + 1 },
+      (_, index) => `### Task ${index + 1}: Task ${index + 1}\n**Dependencies:** none`,
+    );
+    const plan = [
+      '# Plan', '', '## Slices', '', '| Slice | Title | Tasks |', '| --- | --- | --- |',
+      ...rows, '', ...tasks,
+    ].join('\n');
+
+    expect(validatePlanSlices(plan)).toMatchObject({ kind: 'invalid' });
+    expect(validateConfig({ stacked_prs: { max_slices: MAX_CHILD_ID } }).ok).toBe(true);
+    expect(validateConfig({ stacked_prs: { max_slices: MAX_CHILD_ID + 1 } }).ok).toBe(false);
   });
 });
 

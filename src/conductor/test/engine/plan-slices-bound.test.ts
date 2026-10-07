@@ -1,12 +1,13 @@
-// Covers: task:8
+// Covers: task:6, task:8
 import { describe, expect, it } from 'vitest';
-import { MAX_PLAN_SLICES, validatePlanSlices } from '../../src/engine/plan-slices.js';
+import { MAX_CHILD_ID } from '../../src/engine/child-context.js';
+import { validatePlanSlices } from '../../src/engine/plan-slices.js';
 
 function task(id: number): string {
   return `### Task ${id}: Task ${id}\n**Dependencies:** none`;
 }
 
-function slicedPlan(rows: string[], taskCount = 6): string {
+function slicedPlan(rows: string[], taskCount = rows.length): string {
   return [
     '# Plan',
     '',
@@ -21,49 +22,43 @@ function slicedPlan(rows: string[], taskCount = 6): string {
 }
 
 function sliceRows(count: number): string[] {
-  return Array.from({ length: count }, (_, index) => {
-    const position = index + 1;
-    const taskIds = position === count
-      ? Array.from({ length: 7 - position }, (_, taskIndex) => position + taskIndex).join(', ')
-      : String(position);
-    return `| ${position} | Slice ${position} | ${taskIds} |`;
-  });
+  return Array.from({ length: count }, (_, index) => `| ${index + 1} | Slice ${index + 1} | ${index + 1} |`);
 }
 
 describe('plan slice bound', () => {
   it('exports a fixed bound, keeps the validator configuration-free, and enforces that bound', () => {
-    expect(MAX_PLAN_SLICES).toBe(5);
+    expect(MAX_CHILD_ID).toBe(9);
     expect(validatePlanSlices).toHaveLength(1);
 
-    const withinBound = validatePlanSlices(slicedPlan(sliceRows(MAX_PLAN_SLICES)));
+    const withinBound = validatePlanSlices(slicedPlan(sliceRows(MAX_CHILD_ID)));
     expect(withinBound).toMatchObject({ kind: 'sliced' });
-    expect(withinBound.kind === 'sliced' && withinBound.slices).toHaveLength(5);
+    expect(withinBound.kind === 'sliced' && withinBound.slices).toHaveLength(9);
 
-    const result = validatePlanSlices(slicedPlan(sliceRows(MAX_PLAN_SLICES + 1)));
+    const result = validatePlanSlices(slicedPlan(sliceRows(MAX_CHILD_ID + 1)));
     expect(result).toMatchObject({ kind: 'invalid' });
     expect(result.kind === 'invalid' && result.violations).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'max-slices',
-        message: expect.stringContaining('plan declares 6 slices and the bound is 5'),
+        message: expect.stringContaining('plan declares 10 slices and the bound is 9'),
       }),
     ]));
   });
 
   it('accepts one slice holding every task', () => {
-    expect(validatePlanSlices(slicedPlan(['| 1 | Everything | 1, 2, 3, 4, 5, 6 |']))).toMatchObject({ kind: 'sliced' });
+    expect(validatePlanSlices(slicedPlan(['| 1 | Everything | 1, 2, 3, 4, 5, 6 |'], 6))).toMatchObject({ kind: 'sliced' });
   });
 
   it('aggregates the slice bound and an empty slice into one invalid result', () => {
     const result = validatePlanSlices(slicedPlan([
-      ...sliceRows(MAX_PLAN_SLICES + 1).slice(0, 4),
-      '| 5 | Fifth | |',
-      '| 6 | Sixth | 5, 6 |',
+      ...sliceRows(MAX_CHILD_ID + 1).slice(0, 8),
+      '| 9 | Ninth | |',
+      '| 10 | Tenth | 10 |',
     ]));
 
     expect(result).toMatchObject({ kind: 'invalid' });
     expect(result.kind === 'invalid' && result.violations).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'max-slices', message: expect.stringContaining('bound is 5') }),
-      expect.objectContaining({ code: 'empty-slice', position: 5 }),
+      expect.objectContaining({ code: 'max-slices', message: expect.stringContaining('bound is 9') }),
+      expect.objectContaining({ code: 'empty-slice', position: 9 }),
     ]));
   });
 });

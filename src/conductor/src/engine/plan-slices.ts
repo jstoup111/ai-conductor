@@ -4,6 +4,7 @@ import {
   resolvePlanTaskReference,
   TASK_HEADER_PATTERN,
 } from './plan-task-parse.js';
+import { MAX_CHILD_ID } from './child-context.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 
 export interface PlanSlice {
@@ -137,8 +138,6 @@ export function deriveStoryOwnership(
   for (const [storyId, positions] of positionsByStory) ownership[storyId] = [...positions][0];
   return { kind: 'owned', ownership };
 }
-
-export const MAX_PLAN_SLICES = 5;
 
 function fencedLineStates(lines: string[]): boolean[] {
   const states: boolean[] = [];
@@ -301,10 +300,10 @@ export function validatePlanSlices(planText: string): PlanSlicesValidation {
     sliceHasTaskReferences.push(cells[2] !== '');
   }
 
-  if (slices.length > MAX_PLAN_SLICES) {
+  if (slices.length > MAX_CHILD_ID) {
     violations.push({
       code: 'max-slices',
-      message: `plan declares ${slices.length} slices and the bound is ${MAX_PLAN_SLICES}`,
+      message: `plan declares ${slices.length} slices and the bound is ${MAX_CHILD_ID}`,
     });
   }
 
