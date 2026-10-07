@@ -6,6 +6,8 @@ import {
 } from './plan-task-parse.js';
 import { MAX_CHILD_ID } from './child-context.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
+import { ALL_STEPS } from './steps.js';
+import type { StepDefinition } from '../types/index.js';
 
 export interface PlanSlice {
   position: number;
@@ -29,6 +31,45 @@ export type PlanSlicesValidation =
 export type StoryOwnershipValidation =
   | { kind: 'owned'; ownership: Readonly<Record<string, number>> }
   | { kind: 'invalid'; violations: PlanSliceViolation[] };
+
+export interface RegionCoupledCustomStep {
+  name: string;
+  coupling: 'in-region' | 'loop-coupled';
+}
+
+/**
+ * Finds custom steps that cannot safely run once per independent child.
+ *
+ * The resolved registry is authoritative: custom steps can be chained, so
+ * their configured `after` text does not reliably describe their final place.
+ */
+export function customStepsInPerChildRegion(
+  registry: readonly StepDefinition[],
+): RegionCoupledCustomStep[] {
+  const builtInNames = new Set(ALL_STEPS.map((step) => step.name));
+  const acceptanceSpecsIndex = registry.findIndex((step) => step.name === 'acceptance_specs');
+  const buildReviewIndex = registry.findIndex((step) => step.name === 'build_review');
+
+  if (acceptanceSpecsIndex === -1 || buildReviewIndex === -1) return [];
+
+  return registry.flatMap((step, index): RegionCoupledCustomStep[] => {
+    if (builtInNames.has(step.name)) return [];
+
+    if (index > acceptanceSpecsIndex && index < buildReviewIndex) {
+      return [{ name: step.name, coupling: 'in-region' }];
+    }
+
+    if (
+      step.phase === 'BUILD'
+      && index < buildReviewIndex
+      && (step.loopGate === true || step.kickbackTarget === true)
+    ) {
+      return [{ name: step.name, coupling: 'loop-coupled' }];
+    }
+
+    return [];
+  });
+}
 
 const FENCE_LINE = /^\s*(`{3,}|~{3,})(.*)$/;
 const SLICES_HEADING = /^##\s+Slices\s*$/i;
