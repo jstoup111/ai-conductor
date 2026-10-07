@@ -1016,6 +1016,23 @@ async function branchUntouchedInheritance(
   };
 }
 
+type ProtectedArtifactInheritance = 'inherited' | 'not-inherited' | 'no-merge-base' | 'diff-probe-failed';
+
+function attributionLine(
+  inheritance: ProtectedArtifactInheritance,
+  provenance: Pick<ProtectedArtifactRotationEvidence, 'mergeBase' | 'headTouchedPath'> = {},
+): string {
+  if (inheritance === 'inherited') return 'Attribution: base-inherited';
+  if (inheritance === 'no-merge-base' || inheritance === 'diff-probe-failed') {
+    return 'Attribution: provenance undeterminable';
+  }
+  if (provenance.headTouchedPath === false) return 'Attribution: uncommitted workspace change';
+  if (provenance.headTouchedPath === true && provenance.mergeBase) {
+    return `Attribution: feature-authored (committed on this branch since merge-base ${provenance.mergeBase})`;
+  }
+  return 'Attribution: provenance undeterminable';
+}
+
 async function inspectSeal(
   projectRoot: string,
   seal: ProtectedArtifactSeal,
@@ -1039,23 +1056,26 @@ async function inspectSeal(
   };
   const undeterminableProvenance = (path: string, missingRef: string): ProtectedArtifactSealVerdict => ({
     ok: false,
-    reason: `Protected artifact provenance undeterminable: ${path}\nMissing base ref: ${missingRef}.\nProvide the base ref, then rebase onto it.`,
+    reason: `Protected artifact provenance undeterminable: ${path}\nMissing base ref: ${missingRef}.\nProvide the base ref, then rebase onto it.\n${attributionLine('diff-probe-failed')}`,
   });
   const noMergeBase = (path: string, baseBranch: string): ProtectedArtifactSealVerdict => ({
     ok: false,
-    reason: `Protected artifact provenance undeterminable: ${path}\nNo merge-base exists between HEAD and ${baseBranch}.\nRebase onto ${baseBranch} to establish shared history.`,
+    reason: `Protected artifact provenance undeterminable: ${path}\nNo merge-base exists between HEAD and ${baseBranch}.\nRebase onto ${baseBranch} to establish shared history.\n${attributionLine('no-merge-base')}`,
   });
   const failedInheritanceProbe = (path: string): ProtectedArtifactSealVerdict => ({
     ok: false,
-    reason: `Protected artifact provenance undeterminable: ${path}\nInheritance probe failed: git diff.\nVerify Git access and retry.`,
+    reason: `Protected artifact provenance undeterminable: ${path}\nInheritance probe failed: git diff.\nVerify Git access and retry.\n${attributionLine('diff-probe-failed')}`,
   });
   const inheritedFromBase = async (path: string): Promise<
-    'inherited' | 'not-inherited' | 'no-merge-base' | 'diff-probe-failed'
+    { inheritance: ProtectedArtifactInheritance; mergeBase?: string; headTouchedPath: boolean | 'indeterminate' }
   > => {
     const ref = await baseRef();
-    if (ref === undefined) return 'diff-probe-failed';
-    if (await matchesBaseTip(projectRoot, ref, path)) return 'inherited';
-    return (await branchUntouchedInheritance(projectRoot, ref, path)).inheritance;
+    if (ref === undefined) return { inheritance: 'diff-probe-failed', headTouchedPath: 'indeterminate' };
+    if (await matchesBaseTip(projectRoot, ref, path)) {
+      return { inheritance: 'inherited', headTouchedPath: 'indeterminate' };
+    }
+    const { inheritance, provenance } = await branchUntouchedInheritance(projectRoot, ref, path);
+    return { inheritance, ...provenance, headTouchedPath: provenance.headTouchedPath ?? 'indeterminate' };
   };
 
   const expected = new Map(seal.protectedArtifacts.map((artifact) => [artifact.path, artifact.fingerprint]));
@@ -1085,12 +1105,12 @@ async function inspectSeal(
       // this seal's baseline was taken. Tolerated only when the workspace copy
       // is byte-identical to the base tip's committed copy.
       const inheritance = await inheritedFromBase(path);
-      if (inheritance === 'inherited') continue;
+      if (inheritance.inheritance === 'inherited') continue;
       const missingRef = await missingBaseRef();
       if (missingRef) return undeterminableProvenance(path, missingRef);
-      if (inheritance === 'no-merge-base') return noMergeBase(path, baseBranch!);
-      if (inheritance === 'diff-probe-failed') return failedInheritanceProbe(path);
-      return { ok: false, reason: `Protected artifact added: ${path}` };
+      if (inheritance.inheritance === 'no-merge-base') return noMergeBase(path, baseBranch!);
+      if (inheritance.inheritance === 'diff-probe-failed') return failedInheritanceProbe(path);
+      return { ok: false, reason: `Protected artifact added: ${path}\n${attributionLine(inheritance.inheritance, inheritance)}` };
     }
     const content = await readContainedProtectedArtifact(projectRoot, path);
     if (content === undefined) {
@@ -1103,18 +1123,18 @@ async function inspectSeal(
       // self-amendment. The base branch is an independent authority, so content
       // it already contains is neither a local amendment nor a seal violation.
       const inheritance = await inheritedFromBase(path);
-      if (inheritance === 'inherited') continue;
+      if (inheritance.inheritance === 'inherited') continue;
       if (featureDesc && namesOwnFeature(path, featureDesc)) {
         selfAmendments.push({ path, sealedFingerprint: sealedFingerprint!, currentFingerprint });
       } else {
         const missingRef = await missingBaseRef();
         if (missingRef) return undeterminableProvenance(path, missingRef);
-        if (inheritance === 'no-merge-base') return noMergeBase(path, baseBranch!);
-        if (inheritance === 'diff-probe-failed') return failedInheritanceProbe(path);
+        if (inheritance.inheritance === 'no-merge-base') return noMergeBase(path, baseBranch!);
+        if (inheritance.inheritance === 'diff-probe-failed') return failedInheritanceProbe(path);
         // BASE-INHERITANCE TOLERANCE (#976). The mismatch is not this feature's
         // own amendment, and was not inherited from the base branch. The seal
         // therefore remains authoritative and the mutation must halt.
-        return { ok: false, reason: `Protected artifact changed: ${path}` };
+        return { ok: false, reason: `Protected artifact changed: ${path}\n${attributionLine(inheritance.inheritance, inheritance)}` };
       }
     }
   }

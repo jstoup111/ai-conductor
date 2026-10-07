@@ -1,4 +1,4 @@
-// Covers: task:1, task:5
+// Covers: task:1, task:2, task:5
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
@@ -738,7 +738,7 @@ describe('resealProtectedArtifactSeal', () => {
 
     await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' })).resolves.toEqual({
       ok: false,
-      reason: 'Protected artifact changed: .docs/plans/untouched.md',
+      reason: 'Protected artifact changed: .docs/plans/untouched.md\nAttribution: uncommitted workspace change',
     });
   });
 
@@ -869,7 +869,11 @@ describe('resealProtectedArtifactSeal', () => {
       rejection,
       persistedBytes: await readFile(sealPath, 'utf8'),
     }).toEqual({
-      rejection: reason,
+      rejection: reason.startsWith('Protected artifact provenance undeterminable')
+        ? `${reason}\nAttribution: provenance undeterminable`
+        : reason.startsWith('Protected artifact deleted')
+          ? reason
+          : `${reason}\nAttribution: feature-authored (committed on this branch since merge-base ${await git(repo, ['merge-base', baseBranch!, 'HEAD'])})`,
       persistedBytes: originalBytes,
     });
   });
@@ -1934,7 +1938,7 @@ describe('verifyProtectedArtifactSeal', () => {
 
     await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' })).resolves.toEqual({
       ok: false,
-      reason: 'Protected artifact changed: .docs/plans/feature.md',
+      reason: 'Protected artifact changed: .docs/plans/feature.md\nAttribution: uncommitted workspace change',
     });
   });
 
@@ -1948,11 +1952,11 @@ describe('verifyProtectedArtifactSeal', () => {
 
     await expect(verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature', baseBranch: 'main' })).resolves.toEqual({
       ok: false,
-      reason: 'Protected artifact changed: .docs/plans/another-feature.md',
+      reason: 'Protected artifact changed: .docs/plans/another-feature.md\nAttribution: uncommitted workspace change',
     });
   });
 
-  it('fails closed and names git diff when the inheritance probe exits non-zero', async () => {
+  it('attributes an undeterminable refusal when the git diff inheritance probe exits non-zero', async () => {
     const repo = await makeRepo({ '.docs/plans/another-feature.md': 'approved plan\n' });
     await createProtectedArtifactSeal({
       projectRoot: repo,
@@ -1965,20 +1969,23 @@ describe('verifyProtectedArtifactSeal', () => {
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature', baseBranch: 'main' }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact provenance undeterminable: .docs/plans/another-feature.md\nInheritance probe failed: git diff.\nVerify Git access and retry.',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/another-feature.md\nInheritance probe failed: git diff.\nVerify Git access and retry.\nAttribution: provenance undeterminable',
       });
     } finally {
       restorePath();
     }
   });
 
-  it('uses the normal changed-artifact halt, not undeterminable provenance, for a resolved-base modification', async () => {
+  it('attributes a committed feature-authored changed artifact with its merge-base', async () => {
     const repo = await makeRepo({ '.docs/plans/another-feature.md': 'approved plan\n' });
+    await git(repo, ['checkout', '-q', '-b', 'feature']);
     await createProtectedArtifactSeal({
       projectRoot: repo,
       baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
     });
     await writeProjectFile(repo, '.docs/plans/another-feature.md', 'edited during BUILD\n');
+    await git(repo, ['add', '.docs/plans/another-feature.md']);
+    await git(repo, ['commit', '-q', '-m', 'build: edit another feature plan']);
 
     const verdict = await verifyProtectedArtifactSeal({
       projectRoot: repo,
@@ -1988,7 +1995,7 @@ describe('verifyProtectedArtifactSeal', () => {
 
     expect(verdict).toEqual({
       ok: false,
-      reason: 'Protected artifact changed: .docs/plans/another-feature.md',
+      reason: `Protected artifact changed: .docs/plans/another-feature.md\nAttribution: feature-authored (committed on this branch since merge-base ${await git(repo, ['merge-base', 'main', 'HEAD'])})`,
     });
     expect((verdict as { reason: string }).reason).not.toMatch(/undeterminable/i);
   });
@@ -2018,9 +2025,9 @@ describe('verifyProtectedArtifactSeal', () => {
     ['recreated', async (repo: string) => {
       await rm(join(repo, '.docs/plans/feature.md'));
       await writeProjectFile(repo, '.docs/plans/feature.md', 'recreated plan\n');
-    }, 'Protected artifact changed: .docs/plans/feature.md'],
+    }, 'Protected artifact changed: .docs/plans/feature.md\nAttribution: uncommitted workspace change'],
     ['new', async (repo: string) => writeProjectFile(repo, '.docs/plans/new.md', 'new plan\n'),
-      'Protected artifact added: .docs/plans/new.md'],
+      'Protected artifact added: .docs/plans/new.md\nAttribution: uncommitted workspace change'],
   ])('rejects a %s protected artifact without refreshing the seal', async (_kind, mutate, reason) => {
     const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
     await createProtectedArtifactSeal({
@@ -2144,7 +2151,7 @@ describe('verifyProtectedArtifactSeal', () => {
 
       await expect(
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'unrelated-other-feature', baseBranch: 'main' }),
-      ).resolves.toEqual({ ok: false, reason: 'Protected artifact changed: .docs/architecture/feature.md' });
+      ).resolves.toEqual({ ok: false, reason: 'Protected artifact changed: .docs/architecture/feature.md\nAttribution: uncommitted workspace change' });
     });
 
     it('still rejects an ADDED artifact even when it names the current feature', async () => {
@@ -2157,7 +2164,7 @@ describe('verifyProtectedArtifactSeal', () => {
 
       await expect(
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature', baseBranch: 'main' }),
-      ).resolves.toEqual({ ok: false, reason: 'Protected artifact added: .docs/architecture/feature.md' });
+      ).resolves.toEqual({ ok: false, reason: 'Protected artifact added: .docs/architecture/feature.md\nAttribution: uncommitted workspace change' });
     });
 
     it('still rejects a DELETED artifact even when it names the current feature', async () => {
@@ -2296,7 +2303,7 @@ describe('verifyProtectedArtifactSeal', () => {
       ).resolves.toMatchObject({ ok: true });
     });
 
-    it("refuses a feature's committed edit to another artifact while its HEAD remains behind main", async () => {
+    it("attributes a feature's committed edit to another artifact while its HEAD remains behind main", async () => {
       const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
       const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
       await git(repo, ['checkout', '-q', '-b', 'feature']);
@@ -2310,10 +2317,13 @@ describe('verifyProtectedArtifactSeal', () => {
 
       await expect(
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
-      ).resolves.toMatchObject({ ok: false });
+      ).resolves.toEqual({
+        ok: false,
+        reason: `Protected artifact changed: .docs/plans/other-feature.md\nAttribution: feature-authored (committed on this branch since merge-base ${await git(repo, ['merge-base', 'main', 'HEAD'])})`,
+      });
     });
 
-    it("refuses an uncommitted edit when the feature's commits never changed the inherited artifact", async () => {
+    it("attributes an uncommitted edit when the feature's commits never changed the inherited artifact", async () => {
       const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
       const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
       await git(repo, ['checkout', '-q', '-b', 'feature']);
@@ -2325,7 +2335,10 @@ describe('verifyProtectedArtifactSeal', () => {
 
       await expect(
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
-      ).resolves.toMatchObject({ ok: false });
+      ).resolves.toEqual({
+        ok: false,
+        reason: 'Protected artifact changed: .docs/plans/other-feature.md\nAttribution: uncommitted workspace change',
+      });
     });
 
     it('STILL HALTS when the content does not match the base branch tip', async () => {
@@ -2343,7 +2356,7 @@ describe('verifyProtectedArtifactSeal', () => {
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact changed: .docs/plans/other-feature.md',
+        reason: 'Protected artifact changed: .docs/plans/other-feature.md\nAttribution: uncommitted workspace change',
       });
     });
 
@@ -2359,7 +2372,7 @@ describe('verifyProtectedArtifactSeal', () => {
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact added: .docs/plans/invented.md',
+        reason: 'Protected artifact added: .docs/plans/invented.md\nAttribution: uncommitted workspace change',
       });
     });
 
@@ -2375,7 +2388,7 @@ describe('verifyProtectedArtifactSeal', () => {
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine' }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: no base branch was supplied.\nProvide the base ref, then rebase onto it.',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: no base branch was supplied.\nProvide the base ref, then rebase onto it.\nAttribution: provenance undeterminable',
       });
     });
 
@@ -2391,7 +2404,7 @@ describe('verifyProtectedArtifactSeal', () => {
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine' }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact provenance undeterminable: .docs/plans/invented.md\nMissing base ref: no base branch was supplied.\nProvide the base ref, then rebase onto it.',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/invented.md\nMissing base ref: no base branch was supplied.\nProvide the base ref, then rebase onto it.\nAttribution: provenance undeterminable',
       });
     });
 
@@ -2411,7 +2424,7 @@ describe('verifyProtectedArtifactSeal', () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: neither origin/no-such-branch nor no-such-branch resolves.\nProvide the base ref, then rebase onto it.',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: neither origin/no-such-branch nor no-such-branch resolves.\nProvide the base ref, then rebase onto it.\nAttribution: provenance undeterminable',
       });
     });
 
@@ -2436,7 +2449,7 @@ describe('verifyProtectedArtifactSeal', () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nNo merge-base exists between HEAD and main.\nRebase onto main to establish shared history.',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nNo merge-base exists between HEAD and main.\nRebase onto main to establish shared history.\nAttribution: provenance undeterminable',
       });
     });
 
@@ -3330,7 +3343,7 @@ describe('verifyProtectedArtifactSeal', () => {
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: neither origin/main nor main resolves.\nProvide the base ref, then rebase onto it.',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: neither origin/main nor main resolves.\nProvide the base ref, then rebase onto it.\nAttribution: provenance undeterminable',
       });
       expect(
         await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'),
@@ -3392,7 +3405,7 @@ describe('verifyProtectedArtifactSeal', () => {
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'no-such-base' }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: neither origin/no-such-base nor no-such-base resolves.\nProvide the base ref, then rebase onto it.',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: neither origin/no-such-base nor no-such-base resolves.\nProvide the base ref, then rebase onto it.\nAttribution: provenance undeterminable',
       });
       expect(
         await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'),
