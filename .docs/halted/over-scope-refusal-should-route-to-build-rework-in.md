@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-07T01:07:28.338Z
 Slug: over-scope-refusal-should-route-to-build-rework-in
 Class: needs-human
 Halting step: unknown
