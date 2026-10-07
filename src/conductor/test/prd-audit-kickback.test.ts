@@ -1049,6 +1049,7 @@ describe('prd_audit kickback', () => {
     expect(fixture.retryReasons).toHaveLength(1);
     expect(fixture.retryReasons[0]).toContain(`refusal-${fixture.decisionId}`);
     expect(fixture.retryReasons[0]).toContain(fixture.decisionId);
+    expect(fixture.retryReasons[0]).toContain('.pipeline/prd-audit.md');
     const plan = await readFile(fixture.planPath, 'utf8');
     expect(plan).toContain(`### Task rem-prd-audit-refusal-${fixture.decisionId}: Remove the refused S2.1 behavior`);
     expect(fixture.kickbacks).toContainEqual(expect.objectContaining({
@@ -1219,6 +1220,7 @@ describe('prd_audit kickback', () => {
     expect(fixture.retryReasons).toHaveLength(1);
     expect(fixture.retryReasons[0]).toContain(`refusal-${fixture.decisionId}`);
     expect(fixture.retryReasons[0]).toContain(fixture.decisionId);
+    expect(fixture.retryReasons[0]).toContain('.pipeline/prd-audit.md');
     expect(fixture.kickbacks).toContainEqual(expect.objectContaining({
       from: 'prd_audit', to: 'build', count: 1,
     }));

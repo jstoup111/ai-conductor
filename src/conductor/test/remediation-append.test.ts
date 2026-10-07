@@ -224,6 +224,25 @@ describe('refusal-rework append', () => {
     expect(second.planText.match(new RegExp(`### Task rem-prd-audit-refusal-${decisionId}:`, 'g'))).toHaveLength(1);
   });
 
+  it('upserts the canonical refusal task when its planner title changes', () => {
+    const first = appendRemediationTasks(
+      '### Task 4: Existing work\n',
+      [admittedRefusalGap()],
+      PRD_AUDIT_REMEDIATION_GATE_SOURCE,
+    );
+    const second = appendRemediationTasks(
+      first.planText,
+      [{
+        ...admittedRefusalGap(),
+        tasks: [{ id: 'remove-offer-again', title: 'Remove the reworded refused offer' }],
+      }],
+      PRD_AUDIT_REMEDIATION_GATE_SOURCE,
+    );
+
+    expect(second.ids).toEqual([`rem-prd-audit-refusal-${decisionId}`]);
+    expect(second.planText).toBe(first.planText);
+  });
+
   it('throws the named H9 id error for a refusal gap with an empty decision id', () => {
     const plan = '### Task 4: Existing work\n';
     const gap: CriterionBoundRemediationGap = {

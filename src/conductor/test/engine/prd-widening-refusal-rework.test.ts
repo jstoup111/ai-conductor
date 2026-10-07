@@ -50,6 +50,8 @@ describe('renderRefusalReworkContext', () => {
     expect(text).toContain('original offer snapshot text');
     const storyBlock = blocksOf(text).find((block) => block.includes('S2.1'))!;
     expect(storyBlock).not.toContain('snapshot');
+    expect(storyBlock).not.toContain('Original case id');
+    expect(text).toContain('Original case id: case-9');
   });
 
   it('derives the NC gap id from the decision, not from the presentation key', () => {
@@ -59,7 +61,7 @@ describe('renderRefusalReworkContext', () => {
 
   it('restricts the rework tasks to removing or reworking the refused behavior', () => {
     const text = renderRefusalReworkContext([storyRefusal, ncRefusal]);
-    expect(text).toMatch(/must either remove the refused behavior or rework it/);
+    expect(text).toMatch(/refusal-<decisionId> gaps below must either remove the refused behavior or rework it/);
   });
 });
 

@@ -9363,6 +9363,10 @@ export class Conductor {
             const withRefusalReworkContext = (dispatchContext: string): string =>
               refusalReworkContext === undefined
                 ? dispatchContext
+                : !dispatchContext.includes(AS_BUILT_VERDICT_PATH)
+                  ? 'Blocking prd_audit gaps at .pipeline/prd-audit.md. ' +
+                    'Plan remediation per the /remediate skill and write .pipeline/remediation.json.\n\n' +
+                    refusalReworkContext
                 : `${dispatchContext}\n\n${refusalReworkContext}`;
 
             if (allGreen) {
@@ -12176,7 +12180,9 @@ export class Conductor {
                     outcome = await this.planRemediation(
                       state,
                       steps,
-                      renderRefusalReworkContext(refusalRoute.refusals),
+                      'Blocking prd_audit gaps at .pipeline/prd-audit.md. ' +
+                        'Plan remediation per the /remediate skill and write .pipeline/remediation.json.\n\n' +
+                        renderRefusalReworkContext(refusalRoute.refusals),
                       {
                         source: 'prd-audit',
                         evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],

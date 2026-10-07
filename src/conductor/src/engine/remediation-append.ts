@@ -201,6 +201,13 @@ export function appendRemediationTasks(
       const title = collapseToOneLine(t.title) ?? collapseToOneLine(gap.rationale) ?? '';
 
       const existingTitle = existing.get(canonical);
+      if (refusalGapBaseId(gap) !== undefined && existingTitle !== undefined) {
+        // A refusal task is keyed by the durable refusal decision, not its
+        // presentation wording. Later rounds may rename the finding or the
+        // planner's title, but must still reopen the one canonical task.
+        ids.push(canonical);
+        continue;
+      }
       if (existingTitle !== undefined && existingTitle === title) {
         // Idempotent re-round: exactly one task per logical gap.
         ids.push(canonical);

@@ -76,7 +76,7 @@ export type RefusalReworkAdmission =
   | { kind: 'rejected'; criteria: string[] };
 
 const REWORK_ONLY_SENTENCE =
-  'Every task in this remediation round must either remove the refused behavior or rework it ' +
+  'Every task for the refusal-<decisionId> gaps below must either remove the refused behavior or rework it ' +
   'to fit within the recorded decision; no new behavior may be introduced.';
 
 /** Render the refusal evidence as the `/remediate` dispatch (`retryReason`) context. */
@@ -90,6 +90,9 @@ export function renderRefusalReworkContext(refusals: readonly RefusalReworkEvide
     ];
     if (refusal.snapshot !== undefined) {
       lines.push(`- Original offer snapshot: ${refusal.snapshot}`);
+    }
+    if (refusal.caseId !== undefined) {
+      lines.push(`- Original case id: ${refusal.caseId}`);
     }
     blocks.push(lines.join('\n'));
   }
