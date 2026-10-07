@@ -176,7 +176,7 @@ test_suite:
 # without signal here. The step is marked `skipped`, which satisfies the
 # downstream prerequisites (prd_audit, rebase) and the SHIP-tail selector —
 # the pipeline flows build → build_review (opt-in, currently off) → prd_audit
-# (skipped on technical track) → architecture_review_as_built → rebase →
+# (runs on both tracks; the technical track skips only prd) → architecture_review_as_built → rebase →
 # maintain-documentation → release-disposition → finish. manual_test is the only gating step whose
 # definition opts into config-disable (`configDisableAllowed`); structural steps can never be
 # disabled. Read per conduct run; new builds pick it up once the engine

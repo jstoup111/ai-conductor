@@ -15550,7 +15550,8 @@ export class Conductor {
     const tier = state.complexity_tier ?? 'L';
     const scheduling = await this.resolvePlanContentScheduling(state, tier);
     // Resolve the track once (state-seeded, or the committed marker in the
-    // interactive flow) so a technical feature skips prd_audit in the SHIP loop.
+    // interactive flow). Track skips apply only to steps declaring
+    // `skippableForTracks` (today only `prd`).
     const track = await this.resolveTrack(state);
     // Opt-in judgement gate (jstoup111/ai-conductor#324): resolved once here
     // (read-once, `owner_gate_cutover` semantics) so a config value flipped
