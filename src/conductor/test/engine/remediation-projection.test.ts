@@ -11,6 +11,11 @@ import {
   REMEDIATION_PROJECTION_VERSION,
   type RemediationProjectionLimits,
 } from '../../src/engine/remediation-projection.js';
+import { readPendingAsBuiltRemediationFindings } from '../../src/engine/kickback-ledger.js';
+import {
+  REMEDIATION_PLAN_CONTRACT_VERSION,
+  validateRemediationPlan,
+} from '../../src/engine/remediation-plan-contract.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
@@ -163,6 +168,74 @@ describe('remediation projection', () => {
         pendingAsBuiltFindings: [{ finding: 'as-built:prior:1', summary: 'An earlier finding remains pending.' }],
         priorLaps: [{ gate: 'architecture_review_as_built', laps: 1 }],
       },
+    });
+  });
+
+  // Covers: task:15
+  it('keeps provider-minted pending rows historical and refuses to account for them', async () => {
+    const root = await fixture();
+    await writeAsBuiltVerdict(root);
+    const legacyFindings = [{
+      gate: 'architecture_review_as_built',
+      finding: 'ARCH-1',
+      class: 'REMEDIABLE',
+      governingClause: 'Task 7',
+      reference: { kind: 'plan-task', taskId: '7' },
+      summary: 'first pre-upgrade repair',
+      outcome: 'remediated',
+    }, {
+      gate: 'architecture_review_as_built',
+      finding: 'ARCH-1',
+      class: 'REMEDIABLE',
+      governingClause: 'Task 7',
+      reference: { kind: 'plan-task', taskId: '7' },
+      summary: 'second pre-upgrade repair sharing the provider id',
+      outcome: 'remediated',
+    }];
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {},
+      pendingAsBuiltRemediationFindings: legacyFindings,
+    }), 'utf8');
+
+    const result = await buildRemediationProjection(root, {
+      source: 'as-built', activePlanPath: '.docs/plans/active.md',
+    });
+    if (!result.ok) throw new Error(`expected projection, received ${result.fault.detail}`);
+    expect(result.projection.requiredReferences).toEqual([expect.objectContaining({
+      kind: 'as-built-finding', id: 'as-built:as-built-attempt:1',
+    })]);
+    expect(result.projection.requiredReferences).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'ARCH-1' }),
+    ]));
+    expect(result.projection.pendingAsBuiltFindings).toEqual([]);
+
+    const currentDisposition = {
+      reference: { kind: 'as-built-finding', id: 'as-built:as-built-attempt:1' },
+      disposition: 'existing-task',
+      category: null,
+      rationale: 'The current stamped finding belongs to Task 7.',
+      tasks: [],
+      boundTaskIds: ['7'],
+    };
+    expect(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [currentDisposition],
+    }, result.projection)).toMatchObject({ kind: 'accepted' });
+
+    expect(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [{ ...currentDisposition, reference: { kind: 'as-built-finding', id: 'ARCH-1' } }],
+    }, result.projection)).toMatchObject({
+      kind: 'rejected',
+      diagnostics: expect.arrayContaining([
+        'dispositions[0].reference does not resolve required reference as-built-finding:ARCH-1',
+      ]),
+    });
+    await expect(readPendingAsBuiltRemediationFindings(root)).resolves.toEqual({
+      kind: 'ok',
+      findings: legacyFindings,
     });
   });
 

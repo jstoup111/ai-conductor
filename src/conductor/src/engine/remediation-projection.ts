@@ -16,6 +16,7 @@ import { readAsBuiltVerdict } from './as-built-verdict-store.js';
 import type { AsBuiltGoverningReference } from './as-built-contract.js';
 import { AS_BUILT_PROJECTION_LIMITS, type AsBuiltProjectionLimits } from './as-built-projection.js';
 import {
+  isEngineStampedAsBuiltFindingId,
   readKickbackLedgerResult,
   readPendingAsBuiltRemediationFindings,
   type KickbackLedgerReadResult,
@@ -432,7 +433,11 @@ export async function buildRemediationProjection(
     requiredReferences,
     evidence,
     tasks: taskContext.tasks,
-    pendingAsBuiltFindings: pending.findings,
+    // Pre-v2 provider ids remain in the ledger for historical shipment
+    // records, but are not planning context or remediation obligations.
+    pendingAsBuiltFindings: pending.findings.filter((finding) =>
+      isEngineStampedAsBuiltFindingId(finding.finding),
+    ),
     priorLaps: ledger.kind === 'ok' ? projectPriorLaps(ledger.ledger.gates) : [],
     refusals,
     vocabulary: {

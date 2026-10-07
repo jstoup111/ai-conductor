@@ -475,12 +475,23 @@ function isPendingAsBuiltRemediationFinding(
   );
 }
 
+/**
+ * v2 is the first contract whose finding ids are engine-stamped. Earlier
+ * pending rows retain provider-authored ids and may legitimately collide, so
+ * only stamps that this engine can recognize carry a uniqueness invariant.
+ */
+export function isEngineStampedAsBuiltFindingId(value: string): boolean {
+  return /^as-built:[^:]+:[1-9]\d*$/.test(value);
+}
+
 function isPendingAsBuiltRemediationFindings(
   value: unknown,
 ): value is PendingAsBuiltRemediationFinding[] {
-  return Array.isArray(value) &&
-    value.every(isPendingAsBuiltRemediationFinding) &&
-    new Set(value.map((finding) => finding.finding)).size === value.length;
+  if (!Array.isArray(value) || !value.every(isPendingAsBuiltRemediationFinding)) return false;
+  const engineStampedIds = value
+    .map((finding) => finding.finding)
+    .filter(isEngineStampedAsBuiltFindingId);
+  return new Set(engineStampedIds).size === engineStampedIds.length;
 }
 
 function isPendingRepairGateCharge(value: unknown): value is PendingRepairGateCharge {
