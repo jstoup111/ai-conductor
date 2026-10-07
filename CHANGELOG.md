@@ -36,6 +36,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Claude users receive reliable destructive-Git protection for valid abbreviated, bundled, and negated option spellings. ([implementation PR #2997](https://github.com/jstoup111/ai-conductor/pull/2997)).
 - coverage_binding no longer fails a judge batch when the judge appends a verdict for a claim id it was never issued, provided every issued claim id was answered. ([implementation PR #3011](https://github.com/jstoup111/ai-conductor/pull/3011)).
 - coverage_binding now judges each ADR decision together with every amendment recorded in that ADR, and re-judges a previously refused conflict after the halt is cleared instead of reusing the refusal. ([implementation PR #3012](https://github.com/jstoup111/ai-conductor/pull/3012)).
+- Self-host build_review rubrics routed to Codex no longer fail with an "ambiguous" installed-policy error, and no longer fail with a "scratch home is outside the worktree scratch root" error during native-schema setup. ([implementation PR #3023](https://github.com/jstoup111/ai-conductor/pull/3023)).
 
 ## Migration
 
