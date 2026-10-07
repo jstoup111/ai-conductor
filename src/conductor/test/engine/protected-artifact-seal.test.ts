@@ -1,4 +1,4 @@
-// Covers: task:5
+// Covers: task:1, task:5
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
@@ -483,6 +483,95 @@ describe('createProtectedArtifactSeal', () => {
       normalized: { ...v1Seal, version: 2, rebaselines: [] },
       invalid: 'Protected artifact seal is invalid',
     });
+  });
+
+  it('reads an inherited-base-deletion lineage entry with its audited deletedBy map intact', async () => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    const deletedBy = {
+      '.docs/plans/retired.md': 'a'.repeat(40),
+      '.docs/stories/retired.md': 'b'.repeat(40),
+    };
+    const seal = {
+      version: 2 as const,
+      baselineCommit,
+      protectedArtifacts: [{
+        path: '.docs/plans/feature.md',
+        fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+      }],
+      rebaselines: [{
+        fromCommit: baselineCommit,
+        toCommit: baselineCommit,
+        trigger: 'inherited-base-deletion',
+        paths: Object.keys(deletedBy),
+        deletedBy,
+      }],
+    };
+    await mkdir(dirname(sealPath), { recursive: true });
+    await writeFile(sealPath, `${JSON.stringify(seal)}\n`);
+
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toEqual({
+      ok: true,
+      seal,
+      selfAmendments: [],
+    });
+  });
+
+  it('reads a version-2 seal whose rebaseline has no deletedBy map', async () => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    const seal = {
+      version: 2 as const,
+      baselineCommit,
+      protectedArtifacts: [{
+        path: '.docs/plans/feature.md',
+        fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+      }],
+      rebaselines: [{
+        fromCommit: baselineCommit,
+        toCommit: baselineCommit,
+        trigger: 'proactive-rebase',
+        paths: [],
+      }],
+    };
+    await mkdir(dirname(sealPath), { recursive: true });
+    await writeFile(sealPath, `${JSON.stringify(seal)}\n`);
+
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toEqual({
+      ok: true,
+      seal,
+      selfAmendments: [],
+    });
+  });
+
+  it.each([
+    ['an array', ['a'.repeat(40)]],
+    ['a string', 'a'.repeat(40)],
+    ['an object with a non-string value', { '.docs/plans/retired.md': 1 }],
+  ])('rejects a rebaseline deletedBy map that is %s', async (_description, deletedBy) => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    await mkdir(dirname(sealPath), { recursive: true });
+    await writeFile(sealPath, `${JSON.stringify({
+      version: 2,
+      baselineCommit,
+      protectedArtifacts: [{
+        path: '.docs/plans/feature.md',
+        fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+      }],
+      rebaselines: [{
+        fromCommit: baselineCommit,
+        toCommit: baselineCommit,
+        trigger: 'inherited-base-deletion',
+        paths: ['.docs/plans/retired.md'],
+        deletedBy,
+      }],
+    })}\n`);
+
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).rejects.toThrow('Protected artifact seal is invalid');
   });
 });
 

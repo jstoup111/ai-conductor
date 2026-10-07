@@ -39,6 +39,8 @@ export interface ProtectedArtifactRebaseline {
   toCommit: string;
   trigger: string;
   paths: string[];
+  /** Maps each base-inherited deleted artifact path to its deleting base commit. */
+  deletedBy?: Record<string, string>;
   /** Verbatim rationale for an operator-initiated scoped reseal. */
   reason?: string;
 }
@@ -115,6 +117,7 @@ export type ProtectedArtifactSealRebaselineEvent =
       fromCommit: string;
       toCommit: string;
       paths: string[];
+      deletedBy?: Record<string, string>;
       excludedBaseAheadPaths?: string[];
       excludedOperatorResealedPaths?: string[];
       includedEngineAppendedPaths?: string[];
@@ -541,6 +544,12 @@ function parseSeal(serialized: string): ProtectedArtifactSeal {
           typeof entry?.trigger === 'string' &&
           Array.isArray(entry?.paths) &&
           entry.paths.every((path: unknown) => typeof path === 'string') &&
+          (entry.deletedBy === undefined || (
+            typeof entry.deletedBy === 'object' &&
+            entry.deletedBy !== null &&
+            !Array.isArray(entry.deletedBy) &&
+            Object.values(entry.deletedBy).every((deletedBy: unknown) => typeof deletedBy === 'string')
+          )) &&
           (entry.reason === undefined || typeof entry.reason === 'string'),
       );
     if (
