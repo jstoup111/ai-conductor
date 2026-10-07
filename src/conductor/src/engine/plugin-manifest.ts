@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { load } from 'js-yaml';
-import { PluginManifest, PluginManifestError, PluginVersionError, VALID_PLUGIN_KINDS } from '../types/plugin.js';
+import { PluginManifest, PluginManifestError, PluginVersionError, RETIRED_PLUGIN_KINDS, VALID_PLUGIN_KINDS } from '../types/plugin.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // The relative depth to VERSION differs between the source tree (src/engine/ → 4 levels up)
@@ -50,6 +50,12 @@ export function validateManifest(raw: unknown): PluginManifest {
 
   // Task 4: Validate kind enum
   const kind = manifest.kind;
+  if (RETIRED_PLUGIN_KINDS.includes(kind as typeof RETIRED_PLUGIN_KINDS[number])) {
+    throw new PluginManifestError(
+      `Unsupported plugin kind "${kind}". Supported kinds are: ${VALID_PLUGIN_KINDS.join(', ')}`
+    );
+  }
+
   if (!VALID_PLUGIN_KINDS.includes(kind as never)) {
     throw new PluginManifestError(
       `Invalid kind "${kind}". Valid kinds are: ${VALID_PLUGIN_KINDS.join(', ')}`

@@ -5,7 +5,7 @@
 /**
  * Valid plugin kinds in the conductor plugin system.
  */
-export type PluginKind = 'llm_provider' | 'ui_renderer' | 'step' | 'hook' | 'visualizer' | 'memory_provider';
+export type PluginKind = 'llm_provider' | 'ui_renderer' | 'visualizer' | 'memory_provider';
 
 /**
  * Valid plugin kinds as a list for validation and error messages.
@@ -13,11 +13,15 @@ export type PluginKind = 'llm_provider' | 'ui_renderer' | 'step' | 'hook' | 'vis
 export const VALID_PLUGIN_KINDS: readonly PluginKind[] = [
   'llm_provider',
   'ui_renderer',
-  'step',
-  'hook',
   'visualizer',
   'memory_provider',
 ];
+
+/**
+ * Kinds retired because no runtime retrieval seam can execute them. Reintroducing one
+ * requires a runtime retrieval seam before it can return to PluginKind.
+ */
+export const RETIRED_PLUGIN_KINDS = ['step', 'hook'] as const;
 
 /**
  * Plugin manifest schema from plugin.yml.

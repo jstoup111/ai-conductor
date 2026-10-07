@@ -20,6 +20,9 @@ Place a plugin in either `~/.ai-conductor/plugins/<name>/` or
 the same name. Its `plugin.yml` needs `kind: visualizer`, a lowercase-hyphenated `name`, and an
 `entrypoint`; `harness_version` is optional.
 
+Plugin manifests support `llm_provider`, `ui_renderer`, `visualizer`, and `memory_provider` kinds.
+A manifest declaring retired `step` or `hook` is refused at load, and discovery skips that plugin.
+
 The entrypoint's default export may be a `VisualizerPlugin` object or a factory. A factory receives
 `VisualizerFactoryContext` and returns a `VisualizerPlugin` for that run, or `null` when disabled.
 The context supplies the resolved harness config, pipeline directory, shared event emitter, and

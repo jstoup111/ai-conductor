@@ -116,7 +116,7 @@ describe('PluginRegistry', () => {
 
       expect(registry.list('llm_provider')).toEqual(['claude']);
       expect(registry.list('ui_renderer')).toEqual(['terminal']);
-      expect(registry.list('step')).toEqual([]);
+      expect(registry.list('visualizer')).toEqual([]);
     });
   });
 

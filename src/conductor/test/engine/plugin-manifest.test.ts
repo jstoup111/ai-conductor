@@ -58,20 +58,29 @@ describe('validateManifest', () => {
   });
 
   describe('kind validation', () => {
-    it('throws PluginManifestError when kind is not a valid enum value', () => {
+    it.each(['step', 'hook'])('refuses retired kind %s with the supported kinds', (kind) => {
+      const manifest = {
+        kind,
+        name: 'test',
+        entrypoint: 'index.ts',
+      };
+
+      expect(() => validateManifest(manifest)).toThrow(PluginManifestError);
+      expect(() => validateManifest(manifest)).toThrow(
+        `Unsupported plugin kind "${kind}". Supported kinds are: llm_provider, ui_renderer, visualizer, memory_provider`
+      );
+    });
+
+    it('keeps the invalid-kind wording for a kind that was never valid', () => {
       const manifest = {
         kind: 'frobnicator',
         name: 'test',
         entrypoint: 'index.ts',
       };
       expect(() => validateManifest(manifest)).toThrow(PluginManifestError);
-      try {
-        validateManifest(manifest);
-        expect.fail('Should have thrown PluginManifestError');
-      } catch (err) {
-        expect(String(err)).toMatch(/Invalid kind/);
-        expect(String(err)).toMatch(/frobnicator/);
-      }
+      expect(() => validateManifest(manifest)).toThrow(
+        'Invalid kind "frobnicator". Valid kinds are: llm_provider, ui_renderer, visualizer, memory_provider'
+      );
     });
   });
 
