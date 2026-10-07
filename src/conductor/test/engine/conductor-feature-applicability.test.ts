@@ -99,6 +99,7 @@ describe('Conductor feature applicability dispatch', () => {
     ]);
   });
 
+  // Covers: task:2
   it('runs markerless acceptance_specs and manual_test identically with the toggle on or off', async () => {
     const disabledProjectRoot = await mkdtemp(join(tmpdir(), 'conductor-feature-applicability-'));
     const roots = [projectRoot, disabledProjectRoot];
