@@ -78,7 +78,8 @@ so that no other artifact's sealed value is silently replaced.
   fingerprint of its content at the reseal commit, and `P2` and `P3` retain their previous sealed
   fingerprints byte-for-byte.
 - Given a scoped reseal succeeds, when the resulting seal is read, then its entry set is exactly
-  the entry set it had before — no path added, none removed.
+  the entry set it had before — no path added, and none removed except sealed paths whose deletion
+  was base-inherited, each pruned with an audited `inherited-base-deletion` rebaseline entry.
 - Given a scoped reseal succeeds, when the resulting seal is read, then `baselineCommit` equals the
   reseal commit, and a `rebaselines` entry records the prior baseline as `fromCommit`, the reseal
   commit as `toCommit`, and exactly the enumerated paths.
@@ -95,8 +96,10 @@ so that no other artifact's sealed value is silently replaced.
 - Given a named path has uncommitted modifications in the working tree, when the reseal is
   requested, then it is refused with a message directing the operator to commit first, and the seal
   file is unmodified.
-- Given a named path has been deleted from the working tree, when the reseal is requested, then it
-  is refused rather than silently removing the entry from the seal.
+- Given a named path has been deleted from the working tree by this feature (a branch commit or an
+  uncommitted deletion), when the reseal is requested, then it is refused rather than removing the
+  entry from the seal. A named path whose deletion was base-inherited is instead pruned with an
+  audited `inherited-base-deletion` rebaseline entry.
 - Given the reseal commit cannot be resolved by git, when the reseal is requested, then it is
   refused naming the unresolvable commit and the seal file is unmodified.
 - Given no `--path` is supplied at all, when the reseal is requested, then it is refused — there is
@@ -105,7 +108,8 @@ so that no other artifact's sealed value is silently replaced.
 ### Done When
 - [ ] A scoped reseal over a multi-entry seal leaves every unnamed entry's fingerprint byte-identical,
       verified by test.
-- [ ] The resulting seal's entry-set cardinality and key set are unchanged, verified by test.
+- [ ] The resulting seal's entry-set cardinality and key set are unchanged apart from audited
+      base-inherited deletion prunes, verified by test.
 - [ ] `baselineCommit` equals the reseal commit and the `rebaselines` entry lists exactly the
       enumerated paths, verified by test.
 - [ ] Each refusal above exits non-zero with the offending path named in the message, and leaves the
@@ -147,8 +151,9 @@ also drifted so that an audited recovery can never launder a genuine violation.
   either — the refusal is all-or-nothing.
 - Given two unnamed protected artifacts have drifted, when a reseal is requested, then the refusal
   names the offending artifact rather than failing with an unattributed error.
-- Given an unnamed protected artifact has been deleted, when a reseal is requested, then the reseal
-  is refused naming it.
+- Given an unnamed protected artifact has been deleted by this feature (a branch commit or an
+  uncommitted deletion), when a reseal is requested, then the reseal is refused naming it. An
+  unnamed artifact whose deletion was base-inherited does not refuse the reseal.
 - Given a new protected artifact exists in the workspace that the seal has no entry for and
   verification does not classify it as base-inherited, when a reseal is requested, then the reseal
   is refused naming it.

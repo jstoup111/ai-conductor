@@ -212,15 +212,17 @@ feature, so that an opportunistic repair failing is not mistaken for a violation
   path, when the seal verdict is composed, then the result is a failure naming the path.
 - Given `inspectSeal` failed, when rotation is refused for any reason, then the composed verdict
   reports the inspection's own failure reason and is not replaced by a rotation reason.
-- Given a refusal class that does not escalate, when the seal verdict is composed, then the seal file
-  is left byte-identical and no `rebaselines[]` entry is appended.
+- Given a refusal class that does not escalate, when the seal verdict is composed, then the rotation
+  writes nothing: no rotation `rebaselines[]` entry is appended and the baseline is not moved. The
+  only seal write that may accompany it is an audited `inherited-base-deletion` prune made by the
+  passing inspection itself; with no base-inherited deletion, the seal file stays byte-identical.
 
 ### Done When
 - [ ] A test per environmental refusal class asserts a passing inspection survives the refusal.
 - [ ] A test asserts `workspace-differs-from-head` still produces a failing composed verdict.
 - [ ] A test asserts a provenance-confirmed feature-authored refusal still produces a failing
       composed verdict.
-- [ ] A test asserts a non-escalating refusal appends no `rebaselines[]` entry.
+- [ ] A test asserts a non-escalating refusal appends no rotation `rebaselines[]` entry.
 
 ---
 
