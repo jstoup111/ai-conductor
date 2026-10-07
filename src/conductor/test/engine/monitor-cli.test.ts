@@ -110,6 +110,33 @@ describe('Task 20 — monitor pre-boot command', () => {
     });
   });
 
+  it('forwards a well-formed per-run model unchanged to the guided-session seam', async () => {
+    const openGuidedSession = vi.fn();
+    const runGuidedMonitorQueue = vi.fn(async (deps: { launch: (item: ProjectHalt) => void }) => {
+      deps.launch(halt());
+      return { active: false };
+    });
+
+    const code = await dispatchMonitorCommand(
+      detectMonitorCommand(argv('monitor', 'all', '--model', 'claude-fable-5-1'))!,
+      '/projects/operator',
+      {
+        loadConfig: async () => ({ ok: true, config: {}, warnings: [] }),
+        openGuidedSession,
+        runGuidedMonitorQueue: runGuidedMonitorQueue as never,
+        reconcileHaltIssues: async () => cleanReconciliation(),
+        createInterrupt: () => ({ untilStop: new Promise<void>(() => {}), dispose: vi.fn() }),
+        startEventSpine: (() => ({ events: { emit: async () => {} }, stop: vi.fn() })) as never,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(openGuidedSession).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'claude',
+      model: 'claude-fable-5-1',
+    }));
+  });
+
   it('passes the selected project into the queue-driving loop without launching a real session', async () => {
     const deriveQueueMembership = vi.fn(async () => ({ code: 0, halts: [halt()] }));
     const offer = vi.fn();
