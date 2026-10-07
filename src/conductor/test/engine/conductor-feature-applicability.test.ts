@@ -99,6 +99,65 @@ describe('Conductor feature applicability dispatch', () => {
     ]);
   });
 
+  it('runs markerless acceptance_specs and manual_test identically with the toggle on or off', async () => {
+    const disabledProjectRoot = await mkdtemp(join(tmpdir(), 'conductor-feature-applicability-'));
+    const roots = [projectRoot, disabledProjectRoot];
+    try {
+      const results = await Promise.all([true, false].map(async (enabled, index) => {
+        const root = roots[index];
+        const path = join(root, 'conduct-state.json');
+        const runEvents = new ConductorEventEmitter();
+        const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+        const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), runEvents);
+        await writeState(path, allDoneExcept('acceptance_specs', {
+          manual_test: 'pending',
+          applicability_declarations: [],
+        }));
+        const seed = await readState(path);
+        expect(seed.ok && Object.entries(seed.value)
+          .filter(([, status]) => status === 'pending')
+          .map(([step]) => step)).toEqual(['acceptance_specs', 'manual_test']);
+        persister.start();
+        try {
+          await new Conductor({
+            projectRoot: root,
+            stateFilePath: path,
+            stepRunner: runner,
+            events: runEvents,
+            fromStep: 'acceptance_specs',
+            mode: 'auto',
+            config: { feature_applicability: { enabled } },
+          }).run();
+        } finally {
+          persister.stop();
+        }
+
+        const state = await readState(path);
+        const persisted = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
+          .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+        return {
+          steps: (runner.run as ReturnType<typeof vi.fn>).mock.calls.map(([step]) => step),
+          statuses: state.ok ? {
+            acceptance_specs: state.value.acceptance_specs,
+            manual_test: state.value.manual_test,
+          } : undefined,
+          applicabilityEvents: persisted.filter((event) => [
+            'step_inapplicable',
+            'step_inapplicable_ignored',
+            'step_inapplicable_refused',
+          ].includes(event.type as string)),
+        };
+      }));
+
+      expect(results[0].steps).toEqual(results[1].steps);
+      expect(results[0].statuses).toEqual(results[1].statuses);
+      expect(results[0].applicabilityEvents).toEqual([]);
+      expect(results[1].applicabilityEvents).toEqual([]);
+    } finally {
+      await rm(disabledProjectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('does not leak feature A declarations into feature B with an empty seed', async () => {
     await writeState(statePath, allDoneExcept('acceptance_specs', { applicability_declarations: [] }));
     const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
