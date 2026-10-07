@@ -76,6 +76,10 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    - `invalid`, with one typed violation per defect, each carrying a violation code, the slice
      position, the task id where one applies, and a message.
 
+> **Amended 2026-10-07 by #2941:** (adr-2026-10-07-sliced-plan-story-ownership-and-stack-eligibility
+> decisions 2–3) `plan-slices.ts` also owns the story-ownership predicate and the stack-eligibility
+> verdict. Land and `coverage_binding` stay its only production callers.
+
    It reads task ids from `TASK_HEADER_PATTERN` headings and never re-derives task-id validity. The
    engineer land gate (Decision 5) and the `coverage_binding` slice layer (Decision 6) are its only
    production callers. Daemon discovery and `planHasDependencyTree` stay presence-only and
@@ -93,6 +97,10 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    - a malformed table, row, or cell;
    - more than `MAX_PLAN_SLICES` slices. This is a code constant equal to 5, not a config key,
      following `adr-2026-09-05-gh-cli-version-floor` D2.
+
+> **Amended 2026-10-07 by #2941:** (adr-2026-10-07-sliced-plan-story-ownership-and-stack-eligibility
+> decision 7) The grammar bound becomes `MAX_CHILD_ID` (9), replacing `MAX_PLAN_SLICES` = 5. The
+> configured `stacked_prs.max_slices` is enforced only through stack eligibility, never by this rung.
 
    Slices are ordered by position value. Gaps between positions are allowed.
 
@@ -132,6 +140,12 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    - The rung stays model-free and offline, and it reads the worktree plan, so a re-run of land
      gives the same verdict.
 
+> **Amended 2026-10-07 by #2941:** (adr-2026-10-07-sliced-plan-story-ownership-and-stack-eligibility
+> decisions 1 and 5) This rung stays flag-independent. A second rung, `stacked-delivery`, engages only
+> for a sliced plan with `stacked_prs.enabled` on, and refuses story-ownership violations and
+> ineligible stacking. The flag-turned-on-later gap is closed by re-evaluating both at
+> `coverage_binding`.
+
 6. **`coverage_binding` slice layer: re-validation after amendment, with visible membership
    change.** Following the precedent of D17 in `adr-2026-08-31-coverage-binding-judge-step`, the
    `coverage_binding` runner calls `validatePlanSlices` on the plan it resolved.
@@ -151,6 +165,11 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    - **Baseline:** a prior envelope with no recorded membership (legacy, first run, or a recreated
      worktree) is a baseline, per D19. It records membership and emits nothing.
    - **Unsliced plans:** the layer is inert for a plan that is unsliced both before and after.
+
+> **Amended 2026-10-07 by #2941:** (adr-2026-10-07-sliced-plan-story-ownership-and-stack-eligibility
+> decisions 5–6) For a sliced, flag-on plan the layer also evaluates story ownership and stack
+> eligibility under the current config, and records `story id → child position` beside the
+> membership under the same rules.
 
 > **Amended 2026-10-03 by #2940:** (adr-2026-10-03-stacked-child-plans-identity-and-state decisions 5–7) The recorded membership is also the source
 > of a stacked feature's child identities: a child id is a declared slice position. The recovery
@@ -173,6 +192,12 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    - a non-object block;
    - an unknown sub-key;
    - a non-boolean `enabled`.
+
+> **Amended 2026-10-07 by #2941:** (adr-2026-10-07-sliced-plan-story-ownership-and-stack-eligibility
+> decisions 1, 5 and 7) `stacked_prs.enabled` gains its first production readers, the land
+> `stacked-delivery` rung and the `coverage_binding` runner, which engage only when it is on. The block
+> also accepts `max_slices`. The consumer registry rows for `stacked_prs`, `stacked_prs.enabled` and
+> `stacked_prs.max_slices` name those two readers instead of the #2724 reservation.
 
    The `mergeable_autoresolve.enabled` shape is the model. The consumer registry declares
    `stacked_prs` and `stacked_prs.enabled` as `none`, with the reason "reserved for #2724

@@ -71,6 +71,12 @@ that ADR's shared resolver once its feature ships, and until then via the valida
 citation normalization extended with the annotation strip (that ADR's resolver adopts this call
 site when it lands).
 
+> **Amended 2026-10-07 by #2941:** (adr-2026-10-07-sliced-plan-story-ownership-and-stack-eligibility
+> decision 6) For a sliced, flag-on plan, `coverage_binding` stays feature-scoped. It holds one
+> whole-feature baseline, runs before the first child, and re-runs only on the D16 and D19
+> triggers. Recorded story ownership is an envelope field that never enters the judge prompt, and a
+> child projection never resets the baseline.
+
 **D2 — The quote is drawn from the cited task's `Done when` block.** `checkCriterionCoverage`
 scopes its whitespace-normalized substring match to the union of the cited tasks' `Done when`
 checks (`parsePlanTaskDoneWhen`), not the whole task body. A quote found in the body but not in
