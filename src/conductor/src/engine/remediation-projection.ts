@@ -18,7 +18,9 @@ import { AS_BUILT_PROJECTION_LIMITS, type AsBuiltProjectionLimits } from './as-b
 import {
   readKickbackLedgerResult,
   readPendingAsBuiltRemediationFindings,
+  type KickbackLedgerReadResult,
   type PendingAsBuiltRemediationFinding,
+  type PendingAsBuiltRemediationFindingsReadResult,
 } from './kickback-ledger.js';
 import { parsePlanTaskDoneWhen, parsePlanTaskTitles } from './plan-task-parse.js';
 import type { RefusalReworkEvidence } from './prd-widening-refusal-rework.js';
@@ -120,7 +122,68 @@ export interface RemediationProjectionRequest {
 
 export type RemediationProjectionResult =
   | { readonly ok: true; readonly projection: RemediationProjection }
-  | { readonly ok: false; readonly fault: { readonly source: string; readonly detail: string } };
+  | {
+      readonly ok: false;
+      readonly kind: 'preparation-fault';
+      readonly fault: {
+        readonly source: string;
+        readonly detail: string;
+        readonly dimension?: string;
+        readonly actual?: number;
+        readonly limit?: number;
+      };
+    };
+
+/** Largest observed serialized structured sections in the Task 8 remediation corpus. */
+export const REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES = {
+  requiredReferencesBytes: 339,
+  tasksBytes: 165,
+  pendingAsBuiltFindingsBytes: 235,
+  priorLapsBytes: 50,
+  refusalsBytes: 109,
+  totalBytes: 1_012,
+} as const;
+
+function roundUpPowerOfTwo(bytes: number): number {
+  let rounded = 1;
+  while (rounded < bytes) rounded *= 2;
+  return rounded;
+}
+
+/** Finite engine bounds for required structured input; required values are never truncated. */
+export const REMEDIATION_PROJECTION_LIMITS = {
+  // Required-reference corpus maximum: 339 B; rounded up to 512 B.
+  requiredReferencesBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes),
+  // Owning-task corpus maximum: 165 B; rounded up to 256 B.
+  tasksBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes),
+  // Pending as-built finding corpus maximum: 235 B; rounded up to 256 B.
+  pendingAsBuiltFindingsBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes),
+  // Prior-lap corpus maximum: 50 B; rounded up to 64 B.
+  priorLapsBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorLapsBytes),
+  // Refusal corpus maximum: 109 B; rounded up to 128 B.
+  refusalsBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes),
+  // Complete structured projection corpus maximum: 1,012 B; rounded up to 1,024 B.
+  totalBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.totalBytes),
+  // Untyped-evidence per-file corpus bound is owned by the as-built projection.
+  perFileHunksBytes: AS_BUILT_PROJECTION_LIMITS.perFileHunksBytes,
+  // Untyped-evidence total corpus bound is owned by the as-built projection.
+  totalDiffBytes: AS_BUILT_PROJECTION_LIMITS.totalDiffBytes,
+} as const;
+
+export interface RemediationProjectionLimits extends RemediationEvidenceLimits {
+  readonly requiredReferencesBytes: number;
+  readonly tasksBytes: number;
+  readonly pendingAsBuiltFindingsBytes: number;
+  readonly priorLapsBytes: number;
+  readonly refusalsBytes: number;
+  readonly totalBytes: number;
+}
+
+/** Narrow test seam for required durable-state reads. */
+export interface RemediationProjectionDependencies {
+  readonly readKickbackLedgerResult?: typeof readKickbackLedgerResult;
+  readonly readPendingAsBuiltRemediationFindings?: typeof readPendingAsBuiltRemediationFindings;
+}
 
 const REMEDIATION_DISPOSITIONS: readonly RemediationDisposition[] = [
   ...REMEDIATION_TARGET_STEPS,
@@ -137,12 +200,70 @@ function includesAsBuilt(source: RemediationProjectionSource): boolean {
   return source === 'as-built' || source === 'validation-group';
 }
 
-function sourceFault(source: string, detail: string): RemediationProjectionResult {
-  return { ok: false, fault: { source, detail } };
+function preparationFault(
+  source: string,
+  detail: string,
+  fields: Pick<Extract<RemediationProjectionResult, { readonly ok: false }>['fault'], 'dimension' | 'actual' | 'limit'> = {},
+): RemediationProjectionResult {
+  return { ok: false, kind: 'preparation-fault', fault: { source, detail, ...fields } };
 }
 
 function utf8Bytes(text: string): number {
   return Buffer.byteLength(text, 'utf-8');
+}
+
+function serializedBytes(value: unknown): number {
+  return utf8Bytes(JSON.stringify(value));
+}
+
+function projectionLimitFault(
+  projection: RemediationProjection,
+  source: RemediationProjectionSource,
+  limits: RemediationProjectionLimits,
+): RemediationProjectionResult | undefined {
+  const dimensions: readonly { readonly dimension: string; readonly actual: number; readonly limit: number }[] = [
+    { dimension: 'required-references', actual: serializedBytes(projection.requiredReferences), limit: limits.requiredReferencesBytes },
+    { dimension: 'tasks', actual: serializedBytes(projection.tasks), limit: limits.tasksBytes },
+    { dimension: 'pending-as-built-findings', actual: serializedBytes(projection.pendingAsBuiltFindings), limit: limits.pendingAsBuiltFindingsBytes },
+    { dimension: 'prior-laps', actual: serializedBytes(projection.priorLaps), limit: limits.priorLapsBytes },
+    { dimension: 'refusals', actual: serializedBytes(projection.refusals), limit: limits.refusalsBytes },
+    { dimension: 'total', actual: serializedBytes(projection), limit: limits.totalBytes },
+  ];
+  const overflow = dimensions.find(({ actual, limit }) => actual > limit);
+  return overflow === undefined
+    ? undefined
+    : preparationFault(source, `${overflow.dimension} exceeds its required structured-input limit`, overflow);
+}
+
+function errorDetail(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function verdictFault(source: string, detail: string): RemediationProjectionResult {
+  const normalized = detail.toLowerCase().includes('version')
+    ? `unsupported typed verdict version: ${detail}`
+    : detail;
+  return preparationFault(source, normalized);
+}
+
+async function safelyReadLedger(
+  read: () => Promise<KickbackLedgerReadResult>,
+): Promise<KickbackLedgerReadResult> {
+  try {
+    return await read();
+  } catch (error) {
+    return { kind: 'unreadable', reason: `kickback ledger is unreadable: ${errorDetail(error)}` };
+  }
+}
+
+async function safelyReadPendingFindings(
+  read: () => Promise<PendingAsBuiltRemediationFindingsReadResult>,
+): Promise<PendingAsBuiltRemediationFindingsReadResult> {
+  try {
+    return await read();
+  } catch (error) {
+    return { kind: 'unreadable', reason: `kickback ledger is unreadable: ${errorDetail(error)}` };
+  }
 }
 
 function untypedEvidenceSource(
@@ -223,18 +344,24 @@ async function projectActiveTasks(
 export async function buildRemediationProjection(
   worktree: string,
   request: RemediationProjectionRequest,
-  evidenceLimitOverrides?: Partial<RemediationEvidenceLimits>,
+  limitOverrides: Partial<RemediationProjectionLimits> = {},
+  dependencies: RemediationProjectionDependencies = {},
 ): Promise<RemediationProjectionResult> {
   const requiredReferences: RemediationRequiredReference[] = [];
   const ownerTaskIds = new Set<string>();
 
   if (includesPrdAudit(request.source)) {
-    const current = await readCurrentPrdAuditVerdict(worktree, {
-      attemptRunId: request.attemptRunId,
-      config: request.config,
-      git: request.git,
-    });
-    if (current.kind !== 'present') return sourceFault('prd-audit verdict', current.reason);
+    let current: Awaited<ReturnType<typeof readCurrentPrdAuditVerdict>>;
+    try {
+      current = await readCurrentPrdAuditVerdict(worktree, {
+        attemptRunId: request.attemptRunId,
+        config: request.config,
+        git: request.git,
+      });
+    } catch (error) {
+      return preparationFault('prd-audit verdict', `typed verdict is unreadable: ${errorDetail(error)}`);
+    }
+    if (current.kind !== 'present') return verdictFault('prd-audit verdict', current.reason);
     for (const judgment of current.value.judgment.criterionJudgments) {
       if (judgment.grade !== 'FIXABLE') continue;
       requiredReferences.push({
@@ -249,9 +376,14 @@ export async function buildRemediationProjection(
   }
 
   if (includesAsBuilt(request.source)) {
-    const current = await readAsBuiltVerdict(worktree);
+    let current: Awaited<ReturnType<typeof readAsBuiltVerdict>>;
+    try {
+      current = await readAsBuiltVerdict(worktree);
+    } catch (error) {
+      return preparationFault('as-built verdict', `typed verdict is unreadable: ${errorDetail(error)}`);
+    }
     if (current.kind !== 'present') {
-      return sourceFault('as-built verdict', current.kind === 'absent'
+      return verdictFault('as-built verdict', current.kind === 'absent'
         ? 'architecture-review-as-built typed verdict is missing'
         : current.reason);
     }
@@ -281,31 +413,37 @@ export async function buildRemediationProjection(
     });
   }
 
+  const limits: RemediationProjectionLimits = { ...REMEDIATION_PROJECTION_LIMITS, ...limitOverrides };
+  const readPending = dependencies.readPendingAsBuiltRemediationFindings ?? readPendingAsBuiltRemediationFindings;
+  const readLedger = dependencies.readKickbackLedgerResult ?? readKickbackLedgerResult;
   const [pending, ledger, taskContext, evidence] = await Promise.all([
-    readPendingAsBuiltRemediationFindings(worktree),
-    readKickbackLedgerResult(worktree),
+    safelyReadPendingFindings(() => readPending(worktree)),
+    safelyReadLedger(() => readLedger(worktree)),
     projectActiveTasks(worktree, request, ownerTaskIds),
-    projectUntypedEvidence(worktree, request, { ...AS_BUILT_PROJECTION_LIMITS, ...evidenceLimitOverrides }),
+    projectUntypedEvidence(worktree, request, limits),
   ]);
-  if (pending.kind === 'unreadable') return sourceFault('kickback ledger', pending.reason);
-  if (ledger.kind === 'unreadable') return sourceFault('kickback ledger', ledger.reason);
-  if (!taskContext.ok) return sourceFault('active plan', taskContext.detail);
+  if (pending.kind === 'unreadable') return preparationFault('kickback ledger', pending.reason);
+  if (ledger.kind === 'unreadable') return preparationFault('kickback ledger', ledger.reason);
+  if (!taskContext.ok) return preparationFault('active plan', taskContext.detail);
 
+  const projection: RemediationProjection = {
+    version: REMEDIATION_PROJECTION_VERSION,
+    source: request.source,
+    requiredReferences,
+    evidence,
+    tasks: taskContext.tasks,
+    pendingAsBuiltFindings: pending.findings,
+    priorLaps: ledger.kind === 'ok' ? projectPriorLaps(ledger.ledger.gates) : [],
+    refusals,
+    vocabulary: {
+      dispositions: REMEDIATION_DISPOSITIONS,
+      haltCategories: REMEDIATION_HALT_CATEGORIES,
+    },
+  };
+  const fault = projectionLimitFault(projection, request.source, limits);
+  if (fault !== undefined) return fault;
   return {
     ok: true,
-    projection: {
-      version: REMEDIATION_PROJECTION_VERSION,
-      source: request.source,
-      requiredReferences,
-      evidence,
-      tasks: taskContext.tasks,
-      pendingAsBuiltFindings: pending.findings,
-      priorLaps: ledger.kind === 'ok' ? projectPriorLaps(ledger.ledger.gates) : [],
-      refusals,
-      vocabulary: {
-        dispositions: REMEDIATION_DISPOSITIONS,
-        haltCategories: REMEDIATION_HALT_CATEGORIES,
-      },
-    },
+    projection,
   };
 }

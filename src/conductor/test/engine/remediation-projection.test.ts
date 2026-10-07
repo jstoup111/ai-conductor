@@ -1,10 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { buildRemediationProjection, REMEDIATION_PROJECTION_VERSION } from '../../src/engine/remediation-projection.js';
+import {
+  buildRemediationProjection,
+  REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES,
+  REMEDIATION_PROJECTION_LIMITS,
+  REMEDIATION_PROJECTION_VERSION,
+  type RemediationProjectionLimits,
+} from '../../src/engine/remediation-projection.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
@@ -76,6 +82,20 @@ async function writeAsBuiltVerdict(root: string): Promise<void> {
       summary: 'The typed boundary is not reached.',
     }],
   }, 'as-built-attempt'), { attemptId: 'as-built-attempt', codeStamp: null, policy });
+}
+
+async function expectPreparationFault(
+  result: Awaited<ReturnType<typeof buildRemediationProjection>>,
+  expected: Record<string, unknown>,
+): Promise<void> {
+  expect(result).toMatchObject({ ok: false, kind: 'preparation-fault', fault: expected });
+  expect(result).not.toHaveProperty('projection');
+}
+
+function roundUpPowerOfTwo(bytes: number): number {
+  let rounded = 1;
+  while (rounded < bytes) rounded *= 2;
+  return rounded;
 }
 
 describe('remediation projection', () => {
@@ -284,5 +304,98 @@ describe('remediation projection', () => {
         },
       });
     }
+  });
+
+  // Covers: task:10
+  it('returns preparation faults for missing and unreadable required typed verdicts', async () => {
+    const missingPrdRoot = await fixture();
+    const unreadableAsBuiltRoot = await fixture();
+    await mkdir(join(unreadableAsBuiltRoot, '.pipeline'), { recursive: true });
+    await writeFile(join(unreadableAsBuiltRoot, '.pipeline', 'architecture-review-as-built.json'), '{', 'utf8');
+
+    await expectPreparationFault(await buildRemediationProjection(missingPrdRoot, {
+      source: 'prd-audit', activePlanPath: '.docs/plans/active.md', attemptRunId: 'prd-attempt',
+    }), {
+      source: 'prd-audit verdict', detail: expect.stringContaining('missing'),
+    });
+    await expectPreparationFault(await buildRemediationProjection(unreadableAsBuiltRoot, {
+      source: 'as-built', activePlanPath: '.docs/plans/active.md',
+    }), {
+      source: 'as-built verdict', detail: expect.stringContaining('unreadable'),
+    });
+  });
+
+  // Covers: task:10
+  it('returns a preparation fault for an unsupported typed verdict version', async () => {
+    const root = await fixture();
+    await writeAsBuiltVerdict(root);
+    const path = join(root, '.pipeline', 'architecture-review-as-built.json');
+    const persisted = JSON.parse(await readFile(path, 'utf8')) as { verdict: { version: string } };
+    persisted.verdict.version = 'unsupported-version';
+    await writeFile(path, JSON.stringify(persisted), 'utf8');
+
+    await expectPreparationFault(await buildRemediationProjection(root, {
+      source: 'as-built', activePlanPath: '.docs/plans/active.md',
+    }), {
+      source: 'as-built verdict', detail: expect.stringContaining('unsupported'),
+    });
+  });
+
+  // Covers: task:10
+  it('refuses an over-limit required structured dimension without shortening it', async () => {
+    const root = await fixture();
+    await writePrdVerdict(root);
+
+    const result = await buildRemediationProjection(root, {
+      source: 'prd-audit', activePlanPath: '.docs/plans/active.md', attemptRunId: 'prd-attempt',
+    }, { requiredReferencesBytes: 1 });
+    await expectPreparationFault(result, {
+      source: 'prd-audit', dimension: 'required-references', actual: expect.any(Number), limit: 1,
+    });
+    if (result.ok) throw new Error('expected an over-limit preparation fault');
+    expect(result.fault.actual).toBeGreaterThan(result.fault.limit!);
+  });
+
+  // Covers: task:10
+  it('faults for a corrupt or throwing kickback-ledger read instead of projecting empty history', async () => {
+    const corruptRoot = await fixture();
+    const throwingRoot = await fixture();
+    await mkdir(join(corruptRoot, '.pipeline'), { recursive: true });
+    await writeFile(join(corruptRoot, '.pipeline', 'kickback-ledger.json'), '{', 'utf8');
+
+    await expectPreparationFault(await buildRemediationProjection(corruptRoot, {
+      source: 'finish-verification', activePlanPath: '.docs/plans/active.md',
+    }), {
+      source: 'kickback ledger', detail: expect.stringContaining('kickback ledger'),
+    });
+    await expectPreparationFault(await buildRemediationProjection(throwingRoot, {
+      source: 'finish-verification', activePlanPath: '.docs/plans/active.md',
+    }, {}, {
+      readKickbackLedgerResult: async () => { throw new Error('injected ledger read failure'); },
+    }), {
+      source: 'kickback ledger', detail: expect.stringContaining('injected ledger read failure'),
+    });
+  });
+
+  // Covers: task:10
+  it('ships finite structured limits for every required projection dimension', () => {
+    const limits: RemediationProjectionLimits = REMEDIATION_PROJECTION_LIMITS;
+    expect(limits).toEqual({
+      requiredReferencesBytes: expect.any(Number),
+      tasksBytes: expect.any(Number),
+      pendingAsBuiltFindingsBytes: expect.any(Number),
+      priorLapsBytes: expect.any(Number),
+      refusalsBytes: expect.any(Number),
+      totalBytes: expect.any(Number),
+      perFileHunksBytes: expect.any(Number),
+      totalDiffBytes: expect.any(Number),
+    });
+    expect(Object.values(limits).every((limit) => Number.isFinite(limit) && limit > 0)).toBe(true);
+    expect(limits.requiredReferencesBytes).toBe(roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes));
+    expect(limits.tasksBytes).toBe(roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes));
+    expect(limits.pendingAsBuiltFindingsBytes).toBe(roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes));
+    expect(limits.priorLapsBytes).toBe(roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorLapsBytes));
+    expect(limits.refusalsBytes).toBe(roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes));
+    expect(limits.totalBytes).toBe(roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.totalBytes));
   });
 });
