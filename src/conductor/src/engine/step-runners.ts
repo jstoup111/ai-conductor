@@ -768,9 +768,18 @@ export function productionBuildReviewPolicyCatalog(
     // precedence, because that is the definition the candidate would load.
     if (originalCatalogHome === undefined || originalCatalogHome === preparedHome) return prepared;
     const key = (skill: InstalledReviewSkill) => `${skill.source}\0${skill.plugin?.id ?? ''}\0${skill.semanticName}`;
-    const preparedKeys = new Set(prepared.map(key));
     const original = await discover(originalCatalogHome, { ...env, [catalogProvider.homeVariable]: originalCatalogHome }, false);
-    return [...prepared, ...original.filter((skill) => skill.source !== 'project' && !preparedKeys.has(key(skill)))];
+    // A provider can also list installs it finds outside its home variable
+    // (Codex reads the operator's `$HOME/.agents/skills` regardless of
+    // CODEX_HOME). Such an entry is the operator's install, not something
+    // preparation placed, so it competes only through the original catalog
+    // below rather than as a second prepared origin for the same skill.
+    const operatorOrigins = new Set(original
+      .filter((skill) => skill.source !== 'project')
+      .map((skill) => skill.installationOrigin));
+    const preparedOwned = prepared.filter((skill) => skill.source === 'project' || !operatorOrigins.has(skill.installationOrigin));
+    const preparedKeys = new Set(preparedOwned.map(key));
+    return [...preparedOwned, ...original.filter((skill) => skill.source !== 'project' && !preparedKeys.has(key(skill)))];
   };
 }
 

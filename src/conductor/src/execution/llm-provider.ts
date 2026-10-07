@@ -172,6 +172,12 @@ export interface SelfHostInvocation {
    * mapping only; it is never written to and never inferred after preparation.
    */
   originalCatalogHome?: string;
+  /**
+   * Worktree whose `.daemon/scratch` owns this invocation's provider home.
+   * The invocation `cwd` can be a different checkout (a read-only review
+   * snapshot), so scratch confinement checks the home against this owner.
+   */
+  scratchRoot?: string;
   teardown(): Promise<void>;
 }
 

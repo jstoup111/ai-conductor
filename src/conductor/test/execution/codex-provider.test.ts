@@ -700,6 +700,64 @@ describe('CodexProvider', () => {
     }
   });
 
+  it('writes a self-host schema when the invocation cwd is a review checkout other than the home owner', async () => {
+    // Observed shape: a self-host build_review rubric runs from a read-only
+    // review snapshot while its provider home lives in the feature worktree.
+    const worktree = await mkdtemp(join(tmpdir(), 'codex-self-host-schema-owner-worktree-'));
+    const reviewCheckout = await mkdtemp(join(tmpdir(), 'codex-self-host-schema-review-checkout-'));
+    const home = join(worktree, '.daemon', 'scratch', 'd-run', '0-codex-eventSpine', 'self-host-codex-home');
+    let schemaPath: string | undefined;
+    await mkdir(home, { recursive: true });
+    mockExeca.mockImplementation(async (_file, args) => {
+      const index = args.indexOf('--output-schema');
+      schemaPath = index === -1 ? undefined : args[index + 1];
+      return { stdout: jsonlMessage('{}'), stderr: '', exitCode: 0 } as any;
+    });
+
+    try {
+      const result = await provider.invoke({
+        ...baseOptions,
+        interactive: false,
+        cwd: reviewCheckout,
+        nativeSchema: { type: 'object' },
+        selfHost: { executable: '/isolated/bin/codex', env: { CODEX_HOME: home }, args: [], scratchRoot: worktree, teardown: async () => {} },
+      });
+
+      expect(result.success).toBe(true);
+      expect(schemaPath).toBe(join(home, 'output-schema.json'));
+    } finally {
+      await Promise.all([
+        rm(worktree, { recursive: true, force: true }),
+        rm(reviewCheckout, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it('still refuses a self-host schema home outside its declared scratch owner', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'codex-self-host-schema-declared-owner-'));
+    const otherWorktree = await mkdtemp(join(tmpdir(), 'codex-self-host-schema-other-owner-'));
+    const home = join(otherWorktree, '.daemon', 'scratch', 'd-run', '0-codex', 'self-host-codex-home');
+    await mkdir(home, { recursive: true });
+
+    try {
+      const result = await provider.invoke({
+        ...baseOptions,
+        interactive: false,
+        cwd: otherWorktree,
+        nativeSchema: { type: 'object' },
+        selfHost: { executable: '/isolated/bin/codex', env: { CODEX_HOME: home }, args: [], scratchRoot: worktree, teardown: async () => {} },
+      });
+
+      expect(result).toMatchObject({ success: false, output: expect.stringContaining('outside the worktree scratch root') });
+      expect(mockExeca).not.toHaveBeenCalled();
+    } finally {
+      await Promise.all([
+        rm(worktree, { recursive: true, force: true }),
+        rm(otherWorktree, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
   it('sends Codex a strict-mode schema and returns the result in the engine schema shape', async () => {
     const worktree = await mkdtemp(join(tmpdir(), 'codex-native-schema-strict-worktree-'));
     const home = join(worktree, '.daemon', 'scratch', 'review-run', '1-codex');

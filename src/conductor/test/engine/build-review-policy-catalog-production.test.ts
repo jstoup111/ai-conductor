@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { productionBuildReviewPolicyCatalog } from '../../src/engine/step-runners.js';
 import { createCodexAppServerTransport } from '../../src/engine/build-review-policy-codex.js';
+import { resolveInstalledReviewPolicy } from '../../src/engine/build-review-policy-resolver.js';
 
 const entry = { id: 'portable', kind: 'custom' } as never;
 
@@ -74,5 +75,42 @@ describe('production installed-policy catalog under a self-host prepared candida
     expect(skills.map((found) => found.canonicalSkillPath)).toEqual([
       '/scratch/throwaway/skills/shared/SKILL.md', '/operator/.codex/skills/operator-only/SKILL.md',
     ]);
+  });
+
+  it('resolves a self-host Codex policy to the prepared copy when Codex also lists the operator install', async () => {
+    // Observed shape: CODEX_HOME is the throwaway home, but Codex still lists
+    // the operator's $HOME/.agents/skills, so the prepared pass reports two
+    // user-scope origins for one policy.
+    const skill = (name: string, path: string) => ({ name, path, scope: 'user', enabled: true, pluginId: null });
+    const operatorInstall = '/operator/checkout/skills/build-review-test-quality/SKILL.md';
+    const preparedCopy = '/scratch/throwaway/skills/build-review-test-quality/SKILL.md';
+    const codexTransport = { open: async (environment: { env: NodeJS.ProcessEnv; cwd: string }) => ({
+      request: async () => ({ data: [{ cwd: environment.cwd, errors: [], skills: environment.env.CODEX_HOME === '/operator/.codex'
+        ? [skill('build-review-test-quality', operatorInstall)]
+        : [skill('build-review-test-quality', operatorInstall), skill('build-review-test-quality', preparedCopy)] }] }),
+      close: async () => {},
+    }) } as never;
+    const catalog = productionBuildReviewPolicyCatalog('/project', { codexTransport });
+    const skills = await catalog({ provider: 'codex', entry, skill: 'build-review-test-quality', preparedEnv: { CODEX_HOME: '/scratch/throwaway' }, originalCatalogHome: '/operator/.codex' });
+
+    expect(resolveInstalledReviewPolicy({ skill: 'build-review-test-quality' }, skills)).toMatchObject({
+      kind: 'resolved', policy: { canonicalSkillPath: preparedCopy },
+    });
+  });
+
+  it('keeps two distinct prepared installs of one policy ambiguous', async () => {
+    const skill = (name: string, path: string, scope: string) => ({ name, path, scope, enabled: true, pluginId: null });
+    const codexTransport = { open: async (environment: { env: NodeJS.ProcessEnv; cwd: string }) => ({
+      request: async () => ({ data: [{ cwd: environment.cwd, errors: [], skills: environment.env.CODEX_HOME === '/operator/.codex'
+        ? []
+        : [skill('portable', '/scratch/throwaway/skills/portable/SKILL.md', 'user'), skill('portable', '/project/.agents/skills/portable/SKILL.md', 'repo')] }] }),
+      close: async () => {},
+    }) } as never;
+    const catalog = productionBuildReviewPolicyCatalog('/project', { codexTransport });
+    const skills = await catalog({ provider: 'codex', entry, skill: 'portable', preparedEnv: { CODEX_HOME: '/scratch/throwaway' }, originalCatalogHome: '/operator/.codex' });
+
+    expect(resolveInstalledReviewPolicy({ skill: 'portable' }, skills)).toMatchObject({
+      kind: 'failure', failure: { code: 'ambiguous' },
+    });
   });
 });

@@ -205,7 +205,7 @@ async function writePiNativeSchema(options: InvokeOptions): Promise<string> {
   const homeDir = options.nativeSchemaScratchHome ?? options.selfHost?.env.PI_HOME;
   if (!homeDir) throw new Error(`requested native schema requires an owned ${piDisplayName()} scratch home`);
   return writeScratchSchema({
-    worktreeRoot: (options.nativeSchemaScratchHome === undefined ? undefined : options.nativeSchemaScratchRoot) ?? options.cwd ?? process.cwd(),
+    worktreeRoot: (options.nativeSchemaScratchHome === undefined ? options.selfHost?.scratchRoot : options.nativeSchemaScratchRoot) ?? options.cwd ?? process.cwd(),
     homeDir,
     schema: options.nativeSchema!,
   });

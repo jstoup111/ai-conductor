@@ -62,7 +62,7 @@ describe('self-host live-boundary events', () => {
     await Promise.all([projectRoot, liveCheckout, providerHome, fakeBin].map(root => rm(root, { recursive: true, force: true })));
   });
 
-  let lastPrepared: { originalCatalogHome?: string; env: NodeJS.ProcessEnv } | undefined;
+  let lastPrepared: { originalCatalogHome?: string; scratchRoot?: string; env: NodeJS.ProcessEnv } | undefined;
   function harness(work: () => Promise<StepRunResult>, options: { selfHost?: boolean; maxRetries?: number; candidateAttempts?: number } = {}) {
     const runtimes = new ProviderRuntimeSet([{ key: 'claude', provider: { invoke: vi.fn(), }, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }] as never);
     const providerExecution: ProviderExecutionContext = { runtimes, sessions: {} as never, configuredProviders: ['claude'] };
@@ -213,5 +213,8 @@ describe('self-host live-boundary events', () => {
     // needs the original root named by preparation, not guessed afterwards.
     expect(lastPrepared?.originalCatalogHome).toBe(providerHome);
     expect(lastPrepared?.env.CLAUDE_CONFIG_DIR).not.toBe(providerHome);
+    // Scratch confinement checks the home against the worktree that owns it,
+    // not the invocation cwd (a review snapshot for build_review rubrics).
+    expect(lastPrepared?.scratchRoot).toBe(projectRoot);
   });
 });
