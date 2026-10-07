@@ -547,6 +547,95 @@ describe('custom build-review policy runner', () => {
     })]);
   });
 
+  /**
+   * Self-host preparation copies `skills/` into each candidate's throwaway
+   * provider home, Codex resolves the policy from that copy (#3023), and the
+   * candidate's teardown deletes the home before the lap settles (#3021 halt).
+   */
+  async function runThrowawayHomeCodexMember(input: {
+    readonly duringReview?: (home: string) => Promise<void>;
+    readonly priorLifecycleEpisode?: boolean;
+  }) {
+    const root = await fixture();
+    const homes: string[] = [];
+    if (input.priorLifecycleEpisode) {
+      await writeFile(join(root, '.pipeline', 'provider-lifecycle-build_review.json'), `${JSON.stringify({
+        version: 1,
+        lifecycle: { phase: 'settled', attempt: { logicalStep: 'build_review', id: 'prior-dispatch' }, recoveryCount: 0, outcome: 'failed' },
+      })}\n`);
+    }
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const invoke = vi.fn(async (options: InvokeOptions) => {
+      await input.duringReview?.(options.selfHost!.env!.CODEX_HOME!);
+      return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+    });
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
+    const events = new ConductorEventEmitter();
+    const failures: unknown[] = [];
+    events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event); });
+    const runner = new DefaultStepRunner(provider, 'custom-policy-throwaway-home', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        // A fallback list makes every candidate capture a baseline in its own
+        // prepared home, which the executor tears down before fan-out.
+        portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'global', llm_provider: ['codex', 'claude'] },
+      } } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([
+        { key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) },
+        { key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
+      ]),
+      sessionStore: new ProviderSessionStore(), events,
+      probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
+      providerExecution: {
+        prepareCandidateSelfHost: async () => {
+          const home = await mkdtemp(join(root, 'self-host-home-'));
+          homes.push(home);
+          const packageRoot = join(home, 'skills', 'portable-policy');
+          await mkdir(join(packageRoot, 'agents'), { recursive: true });
+          await writeFile(join(packageRoot, 'SKILL.md'), '# Portable policy\n');
+          await writeFile(join(packageRoot, 'agents', 'openai.yaml'), 'interface: {}\n');
+          return {
+            executable: '/prepared/codex', env: { CODEX_HOME: home, CLAUDE_CONFIG_DIR: home }, args: [],
+            teardown: async () => { await rm(home, { recursive: true, force: true }); },
+          };
+        },
+      } as never,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: passingEffectiveResolver,
+      buildReviewPolicyCatalog: async ({ preparedEnv }) => {
+        const packageRoot = join(preparedEnv!.CODEX_HOME!, 'skills', 'portable-policy');
+        return [{ semanticName: 'portable-policy', source: 'global', installationOrigin: packageRoot, canonicalSkillPath: join(packageRoot, 'SKILL.md'), packageRoot, declaredDependencies: [], availability: 'available' as const }];
+      },
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    });
+    const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    return { result, failures, homes, invoke };
+  }
+
+  it('keeps a verdict whose policy package lived in a candidate home the engine tore down before settlement', async () => {
+    const { result, failures, homes, invoke } = await runThrowawayHomeCodexMember({ priorLifecycleEpisode: true });
+
+    expect(result.success, result.output).toBe(true);
+    expect(failures).toEqual([]);
+    expect(invoke).toHaveBeenCalledOnce();
+    // Both baseline homes and the reviewing home were really deleted.
+    expect(homes.length).toBeGreaterThanOrEqual(3);
+    await expect(Promise.all(homes.map((home) => readdir(home).then(() => home, () => undefined)))).resolves.toEqual(homes.map(() => undefined));
+  });
+
+  it('still discards the lap when the throwaway-home policy package is edited while its reviewer runs', async () => {
+    const { result, failures } = await runThrowawayHomeCodexMember({
+      duringReview: async (home) => { await writeFile(join(home, 'skills', 'portable-policy', 'agents', 'openai.yaml'), 'interface: { edited: true }\n'); },
+    });
+
+    expect(result).toMatchObject({ success: false, currentLapMechanicalFault: true });
+    expect(result.output).toContain('review-input-mutated');
+    expect(failures).toEqual([expect.objectContaining({ changedInputs: ['installedPolicyPackage:agents/openai.yaml'] })]);
+  });
+
   // Covers: task:7, rem-as-built-rem-ab12-1
   it('discards a real frozen-head mutation during fan-out without publishing an aggregate', async () => {
     const root = await fixture();

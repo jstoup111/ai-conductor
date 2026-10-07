@@ -6,6 +6,7 @@ import { AUDIT_TRAIL_DIRECTORY } from './audit-trail.js';
 import { BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY } from './build-review-artifacts.js';
 import { BUILD_REVIEW_CACHE_DIRECTORY } from './build-review-cache.js';
 import { FEATURE_EVENT_LOG_PATH } from './event-persister.js';
+import { providerLifecycleEpisodeRelativePath } from './provider-lifecycle-store.js';
 import { STEP_HEARTBEAT_PATH } from './step-heartbeat.js';
 
 const PIPELINE_DIRECTORY = '.pipeline/';
@@ -17,7 +18,9 @@ function pipelineRelative(path: string): string {
 
 /**
  * Pipeline paths the engine itself appends to or rewrites while a lap runs
- * (event ledgers, heartbeat, verdict cache, captured policy copies). They are
+ * (event ledgers, heartbeat, verdict cache, captured policy copies, and the
+ * step's provider-lifecycle recovery episode, which each rubric dispatch's
+ * supervisor writes and clears as it settles). They are
  * relative to the pipeline evidence root and derived from their writers' own
  * path constants, so a lap never invalidates itself through its telemetry.
  * Captured policy bytes are protected by their own digest root instead.
@@ -28,6 +31,7 @@ export const BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES: readonly string[] = Object.fr
   STEP_HEARTBEAT_PATH,
   BUILD_REVIEW_CACHE_DIRECTORY,
   BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY,
+  providerLifecycleEpisodeRelativePath('build_review'),
 ].map(pipelineRelative));
 
 export const BUILD_REVIEW_INPUT_ROOT_KINDS = [

@@ -20,6 +20,17 @@ export interface BuildReviewLapInputSettlement {
   readonly changedInputs: readonly string[];
 }
 
+const EMPTY_ROOTS: BuildReviewInputDigestRoots = Object.freeze({
+  frozenHead: [], frozenBaseline: [], capturedPolicyMaterial: [], installedPolicyPackage: [], evidenceRoot: [],
+});
+
+function mergeDigests(left: BuildReviewInputDigest, right: BuildReviewInputDigest): BuildReviewInputDigest {
+  const entries = [...left.entries, ...right.entries].sort((a, b) => (
+    a.root.localeCompare(b.root) || a.relativePath.localeCompare(b.relativePath)
+  ));
+  return { version: 1, entries };
+}
+
 type CacheWriteOutcome = { readonly ok: true } | { readonly ok: false; readonly error: unknown };
 
 /**
@@ -41,6 +52,8 @@ export class BuildReviewLapGate {
   private readonly pending = new Set<string>();
   private readonly records: BuildReviewLapInputRecord[] = [];
   private readonly registeredPolicies = new Set<string>();
+  /** Installed-package digests taken before their owner deleted the package root. */
+  private readonly sealedPackages = new Map<BuildReviewLapInputRecord, BuildReviewInputDigest>();
   private readonly deferredCacheWrites: Array<{ readonly member: string; readonly write: () => Promise<CacheWriteOutcome> }> = [];
   private readonly slotWaiters: Array<() => void> = [];
   private readonly baseline: Promise<void>;
@@ -106,6 +119,25 @@ export class BuildReviewLapGate {
     this.registeredPolicies.add(key);
   }
 
+  /**
+   * Re-digests the installed package at `packageRoot` now, ahead of settlement.
+   *
+   * A self-host candidate's policy package can live inside its throwaway
+   * provider home (Codex loads the prepared copy of `skills/`), and the
+   * candidate's teardown deletes that home before the lap settles. The package
+   * can only influence a verdict while that candidate exists, so its owner
+   * seals it immediately before teardown: an edit made during the reviewer
+   * run still differs from the baseline, while the engine's own deletion of
+   * the home is never read as a mutated input. Captured policy material and
+   * every other root keep settling at the end of the lap.
+   */
+  async sealPolicyPackage(packageRoot: string): Promise<void> {
+    for (const record of this.records) {
+      if (record.roots.installedPolicyPackage !== packageRoot || this.sealedPackages.has(record)) continue;
+      this.sealedPackages.set(record, await captureBuildReviewInputDigest({ ...EMPTY_ROOTS, installedPolicyPackage: packageRoot }));
+    }
+  }
+
   /** Arrives and waits until every member's baseline exists. */
   async waitForBaseline(member: string): Promise<void> {
     this.arrive(member);
@@ -153,8 +185,12 @@ export class BuildReviewLapGate {
 
   /** Re-digests every registered input and lists what changed during the lap. */
   async settle(): Promise<BuildReviewLapInputSettlement> {
-    const records = await Promise.all(this.records.map(async ({ roots, before }) => {
-      const after = await captureBuildReviewInputDigest(roots);
+    const records = await Promise.all(this.records.map(async (record) => {
+      const { roots, before } = record;
+      const sealed = this.sealedPackages.get(record);
+      const after = sealed === undefined
+        ? await captureBuildReviewInputDigest(roots)
+        : mergeDigests(await captureBuildReviewInputDigest({ ...roots, installedPolicyPackage: [] }), sealed);
       return { roots, before, after, changedInputs: await diffBuildReviewInputDigests(before, after) };
     }));
     return {
