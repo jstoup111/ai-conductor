@@ -600,6 +600,17 @@ function parseState(value: unknown): ParsedState {
   return { ok: false, reason: 'unknown-version' };
 }
 
+/**
+ * The admissibility check `mutate` applies before writing, exposed for a caller
+ * composing several transitions under one lease: each intermediate state is
+ * rejected with the same owner evidence before anything is written.
+ */
+export function checkRemediationCaseStoreTransition(nextState: RemediationCaseStoreState):
+  | { readonly ok: true }
+  | { readonly ok: false; readonly caseIds: readonly string[]; readonly sourceIds: readonly string[] } {
+  return parseState(nextState).ok ? { ok: true } : { ok: false, ...rejectedTransitionOwners(nextState) };
+}
+
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
 }

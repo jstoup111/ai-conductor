@@ -1,10 +1,10 @@
-// Covers: task:7, task:19, task:35, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab4-1, task:rem-ar-ab-d9-3-2, task:rem-as-built-rem-ar-ab-d6-9-1
+// Covers: task:7, task:19, task:35, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab4-1, task:rem-ar-ab-d9-3-2, task:rem-as-built-rem-ar-ab-d6-9-1, task:rem-as-built-rem-ar-ab-d6-13-1
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewSettlementObligationCase, persistBuildReviewDecisionStop, renderBuildReviewDeferralIssue, remediationEffectMarker } from '../../src/engine/remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDecisionStop, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewSettlementObligationCase, persistBuildReviewDecisionStop, renderBuildReviewDeferralIssue, remediationEffectMarker } from '../../src/engine/remediation-case-effects.js';
 import { fileIntakeIssue } from '../../src/engine/engineer/intake/file-issue.js';
 import { sanitizeIntakeText } from '../../src/engine/engineer/intake/sanitize.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
@@ -623,6 +623,34 @@ describe('remediation case effects', () => {
     expect(result).toMatchObject({
       ok: false,
       reason: 'build-review kickback budget exhausted (cumulative): blocked cases case-1 (effect effect-1); count 3, cumulative 6',
+    });
+  });
+  it('applies the same pure decision-stop transition the leased wrapper persists', async () => {
+    const owner = (id: string, sourceId: string): RemediationCaseRecord => ({
+      id, domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+      rationale: 'The owner is still being repaired.', resolution: 'open',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-03T00:00:00.000Z' }],
+      effect: { id: `effect-${id}`, kind: 'action', status: 'reserved' },
+    });
+    const initial: RemediationCaseStoreState = { version: 'v1', feature, cases: [owner('bound-owner', 'historic-source'), owner('overlapping-owner', 'stop-source')] };
+    const store = await storeWith(initial);
+    const before = await store.read();
+    if (!before.ok) throw new Error(before.reason);
+    const stop: RemediationCaseRecord = {
+      id: 'decision-stop', domain: 'build_review', disposition: 'escalate', priority: 'high', confidence: 'high',
+      rationale: 'An owner decision is required.', resolution: 'open',
+      sources: [{ sourceId: 'stop-source', outcome: 'escalate', recordedAt: '2026-10-03T00:00:00.000Z' }],
+      effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+    };
+
+    const pure = applyBuildReviewDecisionStop(before.state, { record: stop, supersedeCaseIds: ['bound-owner'] });
+    const wrapped = await persistBuildReviewDecisionStop({ store, record: stop, supersedeCaseIds: ['bound-owner'] });
+
+    expect(pure.value).toMatchObject({ ok: true, status: 'persisted', supersededCaseIds: ['bound-owner', 'overlapping-owner'] });
+    expect(wrapped).toEqual(pure.value);
+    await expect(store.read()).resolves.toEqual({ ok: true, state: pure.nextState });
+    expect(applyBuildReviewDecisionStop(pure.nextState!, { record: { ...stop, rationale: 'A different decision.' } })).toEqual({
+      value: { ok: false, reason: 'conflicting-case-id', caseIds: ['decision-stop'], sourceIds: ['stop-source'] },
     });
   });
 });

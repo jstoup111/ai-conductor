@@ -1,11 +1,11 @@
-// Covers: task:3, task:5
+// Covers: task:3, task:5, task:rem-as-built-rem-ar-ab-d6-13-1
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { classifyRemediationCaseReuse, reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
+import { classifyRemediationCaseReuse, reconcileRemediationCaseState, reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import type {
   RemediationCasePrdWideningRecord,
@@ -778,5 +778,22 @@ describe('remediation case reconciler', () => {
 
     expect(distinct.ok && distinct.state.cases.map((record) => record.id)).toEqual(['case-1', 'case-2']);
     expect(distinct.ok && distinct.caseIdsByRef.get('later-action')).toBe('case-2');
+  });
+  it('applies the same pure transition the leased wrapper persists', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const resolved = resolvedAnchorCase();
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [resolved] } }));
+    const before = await store.read();
+    if (!before.ok) throw new Error(before.reason);
+    const reconcileInput = { graph: distinctAnchorGraph(), recordedAt: RECORDED_AT };
+
+    const pure = reconcileRemediationCaseState(before.state, { ...reconcileInput, generateId: generatedIds('case-pure', 'effect-pure') });
+    const wrapped = await reconcileRemediationCases(store, { ...reconcileInput, generateId: generatedIds('case-pure', 'effect-pure') });
+
+    expect(pure).toMatchObject({ ok: true, changed: true });
+    const { changed: _changed, ...pureResult } = pure as Extract<typeof pure, { ok: true }>;
+    expect(wrapped).toEqual(pureResult);
+    await expect(store.read()).resolves.toEqual({ ok: true, state: pureResult.state });
   });
 });

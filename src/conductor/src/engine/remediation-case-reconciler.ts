@@ -85,7 +85,7 @@ export function classifyRemediationCaseReuse(
   return attemptedCaseIds.has(record.id) ? 'halt-repeat' : 'resume';
 }
 
-type Reconciliation =
+export type RemediationCaseStateReconciliation =
   | {
       readonly ok: true;
       readonly state: RemediationCaseStoreState;
@@ -163,10 +163,15 @@ function takeId(generateId: () => string, usedIds: Set<string>): string | Remedi
   return id;
 }
 
-function reconcileState(
+/**
+ * The pure reconciliation transition `reconcileRemediationCases` applies under
+ * its lease, exposed so a caller can compose it with the same judgement's other
+ * transitions into one atomic write (ADR D6.6).
+ */
+export function reconcileRemediationCaseState(
   state: RemediationCaseStoreState,
   input: ReconcileRemediationCasesInput,
-): Reconciliation {
+): RemediationCaseStateReconciliation {
   const foreignIds = new Set(input.foreignCaseIds ?? []);
   const attemptedIds = new Set(input.attemptedCaseIds ?? []);
   const existingById = new Map(state.cases.map((record) => [record.id, record]));
@@ -428,8 +433,8 @@ export async function reconcileRemediationCases(
   store: RemediationCaseStore,
   input: ReconcileRemediationCasesInput,
 ): Promise<ReconcileRemediationCasesResult> {
-  const mutation = await store.mutate<Reconciliation>(async (state) => {
-    const reconciliation = reconcileState(state, input);
+  const mutation = await store.mutate<RemediationCaseStateReconciliation>(async (state) => {
+    const reconciliation = reconcileRemediationCaseState(state, input);
     return reconciliation.ok
       ? { value: reconciliation, ...(reconciliation.changed ? { nextState: reconciliation.state } : {}) }
       : { value: reconciliation };

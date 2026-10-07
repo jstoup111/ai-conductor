@@ -16,6 +16,7 @@ import type { RemediationCaseDeferralEffect } from './remediation-case-artifact.
 import {
   type RemediationCaseFeatureIdentity,
   type RemediationCaseRecord,
+  type RemediationCaseStoreMutation,
   type RemediationCaseStoreState,
   RemediationCaseStore,
 } from './remediation-case-store.js';
@@ -107,6 +108,81 @@ export function sameDecisionStopContent(left: RemediationCaseRecord, right: Reme
     });
 }
 
+export type BuildReviewDecisionStopTransition = RemediationCaseStoreMutation<PersistBuildReviewDecisionStopResult>;
+
+/**
+ * The pure decision-stop transition: what `persistBuildReviewDecisionStop`
+ * applies under its lease, exposed so a caller can compose it with other
+ * transitions of the same judgement into one atomic write (ADR D6.6).
+ */
+export function applyBuildReviewDecisionStop(
+  state: RemediationCaseStoreState,
+  input: {
+    readonly record: RemediationCaseRecord;
+    /**
+     * An explicitly bound escalation replaces this owner even when the new
+     * stop's current-lap sources do not overlap its historic sources.
+     */
+    readonly supersedeCaseIds?: readonly string[];
+  },
+): BuildReviewDecisionStopTransition {
+  if (!isBuildReviewDecisionStop(input.record)) return { value: { ok: false, reason: 'invalid-decision-stop' } };
+  const existing = state.cases.find((record) => record.id === input.record.id);
+  if (existing) {
+    return {
+      value: sameDecisionStop(existing, input.record)
+        ? { ok: true as const, status: 'already-persisted' as const, caseId: existing.id, supersededCaseIds: [], supersededEffects: [] }
+        : {
+          ok: false as const, reason: 'conflicting-case-id' as const, caseIds: [existing.id],
+          sourceIds: [...new Set([...existing.sources, ...input.record.sources].map((source) => source.sourceId))],
+        },
+    };
+  }
+  const replayed = state.cases.find((record) =>
+    isBuildReviewDecisionStop(record) && sameDecisionStopContent(record, input.record));
+  if (replayed) {
+    return {
+      value: { ok: true as const, status: 'already-persisted' as const, caseId: replayed.id, supersededCaseIds: [], supersededEffects: [] },
+    };
+  }
+  const stopSourceIds = new Set(input.record.sources.map((source) => source.sourceId));
+  const explicitlySupersededCaseIds = new Set(input.supersedeCaseIds ?? []);
+  const superseded = state.cases.filter((record) => record.id !== input.record.id && record.domain === 'build_review' &&
+    isOpenRemediationCase(record) && (explicitlySupersededCaseIds.has(record.id) ||
+      record.sources.some((source) => stopSourceIds.has(source.sourceId))));
+  const supersededCaseIds = superseded.map((record) => record.id);
+  const supersededEffects = superseded.flatMap((record) => {
+    if (record.effect.kind === 'none' || record.effect.status !== 'reserved') return [];
+    return [{
+      caseId: record.id,
+      effectId: record.effect.id,
+      effectKind: record.effect.kind,
+      reason: `superseded by decision stop ${input.record.id}`,
+    }];
+  });
+  return {
+    value: { ok: true as const, status: 'persisted' as const, caseId: input.record.id, supersededCaseIds, supersededEffects },
+    nextState: {
+      ...state,
+      cases: [
+        ...state.cases.map((record) => {
+          if (!supersededCaseIds.includes(record.id)) return record;
+          const effect = record.effect.kind !== 'none' && record.effect.status === 'reserved'
+            ? {
+              id: record.effect.id,
+              kind: record.effect.kind,
+              status: 'failed' as const,
+              diagnostic: `superseded by decision stop ${input.record.id}`,
+            }
+            : record.effect;
+          return { ...record, resolution: 'resolved' as const, effect };
+        }),
+        input.record,
+      ],
+    },
+  };
+}
+
 /**
  * The effect-state owner persists decision stops through its existing lease,
  * but deliberately has no publication, tracker, artifact, or charge adapter.
@@ -114,69 +190,11 @@ export function sameDecisionStopContent(left: RemediationCaseRecord, right: Reme
 export async function persistBuildReviewDecisionStop(input: {
   readonly store: RemediationCaseStore;
   readonly record: RemediationCaseRecord;
-  /**
-   * An explicitly bound escalation replaces this owner even when the new
-   * stop's current-lap sources do not overlap its historic sources.
-   */
   readonly supersedeCaseIds?: readonly string[];
 }): Promise<PersistBuildReviewDecisionStopResult> {
   if (!isBuildReviewDecisionStop(input.record)) return { ok: false, reason: 'invalid-decision-stop' };
-  const mutation = await input.store.mutate<PersistBuildReviewDecisionStopResult>(async (state) => {
-    const existing = state.cases.find((record) => record.id === input.record.id);
-    if (existing) {
-      return {
-        value: sameDecisionStop(existing, input.record)
-          ? { ok: true as const, status: 'already-persisted' as const, caseId: existing.id, supersededCaseIds: [], supersededEffects: [] }
-          : {
-            ok: false as const, reason: 'conflicting-case-id' as const, caseIds: [existing.id],
-            sourceIds: [...new Set([...existing.sources, ...input.record.sources].map((source) => source.sourceId))],
-          },
-      };
-    }
-    const replayed = state.cases.find((record) =>
-      isBuildReviewDecisionStop(record) && sameDecisionStopContent(record, input.record));
-    if (replayed) {
-      return {
-        value: { ok: true as const, status: 'already-persisted' as const, caseId: replayed.id, supersededCaseIds: [], supersededEffects: [] },
-      };
-    }
-    const stopSourceIds = new Set(input.record.sources.map((source) => source.sourceId));
-    const explicitlySupersededCaseIds = new Set(input.supersedeCaseIds ?? []);
-    const superseded = state.cases.filter((record) => record.id !== input.record.id && record.domain === 'build_review' &&
-      isOpenRemediationCase(record) && (explicitlySupersededCaseIds.has(record.id) ||
-        record.sources.some((source) => stopSourceIds.has(source.sourceId))));
-    const supersededCaseIds = superseded.map((record) => record.id);
-    const supersededEffects = superseded.flatMap((record) => {
-      if (record.effect.kind === 'none' || record.effect.status !== 'reserved') return [];
-      return [{
-        caseId: record.id,
-        effectId: record.effect.id,
-        effectKind: record.effect.kind,
-        reason: `superseded by decision stop ${input.record.id}`,
-      }];
-    });
-    return {
-      value: { ok: true as const, status: 'persisted' as const, caseId: input.record.id, supersededCaseIds, supersededEffects },
-      nextState: {
-        ...state,
-        cases: [
-          ...state.cases.map((record) => {
-            if (!supersededCaseIds.includes(record.id)) return record;
-            const effect = record.effect.kind !== 'none' && record.effect.status === 'reserved'
-              ? {
-                id: record.effect.id,
-                kind: record.effect.kind,
-                status: 'failed' as const,
-                diagnostic: `superseded by decision stop ${input.record.id}`,
-              }
-              : record.effect;
-            return { ...record, resolution: 'resolved' as const, effect };
-          }),
-          input.record,
-        ],
-      },
-    };
-  });
+  const mutation = await input.store.mutate<PersistBuildReviewDecisionStopResult>(async (state) =>
+    applyBuildReviewDecisionStop(state, input));
   if (mutation.ok) return mutation.value;
   if (mutation.reason === 'rejected-transition' && 'caseIds' in mutation) {
     return { ok: false, reason: mutation.reason, caseIds: mutation.caseIds, sourceIds: mutation.sourceIds };

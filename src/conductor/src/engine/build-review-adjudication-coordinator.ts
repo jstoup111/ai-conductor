@@ -17,12 +17,12 @@ import { parsePlanTaskBodies } from './plan-task-parse.js';
 import { authorizeBuildReviewRemediationActionEffects, orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop, type PersistBuildReviewDecisionStopResult } from './remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDecisionStop, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, type PersistBuildReviewDecisionStopResult } from './remediation-case-effects.js';
 import { RemediationCaseJudgementRejectedError, type RemediationCaseJudgement } from './remediation-case-artifact.js';
-import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
+import { classifyRemediationCaseReuse, reconcileRemediationCases, reconcileRemediationCaseState, type ReconcileRemediationCasesInput, type ReconcileRemediationCasesResult } from './remediation-case-reconciler.js';
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds } from './build-review-work-order.js';
-import { RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseSuppressionEntry } from './remediation-case-store.js';
+import { checkRemediationCaseStoreTransition, RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseSuppressionEntry } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
 import type { BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import type { BumpKickbackGateInput, chargeBuildReviewEffectInLedger } from './kickback-ledger.js';
@@ -717,7 +717,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   ];
   const recordedAt = new Date().toISOString();
   const generateId = input.generateId ?? randomUUID;
-  const reconciled = await reconcileRemediationCases(store, {
+  const reconcileInput: ReconcileRemediationCasesInput = {
     graph: { ...graph.graph, cases: [...ordinaryCases, ...recurrenceOnlyCases] }, recordedAt, generateId,
     attemptedCaseIds,
     recurrenceOnlyCaseRefs: new Set(recurrenceOnlyCases.map((proposed) => proposed.case.caseRef)),
@@ -739,7 +739,131 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     // feed a later adjudication as an unresolved prior. A mechanically incomplete
     // lap proves nothing by absence, so it still leaves that history open.
     resolveAbsentOpenNonActionCases: input.mechanical === 'healthy',
+  };
+  const blockedConsistencySourceIds = new Set(blockedConsistency?.sourceIds ?? []);
+  // Exactly one escalation stop carries the blocked consistency verdict when
+  // the escalations cover its sources: one that covers them all, else the
+  // first contributor to a collective cover. Without an owner here the
+  // synthetic stop below has no uncovered sources left and the verdict would
+  // never reach durable state or the completion projection (ADR D12).
+  const coversBlockedSource = (proposed: typeof escalationCases[number]) =>
+    proposed.sources.some((source) => blockedConsistencySourceIds.has(source.sourceId));
+  const blockedConsistencyOwner = blockedConsistency === undefined ? undefined
+    : escalationCases.find((proposed) => blockedConsistency.sourceIds.every((sourceId) =>
+      proposed.sources.some((source) => source.sourceId === sourceId)))
+      ?? (blockedConsistency.sourceIds.every((sourceId) => escalationCases.some((proposed) =>
+        proposed.sources.some((source) => source.sourceId === sourceId)))
+        ? escalationCases.find(coversBlockedSource)
+        : undefined);
+  // Every store write of one validated judgement lands in a single lease:
+  // reconciliation, then each escalation stop, then the synthetic consistency
+  // stop, each applied to the state the previous one produced. Any rejection
+  // returns no next state, so a later conflict cannot leave earlier cases,
+  // stops, or supersessions durable (ADR D6.6). A D6.3 recurrence commits only
+  // the reconciliation and writes no stop, so its regressed halt below reads
+  // the same durable state it always has.
+  type ComposedStop = {
+    readonly proposed?: typeof escalationCases[number];
+    readonly result: Extract<PersistBuildReviewDecisionStopResult, { ok: true }>;
+  };
+  type ComposedAdjudication = {
+    readonly reconciled: ReconcileRemediationCasesResult;
+    readonly stops: readonly ComposedStop[];
+    readonly stopFailure?: { readonly label: string; readonly result: Extract<PersistBuildReviewDecisionStopResult, { ok: false }> };
+  };
+  const recurrenceOnlyRefs = new Set(recurrenceOnlyCases.map((proposed) => proposed.case.caseRef));
+  const composed = await store.mutate<ComposedAdjudication>(async (state) => {
+    const escalationCoveredBlockedSourceIds = new Set<string>();
+    const reconciliation = reconcileRemediationCaseState(state, reconcileInput);
+    if (reconciliation.ok && reconciliation.changed) {
+      const admissible = checkRemediationCaseStoreTransition(reconciliation.state);
+      if (!admissible.ok) {
+        return {
+          value: {
+            reconciled: { ok: false, reason: 'store-failure', storeReason: 'rejected-transition', caseIds: admissible.caseIds, sourceIds: admissible.sourceIds },
+            stops: [],
+          },
+        };
+      }
+    }
+    if (!reconciliation.ok) return { value: { reconciled: reconciliation, stops: [] } };
+    const committedReconciliation = reconciliation.changed ? { nextState: reconciliation.state } : {};
+    if ([...reconciliation.recurringCaseIdsByRef?.keys() ?? []].some((caseRef) => recurrenceOnlyRefs.has(caseRef))) {
+      return { value: { reconciled: reconciliation, stops: [] }, ...committedReconciliation };
+    }
+    let current = reconciliation.state;
+    let changed = reconciliation.changed;
+    const stops: ComposedStop[] = [];
+    const applyStop = (label: string, record: RemediationCaseRecord, supersedeCaseIds?: readonly string[]):
+      | { readonly ok: true; readonly result: ComposedStop['result'] }
+      | { readonly ok: false; readonly failure: NonNullable<ComposedAdjudication['stopFailure']> } => {
+      const applied = applyBuildReviewDecisionStop(current, { record, ...(supersedeCaseIds === undefined ? {} : { supersedeCaseIds }) });
+      if (!applied.value.ok) return { ok: false, failure: { label, result: applied.value } };
+      if (applied.nextState) {
+        const admissible = checkRemediationCaseStoreTransition(applied.nextState);
+        if (!admissible.ok) {
+          return { ok: false, failure: { label, result: { ok: false, reason: 'rejected-transition', caseIds: admissible.caseIds, sourceIds: admissible.sourceIds } } };
+        }
+        current = applied.nextState;
+        changed = true;
+      }
+      return { ok: true, result: applied.value };
+    };
+    for (const proposed of escalationCases) {
+      // A bound owner cannot also be the new decision stop: persistence must be
+      // able to resolve it atomically before opening its replacement.
+      const caseId = proposed.case.existingCaseId === undefined
+        ? matchingPriorEscalationStop(proposed)?.id ?? generateId()
+        : boundDecisionStopId(input.aggregate.lapId, proposed.case.existingCaseId);
+      const ownsBlockedConsistency = proposed === blockedConsistencyOwner;
+      const persistedStop = applyStop('decision stop', {
+        id: caseId, domain: 'build_review', disposition: 'escalate', priority: proposed.case.priority,
+        rationale: proposed.case.rationale, confidence: proposed.case.confidence, resolution: 'open',
+        sources: proposed.sources.map((source) => ({ sourceId: source.sourceId, outcome: source.outcome, recordedAt })),
+        effect: { kind: 'none' }, escalation: proposed.case.escalation!,
+        ...(ownsBlockedConsistency ? { consistencyStop: blockedConsistency } : {}),
+        ...(proposed.case.distinctFrom?.length ? { distinctFrom: proposed.case.distinctFrom } : {}),
+      }, proposed.case.existingCaseId === undefined ? undefined : [proposed.case.existingCaseId]);
+      if (!persistedStop.ok) {
+        return { value: { reconciled: reconciliation, stops: [], stopFailure: persistedStop.failure } };
+      }
+      for (const source of proposed.sources) {
+        if (blockedConsistencySourceIds.has(source.sourceId)) escalationCoveredBlockedSourceIds.add(source.sourceId);
+      }
+      stops.push({ proposed, result: persistedStop.result });
+    }
+    if (blockedConsistency) {
+      const sources = graph.graph.sourceOutcomes
+        .filter((source) => blockedConsistency.sourceIds.includes(source.sourceId) && !escalationCoveredBlockedSourceIds.has(source.sourceId))
+        .map((source) => ({ sourceId: source.sourceId, outcome: source.outcome, recordedAt }));
+      // The synthetic stop is the new case for the validated live rows it
+      // absorbs, including effect-withheld actions, so it persists their
+      // declared lineage (D6.2).
+      const syntheticSourceIds = new Set(sources.map((source) => source.sourceId));
+      const syntheticDistinctFrom = [...new Set(liveGraphCases
+        .filter((proposed) => proposed.sources.some((source) => syntheticSourceIds.has(source.sourceId)))
+        .flatMap((proposed) => proposed.case.distinctFrom ?? []))];
+      if (sources.length > 0) {
+        const persistedStop = applyStop('blocked consistency stop', {
+          id: consistencyStopId(input.aggregate.lapId), domain: 'build_review', disposition: 'escalate', priority: 'high',
+          rationale: blockedConsistency.rationale, confidence: 'high', resolution: 'open', sources,
+          effect: { kind: 'none' }, consistencyStop: blockedConsistency,
+          ...(syntheticDistinctFrom.length === 0 ? {} : { distinctFrom: syntheticDistinctFrom }),
+        });
+        if (!persistedStop.ok) {
+          return { value: { reconciled: reconciliation, stops: [], stopFailure: persistedStop.failure } };
+        }
+        stops.push({ result: persistedStop.result });
+      }
+    }
+    return { value: { reconciled: reconciliation, stops }, ...(changed ? { nextState: current } : {}) };
   });
+  const reconciled: ReconcileRemediationCasesResult = composed.ok
+    ? composed.value.reconciled
+    : {
+      ok: false, reason: 'store-failure', storeReason: composed.reason,
+      ...(composed.reason === 'rejected-transition' && 'caseIds' in composed ? { caseIds: composed.caseIds, sourceIds: composed.sourceIds } : {}),
+    };
   if (!reconciled.ok) {
     // A store fault stays fail-closed; a rejected graph is content-specific
     // and, like every failure above, may be obsolete under a late acceptance.
@@ -810,81 +934,25 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const supersededDecisionStopEffects: Array<{
     caseId: string; effectId: string; effectKind: 'action' | 'deferral'; reason: string;
   }> = [];
-  const blockedConsistencySourceIds = new Set(blockedConsistency?.sourceIds ?? []);
-  const escalationCoveredBlockedSourceIds = new Set<string>();
-  // Exactly one escalation stop carries the blocked consistency verdict when
-  // the escalations cover its sources: one that covers them all, else the
-  // first contributor to a collective cover. Without an owner here the
-  // synthetic stop below has no uncovered sources left and the verdict would
-  // never reach durable state or the completion projection (ADR D12).
-  const coversBlockedSource = (proposed: typeof escalationCases[number]) =>
-    proposed.sources.some((source) => blockedConsistencySourceIds.has(source.sourceId));
-  const blockedConsistencyOwner = blockedConsistency === undefined ? undefined
-    : escalationCases.find((proposed) => blockedConsistency.sourceIds.every((sourceId) =>
-      proposed.sources.some((source) => source.sourceId === sourceId)))
-      ?? (blockedConsistency.sourceIds.every((sourceId) => escalationCases.some((proposed) =>
-        proposed.sources.some((source) => source.sourceId === sourceId)))
-        ? escalationCases.find(coversBlockedSource)
-        : undefined);
   // A replayed stop is no transition, so it gets no lifecycle occurrence; a
   // newly written synthetic stop is one, though no caseRef names it (D12).
   const replayedStopIds = new Set<string>();
   const newSyntheticStopIds: string[] = [];
-  for (const proposed of escalationCases) {
-    // A bound owner cannot also be the new decision stop: persistence must be
-    // able to resolve it atomically before opening its replacement.
-    const caseId = proposed.case.existingCaseId === undefined
-      ? matchingPriorEscalationStop(proposed)?.id ?? generateId()
-      : boundDecisionStopId(input.aggregate.lapId, proposed.case.existingCaseId);
-    const proposedSourceIds = new Set(proposed.sources.map((source) => source.sourceId));
-    const ownsBlockedConsistency = proposed === blockedConsistencyOwner;
-    const persistedStop = await persistBuildReviewDecisionStop({
-      store,
-      ...(proposed.case.existingCaseId === undefined ? {} : { supersedeCaseIds: [proposed.case.existingCaseId] }),
-      record: {
-        id: caseId, domain: 'build_review', disposition: 'escalate', priority: proposed.case.priority,
-        rationale: proposed.case.rationale, confidence: proposed.case.confidence, resolution: 'open',
-        sources: proposed.sources.map((source) => ({ sourceId: source.sourceId, outcome: source.outcome, recordedAt })),
-        effect: { kind: 'none' }, escalation: proposed.case.escalation!,
-        ...(ownsBlockedConsistency ? { consistencyStop: blockedConsistency } : {}),
-        ...(proposed.case.distinctFrom?.length ? { distinctFrom: proposed.case.distinctFrom } : {}),
-      },
-    });
-    if (!persistedStop.ok) return fail(`decision stop ${persistedStop.reason}`, decisionStopFailureEvidence(persistedStop));
-    if (persistedStop.status === 'already-persisted') replayedStopIds.add(persistedStop.caseId);
-    for (const sourceId of proposedSourceIds) {
-      if (blockedConsistencySourceIds.has(sourceId)) escalationCoveredBlockedSourceIds.add(sourceId);
-    }
-    supersededDecisionStopCaseIds.push(...persistedStop.supersededCaseIds);
-    supersededDecisionStopEffects.push(...persistedStop.supersededEffects);
-    caseIdsByRef.set(proposed.case.caseRef, persistedStop.caseId);
+  // Unreachable: a failed lease already returned through `reconciled` above.
+  if (!composed.ok) return fail('composed adjudication was not reconciled');
+  if (composed.value.stopFailure) {
+    const { label, result } = composed.value.stopFailure;
+    return fail(`${label} ${result.reason}`, decisionStopFailureEvidence(result));
   }
-  if (blockedConsistency) {
-    const sources = graph.graph.sourceOutcomes
-      .filter((source) => blockedConsistency.sourceIds.includes(source.sourceId) && !escalationCoveredBlockedSourceIds.has(source.sourceId))
-      .map((source) => ({ sourceId: source.sourceId, outcome: source.outcome, recordedAt }));
-    // The synthetic stop is the new case for the validated live rows it
-    // absorbs, including effect-withheld actions, so it persists their
-    // declared lineage (D6.2).
-    const syntheticSourceIds = new Set(sources.map((source) => source.sourceId));
-    const syntheticDistinctFrom = [...new Set(liveGraphCases
-      .filter((proposed) => proposed.sources.some((source) => syntheticSourceIds.has(source.sourceId)))
-      .flatMap((proposed) => proposed.case.distinctFrom ?? []))];
-    if (sources.length > 0) {
-      const persistedStop = await persistBuildReviewDecisionStop({
-        store,
-        record: {
-          id: consistencyStopId(input.aggregate.lapId), domain: 'build_review', disposition: 'escalate', priority: 'high',
-          rationale: blockedConsistency.rationale, confidence: 'high', resolution: 'open', sources,
-          effect: { kind: 'none' }, consistencyStop: blockedConsistency,
-          ...(syntheticDistinctFrom.length === 0 ? {} : { distinctFrom: syntheticDistinctFrom }),
-        },
-      });
-      if (!persistedStop.ok) return fail(`blocked consistency stop ${persistedStop.reason}`, decisionStopFailureEvidence(persistedStop));
-      if (persistedStop.status === 'persisted') newSyntheticStopIds.push(persistedStop.caseId);
-      supersededDecisionStopCaseIds.push(...persistedStop.supersededCaseIds);
-      supersededDecisionStopEffects.push(...persistedStop.supersededEffects);
+  for (const { proposed, result } of composed.value.stops) {
+    if (proposed === undefined) {
+      if (result.status === 'persisted') newSyntheticStopIds.push(result.caseId);
+    } else {
+      if (result.status === 'already-persisted') replayedStopIds.add(result.caseId);
+      caseIdsByRef.set(proposed.case.caseRef, result.caseId);
     }
+    supersededDecisionStopCaseIds.push(...result.supersededCaseIds);
+    supersededDecisionStopEffects.push(...result.supersededEffects);
   }
   const durableState = await store.read();
   if (!durableState.ok) return fail(`case store ${durableState.reason}`);

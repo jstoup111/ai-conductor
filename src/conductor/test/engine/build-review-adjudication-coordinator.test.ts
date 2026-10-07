@@ -1,4 +1,168 @@
-// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-ar-ab-d9-3-1, task:rem-ar-ab-d9-3-2, task:rem-as-built-rem-ar-ab-d6-9-1, task:rem-as-built-rem-ar-ab-d6-10-1, task:rem-as-built-rem-ar-ab-d6-11-1, task:rem-as-built-rem-ar-ab-d11-2-1, task:rem-as-built-rem-ar-ab-d12-3-1
+describe('coordinateBuildReviewAdjudication one-lease judgement persistence', () => {
+  const finding = (name: string) => ({
+    concernKind: 'test-insensitive' as const, summary: `The ${name} changed test is insensitive.`, evidenceLocations: [`test/${name}.test.ts:1`],
+    anchor: { rubric: 'testQuality' as const, locus: { path: `test/${name}.test.ts`, contentHash: `sha256:${name}`, display: `${name} test` } },
+  });
+  const tripleAggregate = joinBuildReviewRubricOutcomes({
+    lapId: 'lap-3' as never,
+    snapshotDigest: 'snapshot-3',
+    results: {
+      security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId: 'lap-3' as never, snapshotDigest: 'snapshot-3', contractVersion: 'v3', verdict: 'FAIL',
+        findings: [finding('first'), finding('second'), finding('third')],
+      },
+    },
+  });
+  const [firstSource, secondSource, thirdSource] = projectBuildReviewAggregateSources(tripleAggregate)!.map(buildReviewAdjudicationSourceId);
+  const casesPath = (root: string) => join(root, '.pipeline', 'remediation-cases.json');
+  const idsFrom = (...ids: string[]) => () => ids.shift()!;
+
+  it('writes no stop, supersession, or case when a second bound escalation conflicts with the first', async () => {
+    const root = await projectRoot();
+    await seedCases(new RemediationCaseStore(root, feature), {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-bound-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The current owner remains unresolved.', resolution: 'open',
+        sources: [{ sourceId: firstSource!, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { id: 'effect-bound-owner', kind: 'action', status: 'reserved' },
+      }],
+    });
+    const before = await readFile(casesPath(root), 'utf8');
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [
+        { sourceId: firstSource!, outcome: 'escalate', caseRef: 'first-stop' },
+        { sourceId: secondSource!, outcome: 'escalate', caseRef: 'second-stop' },
+        { sourceId: thirdSource!, outcome: 'rejected', caseRef: 'third-reject' },
+      ],
+      cases: [
+        {
+          caseRef: 'first-stop', existingCaseId: 'case-bound-owner', disposition: 'escalate', priority: 'high', confidence: 'high',
+          rationale: 'Architecture must decide the first source.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+        },
+        {
+          caseRef: 'second-stop', existingCaseId: 'case-bound-owner', disposition: 'escalate', priority: 'high', confidence: 'high',
+          rationale: 'Architecture must decide the second source.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+        },
+        { caseRef: 'third-reject', disposition: 'reject', priority: 'low', confidence: 'high', rationale: 'The third proposal cannot proceed.', effect: { kind: 'none' } },
+      ],
+      consistency: {
+        verdict: 'consistent', sourceIds: [firstSource!, secondSource!, thirdSource!],
+        caseRefs: ['first-stop', 'second-stop', 'third-reject'], rationale: 'The decisions are consistent.',
+      },
+    } as const satisfies RemediationCaseJudgement;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: tripleAggregate,
+      generateId: idsFrom('case-third-reject'), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      detail: expect.stringMatching(/^decision stop conflicting-case-id; persisted case history is valid; failure kind: rejected-transition$/),
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'rejected-transition',
+      caseIds: ['decision-stop-lap-3-case-bound-owner'],
+    }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_case_reconciled' }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_effect_failed' }));
+    expect(await readFile(casesPath(root), 'utf8')).toBe(before);
+  });
+
+  // A blocked verdict covers every source, so its lap's ordinary reconciliation
+  // write is the settlement of a prior open non-action case absent from the lap.
+  const absentReject = {
+    id: 'case-absent-reject', domain: 'build_review' as const, disposition: 'reject' as const, priority: 'low' as const, confidence: 'high' as const,
+    rationale: 'An earlier proposal could not proceed.', resolution: 'open' as const,
+    sources: [{ sourceId: 'absent-source', outcome: 'rejected' as const, recordedAt: '2026-10-02T00:00:00.000Z' }],
+    effect: { kind: 'none' as const },
+  };
+  const blockedJudgement = {
+    mode: 'case-v2', domain: 'build_review',
+    sourceOutcomes: [
+      { sourceId: firstSource!, outcome: 'escalate', caseRef: 'first-stop' },
+      { sourceId: secondSource!, outcome: 'rejected', caseRef: 'blocked-reject' },
+      { sourceId: thirdSource!, outcome: 'rejected', caseRef: 'blocked-reject' },
+    ],
+    cases: [
+      {
+        caseRef: 'first-stop', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'Architecture must decide the first source.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      },
+      { caseRef: 'blocked-reject', disposition: 'reject', priority: 'low', confidence: 'high', rationale: 'The remaining proposals cannot proceed.', effect: { kind: 'none' } },
+    ],
+    consistency: {
+      verdict: 'blocked', sourceIds: [firstSource!, secondSource!, thirdSource!],
+      caseRefs: ['first-stop', 'blocked-reject'], rationale: 'The sources remain inconsistent.',
+    },
+  } as const satisfies RemediationCaseJudgement;
+
+  it('leaves a reconciled settlement and escalation stop unwritten when the synthetic consistency stop conflicts', async () => {
+    const root = await projectRoot();
+    await seedCases(new RemediationCaseStore(root, feature), {
+      version: 'v1', feature,
+      cases: [absentReject, {
+        id: 'consistency-stop-lap-3', domain: 'build_review', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'A different consistency conflict was recorded.', resolution: 'open',
+        sources: [{ sourceId: 'historic-source', outcome: 'rejected', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        effect: { kind: 'none' }, consistencyStop: { sourceIds: ['historic-source'], rationale: 'A different consistency conflict was recorded.' },
+      }],
+    });
+    const before = await readFile(casesPath(root), 'utf8');
+    const events: RemediationCaseLifecycleEvent[] = [];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => blockedJudgement), aggregate: tripleAggregate,
+      generateId: idsFrom('stop-first'), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      detail: expect.stringMatching(/^blocked consistency stop conflicting-case-id; persisted case history is valid; failure kind: rejected-transition$/),
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed', failureKind: 'rejected-transition', caseIds: ['consistency-stop-lap-3'],
+    }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_case_reconciled' }));
+    expect(await readFile(casesPath(root), 'utf8')).toBe(before);
+  });
+
+  it('persists a settlement, escalation stop, and synthetic stop together and replays them as already persisted', async () => {
+    const root = await projectRoot();
+    await seedCases(new RemediationCaseStore(root, feature), { version: 'v1', feature, cases: [absentReject] });
+
+    const first = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => blockedJudgement), aggregate: tripleAggregate, generateId: idsFrom('stop-first'),
+    });
+    expect(first).toMatchObject({ ok: true, route: 'halt' });
+    const persisted = await new RemediationCaseStore(root, feature).read();
+    if (!persisted.ok) throw new Error(persisted.reason);
+    expect(persisted.state.cases).toEqual([
+      expect.objectContaining({ id: 'case-absent-reject', resolution: 'resolved' }),
+      expect.objectContaining({ id: 'stop-first', resolution: 'open', escalation: { owner: 'architecture' }, sources: [expect.objectContaining({ sourceId: firstSource })] }),
+      expect.objectContaining({
+        id: 'consistency-stop-lap-3', resolution: 'open', consistencyStop: expect.any(Object),
+        sources: [expect.objectContaining({ sourceId: secondSource }), expect.objectContaining({ sourceId: thirdSource })],
+      }),
+    ]);
+
+    const before = await readFile(casesPath(root), 'utf8');
+    const events: RemediationCaseLifecycleEvent[] = [];
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => blockedJudgement), aggregate: tripleAggregate, generateId: idsFrom('stop-replayed'),
+      emit: async (event) => { events.push(event); },
+    })).resolves.toMatchObject({ ok: true, route: 'halt' });
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_adjudication_failed' }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_case_reconciled' }));
+    expect(await readFile(casesPath(root), 'utf8')).toBe(before);
+  });
+});
+
+// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-ar-ab-d9-3-1, task:rem-ar-ab-d9-3-2, task:rem-as-built-rem-ar-ab-d6-9-1, task:rem-as-built-rem-ar-ab-d6-10-1, task:rem-as-built-rem-ar-ab-d6-11-1, task:rem-as-built-rem-ar-ab-d11-2-1, task:rem-as-built-rem-ar-ab-d12-3-1, task:rem-as-built-rem-ar-ab-d6-13-1
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
