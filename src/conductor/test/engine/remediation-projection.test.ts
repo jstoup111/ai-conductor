@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -201,5 +202,87 @@ describe('remediation projection', () => {
         requiredReferences: [], pendingAsBuiltFindings: [], priorLaps: [], refusals: [],
       },
     });
+  });
+
+  // Covers: task:9
+  it('projects the build-stall question by its stall key without fabricating typed references', async () => {
+    const root = await fixture();
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'build-stall-question.md'), 'Which migration owns this boundary?');
+
+    const result = await buildRemediationProjection(root, {
+      source: 'build-stall', activePlanPath: '.docs/plans/active.md', featureDesc: 'Repair build stall evidence',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      projection: {
+        requiredReferences: [],
+        evidence: {
+          excerpts: [{
+            key: 'stall:repair-build-stall-evidence',
+            path: '.pipeline/build-stall-question.md',
+            content: 'Which migration owns this boundary?',
+          }],
+          omittedFiles: [],
+        },
+      },
+    });
+  });
+
+  // Covers: task:9
+  it('projects finish test failures by their test-stem key without fabricating typed references', async () => {
+    const root = await fixture();
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'test-failures.md'), 'remediation-projection.test.ts failed');
+
+    const result = await buildRemediationProjection(root, {
+      source: 'finish-verification', activePlanPath: '.docs/plans/active.md',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      projection: {
+        requiredReferences: [],
+        evidence: {
+          excerpts: [{
+            key: 'test:test-failures',
+            path: '.pipeline/test-failures.md',
+            content: 'remediation-projection.test.ts failed',
+          }],
+          omittedFiles: [],
+        },
+      },
+    });
+  });
+
+  // Covers: task:9
+  it('omits over-cap untyped evidence by path and digest while retaining its key', async () => {
+    const root = await fixture();
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    const content = 'x'.repeat(80);
+    await writeFile(join(root, '.pipeline', 'test-failures.md'), content);
+
+    const perFileResult = await buildRemediationProjection(root, {
+      source: 'finish-verification', activePlanPath: '.docs/plans/active.md',
+    }, { perFileHunksBytes: 64, totalDiffBytes: 128 });
+    const totalResult = await buildRemediationProjection(root, {
+      source: 'finish-verification', activePlanPath: '.docs/plans/active.md',
+    }, { perFileHunksBytes: 128, totalDiffBytes: 64 });
+
+    const omitted = {
+      key: 'test:test-failures',
+      path: '.pipeline/test-failures.md',
+      digest: `sha256:${createHash('sha256').update(content).digest('hex')}`,
+    };
+    for (const result of [perFileResult, totalResult]) {
+      expect(result).toMatchObject({
+        ok: true,
+        projection: {
+          requiredReferences: [],
+          evidence: { excerpts: [], omittedFiles: [omitted] },
+        },
+      });
+    }
   });
 });

@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import {
   REMEDIATION_EXISTING_TASK_DISPOSITION,
   REMEDIATION_HALT_CATEGORIES,
@@ -11,6 +14,7 @@ import {
 } from './artifacts.js';
 import { readAsBuiltVerdict } from './as-built-verdict-store.js';
 import type { AsBuiltGoverningReference } from './as-built-contract.js';
+import { AS_BUILT_PROJECTION_LIMITS, type AsBuiltProjectionLimits } from './as-built-projection.js';
 import {
   readKickbackLedgerResult,
   readPendingAsBuiltRemediationFindings,
@@ -18,6 +22,7 @@ import {
 } from './kickback-ledger.js';
 import { parsePlanTaskDoneWhen, parsePlanTaskTitles } from './plan-task-parse.js';
 import type { RefusalReworkEvidence } from './prd-widening-refusal-rework.js';
+import { slugify } from './worktree.js';
 
 /** Incremented only when the deterministic remediation input contract changes. */
 export const REMEDIATION_PROJECTION_VERSION = 1;
@@ -63,6 +68,20 @@ export interface RemediationProjectionVocabulary {
   readonly haltCategories: readonly RemediationHaltCategory[];
 }
 
+/** Read-only evidence from sources which have no typed required-reference set. */
+export interface RemediationProjectionEvidence {
+  readonly excerpts: readonly {
+    readonly key: string;
+    readonly path: string;
+    readonly content: string;
+  }[];
+  readonly omittedFiles: readonly {
+    readonly key: string;
+    readonly path: string;
+    readonly digest: string;
+  }[];
+}
+
 export interface RemediationProjectionPriorLap {
   readonly gate: string;
   readonly laps: number;
@@ -73,6 +92,8 @@ export interface RemediationProjection {
   readonly source: RemediationProjectionSource;
   /** Typed obligations the plan validator accounts for exactly once. */
   readonly requiredReferences: readonly RemediationRequiredReference[];
+  /** Bounded read-only context for build-stall and finish-verification requests. */
+  readonly evidence: RemediationProjectionEvidence;
   /** Active-plan context only for tasks which own a required typed reference. */
   readonly tasks: readonly RemediationProjectionTask[];
   /** Read-only history retained for planning context, never fabricated from a verdict. */
@@ -82,6 +103,8 @@ export interface RemediationProjection {
   readonly refusals: readonly RefusalReworkEvidence[];
   readonly vocabulary: RemediationProjectionVocabulary;
 }
+
+type RemediationEvidenceLimits = Pick<AsBuiltProjectionLimits, 'perFileHunksBytes' | 'totalDiffBytes'>;
 
 export interface RemediationProjectionRequest {
   readonly source: RemediationProjectionSource;
@@ -116,6 +139,53 @@ function includesAsBuilt(source: RemediationProjectionSource): boolean {
 
 function sourceFault(source: string, detail: string): RemediationProjectionResult {
   return { ok: false, fault: { source, detail } };
+}
+
+function utf8Bytes(text: string): number {
+  return Buffer.byteLength(text, 'utf-8');
+}
+
+function untypedEvidenceSource(
+  worktree: string,
+  request: RemediationProjectionRequest,
+): { readonly key: string; readonly path: string } | undefined {
+  if (request.source === 'build-stall') {
+    const slug = slugify(request.featureDesc ?? basename(worktree));
+    return { key: `stall:${slug}`, path: '.pipeline/build-stall-question.md' };
+  }
+  if (request.source === 'finish-verification') {
+    return { key: 'test:test-failures', path: '.pipeline/test-failures.md' };
+  }
+  return undefined;
+}
+
+async function projectUntypedEvidence(
+  worktree: string,
+  request: RemediationProjectionRequest,
+  limits: RemediationEvidenceLimits,
+): Promise<RemediationProjectionEvidence> {
+  const source = untypedEvidenceSource(worktree, request);
+  if (source === undefined) return { excerpts: [], omittedFiles: [] };
+
+  let content: string;
+  try {
+    content = await readFile(join(worktree, source.path), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { excerpts: [], omittedFiles: [] };
+    throw error;
+  }
+
+  const bytes = utf8Bytes(content);
+  if (bytes > limits.perFileHunksBytes || bytes > limits.totalDiffBytes) {
+    return {
+      excerpts: [],
+      omittedFiles: [{
+        ...source,
+        digest: `sha256:${createHash('sha256').update(content).digest('hex')}`,
+      }],
+    };
+  }
+  return { excerpts: [{ ...source, content }], omittedFiles: [] };
 }
 
 function projectPriorLaps(gates: Readonly<Record<string, { readonly laps?: number }>>): readonly RemediationProjectionPriorLap[] {
@@ -153,6 +223,7 @@ async function projectActiveTasks(
 export async function buildRemediationProjection(
   worktree: string,
   request: RemediationProjectionRequest,
+  evidenceLimitOverrides?: Partial<RemediationEvidenceLimits>,
 ): Promise<RemediationProjectionResult> {
   const requiredReferences: RemediationRequiredReference[] = [];
   const ownerTaskIds = new Set<string>();
@@ -210,10 +281,11 @@ export async function buildRemediationProjection(
     });
   }
 
-  const [pending, ledger, taskContext] = await Promise.all([
+  const [pending, ledger, taskContext, evidence] = await Promise.all([
     readPendingAsBuiltRemediationFindings(worktree),
     readKickbackLedgerResult(worktree),
     projectActiveTasks(worktree, request, ownerTaskIds),
+    projectUntypedEvidence(worktree, request, { ...AS_BUILT_PROJECTION_LIMITS, ...evidenceLimitOverrides }),
   ]);
   if (pending.kind === 'unreadable') return sourceFault('kickback ledger', pending.reason);
   if (ledger.kind === 'unreadable') return sourceFault('kickback ledger', ledger.reason);
@@ -225,6 +297,7 @@ export async function buildRemediationProjection(
       version: REMEDIATION_PROJECTION_VERSION,
       source: request.source,
       requiredReferences,
+      evidence,
       tasks: taskContext.tasks,
       pendingAsBuiltFindings: pending.findings,
       priorLaps: ledger.kind === 'ok' ? projectPriorLaps(ledger.ledger.gates) : [],
