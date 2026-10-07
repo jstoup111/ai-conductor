@@ -110,6 +110,14 @@ describe('repository-local event-spine policy settlement', () => {
         { key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) },
       ]),
       sessionStore: new ProviderSessionStore(),
+      // This test settles a missing catalog policy. Keep the capability
+      // preflight deterministic so it cannot invoke the host's real provider
+      // before reaching that catalog boundary.
+      probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({
+        provider: providerKey,
+        platform,
+        status: 'available' as const,
+      }),
       buildReviewEffectiveResolver: async () => ({ ok: true, feature: { version: 'v1', repository: root, feature: 'feature' }, effective: { rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] } }) as never,
       buildReviewPolicyCatalog: async () => [],
     });
