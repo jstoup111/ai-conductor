@@ -18,7 +18,7 @@
 // call ordering.
 
 import { execa } from 'execa';
-import { basename, join } from 'node:path';
+import { join, sep } from 'node:path';
 
 /** Which of the three reconciliation cases fired — surfaced so callers can report it (FR-11). */
 export type WorktreeReconcile = 'reused' | 'attached' | 'created';
@@ -87,8 +87,13 @@ export async function isRegisteredWorktree(root: string, path: string): Promise<
   try {
     const { stdout } = await execa('git', ['worktree', 'list', '--porcelain'], { cwd: root });
     // Lines look like `worktree <abs-path>`. Match the exact path or its
-    // `.worktrees/<name>` suffix (git may report a realpath-resolved form).
-    const suffix = path.slice(path.indexOf(join('.worktrees', basename(path))));
+    // full `.worktrees/...` suffix (git may report a realpath-resolved form).
+    // Keeping the whole suffix is necessary for nested feature slugs: reducing
+    // `.worktrees/a/b` to its basename can turn a failed lookup into the final
+    // character and accidentally match an unrelated project root.
+    const marker = `${join('.worktrees', '')}${sep}`;
+    const markerIndex = path.indexOf(marker);
+    const suffix = markerIndex >= 0 ? path.slice(markerIndex) : path;
     return stdout
       .split('\n')
       .filter((l) => l.startsWith('worktree '))
