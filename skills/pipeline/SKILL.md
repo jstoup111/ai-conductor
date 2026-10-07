@@ -182,8 +182,8 @@ ownership unless its whole task is independently proven satisfied by the existin
 
 After the declared copy commits, evaluate each later task against **every acceptance criterion** as
 one task. When the copied commit satisfies the whole task, including its scoped verification, close
-it with the existing empty-commit form `Evidence: satisfied-by <copy-sha>` plus `Task: <id>`; the
-normal completeness rubric still evaluates that task against the plan.
+it with the existing empty-commit form `Evidence: satisfied-by <copy-sha>` plus `Task: <id>`;
+`prd_audit` still judges that task's completion against the plan.
 
 This is not a new evidence form or a shortcut around evidence derivation. The cited SHA must
 resolve to an existing commit and be an ancestor of `HEAD`. A nonexistent or unresolvable SHA, or

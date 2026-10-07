@@ -246,7 +246,8 @@ export type BuildReviewRepairProvenance =
  * pipeline/shipped state plus routine documentation and generated changelog
  * output. They are excluded from the graded diff because grading them against
  * the plan is incoherent — no plan task can ever describe harness machinery
- * output, so their presence reads to the Scope rubric as unplanned work and
+ * output, so their presence reads to prd_audit's OVER_SCOPE judgement as
+ * unplanned work and
  * kicks the build back over a file the builder did not write (observed on
  * `build-review-ci-watch-partial-block-1002`, whose engine-stamped
  * `.docs/shipped/<slug>.md` was cited as an out-of-scope finding).

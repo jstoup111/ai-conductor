@@ -184,9 +184,10 @@ than land new code. The match is exact (case-insensitive) on the literal value `
 any other value, or the line's absence, means the task is NOT verify-only.
 
 Use `**Verify-only:** yes` (or `**Type:** verification`) for a task that verifies or
-documents behavior that may already exist. This marker is review-load-bearing evidence
-for the Tautology and Completeness reviews. Never mark a task that delivers new or
-changed behavior: over-marking widens the exemption and is forbidden.
+documents behavior that may already exist. `prd_audit` judges plan completion against its
+acceptance criteria, while `build_review`'s non-blocking advisory
+work-happened floor recognizes this marker. Never mark a task that delivers new or changed
+behavior: over-marking widens the exemption and is forbidden.
 
 Verify-only tasks preferably complete via an empty commit rather than a code commit:
 carry a `Task: <id>` trailer and an `Evidence: skipped <reason>` trailer (see
@@ -200,6 +201,22 @@ work-happened floor that flags any plan task with no `Task:`-trailered commit as
 (warning only, never a HALT). If you're authoring a task you know will legitimately produce
 no commit of its own, mark it `**Verify-only:** yes` here so the floor recognizes it and
 doesn't flag it.
+
+### 3b-i. Maintenance-change tasks
+
+Use this guidance only when `/explore` has written an operator-confirmed
+`Change class:` marker in the track artifact. The marker, not an author inference, selects the
+maintenance class.
+
+For a `refactor` or `dependency upgrade` task with no observable behavior change, declare
+`**Verify-only:** yes`; its `Done when:` checks require the existing suite and scoped existing
+tests to pass. A `deletion` task follows `/code-removal`, delivers the deletion diff and scoped
+tests proving survivor behavior, and is never Verify-only. Any task that changes observable
+behavior is not Verify-only and follows the ordinary test-first flow.
+
+Only `acceptance_specs` may be inapplicable for a maintenance change. `test_suite` (including
+integrity), `build_review`, `prd_audit`, release disposition, and `finish` all run and block
+exactly as they do for a feature.
 
 ### 3c. `Done when:` — Falsifiable Completion Criteria (REQUIRED)
 

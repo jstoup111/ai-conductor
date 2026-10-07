@@ -22,8 +22,9 @@ HALT if autonomous) on any unconfirmed assumption that changes which approach or
 
 ## Boundaries
 
-`explore` writes **no committed `.docs/` design artifact**. It MAY write exactly one committed
-marker: `.docs/track/<slug>.md`.
+`explore` writes **no committed `.docs/` design artifact**. It MAY write a committed track marker
+at `.docs/track/<slug>.md` and, for an operator-confirmed maintenance change, the matching
+applicability marker at `.docs/applicability/<slug>.md`.
 
 Do NOT:
 - Write code, migrations, configs, tests, stubs, plans, stories, or a PRD/design doc
@@ -143,6 +144,44 @@ Scope boundary: <operator-confirmed breadth and exclusions>
 <one line of rationale>
 ```
 
+### Maintenance changes (refactor, deletion, dependency upgrade)
+
+Classify a proposed technical-track maintenance change by its acceptance criterion:
+
+- **refactor** and **dependency upgrade** preserve existing observable behavior, proven by the
+  existing suite.
+- **deletion** removes a named capability while every surviving behavior still passes.
+
+Propose this classification with the track and get explicit operator confirmation. In an interactive
+run, wait for confirmation. In an autonomous run, HALT with the classification as an unconfirmed
+load-bearing assumption. Write no marker before confirmation.
+
+On confirmation, add this prose line to `.docs/track/<slug>.md`, whether or not an applicability
+marker will be written:
+
+```markdown
+Change class: <refactor|deletion|dependency upgrade>
+```
+
+`parseTrack` reads only the `Track:` line, so this line records the class without changing track
+parsing.
+
+Only for a confirmed **technical** maintenance change, and only when the target project's
+`.ai-conductor/config.yml` sets `feature_applicability.enabled: true`, write the matching
+`.docs/applicability/<slug>.md` marker. It contains exactly this declaration shape, with no other
+step declared:
+
+```markdown
+Inapplicable: acceptance_specs — <class>: <why the existing suite or surviving tests are the specification>
+```
+
+The reason must begin with the class name: `refactor`, `deletion`, or `dependency upgrade`.
+
+A change that adds or changes observable behavior is not maintenance, including a dependency
+upgrade bundled with a feature. Write no applicability marker and follow the normal flow. If the
+toggle is not enabled, write no marker because land-spec refuses it; `acceptance_specs` instead
+uses its existing `disposition-only` outcome, citing the existing test that covers each criterion.
+
 ### 5. Persist the Decision, Then Exit
 
 - **Memory (`.memory/decisions/`)** — persist the **selected approach and why the alternatives were
@@ -163,6 +202,9 @@ Scope boundary: <operator-confirmed breadth and exclusions>
 - [ ] 2-3 approaches presented with trade-offs + a recommendation
 - [ ] Every approach carries **Est. effort** and **Impact** lines
 - [ ] Track decided AND operator-confirmed; `.docs/track/<slug>.md` written
+- [ ] An operator-confirmed technical maintenance change records its `Change class:` line; its
+      `.docs/applicability/<slug>.md` marker is written only when `feature_applicability.enabled: true`
+      and declares only `acceptance_specs`
 - [ ] **No `.docs/` design artifact written (specs/stories/plans); notes kept in `.pipeline/`**
 - [ ] Selected approach + rejected alternatives persisted to `.memory/decisions/` (if non-obvious)
 - [ ] `ExitPlanMode` was NOT called

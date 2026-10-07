@@ -1,9 +1,10 @@
 // Covers: task:4
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { LandGateError, landSpec } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
@@ -11,6 +12,12 @@ import { validateApplicability } from '../../../src/engine/feature-applicability
 
 const execFile = promisify(execFileCb);
 const IDEA = 'applicability landing';
+const testDir = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(testDir, '../../../../..');
+const repositoryConfigSkillPaths = [
+  join('.agents', 'skills', 'maintain-documentation', 'SKILL.md'),
+  join('.agents', 'skills', 'release-disposition', 'SKILL.md'),
+];
 let repoPath: string;
 
 async function git(args: string[], cwd = repoPath): Promise<string> {
@@ -24,12 +31,25 @@ const renderDeps = {
   runMmdc: async () => ({ ok: true }),
 };
 
-async function seed(enabled: boolean, marker?: string, markerStem?: string): Promise<string> {
+async function seed(
+  enabled: boolean,
+  marker?: string,
+  markerStem?: string,
+  useRepositoryConfig = false,
+): Promise<string> {
   await mkdir(join(repoPath, '.ai-conductor'), { recursive: true });
   await writeFile(
     join(repoPath, '.ai-conductor', 'config.yml'),
-    enabled ? 'feature_applicability:\n  enabled: true\n' : '{}\n',
+    useRepositoryConfig
+      ? await readFile(join(repoRoot, '.ai-conductor', 'config.yml'), 'utf8')
+      : enabled ? 'feature_applicability:\n  enabled: true\n' : '{}\n',
   );
+  if (useRepositoryConfig) {
+    await Promise.all(repositoryConfigSkillPaths.map(async (skillPath) => {
+      await mkdir(join(repoPath, dirname(skillPath)), { recursive: true });
+      await writeFile(join(repoPath, skillPath), await readFile(join(repoRoot, skillPath), 'utf8'));
+    }));
+  }
   const { worktreePath } = await createEngineerWorktree(repoPath, IDEA);
   // The fixture exercises applicability landing, not the independent
   // coherence gate. Keep the existing local-Git fixture pattern that makes
@@ -44,6 +64,7 @@ async function seed(enabled: boolean, marker?: string, markerStem?: string): Pro
     mkdir(join(worktreePath, '.docs', 'conflicts'), { recursive: true }),
     mkdir(join(worktreePath, '.docs', 'architecture'), { recursive: true }),
     mkdir(join(worktreePath, '.docs', 'decisions'), { recursive: true }),
+    ...(useRepositoryConfig ? [mkdir(join(worktreePath, '.docs', 'track'), { recursive: true })] : []),
   ]);
   await writeFile(join(worktreePath, '.docs', 'specs', `${stem}.md`), '# PRD\n\nApproved.\n');
   await writeFile(join(worktreePath, '.docs', 'stories', `${stem}.md`), [
@@ -65,6 +86,9 @@ async function seed(enabled: boolean, marker?: string, markerStem?: string): Pro
   await writeFile(join(worktreePath, '.docs', 'conflicts', `${stem}.md`), '# Conflicts\n\nNone.\n');
   await writeFile(join(worktreePath, '.docs', 'architecture', `${stem}.md`), '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n');
   await writeFile(join(worktreePath, '.docs', 'decisions', `${stem}.md`), '# Architecture review\n\nApproved.\n');
+  if (useRepositoryConfig) {
+    await writeFile(join(worktreePath, '.docs', 'track', `${stem}.md`), 'Track: technical\nChange class: dependency upgrade\n');
+  }
   if (marker !== undefined) {
     await mkdir(join(worktreePath, '.docs', 'applicability'), { recursive: true });
     await writeFile(join(worktreePath, '.docs', 'applicability', `${markerStem ?? stem}.md`), marker);
@@ -90,8 +114,13 @@ function options() {
   return { ownerConfig: { spec_owner: 'test-owner' }, renderDeps };
 }
 
-async function refusal(enabled: boolean, marker: string, markerStem?: string): Promise<LandGateError> {
-  const worktreePath = await seed(enabled, marker, markerStem);
+async function refusal(
+  enabled: boolean,
+  marker: string,
+  markerStem?: string,
+  useRepositoryConfig = false,
+): Promise<LandGateError> {
+  const worktreePath = await seed(enabled, marker, markerStem, useRepositoryConfig);
   const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options())
     .catch((reason: unknown) => reason);
 
@@ -154,6 +183,26 @@ describe('landSpec applicability marker', () => {
     );
   });
 
+  // Covers: task:8
+  it('lands a class marker using this repository configuration', async () => {
+    const worktreePath = await seed(
+      false,
+      'Inapplicable: acceptance_specs — dependency upgrade: the existing suite is the specification\n',
+      undefined,
+      true,
+    );
+
+    await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options()))
+      .resolves.toMatchObject({ branch: 'spec/applicability-landing' });
+
+    expect((await git(['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'], worktreePath)).split('\n')).toEqual(
+      expect.arrayContaining([
+        '.docs/applicability/applicability-landing.md',
+        '.docs/track/applicability-landing.md',
+      ]),
+    );
+  });
+
   it('keeps markerless land identical whether the capability is enabled or disabled', async () => {
     const enabledWorktree = await seed(true);
     await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, enabledWorktree, undefined, options());
@@ -198,6 +247,22 @@ describe('landSpec applicability marker', () => {
     expect(error.message).toContain('.docs/applicability/applicability-landing.md');
     expect(error.message).toContain('line 1');
   });
+
+  it.each(['test_suite', 'build_review', 'finish'])(
+    'refuses the non-declarable %s marker under this repository configuration without creating a land commit',
+    async (step) => {
+      const error = await refusal(
+        false,
+        `Inapplicable: ${step} — dependency upgrade: suite is the spec\n`,
+        undefined,
+        true,
+      );
+
+      expect(error).toMatchObject({ gate: 'applicability-invalid' });
+      expect(error.message).toContain('not-declarable');
+      expect(error.message).toContain(step);
+    },
+  );
 
   it('refuses an applicability marker with a mismatched stem without creating a land commit', async () => {
     const error = await refusal(

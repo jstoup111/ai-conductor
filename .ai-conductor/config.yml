@@ -15,6 +15,10 @@ otel:
 # automatically: worktree removed, branch deleted, unparked.
 reconcile_parked_auto_cleanup: true
 
+# #1790: merged maintenance specs may declare acceptance_specs/manual_test inapplicable.
+feature_applicability:
+  enabled: true
+
 # Feature-executor pool width. Above 1 the daemon warns at startup: more rebase
 # kickbacks as siblings land first, and provider spend scales with the width.
 daemon_concurrency: 3
@@ -172,7 +176,7 @@ test_suite:
 # without signal here. The step is marked `skipped`, which satisfies the
 # downstream prerequisites (prd_audit, rebase) and the SHIP-tail selector —
 # the pipeline flows build → build_review (opt-in, currently off) → prd_audit
-# (skipped on technical track) → architecture_review_as_built → rebase →
+# (runs on both tracks; the technical track skips only prd) → architecture_review_as_built → rebase →
 # maintain-documentation → release-disposition → finish. manual_test is the only gating step whose
 # definition opts into config-disable (`configDisableAllowed`); structural steps can never be
 # disabled. Read per conduct run; new builds pick it up once the engine

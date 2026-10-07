@@ -73,8 +73,8 @@ export interface BacklogItem {
    *  auto-closes on merge. Absent for hand-authored / non-intake specs. */
   sourceRef?: string;
   /** Work track, parsed from `.docs/track/<slug>.md` on the base branch
-   *  (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location). `technical` features skip the `prd` step + `prd-audit` at
-   *  SHIP. Absent → the daemon treats it as `product` (back-compat). */
+   *  (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location). `technical` features skip only the `prd` step.
+   *  Absent → the daemon treats it as `product` (back-compat). */
   track?: Track;
   /** Applicability declarations read from the claim-pinned base tree. */
   applicabilityDeclarations?: FeatureApplicabilityDeclaration[];
