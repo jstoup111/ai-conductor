@@ -839,6 +839,16 @@ export async function validationJoinRemediationRoundCap(
   return cap;
 }
 
+/** Keep serial and validation-group refusal work orders byte-for-byte aligned. */
+function withRefusalReworkContext(
+  dispatchContext: string,
+  refusals: readonly RefusalReworkEvidence[] | undefined,
+): string {
+  return refusals === undefined
+    ? dispatchContext
+    : `${dispatchContext}\n\n${renderRefusalReworkContext(refusals)}`;
+}
+
 /**
  * Authored `Governing clause` cells carry inline markdown. The clause grammar is
  * anchored on a bare identifier, so a habitually backticked stem
@@ -7555,6 +7565,28 @@ export class Conductor {
     // counter. Its configured one-lap default is the sole allowance for a
     // criterion-bound repair; other gates retain MAX_KICKBACKS_PER_GATE.
     const prdAuditRemediationLapCap = remediationLapCapForGate('prd_audit', this.config);
+    // Refusal rework is admitted before /remediate runs.  Unlike the old
+    // process-local round counter this reads the durable gate and growth
+    // records, so a daemon restart cannot buy another lap and an operator
+    // raise remains effective.
+    const refusalReworkAllowanceAvailable = async (): Promise<boolean> => {
+      try {
+        const ledger = await readKickbackLedger(this.projectRoot);
+        if (
+          isUnreadableKickbackLedger(ledger) ||
+          isUnreadableKickbackGate(ledger, 'prd_audit') ||
+          isUnreadableKickbackGrowth(ledger)
+        ) return false;
+        const entry = ledger.gates.prd_audit;
+        const lapCap = entry?.effectiveLapCap ?? prdAuditRemediationLapCap;
+        if ((entry?.laps ?? 0) >= lapCap) return false;
+        const unboundedGrowth = await readGrowth(this.projectRoot, Number.MAX_SAFE_INTEGER);
+        const growthCap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(this.config, unboundedGrowth.authored);
+        return (await readGrowth(this.projectRoot, growthCap)).remaining > 0;
+      } catch {
+        return false;
+      }
+    };
     // Daemon-only (#367): how many times a manual_test FAIL has routed back to
     // BUILD. Bounded like prdAuditSelfHeals so a bug BUILD can't actually fix
     // eventually halts for a human instead of ping-ponging.
@@ -9365,18 +9397,16 @@ export class Conductor {
             // an operator halt. Keep its engine-derived evidence attached to
             // the existing group remediation calls below so the group keeps
             // one planner dispatch and one merged rewind.
-            const refusalReworkContext =
-              prdAuditRoute?.kind === 'over-scope-refusal-rework'
-                ? renderRefusalReworkContext(prdAuditRoute.route.refusals)
-                : undefined;
-            const withRefusalReworkContext = (dispatchContext: string): string =>
-              refusalReworkContext === undefined
-                ? dispatchContext
-                : !dispatchContext.includes(AS_BUILT_VERDICT_PATH)
-                  ? 'Blocking prd_audit gaps at .pipeline/prd-audit.md. ' +
-                    'Plan remediation per the /remediate skill and write .pipeline/remediation.json.\n\n' +
-                    refusalReworkContext
-                : `${dispatchContext}\n\n${refusalReworkContext}`;
+            const withGroupRefusalReworkContext = (dispatchContext: string): string =>
+              withRefusalReworkContext(
+                dispatchContext.replace(
+                  'Blocking validation-group gaps at .pipeline/prd-audit.md.',
+                  'Blocking prd_audit gaps at .pipeline/prd-audit.md.',
+                ),
+                prdAuditRoute?.kind === 'over-scope-refusal-rework'
+                  ? prdAuditRoute.route.refusals
+                  : undefined,
+              );
 
             if (allGreen) {
               const projectionRefusal = await this.projectPendingAsBuiltRemediationFindings();
@@ -9532,7 +9562,7 @@ export class Conductor {
                   gate: 'architecture_review_as_built',
                   evidenceFile: AS_BUILT_VERDICT_PATH,
                 });
-                const dispatchContext = withRefusalReworkContext(
+                const dispatchContext = withGroupRefusalReworkContext(
                   `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
                   'Plan remediation per the /remediate skill and write ' +
                   '.pipeline/remediation.json.',
@@ -9631,7 +9661,7 @@ export class Conductor {
                 await this.planRemediation(
                   state,
                   steps,
-                  withRefusalReworkContext(
+                  withGroupRefusalReworkContext(
                     'Blocking validation-group gaps at .pipeline/prd-audit.md and ' +
                     `${AS_BUILT_VERDICT_PATH}. Plan remediation per the ` +
                     '/remediate skill and write .pipeline/remediation.json.',
@@ -9794,7 +9824,7 @@ export class Conductor {
                     evidenceFile: AS_BUILT_VERDICT_PATH,
                   });
                 }
-                const dispatchContext = withRefusalReworkContext(
+                const dispatchContext = withGroupRefusalReworkContext(
                   `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
                   'Plan remediation per the /remediate skill and write ' +
                   '.pipeline/remediation.json.',
@@ -9963,7 +9993,7 @@ export class Conductor {
                     evidenceFile: AS_BUILT_VERDICT_PATH,
                   });
                 }
-                const dispatchContext = withRefusalReworkContext(
+                const dispatchContext = withGroupRefusalReworkContext(
                   `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
                   'Plan remediation per the /remediate skill and write ' +
                   '.pipeline/remediation.json.',
@@ -12179,7 +12209,7 @@ export class Conductor {
                   process.off('SIGTERM', sigterm);
                   return;
                 }
-                if (this.daemon && remediationRounds < prdAuditRemediationLapCap) {
+                if (this.daemon && await refusalReworkAllowanceAvailable()) {
                   let outcome:
                     | { kind: 'route'; target: StepName; hint: string; evidence: string }
                     | { kind: 'halt'; detail: string; haltClass?: string; kickbackOutcome?: string }
@@ -12189,9 +12219,11 @@ export class Conductor {
                     outcome = await this.planRemediation(
                       state,
                       steps,
-                      'Blocking prd_audit gaps at .pipeline/prd-audit.md. ' +
-                        'Plan remediation per the /remediate skill and write .pipeline/remediation.json.\n\n' +
-                        renderRefusalReworkContext(refusalRoute.refusals),
+                      withRefusalReworkContext(
+                        'Blocking prd_audit gaps at .pipeline/prd-audit.md. ' +
+                          'Plan remediation per the /remediate skill and write .pipeline/remediation.json.',
+                        refusalRoute.refusals,
+                      ),
                       {
                         source: 'prd-audit',
                         evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],

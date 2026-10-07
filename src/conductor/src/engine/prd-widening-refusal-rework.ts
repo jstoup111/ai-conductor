@@ -76,7 +76,7 @@ export type RefusalReworkAdmission =
   | { kind: 'rejected'; criteria: string[] };
 
 const REWORK_ONLY_SENTENCE =
-  'Every task for the refusal-<decisionId> gaps below must either remove the refused behavior or rework it ' +
+  'Every task for the refusal-<decisionId> gaps listed below must either remove the refused behavior or rework it ' +
   'to fit within the recorded decision; no new behavior may be introduced.';
 
 /** Render the refusal evidence as the `/remediate` dispatch (`retryReason`) context. */

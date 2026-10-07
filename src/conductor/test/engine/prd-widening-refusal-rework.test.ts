@@ -61,7 +61,7 @@ describe('renderRefusalReworkContext', () => {
 
   it('restricts the rework tasks to removing or reworking the refused behavior', () => {
     const text = renderRefusalReworkContext([storyRefusal, ncRefusal]);
-    expect(text).toMatch(/refusal-<decisionId> gaps below must either remove the refused behavior or rework it/);
+    expect(text).toMatch(/refusal-<decisionId> gaps listed below must either remove the refused behavior or rework it/);
   });
 });
 
