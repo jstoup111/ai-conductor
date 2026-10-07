@@ -67,7 +67,7 @@ build_progress_halt:
   enabled: true
 
 # Per-rubric build-review routing is split across providers: testQuality and
-# eventSpine run on Claude, security on Codex.
+# security run on Claude opus, eventSpine on Codex.
 build_review:
   # Enable this repository's advisory containment recordings. The shipped
   # default remains false, so consumer repositories must opt in explicitly.
@@ -88,25 +88,27 @@ build_review:
       model: opus
       effort: low
     # Security judges the whole frozen feature diff for concrete, changed-hunk-
-    # anchored defects (#2568). Enabled 2026-09-18; routed to Codex 2026-10-07
-    # (operator order) to split rubrics across providers.
+    # anchored defects (#2568). Judgement-heavy like testQuality, so it takes the
+    # same Claude opus routing. Enabled 2026-09-18.
     security:
       enabled: true
-      llm_provider: codex
-      model: gpt-6-astra
+      llm_provider: claude
+      model: opus
       effort: low
       # Findings the reviewer scores below 60 are suppressed, not kicked back:
       # low-confidence security findings (35-55) cost a 30-minute lap and a
       # kickback charge each while rarely surviving a second look.
       min_confidence: 60
   # Repository-local guard against bypassing this repository's event spine.
+  # Routed to Codex terra 2026-10-07 (operator order) to split rubrics across
+  # providers without paying for astra.
   custom_rubrics:
     eventSpine:
       enabled: true
       skill: event-spine
       source: project
-      llm_provider: claude
-      model: sonnet
+      llm_provider: codex
+      model: gpt-5.6-terra
       effort: low
       question: "Does the frozen feature diff add an observation or coordination channel outside ConductorEventEmitter → .pipeline/events.jsonl?"
 
