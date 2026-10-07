@@ -78,6 +78,10 @@ satisfies the whole task may use the existing `Evidence: satisfied-by` closure.
 
 ### No Legitimate RED for Already-Existing Behavior
 
+Plan-declared Verify-only refactor and dependency-upgrade maintenance tasks follow this section;
+deletion tasks follow **Removal Boundary**. A maintenance task that changes observable behavior
+follows the full RED → GREEN cycle.
+
 This boundary applies only when there is no behavior left to add, change, or fix. It never applies
 to a task that adds, changes, or fixes behavior; those tasks run the full RED → DOMAIN → GREEN →
 DOMAIN → COMMIT cycle.
@@ -235,7 +239,7 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
    Change no worktree's files beyond adding those copies, the temporary one included: never set
    uncommitted work aside, and never discard, roll back or overwrite paths to reach the base
    version. A test that still passes proves nothing
-   and will fail the tautology review rubric one expensive lap later. A value computed by the
+   and will fail build_review's testQuality rubric one expensive lap later. A value computed by the
    test but never asserted on is an automatic fail of this check. Exempt: tasks under the
    **No Legitimate RED for Already-Existing Behavior** and **Removal Boundary** sections, and
    plan-declared `**Verify-only:** yes` tasks — their evidence forms replace this check.
