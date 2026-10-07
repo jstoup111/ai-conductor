@@ -203,6 +203,27 @@ describe('refusal-rework append', () => {
     );
   });
 
+  it('upserts the same decision-bound task when an NC finding is renumbered', () => {
+    const first = appendRemediationTasks(
+      '### Task 4: Existing work\n',
+      [admittedRefusalGap()],
+      PRD_AUDIT_REMEDIATION_GATE_SOURCE,
+    );
+    const renumbered = {
+      ...admittedRefusalGap(),
+      criterion: 'NC.1',
+      governingClause: `Refused NC.1 (decision ${decisionId} r${revision})`,
+    };
+    const second = appendRemediationTasks(
+      first.planText,
+      [renumbered],
+      PRD_AUDIT_REMEDIATION_GATE_SOURCE,
+    );
+
+    expect(second.ids).toEqual([`rem-prd-audit-refusal-${decisionId}`]);
+    expect(second.planText.match(new RegExp(`### Task rem-prd-audit-refusal-${decisionId}:`, 'g'))).toHaveLength(1);
+  });
+
   it('throws the named H9 id error for a refusal gap with an empty decision id', () => {
     const plan = '### Task 4: Existing work\n';
     const gap: CriterionBoundRemediationGap = {

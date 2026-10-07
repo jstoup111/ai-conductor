@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:5, task:6, S5.1, S5.2, S5.3, S5.4
+// Covers: task:1, task:3, task:5, task:6, task:7, task:9, S5.1, S5.2, S5.3, S5.4
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
@@ -24,6 +24,7 @@ vi.mock('../src/engine/owner-gate/machine-identity.js', async (importOriginal) =
 
 import {
   Conductor,
+  readRemediationGateAppendBudget,
   remediationLapCapForGate,
   validationJoinRemediationRoundCap,
   type StepRunner,
@@ -1080,6 +1081,36 @@ describe('prd_audit kickback', () => {
         })],
       },
     });
+  });
+
+  it('charges admitted refusal rework to the existing prd_audit lap and growth ledger', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+    });
+
+    const ledger = await readKickbackLedger(fixture.root);
+    expect(ledger.gates.prd_audit).toMatchObject({ laps: 1 });
+    expect(ledger.growth).toMatchObject({ added: 1, byGate: { prd_audit: 1 } });
+  });
+
+  it('re-admits refusal work when a raised prd_audit lap cap has capacity', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'raised-refusal-rework-budget-'));
+    dirs.push(root);
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeKickbackLedger(root, {
+      version: 1,
+      gates: {
+        prd_audit: {
+          count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true,
+          resolvedBefore: 0, laps: 1, effectiveLapCap: 2,
+        },
+      },
+    });
+
+    await expect(readRemediationGateAppendBudget(
+      root, { prd_audit: { max_remediation_laps: 1 } } as never,
+      'prd_audit', 1, 1, 1, 8,
+    )).resolves.toMatchObject({ priorLaps: 1, lapCap: 2, taskCount: 1, growthTaskCount: 1 });
   });
 
   it('routes an all-refused validation group through one refusal-context remediation dispatch', async () => {
