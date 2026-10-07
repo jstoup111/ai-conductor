@@ -259,12 +259,17 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 - **Frontmatter** — `enforcement: advisory`, `phase: decide`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
-- **Engine step** — `explore` (index 2, DECIDE). Always runs — it sets the track that gates `prd` and
-  `prd_audit`.
+- **Engine step** — `explore` (index 2, DECIDE). Always runs — it sets the track that gates `prd`.
+  `prd_audit` runs on both tracks.
 - **Inputs** — `.memory/`; existing `.docs/stories/`; prior bootstrap exploration. At most two
   directory-partitioned exploration agents.
-- **Outputs** — exactly one committed artifact, `.docs/track/<slug>.md`, carrying
-  `Track: product|technical` and `Scope boundary: <operator-confirmed breadth and exclusions>`;
+- **Outputs** — the committed `.docs/track/<slug>.md`, carrying `Track: product|technical`,
+  `Scope boundary: <operator-confirmed breadth and exclusions>`, and, for an operator-confirmed
+  maintenance change, `Change class: <refactor|deletion|dependency upgrade>`. For a confirmed
+  technical maintenance change with
+  [`feature_applicability.enabled: true`](configuration.md#feature_applicability), it also commits
+  `.docs/applicability/<slug>.md` declaring only
+  `Inapplicable: acceptance_specs — <class>: <reason>`;
   ephemeral notes under `.pipeline/`; the selected approach and rejected alternatives promoted to
   `.memory/decisions/`. No completion glob, by design.
 - **Gate role** — advisory, with four internal hard blocks: any unconfirmed assumption that would

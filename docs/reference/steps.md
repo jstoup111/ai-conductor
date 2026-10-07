@@ -242,6 +242,11 @@ Inapplicable: manual_test — no user-facing surface changes
 The separator is ` — ` (an em dash with surrounding spaces) and the reason must be non-empty. Lines
 that do not start with `Inapplicable:` are treated as prose.
 
+`explore` writes this marker for an operator-confirmed technical maintenance change (refactor,
+deletion, or dependency upgrade). Its marker declares only `acceptance_specs`, and the reason starts
+with the class name. Example: `Inapplicable: acceptance_specs — refactor: the existing suite is the
+specification`. Every other gate still runs.
+
 Only built-ins with `featureInapplicableAllowed` are declarable: `acceptance_specs` and
 `manual_test`. Custom steps never are. `land-spec` refuses the marker with gate
 `applicability-invalid` for a malformed line, an empty reason, an unknown step, a non-declarable

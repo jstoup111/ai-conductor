@@ -101,22 +101,26 @@ Two guardrails keep tier-based skipping from becoming a bypass:
 ## Product track versus technical track
 
 Each feature is also classified onto a track during `explore`: `product` or `technical`. The split is
-deliberately narrow — it changes three things and nothing else.
+deliberately narrow — it changes two things and nothing else.
 
 | Difference | Product track | Technical track |
 | --- | --- | --- |
 | `prd` step | runs, authoring enumerated functional requirements | skipped |
-| `prd_audit` step | runs, auditing the shipped code requirement by requirement | skipped |
 | land-time coherence `fr` layer | required | not required |
 
 Everything else is identical: explore, complexity, worktree, architecture, stories, conflict-check, plan,
-coherence-check, the whole of BUILD, manual test, as-built review, rebase, finish.
+coherence-check, the whole of BUILD, manual test, `prd_audit`, as-built review, rebase, finish.
+`prd_audit` grades the stories' acceptance criteria on both tracks; PRD requirements are context only when a
+PRD exists.
 
 The split is narrow because it answers one question — *does this work have enumerated product requirements
-to trace against?* — and only the steps that consume those requirements can differ. A refactor has no
-functional requirements, so a requirement-by-requirement audit of it would either be empty or invented.
-Everything else (does the design hold, do the stories cover the negative paths, does the suite pass) is
-equally true of both.
+to trace against?* — and only the steps that author or trace those requirements can differ. A refactor has
+no functional requirements to author. Everything else (does the design hold, do the stories cover the
+negative paths, does the suite pass, does the diff deliver the plan) is equally true of both.
+
+A technical-track refactor, deletion, or dependency upgrade can additionally skip `acceptance_specs`
+through an operator-confirmed `explore` maintenance classification — see
+[per-feature applicability](../reference/steps.md#per-feature-applicability).
 
 When the track is unknown the flow defaults to `product`, which is the more demanding of the two. Skipping
 by track uses the same `skipped` mechanism as tier skipping, so downstream prerequisites stay satisfied.

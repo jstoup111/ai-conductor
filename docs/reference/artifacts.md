@@ -41,7 +41,7 @@ Twenty entries. Alphabetized; the four with no code reference are marked.
 
 | Entry | Naming | Written by | Read by / gate role |
 | --- | --- | --- | --- |
-| `applicability/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | DECIDE author, only when [`feature_applicability`](configuration.md#feature_applicability) is enabled | `land-spec` validates its `Inapplicable: <step> — <reason>` lines; daemon discovery reads the base-branch copy and seeds the feature's declarations — see [per-feature applicability](steps.md#per-feature-applicability) |
+| `applicability/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | DECIDE author (`explore` for an operator-confirmed technical maintenance change, declaring only `acceptance_specs`), only when [`feature_applicability`](configuration.md#feature_applicability) is enabled | `land-spec` validates its `Inapplicable: <step> — <reason>` lines; daemon discovery reads the base-branch copy and seeds the feature's declarations — see [per-feature applicability](steps.md#per-feature-applicability) |
 | `architecture/` | `YYYY-MM-DD-<topic>.md`, plus fixed `system-context.md`, `containers.md`, `components.md`, `erd.md`, and a `sequences/` subdir | `architecture-diagram`, `architecture-review`, `bootstrap` | `architecture_diagram` completion glob; mermaid render check at land; non-Small artifacts require at least one fenced Mermaid block; protected-artifact seal |
 | `audit/` | free-form | manual | **no code reference** |
 | `audits/` | free-form JSON | a one-off backfill | `shipment-audit.ts` — one hardcoded path, nothing else |
@@ -60,7 +60,7 @@ Twenty entries. Alphabetized; the four with no code reference are marked.
 | `shipped/` | `<plan-stem>.md` | `ai-conductor shipped-record` | daemon backlog dedup; the only input to `ai-conductor kpi` |
 | `specs/` | `YYYY-MM-DD-<slug>.md` | `prd` skill (product track only) | `prd` completion glob; protected-artifact seal |
 | `stories/` | `YYYY-MM-DD-<slug>.md`, plus `epics/` and `features/<name>/` subdirs | `stories` skill | `stories` completion glob; plan-coverage check; coherence rows; protected-artifact seal |
-| `track/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `explore` skill | `parseTrack` reads a `Track: product\|technical` line. Missing ⇒ defaults to `product`. Decides whether `prd` and `prd_audit` run. The file also carries a `Scope boundary:` line recording the operator-confirmed fix breadth; `plan` and `stories` read it as binding free-form text — no code parses it |
+| `track/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `explore` skill | `parseTrack` reads a `Track: product\|technical` line. Missing ⇒ defaults to `product`. Decides whether `prd` runs; `prd_audit` runs on both tracks. The file also carries a `Scope boundary:` line recording the operator-confirmed fix breadth, and, for an operator-confirmed maintenance change, a `Change class: refactor\|deletion\|dependency upgrade` line that `plan` uses to route maintenance tasks; `plan` and `stories` read them as binding free-form text — no code parses them |
 
 Every entry above is committed.
 
