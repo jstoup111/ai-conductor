@@ -5162,6 +5162,8 @@ export class Conductor {
     // later BUILD-boundary cap halt, so keep this derivation shared.
     const prdAuditCriteriaForGapIds = (gapIds: Iterable<string>): string[] =>
       [...new Set([...gapIds].flatMap((gapId) => {
+        const refusalCriterion = refusalCriteriaByGapId.get(gapId);
+        if (refusalCriterion !== undefined) return [refusalCriterion];
         const finding = prdAuditFindings.get(gapId.toUpperCase());
         return finding === undefined ? [] : [finding.criterion];
       }))];
@@ -5273,6 +5275,7 @@ export class Conductor {
       ? prdAuditOverScopeRoute
       : undefined;
     const admittedRefusalGapIds = new Set<string>();
+    const refusalCriteriaByGapId = new Map<string, string>();
     if (refusalReworkRoute !== undefined) {
       const admission = admitRefusalReworkPlan(plan, refusalReworkRoute.refusals);
       if (admission.kind === 'rejected') {
@@ -5289,11 +5292,17 @@ export class Conductor {
       }
       for (const gap of admission.gaps) {
         admittedRefusalGapIds.add(gap.id);
+        refusalCriteriaByGapId.set(gap.id, gap.criterion ?? gap.id);
         appendGaps.push(gap);
         admittedGaps.push(gap);
         allTasks.push(...gap.tasks);
         prdAuditTasks.push(...gap.tasks);
-        prdAuditGrowthTasks.push(...gap.tasks);
+        const canonicalTaskId = `rem-${PRD_AUDIT_REMEDIATION_GATE_SOURCE}-${gap.id}`;
+        const canonicalTaskExists = new RegExp(
+          `^#{1,6}\\s+Task\\s+${canonicalTaskId.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\s*:`,
+          'm',
+        ).test(activePlanText);
+        if (!canonicalTaskExists) prdAuditGrowthTasks.push(...gap.tasks);
       }
     }
     // A `.pipeline/prd-audit.md` path alone is not evidence of a current
