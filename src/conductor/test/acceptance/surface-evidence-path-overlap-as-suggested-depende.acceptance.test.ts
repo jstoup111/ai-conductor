@@ -93,7 +93,11 @@ describe('intake overlap decisions precede issue creation', () => {
     const { bin, callsPath } = await makeGhStub(root);
     const home = join(root, 'home');
     await mkdir(home);
-    const { AI_CONDUCTOR_NO_REAL_EXEC: _testExecGuard, ...environment } = process.env;
+    const {
+      AI_CONDUCTOR_NO_REAL_EXEC: _testExecGuard,
+      CONDUCT_GH_REAL_EXECUTABLE: _managedGhBypass,
+      ...environment
+    } = process.env;
     const env = {
       ...environment,
       HOME: home,

@@ -151,7 +151,7 @@ describe('built-in provider catalog', () => {
   });
 
   it('renders selected model and effort through the catalog-owned interactive argv', () => {
-    const provider = (id: string) => BUILT_IN_PROVIDERS.find((candidate) => candidate.id === id)!;
+    const provider = (id: 'claude' | 'codex') => requireProviderCapability(id, 'interactiveLaunch');
     expect({
       claude: provider('claude').interactiveLaunch!.argv({ prompt: 'P', permissionMode: 'default', model: 'sonnet', effort: 'medium' }),
       codex: provider('codex').interactiveLaunch!.argv({ prompt: 'P', model: 'gpt-5.6-terra', effort: 'xhigh' }),

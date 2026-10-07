@@ -24,7 +24,7 @@ describe('guided-session selection', () => {
   });
 
   it.each([
-    [{ overrides: { provider: 'gemini' } }, 'monitor: unregistered provider gemini.'],
+    [{ config: {}, overrides: { provider: 'gemini' } }, 'monitor: unregistered provider gemini.'],
     [{ config: { monitor: { llm_provider: 'pi' } } }, 'monitor: provider pi cannot open a guided session: missing capability interactiveLaunch (#1007).'],
     [{ config: {}, overrides: { effort: 'turbo' as any } }, 'monitor: effort "turbo" is not accepted by provider claude.'],
     [{ config: {}, overrides: { model: '--bad' } }, 'monitor: model "--bad" is not a valid model id for provider claude.'],

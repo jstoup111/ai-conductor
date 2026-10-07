@@ -77,6 +77,9 @@ esac
     env: {
       ...process.env,
       AI_CONDUCTOR_NO_REAL_EXEC: undefined,
+      // The managed build exposes an absolute real-gh bypass. This fixture
+      // deliberately exercises its PATH-owned gh stub instead.
+      CONDUCT_GH_REAL_EXECUTABLE: undefined,
       // This subprocess proves user-config behavior against `HOME`, so it
       // must not inherit the suite-wide isolated config-directory redirect.
       AI_CONDUCTOR_USER_CONFIG_DIR: undefined,
