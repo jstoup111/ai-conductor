@@ -52,6 +52,8 @@ Discovery is per-directory and best-effort:
 
 The kind enum reserves `step | hook | visualizer` for future implementation. Manifest validator accepts them; no loader code exists yet. This avoids a breaking enum change later.
 
+> **Amended 2026-10-07** — `step` and `hook` are no longer reserved; see [Amendment](#amendment). `visualizer` remains.
+
 ## Consequences
 
 - **Pro:** Plugins are drop-in directories, no npm publish required.
@@ -61,7 +63,17 @@ The kind enum reserves `step | hook | visualizer` for future implementation. Man
 - **Con:** A misbehaving global plugin warns on every project's startup. Mitigated by per-plugin error isolation.
 - **Future:** npm-package discovery and hot-reload remain out of scope; can be added without changing the manifest schema.
 
-## Evidence
+## Amendment
+
+**Amended by:** DECIDE for `refuse-unsupported-plugin-kinds-step-and-hook-at-l` (#1931, 2026-10-07, operator-authorized) — the `step` and `hook` kinds are **retired**, replacing the reservation above for those two kinds.
+
+The reservation assumed a loader seam would follow. Nearly six months on, none exists: no runtime path retrieves a `step` or `hook` plugin, and neither kind has a designed contract for what the plugin would receive. Accepting the manifests let a plugin validate, discover, and register while nothing could ever execute it, a silent false promise to plugin authors. Avoiding a breaking enum change does not justify a kind that cannot run.
+
+- `PluginKind` and `VALID_PLUGIN_KINDS` drop `step` and `hook` (`src/conductor/src/types/plugin.ts`). They are listed in `RETIRED_PLUGIN_KINDS`.
+- Manifest validation refuses a retired kind with a named `Unsupported plugin kind` error that lists the supported kinds (`src/conductor/src/engine/plugin-manifest.ts`). Discovery follows the existing partial-failure rule: warn, skip that plugin, keep loading the others.
+- `visualizer` stays reserved, and the reservation reasoning still applies to it.
+- A retired kind may return to `PluginKind` only together with the runtime retrieval seam that executes it. That reintroduction needs its own decision defining the plugin contract.
+
 
 - Node ESM `import()` of `.ts` files: rejected by Node 20+ unless a custom loader hook is installed (see Node ESM docs).
 - `js-yaml` already a dependency (`src/conductor/package.json:14`). `semver` is a 6KB pure-JS package; addition is low-cost.

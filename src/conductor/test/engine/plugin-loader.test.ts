@@ -119,6 +119,53 @@ export default {
     });
   });
 
+  describe('retired plugin-kind discovery', () => {
+    it('skips a retired-kind directory while registering its supported sibling', async () => {
+      const retiredDir = join(globalDir, 'retired-step');
+      mkdirSync(retiredDir);
+      writeFileSync(
+        join(retiredDir, 'plugin.yml'),
+        `kind: step
+name: retired-step
+entrypoint: index.js`,
+      );
+      // This complete entrypoint makes the fixture prove manifest refusal rather
+      // than a missing-entrypoint failure when run against the former loader.
+      writeFileSync(join(retiredDir, 'index.js'), 'export default {};');
+
+      const supportedDir = join(globalDir, 'working-provider');
+      mkdirSync(supportedDir);
+      writeFileSync(
+        join(supportedDir, 'plugin.yml'),
+        `kind: llm_provider
+name: working-provider
+entrypoint: index.js`,
+      );
+      writeFileSync(
+        join(supportedDir, 'index.js'),
+        `export default {
+  async invoke() {
+    return { success: true, output: 'test', exitCode: 0 };
+  }
+};`,
+      );
+
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await discoverPlugins(globalDir, projectDir, registry);
+
+        registry.markInitialized();
+        expect(warning).toHaveBeenCalledWith(
+          expect.stringContaining('Skipping plugin retired-step: Unsupported plugin kind "step".'),
+        );
+        expect(registry.get('llm_provider', 'working-provider')).toBeDefined();
+        expect(registry.tryGet('llm_provider', 'retired-step')).toBeUndefined();
+      } finally {
+        warning.mockRestore();
+      }
+    });
+  });
+
   describe('llm provider interface validation', () => {
     function writeProviderModule(name: string, source: string): void {
       const pluginDir = join(globalDir, name);
