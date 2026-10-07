@@ -1,15 +1,17 @@
 import { spawn } from 'node:child_process';
 
 import {
-  CLAUDE_PROVIDER,
-  CODEX_PROVIDER,
+  findBuiltInProviderDescriptor,
   resolveProviderExecutable,
 } from './provider-catalog.js';
+import type { EffortLevel } from '../types/config.js';
 
 export interface InteractiveLaunchRequest {
   readonly provider: string;
   readonly openingPrompt: string;
   readonly cwd: string;
+  readonly model?: string;
+  readonly effort?: EffortLevel;
 }
 
 export interface InteractiveLaunchOptions {
@@ -32,33 +34,11 @@ export type InteractiveLaunchOutcome =
   | { readonly kind: 'exited'; readonly exitCode: number }
   | { readonly kind: 'unavailable'; readonly provider: string };
 
-interface InteractiveInvocation {
-  readonly executable: string;
-  readonly args: string[];
-  readonly stdio: InteractiveLaunchOptions['stdio'];
-}
-
 export interface LaunchInteractiveSessionOptions {
   readonly spawn?: InteractiveLaunchProcess;
   readonly report?: (message: string) => void;
   readonly isInteractiveTerminal?: () => boolean;
 }
-
-const interactiveInvocations: Record<
-  string,
-  (prompt: string) => InteractiveInvocation
-> = {
-  [CLAUDE_PROVIDER]: (prompt: string) => ({
-    executable: resolveProviderExecutable(CLAUDE_PROVIDER),
-    args: ['--permission-mode', 'default', prompt],
-    stdio: 'inherit',
-  }),
-  [CODEX_PROVIDER]: (prompt: string) => ({
-    executable: resolveProviderExecutable(CODEX_PROVIDER),
-    args: [prompt],
-    stdio: 'inherit',
-  }),
-} as const;
 
 const defaultSpawn = (
   executable: string,
@@ -79,9 +59,7 @@ export async function launchInteractiveSession(
   request: InteractiveLaunchRequest,
   options: LaunchInteractiveSessionOptions = {},
 ): Promise<InteractiveLaunchOutcome> {
-  const invocation = interactiveInvocations[
-    request.provider as keyof typeof interactiveInvocations
-  ];
+  const descriptor = findBuiltInProviderDescriptor(request.provider);
   const report = options.report ?? ((message: string) => process.stderr.write(`${message}\n`));
   const isInteractiveTerminal = options.isInteractiveTerminal
     ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY));
@@ -91,18 +69,26 @@ export async function launchInteractiveSession(
     return { kind: 'unavailable', provider: request.provider };
   }
 
-  if (!invocation) {
+  if (!descriptor) {
     report(`Interactive launch unavailable: unregistered provider ${request.provider}.`);
+    return { kind: 'unavailable', provider: request.provider };
+  }
+  if (!('interactiveLaunch' in descriptor) || !descriptor.interactiveLaunch) {
+    report(`Interactive launch unavailable: provider ${request.provider} lacks capability interactiveLaunch (#1007).`);
     return { kind: 'unavailable', provider: request.provider };
   }
 
   try {
-    const launch = invocation(request.openingPrompt);
     const spawnProcess = options.spawn ?? defaultSpawn;
     const result = await spawnProcess(
-      launch.executable,
-      launch.args,
-      { cwd: request.cwd, stdio: launch.stdio },
+      resolveProviderExecutable(descriptor.id),
+      descriptor.interactiveLaunch.argv({
+        prompt: request.openingPrompt,
+        permissionMode: 'default',
+        model: request.model,
+        effort: request.effort,
+      }),
+      { cwd: request.cwd, stdio: 'inherit' },
     );
     return { kind: 'exited', exitCode: result.exitCode };
   } catch (error) {

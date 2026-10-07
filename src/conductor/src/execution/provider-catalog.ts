@@ -8,6 +8,7 @@ import {
 } from './pi-provider.js';
 import type { LLMProvider } from './llm-provider.js';
 import type { StepName } from '../types/steps.js';
+import type { EffortLevel } from '../types/config.js';
 import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
@@ -45,7 +46,15 @@ export interface ProviderFactoryOptions {
 
 export interface InteractiveLaunch {
   readonly sessionMarkers: readonly string[];
-  readonly argv: (prompt: string, env: NodeJS.ProcessEnv) => string[];
+  readonly acceptedEfforts: readonly EffortLevel[];
+  readonly argv: (options: InteractiveLaunchArgvOptions) => string[];
+}
+
+export interface InteractiveLaunchArgvOptions {
+  readonly prompt: string;
+  readonly permissionMode?: string;
+  readonly model?: string;
+  readonly effort?: EffortLevel;
 }
 
 /** Result of parsing a provider-owned model listing command. */
@@ -169,10 +178,14 @@ export const BUILT_IN_PROVIDERS = [
     },
     interactiveLaunch: {
       sessionMarkers: ['CLAUDECODE'],
-      argv: (prompt, env) => {
-        const configuredMode = env.CONDUCT_ENGINEER_PERMISSION_MODE;
-        const permissionMode = configuredMode === 'plan' ? 'default' : configuredMode ?? 'default';
-        return ['--permission-mode', permissionMode, prompt];
+      acceptedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      argv: ({ prompt, permissionMode = 'default', model, effort }) => {
+        return [
+          '--permission-mode', permissionMode,
+          ...(model === undefined ? [] : ['--model', model]),
+          ...(effort === undefined ? [] : ['--effort', effort]),
+          prompt,
+        ];
       },
     },
     diagnosticEnvelopes: ['claude-json', 'codex-jsonl'],
@@ -218,7 +231,12 @@ export const BUILT_IN_PROVIDERS = [
     },
     interactiveLaunch: {
       sessionMarkers: ['CODEX_THREAD_ID', 'CODEX_SESSION_ID'],
-      argv: (prompt) => [prompt],
+      acceptedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      argv: ({ prompt, model, effort }) => [
+        ...(model === undefined ? [] : ['--model', model]),
+        ...(effort === undefined ? [] : ['--config', `model_reasoning_effort="${effort}"`]),
+        prompt,
+      ],
     },
     diagnosticEnvelopes: ['codex-jsonl', 'claude-json'],
     reviewPolicyCatalog: 'codex-app-server',

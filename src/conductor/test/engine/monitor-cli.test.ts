@@ -80,7 +80,10 @@ describe('Task 20 — monitor pre-boot command', () => {
     }).toEqual({
       code: 0,
       selection: [[{ projectName: 'alpha' }]],
-      rendered: [['alpha: blocked-feature — needs recovery (needs-human) [no-issue; priority-band]']],
+      rendered: [
+        ['monitor: guided sessions use provider=codex (override), model=gpt-5.6-sol (default), effort=high (default)'],
+        ['alpha: blocked-feature — needs recovery (needs-human) [no-issue; priority-band]'],
+      ],
     });
   });
 
@@ -117,7 +120,7 @@ describe('Task 20 — monitor pre-boot command', () => {
     expect({ code, passes: membership.mock.calls.length, output }).toEqual({
       code: 1,
       passes: 1,
-      output: [],
+      output: ['monitor: guided sessions use provider=codex (override), model=gpt-5.6-sol (default), effort=high (default)'],
     });
   });
 

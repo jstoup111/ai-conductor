@@ -108,7 +108,7 @@ const CUSTOM_BUILD_REVIEW_SOURCES = new Set(['project', 'global', 'plugin']);
 /** Accepted config-key universe used by the consumer-registry coverage gate. */
 export const CONFIG_CONSUMER_KEY_SETS = {
   top: [
-    'harness_version', 'defaults', 'phases', 'steps', 'complexity', 'conductor',
+    'harness_version', 'defaults', 'phases', 'steps', 'complexity', 'conductor', 'monitor',
     'markdown_viewer', 'mermaid_renderer', 'assess', 'acceptance_spec_globs', 'test_suite',
     'llm_provider', 'provider_substitution', 'llm_providers', 'ui_renderer', 'visualizers', 'memory_provider', 'tracker', 'otel', 'build_progress',
     'provider_stream', 'spec_owner', 'github_bot', 'owner_gate_cutover', 'attribution_audit_sample_pct',
@@ -126,6 +126,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   ],
   defaults: ['model', 'effort', 'max_retries', 'escalate'],
   llm_providers: ['model', 'model_escalation_order', 'model_fallback_ladder', 'trust_project_files', 'subagents'],
+  monitor: ['llm_provider', 'model', 'effort'],
   phases: ['model', 'effort', 'max_retries', 'escalate', 'by_tier'],
   steps: ['llm_provider', 'provider_substitution', 'model', 'effort', 'max_retries', 'disable', 'escalate', 'skill', 'hooks', 'by_tier', 'after', 'enforcement', 'completion_artifact', 'gate', 'kickback_target', 'when', 'parallel'],
   conductor: ['update_channel', 'auto_check', 'current_version', 'last_checked_at'],
@@ -756,6 +757,20 @@ export function validateConfig(
   if (providerSubstitutionErr) return { ok: false, error: providerSubstitutionErr };
   const providerModelConfigsErr = validateProviderModelConfigs(obj.llm_providers);
   if (providerModelConfigsErr) return { ok: false, error: providerModelConfigsErr };
+  if (obj.monitor !== undefined) {
+    if (!isPlainObject(obj.monitor)) return errVal('monitor must be an object');
+    const monitor = obj.monitor as Record<string, unknown>;
+    for (const key of Object.keys(monitor)) {
+      if (!new Set<string>(CONFIG_CONSUMER_KEY_SETS.monitor).has(key)) return errVal(`Unknown key in monitor: "${key}"`);
+    }
+    if (monitor.llm_provider !== undefined) {
+      if (typeof monitor.llm_provider !== 'string' || !BUILT_IN_PROVIDERS.some((provider) => provider.id === monitor.llm_provider)) {
+        return errVal(`monitor.llm_provider names unknown provider "${monitor.llm_provider}". Available catalog providers: ${BUILT_IN_PROVIDERS.map((provider) => provider.id).join(', ')}`);
+      }
+    }
+    if (monitor.model !== undefined && typeof monitor.model !== 'string') return errVal('monitor.model must be a string');
+    if (monitor.effort !== undefined && !VALID_EFFORTS.has(monitor.effort as EffortLevel)) return errVal('monitor.effort must be low|medium|high|xhigh|max');
+  }
 
   if (Object.hasOwn(obj, 'harness_version')) {
     if (typeof obj.harness_version !== 'string') {

@@ -65,6 +65,12 @@ describe('guided halt sessions', () => {
     ]]);
   });
 
+  it('forwards the selected model and effort to the launch seam', async () => {
+    const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
+    await openGuidedSession({ provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', halt: { project: '/workspace/project', slug: 'repair-index', reason: 'needs recovery' } }, { launch });
+    expect(launch).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.6-sol', effort: 'high' }));
+  });
+
   it('keeps recovery authority unmarked and launches in the halted feature worktree', async () => {
     const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
 

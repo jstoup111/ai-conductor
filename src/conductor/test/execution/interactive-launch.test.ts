@@ -54,6 +54,14 @@ describe('provider-agnostic interactive launch', () => {
     expect(spawnedOptions).not.toHaveProperty('resume');
   });
 
+  it('passes model and effort only through the catalog launch descriptor', async () => {
+    const spawn = vi.fn<InteractiveLaunchProcess>().mockResolvedValue({ exitCode: 0 });
+    await launchInteractiveSession({ ...request('claude'), model: 'sonnet', effort: 'medium' }, { spawn, isInteractiveTerminal });
+    expect(spawn).toHaveBeenCalledWith('claude', ['--permission-mode', 'default', '--model', 'sonnet', '--effort', 'medium', openingPrompt], {
+      cwd: '/workspace/harness/.worktrees/repair-halt', stdio: 'inherit',
+    });
+  });
+
   it('launches Codex as an attached TUI with its opening prompt positioned in argv', async () => {
     const child = new EventEmitter();
     spawnProcess.mockReturnValue(child);

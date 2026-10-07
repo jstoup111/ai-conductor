@@ -1,6 +1,6 @@
 import { loadMergedConfig } from './config.js';
-import { normalizeProviderSelection } from './provider-selection.js';
-import { findBuiltInProviderDescriptor } from '../execution/provider-catalog.js';
+import type { EffortLevel, HarnessConfig } from '../types/config.js';
+import { resolveGuidedSessionSelection, type GuidedSessionSelection } from './monitor/selection.js';
 import { createPriorityResolver, ghIssueLabelReader } from './backlog-priority.js';
 import { makeProductionGh } from './tracker-client.js';
 import { startOperatorEventSpine } from './event-persister.js';
@@ -17,12 +17,12 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 export type MonitorDispatch =
-  | { readonly kind: 'run'; readonly projectName?: string }
+  | { readonly kind: 'run'; readonly projectName?: string; readonly overrides?: { readonly provider?: string; readonly model?: string; readonly effort?: EffortLevel } }
   | { readonly kind: 'guide' };
 
 export const MONITOR_USAGE =
   // ai-conductor:session-command-context=operator-only
-  'Usage: ai-conductor monitor all|<project>\n' +
+  'Usage: ai-conductor monitor all|<project> [--provider <provider>] [--model <model>] [--effort <effort>]\n' +
   '  Monitor halted features across every registered project, or one named project.\n';
 // /ai-conductor:session-command-context
 
@@ -34,19 +34,25 @@ export const MONITOR_USAGE =
 export function detectMonitorCommand(argv: readonly string[]): MonitorDispatch | null {
   if (argv[2] !== 'monitor') return null;
   const selector = argv[3];
-  if (argv.length !== 4 || selector === undefined || selector.startsWith('-')) {
+  if (selector === undefined || selector.startsWith('-')) {
     return { kind: 'guide' };
   }
-  return selector === 'all' ? { kind: 'run' } : { kind: 'run', projectName: selector };
-}
-
-interface MonitorProviderResolution {
-  readonly provider?: string;
-  readonly error?: string;
+  const overrides: { provider?: string; model?: string; effort?: EffortLevel } = {};
+  for (let index = 4; index < argv.length; index += 2) {
+    const flag = argv[index]; const value = argv[index + 1];
+    if (!value || (flag !== '--provider' && flag !== '--model' && flag !== '--effort') || Object.hasOwn(overrides, flag.slice(2))) return { kind: 'guide' };
+    if (flag === '--provider') overrides.provider = value;
+    if (flag === '--model') overrides.model = value;
+    if (flag === '--effort') overrides.effort = value as EffortLevel;
+  }
+  const withOverrides = Object.keys(overrides).length === 0 ? {} : { overrides };
+  return selector === 'all' ? { kind: 'run', ...withOverrides } : { kind: 'run', projectName: selector, ...withOverrides };
 }
 
 export interface MonitorCliDeps {
-  readonly resolveProvider?: (projectRoot: string) => Promise<MonitorProviderResolution>;
+  readonly resolveProvider?: (projectRoot: string) => Promise<{ readonly provider?: string; readonly error?: string }>;
+  readonly loadConfig?: typeof loadMergedConfig;
+  readonly resolveSelection?: (input: { config: HarnessConfig; overrides?: { provider?: string; model?: string; effort?: EffortLevel } }) => GuidedSessionSelection;
   readonly deriveQueueMembership?: typeof deriveQueueMembership;
   readonly runGuidedMonitorQueue?: typeof runGuidedMonitorQueue;
   readonly openGuidedSession?: typeof openGuidedSession;
@@ -64,12 +70,6 @@ export interface MonitorCliDeps {
 }
 
 const execFileP = promisify(execFile);
-
-async function resolveConfiguredProvider(projectRoot: string): Promise<MonitorProviderResolution> {
-  const result = await loadMergedConfig(projectRoot);
-  if (!result.ok) return { error: result.error.message };
-  return { provider: normalizeProviderSelection(result.config.llm_provider)[0] };
-}
 
 async function haltIssuesRepository(projectRoot: string): Promise<string | undefined> {
   try {
@@ -107,15 +107,21 @@ export async function dispatchMonitorCommand(
     return 1;
   }
 
-  const providerResult = await (deps.resolveProvider ?? resolveConfiguredProvider)(projectRoot);
-  if (providerResult.error !== undefined || providerResult.provider === undefined) {
-    printError(`monitor: unable to resolve provider${providerResult.error ? `: ${providerResult.error}` : ''}`);
-    return 1;
+  let selection: GuidedSessionSelection;
+  const overrides = command.overrides ?? {};
+  if (deps.resolveProvider) {
+    const providerResult = await deps.resolveProvider(projectRoot);
+    if (providerResult.error !== undefined || providerResult.provider === undefined) {
+      printError(`monitor: unable to resolve provider${providerResult.error ? `: ${providerResult.error}` : ''}`); return 1;
+    }
+    selection = (deps.resolveSelection ?? resolveGuidedSessionSelection)({ config: {}, overrides: { ...overrides, provider: overrides.provider ?? providerResult.provider } });
+  } else {
+    const result = await (deps.loadConfig ?? loadMergedConfig)(projectRoot);
+    if (!result.ok) { printError(`monitor: unable to resolve provider: ${result.error.message}`); return 1; }
+    selection = (deps.resolveSelection ?? resolveGuidedSessionSelection)({ config: result.config, overrides });
   }
-  if (findBuiltInProviderDescriptor(providerResult.provider) === undefined) {
-    printError(`monitor: unregistered provider ${providerResult.provider}.`);
-    return 1;
-  }
+  if (selection.kind === 'refused') { printError(selection.message); return 1; }
+  print(`monitor: guided sessions use provider=${selection.provider} (${selection.sources.provider}), model=${selection.model} (${selection.sources.model}), effort=${selection.effort} (${selection.sources.effort})`);
 
   const membership = deps.deriveQueueMembership ?? deriveQueueMembership;
   const run = deps.runGuidedMonitorQueue ?? runGuidedMonitorQueue;
@@ -178,7 +184,7 @@ export async function dispatchMonitorCommand(
         })));
         return orderMonitorQueue(orderable, priorityResolver);
       },
-      launch: (halt) => open({ provider: providerResult.provider!, halt }),
+      launch: (halt) => open({ provider: selection.provider, model: selection.model, effort: selection.effort, halt }),
       offer: (halt) => {
         const ordering = halt as typeof halt & { band?: string; orderingBasis?: string };
         print(

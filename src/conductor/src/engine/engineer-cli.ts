@@ -990,7 +990,12 @@ export async function dispatchEngineer(
         const prompt = `${host!.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
         return (opts.spawnHost ?? spawnInteractiveHost)(
           executable!,
-          host!.interactiveLaunch.argv(prompt, launchEnv),
+          host!.interactiveLaunch.argv({
+            prompt,
+            permissionMode: launchEnv.CONDUCT_ENGINEER_PERMISSION_MODE === 'plan'
+              ? 'default'
+              : launchEnv.CONDUCT_ENGINEER_PERMISSION_MODE ?? 'default',
+          }),
           launchingDirectory,
         );
       });
