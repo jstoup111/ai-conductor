@@ -387,6 +387,17 @@ worktree removal.
 | `build-outcome.json` | `{ version: 1, records: BuildOutcomeRecord[] }`. Each record carries `outcome` (`moved`/`no-movement`), `terminalOutcome` (`done`/`failed`/`no-verdict`), the kicking-back `gate` (or `null`), the gate `verdict` at entry, the `rung` (`model`, `effort`) dispatched at, both movement witnesses (`treeBefore`/`treeAfter`, `headBefore`/`headAfter`), and an optional bounded `note` (the same last-200-lines tail `step_completed` carries) plus an inferred or agent-declared `category` (`disputes-gate`/`belongs-to-decide`/`silent-no-movement`) | `build-outcome.ts`, appended to at every build-step terminal outcome from `conductor.ts` | Read when the conductor handles an active gate's kickback to `build`: an identical no-movement cycle can halt instead of paying for a repeat dispatch (`sameNoOpCycle`) | Missing, corrupt, or version-mismatched sidecars fail open to an empty record set (never throw, never block dispatch); a lost sidecar just means one already-observed no-op cycle may be repeated once before the guard has evidence again |
 | `build-dispute.json` | `{ category: 'disputes-gate' \| 'belongs-to-decide' \| 'silent-no-movement' }` | optional, hand- or agent-authored during a build step | `resolveBuildOutcomeCategory`, preferred over the note-text inference when present and well-formed | Absent, malformed, or shape-invalid content is ignored outright and the category is inferred from the build's note text instead — this artifact is never required for any behavior in the feature |
 
+### Per-child state
+
+A stacked feature keeps per-child region state under `.pipeline/children/<k>/`, where `<k>` is a
+child id from 1 to 9. Each child directory holds whole copies of the flat schemas above:
+`conduct-state.json`, `kickback-ledger.json`, and `gates/<step>.json` for the child-region steps
+`acceptance_specs`, `build`, `test_suite`, and `build_review`. Whole-feature verdicts are never stored
+under a child. Each child file uses its own lease. Flat enumerations never descend into `children/`.
+A fresh feature session removes each existing child's ledger along with the flat one. A feature with no
+`children/` directory reads and writes exactly the flat paths. Operators select a child with
+[`--child <k>`](cli.md#per-child-selection---child).
+
 ### Reconstruction: what self-heals and what must not
 
 `.pipeline/` is gitignored and lives inside the worktree, so removing or recreating a worktree
@@ -609,6 +620,13 @@ base is resolved lazily, only in the create case.
 On a halt or error the daemon **deliberately leaves the worktree in place** for the operator. Only the
 legacy interactive cleanup path also deletes the branch.
 
+A stacked feature's child branch is `feat/c<k>/<slug>`, with `<k>` from 1 to 9 and a single-segment
+slug. No step creates child branches yet. Every branch consumer resolves names through
+`feature-branch-identity.ts` and recognizes them. A child branch is daemon-owned and is attributed to
+its parent feature in intake overlap. Attribution is not authority: halt-PR and GitHub writes from a
+child also require its `feat/daemon-<slug>` leaf to exist. `shipped-record` refuses a child branch,
+and park reconciliation never deletes or repairs one.
+
 ### Commit trailers
 
 Daemon worktrees may contain `.pipeline/co-author`, a hook input written during preparation. It is
@@ -726,7 +744,9 @@ One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-86
 no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
 `<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
 
-`ConductorEvent` is a discriminated union. `EventPersister` writes the event types marked
+`ConductorEvent` is a discriminated union. Any member may carry an optional integer `child` (1–9)
+naming a stacked feature's child; it is omitted when no child applies, and cost and time rollups ignore
+it. `EventPersister` writes the event types marked
 `persist: true` in `event-sinks.ts`; common persisted types include:
 
 `land_gate_rejected`, `contained_live_checkout_drift`, `self_host_containment_verdict`, `self_host_boundary_fingerprint`, `containment_check_unresolved`,

@@ -788,6 +788,8 @@ ai-conductor task done <id> [--done-when <n>=<evidence>]... [--unverified <n>=<r
 ai-conductor task done <id> --plan-gap <n> --reason <text>
 ```
 
+Both verbs accept an optional `--child <k>`; see [Per-child selection](#per-child-selection---child).
+
 Exactly two positionals: the verb and a task id matching `[A-Za-z0-9._-]+` (for example `7` or
 `rem-fr10-1`). A missing or unknown verb, or a missing id, prints the guide to stderr and exits 2.
 
@@ -811,6 +813,20 @@ feature slug. A legacy task with no `Done when:` checks keeps its prior
 exit-0, no-write behavior. A stamp holding a different id prints `cannot clear task <id>; current
 stamp is <other>` and exits 1 with both the stamp and `task-status.json` untouched. A matching stamp
 is removed after a successful close. See [gates](../explanation/gates.md).
+
+### Per-child selection (`--child`)
+
+`task`, `rewind`, and `kickback-budget inspect` accept `--child <k>` to select one child of a stacked
+feature. `<k>` is an integer from 1 to 9 whose `.pipeline/children/<k>/` directory exists in the
+feature's worktree; see [per-child state](artifacts.md#per-child-state). An invalid id, or a child
+with no state directory, exits 1 before any read or write. Without `--child`, every command behaves
+as before. A repeated `--child`, or one without a value, prints the `task` guide (exit 2); for
+`rewind` and `kickback-budget` it falls through to `error: unknown command` (exit 1).
+
+`task start|done --child <k>` also requires the coverage-binding envelope's slice membership to place
+the task in child `k`. A missing envelope, an unmapped task, or a task in another child exits 1.
+Engine-appended remediation task ids skip the membership check. After validation the verb runs
+unchanged against the flat `task-status.json` and `current-task`.
 
 ## `ai-conductor test-suite`
 
@@ -1054,7 +1070,7 @@ do not hand the amendment to BUILD. The land gate repeats this check when a spec
 ## `ai-conductor kickback-budget`
 
 ```bash
-ai-conductor kickback-budget inspect --feature <slug> [--format human|json]
+ai-conductor kickback-budget inspect --feature <slug> [--child <k>] [--format human|json]
 ai-conductor kickback-budget raise --feature <slug> --gate <gate> --by <positive-integer> --rationale "<reason>"
 ai-conductor kickback-budget reset --feature <slug> --gate <gate> --rationale "<reason>"
 ```
@@ -1101,6 +1117,10 @@ Inspect shows the effective plan-growth cap and whether it is config-derived or 
 mutation, the command temporarily parks an unparked feature while it records the authorization and
 removes that temporary park after success. It preserves a park that already existed; unpark that
 feature when ready, otherwise the daemon leaves the authorization unconsumed.
+
+`inspect --child <k>` reads child `k`'s ledger instead of the flat one. Human output starts with
+`Child: <k>`; JSON adds a `child` field. `raise` and `reset` reject `--child` as an unknown flag. See
+[Per-child selection](#per-child-selection---child).
 
 ## `ai-conductor decide-grant`
 
@@ -1182,7 +1202,7 @@ command grants the daemon no clearing authority. Fix the halt's cause first — 
 ## `ai-conductor rewind`
 
 ```bash
-ai-conductor rewind --to <step>
+ai-conductor rewind --to <step> [--child <k>]
 ```
 
 Returns a halted feature to an earlier pipeline step. Run it from that feature's worktree, for example
@@ -1201,6 +1221,14 @@ If clearing the derived records fails, `rewind` exits non-zero and restores the 
 halt markers, and any gate verdicts it staged for removal, so the feature remains retryable. It reports
 the failure that stopped the rewind first; a subsequent `rewind: rollback failed:` message means that
 the corrective restoration also failed and needs operator attention.
+
+With `--child <k>`, `--to` must be a child-region step: `acceptance_specs`, `build`, `test_suite`, or
+`build_review`; any other target exits 1. The target must be earlier than child `k`'s own `last_step`.
+The command demotes child `k`'s region from the target, then the region steps of every existing child
+above `k` in ascending order, then every later whole-feature step in the flat state. It then clears
+those verdicts and the halt markers, emits `operator_rewind` with a `child` field, and prints
+`Rewound child <k> to <step>.` A failure restores every changed store and leaves the halt in place.
+See [Per-child selection](#per-child-selection---child).
 
 ## `ai-conductor reseal`
 
