@@ -1327,8 +1327,11 @@ for flags and exit codes. The manual commands below remain valid but leave no au
 If `HALT.class` is `over-scope`, do not clear the body unchanged. Edit the fenced
 `over-scope-decisions` JSON array in `.pipeline/HALT`: for each decision you are making, set
 `decision` to `accept` or `refuse` and add a non-empty `rationale`. Leave entries you are not
-deciding as `pending`. An accept clears that criterion; a refusal records the decision but keeps
-the halt active as “refused — rework required.”
+deciding as `pending`. An accept clears that criterion; a refusal records the decision and keeps
+the criterion blocking. When every blocking finding is refused, the next daemon `prd_audit` lap
+routes the refusals to BUILD rework instead of re-halting (see
+[gates](../explanation/gates.md#prd_audits-grades-and-routing)). It halts again as “refused — rework
+required” when any finding is still `pending` or the rework cannot be planned or charged.
 
 Keep the offered criterion and summary unchanged, including when a revision refers to an older
 report number or wording. Only the decision and rationale are editable.

@@ -727,7 +727,10 @@ the aggregate gate. Scoped success alone never satisfies that gate.
   case-insensitively. An `existing-task` disposition binds the gap to task id(s) already in the
   active plan instead: the engine re-stages those rows and kicks back to `build` without appending or
   spending plan-growth allowance (see
-  [gates](../explanation/gates.md#kickback-and-remediation-routing)). No completion glob — the
+  [gates](../explanation/gates.md#kickback-and-remediation-routing)). For an all-refused `prd_audit`
+  `OVER_SCOPE` report, the engine supplies refusal evidence in the dispatch context; each refusal needs
+  a `build` disposition with id `refusal-<decisionId>` and at least one removal/rework task, or the
+  engine writes the refused over-scope HALT. No completion glob — the
   engine reads the JSON directly to route.
 - **Gate role** — advisory; it is the unblocker rather than a blocker. HALT is reserved for exactly
   three categories: architectural clarity, product scope, and unanswerable. Every other gap must route
