@@ -5,6 +5,7 @@ import { basename, join } from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { HALT_MARKER } from './halt-marker.js';
 import { supersedeHaltRecord, type HaltRecordRemoteOptions } from './halt-record.js';
+import { leafBranchFor } from './feature-branch-identity.js';
 import type { BacklogItem } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import type { ProviderExecutionContext } from './provider-execution.js';
@@ -172,7 +173,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
     }),
 
     createWorktree: async (slug, order?: WorkOrder) => worktreeLifecycle.run(async () => {
-      const branch = `feat/daemon-${slug}`;
+      const branch = leafBranchFor(slug);
       const path = join(cfg.worktreeBase, slug);
       const root = cfg.projectRoot;
       if (order && cfg.workOrderGit) await verifyWorkOrder(order, cfg.workOrderGit);

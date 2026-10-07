@@ -163,6 +163,31 @@ describe('engine/park-reconciliation — merge evidence against real git', () =>
     });
     expect(await isOperatorParked(notARepo, slug)).toBe(true);
   });
+
+  it('never deletes a child branch on the branchless path when the leaf and its child are both contained in main', async () => {
+    const slug = 'x';
+    // The leaf and its stacked child point at the same main tip, so both are
+    // contained in origin/main. The child must never be deleted on the
+    // branchless path, and the leaf is handled exactly as today.
+    await git(['branch', `feat/daemon-${slug}`, 'main']);
+    await git(['branch', `feat/c1/${slug}`, 'main']);
+    const childTip = await git(['rev-parse', `feat/c1/${slug}`]);
+    const leafTip = await git(['rev-parse', `feat/daemon-${slug}`]);
+    await commit(`.docs/shipped/2026-07-25-${slug}.md`, `slug: 2026-07-25-${slug}\n`, `ship: ${slug}`);
+    await git(['push', '-q', 'origin', 'main']);
+    await writeOperatorPark(repo, slug);
+
+    const outcome = await reconcileMergedPark({ projectRoot: repo, slug, runGit: realGit });
+
+    expect({ outcome, parked: await isOperatorParked(repo, slug) }).toEqual({
+      outcome: { slug, steps: ['worktree-removed', 'branch-absent', 'unparked'] },
+      parked: false,
+    });
+
+    // Neither the child nor the leaf branch is deleted by the branchless cleanup.
+    await expect(git(['rev-parse', '--verify', `feat/c1/${slug}`])).resolves.toBe(childTip);
+    await expect(git(['rev-parse', '--verify', `feat/daemon-${slug}`])).resolves.toBe(leafTip);
+  });
 });
 
 interface GitWorld {

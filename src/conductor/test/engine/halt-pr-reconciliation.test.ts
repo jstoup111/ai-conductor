@@ -922,4 +922,85 @@ describe('reconcileHaltPrs — stale marking on an already-resolved halt', () =>
     expect(foreign.isDraft).toBe(true);
     expect(foreign.labels).toContain('needs-remediation');
   });
+
+  // ── Task 6: resolve PR heads through the identity module; probe the leaf ───
+
+  const probeCases = [
+    {
+      head: 'feat/daemon-x',
+      expected: [
+        'cat-file -e feat/daemon-x:.docs/shipped/x.md',
+        'cat-file -e origin/feat/daemon-x:.docs/shipped/x.md',
+      ],
+    },
+    {
+      head: 'feat/daemon-a/b',
+      expected: [
+        'cat-file -e feat/daemon-a/b:.docs/shipped/a/b.md',
+        'cat-file -e origin/feat/daemon-a/b:.docs/shipped/a/b.md',
+      ],
+    },
+    { head: 'feat/daemon-', expected: [] },
+    {
+      head: 'feat/c1/x',
+      expected: [
+        'cat-file -e feat/daemon-x:.docs/shipped/x.md',
+        'cat-file -e origin/feat/daemon-x:.docs/shipped/x.md',
+      ],
+    },
+    { head: 'main', expected: [] },
+    { head: 'hotfix/y', expected: [] },
+  ];
+
+  it.each(
+    probeCases.map((c, i) => ({
+      head: c.head,
+      expected: c.expected,
+      number: 2100 + i,
+      url: `https://github.com/owner/repo/pull/${2100 + i}`,
+    })),
+  )('records probes for marked head "$head"', async ({ head, expected, number, url }) => {
+    const marked: FakeHeadPr = {
+      number,
+      url,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+      headRefName: head,
+    };
+    const { gh } = makeFakeGhForClearing([marked]);
+    const { runGit, calls } = makeFakeGit([]); // no shipped record → both refs probed
+
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, runGit });
+
+    expect(calls.map((c) => c.join(' '))).toEqual(expected);
+  });
+
+  it('clears a child-head PR via the leaf probe, never probing feat/c<id>/<slug>', async () => {
+    const childPr: FakeHeadPr = {
+      number: 2200,
+      url: 'https://github.com/owner/repo/pull/2200',
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+      headRefName: 'feat/c1/x',
+    };
+    const { gh, commentsFor } = makeFakeGhForClearing([childPr]);
+    // Leaf record present → the first (leaf) probe succeeds and the clear runs.
+    const { runGit, calls } = makeFakeGit(['feat/daemon-x:.docs/shipped/x.md']);
+
+    const logs: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, runGit, log: (m) => logs.push(m) });
+
+    // The probe targets the leaf branch — never the child ref.
+    expect(calls.map((c) => c.join(' '))).toEqual(['cat-file -e feat/daemon-x:.docs/shipped/x.md']);
+    expect(calls.some((c) => c.some((a) => a.includes('feat/c1/x')))).toBe(false);
+
+    // Halt presentation is cleared upon the successful leaf probe.
+    expect(childPr.isDraft).toBe(false);
+    expect(childPr.labels).not.toContain('needs-remediation');
+    expect(childPr.body).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
+    expect(logs.some((m) => m.includes('halt resolved'))).toBe(true);
+    expect(commentsFor(childPr.url).join('\n')).toContain('Halt resolved');
+  });
 });

@@ -98,6 +98,7 @@ export async function enumerateUnmergedBranches(
     'refs/remotes/*/spec/*',
   ],
   onRefEnumerationFailure?: (stderr: string) => void,
+  acceptCandidate?: (ref: string) => boolean,
 ): Promise<string[]> {
   const refs = await git([
     'for-each-ref',
@@ -112,7 +113,8 @@ export async function enumerateUnmergedBranches(
   const candidates = refs.stdout
     .split('\n')
     .map((l) => l.trim())
-    .filter((l) => l.length > 0);
+    .filter((l) => l.length > 0)
+    .filter((ref) => (acceptCandidate ? acceptCandidate(ref) : true));
 
   const unmerged: string[] = [];
   for (const branch of candidates) {

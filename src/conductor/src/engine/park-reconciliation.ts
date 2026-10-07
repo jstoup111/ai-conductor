@@ -12,6 +12,7 @@ import { isOperatorParked, listOperatorParkedSlugs } from './park-marker.js';
 import { parseIntakeSourceRef } from './artifacts.js';
 import { runProjectTeardown } from './worktree-prepare.js';
 import { loadConfig } from './config.js';
+import { isDaemonOwnedBranchName, parseFeatureBranch } from './feature-branch-identity.js';
 import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
 import { phaseMarkerPath } from './phase-marker.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
@@ -74,6 +75,7 @@ export interface UnmergedCommitListing {
 export type RefusalReason =
   | 'invalid-slug'
   | 'in-flight'
+  | 'child-branch'
   | 'ancestry-check-failed'
   | 'branch-missing'
   | 'no-merge-proof'
@@ -219,7 +221,7 @@ function isMerged(evidence: MergeEvidence): boolean {
  * the merge proofs alone.
  */
 export function requiresShippedRecord(branch?: string): boolean {
-  return branch === undefined || branch.startsWith('feat/daemon-');
+  return branch === undefined || isDaemonOwnedBranchName(branch);
 }
 
 /**
@@ -556,8 +558,12 @@ async function gatherMergeEvidence(
 
   const key = undatedStem(slug);
   const shippedRecordOnMain = shippedStems.some((stem) => undatedStem(stem) === key);
+  // A stacked child branch is never deletion (or record-repair) authority on
+  // the branchless path: only the leaf branch records a ship and carries the
+  // deletion proof. Filter child refs out before the ancestry loop so the
+  // record-missing arm and the deletion loop only ever see the leaf.
   const branches = branch === undefined
-    ? branchesBySlug.get(key) ?? []
+    ? (branchesBySlug.get(key) ?? []).filter((ref) => parseFeatureBranch(ref).kind !== 'child')
     : [...branchesBySlug.values()].some((refs) => refs.includes(branch)) ? [branch] : [];
 
   const mergedBranches: string[] = [];
@@ -596,6 +602,7 @@ export async function reconcileParkedFeatures(
     detached: 0,
     'in-flight': 0,
     'foreign-lifecycle': 0,
+    'child-branch': 0,
     'invalid-slug': 0,
     halted: 0,
     'listing-unavailable': 0,
@@ -888,6 +895,14 @@ export async function reconcileMergedPark(
   }
   if (await hasLivePhaseMarker(join(opts.projectRoot, '.worktrees', opts.slug), opts.now?.() ?? Date.now())) {
     return { slug: opts.slug, steps: [], refusal: 'in-flight' };
+  }
+
+  // A stacked child worktree is never reclaimed here: only the leaf records a
+  // ship and only the leaf branch carries deletion authority. Refuse before
+  // any merge-evidence read, shipped-record precondition, or gh lookup so the
+  // child is never scrutinized (or deleted) as if it were the feature.
+  if (opts.branch !== undefined && parseFeatureBranch(opts.branch).kind === 'child') {
+    return { slug: opts.slug, steps: [], refusal: 'child-branch' };
   }
 
   const runGit = opts.runGit ?? makeProductionGit();

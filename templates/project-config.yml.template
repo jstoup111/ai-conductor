@@ -127,6 +127,10 @@
 # Allowed: a boolean, only for a provider that explicitly supports project-file trust.
 # Default: false; Pi ignores project-local .pi files for unattended dispatches.
 # Changing it: true opts Pi into the project's .pi files for that dispatch; it does not change the default containment policy for other providers.
+# Controls: llm_providers.subagents — whether Pi loads its operator-installed pi-subagents extension for writable dispatches; written as llm_providers.pi.subagents.
+# Allowed: a boolean, only for a provider that explicitly supports the subagent extension.
+# Default: false; Pi does not load the extension.
+# Changing it: true enables Pi's installed subagents for writable dispatches without changing delegation behavior for other providers.
 # Controls: provider_substitution — whether an explicitly selected step provider may fall back to configured providers.
 # Allowed: allow or disallow.
 # Default: unset; a step's explicit selection is followed by configured providers, preserving the existing fallback ladder.

@@ -1,6 +1,6 @@
 // Covers: task:2, task:4, task:5
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -8,11 +8,19 @@ import {
   computeAndWriteVerdict,
   readAllVerdicts,
   readVerdict,
+  verdictPathFor,
   writeVerdict,
   validRebaseOperationRecord,
   type GateVerdict,
   type RebaseOperationRecord,
 } from '../../src/engine/gate-verdicts.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import {
+  FULL_SUITE_EVIDENCE_VERSION,
+  readFullSuiteEvidence,
+  writeFullSuiteEvidence,
+  type FullSuitePassEvidence,
+} from '../../src/engine/full-suite-evidence.js';
 
 describe('engine/gate-verdicts', () => {
   let dir: string;
@@ -245,6 +253,83 @@ describe('engine/gate-verdicts', () => {
 
     expect(await checkGateCompletion(dir, 'coverage_binding')).toMatchObject({ done: false });
   });
+
+  it('resolves flat and region-child verdict paths', () => {
+    expect(verdictPathFor(dir, 'build')).toBe(join(dir, '.pipeline/gates/build.json'));
+    expect(verdictPathFor(dir, 'build_review', parseChildId('2')!)).toBe(
+      join(dir, '.pipeline/children/2/gates/build_review.json'),
+    );
+  });
+
+  it('writes and reads a region verdict under its child path without touching siblings', async () => {
+    const child = parseChildId('2')!;
+    const sibling = parseChildId('3')!;
+
+    await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 8 });
+    await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 9 }, sibling);
+    await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 1 }, child);
+
+    const flatPath = join(dir, '.pipeline/gates/build_review.json');
+    const siblingPath = join(dir, '.pipeline/children/3/gates/build_review.json');
+    const childPath = join(dir, '.pipeline/children/2/gates/build_review.json');
+    const flatBefore = await readFile(flatPath, 'utf8');
+    const siblingBefore = await readFile(siblingPath, 'utf8');
+
+    await writeVerdict(dir, 'build_review', { satisfied: false, reason: 'rewritten', checkedAt: 2 }, child);
+
+    expect(await readFile(flatPath, 'utf8')).toBe(flatBefore);
+    expect(await readFile(siblingPath, 'utf8')).toBe(siblingBefore);
+    expect(JSON.parse(await readFile(childPath, 'utf8'))).toEqual({
+      satisfied: false,
+      reason: 'rewritten',
+      checkedAt: 2,
+    });
+    expect(await readVerdict(dir, 'build_review', child)).toEqual({
+      satisfied: false,
+      reason: 'rewritten',
+      checkedAt: 2,
+    });
+  });
+
+  it('refuses a whole-feature child verdict path', () => {
+    expect(() => verdictPathFor(dir, 'prd_audit', parseChildId('2')!)).toThrow(
+      /whole-feature step "prd_audit"/,
+    );
+  });
+
+  it('refuses a whole-feature child write without creating child state, while the flat write still works', async () => {
+    // Pre-create the child directory so the refusal is what leaves it empty.
+    await mkdir(join(dir, '.pipeline/children/2'), { recursive: true });
+
+    await expect(
+      writeVerdict(dir, 'prd_audit', { satisfied: true, checkedAt: 1 }, parseChildId('2')!),
+    ).rejects.toThrow(/whole-feature step "prd_audit"/);
+
+    expect(await readdir(join(dir, '.pipeline/children/2'))).toEqual([]);
+
+    await writeVerdict(dir, 'prd_audit', { satisfied: true, checkedAt: 1 });
+    expect(JSON.parse(await readFile(join(dir, '.pipeline/gates/prd_audit.json'), 'utf8'))).toEqual({
+      satisfied: true,
+      checkedAt: 1,
+    });
+  });
+
+  it('keeps flat verdict enumeration and full-suite evidence unchanged by a populated child region', async () => {
+    await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
+    await writeFullSuiteEvidence(dir, FULL_SUITE_PASS);
+
+    const beforeVerdicts = await readAllVerdicts(dir);
+    const beforeSuite = await readFullSuiteEvidence(dir);
+
+    await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 2 }, parseChildId('2')!);
+
+    const afterVerdicts = await readAllVerdicts(dir);
+    const afterSuite = await readFullSuiteEvidence(dir);
+
+    expect(afterVerdicts).toEqual(beforeVerdicts);
+    expect(afterSuite).toEqual(beforeSuite);
+    expect(afterVerdicts.build_review).toBeUndefined();
+  });
 });
 
 function validRebaseOperationFixture(overrides: Partial<RebaseOperationRecord> = {}): RebaseOperationRecord {
@@ -262,6 +347,35 @@ function validRebaseOperationFixture(overrides: Partial<RebaseOperationRecord> =
     ...overrides,
   };
 }
+
+const FULL_SUITE_PASS: FullSuitePassEvidence = {
+  version: FULL_SUITE_EVIDENCE_VERSION,
+  outcome: 'PASS',
+  reason: 'exit_zero',
+  fingerprint: 'sha256:content-fingerprint',
+  categoryFingerprints: {
+    additional_inputs: 'category:additional_inputs',
+    dependencies: 'category:dependencies',
+    environment: 'category:environment',
+    migrations: 'category:migrations',
+    project_config: 'category:project_config',
+    source: 'category:source',
+    test_infrastructure: 'category:test_infrastructure',
+    tests: 'category:tests',
+  },
+  provenanceHeadSha: '0123456789abcdef',
+  mode: 'aggregate',
+  selectors: [],
+  driftLedger: [],
+  command: 'npm test',
+  workingDirectory: 'src/conductor',
+  startedAt: '2026-07-25T12:00:00.000Z',
+  endedAt: '2026-07-25T12:02:03.456Z',
+  durationMs: 123_456,
+  exitCode: 0,
+  stdout: 'tests passed\n',
+  stderr: '',
+};
 
 function preservationEvidence(gate: 'build_review' | 'prd_audit') {
   return {

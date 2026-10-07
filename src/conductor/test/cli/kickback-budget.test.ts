@@ -1,4 +1,4 @@
-// Covers: task:11
+// Covers: task:11, task:27, task:28
 import { describe, expect, it } from 'vitest';
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -59,6 +59,102 @@ describe('detectKickbackBudgetCommand', () => {
   ])('rejects %s', (_name, argv) => {
     expect(detectKickbackBudgetCommand(argv)).toBeNull();
   });
+
+  it('accepts --child only on inspect and rejects repeated or mutation forms', () => {
+    expect(detectKickbackBudgetCommand(['node', 'conduct', 'kickback-budget', 'inspect', '--feature', 'f', '--child', '2']))
+      .toEqual({ kind: 'kickback-budget', action: 'inspect', feature: 'f', format: 'human', child: '2' });
+    expect(detectKickbackBudgetCommand(['node', 'conduct', 'kickback-budget', 'inspect', '--feature', 'f', '--child', '2', '--child', '2']))
+      .toBeNull();
+    expect(detectKickbackBudgetCommand(['node', 'conduct', 'kickback-budget', 'raise', '--feature', 'f', '--gate', 'build_review', '--by', '1', '--rationale', 'r', '--child', '2']))
+      .toBeNull();
+    expect(detectKickbackBudgetCommand(['node', 'conduct', 'kickback-budget', 'reset', '--feature', 'f', '--gate', 'build_review', '--rationale', 'r', '--child', '2']))
+      .toBeNull();
+  });
+});
+
+describe('kickback-budget inspect --child', () => {
+  const childLedger = { version: 1, gates: { build_review: baseEntry } };
+
+  async function inspect(
+    fixture: { root: string },
+    child: string | undefined,
+    format: 'human' | 'json' = 'human',
+  ): Promise<{ code: number; output: string }> {
+    const lines: string[] = [];
+    const code = await dispatchKickbackBudgetCommand(
+      {
+        kind: 'kickback-budget', action: 'inspect', feature: 'feature', format,
+        ...(child === undefined ? {} : { child }),
+      },
+      { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => lines.push(line) },
+    );
+    return { code, output: lines.join('\n') };
+  }
+
+  async function makeChildFeature(childLedgerContents: unknown): Promise<{ root: string; worktree: string }> {
+    const fixture = await makeFeature({ version: 1, gates: {} });
+    const childPipeline = join(fixture.worktree, '.pipeline', 'children', '2');
+    await mkdir(childPipeline, { recursive: true });
+    await writeFile(
+      join(childPipeline, 'kickback-ledger.json'),
+      typeof childLedgerContents === 'string' ? childLedgerContents : JSON.stringify(childLedgerContents),
+    );
+    return fixture;
+  }
+
+  it.each(['0', '10', 'two'])('rejects invalid child %s before reconciliation or ledger reads', async (child) => {
+    const fixture = await makeFeature('{corrupt');
+    try {
+      await expect(inspect(fixture, child)).resolves.toEqual({
+        code: 1, output: `kickback-budget: invalid child id "${child}".`,
+      });
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('rejects a missing child state before reconciliation or ledger reads', async () => {
+    const fixture = await makeFeature('{corrupt');
+    try {
+      await expect(inspect(fixture, '3')).resolves.toEqual({
+        code: 1, output: 'kickback-budget: child 3 has no child state.',
+      });
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('renders the child ledger with one Child header in human output', async () => {
+    const fixture = await makeChildFeature(childLedger);
+    try {
+      const result = await inspect(fixture, '2');
+      expect(result.code).toBe(0);
+      expect(result.output).toMatch(/^Child: 2\n\nKickback budget \(build_review\)/);
+      expect(result.output.match(/^Child: 2$/gm)).toHaveLength(1);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('renders child as a number in JSON and leaves childless inspect output unchanged', async () => {
+    const fixture = await makeChildFeature(childLedger);
+    try {
+      const child = await inspect(fixture, '2', 'json');
+      expect(child.code).toBe(0);
+      expect(JSON.parse(child.output)).toMatchObject({ feature: 'feature', child: 2, gates: expect.any(Array) });
+
+      const childless = await inspect(fixture, undefined, 'json');
+      expect(childless.code).toBe(0);
+      expect(childless.output).toBe('{"feature":"feature","gates":[{"gate":"build_review","consumed":0,"limit":5,"remaining":5,"latestReason":"","adjustments":[],"mechanicalFaults":0,"planGrowth":{"authored":0,"added":0,"byGate":{},"remaining":0,"cap":0,"capSource":"config-derived"}},{"gate":"prd_audit","consumed":0,"limit":1,"remaining":1,"latestReason":"","adjustments":[],"laps":0,"lapCap":1,"planGrowth":{"authored":0,"added":0,"byGate":{},"remaining":0,"cap":0,"capSource":"config-derived"}},{"gate":"architecture_review_as_built","consumed":0,"limit":1,"remaining":1,"latestReason":"","adjustments":[],"laps":0,"lapCap":1,"planGrowth":{"authored":0,"added":0,"byGate":{},"remaining":0,"cap":0,"capSource":"config-derived"}}]}');
+      expect(JSON.parse(childless.output)).not.toHaveProperty('child');
+
+      const human = await inspect(fixture, undefined);
+      expect(human.output).not.toContain('Child:');
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('reports a corrupt child ledger as unreadable', async () => {
+    const fixture = await makeChildFeature('{corrupt');
+    try {
+      await expect(inspect(fixture, '2')).resolves.toEqual({
+        code: 1, output: 'kickback-budget: ledger is unreadable.',
+      });
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
 });
 
 describe('kickback-budget refusal ladder', () => {
@@ -117,6 +213,23 @@ describe('kickback-budget refusal ladder', () => {
       await expect(access(join(root, '.daemon'))).rejects.toThrow();
       await expect(access(join(root, 'conduct-state.json'))).rejects.toThrow();
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    ['raise', ['raise', '--feature', 'feature', '--gate', 'build_review', '--by', '1', '--rationale', 'evidence', '--child', '2']],
+    ['reset', ['reset', '--feature', 'feature', '--gate', 'build_review', '--rationale', 'evidence', '--child', '2']],
+  ])('falls through %s with --child before ledger access', async (_action, args) => {
+    const fixture = await makeFeature({ version: 1, gates: { build_review: baseEntry } });
+    try {
+      const ledgerPath = join(fixture.worktree, '.pipeline', 'kickback-ledger.json');
+      const before = await readFile(ledgerPath);
+      const conductorRoot = resolve(import.meta.dirname, '../..');
+      const entry = join(conductorRoot, 'src', 'index.ts');
+      const tsxLoader = join(conductorRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
+      await expect(execFileP(process.execPath, ['--import', tsxLoader, entry, 'kickback-budget', ...args], { cwd: fixture.root }))
+        .rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("error: unknown command 'kickback-budget'") });
+      expect(await readFile(ledgerPath)).toEqual(before);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 });
 

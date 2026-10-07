@@ -15,6 +15,7 @@ import {
   formatFeatureUsageTotal,
 } from './execution/provider-diagnostics.js';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
+import { leafBranchFor } from './engine/feature-branch-identity.js';
 import { emitEngineerSignal, resolveEngineerDir } from './engine/engineer-store.js';
 import {
   makeAutoresolveEligibility,
@@ -2126,7 +2127,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // skip it cannot prove.
       shippedOnFeatureBranch: async (slug) => {
         const relPath = `.docs/shipped/${slug}.md`;
-        const branch = `feat/daemon-${slug}`;
+        const branch = leafBranchFor(slug);
         for (const ref of [branch, `origin/${branch}`]) {
           try {
             await execFile('git', ['cat-file', '-e', `${ref}:${relPath}`], { cwd: projectRoot });
@@ -2973,7 +2974,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             return haltPrOperations({
               number: Number(target.number),
               url: entry.prUrl,
-              headRefName: `feat/daemon-${entry.slug}`,
+              headRefName: leafBranchFor(entry.slug),
             });
           },
         });

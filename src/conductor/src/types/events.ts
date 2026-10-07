@@ -25,6 +25,7 @@ import type {
   BuildReviewInfrastructureFailureReason,
   BuildReviewJudgedResultRejection,
 } from '../engine/build-review-domain.js';
+import type { ChildId } from '../engine/child-context.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
@@ -383,7 +384,7 @@ export interface SessionEventDeliveryDiagnosticEvent {
   code: 'producer-path-invalid' | 'record-too-large' | 'write-failed';
 }
 
-export type ConductorEvent =
+type ConductorEventBody =
   | BotCoAuthorSkippedEvent
   | SessionCommandRefusedEvent
   | GithubBypassAttemptEvent
@@ -1931,3 +1932,5 @@ export type ConductorEvent =
       branch?: string;
       refusal: string;
     };
+
+export type ConductorEvent = ConductorEventBody & { child?: ChildId };
