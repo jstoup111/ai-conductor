@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { makeGitRunner } from '../../src/engine/rebase.js';
+import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import { enumerateUnmergedBranches, runOverlapScan } from '../../src/engine/overlap-scan.js';
+import { parseFeatureRef } from '../../src/engine/feature-branch-identity.js';
 import type { BlockerResolver } from '../../src/engine/blocker-resolver.js';
 
 const execFile = promisify(execFileCallback);
@@ -58,5 +59,29 @@ describe('engine/overlap-scan — DECIDE branch set (Task 16)', () => {
       branches: ['spec/x'],
       seamOverlaps: [{ branch: 'spec/x', files: ['evidence.ts'] }],
     });
+  });
+
+  it('drops candidate refs rejected by acceptCandidate before any rev-list call', async () => {
+    const recorded: string[][] = [];
+    const gitRunner: GitRunner = async (args) => {
+      recorded.push(args);
+      if (args[0] === 'for-each-ref') {
+        return { exitCode: 0, stdout: 'feat/c1/a/b\nfeat/c1/\n', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '1', stderr: '' };
+    };
+
+    const branches = await enumerateUnmergedBranches(
+      gitRunner,
+      'main',
+      ['refs/heads/feat/c[1-9]/*', 'refs/remotes/*/feat/c[1-9]/*'],
+      undefined,
+      (ref) => parseFeatureRef(ref).kind !== 'unrecognized',
+    );
+
+    expect(branches).toEqual([]);
+    // Both candidate refs were rejected by the predicate, so the rev-list
+    // loop is never reached and no argv names either ref after enumeration.
+    expect(recorded.filter((args) => args[0] === 'rev-list')).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:4, task:10, task:11
+// Covers: task:1, task:2, task:4, task:10, task:11, task:20
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -198,6 +198,47 @@ describe('engine/cost-rollup', () => {
     ]);
     expect((rollup.byDimension ?? []).reduce((sum, bucket) => sum + bucket.costUsd, 0))
       .toBe(rollup.costUsd);
+  });
+
+  it('keeps per-feature cost totals unchanged when child tags share the ledger', async () => {
+    const taggedEvents = [
+      {
+        type: 'provider_attempt', step: 'build', provider: 'claude', model: 'm-build',
+        outcome: 'success', invoked: true, child: 2,
+        tokenUsage: { input: 100, output: 10, cacheRead: 5, cacheCreation: 1, costUsd: 1 },
+      },
+      {
+        type: 'step_completed', step: 'build', status: 'done', actualProvider: 'claude', child: 2,
+        tokenUsage: { input: 100, output: 10, cacheRead: 5, cacheCreation: 1, costUsd: 1 },
+      },
+      {
+        type: 'provider_attempt', step: 'build_review', provider: 'codex', model: 'm-review',
+        outcome: 'success', invoked: true,
+        tokenUsage: { input: 200, output: 20, cacheRead: 10, cacheCreation: 2, costUsd: 2 },
+      },
+      {
+        type: 'step_completed', step: 'build_review', status: 'done', actualProvider: 'codex',
+        tokenUsage: { input: 200, output: 20, cacheRead: 10, cacheCreation: 2, costUsd: 2 },
+      },
+    ];
+    const untaggedEvents = taggedEvents.map(({ child: _child, ...event }) => event);
+
+    await writeEvents(taggedEvents.map((event) => JSON.stringify(event)));
+    const tagged = await computeCostRollup(dir);
+    await writeEvents(untaggedEvents.map((event) => JSON.stringify(event)));
+    const untagged = await computeCostRollup(dir);
+
+    expect(tagged.byDimension).toEqual(untagged.byDimension);
+    expect(tagged.tokensByDimension).toEqual(untagged.tokensByDimension);
+    expect({
+      tokens: tagged.tokens,
+      costUsd: tagged.costUsd,
+      dispatches: tagged.dispatches,
+    }).toEqual({
+      tokens: untagged.tokens,
+      costUsd: untagged.costUsd,
+      dispatches: untagged.dispatches,
+    });
   });
 
   it('excludes cost-unmetered dispatches from cost buckets but includes their finite token kinds', async () => {

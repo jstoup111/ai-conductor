@@ -1,3 +1,4 @@
+// Covers: task:7, task:18
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -313,7 +314,13 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
   }
 
   it('clears the kickback ledger when the feature session has not started', async () => {
+    const childOneLedgerPath = join(dir, '.pipeline/children/1/kickback-ledger.json');
+    const childTwoLedgerPath = join(dir, '.pipeline/children/2/kickback-ledger.json');
     await writeFile(ledgerPath, JSON.stringify({ version: 1, gates: {} }), 'utf8');
+    await mkdir(join(dir, '.pipeline/children/1'), { recursive: true });
+    await mkdir(join(dir, '.pipeline/children/2'), { recursive: true });
+    await writeFile(childOneLedgerPath, JSON.stringify({ version: 1, gates: {} }), 'utf8');
+    await writeFile(childTwoLedgerPath, JSON.stringify({ version: 1, gates: {} }), 'utf8');
     await writeFile(statePath, JSON.stringify({}), 'utf8');
 
     const conductor = new Conductor({
@@ -328,6 +335,8 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     await conductor.run().catch(() => {});
 
     expect(existsSync(ledgerPath)).toBe(false);
+    expect(existsSync(childOneLedgerPath)).toBe(false);
+    expect(existsSync(childTwoLedgerPath)).toBe(false);
   });
 
   it('preserves the kickback ledger when the feature session has already started', async () => {

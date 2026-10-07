@@ -3,6 +3,13 @@ import {
   intersectFiles,
 } from '../../overlap-scan.js';
 import { changedPathsSinceMergeBase, type GitRunner } from '../../rebase.js';
+import {
+  CHILD_REF_GLOBS,
+  LEAF_REF_GLOBS,
+  SPEC_REF_GLOBS,
+  featureSlugOf,
+  parseFeatureRef,
+} from '../../feature-branch-identity.js';
 import { runTrackerRead, type GhRunner } from '../../tracker-client.js';
 import { parseIntakeSourceRef } from '../../artifacts.js';
 import { parseSourceRef } from '../issue-ref.js';
@@ -14,10 +21,9 @@ import type { BranchOverlap } from './overlap-suggestions.js';
 const DEFAULT_OPEN_ISSUES_LIMIT = 500;
 const DEFAULT_IN_FLIGHT_BRANCH_LIMIT = 100;
 const IN_FLIGHT_REF_PATTERNS = [
-  'refs/heads/spec/*',
-  'refs/remotes/*/spec/*',
-  'refs/heads/feat/daemon-*',
-  'refs/remotes/*/feat/daemon-*',
+  ...SPEC_REF_GLOBS,
+  ...LEAF_REF_GLOBS,
+  ...CHILD_REF_GLOBS,
 ];
 
 interface OpenIssue {
@@ -114,10 +120,10 @@ export async function collectOpenIssueOverlaps({
 }
 
 function inFlightSlug(branch: string): string | null {
-  const localName = branch.match(/(?:^|\/)(spec\/.+|feat\/daemon-.+)$/)?.[1];
-  if (!localName) return null;
-  if (localName.startsWith('spec/')) return localName.slice('spec/'.length);
-  if (localName.startsWith('feat/daemon-')) return localName.slice('feat/daemon-'.length);
+  const identity = parseFeatureRef(branch);
+  if (identity.kind === 'spec' || identity.kind === 'leaf' || identity.kind === 'child') {
+    return featureSlugOf(identity) ?? null;
+  }
   return null;
 }
 
@@ -199,6 +205,7 @@ export async function selectInFlightBranches({
       baseRef,
       IN_FLIGHT_REF_PATTERNS,
       (stderr) => skipNotes.push(`skipped in-flight branch enumeration: ${stderr}`),
+      (ref) => parseFeatureRef(ref).kind !== 'unrecognized',
     );
   } catch (error) {
     return { branches: [], skipNotes: [`skipped in-flight branch enumeration: ${error instanceof Error ? error.message : String(error)}`] };

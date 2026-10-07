@@ -18,6 +18,12 @@ import { writeHaltMarker } from './halt-marker.js';
 import { parsePlanTaskDoneWhen, TEST_DONE_WHEN_TAG } from './plan-task-parse.js';
 import { startOperatorEventSpine } from './event-persister.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
+import { childStateExists, parseChildId } from './child-context.js';
+import {
+  readCoverageBindingEnvelope,
+  type CoverageBindingEnvelopeFilesystem,
+} from './coverage-binding-envelope.js';
+import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 
 export interface PlanGapInput {
   index: number;
@@ -25,15 +31,23 @@ export interface PlanGapInput {
 }
 
 export type TaskDispatch =
-  | { kind: 'start'; id: string }
+  | { kind: 'start'; id: string; child?: string }
   | {
       kind: 'done';
       id: string;
+      child?: string;
       doneWhen?: DoneWhenEvidenceInput[];
       unverified?: DoneWhenUnverifiedInput[];
       planGap?: PlanGapInput;
     }
   | { kind: 'guide' };
+
+const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
+  readFile: (path) => readFile(path, 'utf8'),
+  mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
+  writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
+  rename,
+};
 
 /**
  * Parse argv for the `task` subcommand.
@@ -58,12 +72,23 @@ export function detectTaskCommand(argv: string[]): TaskDispatch | null {
     return { kind: 'guide' };
   }
 
-  if (verb === 'start') return { kind: 'start', id };
+  if (verb === 'start') {
+    let child: string | undefined;
+    for (let index = 5; index < argv.length; index++) {
+      if (argv[index] !== '--child') continue;
+      const value = argv[index + 1];
+      if (!value || child !== undefined) return { kind: 'guide' };
+      child = value;
+      index++;
+    }
+    return child === undefined ? { kind: 'start', id } : { kind: 'start', id, child };
+  }
 
   const doneWhen: DoneWhenEvidenceInput[] = [];
   const unverified: DoneWhenUnverifiedInput[] = [];
   let planGapIndex: number | undefined;
   let planGapReason: string | undefined;
+  let child: string | undefined;
   for (let index = 5; index < argv.length;) {
     const flag = argv[index];
     const value = argv[index + 1];
@@ -84,6 +109,9 @@ export function detectTaskCommand(argv: string[]): TaskDispatch | null {
     } else if (flag === '--reason') {
       if (planGapReason !== undefined || !value.trim()) return { kind: 'guide' };
       planGapReason = value;
+    } else if (flag === '--child') {
+      if (child !== undefined) return { kind: 'guide' };
+      child = value;
     } else {
       return { kind: 'guide' };
     }
@@ -94,12 +122,20 @@ export function detectTaskCommand(argv: string[]): TaskDispatch | null {
     if (planGapIndex === undefined || planGapReason === undefined || doneWhen.length > 0 || unverified.length > 0) {
       return { kind: 'guide' };
     }
-    return { kind: 'done', id, planGap: { index: planGapIndex, reason: planGapReason } };
+    return child === undefined
+      ? { kind: 'done', id, planGap: { index: planGapIndex, reason: planGapReason } }
+      : { kind: 'done', id, child, planGap: { index: planGapIndex, reason: planGapReason } };
   }
 
   return doneWhen.length > 0 || unverified.length > 0
-    ? { kind: 'done', id, doneWhen: doneWhen.length > 0 ? doneWhen : undefined, unverified: unverified.length > 0 ? unverified : undefined }
-    : { kind: 'done', id };
+    ? {
+        kind: 'done',
+        id,
+        ...(child === undefined ? {} : { child }),
+        doneWhen: doneWhen.length > 0 ? doneWhen : undefined,
+        unverified: unverified.length > 0 ? unverified : undefined,
+      }
+    : child === undefined ? { kind: 'done', id } : { kind: 'done', id, child };
 }
 
 /**
@@ -129,6 +165,34 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
   }
 
   const projectRoot = await resolveTaskProjectRoot(cwd);
+
+  if (cmd.child !== undefined) {
+    const child = parseChildId(cmd.child);
+    if (child === undefined) {
+      console.error(`[task-cli] invalid child id "${cmd.child}" (expected 1-9)`);
+      return 1;
+    }
+    if (!await childStateExists(projectRoot, child)) {
+      console.error(`[task-cli] child ${child} has no child state (.pipeline/children/${child}/ does not exist)`);
+      return 1;
+    }
+    const envelope = await readCoverageBindingEnvelope(projectRoot, coverageBindingFilesystem);
+    if (!envelope?.sliceMembership) {
+      console.error('[task-cli] no slice membership is recorded for the feature (coverage-binding envelope missing)');
+      return 1;
+    }
+    if (!isEngineAppendedRemediationTaskId(cmd.id)) {
+      const membership = envelope.sliceMembership.taskSlices[cmd.id];
+      if (membership === undefined) {
+        console.error(`[task-cli] task ${cmd.id} has no recorded slice membership`);
+        return 1;
+      }
+      if (membership !== child) {
+        console.error(`[task-cli] task ${cmd.id} belongs to child ${membership}, not child ${child}`);
+        return 1;
+      }
+    }
+  }
 
   if (cmd.kind === 'start') {
     return runTaskStart(projectRoot, cmd.id);

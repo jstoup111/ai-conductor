@@ -14,7 +14,7 @@ import type {
   StateMutation,
   StateMutationResult,
 } from '../../src/engine/conduct-state-store.js';
-import { clearHaltAtomically, dispatchRewindCommand, rewindState } from '../../src/engine/rewind.js';
+import { clearHaltAtomically, detectRewindCommand, dispatchRewindCommand, rewindState } from '../../src/engine/rewind.js';
 
 class RecordingStateStore implements ConductStateStore<ConductState> {
   readonly batches: NamedAtomicStateMutationBatch<ConductState>[] = [];
@@ -533,5 +533,25 @@ describe('rewindState', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  });
+});
+
+describe('detectRewindCommand', () => {
+  it('parses the allowlisted --to and optional --child flag pairs', () => {
+    expect(detectRewindCommand(['node', 'conduct', 'rewind', '--to', 'build']))
+      .toEqual({ kind: 'rewind', target: 'build' });
+    expect(detectRewindCommand(['node', 'conduct', 'rewind', '--to', 'build', '--child', '2']))
+      .toEqual({ kind: 'rewind', target: 'build', child: '2' });
+  });
+
+  it.each([
+    ['repeated --child', ['node', 'conduct', 'rewind', '--to', 'build', '--child', '2', '--child', '3']],
+    ['missing --child value', ['node', 'conduct', 'rewind', '--to', 'build', '--child']],
+    ['extra positional token', ['node', 'conduct', 'rewind', '--to', 'build', 'extra']],
+    ['missing --to value', ['node', 'conduct', 'rewind', '--to']],
+    ['flag in place of --to value', ['node', 'conduct', 'rewind', '--to', '--child', '2']],
+    ['missing required --to', ['node', 'conduct', 'rewind', '--child', '2']],
+  ])('falls through for %s', (_name, argv) => {
+    expect(detectRewindCommand(argv)).toBeNull();
   });
 });

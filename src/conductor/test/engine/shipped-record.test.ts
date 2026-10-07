@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:20
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -27,6 +27,8 @@ import type { BuildReviewDispositionRecord } from '../../src/engine/build-review
 import type { BacklogTreeSource } from '../../src/engine/daemon-backlog.js';
 import type { CostRollup } from '../../src/engine/cost-rollup.js';
 import type { TimingRollup } from '../../src/engine/timing-rollup.js';
+import { computeCostRollup } from '../../src/engine/cost-rollup.js';
+import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { dispatchShippedRecord } from '../../src/engine/shipped-record-cli.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 
@@ -451,6 +453,64 @@ describe('appendTimingSection', () => {
       parsed: parseShippedRecord(before),
       providerDuration: true,
     });
+  });
+
+  it('renders one feature Cost and Time block for child-tagged build review events', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'shipped-record-child-rollup-'));
+    const taggedEvents = [
+      {
+        type: 'provider_attempt', step: 'build_review', child: 2, provider: 'claude', model: 'm-review',
+        outcome: 'success', invoked: true,
+        tokenUsage: { input: 100, output: 10, cacheRead: 5, cacheCreation: 1, costUsd: 1 },
+        observedIntervals: [{ startedAtMs: 10, durationMs: 20 }],
+      },
+      {
+        type: 'step_completed', step: 'build_review', child: 2, actualProvider: 'claude',
+        tokenUsage: { input: 100, output: 10, cacheRead: 5, cacheCreation: 1, costUsd: 1 },
+        activeInterval: { startedAtMs: 0, durationMs: 30 },
+      },
+      {
+        type: 'provider_attempt', step: 'build_review', child: 3, provider: 'claude', model: 'm-review',
+        outcome: 'success', invoked: true,
+        tokenUsage: { input: 50, output: 5, cacheRead: 2, cacheCreation: 1, costUsd: 0.5 },
+        observedIntervals: [{ startedAtMs: 40, durationMs: 20 }],
+      },
+      {
+        type: 'step_completed', step: 'build_review', child: 3, actualProvider: 'claude',
+        tokenUsage: { input: 50, output: 5, cacheRead: 2, cacheCreation: 1, costUsd: 0.5 },
+        activeInterval: { startedAtMs: 35, durationMs: 30 },
+      },
+    ];
+    const untaggedEvents = taggedEvents.map(({ child: _child, ...event }) => event);
+    const fields = {
+      slug: 'child-rollup',
+      specHash: 'abc123',
+      pr: 'https://github.com/acme/repo/pull/42',
+      shipped: '2026-10-06',
+    };
+    const render = (cost: CostRollup, timing: TimingRollup) =>
+      appendTimingSection(renderShippedRecordWithCost(fields, cost), timing);
+
+    try {
+      const eventsPath = join(root, '.pipeline', 'events.jsonl');
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(eventsPath, `${taggedEvents.map((event) => JSON.stringify(event)).join('\n')}\n`, 'utf8');
+      const taggedCost = await computeCostRollup(root);
+      const taggedTiming = await computeTimingRollup(root);
+
+      await writeFile(eventsPath, `${untaggedEvents.map((event) => JSON.stringify(event)).join('\n')}\n`, 'utf8');
+      const untaggedRendered = render(await computeCostRollup(root), await computeTimingRollup(root));
+      const taggedRendered = render(taggedCost, taggedTiming);
+
+      expect(taggedCost.byDimension).toEqual([
+        { step: 'build_review', model: 'm-review', provider: 'claude', costUsd: 1.5 },
+      ]);
+      expect(taggedRendered.match(/^## Cost$/gm)).toHaveLength(1);
+      expect(taggedRendered.match(/^## Time$/gm)).toHaveLength(1);
+      expect(taggedRendered).toBe(untaggedRendered);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

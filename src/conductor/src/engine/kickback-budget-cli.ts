@@ -17,6 +17,7 @@ import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import { readKickbackHaltGeneration } from './daemon-rekick.js';
 import { loadConfig } from './config.js';
 import { prdAuditAppendCap } from './conductor.js';
+import { childStateExists, parseChildId } from './child-context.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
 
@@ -118,6 +119,15 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     catch (error) { print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1; }
   };
   if (command.action === 'inspect') {
+    const child = command.child === undefined ? undefined : parseChildId(command.child);
+    if (command.child !== undefined && child === undefined) {
+      print(`kickback-budget: invalid child id "${command.child}".`);
+      return 1;
+    }
+    if (child !== undefined && !(await childStateExists(worktree, child))) {
+      print(`kickback-budget: child ${child} has no child state.`);
+      return 1;
+    }
     // D5: reconciliation is a COMMAND-ENTRY obligation, not a mutation-path
     // one. The sealed crash windows say "the operator re-runs any
     // kickback-budget command", and `inspect` is the command an operator
@@ -125,7 +135,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     // here would render a budget the ledger does not actually hold.
     const refused = await reconcile();
     if (refused !== undefined) return refused;
-    const ledger = await readKickbackLedger(worktree);
+    const ledger = await readKickbackLedger(worktree, child);
     if (isUnreadableKickbackLedger(ledger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
     const defaults = await defaultsFor(worktree);
     // Resolve plan growth from the same authored-task cap as remediation. A
@@ -137,12 +147,13 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const readable = [...GATES].filter((gate) => !unavailable.includes(gate));
     const liveHaltGeneration = await readKickbackHaltGeneration(worktree);
     const views = readable.map((gate) => kickbackBudgetView(ledger.gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration));
-    print(command.format === 'json'
-      ? JSON.stringify({ feature: command.feature, gates: views, ...(unavailable.length > 0 ? { unavailableGates: unavailable } : {}) })
-      : [
+    const human = [
         ...views.map((view) => renderKickbackBudgetView(ledger.gates[view.gate], view.gate, defaults[view.gate], planGrowth, liveHaltGeneration)),
         ...unavailable.map((gate) => `${gate}: budget unavailable (durable entry failed validation)`),
-      ].join('\n\n'));
+      ].join('\n\n');
+    print(command.format === 'json'
+      ? JSON.stringify({ feature: command.feature, ...(child === undefined ? {} : { child }), gates: views, ...(unavailable.length > 0 ? { unavailableGates: unavailable } : {}) })
+      : `${child === undefined ? '' : `Child: ${child}\n\n`}${human}`);
     return unavailable.length > 0 ? 1 : 0;
   }
   if (!deps.isInteractive?.() && deps.isInteractive !== undefined || (deps.isInteractive === undefined && !process.stdin.isTTY)) {

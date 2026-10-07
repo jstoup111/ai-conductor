@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:20
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -582,6 +582,36 @@ describe('computeTimingRollup', () => {
       providerActiveMs: 0,
       noProviderActiveMs: 80,
     });
+  });
+
+  it('keeps timing totals unchanged when child tags share the feature ledger', async () => {
+    const taggedEvents = [
+      { type: 'step_started', step: 'build', child: 2 },
+      {
+        type: 'provider_attempt', step: 'build', child: 2, invoked: true,
+        observedIntervals: [{ startedAtMs: 10, durationMs: 20 }],
+      },
+      {
+        type: 'step_completed', step: 'build', child: 2,
+        activeInterval: { startedAtMs: 0, durationMs: 50 },
+      },
+      { type: 'step_started', step: 'build_review' },
+      {
+        type: 'provider_attempt', step: 'build_review', invoked: true,
+        observedIntervals: [{ startedAtMs: 60, durationMs: 10 }],
+      },
+      {
+        type: 'step_completed', step: 'build_review',
+        activeInterval: { startedAtMs: 50, durationMs: 30 },
+      },
+    ];
+    const untaggedEvents = taggedEvents.map(({ child: _child, ...event }) => event);
+    const taggedDirectory = await writeFeatureEvents(taggedEvents);
+    const untaggedDirectory = await writeFeatureEvents(untaggedEvents);
+
+    await expect(computeTimingRollup(taggedDirectory)).resolves.toEqual(
+      await computeTimingRollup(untaggedDirectory),
+    );
   });
 
   it.each([

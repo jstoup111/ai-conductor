@@ -75,6 +75,34 @@ describe('worktree-shared/ensureWorktree', () => {
     expect(addCalls).toHaveLength(0);
     expect(resolveBase).not.toHaveBeenCalled();
   });
+
+  it('does not mistake a project root ending in a nested worktree slug for a registered worktree', async () => {
+    const root = '/repo/root-b';
+    const path = '/repo/root-b/.worktrees/a/b';
+    const addCalls: string[][] = [];
+    mockExeca.mockImplementation((async (...callArgs: unknown[]) => {
+      const args = (callArgs[1] as string[]) ?? [];
+      if (args[0] === 'worktree' && args[1] === 'list') return { stdout: `worktree ${root}\n` };
+      if (args[0] === 'show-ref') throw new Error('no ref');
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        addCalls.push(args);
+        return { stdout: '' };
+      }
+      return { stdout: '' };
+    }) as unknown as typeof execa);
+
+    const res = await ensureWorktree({
+      root,
+      path,
+      branch: 'feat/daemon-a/b',
+      resolveBase: async () => 'main',
+    });
+
+    expect(res.reconcile).toBe('created');
+    expect(addCalls).toEqual([
+      ['worktree', 'add', '-b', 'feat/daemon-a/b', path, 'main'],
+    ]);
+  });
 });
 
 describe('worktree-shared/removeWorktree', () => {

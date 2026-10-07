@@ -11,10 +11,17 @@ import { createFilesystemConductStateStore } from './filesystem-conduct-state-st
 import { readState } from './state.js';
 import type { ConductStateStore } from './conduct-state-store.js';
 import type { ConductState } from '../types/state.js';
-// Single source of truth for the daemon's own branch shape (`feat/daemon-<slug>`,
-// cut by `daemon-deps.ts` createWorktree). Reused rather than re-hardcoded here so
-// the prefix literal cannot drift between the halt-PR sweep and finish-record.
-import { featureSlugFromDaemonBranch } from './halt-pr-reconciliation.js';
+// The worktree branch recorded into conduct-state.json at worktree-creation
+// time is resolved through the identity module — the single source of truth for
+// every branch shape the conductor cuts — so the prefix literals cannot drift
+// between the halt-PR sweep and finish-record.
+import {
+  INTERACTIVE_PREFIX,
+  LEAF_PREFIX,
+  SPEC_PREFIX,
+  featureSlugOf,
+  parseFeatureBranch,
+} from './feature-branch-identity.js';
 import {
   evaluateShipmentEvidence,
   resolveImplementationPrBinding,
@@ -211,6 +218,42 @@ export async function dispatchFinishRecord(
   // — never falls back to writing the keep/finish-choice marker anyway.
   if (cmd.choice === 'pr') {
     const repoDir = dirname(cmd.pipelineDir);
+
+    // Resolve the recorded worktree branch FIRST — before any gh/git spawn — so
+    // a stacked child branch or an unrecognized branch identity refuses
+    // immediately (exit 1, no writes, no git/gh calls). The identity module is
+    // the single source of truth for the branch shapes the conductor cuts, and
+    // its slug is what durable shipment evidence must be evaluated against.
+    const stateResult = await readState(statePath);
+    if (!stateResult.ok) {
+      console.error(
+        `finish-record: cannot read feature state from "${statePath}" (${stateResult.error.message}) — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+    expectedPrUrl = stateResult.value.pr_url;
+    const worktreeBranch = stateResult.value.worktree_branch;
+    const identity = worktreeBranch === undefined ? undefined : parseFeatureBranch(worktreeBranch);
+    if (identity?.kind === 'child') {
+      console.error(
+        `finish-record: worktree_branch "${worktreeBranch}" is a stacked child branch (feat/c<k>/<slug>); only the leaf ${LEAF_PREFIX}<slug> records a ship — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+    if (identity?.kind === 'unrecognized') {
+      console.error(
+        `finish-record: worktree_branch "${worktreeBranch}" is not a valid ${SPEC_PREFIX}<slug>, ${INTERACTIVE_PREFIX}<slug>, or ${LEAF_PREFIX}<slug> branch identity — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+    const featureSlug = (identity !== undefined ? featureSlugOf(identity) : undefined) ?? stateResult.value.feature_desc;
+    if (!featureSlug) {
+      console.error(
+        `finish-record: cannot determine the feature slug from "${statePath}" — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+
     let implementationBinding;
     try {
       implementationBinding = await resolveImplementationPrBinding(
@@ -252,45 +295,6 @@ export async function dispatchFinishRecord(
     if (pushed !== true) {
       console.error(
         `finish-record: HEAD has not been verified as pushed to its upstream branch (push-evidence check returned ${String(pushed)}) — refusing to record PR ${cmd.prUrl}`,
-      );
-      return 1;
-    }
-
-    // A PR URL and pushed HEAD only establish that a PR exists. The durable
-    // shipment contract additionally requires the record committed on that
-    // PR head to pass the shared strict evaluator before any terminal write.
-    const stateResult = await readState(statePath);
-    if (!stateResult.ok) {
-      console.error(
-        `finish-record: cannot read feature state from "${statePath}" (${stateResult.error.message}) — refusing to record PR ${cmd.prUrl}`,
-      );
-      return 1;
-    }
-    expectedPrUrl = stateResult.value.pr_url;
-    // Three sanctioned worktree-branch shapes, all recorded verbatim into
-    // conduct-state.json at worktree-creation time:
-    //   spec/<slug>, feature/<slug>  — interactive `WorktreeManager.create()`
-    //   feat/daemon-<slug>           — daemon `createWorktree` (daemon-deps.ts)
-    // Note `feat/` alone is NOT a sanctioned prefix: `feat/some-hand-cut-branch`
-    // is a legitimate human branch name whose slug we must refuse to guess. The
-    // distinguishing literal is the full `feat/daemon-`.
-    const worktreeBranch = stateResult.value.worktree_branch;
-    const branchSlug =
-      worktreeBranch === undefined
-        ? undefined
-        : (worktreeBranch.match(/^(?:spec|feature)\/(.+)$/)?.[1] ??
-          featureSlugFromDaemonBranch(worktreeBranch) ??
-          undefined);
-    if (worktreeBranch !== undefined && !branchSlug) {
-      console.error(
-        `finish-record: worktree_branch "${worktreeBranch}" is not a valid spec/<slug>, feature/<slug>, or feat/daemon-<slug> branch identity — refusing to record PR ${cmd.prUrl}`,
-      );
-      return 1;
-    }
-    const featureSlug = branchSlug ?? stateResult.value.feature_desc;
-    if (!featureSlug) {
-      console.error(
-        `finish-record: cannot determine the feature slug from "${statePath}" — refusing to record PR ${cmd.prUrl}`,
       );
       return 1;
     }

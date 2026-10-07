@@ -297,9 +297,12 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
   it.each([
     { branch: undefined, expected: true },
     { branch: 'feat/daemon-example', expected: true },
+    { branch: 'feat/daemon-', expected: true },
+    { branch: 'feat/c1/x', expected: true },
     { branch: 'feat/example', expected: false },
     { branch: 'hotfix/example', expected: false },
     { branch: 'spec/example', expected: false },
+    { branch: 'feat/c0/x', expected: false },
   ])('requires a shipped record for branch %j only when dispatch depends on it', ({ branch, expected }) => {
     expect(requiresShippedRecord(branch)).toBe(expected);
   });
@@ -321,6 +324,86 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       });
     },
   );
+
+  it('refuses a listed child branch before gathering merge evidence or issuing any git or gh call', async () => {
+    const slug = 'x';
+    const branch = 'feat/c1/x';
+    // An empty world means any ls-tree/merge-base/worktree/branch call would
+    // throw "unexpected git invocation", so a zero-call assertion proves the
+    // refusal lands before every merge-evidence and destructive read.
+    const { run } = makeGit();
+    const runGh = vi.fn<GhRunner>();
+
+    const outcome = await reconcileMergedPark({ projectRoot: '/project', slug, branch, runGit: run, runGh });
+
+    expect({ outcome, gitCalls: run.mock.calls, ghCalls: runGh.mock.calls }).toEqual({
+      outcome: { slug, steps: [], refusal: 'child-branch' },
+      gitCalls: [],
+      ghCalls: [],
+    });
+  });
+
+  it('refuses a child branch before merged-PR lookup or record repair even when a merged PR exists and no record landed', async () => {
+    const slug = 'x';
+    const branch = 'feat/c1/x';
+    const tip = '1111111111111111111111111111111111111111';
+    const { run } = makeGit({
+      branches: [branch],
+      mergedPrHeads: [tip],
+      tips: { [branch]: tip },
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: `[{"headRefOid":"${tip}"}]` });
+    const requestRecordRepair = vi.fn(async () => {});
+
+    const outcome = await reconcileMergedPark({
+      projectRoot: '/project',
+      slug,
+      branch,
+      runGit: run,
+      runGh,
+      requestRecordRepair,
+    });
+
+    expect({ outcome, ghCalls: runGh.mock.calls, repairs: requestRecordRepair.mock.calls }).toEqual({
+      outcome: { slug, steps: [], refusal: 'child-branch' },
+      ghCalls: [],
+      repairs: [],
+    });
+  });
+
+  it('on the branchless path never deletes a child branch and matches the no-child fixture exactly', async () => {
+    const slug = 'x';
+    const leaf = 'feat/daemon-x';
+    const child = 'feat/c1/x';
+    const withChild = makeGit({ shipped: [slug], branches: [leaf, child], merged: [leaf, child] });
+    const withoutChild = makeGit({ shipped: [slug], branches: [leaf], merged: [leaf] });
+
+    const withRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const withoutRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    try {
+      await mkdir(join(withRoot, '.worktrees', slug), { recursive: true });
+      await writeOperatorPark(withRoot, slug);
+      await mkdir(join(withoutRoot, '.worktrees', slug), { recursive: true });
+      await writeOperatorPark(withoutRoot, slug);
+
+      const withOutcome = await reconcileMergedPark({ projectRoot: withRoot, slug, runGit: withChild.run });
+      const withoutOutcome = await reconcileMergedPark({ projectRoot: withoutRoot, slug, runGit: withoutChild.run });
+
+      // The child ref never reaches the deletion loop: no `git branch -d` names it.
+      expect(withChild.deleted).toEqual([]);
+      expect(withChild.deleteArgv.some((args) => args.includes(child))).toBe(false);
+
+      // Every destructive argv and the outcome deep-equal the identical fixture
+      // lacking the child branch, proving the child is filtered out before the
+      // ancestry loop, the record precondition and the deletion loop.
+      expect(withChild.deleteArgv).toEqual(withoutChild.deleteArgv);
+      expect(withChild.deleted).toEqual(withoutChild.deleted);
+      expect(withOutcome).toEqual(withoutOutcome);
+    } finally {
+      await rm(withRoot, { recursive: true, force: true });
+      await rm(withoutRoot, { recursive: true, force: true });
+    }
+  });
 
   it.each([
     { name: 'a modified tracked path', porcelain: ' M tracked.ts\n', file: 'tracked.ts', dirty: true },
@@ -2924,6 +3007,90 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       expect({ refused: result.counts.refused, events }).toEqual({
         refused: 1,
         events: [{ type: 'worktree_reclaim_failed', slug, branch, refusal: 'worktree-remove-failed' }],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a parked child-branch worktree before the record precondition, counts it refused, and leaves both in place', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'x';
+    const branch = 'feat/c1/x';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run, deleted } = makeGit({
+      shipped: [slug],
+      branches: [branch],
+      merged: [branch],
+    });
+    const runGh = vi.fn<GhRunner>();
+    const requestRecordRepair = vi.fn(async () => {});
+    const events: unknown[] = [];
+    try {
+      await mkdir(worktree, { recursive: true });
+      await writeOperatorPark(projectRoot, slug);
+
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        runGh,
+        requestRecordRepair,
+        worktreeListing: async () => [{ slug, branch }],
+        onEvent: (event) => events.push(event),
+      });
+
+      expect({
+        counts: result.counts,
+        refusedByReason: result.refusedByReason,
+        events,
+        repairs: requestRecordRepair.mock.calls,
+        ghCalls: runGh.mock.calls,
+        worktreeRemains: await access(worktree).then(() => true, () => false),
+        branchRemains: !deleted.includes(branch),
+        parked: await isOperatorParked(projectRoot, slug),
+      }).toEqual({
+        counts: { reconciled: 0, deferred: 0, orphaned: 0, parked: 1, refused: 1, skipped: 0 },
+        refusedByReason: { 'child-branch': 1 },
+        events: [{ type: 'worktree_reclaim_failed', slug, branch, refusal: 'child-branch' }],
+        repairs: [],
+        ghCalls: [],
+        worktreeRemains: true,
+        branchRemains: true,
+        parked: true,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('treats a child-branch worktree as record-gated, retaining it when the record listing is unreadable', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'x';
+    const branch = 'feat/c1/x';
+    const { run, deleted } = makeGit({
+      shipped: 'unavailable',
+      branches: [branch],
+      merged: [branch],
+    });
+    const events: unknown[] = [];
+    try {
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        worktreeListing: async () => [{ slug, branch }],
+        onEvent: (event) => events.push(event),
+      });
+
+      expect({
+        counts: result.counts,
+        lsTreeRead: run.mock.calls.some(([args]) => args[0] === 'ls-tree'),
+        events,
+        deleted,
+      }).toEqual({
+        counts: { reconciled: 0, deferred: 0, orphaned: 0, parked: 0, refused: 0, skipped: 1 },
+        lsTreeRead: true,
+        events: [{ type: 'worktree_reclaim_retained', slug, branch, reason: 'evidence-unavailable' }],
+        deleted: [],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });

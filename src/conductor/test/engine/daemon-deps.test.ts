@@ -52,6 +52,7 @@ import {
   watchHaltCleared,
 } from '../../src/engine/daemon-deps.js';
 import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
+import { leafBranchFor } from '../../src/engine/feature-branch-identity.js';
 import { buildWorkOrder } from '../../src/engine/work-order.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -505,6 +506,15 @@ describe('engine/daemon-deps', () => {
       await deps(dir).createWorktree(slug);
       expect(addCalls).toHaveLength(1);
       expect(addCalls[0]).not.toContain('-b'); // attach: add <path> <branch>
+    });
+
+    it('routes every slug shape through leafBranchFor when the branch is cut', async () => {
+      for (const testSlug of ['x', 'a/b', 'trailing-']) {
+        const { addCalls } = routeGit({ worktreeListed: false, branchExists: false });
+        const wt = await deps(dir).createWorktree(testSlug);
+        expect(wt.branch).toBe(leafBranchFor(testSlug));
+        expect(addCalls[0]).toContain(leafBranchFor(testSlug));
+      }
     });
   });
 

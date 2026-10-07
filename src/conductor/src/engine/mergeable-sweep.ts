@@ -35,6 +35,7 @@ import type { ConductorEvent } from '../types/events.js';
 import type { GithubOperationRunner } from './github-operations.js';
 import type { FeatureWorktree } from './daemon-runner.js';
 import { shippedRecordOnMain } from './shipped-record-on-main.js';
+import { leafBranchFor } from './feature-branch-identity.js';
 import type { CiFixOutcome } from './ci-fix.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
@@ -415,7 +416,7 @@ export async function sweepMergeableLabels({
               await teardownWorktree(
                 {
                   path: join(entry.repoCwd, '.worktrees', entry.slug),
-                  branch: `feat/daemon-${entry.slug}`,
+                  branch: leafBranchFor(entry.slug),
                 },
                 false,
               );

@@ -587,6 +587,38 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
     expect(await readWatch(tmpDir)).toEqual([]);
   });
 
+  it('reaps x and a/b worktrees by their leaf branch names', async () => {
+    const { gh } = makeFakeGh({
+      [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []),
+      [PR_URL_2]: prViewJson('MERGED', 'UNKNOWN', [], []),
+    });
+    const teardownCalls: Array<{ path: string; branch: string; keep: boolean }> = [];
+    await enrollWatch(tmpDir, entry(PR_URL, 'x'));
+    await enrollWatch(tmpDir, entry(PR_URL_2, 'a/b'));
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      shippedRecordProbe: async () => 'present',
+      teardownWorktree: async (worktree, keep) => {
+        teardownCalls.push({ ...worktree, keep });
+      },
+    });
+
+    expect(teardownCalls).toEqual([
+      {
+        path: join('/fake/repo', '.worktrees', 'x'),
+        branch: 'feat/daemon-x',
+        keep: false,
+      },
+      {
+        path: join('/fake/repo', '.worktrees', 'a/b'),
+        branch: 'feat/daemon-a/b',
+        keep: false,
+      },
+    ]);
+  });
+
   it('refuses a shipped-record reap for an active work claim, logs the reason, and retains the watch entry', async () => {
     const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
     const claims = new InMemoryWorkClaims();

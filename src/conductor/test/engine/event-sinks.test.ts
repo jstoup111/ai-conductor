@@ -42,7 +42,7 @@ type GithubWriteCredentialFallbackEvent = Extract<
 >;
 type GithubWriteCredentialFallbackEventHasClosedFields = Assert<Equal<
   keyof GithubWriteCredentialFallbackEvent,
-  'type' | 'operation' | 'target' | 'reason'
+  'type' | 'operation' | 'target' | 'reason' | 'child'
 >>;
 type GithubWriteCredentialFallbackReasonIsClosed = Assert<Equal<
   GithubWriteCredentialFallbackEvent['reason'],
