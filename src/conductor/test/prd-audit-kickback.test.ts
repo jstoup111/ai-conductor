@@ -1094,6 +1094,26 @@ describe('prd_audit kickback', () => {
     expect(ledger.growth).toMatchObject({ added: 1, byGate: { prd_audit: 1 } });
   });
 
+  it('appends and charges every task in an admitted multi-task refusal gap', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      plannerGaps: () => [{
+        id: 'refusal-dec-refuse-s21', disposition: 'build', category: null,
+        rationale: 'Remove the refused behavior.',
+        tasks: [
+          { id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' },
+          { id: 'remove-refused-wiring', title: 'Remove the refused S2.1 wiring' },
+        ],
+      }],
+    });
+
+    const plan = await readFile(fixture.planPath, 'utf8');
+    expect(plan).toContain(`### Task rem-prd-audit-refusal-${fixture.decisionId}: Remove the refused S2.1 behavior`);
+    expect(plan).toContain(`### Task rem-prd-audit-refusal-${fixture.decisionId}-2: Remove the refused S2.1 wiring`);
+    const ledger = await readKickbackLedger(fixture.root);
+    expect(ledger.growth).toMatchObject({ added: 2, byGate: { prd_audit: 2 } });
+  });
+
   it('re-admits refusal work when a raised prd_audit lap cap has capacity', async () => {
     const root = await mkdtemp(join(tmpdir(), 'raised-refusal-rework-budget-'));
     dirs.push(root);
@@ -1241,6 +1261,50 @@ describe('prd_audit kickback', () => {
 
     expect(fixture.calls).not.toContain('remediate');
     await expectRefusedReworkFallback(fixture);
+  });
+
+  it.each([
+    ['a malformed prd_audit gate with readable growth', JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: { authored: 8, added: 0, byGate: {} } })],
+    ['a malformed prd_audit gate with unreadable growth', JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: 'bad' })],
+  ])('fails closed to the refused block for %s', async (_name, ledger) => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      beforeRun: async (root) => writeFile(join(root, '.pipeline', 'kickback-ledger.json'), ledger),
+    });
+
+    expect(fixture.calls).not.toContain('remediate');
+    expect(fixture.calls).not.toContain('build');
+    await expectRefusedReworkFallback(fixture);
+  });
+
+  it.each([
+    ['spent durable allowance', async (root: string) => writeKickbackLedger(root, {
+      version: 1, gates: { prd_audit: { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0, laps: 1 } },
+    })],
+    ['malformed durable allowance', async (root: string) => writeFile(
+      join(root, '.pipeline', 'kickback-ledger.json'),
+      JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } } }),
+    )],
+  ])('uses the refused grouped fallback for %s before dispatch', async (_name, beforeRun) => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')], mode: 'auto', beforeRun,
+    });
+
+    expect(fixture.calls).not.toContain('remediate');
+    expect(fixture.calls).not.toContain('build');
+    await expectRefusedReworkFallback(fixture);
+  });
+
+  it('uses a raised durable allowance in the validation join', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')], mode: 'auto',
+      beforeRun: async (root) => writeKickbackLedger(root, {
+        version: 1,
+        gates: { prd_audit: { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0, laps: 1, effectiveLapCap: 2 } },
+      }),
+    });
+
+    expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
   });
 
   it('writes the refused over-scope block when admission rejects the planner output', async () => {

@@ -284,6 +284,7 @@ import {
   appendRemediationTasks as appendCriterionBoundRemediationTasks,
   buildRemediationDoneWhenChecks,
   PRD_AUDIT_REMEDIATION_GATE_SOURCE,
+  refusalTaskIds,
   type CriterionBoundRemediationGap,
 } from './remediation-append.js';
 import {
@@ -5326,12 +5327,18 @@ export class Conductor {
         admittedGaps.push(gap);
         allTasks.push(...gap.tasks);
         prdAuditTasks.push(...gap.tasks);
-        const canonicalTaskId = `rem-${PRD_AUDIT_REMEDIATION_GATE_SOURCE}-${gap.id}`;
-        const canonicalTaskExists = new RegExp(
-          `^#{1,6}\\s+Task\\s+${canonicalTaskId.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\s*:`,
-          'm',
-        ).test(activePlanText);
-        if (!canonicalTaskExists) prdAuditGrowthTasks.push(...gap.tasks);
+        const refusalTaskIdSegments = refusalTaskIds(gap);
+        const refusalTaskIdsInPlan = refusalTaskIdSegments?.map(
+          (segment) => `rem-${PRD_AUDIT_REMEDIATION_GATE_SOURCE}-${segment}`,
+        ) ?? [];
+        for (const [taskIndex, task] of gap.tasks.entries()) {
+          const taskId = refusalTaskIdsInPlan[taskIndex];
+          const taskExists = taskId !== undefined && new RegExp(
+            `^#{1,6}\\s+Task\\s+${taskId.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\s*:`,
+            'm',
+          ).test(activePlanText);
+          if (!taskExists) prdAuditGrowthTasks.push(task);
+        }
       }
     }
     // A `.pipeline/prd-audit.md` path alone is not evidence of a current
@@ -9605,6 +9612,13 @@ export class Conductor {
                   'Plan remediation per the /remediate skill and write ' +
                   '.pipeline/remediation.json.',
                 );
+                if (
+                  prdAuditRoute?.kind === 'over-scope-refusal-rework' &&
+                  !await refusalReworkAllowanceAvailable()
+                ) {
+                  await haltGroupedRefusalRework();
+                  return;
+                }
                 remediationRounds++;
                 const remediationOutcome = await (async () => {
                   try {
@@ -9685,11 +9699,20 @@ export class Conductor {
               } else if (
                 this.daemon &&
                 prdAuditUnsatisfied &&
-                remediationRounds < prdAuditRemediationLapCap
+                (prdAuditRoute?.kind === 'over-scope-refusal-rework'
+                  ? await refusalReworkAllowanceAvailable()
+                  : remediationRounds < prdAuditRemediationLapCap)
               ) {
                 // Preserve the pre-existing PRD-audit append attempt before
                 // the terminal design/invalid as-built refusal. Its planner
                 // route remains deliberately ignored here.
+                if (
+                  prdAuditRoute?.kind === 'over-scope-refusal-rework' &&
+                  !await refusalReworkAllowanceAvailable()
+                ) {
+                  await haltGroupedRefusalRework();
+                  return;
+                }
                 remediationRounds++;
                 // AB-R11 / APPROVED decision 3: a DESIGN row makes the WHOLE
                 // report halt needs-human, so terminal as-built evidence must
@@ -9728,6 +9751,13 @@ export class Conductor {
                   throw error;
                 }
                 if (terminalAsBuiltRemediation.kind !== 'route' && await haltGroupedRefusalRework()) return;
+              } else if (
+                this.daemon &&
+                prdAuditUnsatisfied &&
+                prdAuditRoute?.kind === 'over-scope-refusal-rework'
+              ) {
+                await haltGroupedRefusalRework();
+                return;
               }
               // AB-R14 / decision 8: when the consolidated kickback owns this
               // round, an all-REMEDIABLE as-built verdict must NOT halt here —
@@ -9859,7 +9889,9 @@ export class Conductor {
               // budget runs out).
               if (
                 gapMemberNamesForMerge.length > 0 &&
-                remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config)
+                (prdAuditRoute?.kind === 'over-scope-refusal-rework'
+                  ? await refusalReworkAllowanceAvailable()
+                  : remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config))
               ) {
                 mtMergeHandled = true;
                 const evidence: RemediationGateProvenance[] = [];
@@ -9878,6 +9910,13 @@ export class Conductor {
                   '.pipeline/remediation.json.',
                 );
 
+                if (
+                  prdAuditRoute?.kind === 'over-scope-refusal-rework' &&
+                  !await refusalReworkAllowanceAvailable()
+                ) {
+                  await haltGroupedRefusalRework();
+                  return;
+                }
                 remediationRounds++;
                 const remediationOutcome = await (async () => {
                   try {
@@ -9971,6 +10010,7 @@ export class Conductor {
                 i = fallbackOutcome.nextIndex;
                 continue;
               } else if (gapMemberNamesForMerge.length > 0) {
+                if (await haltGroupedRefusalRework()) return;
                 // Task 24: budget parity — remediationRounds is already at
                 // MAX_KICKBACKS_PER_GATE, so /remediate is never dispatched
                 // again this round. The deterministic manual_test kickback
@@ -10003,7 +10043,9 @@ export class Conductor {
             // no-manual_test-in-play / manual_test-passed shape.
             if (
               !mtMergeHandled && this.daemon &&
-              remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config)
+              (prdAuditRoute?.kind === 'over-scope-refusal-rework'
+                ? await refusalReworkAllowanceAvailable()
+                : remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config))
             ) {
               const gapMemberNames = membership.dispatchable
                 .filter((member, idx) => {
@@ -10053,6 +10095,13 @@ export class Conductor {
                   '.pipeline/remediation.json.',
                 );
 
+                if (
+                  prdAuditRoute?.kind === 'over-scope-refusal-rework' &&
+                  !await refusalReworkAllowanceAvailable()
+                ) {
+                  await haltGroupedRefusalRework();
+                  return;
+                }
                 remediationRounds++;
                 const remediationOutcome = await (async () => {
                   try {
@@ -10122,6 +10171,12 @@ export class Conductor {
                 // remediationOutcome.kind === 'none' — no usable plan; fall
                 // through to the generic "fail loudly" path below.
               }
+            } else if (
+              !mtMergeHandled && this.daemon &&
+              prdAuditRoute?.kind === 'over-scope-refusal-rework'
+            ) {
+              await haltGroupedRefusalRework();
+              return;
             }
 
             // Non-green join with no classified route left (Tasks 18-24 all
@@ -12249,6 +12304,22 @@ export class Conductor {
               }
               if (prdAuditRoute.kind === 'over-scope-refusal-rework') {
                 const refusalRoute = prdAuditRoute.route;
+                // Durable admission is authoritative for refusal rework. A
+                // malformed or spent ledger must preserve the refused block,
+                // not be reclassified by the no-op escalation probe below.
+                const refusalAllowanceAvailable = this.daemon && await refusalReworkAllowanceAvailable();
+                if (!refusalAllowanceAvailable) {
+                  const refusedReason = await this.writeRefusalReworkHalt(
+                    refusalRoute.detail,
+                    refusalRoute.refused,
+                  );
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  const prUrl = await this.surfaceRemediationPr(refusedReason);
+                  await this.emitLoopHalt(refusedReason, prUrl);
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
                 // The refusal-rework round consumes the same single-use
                 // kickback-to-build no-op baseline as the FIXABLE path below:
                 // a BUILD lap that changed nothing against an unchanged
@@ -12264,7 +12335,7 @@ export class Conductor {
                   process.off('SIGTERM', sigterm);
                   return;
                 }
-                if (this.daemon && await refusalReworkAllowanceAvailable()) {
+                if (refusalAllowanceAvailable) {
                   const typedVerdict = await readPrdAuditVerdict(this.projectRoot);
                   const fixableCriteria = typedVerdict.kind === 'present'
                     ? typedVerdict.value.judgment.criterionJudgments

@@ -243,6 +243,26 @@ describe('refusal-rework append', () => {
     expect(second.planText).toBe(first.planText);
   });
 
+  it('appends every decision-bound refusal task once and upserts every position on recurrence', () => {
+    const gap = admittedRefusalGap();
+    gap.tasks = [
+      { id: 'remove-offer', title: 'Remove the refused offer from the plan' },
+      { id: 'remove-wiring', title: 'Remove the refused wiring from the plan' },
+    ];
+
+    const first = appendRemediationTasks('### Task 4: Existing work\n', [gap], PRD_AUDIT_REMEDIATION_GATE_SOURCE);
+    const second = appendRemediationTasks(first.planText, [gap], PRD_AUDIT_REMEDIATION_GATE_SOURCE);
+
+    expect(first.ids).toEqual([
+      `rem-prd-audit-refusal-${decisionId}`,
+      `rem-prd-audit-refusal-${decisionId}-2`,
+    ]);
+    expect(first.planText.match(new RegExp(`^### Task rem-prd-audit-refusal-${decisionId}(?:-2)?:`, 'gm')))
+      .toHaveLength(2);
+    expect(second.planText).toBe(first.planText);
+    expect(second.ids).toEqual(first.ids);
+  });
+
   it('throws the named H9 id error for a refusal gap with an empty decision id', () => {
     const plan = '### Task 4: Existing work\n';
     const gap: CriterionBoundRemediationGap = {

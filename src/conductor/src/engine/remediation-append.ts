@@ -55,6 +55,20 @@ function refusalGapBaseId(gap: CriterionBoundRemediationGap): string | undefined
   return `${REFUSAL_GAP_PREFIX}${sanitizeSegment(decisionId, 'refusal decision id')}`;
 }
 
+/**
+ * Derive the stable per-position task id segments for one refusal gap. The
+ * first position preserves the historical decision-bound id; subsequent
+ * positions are equally decision-bound, but cannot collapse onto it.
+ */
+export function refusalTaskIds(gap: CriterionBoundRemediationGap): string[] | undefined {
+  const base = refusalGapBaseId(gap);
+  if (base === undefined) return undefined;
+  const taskCount = gap.tasks.length > 0 ? gap.tasks.length : 1;
+  return Array.from({ length: taskCount }, (_, index) =>
+    index === 0 ? base : `${base}-${index + 1}`,
+  );
+}
+
 /** True when an id carries the `rem-` signal accepted by either engine writer. */
 export function isEngineAppendedRemediationTaskId(id: string): boolean {
   return id.startsWith('rem-')
@@ -191,17 +205,18 @@ export function appendRemediationTasks(
     // derived from the gap itself.
     const gapTasks = gap.tasks.length > 0 ? gap.tasks : [{ id: gap.id, title: gap.rationale }];
 
-    for (const t of gapTasks) {
+    const refusalIds = refusalTaskIds(gap);
+    for (const [taskIndex, t] of gapTasks.entries()) {
       // A refusal gap binds the task id to the decision id carried in the gap,
       // never to the planner's (arbitrary) task id — renumbering the finding
       // must not change the addressable id.
-      const base = refusalGapBaseId(gap)
+      const base = refusalIds?.[taskIndex]
         ?? sanitizeSegment(t.id !== '' ? t.id : gap.id, 'gap task id');
       const canonical = `rem-${source}-${base}`;
       const title = collapseToOneLine(t.title) ?? collapseToOneLine(gap.rationale) ?? '';
 
       const existingTitle = existing.get(canonical);
-      if (refusalGapBaseId(gap) !== undefined && existingTitle !== undefined) {
+      if (refusalIds !== undefined && existingTitle !== undefined) {
         // A refusal task is keyed by the durable refusal decision, not its
         // presentation wording. Later rounds may rename the finding or the
         // planner's title, but must still reopen the one canonical task.
