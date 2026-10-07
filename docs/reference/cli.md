@@ -299,8 +299,8 @@ creates or cleans git worktrees. OTel export is opt-in and off unless configured
 ## `ai-conductor monitor`
 
 ```bash
-ai-conductor monitor all
-ai-conductor monitor <project>
+ai-conductor monitor all [--provider <provider>] [--model <model>] [--effort <effort>]
+ai-conductor monitor <project> [--provider <provider>] [--model <model>] [--effort <effort>]
 ```
 
 Runs the foreground guided-resolution queue for halted features. It does not start, attach to, or
@@ -310,6 +310,21 @@ dispatch the daemon.
 | --- | --- |
 | `all` | Monitor halted features across every registered project. |
 | `<project>` | Monitor halted features in one registered project by name. |
+
+| Flag | Value | Default | Effect |
+| --- | --- | --- | --- |
+| `--provider` | built-in provider with interactive launch (`claude`, `codex`) | [`monitor.llm_provider`](configuration.md#monitor), else the first [`llm_provider`](configuration.md#llm_provider) entry | Provider for every guided session in this run. |
+| `--model` | model id | `monitor.model`, else the provider's built-in `explore` model ([models](models.md)) | Model passed to the provider CLI. |
+| `--effort` | `low`\|`medium`\|`high`\|`xhigh`\|`max` | `monitor.effort`, else the provider's built-in `explore` effort | Effort passed to the provider CLI. |
+
+Flags follow the selector in any order, each at most once. `--provider` ignores the configured
+`monitor.model` and `monitor.effort`; values not given on the command line then come from the
+overriding provider's built-in `explore` policy. Before the queue starts, the monitor prints the
+resolved selection with each value's source (`override`, `config`, or `default`):
+
+```text
+monitor: guided sessions use provider=codex (override), model=gpt-5.6-sol (default), effort=high (default)
+```
 
 The monitor remains active until interrupted (`Ctrl-C`). It offers one halted feature at a time in a
 guided session and re-derives the queue between passes, so resolved or parked work is not offered
@@ -336,8 +351,11 @@ queue. Offers, session opens, deferrals, and session ends are recorded on the ev
 | --- | --- |
 | Valid selector, then interrupt | Prints `Monitor stopped.`; exits 0 unless an inventory error occurred during a pass. |
 | Unknown project, unreadable registry, or unreadable selected project | Reports the inventory error; exits 1 after the monitor stops. |
-| Configured provider unresolvable or not built in | Prints `monitor: unable to resolve provider…` or `monitor: unregistered provider <name>.`; exits 1 before the queue starts. |
-| Missing selector, extra argument, or selector beginning with `-` | Prints `Usage: ai-conductor monitor all\|<project>` to stderr; exits 1. |
+| Config unloadable, or selected provider not built in | Prints `monitor: unable to resolve provider…` or `monitor: unregistered provider <name>.`; exits 1 before the queue starts. |
+| Selected provider lacks interactive launch | Prints `monitor: provider <name> cannot open a guided session: missing capability interactiveLaunch (#1007).`; exits 1 before the queue starts. |
+| Effort not accepted by the provider | Prints `monitor: effort "<effort>" is not accepted by provider <name>.`; exits 1 before the queue starts. |
+| Model empty, starting with `-`, or containing whitespace or control characters | Prints `monitor: model "<model>" is not a valid model id for provider <name>.`; exits 1 before the queue starts. |
+| Missing selector, selector beginning with `-`, unknown or repeated flag, or flag without a value | Prints the `Usage: ai-conductor monitor all\|<project> [--provider …]` line to stderr; exits 1. |
 | Invoked from a daemon-managed session | Refused by the [daemon-session guard](#daemon-session-refusal) before queue enumeration; exits 1. |
 
 `monitor` is intentionally unavailable to daemon-managed provider sessions. Run it from an operator

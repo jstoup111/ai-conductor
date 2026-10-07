@@ -196,7 +196,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
-58 top-level keys are allow-listed (plus the retired compatibility key `wiring`, which emits a
+59 top-level keys are allow-listed (plus the retired compatibility key `wiring`, which emits a
 deprecation warning and event; see [build_review](#build_review)). Everything else fails the load.
 
 | Key | Type | Default | Section |
@@ -215,6 +215,7 @@ deprecation warning and event; see [build_review](#build_review)). Everything el
 | `llm_provider` | string \| string[] | `['claude']` | [llm_provider](#llm_provider) |
 | `llm_providers` | object | unset; required for `pi` | [llm_providers](#llm_providers) |
 | `provider_substitution` | string | `allow` | [provider_substitution](#provider_substitution) |
+| `monitor` | object | unset | [monitor](#monitor) |
 | `ui_renderer` | string | `terminal` | [ui_renderer](#ui_renderer) |
 | `visualizers` | string[] | unset | [visualizers](#visualizers) |
 | `memory_provider` | string | `local` | [memory_provider](#memory_provider) |
@@ -804,6 +805,28 @@ Set the key at the top level to establish the default for explicit step selectio
 `steps.<name>.provider_substitution` to override it for one step. This key does not change
 usage-exhaustion suppression: unavailable candidates are skipped only after the effective candidate
 list is resolved. See [multiprovider](../guides/multiprovider.md#keep-an-explicit-step-selection-exclusive).
+
+## monitor
+
+Provider, model, and effort for [`ai-conductor monitor`](cli.md#ai-conductor-monitor) guided
+sessions only. Optional object; lifecycle-step routing, models, and effort are unaffected
+(`src/conductor/src/engine/monitor/selection.ts`).
+
+| Key | Type | Default | Constraint |
+| --- | --- | --- | --- |
+| `llm_provider` | string | first [`llm_provider`](#llm_provider) entry | Built-in provider id; validated at load. The monitor refuses a provider without interactive launch (`pi`). |
+| `model` | string | selected provider's built-in `explore` model ([models](models.md)) | Non-empty; no leading `-`, whitespace, or control characters. |
+| `effort` | `low`\|`medium`\|`high`\|`xhigh`\|`max` | selected provider's built-in `explore` effort | Must be accepted by the selected provider. |
+
+Any other key fails the load with `Unknown key in monitor`. The `--provider`, `--model`, and
+`--effort` flags override these values for one run; `--provider` also ignores the configured
+`model` and `effort`.
+
+```yaml
+monitor:
+  llm_provider: codex
+  effort: medium
+```
 
 ## ui_renderer
 
