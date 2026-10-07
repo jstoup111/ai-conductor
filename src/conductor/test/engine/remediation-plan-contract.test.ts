@@ -20,6 +20,7 @@ const expectedDispositions = [
 ];
 
 describe('remediation plan contract', () => {
+  // Covers: task:1
   it('derives its disposition and halt-category vocabularies from the engine constants', () => {
     const disposition = REMEDIATION_PLAN_SCHEMA.properties.dispositions.items.properties.disposition;
     const category = REMEDIATION_PLAN_SCHEMA.properties.dispositions.items.properties.category.anyOf[0];
@@ -29,6 +30,7 @@ describe('remediation plan contract', () => {
     expect(category.enum).toEqual(REMEDIATION_HALT_CATEGORIES);
   });
 
+  // Covers: task:1
   it('keeps each disposition a strict, engine-judgment-only shape', () => {
     const root = REMEDIATION_PLAN_SCHEMA;
     const disposition = root.properties.dispositions.items;
@@ -61,6 +63,7 @@ describe('remediation plan contract', () => {
     ]));
   });
 
+  // Covers: task:1
   it('renders the provider shape from the supplied schema rather than a parallel template', () => {
     expect(Object.isFrozen(REMEDIATION_PLAN_SCHEMA)).toBe(true);
 
