@@ -64,6 +64,13 @@ In **daemon mode only**, route a `halt_marker` build stall through the existing
    "tasks non-empty for build" rule is a skill-contract rule for gap remediation and is
    explicitly relaxed for stall questions, so no plan-append occurs for an answer).
 
+   > **Amended 2026-10-06 by #2522:** D7.1 moves this contract from skill prose into the
+   > engine-owned remediation plan schema and validator. The `stall:<slug>` reference grammar,
+   > `disposition: "build"` with no new tasks, and the answer in `rationale` remain valid for the
+   > build-stall source only; for every other source `build` still requires new tasks. The plan
+   > is read through the engine's typed plan reader, not `readRemediationPlan`. Decisions 1–6 are
+   > unchanged.
+
 **Out of scope:** the implicit `no_task_progress` stall (belongs to #280); interactive
 mode (the `runInteractive('build')` REPL path is unchanged); the daemon auto-park layer
 (`conductor.ts:1727-1759`) runs before the stall branch and is untouched.

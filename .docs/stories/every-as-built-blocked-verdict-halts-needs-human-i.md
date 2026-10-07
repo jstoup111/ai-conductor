@@ -14,15 +14,16 @@ classifications so that the engine can tell remediable findings from design find
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the as-built review reaches a BLOCKED verdict, when it returns its structured result, then the typed verdict carries one finding per blocking issue with a finding id, a class from the closed set REMEDIABLE or DESIGN, a structural governing reference (`{kind: "adr-decision", stem, decision}` or `{kind: "plan-task", taskId}`), and a one-line summary
+- Given the as-built review reaches a BLOCKED verdict, when it returns its structured result, then the typed verdict carries one finding per blocking issue with an engine-stamped finding id (assigned by the engine at validation and persist, unique across the feature's laps), a class from the closed set REMEDIABLE or DESIGN, a structural governing reference (`{kind: "adr-decision", stem, decision}` or `{kind: "plan-task", taskId}`), and a one-line summary
 - Given a finding whose remedy is already required by an APPROVED artifact, when the review classifies it, then the finding's class is REMEDIABLE and its reference names that artifact and decision
 
 #### Negative Paths
 - Given a non-BLOCKED verdict (APPROVED, DRIFT NOTES, or PLAN_GAP), when the structured result is validated, then it carries no findings, a findings array on it is rejected, and the existing verdict handling is unchanged
+- Given a provider result whose finding includes its own id field, when the structured result is validated, then it is rejected as a schema violation naming the unsupported field
 - Given a finding requiring a decision no approved artifact has made, when the review classifies it, then the finding's class is DESIGN and the rendered report's resolution text still states the code-fix-or-superseding-ADR choice
 
 ### Done When
-- [ ] The as-built output contract defines the typed finding (id, closed class set, structural reference, summary), the architecture-review skill's as-built section carries the class semantics as judgement guidance, and the skill validation suite passes
+- [ ] The as-built output contract defines the typed finding (closed class set, structural reference, summary, with the id engine-stamped rather than provider-supplied), the architecture-review skill's as-built section carries the class semantics as judgement guidance, and the skill validation suite passes
 - [ ] A fixture BLOCKED typed verdict with findings validates, and contract tests accept all four verdicts with findings admitted only on BLOCKED
 
 ## Story 2: Fail-closed parsing of the classification table

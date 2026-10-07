@@ -20,25 +20,25 @@ Approved by the operator on 2026-10-02. Scope is skill text only: the `pipeline`
 #### Negative Paths
 
 - Given a BUILD session that believes it has fixed a SHIP finding, when it closes the remediation task, then the `pipeline` skill states that only the validator's own next dispatch produces a new verdict and that the session records its proof through `conduct task done` evidence instead of editing the verdict.
-- Given the read-only rule, when a BUILD session needs the finding's detail, then the `pipeline` and `tdd` skills still direct it to read `.pipeline/remediation.json` and the cited verdict artifact, so reading is not forbidden.
+- Given the read-only rule, when a BUILD session needs the finding's detail, then the `pipeline` and `tdd` skills still direct it to read the typed remediation plan (`.pipeline/remediation-plan.json`) and the cited verdict artifact, so reading is not forbidden.
 
 ### Done When
 
 - [ ] The pipeline skill-contract test asserts the `pipeline` and `tdd` skills each name all five verdict artifact paths together with a never-write, never-delete, never-recreate rule.
 - [ ] The pipeline skill-contract test asserts the `pipeline` skill states that only the validator's own dispatch produces a verdict and that reading the cited artifacts remains allowed.
 
-## Story 2: Remediation reads verdict inputs without rewriting them
+## Story 2: Remediation judges verdict findings without rewriting them
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- Given the `remediate` skill loads gap-based inputs from `.pipeline/prd-audit.md` or `.pipeline/architecture-review-as-built.md`, when it lists those inputs, then it marks the SHIP verdict artifacts as read-only evidence and names `.pipeline/remediation.json` as its only write in that mode.
+- Given a gap-planning dispatch for PRD-audit or as-built findings, when the planner receives its input, then the findings arrive in the engine-owned projection, the planner reads no verdict file to obtain them, and the engine (not the planner) persists the validated plan, so gap planning has no file inputs and writes no file.
 
 #### Negative Paths
 
-- Given a remediation planner that concludes a SHIP finding is already resolved, when it records that conclusion, then the `remediate` skill directs it to say so in `.pipeline/remediation.json` and forbids editing, deleting, or recreating the verdict artifact to change its verdict.
+- Given a remediation planner that concludes a SHIP finding is already resolved, when it records that conclusion, then the `remediate` skill directs it to say so in that finding's disposition rationale and forbids editing, deleting, or recreating any SHIP verdict artifact to change its verdict.
 
 ### Done When
 
-- [ ] The remediate skill-contract test asserts the gap-based input section marks the SHIP verdict artifacts read-only and forbids editing, deleting, or recreating them.
+- [ ] The remediate skill-contract test asserts the gap-planning guidance forbids editing, deleting, or recreating the SHIP verdict artifacts, and names no verdict file as a gap-planning input and no file as a gap-planning write.

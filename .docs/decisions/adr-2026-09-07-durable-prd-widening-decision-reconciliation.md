@@ -94,6 +94,18 @@ This supplies only the contract needed here and is an incremental implementation
 > guidance and standalone human use, not machine input recipes or table grammar. No provider
 > option, adapter, registry, decision authority or reconciliation responsibility is added.
 
+> **Amended 2026-10-06 by #2522:** D6.4 adds `remediate` gap planning as the fifth consumer of
+> the existing native-schema seam, as a second mode on the existing remediation request. Its
+> versioned engine-rendered input carries the requesting source, required typed references
+> (PRD-audit FIXABLE criteria and engine-stamped as-built REMEDIABLE findings), untyped source
+> evidence under its existing key grammar, owning plan tasks, applicable prior decisions already
+> held in engine state, and the code-owned disposition vocabulary. One static engine schema
+> supplies native enforcement and the rendered shape; the engine validates reference accounting,
+> vocabulary, and owner binding, persists the plan stamped with its attempt, and supplies
+> `planRemediation` through one reader. The skill keeps judgment guidance, not output format,
+> vocabulary, or input recipes. D5's reconciliation mode and the build_review case adjudication
+> mode are unchanged. No provider option, adapter, or step is added.
+
 ### D7 — Bounded inputs and retries never erase obligations
 
 Initial bounds: 512 current sources, 128 PRD cases, 512 source links per case, 64 evidence pointers per source, 256 bytes per identifier/reference, 8000 bytes per prose field, and 128 KiB total serialized reconciliation input. These are explicit approved engineering limits based on the existing build-review context precedent, not measurements of this feature's needs. Overflow names the dimension, actual size, and limit and blocks reconciliation without truncation or history pruning.
@@ -111,6 +123,14 @@ At most one successful semantic reconciliation is accepted per unchanged frozen 
 > explicit omitted paths/digests for read-only inspection. Optional absent PRD/history is
 > represented honestly; present corrupt/foreign/unsupported authority is never absence.
 > Existing widening-reconciliation limits and allowances remain unchanged.
+
+> **Amended 2026-10-06 by #2522:** D7.3 applies the named-bound rule to the remediation gap-plan
+> projection. Required structured dimensions have finite engine constants sized from the
+> corresponding corpus at BUILD and rounded up; untyped evidence text follows the as-built
+> per-file and total caps with explicit omission digests. Missing, unreadable, or over-limit
+> required input faults before invocation, naming the dimension, source, and actual/limit, with
+> no truncation and no repeated provider call. Mechanical output failures use the configured
+> remediate attempt allowance. Existing reconciliation limits and allowances are unchanged.
 
 ### D8 — Commit relationships with optimistic freshness, classify mechanically
 

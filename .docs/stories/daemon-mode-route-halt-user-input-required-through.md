@@ -60,9 +60,9 @@ that answerable questions never require me.
 #### Happy Path
 - Given daemon mode, a `halt_marker` stall, and `remediationRounds` under
   `MAX_KICKBACKS_PER_GATE`, when the stall branch runs, then `planRemediation()` is invoked
-  with a dispatch context naming the stall question and
-  `hintSource = { source: 'build_stall', evidenceFile: '.pipeline/build-stall-question.md' }`,
-  and a `kickback`-class event records the round.
+  for the build-stall source, the engine projection carries the stall question from
+  `.pipeline/build-stall-question.md` under its `stall:<slug>` reference, and a `kickback`-class
+  event records the round.
 
 #### Negative Paths
 - Given interactive mode (mode ≠ auto / no daemon), when a `halt_marker` stall occurs, then
@@ -174,19 +174,23 @@ breaks, so the dead end is at worst as informative as the agent's last words.
 - Given the remediate dispatch throws (runner crash / spawn failure), when the stall branch
   handles the error, then the HALT is written carrying the question and the run loop exits
   halted — the exception does not escape the loop.
-- Given `.pipeline/remediation.json` is malformed JSON or fails the session-freshness check
-  (`readRemediationPlan` returns null → outcome `none`), when the stall branch consumes it,
-  then the HALT carries the question.
+- Given every remediate attempt within `remediate`'s retry allowance yields no usable plan
+  (missing structured result, rejected plan, timeout, or persistence failure), when the
+  allowance is exhausted and the stall branch receives the no-plan result, then the HALT
+  carries the question as its first non-empty line, with the named mechanical fault
+  appended after it.
 - Given `remediationRounds` is exhausted before dispatch (TR-2 negative), when the stall
   branch short-circuits, then the HALT carries the question.
-- Given remediation returns dispositions that are ALL dropped by engine validation (e.g.
-  halt without category), when the plan reads as empty/none, then the HALT carries the
-  question.
+- Given remediation returns a plan the engine validator rejects (e.g. a halt without a
+  category), when every retry is rejected and the stall branch receives the no-plan result,
+  then the HALT carries the question as its first non-empty line, followed by the rejection
+  diagnostic.
 
 ### Done When
-- [ ] Engine test matrix (dispatch throws / malformed JSON / stale file / budget exhausted /
-      all-dropped dispositions): every case ends with `.pipeline/HALT` whose first line is
-      the question — zero cases produce the generic message or an empty HALT.
+- [ ] Engine test matrix (dispatch throws / missing structured result / rejected plan after
+      retry exhaustion / budget exhausted): every case ends with `.pipeline/HALT` whose first
+      line is the question, with any named mechanical fault after it — zero cases produce the
+      generic message or an empty HALT.
 
 ---
 
@@ -222,17 +226,21 @@ confused agent cannot spin remediation forever.
 
 **Requirement:** TR-7 (ADR §7)
 
-As a harness maintainer, I want the stall-question input mode documented in the skill
-contracts, so the planner produces dispositions the engine consumes deterministically.
+As a harness maintainer, I want the stall-question judgment documented in the skill and the
+stall disposition shape enforced by the engine validator, so the planner's answers are consumed
+deterministically.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `skills/remediate/SKILL.md`, when the stall-question mode is read, then it
-  specifies: evidence file is a question (not a gap list); disposition id `stall:<slug>`;
-  an answerable question emits `disposition: "build"`, `tasks: []`, the answer in
-  `rationale`; an unanswerable one emits `disposition: "halt"` with the existing category
-  taxonomy; the verify-claims/halt-on-uncertain rule applies unchanged.
+- Given `skills/remediate/SKILL.md`, when the stall-question guidance is read, then it
+  explains the judgment only: the input is a question (not a gap list); an answerable
+  question is answered in the rationale of a `build` with no new tasks; an unanswerable one
+  halts under the existing category taxonomy; the verify-claims/halt-on-uncertain rule
+  applies unchanged — it carries no id grammar or disposition field shape.
+- Given a build-stall result whose reference is `stall:<slug>`, answered with `build`, no new
+  tasks, and the answer in its rationale, when the engine validator checks it, then the plan
+  is accepted.
 - Given `skills/pipeline/SKILL.md`, when the marker semantics section is read, then the
   daemon-mode behavior (remediation attempt before HALT; question preserved in the HALT)
   is documented alongside the existing interactive REPL semantics.
@@ -242,13 +250,18 @@ contracts, so the planner produces dispositions the engine consumes deterministi
   when the engine consumes the plan, then existing plan-append + task-status re-seed
   machinery runs unchanged (tasks are appended, not rejected) — the `tasks: []` rule is a
   default for pure answers, not an engine-side rejection.
-- Given the gap-remediation input modes (prd-audit / finish / as-built), when their
-  sections are read post-edit, then their contracts are unchanged (tasks required non-empty
-  for `build` gaps remains stated for gap mode).
+- Given a gap-planning source other than build stall (prd-audit / finish / as-built), when
+  the engine validator checks a `build` disposition with no new tasks, then the whole plan is
+  rejected naming the empty task list.
+- Given a build-stall result whose reference is outside the `stall:<slug>` grammar, when the
+  engine validator checks it, then the whole plan is rejected naming the malformed reference.
 
 ### Done When
-- [ ] `skills/remediate/SKILL.md` documents the stall-question mode (input, id grammar,
-      disposition shape, halt taxonomy applies).
+- [ ] `skills/remediate/SKILL.md` documents the stall-question judgment (answerable versus
+      unanswerable, halt taxonomy applies, verify-claims) with no id grammar or disposition
+      shape.
+- [ ] Engine validator fixtures accept a `stall:<slug>` `build` with no tasks and the answer in
+      its rationale, and reject a malformed stall reference and a taskless non-stall `build`.
 - [ ] `skills/pipeline/SKILL.md` documents daemon-mode marker routing.
 - [ ] `README.md` + `src/conductor/README.md` reflect the new daemon behavior (docs-track-
       features rule).

@@ -14,6 +14,9 @@ plan-growth allowance; decisions 3, 4, and 7 are qualified accordingly.
 **Amended:** 2026-09-23 by #2188 — decisions 1, 2, 6, and 7 are qualified: findings arrive as
 typed fields of the engine-owned as-built verdict contract instead of a Markdown table (see the
 amendment note under decision 9).
+**Amended:** 2026-10-06 by #2522 — decisions 1 and 3 are qualified: finding ids are
+engine-stamped, and remediation-planner accounting against them is structural (see the
+amendment note before Consequences).
 
 ## Context
 
@@ -237,6 +240,27 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    > **Amended 2026-09-29 by #2753:** An `existing-task` round registers a lap-only pending
    > repair. Its lap is charged at BUILD dispatch settlement, not at restage, and still charges no
    > growth. The restage-before-rewind obligation is unchanged.
+
+> **Amended 2026-10-06 by #2522:** Decisions 1 and 3 are qualified so that the remediation
+> planner references findings by engine-authored identity. Class meanings, the bounded route,
+> the single appender (decision 5), validation-group primacy (decision 8), and the `existing-task`
+> restage (decision 9) are unchanged.
+>
+> **D1.2 — The engine stamps finding ids.** The provider's terminal as-built result no longer
+> carries a finding id, and the as-built verdict contract version increments. At validation and
+> persistence the engine assigns each finding an id qualified by attempt and ordinal, unique
+> across the feature's laps. The pending-finding ledger, the prior-findings projection, the
+> rendered report, and the shipped record carry the stamped id. A verdict of the prior contract
+> version is not authoritative and as-built reruns once through its lifecycle; it is never
+> converted.
+>
+> **D3.1 — Planner accounting is structural.** The remediation planner answers every REMEDIABLE
+> finding in its engine-owned input exactly once by structured reference. Missing, duplicate,
+> foreign, or malformed references and unknown dispositions are field-specific mechanical
+> rejections of the whole plan, retried within `remediate`'s allowance before the caller's
+> existing no-plan handling; they are never substantive verdicts. An `existing-task` disposition
+> for a finding whose governing reference is a plan task must bind that task. See
+> adr-2026-09-07-durable-prd-widening-decision-reconciliation D6.4.
 
 ## Consequences
 

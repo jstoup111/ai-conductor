@@ -40,9 +40,6 @@ needs-human halt the operator resolves by hand-writing the same build-step fix.
 - Given both planner surfaces, when either is read, then each states in the `build` guidance that
   a test which passes against the baseline and needs strengthening within an existing task's
   RED/GREEN steps is `build` work, not a planning miss.
-- Given both planner surfaces, when either is read, then each carries a `build_review` trigger
-  entry naming its evidence input and its gap-id format, so a build_review gap is no longer
-  serialized under an improvised id borrowed from another trigger.
 
 #### Negative Paths
 
@@ -61,8 +58,6 @@ needs-human halt the operator resolves by hand-writing the same build-step fix.
 - [ ] A contract test asserts, over **both** `skills/remediate/SKILL.md` and
       `agents/remediation-planner.md`, that each requires an existing-plan-task coverage check
       before a `plan` disposition and routes a covered gap to `build`.
-- [ ] A contract test asserts both surfaces carry a `build_review` trigger entry with its evidence
-      input and gap-id format.
 - [ ] `remediation-authority-routing.acceptance.test.ts` passes unmodified in its
       "keeps an in-scope planning omission on the plan route" assertion.
 - [ ] `test/test_harness_integrity.sh` passes (both edited files are gated artifacts).
@@ -96,10 +91,9 @@ it gave up.
 #### Negative Paths
 
 - Given the guidance that `plan` is a terminal HALT, when the planner is tempted to treat `halt`
-  and `plan` as interchangeable, then both surfaces state that the two `halt` categories
-  (`architectural-clarity`, `product-scope`) remain the only HALT categories and that `plan` is
-  still a routed disposition — the guidance must not collapse `plan` into `halt` or widen the HALT
-  categories.
+  and `plan` as interchangeable, then both surfaces describe the HALT categories (`architectural-clarity`, `product-scope`, and
+  `unanswerable` for stall questions) and state that `plan` is still a routed disposition — the
+  guidance must not collapse `plan` into `halt` or add a HALT category.
 - Given a gap whose nature is genuinely uncertain rather than provably uncovered, when the planner
   applies the coverage rule, then the existing `verify-claims` calibration still governs: low
   confidence about the gap's *nature* remains a HALT signal and is not laundered into a `build`
@@ -111,11 +105,11 @@ it gave up.
       task id(s) and why none covers the gap.
 - [ ] A contract test asserts both surfaces state that `plan` is a terminal needs-human HALT in a
       daemon run.
-- [ ] A contract test asserts both surfaces still name exactly `architectural-clarity` and
-      `product-scope` as the HALT categories.
+- [ ] The engine validator's halt-category enum is the only accepted category set, and both
+      surfaces describe `plan` as distinct from `halt`.
 - [ ] `decide-entry-policy.ts` is unchanged in this diff — the autonomous-DECIDE refusal that
       produced the reported halt is verified correct and stays intact.
-- [ ] No new `.pipeline/` file, event-union member, or `remediation.json` field is added; the
+- [ ] No new `.pipeline/` file, event-union member, or remediation plan field is added; the
       coverage evidence travels in the existing `rationale` string.
 
 ---
