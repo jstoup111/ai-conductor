@@ -29,6 +29,10 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Feature cost totals, the shipped-record Cost block, --report and OTel cost metrics now include failed provider attempts for Claude, Codex and Pi, recorded through the existing cost telemetry. A failed attempt with no usable record is reported as unmetered, never as $0. ([implementation PR #3027](https://github.com/jstoup111/ai-conductor/pull/3027)).
 - Maintainers can classify confirmed maintenance changes and skip unnecessary acceptance specifications. ([implementation PR #3029](https://github.com/jstoup111/ai-conductor/pull/3029)).
 
+### Removed
+
+- Plugin manifests now reject unsupported `step` and `hook` kinds. ([implementation PR #3032](https://github.com/jstoup111/ai-conductor/pull/3032)).
+
 ### Fixed
 
 - Builds now reopen completed tasks when their plan text changes. ([implementation PR #2929](https://github.com/jstoup111/ai-conductor/pull/2929)).
