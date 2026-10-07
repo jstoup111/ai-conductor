@@ -42,6 +42,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review rubrics routed to Claude run again instead of failing setup and halting for operator attention. Claude's read-only review cannot run any observed command (`gh` and the conductor launchers are explicitly denied), so it is admitted without an observation-destination proof. Any wider Claude review policy still has to prove that destination first, and `daemon status` now reports the same Claude availability that dispatch accepts. ([implementation PR #3024](https://github.com/jstoup111/ai-conductor/pull/3024)).
 - Self-host build_review rubrics routed to Codex no longer halt with "review-input-mutated" because the engine deleted the candidate's throwaway policy copy, or rewrote its own provider-lifecycle file, during the review lap; genuine policy or evidence edits during review are still detected. ([implementation PR #3025](https://github.com/jstoup111/ai-conductor/pull/3025)).
 - Pi cost records now include nested pi-subagents children, and no longer show a complete cost while a background subagent run has not reported its usage. ([implementation PR #3026](https://github.com/jstoup111/ai-conductor/pull/3026)).
+- Daemon builds route fully refused over-scope findings into bounded BUILD rework. ([implementation PR #3010](https://github.com/jstoup111/ai-conductor/pull/3010)).
 
 ## Migration
 
