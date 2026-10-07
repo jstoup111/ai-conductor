@@ -657,3 +657,138 @@ describe('PiProvider usage', () => {
     });
   });
 });
+
+describe('PiProvider pi-subagents usage', () => {
+  const subagentStream = () => readFile(new URL('../fixtures/pi/subagent-stream.jsonl', import.meta.url), 'utf8');
+
+  type ToolResultRecord = { toolName?: unknown; details: Record<string, unknown>; usage?: unknown };
+
+  /** Rewrite every subagent tool-result record: the tool_execution_end result and the toolResult message. */
+  function rewriteSubagentResults(stdout: string, rewrite: (result: ToolResultRecord) => void): string {
+    return stdout.split('\n').map((line) => {
+      if (!line.trim()) return line;
+      const event = JSON.parse(line) as {
+        type?: unknown;
+        result?: ToolResultRecord;
+        message?: ToolResultRecord & { role?: unknown };
+      };
+      if (event.type === 'tool_execution_end' && event.result) rewrite(event.result);
+      if ((event.type === 'message_start' || event.type === 'message_end') && event.message?.role === 'toolResult') {
+        rewrite(event.message);
+      }
+      return JSON.stringify(event);
+    }).join('\n');
+  }
+
+  function toolResultLine(toolName: string, details: Record<string, unknown>, usage?: unknown): string {
+    return JSON.stringify({
+      type: 'message_end',
+      message: {
+        role: 'toolResult',
+        toolCallId: `call-${toolName}`,
+        toolName,
+        content: [],
+        details,
+        ...(usage === undefined ? {} : { usage }),
+        isError: false,
+      },
+    });
+  }
+
+  const asyncLaunch = toolResultLine('subagent', {
+    mode: 'single',
+    runId: 'run-bg-1',
+    results: [],
+    asyncId: 'run-bg-1',
+    asyncDir: '/tmp/async/run-bg-1',
+  });
+
+  /** Insert lines before the final assistant turn of the subagent fixture. */
+  function beforeFinalTurn(stdout: string, ...extra: string[]): string {
+    const lines = stdout.split('\n');
+    lines.splice(lines.lastIndexOf('{"type":"turn_start"}'), 0, ...extra);
+    return lines.join('\n');
+  }
+
+  async function invoke(stdout: string) {
+    const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
+    return new PiProvider('/resolved/pi', spawn, environment).invoke(invokeOptions);
+  }
+
+  it('adds the nested subagent rollup once on top of the direct child usage already on the tool result', async () => {
+    const result = await invoke(await subagentStream());
+
+    expect(result.tokenUsage).toMatchObject({
+      input: 100 + 5000 + 1000 + 200,
+      output: 20 + 800 + 200 + 30,
+      cacheRead: 20000,
+      numTurns: 2,
+      costSource: 'provider',
+    });
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.001 + 0.4 + 0.1 + 0.002, 12);
+    expect(classifyMetering(result.tokenUsage)).toBe('fully-metered');
+  });
+
+  it('takes the whole subagent rollup when the tool result carries no usage of its own', async () => {
+    const stdout = rewriteSubagentResults(await subagentStream(), (result) => { delete result.usage; });
+
+    const result = await invoke(stdout);
+
+    expect(result.tokenUsage).toMatchObject({ input: 6300, output: 1050, costSource: 'provider' });
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.503, 12);
+  });
+
+  it('counts unpriced nested subagent tokens without claiming a provider cost', async () => {
+    const stdout = rewriteSubagentResults(await subagentStream(), (result) => {
+      result.details.totalCost = { inputTokens: 6000, outputTokens: 1000, costUsd: 0.4 };
+    });
+
+    const result = await invoke(stdout);
+
+    expect(result.tokenUsage).toMatchObject({ input: 6300, output: 1050 });
+    expect(result.tokenUsage).not.toHaveProperty('costUsd');
+    expect(result.tokenUsage).not.toHaveProperty('costSource');
+  });
+
+  it('never claims a complete cost while a background subagent run has not reported its usage', async () => {
+    const result = await invoke(beforeFinalTurn(await subagentStream(), asyncLaunch));
+
+    expect(result.tokenUsage).toMatchObject({ input: 6300, output: 1050 });
+    expect(result.tokenUsage).not.toHaveProperty('costUsd');
+    expect(result.tokenUsage).not.toHaveProperty('costSource');
+    expect(classifyMetering(result.tokenUsage)).not.toBe('fully-metered');
+  });
+
+  it('keeps provider cost once a wait result delivers the background run usage', async () => {
+    const stdout = beforeFinalTurn(
+      await subagentStream(),
+      asyncLaunch,
+      toolResultLine(
+        'bg_wait',
+        {
+          mode: 'management',
+          results: [],
+          completions: [{
+            runId: 'run-bg-1',
+            results: [{ agent: 'delegate', usage: { input: 300, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.03, turns: 2 } }],
+          }],
+        },
+        { input: 300, output: 50, cacheRead: 0, cacheWrite: 0, totalTokens: 350, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.03 } },
+      ),
+    );
+
+    const result = await invoke(stdout);
+
+    expect(result.tokenUsage).toMatchObject({ input: 6600, output: 1100, costSource: 'provider' });
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.533, 12);
+  });
+
+  it('ignores a cost rollup on a tool result from any tool other than subagent', async () => {
+    const stdout = rewriteSubagentResults(await subagentStream(), (result) => { result.toolName = 'bash'; });
+
+    const result = await invoke(stdout);
+
+    expect(result.tokenUsage).toMatchObject({ input: 5300, output: 850, costSource: 'provider' });
+    expect(result.tokenUsage?.costUsd).toBeCloseTo(0.403, 12);
+  });
+});
