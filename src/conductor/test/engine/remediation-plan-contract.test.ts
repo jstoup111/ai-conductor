@@ -25,6 +25,7 @@ function projection(
   source: RemediationProjection['source'],
   requiredReferences: readonly RemediationRequiredReference[],
   tasks: RemediationProjection['tasks'] = [{ id: '7', title: 'Repair the finding', doneWhen: [] }],
+  refusals: RemediationProjection['refusals'] = [],
 ): RemediationProjection {
   return {
     version: 1,
@@ -33,11 +34,30 @@ function projection(
     tasks,
     pendingAsBuiltFindings: [],
     priorLaps: [],
-    refusals: [],
+    refusals,
     vocabulary: {
       dispositions: expectedDispositions,
       haltCategories: REMEDIATION_HALT_CATEGORIES,
     },
+  };
+}
+
+function refusal(decisionId: string): RemediationProjection['refusals'][number] {
+  return {
+    key: 'S1.2',
+    decisionId,
+    revision: 1,
+    rationale: 'The operator refused the widening offer.',
+  };
+}
+
+function refusalReference(decisionId: string): RemediationRequiredReference {
+  return {
+    kind: 'refusal',
+    id: decisionId,
+    sourceGate: 'refusal-rework',
+    revision: 1,
+    rationale: 'The operator refused the widening offer.',
   };
 }
 
@@ -397,6 +417,54 @@ describe('remediation plan contract', () => {
     }, projection('prd-audit', [required])));
 
     expect(diagnostics).toContain('dispositions[0].reference is only valid for build-stall source');
+  });
+
+  // Covers: task:7
+  it('rejects a refusal reference whose decision id is not projected', () => {
+    const decisionId = 'decision-owned';
+    const diagnostics = expectRejected(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'refusal', id: 'decision-foreign' })],
+    }, projection('prd-audit', [refusalReference(decisionId)], undefined, [refusal(decisionId)])));
+
+    expect(diagnostics).toEqual(['dispositions[0].reference does not resolve projected refusal decision-foreign']);
+  });
+
+  // Covers: task:7
+  it('rejects a duplicate projected refusal reference', () => {
+    const decisionId = 'decision-owned';
+    const diagnostics = expectRejected(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [
+        disposition({ kind: 'refusal', id: decisionId }),
+        disposition({ kind: 'refusal', id: decisionId }, { rationale: 'A conflicting rework.' }),
+      ],
+    }, projection('prd-audit', [refusalReference(decisionId)], undefined, [refusal(decisionId)])));
+
+    expect(diagnostics).toEqual(['dispositions[1].reference duplicates projected refusal decision-owned']);
+  });
+
+  // Covers: task:7
+  it('rejects an empty refusal decision id at the reference id field', () => {
+    const diagnostics = expectRejected(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'refusal', id: '' })],
+    }, projection('prd-audit', [refusalReference('decision-owned')], undefined, [refusal('decision-owned')])));
+
+    expect(diagnostics).toEqual(['dispositions[0].reference.id must be non-empty']);
+  });
+
+  // Covers: task:7
+  it('accepts omission of a projected refusal for refusal admission to account for', () => {
+    const decisionId = 'decision-owned';
+
+    expect(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [],
+    }, projection('prd-audit', [refusalReference(decisionId)], undefined, [refusal(decisionId)]))).toEqual({
+      kind: 'accepted',
+      dispositions: [],
+    });
   });
 
   // Covers: task:6

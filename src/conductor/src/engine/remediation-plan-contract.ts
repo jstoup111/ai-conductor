@@ -156,6 +156,24 @@ function owningTaskId(reference: RemediationRequiredReference): string | undefin
   return undefined;
 }
 
+function projectedRefusalReference(
+  id: string,
+  projection: RemediationProjection,
+): RemediationRequiredReference | undefined {
+  const refusal = projection.refusals.find((candidate) => candidate.decisionId === id);
+  if (refusal === undefined) return undefined;
+
+  return projection.requiredReferences.find((candidate) =>
+    candidate.kind === 'refusal' && candidate.id === id,
+  ) ?? {
+    kind: 'refusal',
+    id,
+    sourceGate: 'refusal-rework',
+    revision: refusal.revision,
+    rationale: refusal.rationale,
+  };
+}
+
 /**
  * Validates a provider's remediation plan against the engine-prepared projection.
  * A typed answer is linked to the exact reference object projected for this attempt;
@@ -176,6 +194,7 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
 
   const dispositions: AcceptedRemediationPlanDisposition[] = [];
   const answeredTypedReferences = new Set<string>();
+  const answeredRefusalReferences = new Set<string>();
   for (const [index, candidate] of raw.dispositions.entries()) {
     const field = `dispositions[${index}]`;
     if (!record(candidate) || !exactKeys(candidate, ['reference', 'disposition', 'category', 'rationale', 'tasks', 'boundTaskIds'])) {
@@ -256,6 +275,29 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
         continue;
       }
     }
+    if (kind === 'refusal') {
+      const requiredReference = projectedRefusalReference(id, projection);
+      if (requiredReference === undefined) {
+        diagnostics.push(`${field}.reference does not resolve projected refusal ${id}`);
+        continue;
+      }
+      if (answeredRefusalReferences.has(id)) {
+        diagnostics.push(`${field}.reference duplicates projected refusal ${id}`);
+        continue;
+      }
+      answeredRefusalReferences.add(id);
+      dispositions.push({
+        reference: requiredReference,
+        requiredReference,
+        disposition: candidate.disposition,
+        targetStep: remediationDispositionStep(candidate.disposition),
+        category: candidate.category,
+        rationale: candidate.rationale,
+        tasks: candidate.tasks.map((task) => ({ id: task.id as string, title: task.title as string })),
+        boundTaskIds: [...candidate.boundTaskIds] as string[],
+      });
+      continue;
+    }
     const requiredReference = typedReference(kind, id, projection);
     if (requiredReference !== undefined) {
       const key = referenceKey(requiredReference.kind, requiredReference.id);
@@ -322,6 +364,7 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
   }
 
   for (const reference of projection.requiredReferences) {
+    if (reference.kind === 'refusal') continue;
     const key = referenceKey(reference.kind, reference.id);
     if (!answeredTypedReferences.has(key)) {
       diagnostics.push(`dispositions missing required reference ${reference.kind}:${reference.id}`);
