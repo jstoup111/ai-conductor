@@ -180,6 +180,11 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
    - A plan with a slice position above 9, or with more slices than the configured maximum, is not
      accepted for stacked delivery. #2941 decides the land behavior.
 
+> **Amended 2026-10-07 by #2941:** (adr-2026-10-07-sliced-plan-story-ownership-and-stack-eligibility
+> decision 7) The land behavior is decided: `stacked_prs.max_slices` is enforced through the
+> flag-on stack-eligibility verdict at land and `coverage_binding`, and `MAX_PLAN_SLICES` is replaced
+> by the `MAX_CHILD_ID` ceiling in the flag-independent grammar rung.
+
 6. **The leaf is a branch kind, not the absence of a child.**
    - When a feature has children, the leaf is the child with the highest declared position. Its
      region state lives under that child's directory, and its branch stays `feat/daemon-<slug>`.

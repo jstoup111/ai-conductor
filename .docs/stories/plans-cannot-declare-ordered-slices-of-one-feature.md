@@ -22,13 +22,13 @@ deliberately and a typo is rejected instead of silently ignored.
 
 #### Negative Paths
 - Given a project config whose `stacked_prs` block sets `enabled` to the string "yes", when the project config loads, then loading fails with a validation error naming `stacked_prs.enabled`
-- Given a project config whose `stacked_prs` block carries an unknown key `max_slices`, when the project config loads, then loading fails with a validation error naming `max_slices` as an unknown key in `stacked_prs`
+- Given a project config whose `stacked_prs` block carries an unknown key `max_parallel`, when the project config loads, then loading fails with a validation error naming `max_parallel` as an unknown key in `stacked_prs`
 - Given a project config whose `stacked_prs` value is the list `[true]`, when the project config loads, then loading fails with a validation error stating that `stacked_prs` must be an object
-- Given the config consumer registry, when the registry test enumerates every accepted config key, then `stacked_prs` and `stacked_prs.enabled` are each declared with no production reader and a reason naming #2724
+- Given the config consumer registry, when the registry test enumerates every accepted config key, then `stacked_prs`, `stacked_prs.enabled` and `stacked_prs.max_slices` are each declared with the land `stacked-delivery` rung and the `coverage_binding` runner as their production readers
 
 ### Done When
 - [ ] `loadProjectConfig` accepts `stacked_prs.enabled` as a boolean, defaults it to false inside a present block, and rejects a non-object block, an unknown sub-key, and a non-boolean `enabled`, each with the offending key named in the error
-- [ ] The config consumer registry declares `stacked_prs` and `stacked_prs.enabled` with a `none` consumer whose reason cites #2724, and the registry totality test passes
+- [ ] The config consumer registry declares `stacked_prs`, `stacked_prs.enabled` and `stacked_prs.max_slices` with land and `coverage_binding` as consumers, and the registry totality test passes
 - [ ] `templates/project-config.yml.template` carries a commented `stacked_prs` entry that the config-template test accepts
 
 ## Story 2: Plans without slices, and sliced plans with the flag off, behave exactly as today
@@ -42,7 +42,7 @@ opted in, so that the grammar can land before any consumer of it exists.
 - Given a plan with no `## Slices` section whose tasks use free-form Dependencies prose such as "Tasks 1–9 all passing", when land runs, then no slice refusal is raised and the spec commits as it does today
 - Given a plan with no `## Slices` section and `stacked_prs.enabled` set to true, when land runs, then no slice refusal is raised and the spec commits
 - Given a plan with no `## Slices` section, when the `coverage_binding` step runs, then it records no slice membership, emits no slice event, and reaches the same completion status it reaches today
-- Given a well-formed sliced plan and `stacked_prs.enabled` false, when land and then the `coverage_binding` step run, then both succeed and no build, finish or publication step reads the slice manifest or the flag
+- Given a well-formed sliced plan and `stacked_prs.enabled` false, when land and then the `coverage_binding` step run, then both succeed, `coverage_binding` reads the flag only to leave its stacked-delivery layer inert, and no build, finish or publication step reads the slice manifest or the flag
 
 #### Negative Paths
 - Given a malformed slice manifest, when land runs once with `stacked_prs.enabled` false and once with it true, then both runs refuse with the identical slice refusal message
@@ -139,16 +139,16 @@ few reviewable PRs rather than one PR per task.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a well-formed sliced plan declaring exactly five slices, when land runs, then no bound refusal is raised
+- Given a well-formed sliced plan declaring exactly nine slices, when land runs with `stacked_prs.enabled` false, then no bound refusal is raised
 - Given a well-formed sliced plan declaring one slice that holds every task, when land runs, then no slice refusal is raised
 
 #### Negative Paths
-- Given a sliced plan declaring six otherwise well-formed slices, when land runs, then land refuses stating the plan declares 6 slices and the bound is 5
-- Given a sliced plan declaring six slices where one slice is also empty, when land runs, then one refusal names both the bound and the empty slice
+- Given a sliced plan declaring ten otherwise well-formed slices, when land runs, then land refuses stating the plan declares 10 slices and the bound is 9
+- Given a sliced plan declaring ten slices where one slice is also empty, when land runs, then one refusal names both the bound and the empty slice
 
 ### Done When
-- [ ] `MAX_PLAN_SLICES` equals 5 in `plan-slices.ts` and is not read from config
-- [ ] A test asserts a six-slice plan is refused with the numbers 6 and 5 in the message
+- [ ] The grammar bound in `plan-slices.ts` equals `MAX_CHILD_ID` (9), is flag-independent, and is not read from config; the configured `stacked_prs.max_slices` applies only to stacked delivery
+- [ ] A test asserts a ten-slice plan is refused with the numbers 10 and 9 in the message
 
 ## Story 7: A slice change made by a DECIDE amendment is re-validated and visible
 
@@ -193,5 +193,5 @@ so that following the skill never produces a plan the land gate refuses.
 - Given the slice example in `skills/plan/SKILL.md` edited to use a Dependencies range, when the drift test runs, then the test fails naming the refused Dependencies line
 
 ### Done When
-- [ ] `skills/plan/SKILL.md` documents the `## Slices` table, the membership and later-slice rules, the accepted Dependencies forms for sliced plans, and the bound of 5
+- [ ] `skills/plan/SKILL.md` documents the `## Slices` table, the membership and later-slice rules, the accepted Dependencies forms for sliced plans, and the grammar bound of 9
 - [ ] A test extracts the skill's slice example and asserts `validatePlanSlices` returns a sliced result
