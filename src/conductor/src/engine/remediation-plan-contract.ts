@@ -5,6 +5,7 @@ import {
   REMEDIATION_TARGET_STEPS,
   remediationDispositionStep,
   type RemediationDisposition,
+  type RemediationDispositionRejection,
   type RemediationHaltCategory,
 } from './artifacts.js';
 import type { RemediationProjection, RemediationRequiredReference } from './remediation-projection.js';
@@ -100,7 +101,12 @@ export interface AcceptedRemediationPlanDisposition {
 
 export type ValidateRemediationPlanResult =
   | { readonly kind: 'accepted'; readonly dispositions: readonly AcceptedRemediationPlanDisposition[] }
-  | { readonly kind: 'rejected'; readonly diagnostics: readonly string[] };
+  | {
+      readonly kind: 'rejected';
+      readonly diagnostics: readonly string[];
+      /** Unknown engine-vocabulary values retained for the event-spine consumer. */
+      readonly rejected?: readonly RemediationDispositionRejection[];
+    };
 
 function nonEmptyText(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
@@ -131,6 +137,11 @@ function isHaltCategory(value: unknown): value is RemediationHaltCategory {
   return typeof value === 'string' && (REMEDIATION_HALT_CATEGORIES as readonly string[]).includes(value);
 }
 
+function renderRejectedVocabularyValue(value: unknown): string {
+  if (value === undefined) return '<missing>';
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
 function untypedReferenceMatchesSource(kind: 'stall' | 'test', source: RemediationProjection['source']): boolean {
   return (kind === 'stall' && source === 'build-stall') ||
     (kind === 'test' && source === 'finish-verification');
@@ -143,6 +154,7 @@ function untypedReferenceMatchesSource(kind: 'stall' | 'test', source: Remediati
  */
 export function validateRemediationPlan(raw: unknown, projection: RemediationProjection): ValidateRemediationPlanResult {
   const diagnostics: string[] = [];
+  const rejected: RemediationDispositionRejection[] = [];
   if (!record(raw) || !exactKeys(raw, ['version', 'dispositions'])) {
     return { kind: 'rejected', diagnostics: ['root requires exactly version and dispositions'] };
   }
@@ -183,10 +195,22 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
     }
     if (!isDisposition(candidate.disposition)) {
       diagnostics.push(`${field}.disposition must be one of ${REMEDIATION_DISPOSITIONS.join(', ')}`);
+      rejected.push({
+        gapId: candidate.reference.id as string,
+        disposition: renderRejectedVocabularyValue(candidate.disposition),
+        accepted: REMEDIATION_DISPOSITIONS,
+        field: 'disposition',
+      });
       continue;
     }
     if (candidate.category !== null && !isHaltCategory(candidate.category)) {
       diagnostics.push(`${field}.category must be null or one of ${REMEDIATION_HALT_CATEGORIES.join(', ')}`);
+      rejected.push({
+        gapId: candidate.reference.id as string,
+        disposition: renderRejectedVocabularyValue(candidate.category),
+        accepted: REMEDIATION_HALT_CATEGORIES,
+        field: 'category',
+      });
       continue;
     }
     if (candidate.disposition === 'halt' && candidate.category === null) {
@@ -266,7 +290,7 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
   }
   return diagnostics.length === 0
     ? { kind: 'accepted', dispositions }
-    : { kind: 'rejected', diagnostics };
+    : { kind: 'rejected', diagnostics, ...(rejected.length === 0 ? {} : { rejected }) };
 }
 
 /** Render the provider-visible result shape by walking its own JSON Schema. */

@@ -226,6 +226,68 @@ describe('remediation plan contract', () => {
     });
   });
 
+  // Covers: task:5
+  it('rejects every unknown disposition vocabulary entry with its reference and full accepted set', () => {
+    const result = validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [
+        disposition({ kind: 'stall', id: 'stall:unknown-disposition' }, { disposition: 'unknown-disposition' }),
+        disposition({ kind: 'stall', id: 'stall:unknown-category' }, {
+          disposition: 'halt', category: 'unknown-category', tasks: [],
+        }),
+      ],
+    }, projection('build-stall', []));
+
+    expect(result).toEqual({
+      kind: 'rejected',
+      diagnostics: [
+        `dispositions[0].disposition must be one of ${expectedDispositions.join(', ')}`,
+        `dispositions[1].category must be null or one of ${REMEDIATION_HALT_CATEGORIES.join(', ')}`,
+      ],
+      rejected: [
+        {
+          gapId: 'stall:unknown-disposition',
+          disposition: 'unknown-disposition',
+          accepted: expectedDispositions,
+          field: 'disposition',
+        },
+        {
+          gapId: 'stall:unknown-category',
+          disposition: 'unknown-category',
+          accepted: REMEDIATION_HALT_CATEGORIES,
+          field: 'category',
+        },
+      ],
+    });
+  });
+
+  // Covers: task:5
+  it.each([
+    ['prd-audit', { kind: 'prd-criterion', id: 'S1.2' }],
+    ['as-built', { kind: 'as-built-finding', id: 'as-built:lap-1:1' }],
+    ['validation-group', { kind: 'prd-criterion', id: 'S1.2' }],
+    ['finish-verification', { kind: 'test', id: 'test:engine-contract' }],
+  ] as const)('rejects a taskless build on the %s source', (source, reference) => {
+    const diagnostics = expectRejected(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition(reference, { tasks: [] })],
+    }, projection(source, [])));
+
+    expect(diagnostics).toContain('dispositions[0].tasks requires at least one task for build');
+  });
+
+  // Covers: task:5
+  it('rejects a halt without a category at the category field', () => {
+    const diagnostics = expectRejected(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'stall', id: 'stall:category-required' }, {
+        disposition: 'halt', category: null,
+      })],
+    }, projection('build-stall', [])));
+
+    expect(diagnostics).toContain('dispositions[0].category is required for halt');
+  });
+
   // Covers: task:3
   it('rejects an omission with the disposition field and every missing typed reference named', () => {
     const prd: RemediationRequiredReference = {
