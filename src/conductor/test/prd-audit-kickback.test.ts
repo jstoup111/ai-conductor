@@ -1221,6 +1221,7 @@ describe('prd_audit kickback', () => {
     expect(fixture.retryReasons[0]).toContain(`refusal-${fixture.decisionId}`);
     expect(fixture.retryReasons[0]).toContain(fixture.decisionId);
     expect(fixture.retryReasons[0]).toContain('.pipeline/prd-audit.md');
+    expect(fixture.retryReasons[0]).toContain('S2.2');
     expect(fixture.kickbacks).toContainEqual(expect.objectContaining({
       from: 'prd_audit', to: 'build', count: 1,
     }));
