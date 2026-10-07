@@ -1,4 +1,4 @@
-// Covers: task:11, task:12, task:13
+// Covers: task:10, task:11, task:12, task:13
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';

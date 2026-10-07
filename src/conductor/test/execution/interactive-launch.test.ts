@@ -1,4 +1,4 @@
-// Covers: task:9, task:10
+// Covers: task:3, task:4, task:9, task:10
 import { EventEmitter } from 'node:events';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 

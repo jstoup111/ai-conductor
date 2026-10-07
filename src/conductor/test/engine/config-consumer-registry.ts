@@ -35,6 +35,7 @@ const FULL_SUITE_FINGERPRINT = 'src/conductor/src/engine/full-suite-fingerprint.
 const FULL_SUITE_VERIFIER = 'src/conductor/src/engine/full-suite-verifier.ts';
 const HARNESS_COMMON = 'bin/lib/harness-common.sh';
 const OTEL_CONFIG = 'src/conductor/src/engine/otel/otel-config.ts';
+const MONITOR_CLI = 'src/conductor/src/engine/monitor-cli.ts';
 
 /**
  * Every documented config key maps to its OWN production consumer declaration
@@ -51,6 +52,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   steps: consumer(STEPS),
   complexity: none('inert compatibility block after #1025 removed default_tier'),
   conductor: consumer(HARNESS_COMMON),
+  monitor: consumer(MONITOR_CLI),
   markdown_viewer: consumer(HARNESS_COMMON),
   mermaid_renderer: consumer('src/conductor/src/engine/render-cli.ts'),
   assess: consumer(PROJECT_PRELUDE),
@@ -107,6 +109,12 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   provider_preparation_timeout_minutes: consumer(RESOLVED_CONFIG),
   teardown_timeout_seconds: consumer(RESOLVED_CONFIG),
   dispatch_start_timeout_seconds: consumer(RESOLVED_CONFIG),
+
+  // Guided-session provider, model, and effort are resolved by the foreground
+  // monitor command before queue derivation.
+  'monitor.llm_provider': consumer(MONITOR_CLI),
+  'monitor.model': consumer(MONITOR_CLI),
+  'monitor.effort': consumer(MONITOR_CLI),
 
   // ── defaults / phases ─────────────────────────────────────────────────────
   // resolveProviderNative/NeutralStepConfig read `defaultsCfg?.<key>` and
