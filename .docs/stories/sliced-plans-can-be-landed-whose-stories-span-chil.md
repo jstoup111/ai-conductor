@@ -40,6 +40,9 @@ than one child, so that every child can turn its own stories green.
 - Given an eligible baseline in which an engine-appended remediation task cites story `1` from slice 2,
   when ownership is evaluated, then that task is ignored and no `story-spans-children` violation is
   reported.
+- Given an eligible baseline whose stories file declares story `3` but no task cites story `3`, when
+  land runs, then land fails with gate `stacked-delivery`, and the message names story `3` as owned by
+  no child.
 
 ### Done When
 - [ ] A land-spec test with a story spanning slices 1 and 2 asserts `landGateError` identifier
@@ -59,6 +62,11 @@ candidate, so that ownership is never computed from a truncated citation.
 #### Happy Path
 - Given an eligible baseline whose every `**Story:**` line carries exactly one id (with or without a
   `Story ` prefix), when land runs, then the spec commits.
+- Given an eligible baseline whose task carries `**Story:** 1 (source=a, status=b) — happy path`, when
+  land runs, then the line is read as the single story `1` and the spec commits.
+- Given an eligible baseline with a `**Type:** infrastructure` task in slice 2 whose Story line is a
+  supporting-purpose statement such as `repo release gate (shared helper)`, when land runs, then that
+  task owns no story and the spec commits.
 
 #### Negative Paths
 - Given an eligible baseline except that task `T2` carries `**Story:** 1, 2`, when land runs, then
@@ -66,6 +74,12 @@ candidate, so that ownership is never computed from a truncated citation.
   `2` is not silently dropped.
 - Given an eligible baseline except that task `T4` carries `**Story:** FR-1 and FR-2`, when land runs,
   then the same `multi-story-line` refusal names task `T4`.
+- Given an eligible baseline except that one task carries `**Story:** 1/2` and another carries
+  `**Story:** 1 & 2`, when land runs, then one refusal reports a `multi-story-line` violation for
+  each task, and neither line is truncated to its first id.
+- Given an eligible baseline except that a `**Type:** happy-path` task carries `**Story:** 1-3`, and the
+  stories file declares no story `1-3`, when land runs, then land fails with gate `stacked-delivery`,
+  and the message names the task and the token `1-3` as an unknown story id.
 - Given an **unsliced** plan whose task carries `**Story:** FR-1, FR-2, FR-3`, when land runs, then no
   multi-story-line refusal is raised and `parsePlanTaskStoryIds` still returns `["FR-1"]` for that
   task, as it does today.
@@ -99,6 +113,10 @@ plans and every flag-off project behave as before.
 - Given the flag off and `stacked_prs.max_slices` absent, when a sliced plan with 3 slices lands, then
   it commits. The default `max_slices` of 1 does not refuse it, because `max_slices` applies only
   through stack eligibility.
+- Given a sliced plan and a project config that is present but invalid (for example
+  `stacked_prs.max_slices: 12`), when land runs, then land fails with gate `stacked-delivery`, and
+  the message names the config error. Given an unsliced plan with the same invalid config, land
+  behaves exactly as today.
 
 ### Done When
 - [ ] Land-spec tests cover an unsliced plan with the flag on, and a spanning, Small, unsigned
@@ -119,6 +137,9 @@ DECIDE, so that slicing is never applied silently or to Small work.
   commits.
 - Given a complexity artifact containing `stacked-delivery: APPROVED` in a different letter case, when
   the sign-off is parsed, then it is recognized as approved.
+- Given a multi-line complexity artifact whose `Tier: L` line comes first and which later contains
+  `**Stacked-Delivery:** approved.` (bold key, trailing period), when the sign-off is parsed, then it is
+  recognized as approved.
 
 #### Negative Paths
 - Given an eligible baseline except `Tier: S`, when land runs, then land fails with gate
@@ -159,6 +180,9 @@ per-child BUILD region, so that no child runs a step the per-child loop cannot y
   inside the per-child region.
 - Given custom step `a` with `after: build` and custom step `b` with `after: a`, when land runs, then
   the refusal names both `a` and `b`.
+- Given an eligible baseline whose config has custom step `prep` with `after: coverage_binding` and
+  `kickback_target: true`, or with `gate: true`, when land runs, then land fails with gate
+  `stacked-delivery`, and the message names `prep` as coupled to the per-child loop.
 - Given a custom step whose `after` target does not resolve, when eligibility is evaluated, then that
   step is not reported as in-region, and the existing config validator still reports the broken
   `after`.
@@ -221,9 +245,15 @@ force at build time, so that a change made after merge cannot build an ineligibl
 
 #### Negative Paths
 - Given a sliced plan that landed with the flag off and has a story spanning slices 1 and 2, when the
-  operator then enables `stacked_prs.enabled` and `coverage_binding` runs, then the step records
-  `refused` and ends needs-human, naming the story and both positions. No task is appended and
-  nothing routes to `plan`.
+  operator then enables `stacked_prs.enabled` and `coverage_binding` runs, then the step ends
+  needs-human, naming the story and both positions. The coverage-binding envelope file is
+  byte-identical before and after the run, no task is appended, and nothing routes to `plan`.
+- Given a previously `invalidated` envelope with entries, when the stacked-delivery layer refuses and
+  the operator then fixes the cause and `coverage_binding` re-runs, then that re-run still treats the
+  prior envelope as reopen-eligible (D19), exactly as it would have without the refusal.
+- Given a daemon started with `stacked_prs.enabled` false, when the operator turns the flag on in the
+  project config and `coverage_binding` next runs for a sliced plan with a spanning story, then the
+  layer sees the new value and refuses without a daemon restart.
 - Given a merged eligible plan, when the operator adds a custom step `after: test_suite` and
   `coverage_binding` runs, then it is refused needs-human, naming that step.
 - Given a merged eligible plan, when the operator lowers `max_slices` below the slice count, then
@@ -248,6 +278,8 @@ baseline, so that per-child acceptance and fix routing read ownership instead of
 #### Happy Path
 - Given an eligible plan, when `coverage_binding` passes, then its envelope records
   `story id → child position` beside the slice membership.
+- Given a recorded envelope, when `ai-conductor task start <id> --child <k>` runs for a task recorded
+  in a different child, then it is rejected naming the task's owning child, exactly as today.
 - Given a recorded envelope, when `coverage_binding` is invalidated by an existing trigger and re-runs
   on an unchanged plan, then the recorded ownership is kept and is equal.
 

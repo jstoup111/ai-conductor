@@ -71,8 +71,8 @@ case-insensitive line regex that returns `undefined` when the line is absent.
 | Multi-id Story-line reader (`plan-task-parse.ts`) | Ownership predicate |
 | `Stacked-Delivery:` sign-off parser (`artifacts.ts`) | `landSpec` (worktree complexity file) and the `coverage_binding` runner (feature complexity file) |
 | `LandGateIdentifier` `stacked-delivery` | `landSpec`, surfaced by `ai-conductor compose land` |
-| `stacked_prs.max_slices` config key | `loadProjectConfig` validation; read by the eligibility verdict at both callers; consumer-registry row |
-| Envelope `story → child` ownership field | Written by the `coverage_binding` runner; read by #2942's child projection |
+| `stacked_prs.max_slices` config key | Validated by `loadConfig` / `loadConfig`. Read by the eligibility verdict at both callers, each loading `loadConfig(projectRoot)` at evaluation time. Has a consumer-registry row |
+| Envelope `story → child` ownership field | Written by the `coverage_binding` runner. Read through `projectChildOwnership`, whose first production caller is the existing `task … --child <k>` membership check in `task-cli.ts`. #2942 adds per-child consumers |
 | `/plan` slice proposal and sign-off line | `skills/plan/SKILL.md`, run in DECIDE (composer / conduct) |
 
 **Early overlap scan (advisory):** `origin/spec/daemon-self-host-guardrails` also touches
@@ -83,7 +83,7 @@ branch. Expect a mechanical rebase on config-block validation and no semantic ov
 
 | Risk | Type | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
-| A flag-on sliced plan that passed land is refused at `coverage_binding` after a config change | Integration | Low | Medium | Accepted by design. The refusal names every reason and needs no plan rework. |
+| A flag-on sliced plan that passed land is refused at `coverage_binding` after a config change | Integration | Low | Medium | Accepted by design. The refusal names every reason and leaves the envelope untouched. A config-only cause needs only the config fix. An ownership cause (for example, the flag turned on over a plan whose story spans children) needs a plan amendment and reseal. |
 | Loosening the grammar ceiling from 5 to 9 accepts 6–9-slice plans with the flag off | Technical | Low | Low | Only looser. Flag-off plans still build as one branch, and stacking is still bounded by `max_slices` (default 1). |
 | The custom-step region test misclassifies chained customs | Technical | Medium | Medium | Decide the region from the resolved registry order, not from `after` text. Tests cover chained, before-region, in-region and after-region customs. |
 | `/plan` writes the sign-off line without real operator acceptance | Knowledge | Low | Medium | It is an operator-gated DECIDE step, the same control as every DECIDE marker. The ADR records the limit. |

@@ -19,7 +19,7 @@ sequenceDiagram
     participant Own as story ownership (plan-slices.ts)
     participant Grammar as plan-task-parse.ts
     participant Elig as stack eligibility (plan-slices.ts)
-    participant Config as loadConfig + resolved steps
+    participant Config as loadConfig + buildStepRegistry
     participant CB as coverage_binding runner
     participant Env as coverage-binding envelope
 
@@ -57,7 +57,7 @@ sequenceDiagram
         CB->>Own: same ownership predicate
         CB->>Elig: same eligibility predicate, current config
         alt violation or ineligible (e.g. config drifted after merge)
-            CB-->>CB: refused needs-human, naming the reason
+            CB-->>CB: needs-human naming the reason, envelope left untouched
         else valid
             CB->>Env: record slice membership + story → child ownership
             Note over CB,Env: feature-scoped — one baseline per feature,<br/>a child projection never resets it
@@ -95,3 +95,4 @@ sequenceDiagram
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-10-07 | Initial generation | DECIDE for #2941 (approach C) |
+| 2026-10-07 | One config loader at both points; refusal leaves the envelope untouched | Adversarial spec review |
