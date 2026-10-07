@@ -13,58 +13,58 @@ the parser returns `null`, `planRemediation` answers `{ kind: 'none' }`, and the
 through to the generic "as-built review verdict is BLOCKED" halt. Nothing reaches the event spine.
 Scope is reporting only: which side owns the vocabulary is a separate intake.
 
-## Story 1: A planner output with no recognized disposition halts naming the rejected word
+## Story 1: A planner output with no recognized disposition is rejected naming the rejected word
 
-As the operator reading a halt, I want the halt to name the disposition word the engine rejected, the finding it was attached to, and the vocabulary the engine accepts, so that I investigate the rejection instead of a verdict that was never the cause.
+As the operator reading a halt, I want a rejected plan to name the disposition word the engine rejected, the finding reference it was attached to, and the vocabulary the engine accepts, so that I investigate the rejection instead of a verdict that was never the cause.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `.pipeline/remediation.json` whose every gap carries a disposition word outside the accepted vocabulary (for example `unsupported-disposition` on AB-1 and AB-2), when remediation routing reads it, then the feature halts needs-human with a message that names each rejected word, the gap id it was attached to, and the full accepted vocabulary list.
-- Given the same input, when the halt is written, then the halt text does not contain the generic "as-built review verdict is BLOCKED" reason.
+- Given a structured remediation result whose every disposition carries a value outside the engine vocabulary (for example `unsupported-disposition` on two as-built finding references), when the engine validator checks it, then the whole plan is rejected with a diagnostic naming each rejected value, the reference it was attached to, and the full accepted set, and the attempt is retried within `remediate`'s retry allowance rather than halting immediately.
+- Given every attempt within the retry allowance is rejected the same way, when the allowance is exhausted, then the as-built caller receives a no-plan result carrying that named fault and applies its existing no-plan handling, halting needs-human with a message that names the rejected values, their references, and the accepted set, and that does not contain the generic "as-built review verdict is BLOCKED" reason.
 
 #### Negative Paths
-- Given a gap whose `disposition` field is missing or is not a string, when remediation routing reads it, then the halt names that gap id with the rejected value rendered as `<missing>` or the JSON-stringified value, and the accepted vocabulary, rather than crashing or reporting the generic verdict.
-- Given a rejected gap whose `id` is missing, when the halt is composed, then the halt names the gap by its position in the `dispositions` array (`#3`) and still lists the rejected word.
+- Given a disposition entry whose disposition field is missing or is not a string, when the engine validator checks it, then the whole plan is rejected with a diagnostic naming that entry's reference and the malformed field, rather than crashing or reporting the generic verdict.
+- Given a disposition entry whose finding reference is missing, when the engine validator checks it, then the whole plan is rejected with a diagnostic naming the entry by its position in the dispositions list (`#3`) and the malformed reference field, and still lists the rejected disposition value.
 
 ### Done When
-- [ ] `readRemediationPlan` returns a `rejected` list — one entry per dropped disposition carrying `gapId`, `disposition` (the rejected value), and `accepted` (the vocabulary) — alongside `gaps`, and returns non-null when `rejected` is non-empty even with zero surviving gaps.
-- [ ] `planRemediation` returns `{ kind: 'halt', haltClass: 'needs-human' }` for a zero-survivor plan, with `detail` containing every rejected word, its gap id, and the accepted vocabulary.
-- [ ] A unit test with two unrecognized gaps asserts the halt detail names both words, both gap ids, and the vocabulary, and does not contain "verdict is BLOCKED".
+- [ ] A validator fixture with two unrecognized dispositions produces a whole-plan rejection whose diagnostic names both values, both references, and the accepted set.
+- [ ] An exhaustion fixture with only unrecognized dispositions returns a no-plan result to the as-built caller, which halts needs-human with detail naming every rejected value, its reference, and the accepted set, and not containing "verdict is BLOCKED".
+- [ ] Missing-field and non-string-field fixtures each produce a whole-plan rejection naming the field.
 
 ## Story 2: Every rejected disposition is recorded on the event spine
 
-As the operator following a feature in daemon output, I want each dropped disposition to appear as an event in `.pipeline/events.jsonl` and in the rendered daemon log, so that a discarded planner judgement is visible without reading the halt file.
+As the operator following a feature in daemon output, I want each rejected disposition to appear as an event in `.pipeline/events.jsonl` and in the rendered daemon log, so that a rejected planner judgement is visible without reading the halt file.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a planner output with one or more unrecognized dispositions, when remediation routing reads it, then one `remediation_disposition_rejected` `ConductorEvent` is emitted per rejected gap carrying the gap id, the rejected word, and the accepted vocabulary, and each is persisted to `.pipeline/events.jsonl` and rendered in daemon output.
-- Given the halt from Story 1, when the operator reads `events.jsonl` for the remediate window, then the rejection events precede the halt event and the halt's detail agrees with them.
+- Given a planner output with one or more unrecognized dispositions, when the engine validator checks it, then one `remediation_disposition_rejected` `ConductorEvent` is emitted per rejected entry carrying the finding reference, the rejected word, and the accepted vocabulary, and each is persisted to `.pipeline/events.jsonl` and rendered in daemon output.
+- Given the exhaustion halt from Story 1, when the operator reads `events.jsonl` for the remediate window, then each attempt's rejection events precede the halt event and the halt's detail agrees with them.
 
 #### Negative Paths
-- Given a planner output whose every disposition is recognized, when remediation routing reads it, then zero `remediation_disposition_rejected` events are emitted and `events.jsonl` is byte-identical to the current behavior for that input.
-- Given the event emitter throws while persisting a rejection event, when routing continues, then the halt from Story 1 is still written with the full detail (the halt does not depend on the event succeeding).
+- Given a planner output whose every disposition is recognized, when the engine validator checks it, then zero `remediation_disposition_rejected` events are emitted and `events.jsonl` is byte-identical to the current behavior for that input.
+- Given the event emitter throws while persisting a rejection event, when validation continues, then the whole-plan rejection and, after exhaustion, the halt from Story 1 are still produced with the full detail (the halt does not depend on the event succeeding).
 
 ### Done When
 - [ ] `remediation_disposition_rejected` is a member of the `ConductorEvent` union and registered in `event-sinks.ts` with `render: true, persist: true, audit: true`.
-- [ ] A test asserts that a two-rejection plan emits exactly two events with the expected `gapId`, `disposition`, and `accepted` fields, and that a fully-recognized plan emits none.
+- [ ] A test asserts that a two-rejection plan emits exactly two events with the expected finding reference, `disposition`, and `accepted` fields, and that a fully-recognized plan emits none.
 
-## Story 3: Recognized dispositions still route when others are rejected
+## Story 3: One unrecognized disposition rejects the whole plan
 
-As the daemon, I want a planner output that mixes recognized and unrecognized dispositions to route the recognized gaps normally, so that one drifted word does not discard the whole judgement.
+As the daemon, I want a planner output that mixes recognized and unrecognized dispositions to be rejected as a whole and retried, so that one drifted word is diagnosed and corrected instead of silently discarding a required finding.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a planner output with AB-1 → `build` (with tasks) and AB-2 → `unsupported-disposition`, when remediation routing reads it, then AB-1 routes to `build` with its tasks appended exactly as it does today, one `remediation_disposition_rejected` event is emitted for AB-2, and the route's `evidence`/hint text mentions AB-2 as dropped.
-- Given a planner output whose every disposition is recognized, when remediation routing reads it, then the route, hint, evidence, appended tasks, and halt behavior are unchanged from current behavior.
+- Given a planner output with one as-built finding → `build` (with tasks) and another → `unsupported-disposition`, when the engine validator checks it, then the whole plan is rejected with a diagnostic naming `unsupported-disposition`, its reference, and the accepted set, no tasks are appended, one `remediation_disposition_rejected` event is emitted for the rejected entry, and the attempt is retried within `remediate`'s retry allowance.
+- Given a retry that returns every disposition recognized, when it is validated, then the plan routes, hints, appends tasks, and halts exactly as current behavior for that input, and the rejected attempt's diagnostic is recorded.
 
 #### Negative Paths
-- Given a mixed output where the only recognized gap is a taskless ordinary `build`, when remediation routing reads it, then the existing "no dispatchable build work" halt is returned and its detail additionally names the rejected gap ids and words.
-- Given a mixed output where the recognized gap is a `halt` with a valid category, when remediation routing reads it, then the existing category halt is returned and its detail additionally names the rejected gap ids and words.
+- Given a mixed output where the only recognized entry is a taskless ordinary `build`, when the engine validator checks it, then the whole plan is rejected with diagnostics naming both the unknown disposition value and the empty task list; neither entry is admitted.
+- Given a mixed output where the recognized entry is a `halt` with a valid category, when the engine validator checks it, then the whole plan is rejected naming the unknown value rather than returning the category halt, and only after retry exhaustion does the caller apply its existing no-plan handling naming the fault.
 
 ### Done When
-- [ ] A test with one `build` gap and one unrecognized gap asserts `kind: 'route'`, `target: 'build'`, and one rejection event.
-- [ ] Existing `readRemediationPlan` and `planRemediation` tests pass unchanged for fully-recognized inputs.
-- [ ] Tests cover the taskless-build and category-halt mixed cases asserting the rejected ids appear in `detail`.
+- [ ] A validator fixture with one `build` entry and one unrecognized entry asserts a whole-plan rejection, zero appended tasks, and one rejection event.
+- [ ] Existing routing tests pass unchanged for fully-recognized validated plans.
+- [ ] Fixtures cover the taskless-build and category-halt mixed cases asserting a whole-plan rejection whose diagnostic names the unknown value and its reference.

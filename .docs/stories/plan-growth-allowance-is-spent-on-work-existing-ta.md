@@ -17,12 +17,12 @@ As the conductor, I want a finding whose remedy existing plan tasks already own 
 - Given a prd_audit FIXABLE finding dispositioned `existing-task` bound to its owning plan task id, when remediation routes, then it takes the same non-appending route under gate key `prd_audit`
 
 #### Negative Paths
-- Given an `existing-task` gap whose bound id is absent from the active plan, when `resolvePlanTaskReference` fails to resolve it, then the disposition is invalid and the round halts naming the unresolvable id rather than silently appending or dropping the gap
-- Given an `existing-task` gap with an empty task-binding list, when the remediation plan is read, then the gap is rejected as malformed rather than admitted as a free lap
+- Given an `existing-task` gap whose bound id is absent from the active plan, or is not the finding's owning task, when the engine validator checks the plan, then the whole plan is rejected naming the unresolvable or non-owning id (and the owner) rather than silently appending or dropping the gap
+- Given an `existing-task` gap with an empty task-binding list, when the engine validator checks the plan, then the whole plan is rejected naming the empty binding field rather than admitting the gap as a free lap
 - Given a plan whose growth allowance is fully unspent, when every finding in the round is `existing-task`, then no `kickback-cap` halt citing the plan-growth allowance is produced
 
 ### Done When
-- [ ] A unit test proves an `existing-task` gap admitted through `readRemediationPlan` leaves `growth.added` unchanged and never calls the appender
+- [ ] A unit test proves an `existing-task` gap admitted from a validated typed plan leaves `growth.added` unchanged and never calls the appender
 - [ ] The #2119 reproduction (3 existing-task-owned findings, growth cap 2, 0/2 spent) routes to build instead of halting
 - [ ] `remediationDispositionAppendsToPlan('existing-task')` returns false and `remediationDispositionStep('existing-task')` returns `build`
 
@@ -33,17 +33,17 @@ As the engine, I want the union, validator, step map, and append predicate widen
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `.pipeline/remediation.json` containing an `existing-task` gap with resolvable bindings, when `readRemediationPlan` parses it, then the gap survives into the returned plan with its bound task ids intact
-- Given the `/remediate` skill contract, when the planner reads its disposition list, then `existing-task` is documented with the ownership test (the owning task's Done-when admits the remedy) alongside `publication`'s exclusion rationale
+- Given a structured remediation result containing an `existing-task` disposition bound to the finding's owning task in the active plan, when the engine validator checks it, then the disposition survives into the validated typed plan with its bound task ids intact
+- Given the `/remediate` skill, when the planner reads its judgment guidance, then it explains when a remedy is owned by the finding's existing task (the owning task's Done-when admits the remedy) and why `publication` is not an appending route, while the accepted disposition values themselves come from the engine vocabulary in the projection
 
 #### Negative Paths
-- Given a remediation plan mixing one valid `existing-task` gap and one gap with an unknown disposition string, when parsed, then only the unknown disposition is dropped and the existing-task gap is still admitted
+- Given a remediation result mixing one valid `existing-task` disposition and one with an unknown disposition string, when the engine validator checks it, then the whole plan is rejected naming the unknown value and the accepted set, the `existing-task` disposition is not admitted from that attempt, and the attempt is retried within `remediate`'s retry allowance
 - Given an `existing-task` gap whose bound reference carries a tolerated trailing parenthesized annotation, when resolved, then the annotation is stripped per adr-2026-08-30 D3 and the bare id resolves — a re-derived `Number()` parse is never used
 
 ### Done When
-- [ ] `RemediationDisposition` union, `readRemediationPlan`'s valid list, `remediationDispositionStep`, and `remediationDispositionAppendsToPlan` all name `existing-task` in the same diff
-- [ ] A test feeds an `existing-task` gap through the full parse-and-admit path and asserts it is not dropped
-- [ ] `skills/remediate/SKILL.md` documents the disposition and its exclusion from the append
+- [ ] The engine disposition enum in the native schema, the engine validator's accepted set, `remediationDispositionStep`, and `remediationDispositionAppendsToPlan` all name `existing-task`
+- [ ] A test feeds an `existing-task` disposition through the full validate-and-admit path and asserts it is admitted, and a mixed fixture with an unknown value asserts whole-plan rejection
+- [ ] `skills/remediate/SKILL.md` carries only the judgment guidance on existing-task ownership, with no disposition vocabulary table
 
 ## Story 3: Every existing-task kickback re-stages its bound tasks for the next dispatch
 
@@ -113,7 +113,7 @@ As the engine, I want genuinely-new-scope findings to keep consuming growth allo
 
 #### Negative Paths
 - Given appending gaps requesting more tasks than `growth.remaining`, when budgets are checked, then the round halts on the shared growth allowance exactly as today
-- Given a planner attempting to disposition genuinely new scope as `existing-task` with a fabricated task id, when the id fails to resolve against the active plan, then the disposition is rejected fail-closed rather than granting a growth-free append
+- Given a planner attempting to disposition genuinely new scope as `existing-task` with a fabricated task id, when the id fails to resolve against the active plan or is not the finding's owning task, then the whole plan is rejected fail-closed rather than granting a growth-free append
 
 ### Done When
 - [ ] Existing remediation-budget tests pass unmodified except where they asserted the #2119 defect

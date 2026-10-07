@@ -195,7 +195,7 @@ the decision taken from the typed verdict rather than from scraped Markdown.
 - Given a typed `BLOCKED` remediable verdict on a feature that has already used its as-built remediation lap, when the gate settles, then the repair is appended as pending and the loop halts with class `kickback-cap` at the build transition listing every finding.
 - Given the as-built remediation kill switch is disabled in config, when a typed `BLOCKED` remediable verdict settles, then the loop halts `needs-human` exactly as it does today with the switch off.
 - Given a validation round in which the as-built branch ends in a mechanical fault, when the join settles, then the group treats it as a no-verdict branch, no synthetic remediation gap is created for it, and the existing step-failure handling applies.
-- Given the planner returns remediation findings that do not match the typed `REMEDIABLE` findings exactly, when admission runs, then the loop halts `needs-human` naming the mismatch, as it does today.
+- Given the planner returns a remediation result whose references do not match the typed `REMEDIABLE` findings' engine-stamped ids exactly (missing, duplicate, or foreign), when the engine validator checks it, then the whole plan is rejected naming each mismatched reference and retried within `remediate`'s retry allowance, and after exhaustion the loop halts `needs-human` naming the mismatch fault.
 
 ### Done When
 - [ ] Tests through the production serial path and the production validation-group path with fake providers assert each happy and negative outcome above from a typed verdict fixture.

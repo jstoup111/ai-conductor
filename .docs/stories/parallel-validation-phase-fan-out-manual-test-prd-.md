@@ -49,7 +49,7 @@ build_review so that the SHIP tail costs ~max instead of sum of validator durati
       a slot frees)
 - [ ] Engine test proves all-green join → group `done`, loop advances, zero rewinds
 - [ ] Engine test proves no-verdict branch → group failure → halt marker written, no
-      remediation.json produced for that branch
+      remediate dispatch and no typed remediation plan produced for that branch
 
 ---
 
@@ -138,14 +138,16 @@ hold under parallelism.
   rewind to build carries the FAIL rows as the retry hint and NO remediate session is
   dispatched — byte-for-byte the 2026-07-06 ADR behavior.
 - Given manual_test fails alongside a prd_audit gap, when the join runs, then remediate
-  is dispatched exactly once and its input hint enumerates ONLY the prd-audit/as-built
-  evidence files — manual-test FAIL rows are attached to the merged work order by the
-  engine, not offered to remediate for re-classification.
+  is requested exactly once for the round (retries within the remediate allowance aside) and its engine projection carries ONLY the prd-audit
+  criterion references and as-built engine-stamped finding references — manual-test FAIL
+  rows are attached to the merged work order by the engine, not offered to remediate for
+  re-classification.
 
 #### Negative Paths
-- Given the remediate planner returns an unusable/stale plan (readRemediationPlan →
-  null), when the join falls back, then manual_test's deterministic build kickback still
-  proceeds (the deterministic stream never depends on the LLM stream succeeding).
+- Given every remediate attempt within `remediate`'s retry allowance returns an unusable
+  result, when the join receives the retry-exhausted no-plan result carrying the named
+  fault, then manual_test's deterministic build kickback still proceeds (the deterministic
+  stream never depends on the LLM stream succeeding).
 - Given manual_test FAIL rows exist but its self-heal budget (`MAX_KICKBACKS_PER_GATE`)
   is exhausted, when the join classifies, then the run halts with the existing
   budget-exhausted reason — parallelism does not grant extra kickbacks.
@@ -153,8 +155,9 @@ hold under parallelism.
 ### Done When
 - [ ] Engine test: MT-only failure → zero remediate dispatches, kickback hint equals the
       serial baseline's hint format
-- [ ] Engine test: mixed failure → exactly one remediate dispatch; its dispatch context
-      lists only prd-audit/as-built evidence paths
+- [ ] Engine test: mixed failure → exactly one gap-planning request (retries within the allowance aside); its engine projection
+      carries only prd-audit criterion and as-built finding references, and no manual-test
+      FAIL row
 - [ ] Engine test: exhausted MT budget under the group → halt reason matches the serial
       baseline's wording
 
@@ -170,10 +173,10 @@ that dispositions are consistent and token cost is one planner session per round
 ### Acceptance Criteria
 
 #### Happy Path
-- Given prd_audit has 2 blocking FR gaps and as-built is BLOCKED on 1 ADR violation,
-  when the join dispatches remediate, then `.pipeline/remediation.json` from that single
-  session contains a disposition for every one of the 3 gaps (heterogeneous ids: FR-N
-  and ADR-stem).
+- Given prd_audit has 2 blocking FIXABLE criteria and as-built is BLOCKED on 1 REMEDIABLE
+  finding, when the join dispatches remediate, then the validated typed plan from that
+  single dispatch answers each of the 3 required references exactly once (typed references:
+  2 PRD criterion ids and 1 engine-stamped as-built finding id).
 - Given the dispositions route to different steps, when the engine merges, then the
   rewind target is the earliest routed step and later-step dispositions are preserved in
   the work order for their gates to re-check on the next pass.
@@ -182,9 +185,12 @@ that dispositions are consistent and token cost is one planner session per round
 - Given remediate's plan halts (`kind: 'halt'` — architectural-clarity or product-scope
   gap), when the join applies it, then the run halts with the remediation detail — the
   passing validators' verdicts do not override a human-gated gap.
-- Given remediate returns dispositions for only a subset of the presented gaps, when the
-  engine merges, then the unaddressed gaps' gates remain unsatisfied (they re-block on
-  the next tail pass) — a partial plan cannot green-light an unplanned gap.
+- Given remediate returns dispositions for only a subset of the required references, when
+  the engine validator checks it, then the whole plan is rejected naming each missing
+  reference and retried; if every attempt is rejected, the join receives the no-plan result
+  and applies its existing handling (needs-human halt naming the fault, or manual_test's
+  deterministic kickback when FAIL rows exist) — a partial plan cannot green-light an
+  unplanned gap.
 - Given the per-gate remediation budget (`remediationRounds`) is at cap, when the join
   would dispatch remediate again, then the run halts exactly as the serial path does
   today.

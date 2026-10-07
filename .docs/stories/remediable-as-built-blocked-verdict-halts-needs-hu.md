@@ -19,22 +19,22 @@ halt-class change.
 
 ## Story 1: A remediable verdict whose planner produced no usable plan halts naming the planner failure
 
-As the operator reading a halt, I want a remediable BLOCKED verdict whose remediation planner wrote no usable plan to halt with a reason that says the planner produced nothing and why, so that I fix the planner output instead of reopening an architecture decision that was never in question.
+As the operator reading a halt, I want a remediable BLOCKED verdict whose remediation planner produced no usable plan to halt with a reason that says the planner produced nothing and why, so that I fix the planner output instead of reopening an architecture decision that was never in question.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a daemon-mode validation-group round whose as-built verdict is BLOCKED with every finding REMEDIABLE and no manual_test FAIL, when the remediation planner leaves no `.pipeline/remediation.json` behind, then the feature halts needs-human with a reason stating the as-built findings were REMEDIABLE, that remediation did not route because the planner wrote no remediation plan, and listing each blocking finding with its class and governing clause.
-- Given the same round, when the planner's `.pipeline/remediation.json` is unparseable JSON or its `dispositions` is not an array, then the halt reason names that malformation as the cause and still lists each blocking finding.
+- Given a daemon-mode validation-group round whose as-built verdict is BLOCKED with every finding REMEDIABLE and no manual_test FAIL, when every remediate attempt within `remediate`'s retry allowance returns no structured result, then the feature halts needs-human with a reason stating the as-built findings were REMEDIABLE, that remediation did not route because the planner returned no remediation plan (the missing-result fault), and listing each blocking finding with its engine-stamped id, class, and governing clause.
+- Given the same round, when the last attempt's plan is rejected by the engine validator, then the halt reason names the rejected-plan fault with the rejected field and still lists each blocking finding.
 
 #### Negative Paths
-- Given the same round, when the planner's `.pipeline/remediation.json` exists but predates the session start, then the halt reason names the plan as stale rather than absent, and the halt text does not contain "shipped code violates an approved architecture decision".
-- Given a serial (non-group) as-built step whose planner wrote no usable plan, when it halts, then its halt reason carries the same planner-failure cause and per-finding listing, so the two sites cannot disagree about why nothing routed.
+- Given the same round, when the last attempt times out or the engine fails to persist a validated plan, then the halt reason names that fault (timeout or persistence failure) rather than a missing result, no plan from a prior attempt is accepted in its place regardless of its modification time, and the halt text does not contain "shipped code violates an approved architecture decision".
+- Given a serial (non-group) as-built step whose planner produced no usable plan after retry exhaustion, when it halts, then its halt reason carries the same named planner fault and per-finding listing, so the two sites cannot disagree about why nothing routed.
 
 ### Done When
-- [ ] `planRemediation`'s no-plan result carries a `reason` naming which of absent, stale, unparseable, or non-array-gaps applied, and no caller can receive a bare reason-less no-plan result.
-- [ ] The validation-group as-built route halts on a no-plan result with a reason containing the planner-failure cause and the per-finding listing, and a unit test asserts the halt text for the absent-file case does not contain "shipped code violates an approved architecture decision".
-- [ ] A unit test for the stale-file case asserts the halt reason contains the word "stale" and lists AB-1's class and governing clause.
+- [ ] `planRemediation`'s no-plan result carries the named mechanical fault (missing result, rejected plan with its field, timeout, or persistence failure) after retry exhaustion, and no caller can receive a bare fault-less no-plan result.
+- [ ] The validation-group as-built route halts on a no-plan result with a reason containing the named planner fault and the per-finding listing, and a unit test asserts the halt text for the missing-result case does not contain "shipped code violates an approved architecture decision".
+- [ ] A unit test for the rejected-plan case asserts the halt reason names the rejected field and lists the first finding's engine-stamped id, class, and governing clause.
 
 ## Story 2: The as-built gate reason distinguishes a DESIGN verdict from a REMEDIABLE one
 
@@ -71,5 +71,5 @@ As the operator reading a validation-group halt on an as-built verdict, I want t
 
 ### Done When
 - [ ] The validation-group as-built halt appends the per-finding listing for `blocked-remediable` as well as `blocked-design`, with a cause clause naming why remediation did not run (disabled, non-daemon, or planner failure).
-- [ ] A unit test with remediation disabled asserts the halt text lists AB-1 and AB-2 with class REMEDIABLE and states remediation is disabled.
+- [ ] A unit test with remediation disabled asserts the halt text lists both findings' engine-stamped ids with class REMEDIABLE and states remediation is disabled.
 - [ ] A unit test with a DESIGN finding asserts the `Blocking findings:` listing header appears exactly once in the halt text.

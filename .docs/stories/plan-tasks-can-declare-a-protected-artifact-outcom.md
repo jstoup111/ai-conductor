@@ -55,7 +55,7 @@ prose scan. An author following the tool's own guidance conceals the defect rath
 ### Happy Path
 
 - **Given** the sealed-artifact prohibition in `skills/plan`, **When** it is read, **Then** it names `.docs/decisions/` alongside architecture, plans, specs, and stories, matching `PROTECTED_ARTIFACT_DIRECTORIES` exactly
-- **Given** `HARNESS.md:123-124` and `skills/remediate/SKILL.md:101`, **When** they are read, **Then** both name `.docs/decisions/` in the sealed set
+- **Given** `HARNESS.md:123-124` and `skills/remediate/SKILL.md` (its sealed-set guidance), **When** they are read, **Then** both name `.docs/decisions/` in the sealed set
 
 ### Negative Paths
 

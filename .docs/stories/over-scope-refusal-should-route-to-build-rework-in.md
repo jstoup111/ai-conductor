@@ -97,13 +97,14 @@ keep my existing levers instead of a loop.
 - Given that HALT, when the operator raises the budget with `kickback-budget raise` and clears it, then the next lap may dispatch refusal rework again within the raised allowance.
 
 #### Negative Paths
-- Given the remediation planner returns a human/deferral disposition, an empty task list, or a task not bound to a refusal decision id for any refused finding, when the plan is consumed, then no task is appended for that finding and the refused HALT is written.
-- Given the remediation planner produces no usable plan (missing, stale, or unparseable `.pipeline/remediation.json`), when the route completes, then the refused HALT is written, never a generic needs-human halt that drops the decision block.
+- Given the remediation planner returns a human/deferral disposition or a task not bound to a refusal decision id for any refused finding, when the validated plan is consumed, then no task is appended for that finding and the refused HALT is written.
+- Given the remediation planner returns `build` with an empty task list for a refused finding, when the plan is validated, then the whole plan is rejected and retried, and once the retry allowance is exhausted the refused HALT is written with no appended task.
+- Given every remediate attempt within `remediate`'s retry allowance produces no usable plan (missing structured result, rejected plan, timeout, or persistence failure), when the route receives the retry-exhausted no-plan result, then the refused HALT is written, never a generic needs-human halt that drops the decision block.
 - Given BUILD completes the rework lap without changing the tree (no-op), when `prd_audit` re-fails on the unchanged verdict, then the existing kickback-to-build no-op escalation halts the feature.
 
 ### Done When
 - [ ] Fixture: spent allowance + still-flagged refusal → HALT body contains the refused label and revise-decision entry; zero dispatches.
-- [ ] Fixtures for human disposition, empty plan and unbound task each produce the refused HALT with no appended task.
+- [ ] Fixtures for human disposition and unbound task produce the refused HALT on consumption; an empty-task fixture produces it after retry exhaustion; none appends a task.
 
 ## Story 5: Serial SHIP and validation-group join route refusals identically
 

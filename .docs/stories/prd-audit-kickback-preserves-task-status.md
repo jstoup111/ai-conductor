@@ -396,15 +396,16 @@ trailers so that the migration doesn't park or redo finished tasks.
 
 **Requirement:** ADR H3, H9
 
-As the conductor engine, I want `/remediate` to append gap-derived tasks to the plan under an id
-grammar the parser understands so that remediation work is seeded, evidenced, and completed like
-any other task.
+As the conductor engine, I want gap-derived remediation tasks appended to the plan by the engine's
+single appender under an engine `rem-` id grammar the parser understands so that remediation work
+is seeded, evidenced, and completed like any other task.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a blocking prd-audit gap FR-10, when `/remediate` runs, then the plan gains a task whose id
-  is deterministic and gate-source-prefixed (per the grammar chosen in this story's design note),
+- Given a blocking prd-audit gap FR-10, when its validated remediation plan is admitted, then the
+  engine's single appender adds a plan task whose engine `rem-` id is deterministic and
+  gate-source-prefixed (per the grammar chosen in this story's design note),
   and `parsePlanTaskPaths`/`expandTaskIds` parse it — id, name, and file paths all round-trip.
 - Given the engine re-seeds after the plan extension, then the remediation task appears as
   `pending` in `task-status.json` and a trailer-stamped commit completes it end-to-end.
@@ -417,20 +418,21 @@ any other task.
   completed task — the new work gets a bumped ordinal/content-suffix id, and a spec pins this.
 - Given gaps from two different gates that would derive colliding ids, when both are upserted,
   then the gate-source prefix keeps them distinct (spec constructs the collision).
-- Given a remediation task with an empty or missing id in `remediation.json`, when the plan-append
-  runs, then it is REJECTED with a validation error (non-empty deterministic id is validated, not
-  conventional) — the append never writes an unaddressable task.
+- Given a new remediation task with an empty or missing id in a remediation result, when the
+  engine validator checks it, then the whole plan is REJECTED with a diagnostic naming the field
+  (non-empty deterministic id is validated, not conventional) — the appender never writes an
+  unaddressable task.
 - Given dotted ids (`1.2`) or the chosen alphanumeric forms, when `expandTaskIds` parses plan
   headers, then no id is silently dropped — the parser's accepted grammar and the emitters'
   produced grammar are proven identical by a shared fixture.
 
 ### Done When
-- [ ] One id grammar decision recorded in the plan/ADR note; parser, `/plan` template, and
-      `/remediate` template all conform (shared fixture test).
+- [ ] One id grammar decision recorded in the plan/ADR note; parser, `/plan` template, and the
+      engine's single `rem-` appender all conform (shared fixture test).
 - [ ] End-to-end spec: gap → plan append → re-seed → trailer commit → gate passes.
 - [ ] Idempotency, content-drift, cross-gate-collision, and empty-id-rejection specs pass.
-- [ ] `/remediate` SKILL.md documents the plan-append contract (it currently only writes
-      `remediation.json`).
+- [ ] The engine's single appender owns `rem-` id derivation and the plan append; `/remediate`
+      SKILL.md carries no plan-append contract.
 
 ---
 

@@ -17,7 +17,7 @@ As a daemon operator, I want a member that cannot produce a verdict after its fu
 - Given a member's runner is dead in this way, when its siblings are already in flight, then the siblings still run to their own outcomes before the join halts (no cancellation).
 
 #### Negative Paths
-- Given a member settles as `no-verdict`, when the join runs, then no `remediation.json` is synthesized and no `kickback` event is emitted for that round.
+- Given a member settles as `no-verdict`, when the join runs, then no remediation plan is synthesized and no `kickback` event is emitted for that round.
 - Given a member settles as `no-verdict`, when the halt is written, then the halt class is `needs-human`, not `mechanical`, regardless of how many siblings passed.
 - Given the operator has not cleared the HALT, when the daemon's next scan reaches the feature, then the feature is not re-dispatched.
 
