@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-07T22:16:55.775Z
 Slug: refuse-unsupported-plugin-kinds-step-and-hook-at-l
 Class: protected-artifact
 Halting step: rebase
