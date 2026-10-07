@@ -9,7 +9,9 @@ import {
   detectMonitorCommand,
   dispatchMonitorCommand,
 } from '../../src/engine/monitor-cli.js';
+import { resolveGuidedSessionSelection } from '../../src/engine/monitor/selection.js';
 import { guardDaemonSessionInvocation } from '../../src/execution/daemon-session.js';
+import { BUILT_IN_PROVIDERS, type BuiltInProviderDescriptor } from '../../src/execution/provider-catalog.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { ProjectHalt } from '../../src/engine/monitor/halt-inventory.js';
 import type { HaltIssueReconciliationOutcome } from '../../src/engine/monitor/loop.js';
@@ -21,6 +23,12 @@ const cleanReconciliation = (): HaltIssueReconciliationOutcome => ({
   recordedErrorCount: 0,
   capturedLines: [],
 });
+
+const catalogProvider: BuiltInProviderDescriptor = {
+  ...BUILT_IN_PROVIDERS[0],
+  id: 'catalog-provider',
+  modelCatalog: BUILT_IN_PROVIDERS[2].modelCatalog,
+};
 
 function halt(): ProjectHalt {
   return {
@@ -51,9 +59,12 @@ describe('Task 20 — monitor pre-boot command', () => {
   });
 
   it.each([
-    ['a configured empty model', { kind: 'run' } as const, { monitor: { model: '' } } as HarnessConfig],
-    ['a per-run empty model', detectMonitorCommand(argv('monitor', 'all', '--model', ''))!, {} as HarnessConfig],
-  ])('refuses %s before queue processing or session launch', async (_description, command, config) => {
+    ['a configured empty model', { kind: 'run' } as const, { monitor: { model: '' } } as HarnessConfig, 'monitor: model "" is not a valid model id for provider claude.'],
+    ['a per-run empty model', detectMonitorCommand(argv('monitor', 'all', '--model', ''))!, {} as HarnessConfig, 'monitor: model "" is not a valid model id for provider claude.'],
+    ['a per-run flag-shaped model', detectMonitorCommand(argv('monitor', 'all', '--model', '--dangerously-skip-permissions'))!, {} as HarnessConfig, 'monitor: model "--dangerously-skip-permissions" is not a valid model id for provider claude.'],
+    ['a configured whitespace model', { kind: 'run' } as const, { monitor: { model: 'opus high' } } as HarnessConfig, 'monitor: model "opus high" is not a valid model id for provider claude.'],
+    ['a configured control-character model', { kind: 'run' } as const, { monitor: { model: 'op\u0007us' } } as HarnessConfig, 'monitor: model "op\u0007us" is not a valid model id for provider claude.'],
+  ])('refuses %s before queue processing or session launch', async (_description, command, config, expectedError) => {
     const errors: string[] = [];
     const deriveQueueMembership = vi.fn();
     const openGuidedSession = vi.fn();
@@ -65,9 +76,35 @@ describe('Task 20 — monitor pre-boot command', () => {
       printError: (line) => errors.push(line),
     });
 
+    expect(code).toBe(1);
+    expect(errors).toEqual([expectedError]);
+    expect(deriveQueueMembership).not.toHaveBeenCalled();
+    expect(openGuidedSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses an absent catalog model before queue processing or session launch', async () => {
+    const errors: string[] = [];
+    const deriveQueueMembership = vi.fn();
+    const openGuidedSession = vi.fn();
+
+    const code = await dispatchMonitorCommand(
+      detectMonitorCommand(argv('monitor', 'all', '--provider', catalogProvider.id, '--model', 'x/y'))!,
+      '/projects/operator',
+      {
+        loadConfig: async () => ({ ok: true, config: {}, warnings: [] }),
+        resolveSelection: (input) => resolveGuidedSessionSelection(input, {
+          findDescriptor: () => catalogProvider,
+          listCatalogModels: () => ['a/b'],
+        }),
+        deriveQueueMembership,
+        openGuidedSession,
+        printError: (line) => errors.push(line),
+      },
+    );
+
     expect({ code, errors, queueCalls: deriveQueueMembership.mock.calls.length, launchCalls: openGuidedSession.mock.calls.length }).toEqual({
       code: 1,
-      errors: ['monitor: model "" is not a valid model id for provider claude.'],
+      errors: ['monitor: model "x/y" is not in provider catalog-provider\'s model catalog.'],
       queueCalls: 0,
       launchCalls: 0,
     });
