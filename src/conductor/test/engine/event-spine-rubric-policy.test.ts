@@ -15,7 +15,7 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -105,7 +105,10 @@ describe('repository-local event-spine policy settlement', () => {
     await Promise.all([mkdir(source.baselinePath, { recursive: true }), mkdir(source.headPath, { recursive: true })]);
     const runner = new DefaultStepRunner(provider, 'event-spine-policy', root, {
       featureDesc: 'feature', config, events,
-      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      providerRuntimes: new ProviderRuntimeSet([
+        { key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
+        { key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) },
+      ]),
       sessionStore: new ProviderSessionStore(),
       buildReviewEffectiveResolver: async () => ({ ok: true, feature: { version: 'v1', repository: root, feature: 'feature' }, effective: { rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] } }) as never,
       buildReviewPolicyCatalog: async () => [],
@@ -118,7 +121,7 @@ describe('repository-local event-spine policy settlement', () => {
     } as never;
     const runRubricBuildReview = (runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', executionContext: unknown, capabilities: unknown) => Promise<{ success: boolean }> }).runRubricBuildReview.bind(runner);
     const result = await runRubricBuildReview(
-      inputs, resolveBuildReviewConfig(config), 'M', undefined, { claude: { provider: 'claude', platform: 'linux', status: 'available' } },
+      inputs, resolveBuildReviewConfig(config), 'M', undefined, { codex: { provider: 'codex', platform: 'linux', status: 'available' } },
     );
 
     const detail = 'Installed build-review policy event-spine is unavailable: absent; requested source: project';
@@ -132,8 +135,8 @@ describe('repository-local event-spine policy settlement', () => {
       type: 'build_review_policy_failed', rubric: 'eventSpine', stage: 'catalog', reason: detail,
     })));
 
-    await runRubricBuildReview(inputs, resolveBuildReviewConfig(config), 'M', undefined, { claude: { provider: 'claude', platform: 'linux', status: 'available' } });
-    await runRubricBuildReview(inputs, resolveBuildReviewConfig(config), 'M', undefined, { claude: { provider: 'claude', platform: 'linux', status: 'available' } });
+    await runRubricBuildReview(inputs, resolveBuildReviewConfig(config), 'M', undefined, { codex: { provider: 'codex', platform: 'linux', status: 'available' } });
+    await runRubricBuildReview(inputs, resolveBuildReviewConfig(config), 'M', undefined, { codex: { provider: 'codex', platform: 'linux', status: 'available' } });
     const aggregate = JSON.parse(await readFile(join(root, '.pipeline', 'build-review.json'), 'utf8'));
     expect(aggregate.customResults.eventSpine.result).toEqual({
       kind: 'infrastructure-failure', rubric: 'eventSpine', reason: 'policy-load-failed', detail,
