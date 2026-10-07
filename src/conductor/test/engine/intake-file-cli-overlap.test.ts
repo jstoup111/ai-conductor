@@ -11,6 +11,9 @@ const execFileP = promisify(execFile);
 const cli = resolve(process.cwd(), 'src/intake-file-cli.ts');
 const tsx = resolve(process.cwd(), 'node_modules/.bin/tsx');
 const roots: string[] = [];
+// See the bundled-helper fixture: tsx creates a fixed per-user IPC directory
+// below the temporary directory. `/proc/self/cwd` is short and fixture-local.
+const childTmpdir = process.platform === 'linux' ? '/proc/self/cwd' : undefined;
 
 interface GhCall {
   readonly cwd: string;
@@ -77,15 +80,18 @@ esac
     env: {
       ...process.env,
       AI_CONDUCTOR_NO_REAL_EXEC: undefined,
+      // The managed build exposes an absolute real-gh bypass. This fixture
+      // deliberately exercises its PATH-owned gh stub instead.
+      CONDUCT_GH_REAL_EXECUTABLE: undefined,
       // This subprocess proves user-config behavior against `HOME`, so it
       // must not inherit the suite-wide isolated config-directory redirect.
       AI_CONDUCTOR_USER_CONFIG_DIR: undefined,
       GH_CAPTURE: capture,
       HOME: home,
       PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}`,
-      TMPDIR: root,
-      TMP: root,
-      TEMP: root,
+      TMPDIR: childTmpdir ?? root,
+      TMP: childTmpdir ?? root,
+      TEMP: childTmpdir ?? root,
     },
   };
 }

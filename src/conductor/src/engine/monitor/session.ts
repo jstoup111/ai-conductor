@@ -6,6 +6,7 @@ import {
 import { findBuiltInProviderDescriptor } from '../../execution/provider-catalog.js';
 import { join } from 'node:path';
 import type { HaltDisposition } from '../halt-marker.js';
+import type { EffortLevel } from '../../types/config.js';
 import type { ProjectHalt } from './halt-inventory.js';
 
 /** Halt context at the external session boundary, before classification is trusted. */
@@ -15,6 +16,8 @@ export type GuidedSessionHalt = Omit<ProjectHalt, 'haltClass'> & {
 
 export interface GuidedSessionRequest {
   readonly provider: string;
+  readonly model?: string;
+  readonly effort?: EffortLevel;
   readonly halt: GuidedSessionHalt;
 }
 
@@ -100,6 +103,8 @@ export async function openGuidedSession(
   const launch = options.launch ?? launchInteractiveSession;
   return launch({
     provider: request.provider,
+    model: request.model,
+    effort: request.effort,
     cwd: haltedWorktree(request.halt),
     openingPrompt: openingPrompt(request),
   });

@@ -25,6 +25,10 @@ const OVERLAPPING_ISSUE = `${TARGET_REPOSITORY}#1579`;
 const SHARED_PATH = 'src/review/rubric.ts';
 
 const roots: string[] = [];
+// tsx uses a fixed `tsx-<uid>` directory below the temporary directory. Give
+// each fixture a short, checkout-relative spelling so concurrent CLI fixtures
+// neither exceed the Unix-socket limit nor contend for `/tmp/tsx-<uid>`.
+const childTmpdir = process.platform === 'linux' ? '/proc/self/cwd' : undefined;
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -93,14 +97,20 @@ describe('intake overlap decisions precede issue creation', () => {
     const { bin, callsPath } = await makeGhStub(root);
     const home = join(root, 'home');
     await mkdir(home);
-    const { AI_CONDUCTOR_NO_REAL_EXEC: _testExecGuard, ...environment } = process.env;
+    const {
+      AI_CONDUCTOR_NO_REAL_EXEC: _testExecGuard,
+      CONDUCT_GH_REAL_EXECUTABLE: _managedGhBypass,
+      ...environment
+    } = process.env;
     const env = {
       ...environment,
       HOME: home,
       PATH: `${bin}:${process.env.PATH ?? ''}`,
-      // tsx creates an IPC socket beneath TMPDIR; the run-scoped Vitest temp
-      // path is long enough to exceed the Unix-domain socket path limit.
-      TMPDIR: '/tmp',
+      // Keep the fixture's physical files in Vitest's run root, but shorten
+      // tsx's Unix-socket pathname without sharing another fixture's socket.
+      TMPDIR: childTmpdir ?? root,
+      TMP: childTmpdir ?? root,
+      TEMP: childTmpdir ?? root,
       GH_CALLS: callsPath,
     };
     const commonArgs = [

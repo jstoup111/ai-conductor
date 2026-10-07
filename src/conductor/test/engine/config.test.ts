@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:2.1, task:4, task:5, task:9, task:3, pi-per-step-model-selection-via-wrapped-providers:task:5, task:1, pi-runs-stay-contained-despite-pi-having-no-permis:task:12
+// Covers: task:1, task:2, task:2.1, task:4, task:5, task:6, task:9, task:3, pi-per-step-model-selection-via-wrapped-providers:task:5, task:1, pi-runs-stay-contained-despite-pi-having-no-permis:task:12
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';

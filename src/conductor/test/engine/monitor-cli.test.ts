@@ -1,4 +1,4 @@
-// Covers: task:3, task:6, task:20
+// Covers: task:3, task:6, task:9, task:11, task:12, task:13, task:14, task:15, task:16, task:17, task:20
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,7 +9,10 @@ import {
   detectMonitorCommand,
   dispatchMonitorCommand,
 } from '../../src/engine/monitor-cli.js';
+import { resolveGuidedSessionSelection } from '../../src/engine/monitor/selection.js';
 import { guardDaemonSessionInvocation } from '../../src/execution/daemon-session.js';
+import { BUILT_IN_PROVIDERS, type BuiltInProviderDescriptor } from '../../src/execution/provider-catalog.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import type { ProjectHalt } from '../../src/engine/monitor/halt-inventory.js';
 import type { HaltIssueReconciliationOutcome } from '../../src/engine/monitor/loop.js';
 
@@ -20,6 +23,12 @@ const cleanReconciliation = (): HaltIssueReconciliationOutcome => ({
   recordedErrorCount: 0,
   capturedLines: [],
 });
+
+const catalogProvider: BuiltInProviderDescriptor = {
+  ...BUILT_IN_PROVIDERS[0],
+  id: 'catalog-provider',
+  modelCatalog: BUILT_IN_PROVIDERS[2].modelCatalog,
+};
 
 function halt(): ProjectHalt {
   return {
@@ -47,6 +56,85 @@ describe('Task 20 — monitor pre-boot command', () => {
 
   it('returns guidance for malformed monitor input instead of falling through', () => {
     expect(detectMonitorCommand(argv('monitor', 'all', 'extra'))).toEqual({ kind: 'guide' });
+  });
+
+  it.each([
+    ['a configured empty model', { kind: 'run' } as const, { monitor: { model: '' } } as HarnessConfig, 'monitor: model "" is not a valid model id for provider claude.'],
+    ['a per-run empty model', detectMonitorCommand(argv('monitor', 'all', '--model', ''))!, {} as HarnessConfig, 'monitor: model "" is not a valid model id for provider claude.'],
+    ['a per-run flag-shaped model', detectMonitorCommand(argv('monitor', 'all', '--model', '--dangerously-skip-permissions'))!, {} as HarnessConfig, 'monitor: model "--dangerously-skip-permissions" is not a valid model id for provider claude.'],
+    ['a configured whitespace model', { kind: 'run' } as const, { monitor: { model: 'opus high' } } as HarnessConfig, 'monitor: model "opus high" is not a valid model id for provider claude.'],
+    ['a configured control-character model', { kind: 'run' } as const, { monitor: { model: 'op\u0007us' } } as HarnessConfig, 'monitor: model "op\u0007us" is not a valid model id for provider claude.'],
+  ])('refuses %s before queue processing or session launch', async (_description, command, config, expectedError) => {
+    const errors: string[] = [];
+    const deriveQueueMembership = vi.fn();
+    const openGuidedSession = vi.fn();
+
+    const code = await dispatchMonitorCommand(command, '/projects/operator', {
+      loadConfig: async () => ({ ok: true, config, warnings: [] }),
+      deriveQueueMembership,
+      openGuidedSession,
+      printError: (line) => errors.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(errors).toEqual([expectedError]);
+    expect(deriveQueueMembership).not.toHaveBeenCalled();
+    expect(openGuidedSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses an absent catalog model before queue processing or session launch', async () => {
+    const errors: string[] = [];
+    const deriveQueueMembership = vi.fn();
+    const openGuidedSession = vi.fn();
+
+    const code = await dispatchMonitorCommand(
+      detectMonitorCommand(argv('monitor', 'all', '--provider', catalogProvider.id, '--model', 'x/y'))!,
+      '/projects/operator',
+      {
+        loadConfig: async () => ({ ok: true, config: {}, warnings: [] }),
+        resolveSelection: (input) => resolveGuidedSessionSelection(input, {
+          findDescriptor: () => catalogProvider,
+          listCatalogModels: () => ['a/b'],
+        }),
+        deriveQueueMembership,
+        openGuidedSession,
+        printError: (line) => errors.push(line),
+      },
+    );
+
+    expect({ code, errors, queueCalls: deriveQueueMembership.mock.calls.length, launchCalls: openGuidedSession.mock.calls.length }).toEqual({
+      code: 1,
+      errors: ['monitor: model "x/y" is not in provider catalog-provider\'s model catalog.'],
+      queueCalls: 0,
+      launchCalls: 0,
+    });
+  });
+
+  it('forwards a well-formed per-run model unchanged to the guided-session seam', async () => {
+    const openGuidedSession = vi.fn();
+    const runGuidedMonitorQueue = vi.fn(async (deps: { launch: (item: ProjectHalt) => void }) => {
+      deps.launch(halt());
+      return { active: false };
+    });
+
+    const code = await dispatchMonitorCommand(
+      detectMonitorCommand(argv('monitor', 'all', '--model', 'claude-fable-5-1'))!,
+      '/projects/operator',
+      {
+        loadConfig: async () => ({ ok: true, config: {}, warnings: [] }),
+        openGuidedSession,
+        runGuidedMonitorQueue: runGuidedMonitorQueue as never,
+        reconcileHaltIssues: async () => cleanReconciliation(),
+        createInterrupt: () => ({ untilStop: new Promise<void>(() => {}), dispose: vi.fn() }),
+        startEventSpine: (() => ({ events: { emit: async () => {} }, stop: vi.fn() })) as never,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(openGuidedSession).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'claude',
+      model: 'claude-fable-5-1',
+    }));
   });
 
   it('passes the selected project into the queue-driving loop without launching a real session', async () => {
@@ -80,7 +168,10 @@ describe('Task 20 — monitor pre-boot command', () => {
     }).toEqual({
       code: 0,
       selection: [[{ projectName: 'alpha' }]],
-      rendered: [['alpha: blocked-feature — needs recovery (needs-human) [no-issue; priority-band]']],
+      rendered: [
+        ['monitor: guided sessions use provider=codex (override), model=gpt-5.6-sol (default), effort=high (default)'],
+        ['alpha: blocked-feature — needs recovery (needs-human) [no-issue; priority-band]'],
+      ],
     });
   });
 
@@ -117,7 +208,7 @@ describe('Task 20 — monitor pre-boot command', () => {
     expect({ code, passes: membership.mock.calls.length, output }).toEqual({
       code: 1,
       passes: 1,
-      output: [],
+      output: ['monitor: guided sessions use provider=codex (override), model=gpt-5.6-sol (default), effort=high (default)'],
     });
   });
 

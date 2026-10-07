@@ -250,7 +250,7 @@ describe('catalog interactive launch argv: idea passthrough', () => {
   const defaultHost = requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch');
   const argvFor = (idea?: string) => {
     const prompt = `${defaultHost.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
-    return defaultHost.interactiveLaunch.argv(prompt, {});
+    return defaultHost.interactiveLaunch.argv({ prompt, permissionMode: 'default' });
   };
 
   it('no idea → exactly /composer', () => {

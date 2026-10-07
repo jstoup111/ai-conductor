@@ -11,6 +11,12 @@ import type { BUILD_REVIEW_RUBRIC_IDS } from '../engine/build-review-registry.js
  */
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+export interface MonitorConfig {
+  llm_provider?: string;
+  model?: string;
+  effort?: EffortLevel;
+}
+
 /**
  * Artifact-review flow per step. Fixed per step (not user-configurable) —
  * set in resolved-config.ts's DEFAULT_STEP_REVIEW table:
@@ -543,6 +549,7 @@ export type TrackerConfig =
     };
 
 export interface HarnessConfig {
+  monitor?: MonitorConfig;
   harness_version?: string;
   defaults?: DefaultsConfig;
   phases?: Partial<Record<Phase, PhaseConfig>>;

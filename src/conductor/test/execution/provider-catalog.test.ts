@@ -129,12 +129,10 @@ describe('built-in provider catalog', () => {
       interactiveLaunchUnsupported: unsupportedMessage('interactiveLaunch'),
       sessionMarkers: providers.map((candidate) => candidate.interactiveLaunch?.sessionMarkers),
       claudeArgv: [
-        provider('claude').interactiveLaunch!.argv('/composer', {}),
-        provider('claude').interactiveLaunch!.argv('/composer', {
-          CONDUCT_ENGINEER_PERMISSION_MODE: 'plan',
-        }),
+        provider('claude').interactiveLaunch!.argv({ prompt: '/composer' }),
+        provider('claude').interactiveLaunch!.argv({ prompt: '/composer', permissionMode: 'default' }),
       ],
-      codexArgv: provider('codex').interactiveLaunch!.argv('$composer', {}),
+      codexArgv: provider('codex').interactiveLaunch!.argv({ prompt: '$composer' }),
       readOnlyReview: providers.map((candidate) =>
         supportsProviderCapability(candidate, 'readOnlyReview')),
       readOnlyReviewUnsupported: unsupportedMessage('readOnlyReview'),
@@ -149,6 +147,19 @@ describe('built-in provider catalog', () => {
       codexArgv: ['$composer'],
       readOnlyReview: [true, true, true],
       readOnlyReviewUnsupported: undefined,
+    });
+  });
+
+  it('renders selected model and effort through the catalog-owned interactive argv', () => {
+    const provider = (id: 'claude' | 'codex') => requireProviderCapability(id, 'interactiveLaunch');
+    expect({
+      claude: provider('claude').interactiveLaunch!.argv({ prompt: 'P', permissionMode: 'default', model: 'sonnet', effort: 'medium' }),
+      codex: provider('codex').interactiveLaunch!.argv({ prompt: 'P', model: 'gpt-5.6-terra', effort: 'xhigh' }),
+      efforts: provider('codex').interactiveLaunch!.acceptedEfforts,
+    }).toEqual({
+      claude: ['--permission-mode', 'default', '--model', 'sonnet', '--effort', 'medium', 'P'],
+      codex: ['--model', 'gpt-5.6-terra', '--config', 'model_reasoning_effort="xhigh"', 'P'],
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     });
   });
 

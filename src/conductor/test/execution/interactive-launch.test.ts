@@ -1,4 +1,4 @@
-// Covers: task:9, task:10
+// Covers: task:3, task:4, task:9, task:10
 import { EventEmitter } from 'node:events';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -52,6 +52,14 @@ describe('provider-agnostic interactive launch', () => {
     expect(spawnedOptions).not.toHaveProperty('input');
     expect(spawnedOptions).not.toHaveProperty('streamConsumer');
     expect(spawnedOptions).not.toHaveProperty('resume');
+  });
+
+  it('passes model and effort only through the catalog launch descriptor', async () => {
+    const spawn = vi.fn<InteractiveLaunchProcess>().mockResolvedValue({ exitCode: 0 });
+    await launchInteractiveSession({ ...request('claude'), model: 'sonnet', effort: 'medium' }, { spawn, isInteractiveTerminal });
+    expect(spawn).toHaveBeenCalledWith('claude', ['--permission-mode', 'default', '--model', 'sonnet', '--effort', 'medium', openingPrompt], {
+      cwd: '/workspace/harness/.worktrees/repair-halt', stdio: 'inherit',
+    });
   });
 
   it('launches Codex as an attached TUI with its opening prompt positioned in argv', async () => {

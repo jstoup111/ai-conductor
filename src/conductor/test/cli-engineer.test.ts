@@ -23,7 +23,12 @@ vi.mock('../src/engine/provider-discovery.js', () => ({
 function defaultComposerArgs(env: NodeJS.ProcessEnv, idea?: string): string[] {
   const host = requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch');
   const prompt = `${host.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
-  return host.interactiveLaunch.argv(prompt, env);
+  return host.interactiveLaunch.argv({
+    prompt,
+    permissionMode: env.CONDUCT_ENGINEER_PERMISSION_MODE === 'plan'
+      ? 'default'
+      : env.CONDUCT_ENGINEER_PERMISSION_MODE ?? 'default',
+  });
 }
 
 // ─── 1. Structural: `createProgram()` registers a `engineer` subcommand ──────────

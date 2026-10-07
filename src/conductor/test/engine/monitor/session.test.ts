@@ -1,4 +1,4 @@
-// Covers: task:11, task:12, task:13
+// Covers: task:10, task:11, task:12, task:13
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -63,6 +63,12 @@ describe('guided halt sessions', () => {
         ].join('\n'),
       },
     ]]);
+  });
+
+  it('forwards the selected model and effort to the launch seam', async () => {
+    const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
+    await openGuidedSession({ provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', halt: { project: '/workspace/project', slug: 'repair-index', reason: 'needs recovery' } }, { launch });
+    expect(launch).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.6-sol', effort: 'high' }));
   });
 
   it('keeps recovery authority unmarked and launches in the halted feature worktree', async () => {

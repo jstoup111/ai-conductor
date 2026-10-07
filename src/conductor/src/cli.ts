@@ -614,6 +614,9 @@ export function createProgram(): Command {
   // boot paths; this declaration is help-only and must not add a second route.
   program
     .command('monitor <project>')
+    .option('--provider <provider>', 'Provider for guided sessions')
+    .option('--model <model>', 'Model for guided sessions')
+    .option('--effort <effort>', 'Effort for guided sessions')
     .description('Guide resolution of halted features across `all` registered projects or one named `<project>`');
 
   // Dispatched in index.ts before normal CLI bootstrapping.
