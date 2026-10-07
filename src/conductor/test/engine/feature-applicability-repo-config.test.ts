@@ -1,4 +1,3 @@
-// Covers: task:1
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,6 +12,7 @@ const testDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(testDir, '../../../..');
 
 describe('repository feature applicability configuration', () => {
+  // Covers: task:1
   it('enables class-naming declarations while refusing gated and custom steps', async () => {
     const loaded = await loadConfig(repoRoot);
 
