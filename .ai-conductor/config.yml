@@ -66,10 +66,8 @@ attribution_audit_sample_pct: 10
 build_progress_halt:
   enabled: true
 
-# Per-rubric build-review routing: the judgement-heavy pair runs on Claude
-# opus, the mechanical pair on Codex, halving review load per provider and
-# putting counterfactual/plan-holistic judgement on the strongest reasoner.
-# rootCause inherits the engine's medium-effort default (narrowest rubric).
+# Per-rubric build-review routing is split across providers: testQuality and
+# eventSpine run on Claude, security on Codex.
 build_review:
   # Enable this repository's advisory containment recordings. The shipped
   # default remains false, so consumer repositories must opt in explicitly.
@@ -90,12 +88,12 @@ build_review:
       model: opus
       effort: low
     # Security judges the whole frozen feature diff for concrete, changed-hunk-
-    # anchored defects (#2568). Judgement-heavy like testQuality, so it takes the
-    # same Claude opus routing. Enabled 2026-09-18.
+    # anchored defects (#2568). Enabled 2026-09-18; routed to Codex 2026-10-07
+    # (operator order) to split rubrics across providers.
     security:
       enabled: true
-      llm_provider: claude
-      model: opus
+      llm_provider: codex
+      model: gpt-6-astra
       effort: low
       # Findings the reviewer scores below 60 are suppressed, not kicked back:
       # low-confidence security findings (35-55) cost a 30-minute lap and a
