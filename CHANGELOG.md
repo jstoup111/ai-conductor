@@ -38,6 +38,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - coverage_binding now judges each ADR decision together with every amendment recorded in that ADR, and re-judges a previously refused conflict after the halt is cleared instead of reusing the refusal. ([implementation PR #3012](https://github.com/jstoup111/ai-conductor/pull/3012)).
 - Self-host build_review rubrics routed to Codex no longer fail with an "ambiguous" installed-policy error, and no longer fail with a "scratch home is outside the worktree scratch root" error during native-schema setup. ([implementation PR #3023](https://github.com/jstoup111/ai-conductor/pull/3023)).
 - build_review rubrics routed to Claude run again instead of failing setup and halting for operator attention. Claude's read-only review cannot run any observed command (`gh` and the conductor launchers are explicitly denied), so it is admitted without an observation-destination proof. Any wider Claude review policy still has to prove that destination first, and `daemon status` now reports the same Claude availability that dispatch accepts. ([implementation PR #3024](https://github.com/jstoup111/ai-conductor/pull/3024)).
+- Self-host build_review rubrics routed to Codex no longer halt with "review-input-mutated" because the engine deleted the candidate's throwaway policy copy, or rewrote its own provider-lifecycle file, during the review lap; genuine policy or evidence edits during review are still detected. ([implementation PR #3025](https://github.com/jstoup111/ai-conductor/pull/3025)).
 
 ## Migration
 
