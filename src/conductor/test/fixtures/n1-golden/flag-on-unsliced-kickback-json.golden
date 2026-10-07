@@ -1,3 +1,3 @@
 <!-- Recorded from 14a615c678ab0df4bb467fa0313bcb24434ef68f -->
-kickback-budget: feature 'n1-golden' is unavailable.
-exit:1
+{"feature":"n1-golden","gates":[{"gate":"build_review","consumed":1,"limit":5,"remaining":4,"latestReason":"fixture bump","adjustments":[],"mechanicalFaults":0,"planGrowth":{"authored":0,"added":0,"byGate":{},"remaining":0,"cap":0,"capSource":"config-derived"}},{"gate":"prd_audit","consumed":0,"limit":1,"remaining":1,"latestReason":"","adjustments":[],"laps":0,"lapCap":1,"planGrowth":{"authored":0,"added":0,"byGate":{},"remaining":0,"cap":0,"capSource":"config-derived"}},{"gate":"architecture_review_as_built","consumed":0,"limit":1,"remaining":1,"latestReason":"","adjustments":[],"laps":0,"lapCap":1,"planGrowth":{"authored":0,"added":0,"byGate":{},"remaining":0,"cap":0,"capSource":"config-derived"}}]}
+exit:0

@@ -1,4 +1,4 @@
-import { afterEach, describe, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -148,12 +148,26 @@ describe('N=1 golden renderings', () => {
     const rewindNormalized = normalizeGolden([rewindLines.join('\n'), `exit:${rewindCode}`, rewindRecord].join('\n'), root);
     await expectGolden(`${cell.name}-rewind`, rewindNormalized);
 
+    // The operator command resolves only named feature worktrees. Preserve the
+    // production-written state and ledger in that worktree so inspect renders
+    // the same no-child budget view the CLI sees in a live feature.
+    const budgetWorktree = join(root, '.worktrees', 'n1-golden');
+    const budgetPipeline = join(budgetWorktree, '.pipeline');
+    await mkdir(budgetPipeline, { recursive: true });
+    await writeFile(join(budgetPipeline, 'conduct-state.json'), await readFile(statePath));
+    await writeFile(
+      join(budgetPipeline, 'kickback-ledger.json'),
+      await readFile(join(pipeline, 'kickback-ledger.json')),
+    );
+
     // 2. dispatchKickbackBudgetCommand inspect human
     const humanOutput: string[] = [];
     const humanCode = await dispatchKickbackBudgetCommand(
       { kind: 'kickback-budget', action: 'inspect', feature: 'n1-golden', format: 'human' },
       { cwd: root, resolveMainRoot: async () => root, print: (line: string) => humanOutput.push(line) },
     );
+    expect(humanCode).toBe(0);
+    expect(humanOutput.join('\n')).not.toContain('is unavailable');
     const humanNormalized = normalizeGolden(humanOutput.join('\n') + `\nexit:${humanCode}`, root);
     await expectGolden(`${cell.name}-kickback-human`, humanNormalized);
 
@@ -163,8 +177,11 @@ describe('N=1 golden renderings', () => {
       { kind: 'kickback-budget', action: 'inspect', feature: 'n1-golden', format: 'json' },
       { cwd: root, resolveMainRoot: async () => root, print: (line: string) => jsonOutput.push(line) },
     );
+    expect(jsonCode).toBe(0);
+    expect(jsonOutput.join('\n')).not.toContain('is unavailable');
     const jsonNormalized = normalizeGolden(jsonOutput.join('\n') + `\nexit:${jsonCode}`, root);
     await expectGolden(`${cell.name}-kickback-json`, jsonNormalized);
+    await rm(budgetWorktree, { recursive: true, force: true });
 
     // 4. runDaemonStatus
     const registryPath = join(root, '.daemon-registry.json');
@@ -186,7 +203,7 @@ describe('N=1 golden renderings', () => {
 
     // 5. renderDashboard(await scanInheritedState(...))
     // Need to create a worktree structure for scanInheritedState
-    const worktreeBase = join(root, '.worktrees');
+    const worktreeBase = join(root, '.dashboard-worktrees');
     const processedDir = join(root, '.docs', 'shipped');
     await mkdir(worktreeBase, { recursive: true });
     await mkdir(processedDir, { recursive: true });
