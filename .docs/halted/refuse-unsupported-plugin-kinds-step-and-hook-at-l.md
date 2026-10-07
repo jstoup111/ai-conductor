@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-07T22:12:45.415Z
 Slug: refuse-unsupported-plugin-kinds-step-and-hook-at-l
 Class: needs-human
 Halting step: prd_audit
