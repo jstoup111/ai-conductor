@@ -190,6 +190,38 @@ describe('coverage binding envelope', () => {
     ]);
   });
 
+  it('round-trips optional story ownership without making it completion evidence', () => {
+    const envelope = {
+      version: 1,
+      slug: 'feature',
+      runId: 'run-1',
+      status: 'done',
+      entries: [],
+      storyOwnership: { '1': 1, 'FR-2': 2 },
+    } as const;
+    const invalidated = { ...envelope, status: 'invalidated' as const };
+
+    expect([
+      parseCoverageBindingEnvelope(envelope),
+      parseCoverageBindingEnvelope(invalidated),
+      parseCoverageBindingEnvelope({ ...envelope, storyOwnership: { '1': 1.5 } }),
+      parseCoverageBindingEnvelope({ ...envelope, storyOwnership: { '1': 0 } }),
+      COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status),
+      COVERAGE_BINDING_COMPLETION_STATUSES.includes(
+        parseCoverageBindingEnvelope({
+          version: 1, slug: 'legacy-feature', runId: 'legacy-run', status: 'done', entries: [],
+        })!.status,
+      ),
+    ]).toEqual([
+      envelope,
+      invalidated,
+      null,
+      null,
+      true,
+      true,
+    ]);
+  });
+
   it('round-trips amendment verdict entries and defaults legacy entries to criterion', () => {
     const envelope = {
       version: 1,
