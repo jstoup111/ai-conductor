@@ -133,7 +133,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   harness_self_host: ['activation', 'version_freeze', 'auth_park_timeout_minutes', 'build_auth', 'sandbox_build_env', 'live_containment', 'version_approval_gate', 'release_artifact_gate'],
   harness_self_host_build_auth: ['mode', 'token_path'],
   mergeable_autoresolve: ['enabled', 'cooldownMinutes', 'suiteCommand'],
-  stacked_prs: ['enabled'],
+  stacked_prs: ['enabled', 'max_slices'],
   'steps.parallel': ['name', 'skill', 'model', 'effort', 'advisory'],
   'steps.by_tier': ['model', 'effort', 'max_retries'],
   'build_review.adjudication': ['enabled'],
@@ -1494,11 +1494,18 @@ export function validateConfig(
     // suiteCommand is optional and remains undefined if not provided
   }
 
-  // stacked_prs — enabled defaults to false only when the block is present.
+  // stacked_prs — defaults apply only when the block is present.
   if (obj.stacked_prs !== undefined && isPlainObject(obj.stacked_prs)) {
     const block = obj.stacked_prs as Record<string, unknown>;
     if (block.enabled === undefined) {
       block.enabled = false;
+    }
+    if (block.max_slices === undefined) {
+      block.max_slices = 1;
+    } else if ((block.max_slices as number) > 5) {
+      warnings.push(
+        `stacked_prs.max_slices is ${block.max_slices}; values above 5 may make stacked delivery harder to review.`,
+      );
     }
   }
 
@@ -2977,6 +2984,15 @@ function validateStackedPrsBlock(raw: unknown): ConfigError | null {
     return {
       type: 'validation_error',
       message: 'stacked_prs.enabled must be a boolean',
+    };
+  }
+  if (
+    obj.max_slices !== undefined &&
+    (typeof obj.max_slices !== 'number' || !Number.isInteger(obj.max_slices) || obj.max_slices < 1 || obj.max_slices >= 10)
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'stacked_prs.max_slices must be an integer from 1 through 9',
     };
   }
   return null;

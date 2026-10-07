@@ -827,6 +827,8 @@ export interface MergeableAutoresolveConfig {
 export interface StackedPrsConfig {
   /** Enable/disable stacked pull requests. Default: false when configured. */
   enabled?: boolean;
+  /** Maximum number of stacked plan slices. Default: 1 when configured. */
+  max_slices?: number;
 }
 
 /** The closed set of independently-executed build-review rubric branches. */

@@ -216,6 +216,10 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
 
   // ── stacked_prs ──────────────────────────────────────────────────────────
   'stacked_prs.enabled': none('reserved for #2724 build-loop slice checkpoints; replaced by a real consumer when #2724 lands'),
+  'stacked_prs.max_slices': consumer([
+    'src/conductor/src/engine/engineer/land-spec.ts',
+    STEP_RUNNERS,
+  ]),
 
   // ── build_review ──────────────────────────────────────────────────────────
   // `resolveBuildReviewConfig` is the only reader of the raw block and of every
