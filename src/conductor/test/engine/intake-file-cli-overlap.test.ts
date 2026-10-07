@@ -11,6 +11,9 @@ const execFileP = promisify(execFile);
 const cli = resolve(process.cwd(), 'src/intake-file-cli.ts');
 const tsx = resolve(process.cwd(), 'node_modules/.bin/tsx');
 const roots: string[] = [];
+// See the bundled-helper fixture: tsx creates a fixed per-user IPC directory
+// below the temporary directory. `/proc/self/cwd` is short and fixture-local.
+const childTmpdir = process.platform === 'linux' ? '/proc/self/cwd' : undefined;
 
 interface GhCall {
   readonly cwd: string;
@@ -86,9 +89,9 @@ esac
       GH_CAPTURE: capture,
       HOME: home,
       PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}`,
-      TMPDIR: root,
-      TMP: root,
-      TEMP: root,
+      TMPDIR: childTmpdir ?? root,
+      TMP: childTmpdir ?? root,
+      TEMP: childTmpdir ?? root,
     },
   };
 }
