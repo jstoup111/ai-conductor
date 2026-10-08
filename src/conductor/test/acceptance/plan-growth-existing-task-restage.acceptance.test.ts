@@ -27,8 +27,10 @@ import { createRepairObligationStore } from '../../src/engine/repair-obligations
 import type { ConductorEvent } from '../../src/types/events.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { AS_BUILT_VERDICT_CONTRACT_VERSION, stampAsBuiltFindingIds } from '../../src/engine/as-built-contract.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { persistFixtureProjectedRemediationPlan } from '../engine/remediation-plan-fixtures.js';
+import { REMEDIATION_PLAN_CONTRACT_VERSION, validateRemediationPlan } from '../../src/engine/remediation-plan-contract.js';
 
 let projectRoot: string;
 let stateFilePath: string;
@@ -41,25 +43,50 @@ const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
   diagramDrift: { enabled: false, reason: 'test fixture' },
 };
 
-async function writeBlockedAsBuiltFixture(taskId: string, runId?: string): Promise<void> {
-  await persistAsBuiltVerdict(projectRoot, {
-    version: 'v1',
+async function writeBlockedAsBuiltFixture(taskId: string, runId?: string): Promise<string> {
+  const attemptId = runId ?? 'fixture-run';
+  const verdict = stampAsBuiltFindingIds({
+    version: AS_BUILT_VERDICT_CONTRACT_VERSION,
     verdict: 'BLOCKED',
     reachability: [],
     driftNotes: [],
     findings: [{
-      id: 'ARCH-1',
       class: 'REMEDIABLE',
       reference: { kind: 'plan-task', taskId },
       summary: 'Add the approved guard',
     }],
     violations: 'The approved guard is missing.',
     resolution: 'Repair the task that owns the guard.',
-  }, {
-    attemptId: runId ?? 'fixture-run',
+  }, attemptId);
+  await persistAsBuiltVerdict(projectRoot, verdict, {
+    attemptId,
     codeStamp: null,
     policy: AS_BUILT_FIXTURE_POLICY,
   });
+  return verdict.verdict === 'BLOCKED' ? verdict.findings[0]!.id : '';
+}
+
+async function writeBlockedAsBuiltFixtures(taskIds: readonly string[], runId?: string): Promise<readonly string[]> {
+  const attemptId = runId ?? 'fixture-run';
+  const verdict = stampAsBuiltFindingIds({
+    version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+    verdict: 'BLOCKED',
+    reachability: [],
+    driftNotes: [],
+    findings: taskIds.map((taskId) => ({
+      class: 'REMEDIABLE' as const,
+      reference: { kind: 'plan-task' as const, taskId },
+      summary: 'Add the approved guard',
+    })),
+    violations: 'The approved guard is missing.',
+    resolution: 'Repair the tasks that own the guard.',
+  }, attemptId);
+  await persistAsBuiltVerdict(projectRoot, verdict, {
+    attemptId,
+    codeStamp: null,
+    policy: AS_BUILT_FIXTURE_POLICY,
+  });
+  return verdict.verdict === 'BLOCKED' ? verdict.findings.map((finding) => finding.id) : [];
 }
 
 async function writeFixablePrdAuditFixture(runId?: string): Promise<void> {
@@ -164,21 +191,23 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
     const buildHints: string[] = [];
     const taskStatusesAtBuildDispatch: string[] = [];
     const dispatched: StepName[] = [];
+    let asBuiltFindingIds: readonly string[] = [];
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName, _state, opts) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
-          await writeBlockedAsBuiltFixture('1', opts?.runId);
+          asBuiltFindingIds = await writeBlockedAsBuiltFixtures(['1', '2'], opts?.runId);
         } else if (step === 'remediate') {
-          await persistFixtureProjectedRemediationPlan(projectRoot, opts, [{
-            id: 'ARCH-1', disposition: 'existing-task', category: null,
-            rationale: 'Tasks 1 and 2 own the current finding.',
-            tasks: [
-              { id: '1', title: 'Repair the completed task' },
-              { id: '2', title: 'Repair the sibling task' },
-              { id: '2', title: 'Repair the sibling task duplicate' },
-            ],
-          }]);
+          await persistFixtureProjectedRemediationPlan(projectRoot, opts, [
+            {
+              id: asBuiltFindingIds[0]!, disposition: 'existing-task', category: null,
+              rationale: 'Task 1 owns the first current finding.', tasks: [], boundTaskIds: ['1'],
+            },
+            {
+              id: asBuiltFindingIds[1]!, disposition: 'existing-task', category: null,
+              rationale: 'Task 2 owns the second current finding.', tasks: [], boundTaskIds: ['2'],
+            },
+          ]);
         } else if (step === 'build') {
           buildHints.push(opts?.retryReason ?? '');
           taskStatusesAtBuildDispatch.push(await readFile(
@@ -199,8 +228,10 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
 
     expect(dispatched).toContain('remediate');
     expect(dispatched).toContain('build');
-    expect(buildHints[0]).toContain('ARCH-1');
-    expect(buildHints[0]).toContain('Repair the completed task');
+    expect(buildHints[0]).toContain(asBuiltFindingIds[0]!);
+    expect(buildHints[0]).toContain(asBuiltFindingIds[1]!);
+    expect(buildHints[0]).toContain('Existing task 1');
+    expect(buildHints[0]).toContain('Existing task 2');
     expect(JSON.parse(taskStatusesAtBuildDispatch[0] ?? '{}')).toMatchObject({
       tasks: [
         { id: '1', status: 'pending' },
@@ -234,9 +265,13 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
       (record) => (record as { source?: { instruction?: string; findingId?: string } }).source,
     );
     expect(persistedInstructions).toEqual([
-      expect.objectContaining({ findingId: 'ARCH-1', instruction: buildHints[0] }),
+      expect.objectContaining({
+        findingId: asBuiltFindingIds.join(','),
+        instruction: buildHints[0],
+      }),
     ]);
-    expect(buildHints[0]).toContain('Tasks 1 and 2 own the current finding.');
+    expect(buildHints[0]).toContain('Task 1 owns the first current finding.');
+    expect(buildHints[0]).toContain('Task 2 owns the second current finding.');
 
     // AB-1 (adr-2026-09-06 D2): BUILD lands a commit, the same finding comes
     // back, and the later repair must be a NEW obligation with a fresh
@@ -296,16 +331,17 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
     });
 
     const dispatched: StepName[] = [];
+    let asBuiltFindingId = '';
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName, _state, opts) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
-          await writeBlockedAsBuiltFixture('1');
+          asBuiltFindingId = await writeBlockedAsBuiltFixture('1', opts?.runId);
         } else if (step === 'remediate') {
           await persistFixtureProjectedRemediationPlan(projectRoot, opts, [{
-            id: 'ARCH-1', disposition: 'existing-task', category: null,
+            id: asBuiltFindingId, disposition: 'existing-task', category: null,
             rationale: 'Task 1 owns the current finding.',
-            tasks: [{ id: '1', title: 'Repair the completed task' }],
+            tasks: [], boundTaskIds: ['1'],
           }]);
         } else if (step === 'build') {
           return { success: false, error: 'sentinel: stop after observing reopened BUILD dispatch' };
@@ -329,16 +365,17 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
   it('dispatches the bound authored task as pending without appending a replacement task', async () => {
     let pendingAtBuildDispatch = false;
     const dispatched: StepName[] = [];
+    let asBuiltFindingId = '';
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName, _state, opts) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
-          await writeBlockedAsBuiltFixture('1');
+          asBuiltFindingId = await writeBlockedAsBuiltFixture('1', opts?.runId);
         } else if (step === 'remediate') {
           await persistFixtureProjectedRemediationPlan(projectRoot, opts, [{
-            id: 'ARCH-1', disposition: 'existing-task', category: null,
+            id: asBuiltFindingId, disposition: 'existing-task', category: null,
             rationale: 'Task 1 already owns the approved guard.',
-            tasks: [{ id: '1', title: 'Add the approved guard' }],
+            tasks: [], boundTaskIds: ['1'],
           }]);
         } else if (step === 'build') {
           const status = JSON.parse(
@@ -479,18 +516,19 @@ describe('a consolidated manual-test FAIL round never runs the existing-task rou
     let buildHint = '';
     let taskStatusAtBuildDispatch = '';
     const dispatched: StepName[] = [];
+    let asBuiltFindingId = '';
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName, _state, opts) => {
         dispatched.push(step);
         if (step === 'manual_test') {
           await writeFile(join(projectRoot, '.pipeline', 'manual-test-results.md'), MT_FAIL);
         } else if (step === 'architecture_review_as_built') {
-          await writeBlockedAsBuiltFixture('1', opts?.runId);
+          asBuiltFindingId = await writeBlockedAsBuiltFixture('1', opts?.runId);
         } else if (step === 'remediate') {
           await persistFixtureProjectedRemediationPlan(projectRoot, opts, [{
-            id: 'ARCH-1', disposition: 'existing-task', category: null,
+            id: asBuiltFindingId, disposition: 'existing-task', category: null,
             rationale: 'Task 1 already owns the approved guard.',
-            tasks: [{ id: '1', title: 'Add the approved guard' }],
+            tasks: [], boundTaskIds: ['1'],
           }]);
         } else if (step === 'build') {
           buildHint = opts?.retryReason ?? '';
@@ -515,7 +553,7 @@ describe('a consolidated manual-test FAIL round never runs the existing-task rou
     expect(dispatched.filter((step) => step === 'remediate')).toHaveLength(1);
     expect(dispatched.filter((step) => step === 'build')).toHaveLength(1);
     expect(buildHint).toContain('FAIL');
-    expect(buildHint).toContain('ARCH-1');
+    expect(buildHint).toContain(asBuiltFindingId);
     // The existing-task mechanics did not run: the bound row was not
     // re-staged, no as-built lap was charged, no pending finding persisted.
     expect((JSON.parse(taskStatusAtBuildDispatch) as { tasks: Array<{ id: string; status: string }> }).tasks)
@@ -561,6 +599,7 @@ describe('a mixed prd_audit/as-built existing-task lap keeps every gate armed fo
     } as ConductState);
 
     let remediateCalls = 0;
+    let asBuiltFindingId = '';
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName, _state, options) => {
         if (step === 'prd_audit') {
@@ -572,19 +611,19 @@ describe('a mixed prd_audit/as-built existing-task lap keeps every gate armed fo
           ].join('\n'));
           await writeFixablePrdAuditFixture(options?.runId);
         } else if (step === 'architecture_review_as_built') {
-          await writeBlockedAsBuiltFixture('2');
+          asBuiltFindingId = await writeBlockedAsBuiltFixture('2', options?.runId);
         } else if (step === 'remediate') {
           remediateCalls++;
           await persistFixtureProjectedRemediationPlan(projectRoot, options, [
             {
               id: 'S1.1', disposition: 'existing-task', category: null,
               rationale: 'Task 1 already owns this repair.',
-              tasks: [{ id: '1', title: 'PRD work' }],
+              tasks: [], boundTaskIds: ['1'],
             },
             {
-              id: 'ARCH-1', disposition: 'existing-task', category: null,
+              id: asBuiltFindingId, disposition: 'existing-task', category: null,
               rationale: 'Task 2 already owns the approved guard.',
-              tasks: [{ id: '2', title: 'Add the approved guard' }],
+              tasks: [], boundTaskIds: ['2'],
             },
           ]);
         } else if (step === 'build') {
@@ -631,23 +670,37 @@ describe('a mixed prd_audit/as-built existing-task lap keeps every gate armed fo
 });
 
 describe('existing-task refusals carry the finding onto the spine (S1.4, S7.2)', () => {
-  it('names the finding and bound id when ownership cannot be resolved, and reports it as gate_blocked', async () => {
-    // Covers: S1.4, task:8, task:11
+  it('rejects an absent owner binding before admission and carries its diagnostic to the spine and exhaustion HALT', async () => {
+    // Covers: S1.4, task:6, task:22, task:23
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('gate_blocked', (event) => { events.push(event); });
+    emitter.on('remediation_disposition_rejected', (event) => { events.push(event); });
     const dispatched: StepName[] = [];
+    let asBuiltFindingId = '';
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName, _state, opts) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
-          await writeBlockedAsBuiltFixture('1');
+          asBuiltFindingId = await writeBlockedAsBuiltFixture('1', opts?.runId);
         } else if (step === 'remediate') {
-          await persistFixtureProjectedRemediationPlan(projectRoot, opts, [{
-            id: 'ARCH-1', disposition: 'existing-task', category: null,
-            rationale: 'Bound to a task the plan does not declare.',
-            tasks: [{ id: '99', title: 'No such task' }],
-          }]);
+          const request = opts?.remediationRequest;
+          if (request?.mode !== 'gap-plan') throw new Error('expected gap-plan remediation request');
+          const rejected = validateRemediationPlan({
+            version: REMEDIATION_PLAN_CONTRACT_VERSION,
+            dispositions: [{
+              reference: { kind: 'as-built-finding', id: asBuiltFindingId },
+              disposition: 'existing-task',
+              category: null,
+              rationale: 'Bound to a task the plan does not declare.',
+              tasks: [],
+              boundTaskIds: ['99'],
+            }],
+          }, request.projection);
+          if (rejected.kind !== 'rejected') throw new Error('expected owner-binding rejection');
+          return {
+            success: false,
+            output: `structured-result-rejected: ${rejected.diagnostics.join('; ')}; rejections: ${JSON.stringify(rejected.rejected ?? [])}`,
+          };
         }
         return { success: true };
       }),
@@ -662,16 +715,18 @@ describe('existing-task refusals carry the finding onto the spine (S1.4, S7.2)',
 
     expect(dispatched).not.toContain('build');
     const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8');
-    expect(halt).toContain("finding 'ARCH-1'");
-    expect(halt).toContain("bound id '99'");
+    expect(halt).toContain('remediation did not route: structured-result-rejected:');
+    expect(halt).toContain(`as-built-finding:${asBuiltFindingId}`);
+    expect(halt).toContain('boundTaskIds does not resolve active task 99');
     expect(events).toEqual([
       expect.objectContaining({
-        type: 'gate_blocked',
-        step: 'architecture_review_as_built',
-        reason: expect.stringContaining("finding 'ARCH-1'"),
+        type: 'remediation_disposition_rejected',
+        gapId: asBuiltFindingId,
+        field: 'boundTaskIds',
+        disposition: '99',
+        accepted: ['1'],
       }),
     ]);
-    expect((events[0] as { reason: string }).reason).toContain("bound id '99'");
   });
 
   it('reports an admission persistence failure with source, finding and task context', async () => {
@@ -687,16 +742,17 @@ describe('existing-task refusals carry the finding onto the spine (S1.4, S7.2)',
     const emitter = new ConductorEventEmitter();
     emitter.on('gate_blocked', (event) => { events.push(event); });
     const dispatched: StepName[] = [];
+    let asBuiltFindingId = '';
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName, _state, opts) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
-          await writeBlockedAsBuiltFixture('1');
+          asBuiltFindingId = await writeBlockedAsBuiltFixture('1', opts?.runId);
         } else if (step === 'remediate') {
           await persistFixtureProjectedRemediationPlan(projectRoot, opts, [{
-            id: 'ARCH-1', disposition: 'existing-task', category: null,
+            id: asBuiltFindingId, disposition: 'existing-task', category: null,
             rationale: 'Task 1 already owns the approved guard.',
-            tasks: [{ id: '1', title: 'Add the approved guard' }],
+            tasks: [], boundTaskIds: ['1'],
           }]);
         }
         return { success: true };
@@ -713,7 +769,7 @@ describe('existing-task refusals carry the finding onto the spine (S1.4, S7.2)',
     expect(dispatched).not.toContain('build');
     const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8');
     expect(halt).toContain('could not persist admission');
-    expect(halt).toContain('findings ARCH-1');
+    expect(halt).toContain(`findings ${asBuiltFindingId}`);
     expect(halt).toContain('tasks 1');
     expect(events).toEqual([
       expect.objectContaining({
@@ -721,7 +777,7 @@ describe('existing-task refusals carry the finding onto the spine (S1.4, S7.2)',
         reason: expect.stringContaining('could not persist admission'),
       }),
     ]);
-    expect((events[0] as { reason: string }).reason).toContain('findings ARCH-1');
+    expect((events[0] as { reason: string }).reason).toContain(`findings ${asBuiltFindingId}`);
     expect((events[0] as { reason: string }).reason).toContain('tasks 1');
   });
 });

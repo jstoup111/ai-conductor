@@ -105,7 +105,7 @@ export type ValidateRemediationPlanResult =
   | {
       readonly kind: 'rejected';
       readonly diagnostics: readonly string[];
-      /** Unknown engine-vocabulary values retained for the event-spine consumer. */
+      /** Field-specific rejections retained for the event-spine consumer. */
       readonly rejected?: readonly RemediationDispositionRejection[];
     };
 
@@ -141,6 +141,20 @@ function isHaltCategory(value: unknown): value is RemediationHaltCategory {
 function renderRejectedVocabularyValue(value: unknown): string {
   if (value === undefined) return '<missing>';
   return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function recordBoundTaskIdsRejection(
+  rejected: RemediationDispositionRejection[],
+  reference: RemediationRequiredReference,
+  boundTaskIds: readonly string[],
+  ownerTaskId: string,
+): void {
+  rejected.push({
+    gapId: reference.id,
+    disposition: boundTaskIds.length === 0 ? '<empty>' : boundTaskIds.join(','),
+    accepted: [ownerTaskId],
+    field: 'boundTaskIds',
+  });
 }
 
 function untypedReferenceMatchesSource(kind: 'stall' | 'test', source: RemediationProjection['source']): boolean {
@@ -310,6 +324,7 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
       if (candidate.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION && ownerTaskId !== undefined) {
         if (boundTaskIds.length === 0) {
           diagnostics.push(`${field}.boundTaskIds requires at least one task id for existing-task`);
+          recordBoundTaskIdsRejection(rejected, requiredReference, boundTaskIds, ownerTaskId);
           continue;
         }
         const resolution = resolvePlanTaskReference(
@@ -318,19 +333,23 @@ export function validateRemediationPlan(raw: unknown, projection: RemediationPro
         );
         if (resolution.kind === 'malformed') {
           diagnostics.push(`${field}.boundTaskIds must use the shared active-plan task-id grammar`);
+          recordBoundTaskIdsRejection(rejected, requiredReference, boundTaskIds, ownerTaskId);
           continue;
         }
         if (resolution.kind === 'unresolvable') {
           diagnostics.push(`${field}.boundTaskIds does not resolve active task ${resolution.ids.join(', ')}`);
+          recordBoundTaskIdsRejection(rejected, requiredReference, resolution.ids, ownerTaskId);
           continue;
         }
         const nonOwnerTaskId = resolution.ids.find((taskId) => taskId !== ownerTaskId);
         if (nonOwnerTaskId !== undefined) {
           diagnostics.push(`${field}.boundTaskIds must not bind non-owner task ${nonOwnerTaskId}; owner is ${ownerTaskId}`);
+          recordBoundTaskIdsRejection(rejected, requiredReference, resolution.ids, ownerTaskId);
           continue;
         }
         if (!resolution.ids.includes(ownerTaskId)) {
           diagnostics.push(`${field}.boundTaskIds must bind owner task ${ownerTaskId}`);
+          recordBoundTaskIdsRejection(rejected, requiredReference, resolution.ids, ownerTaskId);
           continue;
         }
         boundTaskIds = resolution.ids;

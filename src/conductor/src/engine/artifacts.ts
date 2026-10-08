@@ -4657,7 +4657,7 @@ export interface RemediationDispositionRejection {
   gapId: string;
   disposition: string;
   accepted: readonly string[];
-  field: 'disposition' | 'category';
+  field: 'disposition' | 'category' | 'boundTaskIds';
 }
 
 // --- Story / plan structure parsing (shared by stories + plan predicates) ---

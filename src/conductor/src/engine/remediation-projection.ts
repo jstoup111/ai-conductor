@@ -139,10 +139,10 @@ export type RemediationProjectionResult =
 export const REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES = {
   requiredReferencesBytes: 339,
   tasksBytes: 165,
-  pendingAsBuiltFindingsBytes: 235,
-  priorLapsBytes: 50,
+  pendingAsBuiltFindingsBytes: 264,
+  priorLapsBytes: 80,
   refusalsBytes: 109,
-  totalBytes: 1_012,
+  totalBytes: 1_089,
 } as const;
 
 function roundUpPowerOfTwo(bytes: number): number {
@@ -157,13 +157,13 @@ export const REMEDIATION_PROJECTION_LIMITS = {
   requiredReferencesBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes),
   // Owning-task corpus maximum: 165 B; rounded up to 256 B.
   tasksBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes),
-  // Pending as-built finding corpus maximum: 235 B; rounded up to 256 B.
+  // Stamped pending as-built finding corpus maximum: 264 B; rounded up to 512 B.
   pendingAsBuiltFindingsBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes),
-  // Prior-lap corpus maximum: 50 B; rounded up to 64 B.
+  // Stamped prior-lap corpus maximum: 80 B; rounded up to 128 B.
   priorLapsBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorLapsBytes),
   // Refusal corpus maximum: 109 B; rounded up to 128 B.
   refusalsBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes),
-  // Complete structured projection corpus maximum: 1,012 B; rounded up to 1,024 B.
+  // Complete stamped-contract projection corpus maximum: 1,089 B; rounded up to 2,048 B.
   totalBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.totalBytes),
   // Untyped-evidence per-file corpus bound is owned by the as-built projection.
   perFileHunksBytes: AS_BUILT_PROJECTION_LIMITS.perFileHunksBytes,

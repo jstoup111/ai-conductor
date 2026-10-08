@@ -824,7 +824,7 @@ function remediationGapsFromTypedPlan(
 }
 
 /**
- * The runner preserves vocabulary rejections in its structured-result
+ * The runner preserves field-specific rejections in its structured-result
  * diagnostic because it must not persist a rejected typed plan. Recover only
  * the validated event payload here; all other malformed-output diagnostics
  * remain ordinary retryable planner faults.
@@ -851,7 +851,7 @@ function remediationDispositionRejectionsFromDispatchOutput(
       typeof rejection.disposition !== 'string' ||
       !Array.isArray(rejection.accepted) ||
       !rejection.accepted.every((value) => typeof value === 'string') ||
-      (rejection.field !== 'disposition' && rejection.field !== 'category')
+      (rejection.field !== 'disposition' && rejection.field !== 'category' && rejection.field !== 'boundTaskIds')
     ) return [];
     return [{
       gapId: rejection.gapId,
