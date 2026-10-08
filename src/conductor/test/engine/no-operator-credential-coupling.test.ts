@@ -1,8 +1,11 @@
+// Covers: task:11
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { CONDUCTOR_DECOMPOSED_MODULES } from '../structural/conductor-shape-guard.js';
 
 /**
  * Task 16: static verification gates for retired credential-copy machinery.
@@ -54,8 +57,27 @@ describe('no-operator-credential-coupling (Task 16 static gates)', () => {
   });
 
   it('the daemon-token build-auth dispatch/park branch never touches the operator credentials path', () => {
-    const conductorPath = join(SRC_DIR, 'engine', 'conductor.ts');
-    const contents = readFileSync(conductorPath, 'utf-8');
+    const findings = CONDUCTOR_DECOMPOSED_MODULES.flatMap((module) =>
+      daemonTokenCredentialFindings(module, readFileSync(join(SRC_DIR, module), 'utf-8')),
+    );
+
+    expect(findings).toEqual([]);
+  });
+
+  it('reports an operator credential identifier planted in a moved destination module', () => {
+    const module = CONDUCTOR_DECOMPOSED_MODULES.find((path) => path !== 'engine/conductor.ts');
+    expect(module).toBeDefined();
+
+    const findings = daemonTokenCredentialFindings(
+      module!,
+      `${readFileSync(join(SRC_DIR, module!), 'utf-8')}\nif (buildAuthMode === 'daemon-token') { operatorConfigDir; }`,
+    );
+
+    expect(findings).toContain(`${module}:operatorConfigDir`);
+  });
+});
+
+function daemonTokenCredentialFindings(module: string, contents: string): string[] {
     const lines = contents.split('\n');
 
     // Isolate each `... buildAuthMode === 'daemon-token'` branch body: from the
@@ -70,8 +92,6 @@ describe('no-operator-credential-coupling (Task 16 static gates)', () => {
       .filter(({ line }) => /buildAuthMode\s*===\s*'daemon-token'/.test(line))
       .map(({ i }) => i);
 
-    expect(guardIndices.length).toBeGreaterThan(0);
-
     const operatorCredentialIdentifiers = [
       '.credentials.json',
       'operatorConfigDir',
@@ -79,6 +99,7 @@ describe('no-operator-credential-coupling (Task 16 static gates)', () => {
       'CLAUDE_CONFIG_DIR',
     ];
 
+    const findings: string[] = [];
     for (const guardIdx of guardIndices) {
       // Isolate exactly the `if (...) { ... }` block guarded by this condition
       // via brace counting, so the slice never bleeds into unrelated sibling
@@ -105,11 +126,8 @@ describe('no-operator-credential-coupling (Task 16 static gates)', () => {
       const branchSlice = lines.slice(guardIdx, endIdx + 1).join('\n');
 
       for (const identifier of operatorCredentialIdentifiers) {
-        expect(
-          branchSlice.includes(identifier),
-          `daemon-token branch (conductor.ts:${guardIdx + 1}-${endIdx}) must not reference "${identifier}" (operator credentials path leaking into build-auth dispatch)`,
-        ).toBe(false);
+        if (branchSlice.includes(identifier)) findings.push(`${module}:${identifier}`);
       }
     }
-  });
-});
+    return findings;
+}

@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 export interface ConductorShapeViolation {
@@ -11,6 +14,26 @@ export interface ConductorImportViolation {
   specifier: string;
   names: string[];
 }
+
+interface ConductorInventory {
+  moduleLevelAtBase: readonly string[];
+}
+
+const guardDirectory = dirname(fileURLToPath(import.meta.url));
+const engineDirectory = join(guardDirectory, '../../src/engine');
+const conductorInventory = JSON.parse(
+  readFileSync(new URL('./conductor-exports.json', import.meta.url), 'utf8'),
+) as ConductorInventory;
+
+/**
+ * The facade and every engine module that now owns a declaration moved out of
+ * it. Source-level negative scans use this set so a move cannot hide a
+ * forbidden pattern from a conductor-only check.
+ */
+export const CONDUCTOR_DECOMPOSED_MODULES = [
+  'engine/conductor.ts',
+  ...engineModulePaths().filter((path) => declaresInventoryName(path)),
+];
 
 /**
  * Check that conductor.ts remains a thin facade: imports, forwarded exports,
@@ -114,6 +137,47 @@ export function checkConductorImports(
 
 function parseSource(source: string, fileName: string): ts.SourceFile {
   return ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+}
+
+function engineModulePaths(directory = engineDirectory): string[] {
+  return readdirSync(directory, { withFileTypes: true })
+    .flatMap((entry) => {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) return engineModulePaths(path);
+      return entry.isFile() && entry.name.endsWith('.ts') ? [relative(join(engineDirectory, '..'), path)] : [];
+    })
+    .sort();
+}
+
+function declaresInventoryName(modulePath: string): boolean {
+  const source = readFileSync(join(engineDirectory, '..', modulePath), 'utf8');
+  const names = topLevelDeclarationNames(parseSource(source, modulePath));
+  return conductorInventory.moduleLevelAtBase.some((name) => names.has(inventoryName(name)));
+}
+
+function topLevelDeclarationNames(sourceFile: ts.SourceFile): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const statement of sourceFile.statements) {
+    if (
+      ts.isFunctionDeclaration(statement)
+      || ts.isClassDeclaration(statement)
+      || ts.isInterfaceDeclaration(statement)
+      || ts.isTypeAliasDeclaration(statement)
+      || ts.isEnumDeclaration(statement)
+    ) {
+      if (statement.name !== undefined) names.add(statement.name.text);
+    }
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name)) names.add(declaration.name.text);
+      }
+    }
+  }
+  return names;
+}
+
+function inventoryName(name: string): string {
+  return name === 'appendRemediationTasks' ? 'appendConductorRemediationTasks' : name;
 }
 
 function violation(
