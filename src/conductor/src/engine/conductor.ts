@@ -15611,8 +15611,12 @@ export class Conductor {
     // above, carrying the delta-derived preserved set into each navigation.
     // Scanning the same verdicts again would navigate them a second time with
     // the generic cascade and incorrectly stale preserved judged gates.
+    // Every other rebase outcome writes no kickback, so any rebase-origin
+    // marker still on disk was left by an earlier changed rebase and already
+    // counted then; recounting it on each no-op pass trips the ping-pong cap
+    // without a new rebase.
     const kickbackVerdict =
-      step.name === 'rebase' && this.lastRebaseOutcome?.kind === 'changed'
+      step.name === 'rebase'
         ? null
         : await this.scanKickbackVerdicts(
             step.name,

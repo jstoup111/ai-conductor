@@ -943,6 +943,22 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       }).toEqual({ build_review: 0, manual_test: 7, prd_audit: 9 });
     });
 
+    it('does not recount a stale rebase kickback when a later rebase is a no-op', async () => {
+      // A prior changed rebase left build_review unsatisfied with a
+      // rebase-origin kickback, and the feature halted before build_review re-ran.
+      // Every later no-op rebase must not count that same marker as a fresh
+      // kickback, or the ping-pong cap trips with no new rebase having happened.
+      const { kickbacks } = await advanceChangedRebase(
+        { kind: 'noop', baseSha: 'abc123' },
+        ['build_review'],
+        { build_review: buildReviewEntry(4) },
+      );
+
+      expect(kickbacks).toEqual([]);
+      expect((await readKickbackLedger(dir)).gates.build_review?.count).toBe(1);
+      expect(existsSync(join(dir, HALT_MARKER))).toBe(false);
+    });
+
     it('does not issue a second credit when the subsequent consumed rebase kickback is recorded', async () => {
       await advanceChangedRebase(
         {
