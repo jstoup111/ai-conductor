@@ -211,7 +211,7 @@ so a bare `npm test` discovers 1185 files and excludes the 16 opt-in smoke files
 | `test/execution/` | 25 | Provider adapters, the `LLMProvider` contract, token usage, rate-limit parsing, sessions. | `npm test -- test/execution` |
 | `test/smoke/` | 4 | Real binaries and real third parties. Excluded by default; seven additional `*.smoke.test.ts` files live beside the subsystem they exercise. | See [Smoke tests](#smoke-tests). |
 | `test/cli/` | 6 | CLI entry-point and argument behavior. | `npm test -- test/cli` |
-| `test/structural/` | 8 | Meta-tests that parse the suite itself. See [Structural meta-tests](#structural-meta-tests). | `npm test -- test/structural` |
+| `test/structural/` | 13 | Meta-tests that parse the suite itself. See [Structural meta-tests](#structural-meta-tests). | `npm test -- test/structural` |
 | `test/types/` | 3 | Type-level contracts. | `npm test -- test/types` |
 | `test/fixtures/` | 5 | Fixture helpers and their executable contract tests. | `npm test -- test/fixtures` |
 
@@ -417,6 +417,24 @@ is `--bare`, commented out, or annotated `// portability-ok: <reason>`. It also 
 no-caller claims (`nothing imports`, `no callers`/`no importers`, inert-module claims, and `nothing`
 calling, using, or invoking a backticked identifier). It fails only when a relative import or symbol
 reference contradicts a claim; truthful claims and matching prose below the leading comment block pass.
+
+### Conductor facade guards
+
+Three structural tests keep `engine/conductor.ts` a thin facade (layout in
+[code organization](code-organization.md#the-conductorts-facade)):
+
+| Test | Fails when |
+| --- | --- |
+| `conductor-shape.test.ts` | `conductor.ts` gains a top-level declaration other than `Conductor` or an allowlisted tuning constant; a module other than `src/index.ts` or `src/daemon-cli.ts` imports the facade; an entry point imports anything but the `Conductor` value from it; a direct consumer imports a moved declaration through a re-export instead of its defining module. |
+| `conductor-export-surface.test.ts` | The checker-resolved export set of `conductor.js` differs from `conductor-exports.json`, exposes a declaration that was private before the split, or a re-exported value loses its object identity. |
+| `destination-isolated-import.test.ts` | A destination module, imported alone, leaves any runtime export `undefined` (an initialization cycle). |
+
+To add a tuning constant to the facade, extend `ALLOWED_TUNABLES` in `conductor-shape.test.ts`. To
+change the facade's exports, update `conductor-exports.json` in the same diff. Run them with:
+
+```bash
+cd src/conductor && npm test -- test/structural/conductor-shape.test.ts test/structural/conductor-export-surface.test.ts test/structural/destination-isolated-import.test.ts
+```
 
 ## Smoke tests
 

@@ -95,6 +95,31 @@ Two lookups that are easy to get wrong:
 - Backlog priority resolution is `createPriorityResolver` in `engine/backlog-priority.ts:123`.
 - The daemon pidfile lock is `engine/daemon-lock.ts`, not under `engine/engineer/`.
 
+#### The `conductor.ts` facade
+
+`engine/conductor.ts` holds only imports, named re-exports, the `Conductor` class, and six tuning
+constants (`MAX_RECOVERY_RETRIES`, `MAX_RATE_LIMIT_DEADLINE_MS`, `PUBLICATION_REDISPATCH_BUDGET`,
+`MAX_GATE_SELECTIONS`, `DONE_MARKER`, `LOOP_HALT_MARKER`). Put every other declaration in a
+purpose-named engine module:
+
+| Module | Owns |
+| --- | --- |
+| `conductor-options.ts` | `ConductorOptions`, `OperatorParkedTermination`, `FinishPublicationCoordinator`, and the checkpoint/review result types the UI consumes. |
+| `step-runner-types.ts` | The `StepRunner` interface, `StepRunOptions`, `StepRunResult`, and spot-audit dispatch types. |
+| `resume-entry.ts` | Gate topology, back-navigation, and resume-index selection. |
+| `step-completion.ts` | Step completion-contract predicates. |
+| `remediation-caps.ts` | `MAX_KICKBACKS_PER_GATE`, remediation lap caps, and append budgets. |
+| `remediation-hints.ts` | Remediation and retry hints, and remediation target selection. |
+| `remediation-task-append.ts` | `appendConductorRemediationTasks`. |
+| `prd-audit-routing.ts`, `as-built-routing.ts` | `prd_audit` and as-built finding routing. |
+| `build-review-halt-render.ts` | Operator-facing `build_review` halt text. |
+| `artifact-approvals.ts` | Artifact approval hashing and active-plan recording. |
+| `finish-presentation-repair.ts`, `post-finish-shipped-record.ts` | Finish presentation repair and the post-finish shipped-record refresh and push. |
+
+Only `src/index.ts` and `src/daemon-cli.ts` may import `engine/conductor.js`, and only the `Conductor`
+value. Every other module imports a moved declaration from its defining module. See
+[Conductor facade guards](testing.md#conductor-facade-guards) for the enforcing tests.
+
 ### execution/
 
 The only layer permitted to reach a third party in ordinary code paths.
@@ -178,10 +203,10 @@ Intended layering is `types ← execution ← engine ← ui ← entry points`. M
 | tools → engine, types | — | Generators read engine metadata; the reverse never happens. |
 
 > **Known limitation.** `engine/` and `ui/` import each other, so the layering above is not enforceable
-> as a one-way rule. Engine-side value imports: `engine/conductor.ts:61` and `engine/event-persister.ts:4`
+> as a one-way rule. Engine-side value imports: `engine/conductor.ts:132` and `engine/event-persister.ts:4`
 > (`ConductorEventEmitter`), `engine/plugin-loader.ts:8-9` (`TerminalSubscriber`, `TerminalRenderer`).
 > UI-side value imports: `ui/terminal-renderer.ts:8,10`
-> (`getArtifactStatus`, `STEP_ARTIFACT_GLOBS`, `formatProgressDelta`), `ui/terminal/prompt-host.ts:14`
+> (`getArtifactStatus`, `STEP_ARTIFACT_GLOBS`, `formatProgressDelta`), `ui/terminal/prompt-host.ts:15`
 > (`getRecoveryOptions`). Moving a symbol between the two layers can therefore create a runtime
 > initialization cycle that the type checker will not flag. Tracked in
 > [#1017](https://github.com/jstoup111/ai-conductor/issues/1017).

@@ -139,7 +139,7 @@ checklist: add the name first, then fix every type error `npm run typecheck` rep
 | 6 | `src/conductor/src/engine/model-table-metadata.ts` | `STEP_RATIONALE` (`:14`) and, if a skill drives the step, `SKILL_STEP_MAP` (`:72`). Then regenerate ARCHITECTURE.md. |
 | 7 | `src/conductor/src/engine/skill-invocation.ts:11` | A `SkillInvocationDescriptor` in `STEP_SKILL_INVOCATIONS` — either `{ kind: 'skill', skillName, arguments }` or `{ kind: 'engine-native' }`. Path resolution happens in `engine/skill-resolver.ts:65`. |
 | 8 (optional) | `src/conductor/src/engine/artifacts.ts` | `CUSTOM_COMPLETION_PREDICATES` (`:1306`) when file globs cannot express completion, and `GATE_ONLY_PREDICATES` (`:2394`) when the step is a gate-loop-only check. Both are `Partial`, so neither errors if you skip it. |
-| 9 (optional) | `src/conductor/src/engine/step-runners.ts:322` | Dispatch behavior in `DefaultStepRunner`. The `StepRunner` interface is `engine/conductor.ts:527`, with `StepRunOptions` at `:477` and `StepRunResult` at `:363`. |
+| 9 (optional) | `src/conductor/src/engine/step-runners.ts:962` | Dispatch behavior in `DefaultStepRunner`. The `StepRunner` interface is `engine/step-runner-types.ts:327`, with `StepRunOptions` at `:229` and `StepRunResult` at `:16`. |
 
 Skip helpers live alongside `ALL_STEPS`: `shouldSkipForTier` (`:420`), `shouldSkipForTrack` (`:431`),
 `shouldSkipForBootstrapMode` (`:451`), `shouldSkipForUpstreamSkip` (`:465`).
@@ -197,7 +197,7 @@ machinery is `engine/gate-verdicts.ts` — `checkGateCompletion` (`:17`), `compu
 
 Routing over verdicts is `engine/selector.ts`: `gateSatisfied` (`:53`), `selectNextGate` (`:111`),
 `earliestUnsatisfiedGateIndex` (`:130`). Kickbacks are capped by `MAX_KICKBACKS_PER_GATE` in
-`engine/conductor.ts:319`.
+`engine/remediation-caps.ts:14`.
 
 Supporting machinery, if your gate needs it: `engine/gate-invalidation.ts`, `engine/gate-writeback.ts`,
 `engine/gate-code-validity.ts`, `engine/gated-snapshot.ts`.
