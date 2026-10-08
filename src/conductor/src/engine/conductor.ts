@@ -5083,10 +5083,16 @@ export class Conductor {
         : {}),
     });
     if (!projectionResult.ok) {
-      return {
-        kind: 'none',
-        reason: `remediation projection preparation fault (${projectionResult.fault.source}): ${projectionResult.fault.detail}`,
-      };
+      const { source, dimension, actual, limit, detail } = projectionResult.fault;
+      const bounds = actual === undefined || limit === undefined
+        ? ''
+        : ` (actual ${actual}, limit ${limit})`;
+      return this.haltForRemediationValidatorFault(
+        state,
+        hintSource,
+        `remediation projection input fault: source ${source}` +
+          `${dimension === undefined ? '' : `, dimension ${dimension}`}${bounds}: ${detail}`,
+      );
     }
     const maxAttempts = resolveStepConfig(
       'remediate',
@@ -5104,6 +5110,16 @@ export class Conductor {
         retryReason: dispatchContext,
         remediationRequest: { mode: 'gap-plan', projection: projectionResult.projection },
       });
+
+      // The native-schema preflight is a deterministic engine capability
+      // check. It cannot become true on a provider retry, so preserve its
+      // provider/capability diagnostic and halt before retry accounting.
+      if (
+        dispatch.output !== undefined &&
+        dispatch.output.startsWith('remediate gap-plan cannot enforce its native output schema')
+      ) {
+        return this.haltForRemediationValidatorFault(state, hintSource, dispatch.output);
+      }
 
       // These are already classified at the provider boundary. They are not
       // malformed or absent plans, so do not turn a credential, throttle, or
@@ -6449,6 +6465,35 @@ export class Conductor {
     await this.writeHaltMarker(reason + '\n', 'mechanical');
     await this.persistPendingStateChanges(state, 'persist conductor transition');
     await this.emitLoopHalt(reason);
+  }
+
+  /**
+   * Planner input and native-schema faults are deterministic validator
+   * preconditions too. Preserve a build-stall's operator question in the
+   * marker, then stop before a retry can re-dispatch an incapable provider.
+   */
+  private async haltForRemediationValidatorFault(
+    state: ConductState,
+    hintSource: RemediationHintSource,
+    detail: string,
+  ): Promise<{
+    kind: 'halt';
+    detail: string;
+    haltClass: 'mechanical';
+  }> {
+    const stallEvidence = hintSource.source === 'build-stall' ||
+      hintSource.source === 'build_stall' ||
+      hintSource.source === 'build_stall_zero_work'
+      ? hintSource.evidence.find((entry) => entry.gate === 'build')
+      : undefined;
+    const stallQuestion = stallEvidence === undefined
+      ? undefined
+      : await this.readTextOrNull(join(this.projectRoot, stallEvidence.evidenceFile));
+    const reason = stallQuestion === null || stallQuestion === undefined || stallQuestion === ''
+      ? detail
+      : `${stallQuestion}\n\n${detail}`;
+    await this.haltForValidatorFault(state, reason);
+    return { kind: 'halt', detail: reason, haltClass: 'mechanical' };
   }
 
   /** Resolve the strict merged-history verdict for the recorded implementation PR. */

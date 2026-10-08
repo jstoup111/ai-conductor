@@ -57,6 +57,13 @@ async function fixture(
     { kind: 'structured', finalStructuredResult: output() },
   ],
   maxRetries = 2,
+  options: {
+    nativeSchema?: boolean;
+    planText?: string;
+    source?: string;
+    evidenceFile?: string;
+    stallQuestion?: string;
+  } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), 'conductor-remediation-typed-plan-'));
   roots.push(root);
@@ -65,7 +72,7 @@ async function fixture(
     mkdir(join(root, '.docs', 'plans'), { recursive: true }),
     mkdir(join(root, '.pipeline'), { recursive: true }),
   ]);
-  await writeFile(planPath, `${plan}\n`, 'utf8');
+  await writeFile(planPath, `${options.planText ?? plan}\n`, 'utf8');
   await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }), 'utf8');
   await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({
     tasks: Array.from({ length: 8 }, (_, index) => ({ id: String(index + 1), status: 'completed' })),
@@ -99,6 +106,10 @@ async function fixture(
     key,
     outcomes,
   });
+  if (options.nativeSchema === false) {
+    (provider.runtime as { nativeSchemaCapability: { nativeOutputSchema: boolean } })
+      .nativeSchemaCapability = { nativeOutputSchema: false };
+  }
   const config = {
     llm_provider: key,
     steps: { remediate: { llm_provider: key, max_retries: maxRetries } },
@@ -126,18 +137,29 @@ async function fixture(
     verifyArtifacts: false,
     config,
   });
+  const source = options.source ?? 'prd-audit';
+  const evidenceFile = options.evidenceFile ?? '.pipeline/prd-audit.md';
+  if (options.stallQuestion !== undefined) {
+    await writeFile(join(root, evidenceFile), options.stallQuestion, 'utf8');
+  }
+  const state = { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState;
+  // This focused planner seam normally runs after Conductor.run has captured
+  // the mutation baseline. Seed that lifecycle-owned baseline so a mechanical
+  // halt can persist through the same state transition port.
+  await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify(state), 'utf8');
+  (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...state };
   const outcome = await (conductor as unknown as {
     planRemediation(
       state: ConductState,
       steps: typeof ALL_STEPS,
       context: string,
-      source: { source: string; evidence: readonly { gate: 'prd_audit'; evidenceFile: string }[] },
+      source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
     ): Promise<{ kind: string; target?: string; hint?: string }>;
   }).planRemediation(
-    { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+    state,
     ALL_STEPS,
     'PRD audit reported repairable criteria.',
-    { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    { source, evidence: [{ gate: source.includes('stall') ? 'build' : 'prd_audit', evidenceFile }] } as never,
   );
   return { root, planPath, provider, outcome, blockedReasons };
 }
@@ -251,5 +273,45 @@ describe('Conductor typed remediation-plan admission', () => {
     expect(result.outcome).toMatchObject({ kind: 'none' });
     expect(result.blockedReasons).not.toContain('remediation planner produced no current typed plan');
     expect(result.blockedReasons).not.toContain('structured-result-missing');
+  });
+
+  // Covers: task:21
+  it('halts mechanically for a gap-plan provider without native-schema capability before retrying', async () => {
+    const result = await fixture('claude', undefined, 2, { nativeSchema: false });
+
+    expect(result.outcome).toMatchObject({ kind: 'halt' });
+    expect(result.provider.invocationCount).toBe(0);
+    await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(
+      /candidate set \[claude\].*nativeSchemaCapability\.nativeOutputSchema/s,
+    );
+    await expect(readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:21
+  it('halts mechanically for a bounded remediation projection input fault before provider dispatch', async () => {
+    const oversizedTask = 'x'.repeat(600);
+    const oversizedPlan = plan.replace('Authored task 1', oversizedTask);
+    const result = await fixture('codex', undefined, 2, { planText: oversizedPlan });
+
+    expect(result.outcome).toMatchObject({ kind: 'halt' });
+    expect(result.provider.invocationCount).toBe(0);
+    await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(
+      /source prd-audit, dimension tasks \(actual \d+, limit \d+\)/,
+    );
+    await expect(readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:21
+  it('retains the build-stall question verbatim on a mechanical capability halt', async () => {
+    const question = 'Which verified input should unblock this stalled build?';
+    const result = await fixture('claude', undefined, 2, {
+      nativeSchema: false,
+      source: 'build-stall',
+      evidenceFile: '.pipeline/build-stall-question.md',
+      stallQuestion: question,
+    });
+
+    expect(result.provider.invocationCount).toBe(0);
+    await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(question);
   });
 });
