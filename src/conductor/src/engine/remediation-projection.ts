@@ -365,6 +365,7 @@ export async function buildRemediationProjection(
     if (current.kind !== 'present') return verdictFault('prd-audit verdict', current.reason);
     for (const judgment of current.value.judgment.criterionJudgments) {
       if (judgment.grade !== 'FIXABLE') continue;
+      if (judgment.ownerTaskId === undefined) continue;
       requiredReferences.push({
         kind: 'prd-criterion',
         id: judgment.criterionId,
@@ -386,7 +387,9 @@ export async function buildRemediationProjection(
     if (current.kind !== 'present') {
       return verdictFault('as-built verdict', current.kind === 'absent'
         ? 'architecture-review-as-built typed verdict is missing'
-        : current.reason);
+        : current.kind === 'prior-version'
+          ? `architecture-review-as-built typed verdict uses prior contract version ${current.version}`
+          : current.reason);
     }
     if (current.value.verdict.verdict === 'BLOCKED') {
       for (const finding of current.value.verdict.findings) {

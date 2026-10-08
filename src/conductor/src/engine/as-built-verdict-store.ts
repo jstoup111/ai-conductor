@@ -3,7 +3,6 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import {
-  AS_BUILT_VERDICT_CONTRACT_VERSION,
   isAsBuiltGoverningReference,
   stampAsBuiltFindingIds,
   validateAsBuiltVerdict,
@@ -59,7 +58,7 @@ function validRecordedFinding(value: unknown): value is RecordedAsBuiltFinding {
 }
 
 function isPriorAsBuiltVerdict(value: unknown): value is { readonly version: 'v1' } {
-  return isRecord(value) && value.version === 'v1' && value.version !== AS_BUILT_VERDICT_CONTRACT_VERSION;
+  return isRecord(value) && value.version === 'v1';
 }
 
 type PersistedVerdictValidation =
@@ -69,11 +68,11 @@ type PersistedVerdictValidation =
 /** Persisted v2 findings must be the exact engine stamp of the provider contract result. */
 function validatePersistedAsBuiltVerdict(value: unknown, attemptId: string): PersistedVerdictValidation {
   if (!isRecord(value)) return { ok: false, field: '', requirement: 'a verdict object is required' };
-  const rawFindings = value.verdict === 'BLOCKED' ? value.findings : undefined;
-  if (value.verdict === 'BLOCKED' && !Array.isArray(rawFindings)) {
+  const rawFindings = value.verdict === 'BLOCKED' && Array.isArray(value.findings) ? value.findings : undefined;
+  if (value.verdict === 'BLOCKED' && rawFindings === undefined) {
     return { ok: false, field: 'findings', requirement: 'an array of blocking findings is required' };
   }
-  const providerFindings = rawFindings?.map((finding, index) => {
+  const providerFindings = rawFindings?.map((finding: unknown, index: number) => {
     if (!isRecord(finding) || typeof finding.id !== 'string' || finding.id.length === 0) {
       return { error: { ok: false as const, field: `findings[${index}].id`, requirement: 'an engine-stamped finding id is required' } };
     }
@@ -81,7 +80,7 @@ function validatePersistedAsBuiltVerdict(value: unknown, attemptId: string): Per
     return { providerFinding };
   });
   const badFinding = providerFindings?.find((entry) => 'error' in entry);
-  if (badFinding !== undefined && 'error' in badFinding) return badFinding.error;
+  if (badFinding !== undefined && 'error' in badFinding) return badFinding.error!;
   const providerValue = rawFindings === undefined
     ? value
     : { ...value, findings: providerFindings!.map((entry) => ('providerFinding' in entry ? entry.providerFinding : undefined)) };

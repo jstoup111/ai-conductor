@@ -86,6 +86,7 @@ import {
   AS_BUILT_REPORT_PATH,
   AS_BUILT_VERDICT_PATH,
 } from './as-built-verdict-store.js';
+import { AS_BUILT_VERDICT_CONTRACT_VERSION } from './as-built-contract.js';
 import {
   PRD_AUDIT_REPORT_PATH,
   PRD_AUDIT_VERDICT_PATH,
@@ -3400,6 +3401,13 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     if (stored.kind === 'unreadable') {
       return { done: false, reason: stored.reason, routeClass: 'absent' };
+    }
+    if (stored.kind === 'prior-version') {
+      return {
+        done: false,
+        reason: `${AS_BUILT_VERDICT_PATH} has prior contract version ${stored.version}; a fresh ${AS_BUILT_VERDICT_CONTRACT_VERSION} verdict is required`,
+        routeClass: 'absent',
+      };
     }
     const artifact = join(dir, AS_BUILT_VERDICT_PATH);
     let codeStampStillValid = false;
