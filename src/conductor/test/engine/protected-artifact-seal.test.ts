@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:5
+// Covers: task:1, task:2, task:3, task:4, task:5
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
@@ -1710,6 +1710,99 @@ describe('evaluateProtectedArtifactSealRotation', () => {
 });
 
 describe('rotateProtectedArtifactSeal', () => {
+  it('persists a one-path inherited-base-deletion prune without rotating the baseline', async () => {
+    const path = '.docs/plans/retired.md';
+    const deletedBy = 'd'.repeat(40);
+    const repo = await makeRepo({ [path]: 'retired plan\n' });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const seal = await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+
+    await rotateProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: baselineCommit,
+      trigger: 'history-rewrite',
+      paths: [],
+      prune: { paths: [path], deletedBy: { [path]: deletedBy } },
+    });
+
+    await expect(readFile(sealPath, 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      baselineCommit,
+      protectedArtifacts: [],
+      rebaselines: [{
+        fromCommit: baselineCommit,
+        toCommit: baselineCommit,
+        trigger: 'inherited-base-deletion',
+        paths: [path],
+        deletedBy: { [path]: deletedBy },
+      }],
+    });
+  });
+
+  it('records two pruned paths with their individual deleting commits in one entry', async () => {
+    const paths = ['.docs/plans/retired-one.md', '.docs/plans/retired-two.md'];
+    const deletedBy = {
+      [paths[0]!]: 'a'.repeat(40),
+      [paths[1]!]: 'b'.repeat(40),
+    };
+    const repo = await makeRepo(Object.fromEntries(paths.map((path) => [path, 'retired plan\n'])));
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const seal = await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+
+    const rotated = await rotateProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: baselineCommit,
+      trigger: 'history-rewrite',
+      paths: [],
+      prune: { paths, deletedBy },
+    });
+
+    expect(rotated.rebaselines).toEqual([{
+      fromCommit: baselineCommit,
+      toCommit: baselineCommit,
+      trigger: 'inherited-base-deletion',
+      paths,
+      deletedBy,
+    }]);
+  });
+
+  it('leaves no prune write or notification when its atomic rename fails', async () => {
+    const path = '.docs/plans/retired.md';
+    const repo = await makeRepo({ [path]: 'retired plan\n' });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const seal = await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    const originalBytes = await readFile(sealPath, 'utf8');
+    const notifications: ProtectedArtifactSealRebaselineEvent[] = [];
+
+    await expect(rotateProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: baselineCommit,
+      trigger: 'history-rewrite',
+      paths: [],
+      prune: { paths: [path], deletedBy: { [path]: 'd'.repeat(40) } },
+      onRebaseline: (event) => { notifications.push(event); },
+      fileOperations: {
+        writeFile,
+        rename: async () => { throw new Error('injected rename failure'); },
+        rm,
+      },
+    })).rejects.toThrow('injected rename failure');
+
+    expect({
+      persistedBytes: await readFile(sealPath, 'utf8'),
+      sealDirectoryEntries: await readdir(dirname(sealPath)),
+      notifications,
+    }).toEqual({
+      persistedBytes: originalBytes,
+      sealDirectoryEntries: ['protected-artifact-seal.json'],
+      notifications: [],
+    });
+  });
+
   it('pins the persisted snapshot and notification produced by a permitted rotation', async () => {
     const repo = await makeRepo({
       '.docs/plans/feature.md': 'approved plan\n',

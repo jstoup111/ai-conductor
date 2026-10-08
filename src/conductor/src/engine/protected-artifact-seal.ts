@@ -178,6 +178,8 @@ export interface RotateProtectedArtifactSealOptions {
   excludedBaseAheadPaths?: string[];
   excludedOperatorResealedPaths?: string[];
   includedEngineAppendedPaths?: string[];
+  /** Base-inherited protected artifacts to remove from the next sealed snapshot. */
+  prune?: { paths: string[]; deletedBy: Record<string, string> };
   fileOperations?: ProtectedArtifactSealFileOperations;
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
@@ -1440,6 +1442,7 @@ export async function rotateProtectedArtifactSeal({
   excludedBaseAheadPaths,
   excludedOperatorResealedPaths,
   includedEngineAppendedPaths,
+  prune,
   fileOperations = { writeFile, rename, rm },
   onRebaseline,
 }: RotateProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
@@ -1453,6 +1456,7 @@ export async function rotateProtectedArtifactSeal({
     excludedBaseAheadPaths,
     excludedOperatorResealedPaths,
     includedEngineAppendedPaths,
+    prune,
     fileOperations,
     onRebaseline,
   });
@@ -1494,6 +1498,7 @@ interface PersistProtectedArtifactSealRotationOptions {
   excludedBaseAheadPaths?: string[];
   excludedOperatorResealedPaths?: string[];
   includedEngineAppendedPaths?: string[];
+  prune?: { paths: string[]; deletedBy: Record<string, string> };
   reason?: string;
   fileOperations: ProtectedArtifactSealFileOperations;
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
@@ -1508,21 +1513,38 @@ async function persistProtectedArtifactSealRotation({
   excludedBaseAheadPaths,
   excludedOperatorResealedPaths,
   includedEngineAppendedPaths,
+  prune,
   reason,
   fileOperations,
   onRebaseline,
 }: PersistProtectedArtifactSealRotationOptions): Promise<ProtectedArtifactSeal> {
-  const rotated: ProtectedArtifactSeal = {
-    ...recomputed,
-    rebaselines: [
-      ...seal.rebaselines,
-      {
+  const pruneEntry = prune && prune.paths.length > 0
+    ? {
+        fromCommit: seal.baselineCommit,
+        toCommit: seal.baselineCommit,
+        trigger: 'inherited-base-deletion',
+        paths: prune.paths,
+        deletedBy: prune.deletedBy,
+      }
+    : undefined;
+  const rotationEntry = !pruneEntry || paths.length > 0
+    ? {
         fromCommit: seal.baselineCommit,
         toCommit: recomputed.baselineCommit,
         trigger,
         paths,
         ...(reason === undefined ? {} : { reason }),
-      },
+      }
+    : undefined;
+  const rotated: ProtectedArtifactSeal = {
+    ...recomputed,
+    protectedArtifacts: pruneEntry
+      ? recomputed.protectedArtifacts.filter(({ path }) => !pruneEntry.paths.includes(path))
+      : recomputed.protectedArtifacts,
+    rebaselines: [
+      ...seal.rebaselines,
+      ...(pruneEntry ? [pruneEntry] : []),
+      ...(rotationEntry ? [rotationEntry] : []),
     ],
   };
   const sealPath = join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH);
@@ -1533,18 +1555,23 @@ async function persistProtectedArtifactSealRotation({
   try {
     await fileOperations.writeFile(temporaryPath, `${JSON.stringify(rotated, null, 2)}\n`);
     await fileOperations.rename(temporaryPath, sealPath);
-    await notifyRebaselineObserver(onRebaseline, {
-      type: 'protected_artifact_rebaseline',
-      trigger,
-      fromCommit: seal.baselineCommit,
-      toCommit: recomputed.baselineCommit,
-      paths,
-      ...(excludedBaseAheadPaths && excludedBaseAheadPaths.length > 0 ? { excludedBaseAheadPaths } : {}),
-      ...(excludedOperatorResealedPaths && excludedOperatorResealedPaths.length > 0
-        ? { excludedOperatorResealedPaths } : {}),
-      ...(includedEngineAppendedPaths && includedEngineAppendedPaths.length > 0
-        ? { includedEngineAppendedPaths } : {}),
-    });
+    if (pruneEntry) {
+      await notifyRebaselineObserver(onRebaseline, {
+        type: 'protected_artifact_rebaseline',
+        ...pruneEntry,
+      });
+    }
+    if (rotationEntry) {
+      await notifyRebaselineObserver(onRebaseline, {
+        type: 'protected_artifact_rebaseline',
+        ...rotationEntry,
+        ...(excludedBaseAheadPaths && excludedBaseAheadPaths.length > 0 ? { excludedBaseAheadPaths } : {}),
+        ...(excludedOperatorResealedPaths && excludedOperatorResealedPaths.length > 0
+          ? { excludedOperatorResealedPaths } : {}),
+        ...(includedEngineAppendedPaths && includedEngineAppendedPaths.length > 0
+          ? { includedEngineAppendedPaths } : {}),
+      });
+    }
     return rotated;
   } catch (error) {
     operationFailed = true;
