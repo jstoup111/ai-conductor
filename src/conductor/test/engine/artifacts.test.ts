@@ -123,7 +123,7 @@ async function writeApprovedAsBuiltVerdict(
 ): Promise<void> {
   await persistAsBuiltVerdict(
     directory,
-    { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] },
+    { version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] },
     { attemptId, codeStamp, policy: AS_BUILT_TEST_POLICY },
   );
 }
@@ -5993,7 +5993,7 @@ Task 1 → Task 2
         gdir = await makeGitDir();
         await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
         await persistAsBuiltVerdict(gdir, {
-          version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+          version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
           findings: [{ id: 'ARCH-1', class: 'DESIGN', summary: 'A decision is required.' }],
           violations: 'architecture gap', resolution: 'make a decision',
         }, { attemptId: 'current-run', codeStamp: null, policy: AS_BUILT_TEST_POLICY });

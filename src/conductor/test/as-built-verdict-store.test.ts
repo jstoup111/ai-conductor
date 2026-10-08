@@ -23,7 +23,7 @@ describe('as-built typed verdict store', () => {
     const dir = await mkdtemp(join(tmpdir(), 'as-built-store-'));
     dirs.push(dir);
     await persistAsBuiltVerdict(dir, {
-      version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
       findings: [{ id: 'AB-1', class: 'DESIGN', summary: 'needs a decision' }],
       violations: 'the decision is unresolved', resolution: 'choose a design',
     }, { attemptId: 'attempt-1', codeStamp: 'abc123', policy });
@@ -32,7 +32,7 @@ describe('as-built typed verdict store', () => {
     expect(stored).toMatchObject({
       kind: 'present', value: { attemptId: 'attempt-1', codeStamp: 'abc123', verdict: { verdict: 'BLOCKED' } },
     });
-    expect(await readFile(join(dir, AS_BUILT_REPORT_PATH), 'utf8')).toContain('| AB-1 | DESIGN | none | needs a decision |');
+    expect(await readFile(join(dir, AS_BUILT_REPORT_PATH), 'utf8')).toContain('| as-built:attempt-1:1 | DESIGN | none | needs a decision |');
   });
 
   it('fails closed for an unreadable envelope and never reads the report as authority', async () => {

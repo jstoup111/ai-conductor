@@ -32,7 +32,7 @@ describe('as-built typed verdict authority', () => {
   it('accepts a delivered plan gap only from the typed envelope', async () => {
     const root = await fixture();
     await persistAsBuiltVerdict(root, {
-      version: 'v1', verdict: 'PLAN_GAP', reachability: [], driftNotes: [],
+      version: 'v2', verdict: 'PLAN_GAP', reachability: [], driftNotes: [],
       outcomeDelivered: true, affectedOutcome: 'The plan is the limit.',
     }, { attemptId: 'fixture-run', codeStamp: null, policy });
 
@@ -59,7 +59,7 @@ describe('as-built typed verdict authority', () => {
   it('keeps a typed remediable verdict on the repair route', async () => {
     const root = await fixture();
     await persistAsBuiltVerdict(root, {
-      version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
       findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Repair it' }],
       violations: 'repair', resolution: 'repair',
     }, { attemptId: 'fixture-run', codeStamp: null, policy });

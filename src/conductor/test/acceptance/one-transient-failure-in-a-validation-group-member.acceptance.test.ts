@@ -34,7 +34,7 @@ async function writePrdAuditPass(dir: string, options?: StepRunOptions): Promise
 
 async function writeAsBuiltApproval(dir: string, options?: StepRunOptions): Promise<void> {
   await persistAsBuiltVerdict(dir, {
-    version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+    version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
   }, {
     attemptId: options?.runId ?? 'test-run',
     codeStamp: null,

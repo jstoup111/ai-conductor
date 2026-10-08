@@ -21,6 +21,7 @@ import {
 import {
   resolveAsBuiltReferences,
   validateAsBuiltVerdict,
+  type AsBuiltProviderVerdict,
   type AsBuiltVerdict,
 } from '../../src/engine/as-built-contract.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
@@ -55,7 +56,7 @@ async function writePrdAuditPass(root: string, attemptId = 'fixture-run'): Promi
   await persistPrdAuditVerdict(root, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'fixture.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId, codeStamp: 'fixture-head' });
 }
 
-async function persist(root: string, verdict: AsBuiltVerdict, runId: string | undefined): Promise<void> {
+async function persist(root: string, verdict: AsBuiltProviderVerdict | AsBuiltVerdict, runId: string | undefined): Promise<void> {
   await persistAsBuiltVerdict(root, verdict, {
     attemptId: runId ?? 'test-run',
     codeStamp: null,

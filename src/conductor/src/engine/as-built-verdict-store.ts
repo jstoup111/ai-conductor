@@ -8,6 +8,7 @@ import {
   validateAsBuiltVerdict,
   type AsBuiltFinding,
   type AsBuiltGoverningReference,
+  type AsBuiltProviderVerdict,
   type AsBuiltVerdict,
 } from './as-built-contract.js';
 import { AS_BUILT_CHECKS, type AsBuiltPolicy } from './as-built-policy.js';
@@ -152,13 +153,17 @@ async function atomicWrite(path: string, contents: string): Promise<void> {
 
 export async function persistAsBuiltVerdict(
   worktree: string,
-  verdict: AsBuiltVerdict,
+  verdict: AsBuiltProviderVerdict | AsBuiltVerdict,
   input: { readonly attemptId: string; readonly codeStamp: string | null; readonly policy: AsBuiltPolicy; readonly recordedFindings?: readonly RecordedAsBuiltFinding[] },
 ): Promise<PersistedAsBuiltVerdict> {
+  // Persistence is the final authority boundary. Stamp here as well as at
+  // dispatch validation so every writer, including recovery paths, records
+  // only attempt-qualified identities.
+  const stampedVerdict = stampAsBuiltFindingIds(verdict, input.attemptId);
   const value: PersistedAsBuiltVerdict = {
     attemptId: input.attemptId,
     codeStamp: input.codeStamp,
-    verdict,
+    verdict: stampedVerdict,
     policy: input.policy,
     recordedFindings: input.recordedFindings ?? [],
   };

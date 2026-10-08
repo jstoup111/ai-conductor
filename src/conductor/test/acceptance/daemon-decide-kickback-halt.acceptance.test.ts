@@ -194,7 +194,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       );
     } else if (step === 'architecture_review_as_built') {
       await persistAsBuiltVerdict(dir,
-        { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] },
+        { version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] },
         { attemptId: options?.runId ?? 'test-run', codeStamp: null, policy: AS_BUILT_TEST_POLICY },
       );
     } else if (step === 'finish') {

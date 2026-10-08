@@ -437,7 +437,7 @@ async function createAsBuiltRemediationCapFixture(input: {
   await writeFile(planPath, plan);
   await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
   await persistAsBuiltVerdict(root, {
-    version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+    version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
     findings: findings.map((finding) => ({
       id: finding.id,
       class: 'REMEDIABLE' as const,
@@ -851,7 +851,7 @@ async function runRefusalReworkRun(input: {
         await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: gaps }));
       } else if (step === 'architecture_review_as_built') {
         await persistAsBuiltVerdict(root, input.asBuilt === 'blocked-remediable' ? {
-          version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+          version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
           findings: [{
             id: 'AB-1', class: 'REMEDIABLE',
             reference: { kind: 'plan-task', taskId: '1' },
@@ -1614,7 +1614,7 @@ describe('prd_audit kickback', () => {
           }
         } else if (step === 'architecture_review_as_built') {
           await persistAsBuiltVerdict(root, {
-            version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+            version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
           }, {
             attemptId: options?.runId ?? 'test-run',
             codeStamp: null,
@@ -2062,7 +2062,7 @@ describe('prd_audit kickback', () => {
         run: async (step, _state, options) => {
           if (step === 'architecture_review_as_built') {
             await persistAsBuiltVerdict(fixture.root, {
-              version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+              version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
             }, {
               attemptId: options?.runId ?? 'test-run',
               codeStamp: null,

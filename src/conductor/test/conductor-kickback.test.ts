@@ -168,7 +168,7 @@ describe('validation-group kickback restages', () => {
         } else if (step === 'architecture_review_as_built') {
           await persistAsBuiltVerdict(dir, input.gapMembers.includes('architecture_review_as_built')
             ? {
-              version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+              version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
               findings: [{
                 id: 'ARCH-1', class: 'REMEDIABLE',
                 reference: { kind: 'plan-task', taskId: '1' }, summary: 'Missing guard',

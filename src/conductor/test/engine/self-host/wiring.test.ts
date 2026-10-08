@@ -186,7 +186,7 @@ async function writeValidatorArtifact(
     // runner must therefore produce the same run-identified result as the
     // real provider path, rather than a Markdown-only legacy fixture.
     await persistAsBuiltVerdict(projectRoot, {
-      version: 'v1',
+      version: 'v2',
       verdict: 'APPROVED',
       reachability: [],
       driftNotes: [],

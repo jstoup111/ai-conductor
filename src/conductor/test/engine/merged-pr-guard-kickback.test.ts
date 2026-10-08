@@ -66,7 +66,7 @@ async function markerExists(dir: string, rel: string): Promise<boolean> {
 
 async function writeAsBuiltApproval(dir: string, attemptId: string): Promise<void> {
   await persistAsBuiltVerdict(dir, {
-    version: 'v1',
+    version: 'v2',
     verdict: 'APPROVED',
     reachability: [],
     driftNotes: [],

@@ -78,7 +78,7 @@ async function writePrdAuditVerdict(
 
 async function writeRemediableAsBuiltVerdict(root: string, runId: string | undefined): Promise<void> {
   await persistAsBuiltVerdict(root, {
-    version: 'v1',
+    version: 'v2',
     verdict: 'BLOCKED',
     reachability: [],
     driftNotes: [],
@@ -99,7 +99,7 @@ async function writeRemediableAsBuiltVerdict(root: string, runId: string | undef
 
 async function writeMixedDesignAsBuiltVerdict(root: string, runId: string | undefined): Promise<void> {
   await persistAsBuiltVerdict(root, {
-    version: 'v1',
+    version: 'v2',
     verdict: 'BLOCKED',
     reachability: [],
     driftNotes: [],

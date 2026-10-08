@@ -251,7 +251,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
       }, { attemptId: options?.runId ?? 'test-run', codeStamp: await git('rev-parse', 'HEAD') });
     } else if (step === 'architecture_review_as_built') {
       await persistAsBuiltVerdict(dir, {
-        version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+        version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
       }, {
         attemptId: options?.runId ?? 'test-run',
         codeStamp: null,

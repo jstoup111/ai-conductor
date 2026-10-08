@@ -270,7 +270,7 @@ async function writePrdAuditVerdict(
 
 async function writeAsBuiltApprovedVerdict(repo: string, codeStamp?: string): Promise<void> {
   await persistAsBuiltVerdict(repo, {
-    version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+    version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
   }, {
     attemptId: 'test-run',
     codeStamp: codeStamp ?? null,

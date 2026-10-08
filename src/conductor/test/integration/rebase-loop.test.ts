@@ -436,7 +436,7 @@ describe('integration/rebase-loop', () => {
       const codeStamp = await git('rev-parse', 'HEAD');
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });
       await persistAsBuiltVerdict(dir, {
-        version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+        version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
       }, {
         attemptId: options?.runId ?? 'test-run',
         codeStamp,

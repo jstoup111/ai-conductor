@@ -840,7 +840,7 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
     // The typed envelope is the as-built gate's authority; the Markdown
     // report is rendered from it by the production writer.
     await persistAsBuiltVerdict(conductorRoot, {
-      version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+      version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
     }, {
       attemptId: 'test-run',
       codeStamp: null,
@@ -948,7 +948,7 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
     });
     await writeState(stateFilePath, state as ConductState);
     await persistAsBuiltVerdict(conductorRoot, {
-      version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+      version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
     }, {
       attemptId: 'test-run',
       codeStamp: null,

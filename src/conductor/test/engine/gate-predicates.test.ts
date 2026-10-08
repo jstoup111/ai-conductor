@@ -209,7 +209,7 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
   });
 
   it('passes on a typed clean APPROVED verdict', async () => {
-    await persist({ version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] });
+    await persist({ version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] });
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(true);
     expect(r.routeClass).toBeUndefined();
@@ -218,7 +218,7 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
 
   it('passes on typed APPROVED WITH DRIFT NOTES', async () => {
     await persist({
-      version: 'v1', verdict: 'APPROVED WITH DRIFT NOTES', reachability: [],
+      version: 'v2', verdict: 'APPROVED WITH DRIFT NOTES', reachability: [],
       driftNotes: [{ note: 'diagram stale' }],
     });
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
@@ -227,8 +227,8 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
 
   it('fails on a typed BLOCKED design verdict', async () => {
     await persist({
-      version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
-      findings: [{ id: 'ARCH-1', class: 'DESIGN', summary: 'A decision is required.' }],
+      version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [{ id: 'as-built:attempt-1:1', class: 'DESIGN', summary: 'A decision is required.' }],
       violations: 'architecture conflict', resolution: 'make a decision',
     });
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
@@ -256,7 +256,7 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
   });
 
   it('scores a prior attempt identity as no fresh verdict regardless of mtime', async () => {
-    const stored = await persist({ version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] }, 'prior-attempt');
+    const stored = await persist({ version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] }, 'prior-attempt');
     const old = new Date(Date.now() - 60 * 60 * 1000);
     const full = join(dir, '.pipeline/architecture-review-as-built.json');
     await utimes(full, old, old);
@@ -269,7 +269,7 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
   });
 
   it('passes a matching typed attempt identity even when its artifact mtime is old', async () => {
-    await persist({ version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] }, 'current-attempt');
+    await persist({ version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] }, 'current-attempt');
     const full = join(dir, '.pipeline/architecture-review-as-built.json');
     const old = new Date(Date.now() - 60 * 60 * 1000);
     await utimes(full, old, old);
@@ -559,7 +559,7 @@ describe('engine/artifacts — verdict-freshness floor regression/fallback', () 
 
   it('(c) idempotency: repeated evaluation of identical on-disk state yields an identical decision + reason', async () => {
     await persistAsBuiltVerdict(dir, {
-      version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+      version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
     }, { attemptId: 'idempotent-attempt', codeStamp: null, policy: AS_BUILT_POLICY });
     const ctx = { attemptRunId: 'idempotent-attempt' };
 

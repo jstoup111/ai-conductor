@@ -37,7 +37,7 @@ const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
 
 async function writeBlockedAsBuiltFixture(projectRoot: string, id = 'ARCH-1'): Promise<void> {
   await persistAsBuiltVerdict(projectRoot, {
-    version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+    version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
     findings: [{
       id, class: 'REMEDIABLE',
       reference: { kind: 'plan-task', taskId: '1' },
