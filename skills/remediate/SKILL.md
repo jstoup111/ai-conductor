@@ -224,10 +224,7 @@ other gap should be turned into concrete work.
   must change or be clarified, or HALT for architectural clarity when a human decision is required.
 - **Coverage and planning judgment.** An implementation gap is ordinarily BUILD work; use
   `acceptance_specs` when the real miss is acceptance coverage. A baseline-passing test that needs
-  strengthening within an existing task's RED/GREEN work is BUILD work, not a planning omission. A
-  `plan` route is for an in-scope plan omission, not an architecture or design decision: before
-  selecting `plan`, examine the approved tasks and use it only when none admits the repair. A `plan`
-  route is terminal in a daemon run and never re-plans.
+  strengthening within an existing task's RED/GREEN work is BUILD work, not a planning omission. A `plan` route is for an in-scope planning omission, not an architecture or design decision: before selecting `plan`, examine the approved tasks and use `plan` only when none admits the repair. A `plan` route is terminal in a daemon run and never re-plans.
 - **Recorded RED exception.** An acceptance-spec repair may waive separate RED proof only when the
   acceptance spec and its implementation must be repaired atomically. Record a non-empty reason and
   attributable approval; report the result as waived, never as proven RED. Otherwise use the ordinary
