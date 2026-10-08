@@ -1515,6 +1515,37 @@ export async function resealProtectedArtifactSeal({
   featureDesc,
   baseBranch,
 }: ResealProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
+  // Preserve scoped reseal's input contract before the broader inspection.
+  // The inspection can legitimately need base provenance for inherited
+  // deletions, but invalid scope must not be recast as provenance failure.
+  if (paths.length === 0) {
+    throw new Error('Scoped protected artifact reseal requires at least one path');
+  }
+  const sealedPaths = new Set(seal.protectedArtifacts.map((artifact) => artifact.path));
+  for (const path of paths) {
+    if (!isProtectedArtifactPath(path)) {
+      throw new Error(`Protected artifact reseal target is not protected: ${path}`);
+    }
+    if (!sealedPaths.has(path)) {
+      throw new Error(`Protected artifact reseal target is not sealed: ${path}`);
+    }
+  }
+  const target = await execa('git', ['rev-parse', '--verify', '--quiet', `${toCommit}^{commit}`], {
+    cwd: projectRoot,
+    reject: false,
+  }).catch(() => undefined);
+  if (!target || target.exitCode !== 0) {
+    throw new Error(`Protected artifact reseal target commit is unresolvable: ${toCommit}`);
+  }
+  // A base-aware reseal may prune an inherited deletion. Without a base branch
+  // there is no permitted provenance path, so retain the scoped target error.
+  if (!baseBranch) {
+    for (const path of paths) {
+      if (await readContainedProtectedArtifact(projectRoot, path) === undefined) {
+        throw new Error(`Protected artifact reseal target is deleted: ${path}`);
+      }
+    }
+  }
   const classification = await inspectSeal(projectRoot, seal, featureDesc, baseBranch, new Set(paths));
   if (!classification.ok) throw new Error(classification.reason);
   // The initial inspection deliberately excludes requested paths: those paths
