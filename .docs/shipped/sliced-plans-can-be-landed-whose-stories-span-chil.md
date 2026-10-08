@@ -23,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","9b2c0571-3804-4c5f-839c-24e20db19709","lifecycle-step","architecture_review_as_built"],step:execution\u0000["timing-rollup","persisted-ledger","cd7ad06b-882b-4872-b0f0-9e2c9b51997e","lifecycle-step","finish"],step:execution\u0000["timing-rollup","persisted-ledger","f1078b65-1b19-419c-9df5-64739c9582ca","lifecycle-step","prd_audit"]
+reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","9b2c0571-3804-4c5f-839c-24e20db19709","lifecycle-step","architecture_review_as_built"],step:execution\u0000["timing-rollup","persisted-ledger","f1078b65-1b19-419c-9df5-64739c9582ca","lifecycle-step","prd_audit"]
 
 ## Build Review
 laps_to_pass: 2
