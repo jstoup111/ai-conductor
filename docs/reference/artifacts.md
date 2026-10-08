@@ -219,6 +219,7 @@ interface ProtectedArtifactSeal {
     toCommit: string;
     trigger: string;
     paths: string[];
+    deletedBy?: Record<string, string>; // inherited-base-deletion entries only
   }[];
 }
 ```
@@ -274,6 +275,14 @@ Verification also tolerates these cases without halting:
   `HEAD`'s blob. The feature is simply behind an older revision it already carried forward untouched;
   this is neither a local amendment nor an uncommitted edit, so it is tolerated the same as base-branch
   inheritance.
+- **Base-inherited deletion** — a sealed artifact is missing because the base branch deleted it and
+  this feature never touched the path since the merge-base. Verification resolves the deleting base
+  commit (`git log -1 --diff-filter=D <base> -- <path>`) and prunes the path from the seal. It appends
+  an `inherited-base-deletion` entry whose `fromCommit` and `toCommit` both equal the current baseline
+  and whose `deletedBy` maps each pruned path to its deleting commit. The prune is written only when
+  the whole verdict passes; any refusal leaves the seal byte-identical. If no deleting commit is
+  found, verification refuses with `Protected artifact provenance undeterminable: <path>` and
+  `Deleting base commit not found.`
 
 Everything else still halts BUILD/SHIP before dispatch: content that neither the base branch nor a
 fingerprint-verified sealed baseline vouches for, any addition neither contains, and any deletion
@@ -287,8 +296,12 @@ between HEAD and <base>`, or `Inheritance probe failed: git diff`) and the recov
 base ref, or rebase onto the base branch to establish shared history). A genuine violation instead
 reports either `Uncommitted protected artifact changed: <path>` (the workspace differs from `HEAD`;
 restore from `HEAD`) or `Protected artifact changed: <path>` with a `Feature-authored committed
-change` cause (revert to the committed DECIDE content and route any actual amendment to DECIDE). Do
-not delete or hand-edit the seal to recover from a halt; follow the
+change` cause (revert to the committed DECIDE content and route any actual amendment to DECIDE). A
+deletion this feature committed, or left uncommitted in the workspace, reports `Protected artifact
+deleted: <path>`. Every path-bearing refusal ends with exactly one attribution line:
+`Attribution: feature-authored (committed on this branch since merge-base <sha>)`,
+`Attribution: uncommitted workspace change`, `Attribution: base-inherited`, or
+`Attribution: provenance undeterminable`. Do not delete or hand-edit the seal to recover from a halt; follow the
 [stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md).
 
 A seal rejection raised before a re-kick rebase is reported as `protected-artifact seal error`.

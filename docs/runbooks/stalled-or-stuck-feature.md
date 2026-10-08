@@ -1074,13 +1074,18 @@ return this amendment to DECIDE; BUILD tasks must not target protected artifacts
      Restore the file from `HEAD`.
    - `Protected artifact changed: <path>` with a `Feature-authored committed change` cause — revert
      to the committed DECIDE content and route any actual amendment to DECIDE.
+   - `Protected artifact deleted: <path>` — this feature deleted a sealed artifact, in a commit or
+     only in the workspace (the `Attribution:` line says which). Restore the file and route any
+     intended removal to DECIDE. A deletion inherited from the base branch never reports this; the
+     engine prunes it from the seal as an `inherited-base-deletion` entry.
    - `Unvouched engine remediation append: <path>` — a recorded remediation-task heading is present,
      but the committed content is not an exact append of either the base-tip or fingerprint-verified
      sealed content. Review the named content and the reported operator-reseal and engine-append exits;
      do not treat it as the ordinary feature-authored revert case.
    - `Protected artifact provenance undeterminable: <path>` — the base ref could not be resolved, no
      merge-base exists between `HEAD` and the base branch, or the inheritance probe (`git diff`)
-     failed. Supply the base ref, or rebase onto the base branch to establish shared history, then
+     failed, or (`Deleting base commit not found.`) the base commit that deleted a sealed path could
+     not be located. Supply the base ref, or rebase onto the base branch to establish shared history, then
      retry.
    - Anything else — resolve the reported baseline/base-tip lookup failure. A safe inherited
      base-branch change (including one where the base has since moved past what this feature's last

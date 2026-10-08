@@ -1274,7 +1274,10 @@ autonomous provider session, or a script piping stdin — only a human at a term
 path must still match its existing baseline or the whole reseal is refused — an operator cannot use
 `--path` to launder unrelated drift into the seal. Each listed path must already be protected and
 sealed, resolvable at the current commit, not deleted, and free of uncommitted changes (commit the
-amendment first). Refusal conditions — unknown worktree, missing rationale, non-interactive terminal,
+amendment first). One deletion is accepted: a path, listed or not, that the base branch deleted and
+this feature never touched is pruned with an `inherited-base-deletion` entry (its deleting commit in
+`deletedBy`) ahead of the `operator-reseal` entry. A listed path this feature deleted still refuses,
+with an `Attribution:` line naming the cause. Refusal conditions — unknown worktree, missing rationale, non-interactive terminal,
 missing seal, an unlisted-path violation, or an invalid reseal target — are each written to the audit
 trail as `protected_artifact_reseal_refused` before the command exits 1; a successful reseal writes
 `protected_artifact_reseal` with the resealed paths' prior and new fingerprints. Both are audited with
