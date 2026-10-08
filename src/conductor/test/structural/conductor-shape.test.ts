@@ -100,7 +100,7 @@ function inventoryName(name: string): string {
 }
 
 describe('structural: conductor shape guard', () => {
-  it('records the current merge-base guard inventory', async () => {
+  it('preserves the base declaration inventory in the real decomposed facade', async () => {
     const { stdout: base } = await execa('git', ['merge-base', 'HEAD', 'origin/main'], { cwd: CONDUCTOR_ROOT });
     const { stdout: baseConductor } = await execa(
       'git',
@@ -110,9 +110,7 @@ describe('structural: conductor shape guard', () => {
     expect(inventory.moduleLevelAtBase).toEqual(
       checkConductorShape(baseConductor, ALLOWED_TUNABLES).map((violation) => violation.name),
     );
-  });
 
-  it('accepts the real conductor facade and locates each base module declaration once', async () => {
     const conductor = await readFile(CONDUCTOR_PATH, 'utf8');
     expect(checkConductorShape(conductor, ALLOWED_TUNABLES)).toEqual([]);
 
