@@ -583,6 +583,7 @@ remediate_gap_plan_section() {
 # The engine owns the gap-plan carrier: the planner and skill retain only
 # judgment guidance. Keep this audit scoped to the legacy gap-plan section so
 # its case-v1/v2 engine-mode contract remains outside this boundary.
+# Covers: task:34
 remediate_gap_plan_contract_audit() {
   local file=$1
   local source=$2

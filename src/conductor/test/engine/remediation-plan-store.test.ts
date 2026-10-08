@@ -104,7 +104,7 @@ describe('typed remediation plan store', () => {
     });
   });
 
-  // Covers: task:11
+  // Covers: task:11, task:31
   it('treats a newer plan from a prior attempt as absent without consulting modification time', async () => {
     const root = await projectRoot();
     await persistRemediationPlan(root, input('attempt-prior'));
@@ -158,7 +158,7 @@ describe('typed remediation plan store', () => {
     expect(readPaths).toEqual([join(root, '.pipeline', 'remediation.json')]);
   });
 
-  // Covers: task:11
+  // Covers: task:11, task:31
   it('returns invalid for corrupt typed evidence rather than admitting its dispositions', async () => {
     const root = await projectRoot();
     await mkdir(join(root, '.pipeline'), { recursive: true });
