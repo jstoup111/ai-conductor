@@ -1,4 +1,4 @@
-// Covers: task:13
+// Covers: task:13, task:16
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
