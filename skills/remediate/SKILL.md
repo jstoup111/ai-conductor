@@ -212,10 +212,11 @@ other gap should be turned into concrete work.
   `.docs/stories/`, do not route it to BUILD or acceptance-spec work. Return it to the owning DECIDE
   step through the existing operator gate and kickback path; make no request, ledger, record, or new
   artifact to bypass that ownership.
-- **Prefer autonomous remediation.** A clear implementation, test, or documentation gap that
-  preserves approved architecture belongs in BUILD, including a conforming as-built finding and an
-  answerable build-stall question. Use `architecture_review` only when approved architecture itself
-  must change or be clarified; do not use it where no architectural decision is needed.
+- **Prefer autonomous remediation.** When approved architecture remains authoritative, clear
+  implementation/test/documentation drift belongs in BUILD, including a conforming as-built finding
+  and an answerable build-stall question. Its audit origin or finding id alone does not determine the
+  route. Use `architecture_review` only when a change to, or clarification of, approved architecture
+  is required; do not use it where no architectural decision is needed.
 - **Reject contradictory dispositions.** Selecting `architecture_review` when no architectural
   decision or product decision is needed is invalid; route clear conforming implementation, test, or
   documentation work to BUILD instead. Selecting `build` when an unresolved or ambiguous
@@ -223,10 +224,10 @@ other gap should be turned into concrete work.
   must change or be clarified, or HALT for architectural clarity when a human decision is required.
 - **Coverage and planning judgment.** An implementation gap is ordinarily BUILD work; use
   `acceptance_specs` when the real miss is acceptance coverage. A baseline-passing test that needs
-  strengthening within an existing task's RED/GREEN work is BUILD work, not a planning omission. An
-  in-scope plan omission is distinct from an architectural decision: before selecting `plan`, examine
-  the approved tasks and use `plan` only when none admits the repair. A `plan` route is terminal in a
-  daemon run and never re-plans.
+  strengthening within an existing task's RED/GREEN work is BUILD work, not a planning omission. A
+  `plan` route is for an in-scope plan omission, not an architecture or design decision: before
+  selecting `plan`, examine the approved tasks and use it only when none admits the repair. A `plan`
+  route is terminal in a daemon run and never re-plans.
 - **Recorded RED exception.** An acceptance-spec repair may waive separate RED proof only when the
   acceptance spec and its implementation must be repaired atomically. Record a non-empty reason and
   attributable approval; report the result as waived, never as proven RED. Otherwise use the ordinary
