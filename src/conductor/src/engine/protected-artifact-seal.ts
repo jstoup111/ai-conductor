@@ -209,6 +209,8 @@ export interface VerifyProtectedArtifactSealOptions {
    * (fully protected, prior behavior).
    */
   baseBranch?: string;
+  /** Test seam for the atomic seal writer used by verification rebaselines. */
+  fileOperations?: ProtectedArtifactSealFileOperations;
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
 
@@ -1338,6 +1340,7 @@ interface ApplyPermittedProtectedArtifactSealRotationInput {
   excludedBaseAheadPaths?: string[];
   excludedOperatorResealedPaths?: string[];
   includedEngineAppendedPaths?: string[];
+  prune?: { paths: string[]; deletedBy: Record<string, string> };
 }
 
 async function applyPermittedProtectedArtifactSealRotation(
@@ -1349,6 +1352,7 @@ async function applyPermittedProtectedArtifactSealRotation(
     excludedBaseAheadPaths,
     excludedOperatorResealedPaths,
     includedEngineAppendedPaths,
+    prune,
   }: ApplyPermittedProtectedArtifactSealRotationInput,
 ): Promise<ProtectedArtifactSealVerdict> {
   const rotated = await rotateProtectedArtifactSeal({
@@ -1360,9 +1364,36 @@ async function applyPermittedProtectedArtifactSealRotation(
     excludedBaseAheadPaths,
     excludedOperatorResealedPaths,
     includedEngineAppendedPaths,
+    prune,
+    fileOperations: options.fileOperations,
     onRebaseline: options.onRebaseline,
   });
   return { ok: true, seal: rotated, selfAmendments: [], inheritedDeletions: [] };
+}
+
+async function persistInheritedDeletionPrune(
+  options: VerifyProtectedArtifactSealOptions,
+  seal: ProtectedArtifactSeal,
+  inspection: Extract<ProtectedArtifactSealVerdict, { ok: true }>,
+): Promise<ProtectedArtifactSealVerdict> {
+  const prune = {
+    paths: inspection.inheritedDeletions.map(({ path }) => path),
+    deletedBy: Object.fromEntries(inspection.inheritedDeletions.map(({ path, deletedBy }) => [path, deletedBy])),
+  };
+  const pruned = await persistProtectedArtifactSealRotation({
+    projectRoot: options.projectRoot,
+    seal,
+    recomputed: {
+      ...seal,
+      protectedArtifacts: seal.protectedArtifacts.filter(({ path }) => !prune.paths.includes(path)),
+    },
+    trigger: 'defensive-history-rewrite',
+    paths: [],
+    prune,
+    fileOperations: options.fileOperations ?? { writeFile, rename, rm },
+    onRebaseline: options.onRebaseline,
+  });
+  return { ...inspection, seal: pruned };
 }
 
 async function verifyExistingProtectedArtifactSeal(
@@ -1395,8 +1426,12 @@ async function verifyExistingProtectedArtifactSeal(
   });
   if (!rotation.permitted) {
     await reportRotationRefusal(options.onRebaseline, rotation);
-    return rotationRefusalVerdict(rotation, inspection, seal, context.headCommit);
+    const verdict = rotationRefusalVerdict(rotation, inspection, seal, context.headCommit);
+    return verdict.ok && verdict.inheritedDeletions.length > 0
+      ? persistInheritedDeletionPrune(options, seal, verdict)
+      : verdict;
   }
+  if (!inspection.ok) return inspection;
   return applyPermittedProtectedArtifactSealRotation({
     options,
     seal,
@@ -1405,6 +1440,12 @@ async function verifyExistingProtectedArtifactSeal(
     excludedBaseAheadPaths: rotation.excludedBaseAheadPaths,
     excludedOperatorResealedPaths: rotation.excludedOperatorResealedPaths,
     includedEngineAppendedPaths: rotation.includedEngineAppendedPaths,
+    prune: inspection.ok && inspection.inheritedDeletions.length > 0
+      ? {
+          paths: inspection.inheritedDeletions.map(({ path }) => path),
+          deletedBy: Object.fromEntries(inspection.inheritedDeletions.map(({ path, deletedBy }) => [path, deletedBy])),
+        }
+      : undefined,
   });
 }
 

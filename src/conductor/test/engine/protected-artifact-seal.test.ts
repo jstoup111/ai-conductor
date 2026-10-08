@@ -2601,6 +2601,65 @@ describe('verifyProtectedArtifactSeal', () => {
       await expect(readFile(join(repo, '.pipeline/protected-artifact-seal.json')).catch(() => Buffer.alloc(0))).resolves.toEqual(before);
     });
 
+    it('persists a merged base-deletion prune exactly once and emits its audited rebaseline event', async () => {
+      const path = '.docs/plans/retired.md';
+      const repo = await makeRepo({ '.gitignore': '.pipeline/\n', [path]: 'approved plan\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'feature']);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      await git(repo, ['checkout', '-q', 'main']);
+      await rm(join(repo, path));
+      await git(repo, ['add', '-A']);
+      await git(repo, ['commit', '-q', '-m', 'retire approved plan']);
+      const deletedBy = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', 'feature']);
+      await git(repo, ['merge', '--no-ff', '-q', 'main', '-m', 'merge retired plan']);
+      const events: ProtectedArtifactSealRebaselineEvent[] = [];
+
+      const first = await verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        baseBranch: 'main',
+        onRebaseline: (event) => { events.push(event); },
+      });
+      const afterFirst = JSON.parse(await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'));
+      const second = await verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' });
+      const afterSecond = JSON.parse(await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'));
+
+      expect({ first, second, afterFirst, afterSecondMatchesFirst: afterSecond, events }).toEqual({
+        first: expect.objectContaining({ ok: true, inheritedDeletions: [{ path, deletedBy }] }),
+        second: expect.objectContaining({ ok: true, inheritedDeletions: [] }),
+        afterFirst: expect.objectContaining({
+          protectedArtifacts: [],
+          rebaselines: [{
+            fromCommit: baselineCommit,
+            toCommit: baselineCommit,
+            trigger: 'inherited-base-deletion',
+            paths: [path],
+            deletedBy: { [path]: deletedBy },
+          }],
+        }),
+        afterSecondMatchesFirst: expect.objectContaining({
+          protectedArtifacts: [],
+          rebaselines: [{
+            fromCommit: baselineCommit,
+            toCommit: baselineCommit,
+            trigger: 'inherited-base-deletion',
+            paths: [path],
+            deletedBy: { [path]: deletedBy },
+          }],
+        }),
+        events: [{
+          type: 'protected_artifact_rebaseline',
+          fromCommit: baselineCommit,
+          toCommit: baselineCommit,
+          trigger: 'inherited-base-deletion',
+          paths: [path],
+          deletedBy: { [path]: deletedBy },
+        }],
+      });
+      expect(afterSecond).toEqual(afterFirst);
+    });
+
     it('refuses a committed feature deletion with feature-authored attribution', async () => {
       const path = '.docs/stories/own.md';
       const repo = await makeRepo({ [path]: 'approved story\n' });
