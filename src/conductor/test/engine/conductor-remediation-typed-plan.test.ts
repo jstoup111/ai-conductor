@@ -1,4 +1,4 @@
-// Covers: task:19
+// Covers: task:19, task:20
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,7 @@ import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import type { RemediationPlanProviderOutcome } from './remediation-plan-fixtures.js';
 import type { ConductState } from '../../src/types/index.js';
 import { createRemediationPlanProviderFixture } from './remediation-plan-fixtures.js';
 
@@ -50,7 +51,13 @@ function output() {
   };
 }
 
-async function fixture(key: 'claude' | 'codex') {
+async function fixture(
+  key: 'claude' | 'codex',
+  outcomes: readonly RemediationPlanProviderOutcome[] = [
+    { kind: 'structured', finalStructuredResult: output() },
+  ],
+  maxRetries = 2,
+) {
   const root = await mkdtemp(join(tmpdir(), 'conductor-remediation-typed-plan-'));
   roots.push(root);
   const planPath = join(root, '.docs', 'plans', 'feature.md');
@@ -90,11 +97,11 @@ async function fixture(key: 'claude' | 'codex') {
 
   const provider = createRemediationPlanProviderFixture({
     key,
-    outcomes: [{ kind: 'structured', finalStructuredResult: output() }],
+    outcomes,
   });
   const config = {
     llm_provider: key,
-    steps: { remediate: { llm_provider: key } },
+    steps: { remediate: { llm_provider: key, max_retries: maxRetries } },
     prd_audit: { max_remediation_laps: 2 },
   } as never;
   const runner = new DefaultStepRunner(provider.provider, 'fixture-runner-session', root, {
@@ -104,10 +111,13 @@ async function fixture(key: 'claude' | 'codex') {
     configuredProviders: [key],
     sessionStore: new ProviderSessionStore(),
   });
+  const events = new ConductorEventEmitter();
+  const blockedReasons: string[] = [];
+  events.on('gate_blocked', (event) => { blockedReasons.push(event.reason); });
   const conductor = new Conductor({
     stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
     stepRunner: runner,
-    events: new ConductorEventEmitter(),
+    events,
     projectRoot: root,
     mode: 'auto',
     daemon: true,
@@ -127,7 +137,7 @@ async function fixture(key: 'claude' | 'codex') {
     'PRD audit reported repairable criteria.',
     { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
   );
-  return { root, planPath, provider, outcome };
+  return { root, planPath, provider, outcome, blockedReasons };
 }
 
 describe('Conductor typed remediation-plan admission', () => {
@@ -167,5 +177,77 @@ describe('Conductor typed remediation-plan admission', () => {
     for (const result of [claude, codex]) {
       expect(await readFile(result.planPath, 'utf8')).toContain('### Task rem-prd-audit-provider-task:');
     }
+  });
+
+  // Covers: task:20
+  it('retries a missing structured plan as a fresh gap-plan session and records its fault', async () => {
+    const result = await fixture('claude', [
+      { kind: 'chat', output: 'I cannot provide structured output.' },
+      { kind: 'structured', finalStructuredResult: output() },
+    ]);
+
+    expect(result.outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(result.provider.invocationCount).toBe(2);
+    expect(result.provider.calls[1]?.sessionId).not.toBe(result.provider.calls[0]?.sessionId);
+    expect(result.blockedReasons).toContain('structured-result-missing');
+  });
+
+  // Covers: task:20
+  it('retries a rejected structured plan and records its validator diagnostic', async () => {
+    const rejected = {
+      version: 'v1',
+      dispositions: [{
+        reference: { kind: 'prd-criterion', id: 'S1.1' },
+        disposition: 'invented-disposition',
+        category: null,
+        rationale: 'This is not a supported engine disposition.',
+        tasks: [],
+        boundTaskIds: [],
+      }],
+    };
+    const result = await fixture('claude', [
+      { kind: 'structured', finalStructuredResult: rejected },
+      { kind: 'structured', finalStructuredResult: output() },
+    ]);
+
+    expect(result.outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(result.provider.invocationCount).toBe(2);
+    expect(result.blockedReasons[0]).toContain('structured-result-rejected');
+  });
+
+  // Covers: task:20
+  it('does not retry a valid first gap-plan attempt', async () => {
+    const result = await fixture('codex');
+
+    expect(result.outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(result.provider.invocationCount).toBe(1);
+  });
+
+  // Covers: task:20
+  it.each([
+    ['timeout', { kind: 'timeout' as const }],
+    ['throw', { kind: 'throw' as const, error: new Error('fixture threw') }],
+  ])('retries a %s gap-plan dispatch with a fresh session', async (_name, failure) => {
+    const result = await fixture('claude', [failure, { kind: 'structured', finalStructuredResult: output() }]);
+
+    expect(result.outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(result.provider.invocationCount).toBe(2);
+    expect(result.provider.calls[1]?.sessionId).not.toBe(result.provider.calls[0]?.sessionId);
+  });
+
+  // Covers: task:20
+  it.each([
+    ['authentication', { authFailure: true }],
+    ['rate limit', { rateLimited: true }],
+    ['model unavailable', { modelUnavailable: true }],
+  ] as const)('keeps %s handling ahead of missing-plan diagnostics', async (_name, condition) => {
+    const result = await fixture('claude', [{
+      kind: 'provider-condition',
+      result: { success: false, output: 'provider condition', exitCode: 1, ...condition },
+    }]);
+
+    expect(result.outcome).toMatchObject({ kind: 'none' });
+    expect(result.blockedReasons).not.toContain('remediation planner produced no current typed plan');
+    expect(result.blockedReasons).not.toContain('structured-result-missing');
   });
 });

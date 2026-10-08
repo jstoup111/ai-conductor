@@ -5071,7 +5071,6 @@ export class Conductor {
         };
       }
     }
-    const attemptId = randomUUID();
     const projectionResult = await buildRemediationProjection(this.projectRoot, {
       source: remediationProjectionSource(hintSource.source),
       activePlanPath: await this.getActivePlanPath() ?? undefined,
@@ -5089,19 +5088,52 @@ export class Conductor {
         reason: `remediation projection preparation fault (${projectionResult.fault.source}): ${projectionResult.fault.detail}`,
       };
     }
-    await this.stepRunner.run('remediate', state, {
-      runId: attemptId,
-      retryReason: dispatchContext,
-      remediationRequest: { mode: 'gap-plan', projection: projectionResult.projection },
-    });
-    const typedPlan = await readTypedRemediationPlan(this.projectRoot, { attemptId });
-    if (typedPlan.kind !== 'present') {
-      return {
-        kind: 'none',
-        reason: typedPlan.kind === 'invalid'
-          ? typedPlan.reason
-          : 'remediation planner produced no current typed plan',
-      };
+    const maxAttempts = resolveStepConfig(
+      'remediate',
+      phaseForStep('remediate'),
+      this.modelPolicyForStep('remediate'),
+      this.config,
+      { tier: state.complexity_tier },
+    ).max_retries;
+    let typedPlan: Awaited<ReturnType<typeof readTypedRemediationPlan>> | undefined;
+    let lastFault = 'remediation planner produced no current typed plan';
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const attemptId = randomUUID();
+      const dispatch = await this.stepRunner.run('remediate', state, {
+        runId: attemptId,
+        retryReason: dispatchContext,
+        remediationRequest: { mode: 'gap-plan', projection: projectionResult.projection },
+      });
+
+      // These are already classified at the provider boundary. They are not
+      // malformed or absent plans, so do not turn a credential, throttle, or
+      // exhausted provider set into a structured-output diagnostic.
+      const providerUnavailable = dispatch.attempts !== undefined &&
+        dispatch.attempts.length > 0 &&
+        dispatch.attempts.every((providerAttempt) => providerAttempt.outcome === 'unavailable');
+      if (dispatch.authFailure || dispatch.rateLimited || providerUnavailable) {
+        return {
+          kind: 'none',
+          reason: dispatch.output ?? 'remediation provider is unavailable',
+        };
+      }
+
+      if (!dispatch.success) {
+        lastFault = dispatch.output ?? 'remediation planner dispatch failed';
+        await reportRefusal(lastFault);
+        continue;
+      }
+
+      typedPlan = await readTypedRemediationPlan(this.projectRoot, { attemptId });
+      if (typedPlan.kind === 'present') break;
+
+      lastFault = typedPlan.kind === 'invalid'
+        ? typedPlan.reason
+        : 'remediation planner produced no current typed plan';
+      await reportRefusal(lastFault);
+    }
+    if (typedPlan?.kind !== 'present') {
+      return { kind: 'none', reason: lastFault };
     }
     const plan = {
       gaps: remediationGapsFromTypedPlan(typedPlan.value.dispositions),
