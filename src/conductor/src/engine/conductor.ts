@@ -254,6 +254,7 @@ import {
   ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   MANUAL_TEST_CODE_STAMP,
   type RemediationGap,
+  type RemediationDispositionRejection,
   type CompletionContext,
   type CompletionResult,
   type FinishChoice,
@@ -820,6 +821,45 @@ function remediationGapsFromTypedPlan(
       ? disposition.boundTaskIds.map((id) => ({ id, title: `Existing task ${id}` }))
       : disposition.tasks.map((task) => ({ ...task })),
   }));
+}
+
+/**
+ * The runner preserves vocabulary rejections in its structured-result
+ * diagnostic because it must not persist a rejected typed plan. Recover only
+ * the validated event payload here; all other malformed-output diagnostics
+ * remain ordinary retryable planner faults.
+ */
+function remediationDispositionRejectionsFromDispatchOutput(
+  output: string | undefined,
+): RemediationDispositionRejection[] {
+  const marker = '; rejections: ';
+  if (output === undefined || !output.startsWith('structured-result-rejected:')) return [];
+  const markerIndex = output.lastIndexOf(marker);
+  if (markerIndex === -1) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output.slice(markerIndex + marker.length));
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((candidate): RemediationDispositionRejection[] => {
+    if (candidate === null || typeof candidate !== 'object') return [];
+    const rejection = candidate as Partial<RemediationDispositionRejection>;
+    if (
+      typeof rejection.gapId !== 'string' ||
+      typeof rejection.disposition !== 'string' ||
+      !Array.isArray(rejection.accepted) ||
+      !rejection.accepted.every((value) => typeof value === 'string') ||
+      (rejection.field !== 'disposition' && rejection.field !== 'category')
+    ) return [];
+    return [{
+      gapId: rejection.gapId,
+      disposition: rejection.disposition,
+      accepted: [...rejection.accepted],
+      field: rejection.field,
+    }];
+  });
 }
 
 /** PRD-audit and as-built review own configured remediation allowances; other gates share the generic cap. */
@@ -5136,6 +5176,17 @@ export class Conductor {
 
       if (!dispatch.success) {
         lastFault = dispatch.output ?? 'remediation planner dispatch failed';
+        const rejections = remediationDispositionRejectionsFromDispatchOutput(dispatch.output);
+        if (rejections.length > 0) {
+          for (const rejection of rejections) {
+            await this.events.emit({
+              type: 'remediation_disposition_rejected',
+              ...rejection,
+              accepted: [...rejection.accepted],
+            });
+          }
+          continue;
+        }
         await reportRefusal(lastFault);
         continue;
       }
