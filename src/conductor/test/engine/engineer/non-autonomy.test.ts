@@ -1,3 +1,4 @@
+// Covers: task:9
 // non-autonomy.test.ts — Structural non-autonomy guarantee (Task 30, FR-10, ADR-005 Condition 2)
 //
 // This test suite asserts the hardest structural invariant for the engineer:
@@ -197,6 +198,33 @@ function buildReachableSet(entryFiles: string[]): Set<string> {
   return visited;
 }
 
+const PUSH_CAPABLE_MODULES = [
+  'engine/post-finish-shipped-record.ts',
+  'engine/finish-presentation-repair.ts',
+];
+
+function findPushCapableViolations(reachable: Set<string>): string[] {
+  return PUSH_CAPABLE_MODULES
+    .filter((suffix) => reachable.has(join(CONDUCTOR_SRC, suffix)))
+    .map((suffix) => `VIOLATION: engineer transitively imports ${suffix}`);
+}
+
+function buildFixtureReachableSet(sources: Record<string, string>, entry: string): Set<string> {
+  const visited = new Set<string>();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = queue.pop()!;
+    if (visited.has(file) || sources[file] === undefined) continue;
+    visited.add(file);
+    for (const specifier of parseLocalImports(sources[file])) {
+      const withoutJs = specifier.endsWith('.js') ? specifier.slice(0, -3) : specifier;
+      const target = resolve(dirname(file), `${withoutJs}.ts`);
+      if (!visited.has(target)) queue.push(target);
+    }
+  }
+  return visited;
+}
+
 // ─── Test suite 1: Import graph non-autonomy ──────────────────────────────────
 
 describe('engineer import graph: structural non-autonomy (FR-10, ADR-005)', () => {
@@ -235,6 +263,64 @@ describe('engineer import graph: structural non-autonomy (FR-10, ADR-005)', () =
       reachable.has(conductorTs),
       'VIOLATION: engineer transitively imports engine/conductor.ts (build entry)',
     ).toBe(false);
+  });
+
+  it('engineer does NOT transitively import push-capable finish modules', () => {
+    expect(findPushCapableViolations(reachable)).toEqual([]);
+    for (const module of PUSH_CAPABLE_MODULES) {
+      const source = readFileSync(join(CONDUCTOR_SRC, module), 'utf-8');
+      if (module.endsWith('post-finish-shipped-record.ts')) {
+        expect(source).toContain('export async function pushPostFinishShippedRecord');
+        expect(source).toContain('export async function refreshPostFinishShippedRecord');
+      } else {
+        expect(source).toContain('export function createFinishPresentationRepair');
+        expect(source).toContain('export function createProvenanceGuardedFinishPresentationRepair');
+      }
+    }
+  });
+
+  it.each([
+    ['post-finish-shipped-record.ts', 'direct'],
+    ['post-finish-shipped-record.ts', 'transitive'],
+    ['finish-presentation-repair.ts', 'direct'],
+    ['finish-presentation-repair.ts', 'transitive'],
+  ] as const)('reports a VIOLATION for a %s fixture import (%s)', (target, route) => {
+    const root = '/fixture/engineer.ts';
+    const intermediate = '/fixture/intermediate.ts';
+    const pushCapable = `/fixture/${target}`;
+    const sources: Record<string, string> = {
+      [root]: route === 'direct'
+        ? `import {} from './${target.replace('.ts', '.js')}';`
+        : "import {} from './intermediate.js';",
+      [pushCapable]: 'export {};',
+    };
+    if (route === 'transitive') sources[intermediate] = `import {} from './${target.replace('.ts', '.js')}';`;
+    const reachableFixture = buildFixtureReachableSet(sources, root);
+    const violations = [...reachableFixture]
+      .filter((file) => file === pushCapable)
+      .map(() => `VIOLATION: engineer transitively imports engine/${target}`);
+    expect(violations).toEqual([`VIOLATION: engineer transitively imports engine/${target}`]);
+  });
+
+  it('non-push-capable destination modules cannot reach push-capable modules', () => {
+    const destinations = [
+      'step-runner-types.ts',
+      'conductor-options.ts',
+      'remediation-caps.ts',
+      'prd-audit-routing.ts',
+      'as-built-routing.ts',
+      'remediation-hints.ts',
+      'remediation-task-append.ts',
+      'resume-entry.ts',
+      'build-review-halt-render.ts',
+      'step-completion.ts',
+      'artifact-approvals.ts',
+    ];
+    for (const module of destinations) {
+      const reachableDestination = buildReachableSet([join(CONDUCTOR_SRC, 'engine', module)]);
+      const violations = PUSH_CAPABLE_MODULES.filter((suffix) => reachableDestination.has(join(CONDUCTOR_SRC, suffix)));
+      expect(violations, `VIOLATION: ${module} reaches ${violations.join(', ')}`).toEqual([]);
+    }
   });
 
   it('engineer does NOT transitively import step-runners.ts (build step executor)', () => {

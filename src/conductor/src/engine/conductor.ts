@@ -65,7 +65,7 @@ import {
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
-import { executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
+import { executeGithubOperation } from './github-operations.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
@@ -444,11 +444,6 @@ import {
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { ShipmentEvidenceInput, ShipmentEvidenceResult } from './shipment-evidence.js';
 import {
-  rehabilitateHaltPr,
-  retitleFloor,
-  bodyFloor,
-  ensureShipReady,
-  postHaltHistoryComment,
   makeRetainedPrPresentable,
   clearHaltStateForResume,
 } from './halt-pr-rehabilitation.js';
@@ -460,15 +455,19 @@ import {
 } from './cost-rollup.js';
 import { openShipDraftPr } from './ship-draft-pr.js';
 import { createShipDraftPublicationDependencies } from './ship-draft-pr.js';
+import {
+  createFinishPresentationRepair,
+} from './finish-presentation-repair.js';
+import {
+  refreshPostFinishShippedRecord,
+} from './post-finish-shipped-record.js';
 import { extractRegionBytes, isEmptyRegion, restoreRegion } from './pr-body-regions.js';
 import { discardRegionCapture, readRegionCaptures, writeRegionCapture } from './pr-body-region-store.js';
 import { RegionRestoreError } from './region-restore-error.js';
 import { mirrorIssueCriticalityLabels } from './pr-criticality-labels.js';
-import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import type { ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
-import { resolveShipmentIdentity } from './shipment-identity.js';
 import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
 
 import {
@@ -522,6 +521,13 @@ export {
   resolveRunnableResumeEntry,
 } from './resume-entry.js';
 export { isEngineComputedStep, writeFenceInstalledForProvider } from './step-completion.js';
+export {
+  createFinishPresentationRepair,
+  createProvenanceGuardedFinishPresentationRepair,
+} from './finish-presentation-repair.js';
+export {
+  pushPostFinishShippedRecord,
+} from './post-finish-shipped-record.js';
 export type { SchedulingUnitRef } from '../types/scheduling-unit.js';
 import {
   MAX_KICKBACKS_PER_GATE,
@@ -587,153 +593,6 @@ import {
   type AsBuiltGoverningClauseResolution,
 } from './as-built-routing.js';
 export type { AsBuiltGoverningClauseResolution } from './as-built-routing.js';
-
-/**
- * Production-facing form of the existing FINISH presentation sequence.  The
- * coordinator calls this only after accepted prose is re-observed; the order
- * deliberately rehabilitates halt state and applies title/body floors before
- * making a draft mergeable.
- */
-export function createFinishPresentationRepair(input: {
-  projectRoot: string;
-  gh: GhRunner;
-  operations?: GithubOperationRunner;
-  log?: (message: string) => void;
-}): (request: { prUrl: string; state: ConductState; mode?: 'capture-only' | 'full' }) => Promise<void> {
-  return async ({ prUrl, state, mode = 'full' }) => {
-    const { projectRoot: cwd, gh } = input;
-    const repairLog = input.log ?? console.warn;
-    let sourceRef: string | undefined;
-    try {
-      const planPath = await resolveFeaturePlanPath(cwd, state.feature_desc);
-      if (planPath && state.feature_desc) {
-        sourceRef = parseIntakeSourceRef(await readFile(join(cwd, `.docs/intake/${planStem(planPath)}.md`), 'utf8').catch(() => null));
-      }
-    } catch { /* floors remain valid without an intake source reference */ }
-    let testEvidenceLine: string | undefined;
-    try {
-      const tasks = normalizeTasks(JSON.parse(await readFile(join(cwd, '.pipeline/task-status.json'), 'utf8')));
-      const completed = tasks.filter((task) => task.status === 'completed' || task.status === 'skipped').length;
-      if (completed > 0) testEvidenceLine = `${completed}/${tasks.length} plan tasks completed with evidence-gated commits`;
-    } catch { /* optional body evidence */ }
-    try {
-      const haltReason = await readFile(join(cwd, '.pipeline/halt-user-input-required'), 'utf8').catch(() => null);
-      const outcome = await postHaltHistoryComment({
-        gh, cwd, prUrl, haltReason, operations: input.operations, log: repairLog,
-      });
-      if (outcome === 'refused') {
-        throw new Error('guarded halt-history repair refused');
-      }
-    } catch (error) { repairLog(`[conductor-repair] postHaltHistoryComment failed: ${error}`); throw error; }
-    if (mode === 'capture-only') return;
-    try {
-      const outcome = await rehabilitateHaltPr({
-        gh, cwd, prUrl, sourceRef, preserveDraft: true, operations: input.operations, log: repairLog,
-      });
-      if (outcome === 'refused') throw new Error('guarded halt rehabilitation refused');
-    } catch (error) { repairLog(`[conductor-repair] rehabilitateHaltPr failed: ${error}`); throw error; }
-    try {
-      const outcome = await retitleFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, branch: state.worktree_branch, operations: input.operations }, repairLog);
-      if (outcome.outcome === 'refused') throw new Error('guarded title repair refused');
-    } catch (error) { repairLog(`[conductor-repair] retitleFloor failed: ${error}`); throw error; }
-    try {
-      const outcome = await bodyFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, sourceRef, testEvidenceLine, operations: input.operations }, repairLog);
-      if (outcome === 'refused') throw new Error('guarded body repair refused');
-    } catch (error) { repairLog(`[conductor-repair] bodyFloor failed: ${error}`); throw error; }
-    // Regions captured from completed project-owned steps are authoritative
-    // across every engine-owned presentation rewrite.
-    const captures = await readRegionCaptures(cwd, prUrl);
-    // A capture has no template bytes at this boundary; reconstruct the marker
-    // wrapper from its key and preserve the captured interior exactly.
-    // Every capture-present failure is a RegionRestoreError (ADR D6) so FINISH
-    // fails closed instead of treating it as a lost response.
-    if (Object.keys(captures).length > 0) try {
-      let body: string;
-      try {
-        const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
-        const value = (JSON.parse(stdout) as { body?: unknown }).body;
-        if (typeof value !== 'string') throw new Error('response has no string body');
-        body = value;
-      } catch (error) {
-        throw new Error(`region verification read failed for ${Object.keys(captures).join(', ')}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      let next = body;
-      for (const [key, bytes] of Object.entries(captures)) next = restoreRegion(next, { key, bytes });
-      if (next !== body) {
-        const target = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
-        const keys = Object.entries(captures).filter(([key, bytes]) => extractRegionBytes(body, key) !== bytes).map(([key]) => key);
-        if (!target || !input.operations) throw new Error(`guarded region restore unavailable for ${keys.join(', ') || 'unknown'}`);
-        const result = await executeGithubOperation({ operation: 'pull-request.edit', repository: target[1], resource: { kind: 'pull-request', number: Number(target[2]) }, context: { actor: 'finish-region-restore' }, payload: { body: next } }, input.operations);
-        if (result.kind !== 'executed') throw new RegionRestoreError('refused', keys, result.kind);
-      }
-      let verified: string;
-      try {
-        const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
-        const value = (JSON.parse(stdout) as { body?: unknown }).body;
-        if (typeof value !== 'string') throw new Error('response has no string body');
-        verified = value;
-      } catch (error) {
-        throw new Error(`region verification read failed for ${Object.keys(captures).join(', ')}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      for (const [key, bytes] of Object.entries(captures)) {
-        if (extractRegionBytes(verified, key) !== bytes) throw new RegionRestoreError('mismatch', [key]);
-      }
-    } catch (error) {
-      if (error instanceof RegionRestoreError) throw error;
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new RegionRestoreError('refused', Object.keys(captures), 'unavailable', `project-owned region restore failed: ${reason}`);
-    }
-    try {
-      const outcome = await ensureShipReady(
-        gh, cwd, prUrl, repairLog, undefined, input.operations,
-      );
-      if (outcome === 'refused') {
-        throw new Error('guarded ready-for-review repair refused');
-      }
-    } catch (error) { repairLog(`[conductor-repair] ensureShipReady failed: ${error}`); throw error; }
-  };
-}
-
-/**
- * Compose FINISH presentation repair at a live CLI root.  The guarded runner
- * is deliberately resolved for each repair attempt: its authorization reads
- * the current committed owner evidence when a mutation is requested, rather
- * than retaining a decision from coordinator construction.
- */
-export function createProvenanceGuardedFinishPresentationRepair(input: {
-  projectRoot: string;
-  git: GitRunner;
-  gh: GhRunner;
-  baseBranch: string;
-  log?: (message: string) => void;
-  events?: GithubOperationEventEmitter;
-}): (request: { prUrl: string; state: ConductState }) => Promise<void> {
-  return async ({ prUrl, state }) => {
-    const publication = await createShipDraftPublicationDependencies({
-      cwd: input.projectRoot,
-      branch: state.worktree_branch,
-      baseBranch: input.baseBranch,
-      featureDesc: state.feature_desc,
-      prUrl,
-      git: input.git,
-      gh: input.gh,
-      events: input.events,
-    });
-    if (!publication) {
-      throw new Error('guarded finish presentation repair unavailable: committed feature provenance could not be resolved');
-    }
-    const pull = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
-    if (!pull || pull[1].toLowerCase() !== publication.remoteMutation.provenance.repository.toLowerCase()) {
-      throw new Error('guarded finish presentation repair unavailable: pull request target could not be resolved');
-    }
-    await createFinishPresentationRepair({
-      projectRoot: input.projectRoot,
-      gh: input.gh,
-      operations: publication.operations,
-      log: input.log,
-    })({ prUrl, state });
-  };
-}
 
 /**
  * How many times a user may pick `retry` from the recovery menu for a single
@@ -865,170 +724,6 @@ function parseNameStatus(stdout: string): ChangedFile[] {
   return out;
 }
 
-interface PostFinishShippedRecordRefreshOptions {
-  runGit: GitRunner;
-  cwd: string;
-  requestedSlug: string;
-  pr: string;
-  log: (message: string) => void;
-  gh: GhRunner;
-  remoteGit?: typeof executeRemoteGit;
-  remoteMutation?: GithubMutationExecutionContext;
-  events: ConductorEventEmitter;
-}
-
-/** Refresh the final Cost block and make its push best-effort and non-blocking. */
-async function refreshPostFinishShippedRecord({
-  runGit,
-  cwd,
-  requestedSlug,
-  pr,
-  log,
-  gh,
-  remoteGit,
-  remoteMutation,
-  events,
-}: PostFinishShippedRecordRefreshOptions): Promise<void> {
-  try {
-    const planPaths = (await readdir(join(cwd, '.docs/plans')))
-      .filter((name) => name.endsWith('.md'))
-      .map((name) => join('.docs/plans', name));
-    const resolution = resolveShipmentIdentity(requestedSlug, planPaths);
-    if (resolution.kind !== 'resolved') {
-      throw new Error('unable to resolve canonical post-finish shipment identity');
-    }
-
-    // The refresh owns only its shipped marker. Refuse to enter the transaction
-    // when any tracked worktree or index change could be lost by recovery;
-    // untracked runtime state such as `.pipeline/` is deliberately irrelevant.
-    await runGit(['diff', '--quiet'], { cwd });
-    await runGit(['diff', '--cached', '--quiet'], { cwd });
-
-    const { stdout: preRefreshOut } = await runGit(['rev-parse', 'HEAD'], { cwd });
-    const preRefreshHead = preRefreshOut.trim();
-    await dispatchShippedRecord({ kind: 'write', slug: requestedSlug, pr }, cwd);
-    const { stdout: postRefreshOut } = await runGit(['rev-parse', 'HEAD'], { cwd });
-    const postRefreshHead = postRefreshOut.trim();
-    if (postRefreshHead === preRefreshHead) return;
-
-    // Prove the immutable commit object once. The later update-ref supplies the
-    // mutable-HEAD check atomically, so rollback cannot clobber another commit.
-    const { stdout: parentOut } = await runGit(
-      ['rev-parse', `${postRefreshHead}^`],
-      { cwd },
-    );
-    const { stdout: subjectOut } = await runGit(
-      ['show', '-s', '--format=%s', postRefreshHead],
-      { cwd },
-    );
-    const { stdout: pathsOut } = await runGit(
-      ['diff-tree', '--no-commit-id', '--name-only', '-r', postRefreshHead],
-      { cwd },
-    );
-    const paths = pathsOut.split('\n').filter((path) => path !== '');
-    const expected = resolution.identity;
-    if (
-      parentOut.trim() !== preRefreshHead ||
-      subjectOut.trim() !== `shipped record: ${expected.slug}` ||
-      paths.length !== 1 ||
-      paths[0] !== expected.recordPath
-    ) {
-      throw new Error('refusing to push an unverified post-finish commit');
-    }
-
-    try {
-      const { stdout: branchOut } = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
-      const resolvedMutation = remoteMutation ?? await resolveFeatureRemoteMutation({
-        cwd,
-        slug: requestedSlug,
-        branch: branchOut.trim(),
-        git: (args) => runGit(args, { cwd }),
-        gh,
-      });
-      await pushPostFinishShippedRecord({
-        runGit,
-        cwd,
-        branch: branchOut.trim(),
-        remoteGit,
-        remoteMutation: resolvedMutation,
-        events,
-      });
-    } catch (pushError) {
-      let recoveryHead = preRefreshHead;
-      let upstreamHead: string | undefined;
-      try {
-        const { stdout } = await runGit(
-          ['rev-parse', '--verify', '@{u}^{commit}'],
-          { cwd },
-        );
-        upstreamHead = stdout.trim() || undefined;
-      } catch {
-        // Missing/indeterminate upstream recovers to the known pushed parent.
-      }
-
-      if (upstreamHead !== postRefreshHead) {
-        if (upstreamHead) {
-          try {
-            await runGit(
-              ['merge-base', '--is-ancestor', preRefreshHead, upstreamHead],
-              { cwd },
-            );
-            const { stdout: postTreeOut } = await runGit(
-              ['rev-parse', '--verify', `${postRefreshHead}^{tree}`],
-              { cwd },
-            );
-            const { stdout: upstreamTreeOut } = await runGit(
-              ['rev-parse', '--verify', `${upstreamHead}^{tree}`],
-              { cwd },
-            );
-            if (upstreamTreeOut.trim() === postTreeOut.trim()) {
-              recoveryHead = upstreamHead;
-            }
-          } catch {
-            // An unrelated/indeterminate or tree-divergent upstream is unsafe;
-            // use the known pushed parent.
-          }
-        }
-        await runGit(['update-ref', 'HEAD', recoveryHead, postRefreshHead], { cwd });
-        await runGit(['reset', '--hard', 'HEAD'], { cwd });
-      }
-      throw pushError;
-    }
-  } catch (err) {
-    log(
-      `post-finish shipped-record refresh failed: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-  }
-}
-
-export async function pushPostFinishShippedRecord(input: {
-  runGit: GitRunner;
-  cwd: string;
-  branch: string;
-  remoteGit?: typeof executeRemoteGit;
-  remoteMutation?: GithubMutationExecutionContext;
-  events?: ConductorEventEmitter;
-}): Promise<void> {
-  const pushed = await (input.remoteGit ?? executeRemoteGit)(
-    ['push', 'origin', `HEAD:refs/heads/${input.branch}`],
-    {
-      cwd: input.cwd,
-      config: (args) => input.runGit(args, { cwd: input.cwd }),
-      runRemoteGit: input.runGit,
-      mutation: input.remoteMutation,
-      events: input.events,
-    },
-  );
-  if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));
-}
-
-function remoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
-  if (result.kind === 'failed') return result.error;
-  if (result.kind === 'refused') return result.reason;
-  return 'remote Git operation did not execute';
-}
 
 function testSuiteBudgetVerdict(inspection: FullSuiteInspectionResult) {
   if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {

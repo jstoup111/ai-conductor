@@ -80,10 +80,8 @@ import {
   type ProviderModelProbeRunner,
 } from './engine/provider-model-probe.js';
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
-import {
-  Conductor,
-  createProvenanceGuardedFinishPresentationRepair,
-} from './engine/conductor.js';
+import { Conductor } from './engine/conductor.js';
+import { createProvenanceGuardedFinishPresentationRepair } from './engine/finish-presentation-repair.js';
 import type { OperatorParkedTermination } from './engine/conductor-options.js';
 import { createProductionAcceptanceRedExec } from './engine/acceptance-red-runner.js';
 import {

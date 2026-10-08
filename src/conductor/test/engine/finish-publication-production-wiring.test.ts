@@ -1,3 +1,4 @@
+// Covers: task:9
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -14,7 +15,7 @@ vi.mock('../../src/engine/owner-gate/machine-identity.js', async (importOriginal
   };
 });
 
-import { createProvenanceGuardedFinishPresentationRepair } from '../../src/engine/conductor.js';
+import { createProvenanceGuardedFinishPresentationRepair } from '../../src/engine/finish-presentation-repair.js';
 import { advanceFinishPublication, type PublicationSnapshot } from '../../src/engine/finish-publication.js';
 
 const engineTestDir = dirname(fileURLToPath(import.meta.url));
@@ -138,7 +139,7 @@ describe('production FINISH coordinator wiring', () => {
     const [foreground, daemon, conductor] = await Promise.all([
       readFile(join(sourceRoot, 'index.ts'), 'utf8'),
       readFile(join(sourceRoot, 'daemon-cli.ts'), 'utf8'),
-      readFile(join(sourceRoot, 'engine', 'conductor.ts'), 'utf8'),
+      readFile(join(sourceRoot, 'engine', 'finish-presentation-repair.ts'), 'utf8'),
     ]);
 
     for (const source of [foreground, daemon]) {
