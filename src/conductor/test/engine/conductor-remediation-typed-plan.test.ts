@@ -124,8 +124,12 @@ async function fixture(
   });
   const events = new ConductorEventEmitter();
   const blockedReasons: string[] = [];
+  const rejectedDispositions: string[] = [];
   events.on('gate_blocked', (event) => {
     if (event.type === 'gate_blocked') blockedReasons.push(event.reason);
+  });
+  events.on('remediation_disposition_rejected', (event) => {
+    if (event.type === 'remediation_disposition_rejected') rejectedDispositions.push(event.disposition);
   });
   const conductor = new Conductor({
     stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
@@ -161,7 +165,7 @@ async function fixture(
     'PRD audit reported repairable criteria.',
     { source, evidence: [{ gate: source.includes('stall') ? 'build' : 'prd_audit', evidenceFile }] } as never,
   );
-  return { root, planPath, provider, outcome, blockedReasons };
+  return { root, planPath, provider, outcome, blockedReasons, rejectedDispositions };
 }
 
 describe('Conductor typed remediation-plan admission', () => {
@@ -236,7 +240,7 @@ describe('Conductor typed remediation-plan admission', () => {
 
     expect(result.outcome).toMatchObject({ kind: 'route', target: 'build' });
     expect(result.provider.invocationCount).toBe(2);
-    expect(result.blockedReasons[0]).toContain('structured-result-rejected');
+    expect(result.rejectedDispositions).toEqual(['invented-disposition']);
   });
 
   // Covers: task:20
@@ -257,6 +261,17 @@ describe('Conductor typed remediation-plan admission', () => {
     expect(result.outcome).toMatchObject({ kind: 'route', target: 'build' });
     expect(result.provider.invocationCount).toBe(2);
     expect(result.provider.calls[1]?.sessionId).not.toBe(result.provider.calls[0]?.sessionId);
+  });
+
+  // Covers: task:23
+  it('returns the final named mechanical fault when every typed gap-plan attempt is unusable', async () => {
+    const result = await fixture('claude', [
+      { kind: 'chat', output: 'first attempt omitted structured output' },
+      { kind: 'throw', error: new Error('last planner fault') },
+    ], 2);
+
+    expect(result.provider.invocationCount).toBe(2);
+    expect(result.outcome).toMatchObject({ kind: 'none', reason: expect.stringContaining('last planner fault') });
   });
 
   // Covers: task:20

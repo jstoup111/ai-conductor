@@ -9608,6 +9608,14 @@ export class Conductor {
                   : undefined,
               );
 
+            // Keep the terminal planner fault until the group reaches its
+            // single generic halt. The manual-test merge consumes a `none`
+            // independently (its deterministic BUILD kickback still wins),
+            // but an otherwise un-routable validation round must name the
+            // final mechanical planner fault rather than silently flatten it
+            // into an unsatisfied-gate message.
+            let remediationNoPlanReason: string | undefined;
+
             // `planRemediation` can reject, return no usable plan, or report
             // a cap.  For an all-refused PRD row those are all the same
             // operator-facing outcome as the serial tail: preserve the exact
@@ -9702,7 +9710,6 @@ export class Conductor {
               const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
                 architecture_review_as_built?: { remediation?: { enabled?: boolean } };
               }).architecture_review_as_built?.remediation?.enabled ?? true;
-              let remediableNoPlanReason: string | undefined;
               // AB-R13 / APPROVED decision 4: the as-built gate's lap budget is
               // the configured, durable `gates.architecture_review_as_built`
               // record that `planRemediation` enforces. `remediationRounds` is a
@@ -9868,7 +9875,7 @@ export class Conductor {
                   return;
                 }
                 if (remediationOutcome.kind === 'none') {
-                  remediableNoPlanReason = remediationOutcome.reason;
+                  remediationNoPlanReason = remediationOutcome.reason;
                 }
               } else if (
                 this.daemon &&
@@ -9949,7 +9956,7 @@ export class Conductor {
                     ? 'remediation is disabled by architecture_review_as_built.remediation.enabled'
                     : !this.daemon
                       ? 'remediation runs only in daemon mode'
-                      : remediableNoPlanReason
+                      : remediationNoPlanReason
                   : undefined;
                 const reason =
                   `Validation group "${step.name}" halted: ${asBuiltReason}` +
@@ -10343,7 +10350,9 @@ export class Conductor {
                 }
 
                 // remediationOutcome.kind === 'none' — no usable plan; fall
-                // through to the generic "fail loudly" path below.
+                // through to the generic "fail loudly" path below, carrying
+                // the last named mechanical fault to its HALT text.
+                remediationNoPlanReason = remediationOutcome.reason;
               }
             } else if (
               !mtMergeHandled && this.daemon &&
@@ -10392,7 +10401,10 @@ export class Conductor {
                 : `Validation group "${step.name}" halted in auto mode: ` +
                   (failedMemberReasons.length > 0
                     ? failedMemberReasons.join('; ')
-                    : 'non-green branch outcome');
+                    : 'non-green branch outcome') +
+                  (remediationNoPlanReason
+                    ? ` — remediation did not route: ${remediationNoPlanReason}`
+                    : '');
             if (!existingGroupHalt || existingGroupHalt.trim().length === 0) {
               await this.writeHaltMarker(groupHaltReason + '\n', 'needs-human');
             }
