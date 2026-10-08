@@ -48,6 +48,12 @@ export interface CoverageBindingSliceMembership {
   readonly titles: readonly string[];
 }
 
+/** The recorded feature baseline narrowed to one child, without rewriting it. */
+export interface CoverageBindingChildOwnershipProjection {
+  readonly taskIds: readonly string[];
+  readonly storyIds: readonly string[];
+}
+
 /**
  * Provenance retained when a completed envelope is invalidated. It makes the
  * old judgement's eligibility explicit without changing the v1 envelope shape
@@ -127,6 +133,8 @@ export interface CoverageBindingEnvelope {
   readonly adrLayer?: CoverageBindingAdrLayerDisposition;
   /** Present when the plan declared a slice manifest. */
   readonly sliceMembership?: CoverageBindingSliceMembership;
+  /** Present when a sliced, stack-eligible plan assigns stories to children. */
+  readonly storyOwnership?: Readonly<Record<string, number>>;
 }
 
 /** Injected so unit tests do not touch the host filesystem. */
@@ -554,13 +562,33 @@ export function coverageBindingEnvelopePath(projectRoot: string): string {
   return join(projectRoot, ENVELOPE_DIRECTORY, ENVELOPE_FILENAME);
 }
 
+/**
+ * Select one child's recorded tasks and stories from the feature-scoped
+ * baseline. This intentionally has no filesystem dependency and does not
+ * modify the envelope it reads.
+ */
+export function projectChildOwnership(
+  envelope: CoverageBindingEnvelope,
+  position: number,
+): CoverageBindingChildOwnershipProjection {
+  return {
+    taskIds: Object.entries(envelope.sliceMembership?.taskSlices ?? {})
+      .filter(([, taskPosition]) => taskPosition === position)
+      .map(([taskId]) => taskId),
+    storyIds: Object.entries(envelope.storyOwnership ?? {})
+      .filter(([, storyPosition]) => storyPosition === position)
+      .map(([storyId]) => storyId),
+  };
+}
+
 export function parseCoverageBindingEnvelope(value: unknown): CoverageBindingEnvelope | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
   const hasAdrLayer = candidate.adrLayer !== undefined;
   const hasPredecessor = candidate.predecessor !== undefined;
   const hasSliceMembership = candidate.sliceMembership !== undefined;
-  if (!exactKeys(candidate, ['version', 'slug', 'runId', 'status', 'entries', ...(hasAdrLayer ? ['adrLayer'] : []), ...(hasPredecessor ? ['predecessor'] : []), ...(hasSliceMembership ? ['sliceMembership'] : [])]) || candidate.version !== ENVELOPE_VERSION ||
+  const hasStoryOwnership = candidate.storyOwnership !== undefined;
+  if (!exactKeys(candidate, ['version', 'slug', 'runId', 'status', 'entries', ...(hasAdrLayer ? ['adrLayer'] : []), ...(hasPredecessor ? ['predecessor'] : []), ...(hasSliceMembership ? ['sliceMembership'] : []), ...(hasStoryOwnership ? ['storyOwnership'] : [])]) || candidate.version !== ENVELOPE_VERSION ||
     !text(candidate.slug) || !text(candidate.runId) || !Array.isArray(candidate.entries) ||
     !(COVERAGE_BINDING_ENVELOPE_STATUSES as readonly unknown[]).includes(candidate.status)) {
     return null;
@@ -569,7 +597,9 @@ export function parseCoverageBindingEnvelope(value: unknown): CoverageBindingEnv
   const adrLayer = hasAdrLayer ? parseAdrLayer(candidate.adrLayer) : undefined;
   const predecessor = hasPredecessor ? parsePredecessor(candidate.predecessor) : undefined;
   const sliceMembership = hasSliceMembership ? parseSliceMembership(candidate.sliceMembership) : undefined;
-  return entries.some((entry) => entry === null) || adrLayer === null || predecessor === null || sliceMembership === null
+  const storyOwnership = hasStoryOwnership && slicePositions(candidate.storyOwnership) ? candidate.storyOwnership : undefined;
+  return entries.some((entry) => entry === null) || adrLayer === null || predecessor === null || sliceMembership === null ||
+    (hasStoryOwnership && storyOwnership === undefined)
     ? null
     : {
       version: ENVELOPE_VERSION,
@@ -580,6 +610,7 @@ export function parseCoverageBindingEnvelope(value: unknown): CoverageBindingEnv
       ...(adrLayer === undefined ? {} : { adrLayer }),
       ...(predecessor === undefined ? {} : { predecessor }),
       ...(sliceMembership === undefined ? {} : { sliceMembership }),
+      ...(storyOwnership === undefined ? {} : { storyOwnership }),
     };
 }
 

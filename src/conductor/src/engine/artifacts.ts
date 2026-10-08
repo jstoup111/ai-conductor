@@ -4189,6 +4189,19 @@ export function parseComplexityTier(content: string | null): ComplexityTier | un
 }
 
 /**
+ * Parse the optional stacked-delivery approval in a complexity marker. The
+ * marker is deliberately line-based so prose elsewhere cannot grant approval.
+ */
+export function parseStackedDeliverySignoff(content: string | null): 'approved' | 'absent' {
+  if (!content) return 'absent';
+  const match = content.match(/^\s*(?:\*\*)?Stacked-Delivery(?:\*\*)?\s*:(?:\*\*)?\s*(\S+)\s*$/im);
+  if (!match) return 'absent';
+  return match[1].replace(/[.,;:!?]+$/u, '').toLowerCase() === 'approved'
+    ? 'approved'
+    : 'absent';
+}
+
+/**
  * Parse an intake-origin marker file (`.docs/intake/<slug>.md`) into the
  * originating work reference. The marker carries a `Source-Ref: <ref>` line
  * (case-insensitive); the rest is free-form. The ref may be a GitHub

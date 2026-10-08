@@ -46,8 +46,10 @@ import {
   featureArtifactPatternsAreRecursive,
   parseAdrDecisions,
   parseComplexityTier,
+  parseStackedDeliverySignoff,
   parseTrack,
   planStem,
+  splitStoryBlocks,
   validateFeatureArtifactStems,
 } from '../artifacts.js';
 import type { StepName } from '../../types/index.js';
@@ -71,14 +73,19 @@ import { resolvePlanStoriesPath } from '../plan-stories-reference.js';
 import { scanPlanProtectedTargets } from '../plan-protected-targets.js';
 import { validatePlanDoneWhen } from '../plan-done-when.js';
 import { PLAN_TASK_HARD_STOP_BOUNDARY, validatePlanTaskCount } from '../plan-task-count.js';
-import { validatePlanSlices } from '../plan-slices.js';
+import {
+  customStepsInPerChildRegion,
+  deriveStoryOwnership,
+  evaluateStackEligibility,
+  validatePlanSlices,
+} from '../plan-slices.js';
 import { assessAcceptedStoryReadability } from '../story-criteria.js';
 import { composeSpecCommitMessage } from './spec-commit-message.js';
 import { isEngineAppendedRemediationTaskId } from '../remediation-append.js';
 import { loadConfig } from '../config.js';
 import { resolveFeatureApplicabilityConfig } from '../resolved-config.js';
 import { validateApplicability } from '../feature-applicability.js';
-import { ALL_STEPS } from '../steps.js';
+import { ALL_STEPS, buildStepRegistry } from '../steps.js';
 
 const execFile = promisify(execFileCb);
 
@@ -124,6 +131,7 @@ export type LandGateIdentifier =
   | 'plan-done-when'
   | 'plan-task-count'
   | 'plan-slices'
+  | 'stacked-delivery'
   | 'plan-stories-reference'
   | 'stories-not-approved'
   | 'stories-unreadable'
@@ -467,6 +475,38 @@ export async function landSpec(
         `landSpec: non-Small architecture artifact "${architectureFile}" is missing a fenced mermaid diagram. ` +
           'Regenerate the diagram through /architecture-diagram before landing.',
       );
+    }
+  }
+
+  if (planSlicesValidation.kind === 'sliced') {
+    const configResult = await loadConfig(canonical);
+    if (!configResult.ok && configResult.error.type !== 'missing') {
+      throw landGateError('stacked-delivery', `landSpec: project config is invalid: ${configResult.error.message}`);
+    }
+    if (configResult.ok && configResult.config.stacked_prs?.enabled === true) {
+      const complexityContent = complexityFile ? await readFile(complexityFile, 'utf-8') : null;
+      const ownership = deriveStoryOwnership(
+        planContent,
+        planSlicesValidation.slices,
+        new Set(splitStoryBlocks(storiesContent).flatMap(({ id }) => id === undefined ? [] : [id])),
+      );
+      const eligibility = evaluateStackEligibility({
+        tier,
+        signoff: parseStackedDeliverySignoff(complexityContent) === 'approved' ? 'approved' : undefined,
+        slicePositions: planSlicesValidation.slices.map(({ position }) => position),
+        maxSlices: configResult.config.stacked_prs.max_slices ?? 1,
+        regionCoupledSteps: customStepsInPerChildRegion(buildStepRegistry(configResult.config)),
+        complexityPath: complexityFile
+          ? relative(worktreePath, complexityFile).replaceAll('\\', '/')
+          : `.docs/complexity/${planStem(planFile)}.md`,
+      });
+      const reasons = [
+        ...(ownership.kind === 'invalid' ? ownership.violations.map(({ message }) => message) : []),
+        ...(eligibility.kind === 'ineligible' ? eligibility.reasons : []),
+      ];
+      if (reasons.length > 0) {
+        throw landGateError('stacked-delivery', `landSpec: ${reasons.join('; ')}`);
+      }
     }
   }
 

@@ -233,10 +233,10 @@
 # Default: unset; enabled false, cooldownMinutes 60, suiteCommand unset.
 # Changing it: enabled true lets the daemon rebase and resolve CONFLICTING non-draft PRs on its own; draft PRs are always left alone.
 # Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
-# Controls: stacked_prs — reserved configuration for build-loop slice checkpoints.
-# Allowed: an object with enabled (true or false).
-# Default: unset; enabled false.
-# Changing it: has no effect until #2724 adds its runtime consumer.
+# Controls: stacked_prs — stacked delivery of a plan's ## Slices manifest.
+# Allowed: an object with enabled (true or false) and max_slices (integer 1-9; above 5 warns).
+# Default: unset; when present, enabled false and max_slices 1.
+# Changing it: enabling adds stacked-delivery checks at engineer/land and coverage_binding.
 # Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
 # Controls: build_review — the judgement gate that reviews the build before the SHIP-tail steps.
 # Allowed: an object with enabled, scopeContainmentEnforced, maxParallel, adjudication, and rubrics; perTaskFloor is retired and ignored.

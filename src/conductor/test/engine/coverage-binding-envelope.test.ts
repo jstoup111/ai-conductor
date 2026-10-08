@@ -1,4 +1,4 @@
-// Covers: task:2, task:1, task:9, task:10, task:11
+// Covers: task:2, task:1, task:9, task:10, task:11, task:13, task:15
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -9,6 +9,7 @@ import {
   COVERAGE_BINDING_ENVELOPE_STATUSES,
   coverageBindingEnvelopePath,
   parseCoverageBindingEnvelope,
+  projectChildOwnership,
   parseAmendmentBatchPayload,
   parseConflictBatchPayload,
   parseJudgeBatchPayload,
@@ -188,6 +189,63 @@ describe('coverage binding envelope', () => {
       null,
       null,
     ]);
+  });
+
+  it('round-trips optional story ownership without making it completion evidence', () => {
+    const envelope = {
+      version: 1,
+      slug: 'feature',
+      runId: 'run-1',
+      status: 'done',
+      entries: [],
+      storyOwnership: { '1': 1, 'FR-2': 2 },
+    } as const;
+    const invalidated = { ...envelope, status: 'invalidated' as const };
+
+    expect([
+      parseCoverageBindingEnvelope(envelope),
+      parseCoverageBindingEnvelope(invalidated),
+      parseCoverageBindingEnvelope({ ...envelope, storyOwnership: { '1': 1.5 } }),
+      parseCoverageBindingEnvelope({ ...envelope, storyOwnership: { '1': 0 } }),
+      COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status),
+      COVERAGE_BINDING_COMPLETION_STATUSES.includes(
+        parseCoverageBindingEnvelope({
+          version: 1, slug: 'legacy-feature', runId: 'legacy-run', status: 'done', entries: [],
+        })!.status,
+      ),
+    ]).toEqual([
+      envelope,
+      invalidated,
+      null,
+      null,
+      true,
+      true,
+    ]);
+  });
+
+  it('projects a child\'s recorded tasks and stories without mutating the feature baseline', () => {
+    const envelope = {
+      version: 1,
+      slug: 'feature',
+      runId: 'run-1',
+      status: 'done',
+      entries: [],
+      sliceMembership: {
+        taskSlices: { '1': 1, '2': 1, '3': 2 },
+        titles: ['Foundation', 'Delivery'],
+      },
+      storyOwnership: { 'FR-1': 1, 'FR-2': 2 },
+    } as const;
+    const baseline = JSON.stringify({
+      sliceMembership: envelope.sliceMembership,
+      storyOwnership: envelope.storyOwnership,
+    });
+
+    expect(projectChildOwnership(envelope, 1)).toEqual({ taskIds: ['1', '2'], storyIds: ['FR-1'] });
+    expect(JSON.stringify({
+      sliceMembership: envelope.sliceMembership,
+      storyOwnership: envelope.storyOwnership,
+    })).toBe(baseline);
   });
 
   it('round-trips amendment verdict entries and defaults legacy entries to criterion', () => {

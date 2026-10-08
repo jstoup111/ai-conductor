@@ -1,4 +1,4 @@
-// Covers: task:8
+// Covers: task:6, task:8
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
@@ -41,7 +41,7 @@ function task(id: number): string {
   ].join('\n');
 }
 
-function plan(rows: string[]): string {
+function plan(rows: string[], taskCount = 6): string {
   return [
     '# Implementation Plan: plan slice bound',
     '',
@@ -53,26 +53,13 @@ function plan(rows: string[]): string {
     '| --- | --- | --- |',
     ...rows,
     '',
-    ...Array.from({ length: 6 }, (_, index) => task(index + 1)),
+    ...Array.from({ length: taskCount }, (_, index) => task(index + 1)),
   ].join('\n');
 }
 
-const fiveSlices = [
-  '| 1 | First | 1 |',
-  '| 2 | Second | 2 |',
-  '| 3 | Third | 3 |',
-  '| 4 | Fourth | 4 |',
-  '| 5 | Fifth | 5, 6 |',
-];
-
-const sixSlices = [
-  '| 1 | First | 1 |',
-  '| 2 | Second | 2 |',
-  '| 3 | Third | 3 |',
-  '| 4 | Fourth | 4 |',
-  '| 5 | Fifth | 5 |',
-  '| 6 | Sixth | 6 |',
-];
+function slices(count: number): string[] {
+  return Array.from({ length: count }, (_, index) => `| ${index + 1} | Slice ${index + 1} | ${index + 1} |`);
+}
 
 async function git(args: string[], cwd = repoPath): Promise<string> {
   const result = await execFile('git', args, { cwd });
@@ -93,6 +80,11 @@ async function seed(planText: string): Promise<string> {
   return worktreePath;
 }
 
+async function enableStackedPrs(): Promise<void> {
+  await mkdir(join(repoPath, '.ai-conductor'), { recursive: true });
+  await writeFile(join(repoPath, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n');
+}
+
 const options = { ownerConfig: { spec_owner: 'test-owner' } as OwnerConfig };
 
 beforeEach(async () => {
@@ -110,21 +102,21 @@ afterEach(async () => {
 });
 
 describe('plan-slices bound land rung', () => {
-  it('lands exactly five slices and refuses the same fixture shape with one added slice', async () => {
-    const fiveSlicePlan = plan(fiveSlices);
-    const validation = validatePlanSlices(fiveSlicePlan);
+  it('lands exactly nine slices and refuses the same fixture shape with one added slice', async () => {
+    const nineSlicePlan = plan(slices(9), 9);
+    const validation = validatePlanSlices(nineSlicePlan);
     expect(validation).toMatchObject({ kind: 'sliced' });
-    expect(validation.kind === 'sliced' && validation.slices).toHaveLength(5);
+    expect(validation.kind === 'sliced' && validation.slices).toHaveLength(9);
 
-    const sixSliceWorktree = await seed(plan(sixSlices));
-    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, sixSliceWorktree, undefined, options)
+    const tenSliceWorktree = await seed(plan(slices(10), 10));
+    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, tenSliceWorktree, undefined, options)
       .catch((reason: unknown) => reason);
 
     expect(error).toBeInstanceOf(LandGateError);
     expect(error).toMatchObject({ gate: 'plan-slices' });
 
-    await git(['worktree', 'remove', '--force', sixSliceWorktree]);
-    await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, await seed(fiveSlicePlan), undefined, options))
+    await git(['worktree', 'remove', '--force', tenSliceWorktree]);
+    await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, await seed(nineSlicePlan), undefined, options))
       .resolves.toMatchObject({ branch: 'spec/plan-slice-bound' });
     expect((await git(['rev-parse', 'spec/plan-slice-bound'])).trim()).toMatch(/^[0-9a-f]{40}$/);
   });
@@ -135,25 +127,40 @@ describe('plan-slices bound land rung', () => {
     ])), undefined, options)).resolves.toMatchObject({ branch: 'spec/plan-slice-bound' });
   });
 
-  it('refuses six slices with the bound violation', async () => {
-    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, await seed(plan(sixSlices)), undefined, options)
+  it('lands seven slices with the flag off', async () => {
+    await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, await seed(plan(slices(7), 7)), undefined, options))
+      .resolves.toMatchObject({ branch: 'spec/plan-slice-bound' });
+  });
+
+  it('refuses ten slices with the bound violation', async () => {
+    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, await seed(plan(slices(10), 10)), undefined, options)
       .catch((reason: unknown) => reason);
 
     expect(error).toBeInstanceOf(LandGateError);
     expect(error).toMatchObject({ gate: 'plan-slices' });
-    expect((error as Error).message).toContain('plan declares 6 slices and the bound is 5');
+    expect((error as Error).message).toContain('plan declares 10 slices and the bound is 9');
   });
 
-  it('refuses six slices with an empty slice in one refusal naming both violations', async () => {
-    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, await seed(plan([
-      ...sixSlices.slice(0, 4),
-      '| 5 | Fifth | |',
-      '| 6 | Sixth | 5, 6 |',
-    ])), undefined, options).catch((reason: unknown) => reason);
+  it('refuses ten slices with the bound violation when stacked delivery is enabled', async () => {
+    await enableStackedPrs();
+    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, await seed(plan(slices(10), 10)), undefined, options)
+      .catch((reason: unknown) => reason);
 
     expect(error).toBeInstanceOf(LandGateError);
     expect(error).toMatchObject({ gate: 'plan-slices' });
-    expect((error as Error).message).toContain('bound is 5');
-    expect((error as Error).message).toContain('slice 5 is empty');
+    expect((error as Error).message).toContain('plan declares 10 slices and the bound is 9');
+  });
+
+  it('refuses ten slices with an empty slice in one refusal naming both violations', async () => {
+    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, await seed(plan([
+      ...slices(10).slice(0, 8),
+      '| 9 | Ninth | |',
+      '| 10 | Tenth | 10 |',
+    ], 10)), undefined, options).catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(LandGateError);
+    expect(error).toMatchObject({ gate: 'plan-slices' });
+    expect((error as Error).message).toContain('bound is 9');
+    expect((error as Error).message).toContain('slice 9 is empty');
   });
 });

@@ -62,11 +62,19 @@ import type { CiRepairDiagnosticReason } from '../types/events.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import {
   parseAdrDecisions,
+  parseComplexityTier,
+  parseStackedDeliverySignoff,
   resolveFeaturePlanPath,
+  splitStoryBlocks,
   selectFeaturePlan,
   BUILD_REVIEW_VERDICT,
 } from './artifacts.js';
-import { validatePlanSlices } from './plan-slices.js';
+import {
+  customStepsInPerChildRegion,
+  deriveStoryOwnership,
+  evaluateStackEligibility,
+  validatePlanSlices,
+} from './plan-slices.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 import {
   formatArchitectureDecisionId,
@@ -106,7 +114,7 @@ import { engineContentStamp } from './engine-version-id.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { BUILD_REVIEW_RUBRIC_IDS, fingerprintBuildReviewRubricPolicy, getBuildReviewRubricDescriptor } from './build-review-registry.js';
 import { currentCommitSha } from './project-prelude.js';
-import { resolveGateCodeValidityConfig } from './config.js';
+import { loadConfig, resolveGateCodeValidityConfig } from './config.js';
 import {
   assembleBuildReviewInputs,
   TestSuiteProofError,
@@ -602,6 +610,8 @@ export interface StepRunnerOptions {
   /** Feature-owned warning sink for daemon-dispatched runners. */
   log?: (message: string) => void;
   featureDesc?: string;
+  /** Canonical project root used for build-entry config reads. */
+  projectRoot?: string;
   totalSteps?: number;
   pipelineDir?: string;
   stepCooldown?: number;
@@ -959,6 +969,7 @@ export class DefaultStepRunner implements StepRunner {
    */
   private wasSessionMarkerFoundOnInit = false;
   private featureDesc: string;
+  private readonly projectRoot: string;
   private totalSteps: number;
   private pipelineDir: string | null;
   private stepCooldown: number;
@@ -1019,6 +1030,7 @@ export class DefaultStepRunner implements StepRunner {
   ) {
     this.runId = sessionId;
     this.featureDesc = options?.featureDesc ?? '';
+    this.projectRoot = options?.projectRoot ?? projectDir;
     this.totalSteps = options?.totalSteps ?? ALL_STEPS.length;
     this.pipelineDir = options?.pipelineDir ?? null;
     this.stepCooldown = options?.stepCooldown ?? 0;
@@ -4712,6 +4724,14 @@ export class DefaultStepRunner implements StepRunner {
     };
     let adrLayer: CoverageBindingAdrLayerDisposition | undefined;
     let sliceMembership: CoverageBindingSliceMembership | undefined;
+    // This is feature-baseline metadata, not judge input.  It is populated
+    // only after the same ownership predicate that admits stacked delivery.
+    let storyOwnership: Readonly<Record<string, number>> | undefined;
+    let decideSet: CoverageBindingDecideSet | undefined;
+    const resolveDecideSet = async (): Promise<CoverageBindingDecideSet | undefined> => {
+      decideSet ??= await resolveCoverageBindingDecideSet(this.projectDir, this.featureDesc || undefined);
+      return decideSet;
+    };
     const writeEnvelope = async (
       status: 'disabled' | 'done' | 'failed' | 'partial' | 'refused',
       entries: readonly CoverageBindingEnvelopeEntry[],
@@ -4724,6 +4744,7 @@ export class DefaultStepRunner implements StepRunner {
         entries,
         ...(adrLayer === undefined ? {} : { adrLayer }),
         ...(sliceMembership === undefined ? {} : { sliceMembership }),
+        ...(storyOwnership === undefined ? {} : { storyOwnership }),
       }, filesystem);
       // Rebase preservation needs to know which HEAD this run judged. Without
       // a resolvable HEAD there is no stamp, and preservation stays refused.
@@ -4765,14 +4786,45 @@ export class DefaultStepRunner implements StepRunner {
           )),
           titles: sliceValidation.slices.map((slice) => slice.title),
         };
+        const configResult = await loadConfig(this.projectRoot);
+        const freshConfig = configResult.ok
+          ? configResult.config
+          : configResult.error.type === 'missing'
+            ? undefined
+            : this.config;
+        if (freshConfig?.stacked_prs?.enabled === true) {
+          const resolvedDecideSet = await resolveDecideSet();
+          const storiesPath = resolvedDecideSet?.storiesPath;
+          const storiesText = storiesPath === undefined || storiesPath === null
+            ? ''
+            : await readFile(join(this.projectDir, storiesPath), 'utf8').catch(() => '');
+          const complexityPath = join(this.projectDir, '.docs', 'complexity', `${basename(planPath!, '.md')}.md`);
+          const complexityContent = await readFile(complexityPath, 'utf8').catch(() => null);
+          const ownership = deriveStoryOwnership(
+            planText,
+            sliceValidation.slices,
+            new Set(splitStoryBlocks(storiesText).flatMap(({ id }) => id === undefined ? [] : [id])),
+          );
+          const eligibility = evaluateStackEligibility({
+            tier: parseComplexityTier(complexityContent),
+            signoff: parseStackedDeliverySignoff(complexityContent) === 'approved' ? 'approved' : undefined,
+            slicePositions: sliceValidation.slices.map(({ position }) => position),
+            maxSlices: freshConfig.stacked_prs.max_slices ?? 1,
+            regionCoupledSteps: customStepsInPerChildRegion(buildStepRegistry(freshConfig)),
+            complexityPath: relative(this.projectDir, complexityPath).replaceAll('\\', '/'),
+          });
+          const reasons = [
+            ...(ownership.kind === 'invalid' ? ownership.violations.map(({ message }) => message) : []),
+            ...(eligibility.kind === 'ineligible' ? eligibility.reasons : []),
+          ];
+          if (reasons.length > 0) {
+            const reason = `coverage_binding refused: ${reasons.join('; ')}`;
+            return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
+          }
+          if (ownership.kind === 'owned') storyOwnership = ownership.ownership;
+        }
       }
     }
-
-    let decideSet: CoverageBindingDecideSet | undefined;
-    const resolveDecideSet = async (): Promise<CoverageBindingDecideSet | undefined> => {
-      decideSet ??= await resolveCoverageBindingDecideSet(this.projectDir, this.featureDesc || undefined);
-      return decideSet;
-    };
 
     // Tier S and legacy plans without obligation bookkeeping have no ADR layer.
     // This preserves their existing judge behavior while still evaluating every

@@ -1646,6 +1646,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       wt.path,
       {
         featureDesc: item.slug,
+        projectRoot,
         pipelineDir,
         config,
         modelPolicy: selectedRuntime.policy,

@@ -1,9 +1,13 @@
 import {
   parsePlanTaskBodies,
+  parsePlanTaskStoryLineIds,
   resolvePlanTaskReference,
   TASK_HEADER_PATTERN,
 } from './plan-task-parse.js';
+import { MAX_CHILD_ID } from './child-context.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
+import { ALL_STEPS } from './steps.js';
+import type { StepDefinition } from '../types/index.js';
 
 export interface PlanSlice {
   position: number;
@@ -23,13 +27,210 @@ export type PlanSlicesValidation =
   | { kind: 'sliced'; slices: PlanSlice[] }
   | { kind: 'invalid'; violations: PlanSliceViolation[] };
 
+/** The slice position that owns each cited story, or every ownership refusal. */
+export type StoryOwnershipValidation =
+  | { kind: 'owned'; ownership: Readonly<Record<string, number>> }
+  | { kind: 'invalid'; violations: PlanSliceViolation[] };
+
+export interface RegionCoupledCustomStep {
+  name: string;
+  coupling: 'in-region' | 'loop-coupled';
+}
+
+export interface StackEligibilityInput {
+  tier: 'S' | 'M' | 'L' | undefined;
+  signoff: 'approved' | undefined;
+  slicePositions: readonly number[];
+  maxSlices: number;
+  regionCoupledSteps: readonly RegionCoupledCustomStep[];
+  complexityPath: string;
+}
+
+export type StackEligibilityVerdict =
+  | { kind: 'eligible' }
+  | { kind: 'ineligible'; reasons: string[] };
+
+/**
+ * Determines whether a sliced plan remains safe to deliver as independent
+ * children under the currently resolved project configuration.
+ */
+export function evaluateStackEligibility({
+  tier,
+  signoff,
+  slicePositions,
+  maxSlices,
+  regionCoupledSteps,
+  complexityPath,
+}: StackEligibilityInput): StackEligibilityVerdict {
+  const reasons: string[] = [];
+
+  if (tier !== 'M' && tier !== 'L') {
+    reasons.push(`stacked delivery requires tier M or L (found ${tier ?? 'no tier'})`);
+  }
+  if (signoff !== 'approved') {
+    reasons.push(`no operator stacking sign-off is recorded in ${complexityPath}`);
+  }
+  if (slicePositions.length > maxSlices) {
+    reasons.push(`plan declares ${slicePositions.length} slices, exceeding stacked_prs.max_slices = ${maxSlices}`);
+  }
+  for (const position of slicePositions) {
+    if (position > MAX_CHILD_ID) {
+      reasons.push(`slice position ${position} is above the MAX_CHILD_ID ceiling of ${MAX_CHILD_ID}`);
+    }
+  }
+  for (const { name, coupling } of regionCoupledSteps) {
+    reasons.push(
+      coupling === 'in-region'
+        ? `custom step ${name} is inside the per-child region`
+        : `custom step ${name} is coupled to the per-child loop`,
+    );
+  }
+
+  return reasons.length === 0 ? { kind: 'eligible' } : { kind: 'ineligible', reasons };
+}
+
+/**
+ * Finds custom steps that cannot safely run once per independent child.
+ *
+ * The resolved registry is authoritative: custom steps can be chained, so
+ * their configured `after` text does not reliably describe their final place.
+ */
+export function customStepsInPerChildRegion(
+  registry: readonly StepDefinition[],
+): RegionCoupledCustomStep[] {
+  const builtInNames = new Set(ALL_STEPS.map((step) => step.name));
+  const acceptanceSpecsIndex = registry.findIndex((step) => step.name === 'acceptance_specs');
+  const buildReviewIndex = registry.findIndex((step) => step.name === 'build_review');
+
+  if (acceptanceSpecsIndex === -1 || buildReviewIndex === -1) return [];
+
+  return registry.flatMap((step, index): RegionCoupledCustomStep[] => {
+    if (builtInNames.has(step.name)) return [];
+
+    if (index > acceptanceSpecsIndex && index < buildReviewIndex) {
+      return [{ name: step.name, coupling: 'in-region' }];
+    }
+
+    if (
+      step.phase === 'BUILD'
+      && index < buildReviewIndex
+      && (step.loopGate === true || step.kickbackTarget === true)
+    ) {
+      return [{ name: step.name, coupling: 'loop-coupled' }];
+    }
+
+    return [];
+  });
+}
+
 const FENCE_LINE = /^\s*(`{3,}|~{3,})(.*)$/;
 const SLICES_HEADING = /^##\s+Slices\s*$/i;
 const REQUIRED_HEADER = ['Slice', 'Title', 'Tasks'];
 const TABLE_DELIMITER_CELL = /^:?-{3,}:?$/;
 const DEPENDENCIES_LINE = /^\s*\*\*Dependencies:\*\*\s*(.*?)\s*$/;
+const STORY_LINE = /^\s*\*\*Story:\*\*\s*(.*?)\s*$/i;
+const TYPE_LINE = /^\s*\*\*Type:\*\*\s*(.*?)\s*$/i;
 
-export const MAX_PLAN_SLICES = 5;
+function taskType(body: string): string | undefined {
+  return body.split('\n').map((line) => line.match(TYPE_LINE)?.[1].trim().toLowerCase()).find(Boolean);
+}
+
+function rawStoryLines(body: string): string[] {
+  return body.split('\n')
+    .map((line) => line.match(STORY_LINE)?.[1].trim())
+    .filter((line): line is string => line !== undefined);
+}
+
+/**
+ * Derives the sole owning slice for each story cited by sliced-plan tasks.
+ *
+ * `declaredStoryIds` is optional until the caller has read the companion
+ * stories artifact. Without it this remains the Task 2 predicate: every
+ * normalized token is treated as a story citation. With it, the predicate also
+ * enforces the ADR's declared-story and supporting-purpose rules.
+ */
+export function deriveStoryOwnership(
+  planText: string,
+  slices: readonly PlanSlice[],
+  declaredStoryIds?: ReadonlySet<string>,
+): StoryOwnershipValidation {
+  const violations: PlanSliceViolation[] = [];
+  const positionsByStory = new Map<string, Set<number>>();
+  const taskBodies = parsePlanTaskBodies(planText);
+
+  for (const slice of slices) {
+    for (const taskId of slice.taskIds) {
+      if (isEngineAppendedRemediationTaskId(taskId)) continue;
+      const body = taskBodies.get(taskId);
+      if (body === undefined) continue;
+
+      const storyLines = parsePlanTaskStoryLineIds(body);
+      const rawLines = rawStoryLines(body);
+      const type = taskType(body);
+      const supportingPurpose = type === 'infrastructure' || type === 'refactor';
+
+      for (let index = 0; index < storyLines.length; index += 1) {
+        const ids = storyLines[index];
+        if (ids.length === 0) continue;
+        const rawLine = rawLines[index] ?? ids.join(', ');
+        const hasDeclaredId = declaredStoryIds?.size === undefined
+          ? true
+          : ids.some((id) => declaredStoryIds.has(id));
+        if (supportingPurpose && !hasDeclaredId) continue;
+
+        if (ids.length > 1) {
+          violations.push({
+            code: 'multi-story-line',
+            position: slice.position,
+            taskId,
+            message: `Task ${taskId} has multiple story ids on Story line "${rawLine}"`,
+          });
+        }
+
+        for (const storyId of ids) {
+          if (declaredStoryIds !== undefined && !declaredStoryIds.has(storyId)) {
+            violations.push({
+              code: 'unknown-story-id',
+              position: slice.position,
+              taskId,
+              message: `Task ${taskId} cites unknown story ${storyId}`,
+            });
+            continue;
+          }
+          const positions = positionsByStory.get(storyId) ?? new Set<number>();
+          positions.add(slice.position);
+          positionsByStory.set(storyId, positions);
+        }
+      }
+    }
+  }
+
+  for (const [storyId, positions] of positionsByStory) {
+    if (positions.size > 1) {
+      const listed = [...positions].sort((left, right) => left - right);
+      violations.push({
+        code: 'story-spans-children',
+        message: `Story ${storyId} spans child positions ${listed.join(' and ')}`,
+      });
+    }
+  }
+
+  if (declaredStoryIds !== undefined) {
+    for (const storyId of declaredStoryIds) {
+      if (!positionsByStory.has(storyId)) {
+        violations.push({
+          code: 'story-unowned',
+          message: `Story ${storyId} is owned by no child position`,
+        });
+      }
+    }
+  }
+
+  if (violations.length > 0) return { kind: 'invalid', violations };
+  const ownership: Record<string, number> = {};
+  for (const [storyId, positions] of positionsByStory) ownership[storyId] = [...positions][0];
+  return { kind: 'owned', ownership };
+}
 
 function fencedLineStates(lines: string[]): boolean[] {
   const states: boolean[] = [];
@@ -192,10 +393,10 @@ export function validatePlanSlices(planText: string): PlanSlicesValidation {
     sliceHasTaskReferences.push(cells[2] !== '');
   }
 
-  if (slices.length > MAX_PLAN_SLICES) {
+  if (slices.length > MAX_CHILD_ID) {
     violations.push({
       code: 'max-slices',
-      message: `plan declares ${slices.length} slices and the bound is ${MAX_PLAN_SLICES}`,
+      message: `plan declares ${slices.length} slices and the bound is ${MAX_CHILD_ID}`,
     });
   }
 

@@ -20,6 +20,7 @@ import { startOperatorEventSpine } from './event-persister.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
 import { childStateExists, parseChildId } from './child-context.js';
 import {
+  projectChildOwnership,
   readCoverageBindingEnvelope,
   type CoverageBindingEnvelopeFilesystem,
 } from './coverage-binding-envelope.js';
@@ -183,11 +184,11 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
     }
     if (!isEngineAppendedRemediationTaskId(cmd.id)) {
       const membership = envelope.sliceMembership.taskSlices[cmd.id];
-      if (membership === undefined) {
-        console.error(`[task-cli] task ${cmd.id} has no recorded slice membership`);
-        return 1;
-      }
-      if (membership !== child) {
+      if (!projectChildOwnership(envelope, child).taskIds.includes(cmd.id)) {
+        if (membership === undefined) {
+          console.error(`[task-cli] task ${cmd.id} has no recorded slice membership`);
+          return 1;
+        }
         console.error(`[task-cli] task ${cmd.id} belongs to child ${membership}, not child ${child}`);
         return 1;
       }
