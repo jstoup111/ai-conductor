@@ -70,7 +70,8 @@ describe('typed PRD-audit remediation admission', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  // Covers: task:24 — the PRD-audit caller receives the final planner fault
+  // Covers: task:24
+  // The PRD-audit caller receives the final planner fault
   // rather than a generic missing-plan result.
   it('returns the exhausted planner fault for PRD deterministic fallback rendering', async () => {
     const root = await mkdtemp(join(tmpdir(), 'prd-audit-exhaustion-'));
@@ -124,7 +125,8 @@ describe('typed PRD-audit remediation admission', () => {
     expect(outcome).toMatchObject({ kind: 'none', reason: 'final typed planner fault' });
   });
 
-  // Covers: task:24 — refusal remains the authoritative terminal shape even
+  // Covers: task:24
+  // Refusal remains the authoritative terminal shape even
   // when the typed planner has exhausted its attempts.
   it('keeps the refused-widening HALT and appends the final planner fault', async () => {
     const root = await mkdtemp(join(tmpdir(), 'prd-audit-refusal-exhaustion-'));
