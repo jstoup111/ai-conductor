@@ -173,6 +173,8 @@ into one stack-eligibility verdict. Land and `coverage_binding` both evaluate it
    Emitting an event when a re-run re-owns a story without moving a task is deferred to #2942,
    alongside its position-immutability guard. Here a re-run simply records the current ownership.
 
+> **Amended 2026-10-07 by #2942:** A missing envelope (for example after worktree recreation loses the gitignored `.pipeline/`) is a re-run condition. The re-run must reproduce the same positions, enforced by the position-immutability guard (`adr-2026-10-07-per-child-build-region` decisions 2 and 13).
+
 7. **The slice bound splits in two.**
    - **Grammar ceiling:** the flag-independent `plan-slices` rung bound becomes `MAX_CHILD_ID` (9).
      It replaces `MAX_PLAN_SLICES` = 5. It is only looser, so no plan that lands today is refused.

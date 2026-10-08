@@ -98,6 +98,8 @@ dedup, owner-gate provenance, push-evidence finish guard.
 > **D4** — `parsePlanTaskPaths` and `TASK_ID_PATTERN` are shared utilities that MUST be preserved/relocated, not deleted. (above: "**Constraint — preserve shared utilities.**")
 > **D5** — The listed same-named systems (`wiring_check`, `acceptance_specs` RED-evidence, shipped-record dedup, owner-gate provenance, push-evidence finish guard) are out of scope and stay untouched. (above: "**Out of scope — separate same-named systems")
 
+> **Amended 2026-10-07 by #2942:** On a stacked child branch only, the commit-msg hook blocks a commit whose `Task:` id belongs to a different child than the checked-out branch. This is a branch-membership check, not attribution: stamps remain telemetry, and features with no children are unchanged (`adr-2026-10-07-per-child-build-region` decision 6).
+
 ## Consequences
 
 ### Positive

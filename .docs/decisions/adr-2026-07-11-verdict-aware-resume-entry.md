@@ -86,6 +86,8 @@ Adopt **Option A**. On `resume: true`, the start index is
 5. **One authority.** No new satisfaction predicate is introduced; the clamp calls the same
    `gateSatisfied` used by `selectNextGate`, so entry and tail can never disagree on semantics.
 
+> **Amended 2026-10-07 by #2942:** For a stacked feature the resume clamp reads one overlay (flat state plus the active child's region keys); the satisfaction authority is unchanged (`adr-2026-10-07-per-child-build-region` decision 4).
+
 ## Consequences
 
 ### Positive

@@ -97,6 +97,8 @@ unchanged) and by D2 below.
 change always earns a fresh budget" — is a property of `count`, not of the convergence counters, and
 is preserved exactly.
 
+> **Amended 2026-10-07 by #2942:** In a stacked feature the counters accumulate per child, on the active child's `build_review` entry (`adr-2026-10-07-per-child-build-region` decision 10).
+
 ### D2 — The rebase that invalidates the gate refunds its convergence laps
 
 Where `advanceTail` handles `lastRebaseOutcome.kind === 'changed'` (`conductor.ts:8955-9010`), the
@@ -104,6 +106,8 @@ loop that re-opens each invalidated target additionally credits `build_review`'s
 counters back to their empty state — `cumulative → 0`, `rubricFailures → {}` — before re-opening it.
 
 Three conditions, each load-bearing:
+
+> **Amended 2026-10-07 by #2942:** The refund credits the active child's `build_review` entry, and its receipt is written in that child's ledger in the same lease (`adr-2026-10-07-per-child-build-region` decision 10).
 
 1. **Only when the gate was actually invalidated.** The existing loop already keys on a verdict with
    `satisfied === false` and `kickback.from === 'rebase'`, which is precisely `adr-2026-07-20`'s

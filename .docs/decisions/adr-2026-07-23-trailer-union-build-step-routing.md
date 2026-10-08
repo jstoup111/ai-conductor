@@ -69,6 +69,8 @@ Adopt **Option A**, with these constraints:
    consume `resolveTaskIds`. The breaker's stall predicate itself (`attempt ≥ 2` ∧ no count
    movement ⇒ HALT) is unchanged — genuine stalls (tasks unresolved, no movement) halt exactly
    as today.
+
+> **Amended 2026-10-07 by #2942:** In a stacked feature both consumers fold over child k's task set only: its slice tasks plus remediation tasks recorded to child k (`adr-2026-10-07-per-child-build-region` decision 6).
 3. **Rows stay dead, but still count.** No machinery writes `completed` rows (no derivation
    revival). Rows present from operator/recovery edits or `skipped` markers still resolve — the
    union only widens resolution, never narrows it.

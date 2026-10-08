@@ -60,6 +60,8 @@ exception; every other requirement (`errors == 0`, `skipped == 0`, `executed >= 
 because a waived RED requirement is not a waived *execution* requirement — the specs must still
 have run.
 
+> **Amended 2026-10-07 by #2942:** A second exception kind, `prior-child-green`, is valid in a stacked feature when a child's spec already passes because an earlier child implemented the behavior. Its attribution must name the parent child's closure tip, and the `writing-system-tests` skill records it. Every other execution requirement still applies (`adr-2026-10-07-per-child-build-region` decision 5).
+
 **A waived pass is reported as waived, never as proven.** The `acceptance_red` event is emitted
 with `state: satisfied` and `viaException: true`, and the live status line and the ledger both
 carry that distinction. A waived step must never present the acceptance-spec lifecycle as
@@ -116,6 +118,8 @@ repository that installs the harness.
 > **D2** — A waived pass is reported as waived, never as proven: `acceptance_red` is emitted with `state: satisfied` and `viaException: true`, and the live status line and the ledger carry that distinction (above: "A waived pass is reported as waived, never as proven.")
 > **D3** — An unrecorded green run stays rejected, with its failure text (`0 failed — RED not established`) unchanged (above: "An unrecorded green run stays rejected")
 > **D4** — Per the 2026-08-09 #1246 amendment: the exec result owns observed counters and a recorded declaration survives re-execution — the self-heal carries an existing `exception` forward, never invents one, and never repairs a malformed one (above: "the exec result owns observed counters; a recorded declaration survives re-execution")
+
+> **Amended 2026-10-07 by #2942:** In a stacked feature the self-heal reads and carries the exception forward at the active child's marker path (`adr-2026-10-07-per-child-build-region` decision 5).
 > **D5** — `skills/remediate/SKILL.md` states the obligation to declare the exception rather than combine acceptance and production changes silently, in provider-neutral prose, with the consumer-facing rule in `HARNESS.md` (above: "`skills/remediate/SKILL.md` states the obligation.")
 
 ## Consequences

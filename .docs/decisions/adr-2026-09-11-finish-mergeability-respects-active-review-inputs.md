@@ -19,7 +19,11 @@ The operator approved document-aware invalidation on 2026-09-10 and reaffirmed i
 3. When the advanced base changes the active feature's stories, PRD, plan, or coherence inputs used by a judged review, enter the existing rebase flow even if the prospective merge is clean. Use the existing scoped input resolution and gate projection to invalidate and rerun only affected reviews. Unrelated feature documents do not trigger this exception. A document-only change does not itself invalidate BUILD or aggregate test proof.
 4. Conflicting or indeterminate prospective merges enter the existing rebase and bounded conflict-resolution flow. Both clean rebases and conflict-resolution recovery use the same relevant-document invalidation policy. Existing code/test invalidation, drift-budget, evidence, protected-seal, and HALT behavior remains in force.
 5. Re-kick retains mandatory play-forward rebase onto the advanced base before retrying its gate and cannot take mergeable-skip. It continues to share the existing rebase driver, conflict resolver, verdict, evidence-translation, protected-seal, and HALT machinery with finish.
+
+> **Amended 2026-10-07 by #2942:** For a stacked feature whose active child is not the leaf, the play-forward rebase is skipped and recorded as `rebase_skipped_for_stack` until #2943 provides restack; at the leaf it applies to the leaf only (`adr-2026-10-07-per-child-build-region` decision 12).
 6. Keep the existing lifecycle step name and placement. Normal finish requires the branch to be current or prospectively mergeable without unresolved changes to active review inputs; publication still requires current passing evidence. Re-kick retains the rebased-onto-advanced-base contract.
+
+> **Amended 2026-10-07 by #2942:** For a stacked feature whose active child is not the leaf, re-kick does not rebase onto the advanced base until #2943 provides restack; the contract applies at the leaf (`adr-2026-10-07-per-child-build-region` decision 12).
 7. Coverage binding remains non-tree-attesting under `adr-2026-08-31-coverage-binding-judge-step`. This decision does not introduce a durable coverage resume-validity stamp or authorize a test-only validity branch. The existing post-rebase classification owns invalidation for its active input surface.
 
 ## Consequences

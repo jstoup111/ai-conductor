@@ -40,7 +40,7 @@ locally and diagnosable rather than silently dropped.
 
 ### Happy Path
 
-- **Given** a feature worktree whose branch has an upstream remote that accepts the push, **when** the halt record is committed, **then** the engine pushes the current branch and the record is present on the remote branch, and a `halt_record_written` event names the record path and the halt class.
+- **Given** a feature worktree whose branch has an upstream remote that accepts the push, **when** the halt record is committed, **then** the engine pushes the current branch (unless it is a stacked child branch `feat/c<k>/<slug>`, which is never pushed) and the record is present on the remote branch, and a `halt_record_written` event names the record path and the halt class.
 
 ### Negative Paths
 

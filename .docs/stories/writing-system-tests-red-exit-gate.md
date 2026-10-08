@@ -28,7 +28,7 @@ a hard exit condition, so the step is not reportable as complete on the first at
   daemon in auto mode,
 - **When** the `writing-system-tests` skill generates the acceptance specs, executes them against
   the project's test runner, and the feature's own specs fail for the right reason (genuine RED),
-- **Then** the skill writes `.pipeline/acceptance-specs-red.json` capturing the real run
+- **Then** the skill writes `.pipeline/acceptance-specs-red.json` (or, in a stacked feature, the active child's `.pipeline/children/<k>/acceptance-specs-red.json`) capturing the real run
   (`executed >= 1`, `failed >= 1`, `skipped == 0`, `errors == 0`) **before** it reports the step
   complete, and only then commits the failing specs,
 - **And** the engine's `acceptance_specs` completion check passes on the **first** attempt (no

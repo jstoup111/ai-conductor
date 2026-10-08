@@ -42,7 +42,7 @@ As an operator who amends a halted feature's plan and rewinds it to build, I wan
 
 ## Story 2: An incomplete build does not succeed and names every pending task
 
-**Requirement:** TI-2 — BUILD reports not done while any plan task is unresolved, and the reason names every pending task by id and title.
+**Requirement:** TI-2 — BUILD reports not done while any plan task is unresolved, and the reason names every pending task by id and title. In a stacked feature, "plan task" means the active child's slice tasks plus the remediation tasks recorded to that child.
 
 As an operator reading daemon output, I want an incomplete build to say exactly which tasks are unfinished, so that I can see what was skipped without opening `task-status.json`.
 

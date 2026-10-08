@@ -167,6 +167,8 @@ records a new PASS, drift measurement restarts from that PASS's provenance state
 > home. Placing it there also removes the double-inspection defect the shipped code exhibited on
 > the daemon path, so one structural change satisfies both this decision and D7.
 
+> **Amended 2026-10-07 by #2942:** The verifier's evidence path is child-parameterized; scoped selection uses the child's base (`adr-2026-10-07-per-child-build-region` decisions 7–8).
+
 ### D5 — Verification mode is a first-class, load-validated choice
 
 `verification.mode: scoped` requires a valid `scoped_command` (with `{selectors}`) at config
@@ -189,6 +191,8 @@ scoped run's identity is captured: the fingerprint normalization additionally co
 `scoped_command` and the resolved selector set whenever mode is scoped, so a selector-set
 change stales a scoped PASS.
 
+> **Amended 2026-10-07 by #2942:** In a stacked feature, scoped selection runs from the child's base (`resolveChildBase`) rather than the merge-base; a missing or non-ancestor parent selects the aggregate suite (`adr-2026-10-07-per-child-build-region` decision 8).
+
 ### D6 — Evidence schema records what the PASS covered (version bump)
 
 `.pipeline/test-suite-evidence.json` bumps its version and adds: `mode`
@@ -197,6 +201,8 @@ change stales a scoped PASS.
 since the attested PASS. Together with the existing `provenanceHeadSha` this delivers the
 traceability outcome: an operator can name the attested commit, the mode and selection it
 ran under, and every tolerated drift increment since — from `.pipeline/` alone.
+
+> **Amended 2026-10-07 by #2942:** In a stacked feature, test-suite evidence is per child and `full_suite: once` requires one aggregate PASS per feature, on the leaf (its `test_suite` and the FINISH fence) (`adr-2026-10-07-per-child-build-region` decision 7).
 
 ### D7 — Outcomes ride the existing event spine
 

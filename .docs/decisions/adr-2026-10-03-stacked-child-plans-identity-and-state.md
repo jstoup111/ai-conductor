@@ -217,6 +217,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
      existing `children/<k>/kickback-ledger.json` by explicit enumeration, never with a recursive
      delete (`adr-2026-07-11-pipeline-state-durability` D2).
 
+> **Amended 2026-10-07 by #2942:** The region stores also hold acceptance evidence (RED marker, run contract, disposition record), and a child gate's convergence-credit receipt is written in that child's ledger atomically with the credit; growth, `pendingRepair` and `effectiveGrowthCap` stay flat and child ledgers refuse them (`adr-2026-10-07-per-child-build-region` decisions 4 and 10).
+
 9. **Region caps apply per child.**
    - Because region gate entries, including `build_review`'s cumulative count, live in the child's
      ledger, every region cap applies per child. That is the operator's decision log ("caps are per
@@ -225,6 +227,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
      `adr-2026-08-12-cumulative-build-review-convergence-bound` and
      `adr-2026-07-26-cross-dispatch-kickback-livelock-bound`.
    - Plan growth and repair budgets stay feature-wide (#2944).
+
+> **Amended 2026-10-07 by #2942:** Per-child caps are enabled. With N children the total `build_review` cumulative bound is N×5 and the mechanical-fault bound N×3; `kickback-budget raise|reset --child` are offered (`adr-2026-10-07-per-child-build-region` decision 10).
 
 10. **The active-child contract is implemented by #2942.**
     - The active child is derived from git branch state, with no new state file, so it survives
@@ -235,6 +239,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
     - It must never resolve to "no child" in a way that would write region state to the flat paths
       while child state exists. #2942 decides the fail-closed policy for detached HEAD and git errors.
     - In this ticket the active child is always "no child".
+
+> **Amended 2026-10-07 by #2942:** The active child is derived independently of the checkout: positions from the sealed envelope, closure from monotone compare-and-swap refs `refs/conductor/<slug>/closed/c<k>`, active = lowest unclosed position; ancestry is only a divergence detector. Ancestry-based or checkout-based derivation was falsified by adversarial review (child 1 closed on creation; closed children reopened by rebase). The engine switches the worktree to the active child before any region dispatch (`adr-2026-10-07-per-child-build-region` decisions 1–2).
 
 11. **The base-override contract is implemented by #2942.**
     - One producer, `resolveChildBase(worktree, child)`, returns one of three results:
@@ -252,6 +258,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
       - task seed: nothing proven;
       - amendment claims: all obligations.
     - `BuildReviewInputs.baseKind` gains `child-parent`, which suppresses the degraded-fetch warning.
+
+> **Amended 2026-10-07 by #2942:** `resolveChildBase` gains a typed `parent-not-ancestor` result (and translates the leaf's parent tip through the persisted rewrite map after its FINISH rebase), and acceptance spec attribution is a seventh consuming site that refuses disposition-only when the parent is unresolvable (`adr-2026-10-07-per-child-build-region` decision 8). The follow-up "write halt records to the leaf" is re-decided: halt records commit to the active child's branch with a `Child:` field and reach the leaf by ancestry; no child branch is pushed (decision 11).
 
 12. **Events carry an optional `child`.**
     - `ConductorEvent` becomes `(existing union) & { child?: ChildId }`.
@@ -277,6 +285,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
       `current-task` stays flat because the commit hook reads it.
     - **`kickback-budget inspect --child k`** reads child k's ledger entries. `raise` and `reset` with
       `--child` are not offered until #2942 writes per-child cap evidence.
+
+> **Amended 2026-10-07 by #2942:** Without `--child`, `rewind`, `task` and `kickback-budget` now default to the active child of a feature with children; byte-identity without the flag holds for features with no children. `kickback-budget raise|reset --child` are offered. `rewind --child k` for a closed child is refused naming #2943, and the downstream cascade over children above k applies only to children that are not closed (`adr-2026-10-07-per-child-build-region` decisions 10–11).
 
 14. **The N=1 contract is structural and proven by golden tests.**
     - With no child there is no `children/` directory, no new key, and no event field.
