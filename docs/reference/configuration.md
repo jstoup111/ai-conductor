@@ -1467,16 +1467,34 @@ removal attempts; other `needs-remediation` causes remain sticky.
 
 ## stacked_prs
 
-Reserved for #2724 build-loop slice checkpoints; it has no runtime consumer yet. The commented
-`stacked_prs` entry in `templates/project-config.yml.template` is inert, and the plan-slices land
-gate and `coverage_binding` slice layer run regardless of this flag.
+Opts a project into stacked delivery of a sliced plan. Plan-slice grammar validation (the
+`plan-slices` land gate and the `coverage_binding` slice layer) runs regardless of this block; the
+checks below run only when `enabled` is `true`. Build-loop slice checkpoints remain reserved for
+#2724.
 
 | Key | Type | Validation | Default |
 | --- | --- | --- | --- |
 | `stacked_prs.enabled` | boolean | Boolean, else hard error | `false` |
+| `stacked_prs.max_slices` | integer | Integer from 1 through 9, else hard error; a value above 5 loads with a review-size warning | `1` |
 
 `stacked_prs` must be an object. Unknown sub-keys and non-object values are hard errors. When the
-block is present but `enabled` is omitted, it resolves to `false`.
+block is present, an omitted `enabled` resolves to `false` and an omitted `max_slices` resolves to
+`1`.
+
+When `enabled` is `true` and the plan declares a `## Slices` manifest, the `stacked-delivery` land
+gate at `engineer/land` and the `coverage_binding` step refuse the plan unless all of these hold:
+
+- The complexity tier is `M` or `L`.
+- `.docs/complexity/<plan-stem>.md` carries a `Stacked-Delivery: approved` line.
+- The slice count is at most `max_slices`.
+- Every task's `**Story:**` line cites exactly one known story id, and all of a story's tasks sit
+  in one slice.
+- No custom step sits between `acceptance_specs` and `build_review`, and no custom BUILD step
+  before `build_review` is a loop gate or kickback target.
+
+The refusal lists every failed condition; `coverage_binding` refuses as `needs-human`. On success,
+`coverage_binding` records the story-to-slice mapping as `storyOwnership` in
+[`coverage-binding.json`](artifacts.md).
 
 
 ## conflict_check
