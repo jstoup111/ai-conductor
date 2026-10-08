@@ -83,6 +83,11 @@ import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import {
+  persistFixtureProjectedRemediationPlan,
+  persistFixtureRemediationPlan,
+  persistFixtureTestRemediationPlan,
+} from './remediation-plan-fixtures.js';
 
 function passingBuildReviewAggregate() {
   const lapId = parseBuildReviewLapId('fixture-lap')!;
@@ -191,7 +196,7 @@ async function writePrdAuditFixableFixture(
 
 function asBuiltApprovedFixture() {
   return {
-    version: 'v1' as const,
+    version: 'v2' as const,
     verdict: 'APPROVED' as const,
     reachability: [],
     driftNotes: [],
@@ -200,7 +205,7 @@ function asBuiltApprovedFixture() {
 
 function asBuiltBlockedFixture(findings: readonly AsBuiltFinding[]) {
   return {
-    version: 'v1' as const,
+    version: 'v2' as const,
     verdict: 'BLOCKED' as const,
     reachability: [],
     driftNotes: [],
@@ -217,6 +222,59 @@ function asBuiltRemediableFixture(id: string, taskId: string, summary: string) {
     reference: { kind: 'plan-task' as const, taskId },
     summary,
   }]);
+}
+
+type LegacyRemediationDisposition = {
+  readonly id: string;
+  readonly disposition: string;
+  readonly category: string | null;
+  readonly rationale: string;
+  readonly tasks: readonly { readonly id: string; readonly title: string }[];
+};
+
+/**
+ * Preserve the production remediation boundary in orchestration fixtures:
+ * the fake supplies provider-shaped dispositions while the shared fixture
+ * helper validates and stamps the dispatch-bound engine authority.
+ */
+async function persistLegacyRemediationPlan(
+  projectRoot: string,
+  options: StepRunOptions | undefined,
+  dispositions: readonly LegacyRemediationDisposition[],
+): Promise<void> {
+  const normalized = dispositions.map((disposition) => ({
+    ...disposition,
+    tasks: disposition.disposition === 'existing-task' ? [] : disposition.tasks,
+    ...(disposition.disposition === 'existing-task'
+      ? { boundTaskIds: disposition.tasks.map((task) => task.id) }
+      : {}),
+  }));
+  const request = options?.remediationRequest;
+  if (request?.mode !== 'gap-plan') {
+    throw new Error('fixture remediation dispatch requires a gap-plan request');
+  }
+  if (request.projection.requiredReferences.length > 0) {
+    await persistFixtureProjectedRemediationPlan(projectRoot, options, normalized);
+    return;
+  }
+  if (request.projection.source === 'build-stall') {
+    await persistFixtureRemediationPlan(projectRoot, options, {
+      version: 'v1',
+      dispositions: normalized.map((disposition) => ({
+        reference: { kind: 'stall', id: disposition.id },
+        disposition: disposition.disposition,
+        category: disposition.category,
+        rationale: disposition.rationale,
+        tasks: disposition.tasks,
+        boundTaskIds: disposition.boundTaskIds ?? [],
+      })),
+    });
+    return;
+  }
+  await persistFixtureTestRemediationPlan(projectRoot, options, normalized.map((disposition) => ({
+    ...disposition,
+    id: disposition.id.replace(/^test:/, ''),
+  })));
 }
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
@@ -1548,8 +1606,7 @@ describe('engine/conductor', () => {
       return { runner, calls };
     }
 
-    // Like shipRunner, but also writes .pipeline/remediation.json when the
-    // `remediate` step runs, so the conductor's typed remediation routing engages.
+    // Like shipRunner, but supplies a dispatch-bound typed remediation plan.
     function remediateRunner(
       _auditBody: string,
       plan: unknown,
@@ -1576,8 +1633,11 @@ describe('engine/conductor', () => {
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           } else if (step === 'remediate') {
-            await mkdir(join(dir, '.pipeline'), { recursive: true });
-            await writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify(plan));
+            await persistLegacyRemediationPlan(
+              dir,
+              options,
+              (plan as { dispositions: readonly LegacyRemediationDisposition[] }).dispositions,
+            );
           }
           return { success: true };
         }),
@@ -1695,7 +1755,7 @@ describe('engine/conductor', () => {
         {
           dispositions: [
             {
-              id: 'FR-3',
+              id: 'S1.1',
               disposition: 'halt',
               category: 'architectural-clarity',
               rationale: 'ambiguous aggregate boundary',
@@ -1724,7 +1784,7 @@ describe('engine/conductor', () => {
       expect(halted).toBe(true);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
       expect(halt).toMatch(/needs human DECIDE/);
-      expect(halt).toMatch(/FR-3 \(architectural-clarity/);
+      expect(halt).toMatch(/S1\.1 \(architectural-clarity/);
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
       // An architectural-clarity gap needs a human DECIDE — the re-kick
       // sweep must never auto-resume it.
@@ -1737,7 +1797,7 @@ describe('engine/conductor', () => {
       const { runner, calls } = remediateRunner('| FR-1 | DIVERGED | intended-drift | y | no |\n', {
         dispositions: [
           {
-            id: 'FR-1',
+            id: 'S1.1',
             disposition: 'architecture_review',
             category: null,
             rationale: 'design drifted from ADR',
@@ -1782,7 +1842,7 @@ describe('engine/conductor', () => {
       const { runner, calls } = remediateRunner('| FR-9 | MISSING | intended-drift | z | no |\n', {
         dispositions: [
           {
-            id: 'FR-9',
+            id: 'S1.1',
             disposition: 'plan',
             category: null,
             rationale: 'plan missing the FR entirely',
@@ -2935,21 +2995,13 @@ describe('engine/conductor', () => {
               );
             }
           } else if (step === 'remediate') {
-            // Write remediation plan that routes back to build
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: 'stall:auth-provider',
-                    disposition: 'build',
-                    category: null,
-                    rationale: REMEDIATION_ANSWER,
-                    tasks: [],
-                  },
-                ],
-              }),
-            );
+            await persistLegacyRemediationPlan(dir, opts, [{
+              id: 'stall:auth-provider',
+              disposition: 'build',
+              category: null,
+              rationale: REMEDIATION_ANSWER,
+              tasks: [],
+            }]);
           } else if (step === 'manual_test') {
             // Downstream validation group: this test is about the build
             // stall's own remediation dispatch, not the group — pass its
@@ -3014,7 +3066,7 @@ describe('engine/conductor', () => {
       let buildAttemptCount = 0;
       const remediateCallCount: number[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state: ConductState, _opts?: { retryReason?: string }) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
           if (step === 'build') {
             buildAttemptCount++;
             // Always write a stall marker to trigger remediation dispatch
@@ -3028,21 +3080,13 @@ describe('engine/conductor', () => {
             );
           } else if (step === 'remediate') {
             remediateCallCount.push(buildAttemptCount);
-            // Return a route disposition to trigger a retry
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: `stall:${buildAttemptCount}`,
-                    disposition: 'build',
-                    category: null,
-                    rationale: `Answer ${buildAttemptCount}`,
-                    tasks: [],
-                  },
-                ],
-              }),
-            );
+            await persistLegacyRemediationPlan(dir, opts, [{
+              id: `stall:${buildAttemptCount}`,
+              disposition: 'build',
+              category: null,
+              rationale: `Answer ${buildAttemptCount}`,
+              tasks: [],
+            }]);
           }
           return { success: true } as StepRunResult;
         }),
@@ -3079,7 +3123,7 @@ describe('engine/conductor', () => {
       let buildAttemptCount = 0;
       const remediateCallCount: number[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state: ConductState, _opts?: { retryReason?: string }) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
           if (step === 'build') {
             buildAttemptCount++;
             // Always write a stall marker to trigger remediation dispatch
@@ -3115,22 +3159,13 @@ describe('engine/conductor', () => {
             );
           } else if (step === 'remediate') {
             remediateCallCount.push(buildAttemptCount);
-            // Route back to build every time — the stall never actually
-            // resolves, forcing the budget to exhaust.
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: `stall:${buildAttemptCount}`,
-                    disposition: 'build',
-                    category: null,
-                    rationale: `Answer ${buildAttemptCount}`,
-                    tasks: [],
-                  },
-                ],
-              }),
-            );
+            await persistLegacyRemediationPlan(dir, opts, [{
+              id: `stall:${buildAttemptCount}`,
+              disposition: 'build',
+              category: null,
+              rationale: `Answer ${buildAttemptCount}`,
+              tasks: [],
+            }]);
           }
           return { success: true } as StepRunResult;
         }),
@@ -3202,7 +3237,7 @@ describe('engine/conductor', () => {
       await seedToBuildStep();
 
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           if (step === 'build') {
             // Write stall marker with question
             await writeFile(
@@ -3215,21 +3250,13 @@ describe('engine/conductor', () => {
               JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
             );
           } else if (step === 'remediate') {
-            // Write remediation with halt disposition
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: 'stall:auth-provider',
-                    disposition: 'halt',
-                    category: 'product-scope',
-                    rationale: 'Choice of auth provider is a product decision.',
-                    tasks: [],
-                  },
-                ],
-              }),
-            );
+            await persistLegacyRemediationPlan(dir, options, [{
+              id: 'stall:auth-provider',
+              disposition: 'halt',
+              category: 'product-scope',
+              rationale: 'Choice of auth provider is a product decision.',
+              tasks: [],
+            }]);
           }
           return { success: true } as StepRunResult;
         }),
@@ -3268,7 +3295,7 @@ describe('engine/conductor', () => {
       await seedToBuildStep();
 
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           if (step === 'build') {
             // Write stall marker with question
             await writeFile(
@@ -3281,21 +3308,13 @@ describe('engine/conductor', () => {
               JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
             );
           } else if (step === 'remediate') {
-            // Write remediation that misroutes to 'plan' (non-build target)
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: 'stall:auth-provider',
-                    disposition: 'plan',
-                    category: null,
-                    rationale: 'Needs a re-plan, not a build answer.',
-                    tasks: [],
-                  },
-                ],
-              }),
-            );
+            await persistLegacyRemediationPlan(dir, options, [{
+              id: 'stall:auth-provider',
+              disposition: 'plan',
+              category: null,
+              rationale: 'Needs a re-plan, not a build answer.',
+              tasks: [],
+            }]);
           }
           return { success: true } as StepRunResult;
         }),
@@ -3528,8 +3547,11 @@ describe('engine/conductor', () => {
       );
     }
 
-    function remediationPlanFile(plan: unknown): Promise<void> {
-      return writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify(plan));
+    function remediationPlanFile(
+      options: StepRunOptions | undefined,
+      plan: { readonly dispositions: readonly LegacyRemediationDisposition[] },
+    ): Promise<void> {
+      return persistLegacyRemediationPlan(dir, options, plan.dispositions);
     }
 
     // Covers: task:26
@@ -3613,7 +3635,7 @@ describe('engine/conductor', () => {
       // writes its choice and the feature ships without a HALT.
       let buildFixed = false;
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           if (step === 'build') {
             buildFixed = true;
             await writeFile(
@@ -3621,7 +3643,7 @@ describe('engine/conductor', () => {
               JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
             );
           } else if (step === 'remediate') {
-            await remediationPlanFile({
+            await remediationPlanFile(options, {
               dispositions: [
                 {
                   id: 'test:loop-intake',
@@ -3702,10 +3724,10 @@ describe('engine/conductor', () => {
       await seedShipTail();
       const calls: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           calls.push(step);
           if (step === 'remediate') {
-            await remediationPlanFile({
+            await remediationPlanFile(options, {
               dispositions: [
                 {
                   id: 'test:wallet-flows',
@@ -3767,17 +3789,18 @@ describe('engine/conductor', () => {
             asBuiltRestagedBeforeBuild = current.ok && current.value.architecture_review_as_built === 'stale';
             return { success: false, error: 'stop after observing serial reroute' };
           } else if (step === 'remediate') {
-            await remediationPlanFile({
-              dispositions: [
-                {
-                  id: 'ARCH-1',
-                  disposition: 'build',
-                  category: null,
-                  rationale: 'Add the missing approved guard.',
-                  tasks: [{ id: 'missing-guard', title: 'Add the missing guard' }],
-                },
-              ],
-            });
+            const request = options?.remediationRequest;
+            const findingId = request?.mode === 'gap-plan'
+              ? request.projection.requiredReferences[0]?.id
+              : undefined;
+            if (findingId === undefined) throw new Error('as-built remediation fixture needs a projected finding');
+            await persistFixtureProjectedRemediationPlan(dir, options, [{
+              id: findingId,
+              disposition: 'build',
+              category: null,
+              rationale: 'Add the missing approved guard.',
+              tasks: [{ id: 'missing-guard', title: 'Add the missing guard' }],
+            }]);
           }
           return { success: true };
         }),
@@ -3843,9 +3866,9 @@ describe('engine/conductor', () => {
 
       await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
       const firstHalt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
-      expect(firstHalt).toContain('ARCH-REMEDIABLE (REMEDIABLE; plan task 1): Add the missing guard');
-      expect(firstHalt).toContain(
-        'ARCH-DESIGN (DESIGN; ADR-auth decision 2): Choose the incompatible boundary',
+      expect(firstHalt).toMatch(/as-built:[^\s]+:1 \(REMEDIABLE; plan task 1\): Add the missing guard/);
+      expect(firstHalt).toMatch(
+        /as-built:[^\s]+:2 \(DESIGN; ADR-auth decision 2\): Choose the incompatible boundary/,
       );
       expect(vi.mocked(runner.run).mock.calls.map(([step]) => step)).not.toContain('remediate');
       await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
