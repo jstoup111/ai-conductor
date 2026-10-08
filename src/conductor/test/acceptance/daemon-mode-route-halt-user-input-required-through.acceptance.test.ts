@@ -459,7 +459,8 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
     }
   });
 
-  // Covers: task:25 — planner exhaustion keeps the last engine-owned fault
+  // Covers: task:25
+  // Planner exhaustion keeps the last engine-owned fault
   // rather than replacing it with the pre-typed-plan "missing or invalid"
   // wording. Stub only the planner boundary: this test owns the real daemon
   // build-stall routing, marker writer, and terminal observation.
@@ -503,7 +504,8 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
     }
   });
 
-  // Covers: task:25 — the zero-work branch deliberately retains its retry and
+  // Covers: task:25
+  // The zero-work branch deliberately retains its retry and
   // auto-park semantics. It must nevertheless carry the exhausted planner
   // fault through the existing terminal stall HALT.
   it('keeps the final planner fault on the zero-work build-stall terminal path', async () => {
