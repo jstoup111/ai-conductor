@@ -298,6 +298,9 @@ export interface AttributionAuditDispatchResult {
   error?: string;
 }
 
+/** @deprecated Retained for direct-module consumers after the decomposition. */
+export type { AttributionAuditDispatchResult as SpotAuditDispatchResult };
+
 /**
  * Post-green non-blocking spot-audit dispatch.
  *

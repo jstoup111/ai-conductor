@@ -242,6 +242,8 @@ export async function withKickbackLedgerLease<T>(
 
 /** A gate may be kicked back to BUILD this many times for one progress state. */
 export const KICKBACK_LEDGER_MAX_PER_GATE = 2;
+/** @deprecated Retained for direct-module consumers after the decomposition. */
+export { KICKBACK_LEDGER_MAX_PER_GATE as MAX_KICKBACKS_PER_GATE };
 
 /** Cumulative build-review failures allowed before human intervention is required. */
 export const MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW = 5;
