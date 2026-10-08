@@ -13230,16 +13230,16 @@ export class Conductor {
                       }
                     }
                     if (outcome.kind === 'none') {
-                      // Task 8: Degraded remediation exit (malformed/stale/dropped).
-                      // No valid dispositions from /remediate; halt with the question
-                      // so human can investigate why remediation failed.
+                      // A bounded typed-planner round is exhausted. Preserve
+                      // its final mechanical fault instead of flattening it
+                      // into the legacy malformed/stale diagnosis.
+                      const detail = `Remediation planner fault: ${outcome.reason}`;
                       // #569: a zero-work stall never terminal-HALTs from
                       // this block — it falls through to the existing
-                      // retry/auto-park path.
+                      // retry/auto-park path. Carry the question and fault to
+                      // that terminal path so an eventual HALT is equally
+                      // actionable without changing auto-park admission.
                       if (!isZeroWorkStall) {
-                        const detail =
-                          'remediation produced no valid dispositions ' +
-                          '(check .pipeline/remediation.json: malformed JSON, stale file, or all dispositions dropped by validation)';
                         const haltContent = effectiveQuestion + '\n\n' + detail;
                         await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
                           /* best-effort marker */
@@ -13251,6 +13251,7 @@ export class Conductor {
                         process.off('SIGTERM', sigterm);
                         return;
                       }
+                      lastBuildStallReason = `${effectiveQuestion}\n\n${detail}`;
                     }
                     }
                   }
@@ -14253,9 +14254,10 @@ export class Conductor {
                   return;
                 }
 
-                // outcome.kind === 'none' (no valid dispositions after validation,
-                // malformed JSON, or stale file) — fall through to fail-safe HALT below.
-                const detail = 'Remediation plan missing or invalid (no routable dispositions found)';
+                // A bounded typed-planner round is exhausted. The original
+                // stall question remains the first line; retain the planner's
+                // final mechanical fault in the HALT detail.
+                const detail = `Remediation planner fault: ${outcome.reason}`;
                 await writeStallHalt(this.projectRoot, stallQuestion, detail, this.events);
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);

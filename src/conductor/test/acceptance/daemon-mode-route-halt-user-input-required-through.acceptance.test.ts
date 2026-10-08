@@ -471,6 +471,89 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
     }
   });
 
+  // Covers: task:25 — planner exhaustion keeps the last engine-owned fault
+  // rather than replacing it with the pre-typed-plan "missing or invalid"
+  // wording. Stub only the planner boundary: this test owns the real daemon
+  // build-stall routing, marker writer, and terminal observation.
+  it('keeps the build-stall question first and the final planner fault on exhaustion', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'stall-planner-exhaustion-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedRepo(dir, statePath);
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            await writeTaskStatus(dir, 2, 5);
+            await writeHaltMarker(dir, QUESTION_1);
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+      const conductor = makeConductor(dir, statePath, runner, new ConductorEventEmitter());
+      const sources: string[] = [];
+      (conductor as unknown as {
+        planRemediation: (
+          state: ConductState,
+          steps: unknown,
+          context: string,
+          hint: { source: string },
+        ) => Promise<{ kind: 'none'; reason: string }>;
+      }).planRemediation = vi.fn(async (_state, _steps, _context, hint) => {
+        sources.push(hint.source);
+        return { kind: 'none', reason: 'last planner fault: structured result missing' };
+      });
+
+      await conductor.run();
+
+      expect(sources).toEqual(['build_stall']);
+      const halt = await readHaltFile(dir);
+      expect(halt).not.toBeNull();
+      expect((halt as string).split('\n').find((line) => line.trim())).toBe(QUESTION_1);
+      expect(halt).toContain('Remediation planner fault: last planner fault: structured result missing');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:25 — the zero-work branch deliberately retains its retry and
+  // auto-park semantics. It must nevertheless carry the exhausted planner
+  // fault through the existing terminal stall HALT.
+  it('keeps the final planner fault on the zero-work build-stall terminal path', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'zero-work-planner-exhaustion-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedRepo(dir, statePath);
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') await writeTaskStatus(dir, 2, 5);
+          return { success: true } as StepRunResult;
+        }),
+      };
+      const conductor = makeConductor(dir, statePath, runner, new ConductorEventEmitter());
+      const sources: string[] = [];
+      (conductor as unknown as {
+        planRemediation: (
+          state: ConductState,
+          steps: unknown,
+          context: string,
+          hint: { source: string },
+        ) => Promise<{ kind: 'none'; reason: string }>;
+      }).planRemediation = vi.fn(async (_state, _steps, _context, hint) => {
+        sources.push(hint.source);
+        return { kind: 'none', reason: 'last planner fault: attempt allowance exhausted' };
+      });
+
+      await conductor.run();
+
+      expect(sources).toEqual(['build_stall_zero_work', 'build_stall_zero_work']);
+      const halt = await readHaltFile(dir);
+      expect(halt).toContain('build stalled: no task progress');
+      expect(halt).toContain('Remediation planner fault: last planner fault: attempt allowance exhausted');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // ── E. third stall in one run has no budget left ──
   it('exhausts the shared remediation budget on the third stall and fail-safe HALTs with the third question', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'stall-budget-exhausted-'));
