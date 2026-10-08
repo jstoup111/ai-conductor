@@ -371,7 +371,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       const calls: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state, options) => {
+        run: vi.fn(async (step: StepName, _state, _options) => {
           calls.push(step);
           if (step === 'manual_test') {
             throw new Error('agent crashed mid-session — no .pipeline marker written');
@@ -419,7 +419,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
         run_started_at: Date.now() - 1_000,
       });
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state, options) => {
+        run: vi.fn(async (step: StepName, _state, _options) => {
           if (step === 'manual_test') {
             throw new Error('agent crashed before producing a verdict');
           }
@@ -448,7 +448,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       });
       await seedPendingNoOpKickback(dir, 'manual_test');
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, _options) => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
           } else if (step === 'prd_audit') {
@@ -476,7 +476,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       });
       await seedPendingNoOpKickback(dir, 'prd_audit');
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
@@ -594,6 +594,8 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeApprovedAsBuiltVerdict(dir, opts?.runId);
           } else if (step === 'remediate') {
             remediateReasons.push(opts?.retryReason ?? '');
             await persistFixtureProjectedRemediationPlan(dir, opts, [{

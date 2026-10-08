@@ -23,7 +23,7 @@ const projection: RemediationProjection = {
   pendingAsBuiltFindings: [],
   priorLaps: [],
   refusals: [],
-  vocabulary: { dispositions: ['build'], haltCategories: ['mechanical'] },
+  vocabulary: { dispositions: ['build'], haltCategories: ['architectural-clarity'] },
 };
 
 function runnerFor(

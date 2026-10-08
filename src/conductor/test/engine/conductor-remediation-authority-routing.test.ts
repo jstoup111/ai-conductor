@@ -21,8 +21,6 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
-import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { writeState } from '../../src/engine/state.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { PrdAuditJudgment } from '../../src/engine/prd-audit-contract.js';
@@ -31,28 +29,6 @@ import {
   persistFixtureRemediationPlan,
   persistFixtureTestRemediationPlan,
 } from './remediation-plan-fixtures.js';
-
-const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
-  reachability: { enabled: true, reason: 'test fixture' },
-  planGap: { enabled: true, reason: 'test fixture' },
-  adrCompliance: { enabled: false, reason: 'test fixture' },
-  diagramDrift: { enabled: false, reason: 'test fixture' },
-};
-
-async function writeBlockedAsBuiltFixture(projectRoot: string, id = 'ARCH-1'): Promise<void> {
-  await persistAsBuiltVerdict(projectRoot, {
-    version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
-    findings: [{
-      id, class: 'REMEDIABLE',
-      reference: { kind: 'plan-task', taskId: '1' },
-      summary: 'The approved task needs repair.',
-    }],
-    violations: 'The approved task is incomplete.',
-    resolution: 'Repair task 1.',
-  }, {
-    attemptId: 'fixture-run', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY,
-  });
-}
 
 async function persistFixturePrdAuditVerdict(
   projectRoot: string,

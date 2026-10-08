@@ -129,7 +129,7 @@ describe('acceptance: stale judged-gate pre-dispatch preservation (#2639)', () =
       await persistAsBuiltVerdict(root, clean
         ? { version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] }
         : {
-          version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+          version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
           findings: [{ id: 'ARCH-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'unclean' }],
           violations: 'unclean', resolution: 'repair it',
         }, {

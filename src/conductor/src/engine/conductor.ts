@@ -5144,10 +5144,11 @@ export class Conductor {
           `${dimension === undefined ? '' : `, dimension ${dimension}`}${bounds}: ${detail}`,
       );
     }
+    const remediateModelPolicy = this.modelPolicyForStep('remediate');
     const maxAttempts = resolveStepConfig(
       'remediate',
       phaseForStep('remediate'),
-      this.modelPolicyForStep('remediate'),
+      remediateModelPolicy,
       this.config,
       { tier: state.complexity_tier },
     ).max_retries;

@@ -54,7 +54,7 @@ describe('toCodexStrictSchema', () => {
 
   it('round-trips a Codex as-built verdict through the closed validator', () => {
     const strictOutput = {
-      version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+      version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
       outcomeDelivered: null, affectedOutcome: null, findings: null, violations: null, resolution: null,
     };
     const verdict = validateAsBuiltVerdict(fromCodexStrictResult(AS_BUILT_VERDICT_SCHEMA, strictOutput));

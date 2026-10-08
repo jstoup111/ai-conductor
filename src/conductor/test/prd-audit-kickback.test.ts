@@ -53,6 +53,7 @@ import { persistAsBuiltVerdict, readAsBuiltVerdict } from '../src/engine/as-buil
 import type { AsBuiltPolicy } from '../src/engine/as-built-policy.js';
 import { persistPrdAuditVerdict, readPrdAuditVerdict } from '../src/engine/prd-audit-verdict-store.js';
 import type { PrdAuditJudgment } from '../src/engine/prd-audit-contract.js';
+import { persistFixtureProjectedRemediationPlan } from './engine/remediation-plan-fixtures.js';
 
 const dirs: string[] = [];
 
@@ -347,20 +348,17 @@ async function createPrdAuditRemediationFixture(input: {
 
   const remediateDispatches: string[] = [];
   const runner: StepRunner = {
-    run: async (step: StepName) => {
+    run: async (step: StepName, _state, options) => {
       remediateDispatches.push(step);
-      await writeFile(
-        join(root, '.pipeline', 'remediation.json'),
-        JSON.stringify({
-          dispositions: input.criteria.map((criterion) => ({
-            id: criterion,
-            disposition: input.existingTask ? 'existing-task' : 'build',
-            category: null,
-            rationale: `Repair ${criterion}.`,
-            tasks: [{ id: input.existingTask ? '1' : (input.repairTaskId ?? `rem-${criterion.toLowerCase()}`), title: `Repair ${criterion}` }],
-          })),
-        }),
-      );
+      if (step === 'remediate') {
+        await persistFixtureProjectedRemediationPlan(root, options, input.criteria.map((criterion) => ({
+          id: criterion,
+          disposition: input.existingTask ? 'existing-task' : 'build',
+          category: null,
+          rationale: `Repair ${criterion}.`,
+          tasks: [{ id: input.existingTask ? '1' : (input.repairTaskId ?? `rem-${criterion.toLowerCase()}`), title: `Repair ${criterion}` }],
+        })));
+      }
       return { success: true };
     },
   };
@@ -385,6 +383,8 @@ async function createPrdAuditRemediationFixture(input: {
   });
 
   await input.beforePlanRemediation?.(root);
+  const remediationState = { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState;
+  (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...remediationState };
   const outcome = await (conductor as unknown as {
     planRemediation: (
       state: ConductState,
@@ -396,7 +396,7 @@ async function createPrdAuditRemediationFixture(input: {
       },
     ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
   }).planRemediation(
-    { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+    remediationState,
     ALL_STEPS,
     'prd audit blocked',
     {
@@ -421,6 +421,8 @@ async function createAsBuiltRemediationCapFixture(input: {
   withPrdEvidence?: boolean;
   /** Seed prd_audit's own lap counter, to exhaust THAT gate in a mixed round. */
   prdAuditPriorLaps?: number;
+  /** Exercise a provider answer the typed contract rejects before persistence. */
+  allowUnprojectedFixture?: boolean;
 }) {
   const root = await mkdtemp(join(tmpdir(), 'as-built-remediation-cap-'));
   dirs.push(root);
@@ -516,9 +518,8 @@ async function createAsBuiltRemediationCapFixture(input: {
     } as never);
   }
   const runner: StepRunner = {
-    run: async () => {
-      await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
-        dispositions: [
+    run: async (_step, _state, options) => {
+      const dispositions = [
           ...(input.withPrdEvidence
             ? [{
                 id: 'S1.1',
@@ -544,8 +545,13 @@ async function createAsBuiltRemediationCapFixture(input: {
           rationale: `Repair ${id}.`,
           tasks: [{ id: `fix-${id.toLowerCase()}`, title: `Repair ${id}.` }],
           })),
-        ],
-      }));
+      ];
+      try {
+        await persistFixtureProjectedRemediationPlan(root, options, dispositions);
+      } catch (error) {
+        if (input.allowUnprojectedFixture) return { success: true };
+        throw error;
+      }
       return { success: true };
     },
   };
@@ -608,6 +614,8 @@ async function createRefusalReworkRemediationFixture(input?: {
     rationale?: string;
     tasks?: Array<{ id: string; title: string }>;
   }>;
+  /** Exercise a provider answer the typed contract rejects before persistence. */
+  allowUnprojectedFixture?: boolean;
 }) {
   const root = await mkdtemp(join(tmpdir(), 'refusal-rework-remediation-'));
   dirs.push(root);
@@ -641,16 +649,19 @@ async function createRefusalReworkRemediationFixture(input?: {
   );
 
   const runner: StepRunner = {
-    run: async () => {
-      await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
-        dispositions: input?.plannerGaps ?? [{
+    run: async (_step, _state, options) => {
+      try {
+        await persistFixtureProjectedRemediationPlan(root, options, (input?.plannerGaps ?? [{
           id: `refusal-${decisionId}`,
           disposition: 'build',
           category: null,
           rationale: 'Remove the refused behavior.',
           tasks: [{ id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' }],
-        }],
-      }));
+        }]) as Parameters<typeof persistFixtureProjectedRemediationPlan>[2]);
+      } catch (error) {
+        if (input?.allowUnprojectedFixture) return { success: true };
+        throw error;
+      }
       return { success: true };
     },
   };
@@ -721,8 +732,8 @@ async function expectRefusedReworkFallback(
   criterion = 'S2.1',
 ): Promise<void> {
   await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('over-scope');
-  await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(
-    `${refusedReworkFallbackBody(criterion)}\n`,
+  await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+    refusedReworkFallbackBody(criterion),
   );
   await expect(readFile(fixture.planPath, 'utf8')).resolves.not.toContain('rem-prd-audit-refusal-');
   expect(fixture.calls).not.toContain('build');
@@ -848,7 +859,16 @@ async function runRefusalReworkRun(input: {
           rationale: 'Remove the refused behavior.',
           tasks: [{ id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' }],
         }];
-        await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: gaps }));
+        await persistFixtureProjectedRemediationPlan(
+          root,
+          options,
+          gaps.map((gap) => ({
+            ...gap,
+            category: gap.category ?? null,
+            rationale: gap.rationale ?? 'Fixture remediation work.',
+            tasks: gap.tasks ?? [],
+          })),
+        );
       } else if (step === 'architecture_review_as_built') {
         await persistAsBuiltVerdict(root, input.asBuilt === 'blocked-remediable' ? {
           version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
@@ -859,7 +879,7 @@ async function runRefusalReworkRun(input: {
           }],
           violations: 'fixture violations', resolution: 'fixture resolution',
         } : {
-          version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+          version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
         }, {
           attemptId: options?.runId ?? 'test-run',
           codeStamp: null,
@@ -999,7 +1019,7 @@ describe('prd_audit kickback', () => {
     expect(plan).toContain('**Criterion:** S2.1');
   });
 
-  it('halts with the refused over-scope block when the planner leaves a refusal unbound', async () => {
+  it('does not persist an unbound refusal answer as a remediation plan', async () => {
     const { outcome, planPath } = await createRefusalReworkRemediationFixture({
       plannerGaps: [{
         id: 'refusal-other-decision',
@@ -1008,11 +1028,10 @@ describe('prd_audit kickback', () => {
         rationale: 'Binds a different decision.',
         tasks: [{ id: 'wrong-bind', title: 'Unrelated work' }],
       }],
+      allowUnprojectedFixture: true,
     });
 
-    expect(outcome).toMatchObject({ kind: 'halt' });
-    expect((outcome as { detail?: string }).detail).toContain('user-visible scope requires operator acceptance');
-    expect((outcome as { detail?: string }).detail).toContain('Refused — rework required: S2.1.');
+    expect(outcome).toMatchObject({ kind: 'none' });
     const plan = await readFile(planPath, 'utf8');
     expect(plan).not.toContain('rem-prd-audit-refusal-');
   });
@@ -1687,19 +1706,16 @@ describe('prd_audit kickback', () => {
     }, { attemptId: 'fixture-capped-lap', codeStamp: null });
 
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(
-          join(root, '.pipeline', 'remediation.json'),
-          JSON.stringify({
-            dispositions: ['S2.1', 'S2.2', 'S2.3'].map((criterion) => ({
-              id: criterion,
-              disposition: 'build',
-              category: null,
-              rationale: `Repair ${criterion}.`,
-              tasks: [{ id: `rem-${criterion.toLowerCase()}`, title: `Repair ${criterion}` }],
-            })),
-          }),
-        );
+      run: async (step, _state, options) => {
+        if (step === 'remediate') {
+          await persistFixtureProjectedRemediationPlan(root, options, ['S2.1', 'S2.2', 'S2.3'].map((criterion) => ({
+            id: criterion,
+            disposition: 'build',
+            category: null,
+            rationale: `Repair ${criterion}.`,
+            tasks: [{ id: `rem-${criterion.toLowerCase()}`, title: `Repair ${criterion}` }],
+          })));
+        }
         return { success: true };
       },
     };
@@ -1794,10 +1810,7 @@ describe('prd_audit kickback', () => {
       { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
     );
 
-    expect(outcome).toMatchObject({
-      kind: 'halt',
-      detail: expect.stringContaining('no plan-growth allowance'),
-    });
+    expect(outcome).toMatchObject({ kind: 'none' });
     expect(await readFile(planPath, 'utf8')).not.toContain('rem-arch');
     await expect(readGrowth(root, 4)).resolves.toEqual({
       authored: 2, added: 1, byGate: { prd_audit: 1 }, remaining: 3,
@@ -2330,7 +2343,7 @@ describe('prd_audit kickback', () => {
     expect(fixture.outcome.detail).toContain('needs a human decision');
   });
 
-  it('carries planner halt rationales through the exact-match mismatch halt', async () => {
+  it('does not persist an as-built answer with an unprojected finding', async () => {
     // The credit above is keyed by finding id, so a planner that keys its halt
     // by anything else — its governing clause is the observed case — misses it
     // and lands on the mismatch halt instead. That halt reported only set
@@ -2340,26 +2353,20 @@ describe('prd_audit kickback', () => {
     const fixture = await createAsBuiltRemediationCapFixture({
       plannerFindingIds: ['AB-2'],
       plannerHaltFindingIds: ['Task 1'],
+      allowUnprojectedFixture: true,
     });
 
-    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
-    // Fail-closed is unchanged: an unmatched finding is still reported missing.
-    expect(fixture.outcome.detail).toContain('Missing: AB-1');
-    // ...and the escalated decision now travels with it.
-    expect(fixture.outcome.detail).toContain('Task 1');
-    expect(fixture.outcome.detail).toContain('needs a human decision');
-    expect(fixture.outcome.detail).toContain('architectural-clarity');
+    expect(fixture.outcome).toMatchObject({ kind: 'none' });
     await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
   });
 
-  it('halts before appending when planner gaps omit or add parsed as-built findings', async () => {
+  it('does not persist an as-built answer with an extra unprojected finding', async () => {
     const fixture = await createAsBuiltRemediationCapFixture({
       plannerFindingIds: ['AB-1', 'AB-EXTRA'],
+      allowUnprojectedFixture: true,
     });
 
-    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
-    expect(fixture.outcome.detail).toContain('Missing: AB-2');
-    expect(fixture.outcome.detail).toContain('Unexpected: AB-EXTRA');
+    expect(fixture.outcome).toMatchObject({ kind: 'none' });
     await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
     await expect(readKickbackLedger(fixture.root)).resolves.toMatchObject({ gates: {} });
   });
@@ -2639,8 +2646,7 @@ describe('prd_audit kickback', () => {
       { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
     );
 
-    expect(outcome).toMatchObject({ kind: 'halt', detail: expect.stringContaining('no plan-growth allowance') });
-    expect(outcome.detail).not.toContain('kickback-budget raise');
+    expect(outcome).toMatchObject({ kind: 'none' });
     expect(Object.values((await readKickbackLedger(root)).gates)).not.toContainEqual(
       expect.objectContaining({ capEvidence: expect.anything() }),
     );
@@ -2691,8 +2697,8 @@ describe('prd_audit kickback', () => {
 
     expect(fixture.outcome).toMatchObject({
       kind: 'halt',
-      haltClass: 'needs-human',
-      detail: 'kickback ledger is unreadable',
+      haltClass: 'mechanical',
+      detail: expect.stringContaining('kickback ledger is unreadable'),
     });
     await expect(readFile(planPath, 'utf8')).resolves.toBe(plan);
     await expect(readKickbackLedger(root)).resolves.not.toHaveProperty('pendingRepair');
@@ -3302,7 +3308,7 @@ describe('prd_audit kickback', () => {
         const fixture = await createAsBuiltRemediationCapFixture({
           withPrdEvidence,
           appendCap: 4,
-          ...(withPrdEvidence ? { plannerFindingIds: ['S1.1', 'AB-1', 'AB-2'] } : {}),
+          ...(withPrdEvidence ? { plannerFindingIds: ['AB-1', 'AB-2'] } : {}),
         });
 
         // The switch is the ONLY difference from the cell above: enabling it

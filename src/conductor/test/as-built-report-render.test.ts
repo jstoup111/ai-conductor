@@ -18,7 +18,7 @@ function persisted(verdict: PersistedAsBuiltVerdict['verdict']): PersistedAsBuil
 describe('renderAsBuiltReport', () => {
   it('renders every field of two BLOCKED findings plus violation and resolution prose', () => {
     const report = renderAsBuiltReport(persisted({
-      version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
       findings: [
         { id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'adr-decision', stem: 'adr-2026-09-01-typed-verdict', decision: 3 }, summary: 'report is read as authority' },
         { id: 'AB-2', class: 'DESIGN', reference: { kind: 'plan-task', taskId: '12' }, summary: 'handshake lacks a rejection outcome' },
@@ -36,7 +36,7 @@ describe('renderAsBuiltReport', () => {
 
   it('renders reachability chains, drift notes, and the applied check policy for APPROVED', () => {
     const report = renderAsBuiltReport(persisted({
-      version: 'v1', verdict: 'APPROVED WITH DRIFT NOTES',
+      version: 'v2', verdict: 'APPROVED WITH DRIFT NOTES',
       reachability: [
         { primitive: 'persistAsBuiltVerdict', callerChain: ['bin/conduct', 'step-runners.ts:1160', 'as-built-verdict-store.ts:120'] },
         { primitive: 'readAsBuiltVerdict', callerChain: ['daemon loop', 'artifacts.ts:3378'] },
@@ -64,7 +64,7 @@ describe('renderAsBuiltReport', () => {
 
   it('renders an empty caller chain as an unreachable primitive', () => {
     const report = renderAsBuiltReport(persisted({
-      version: 'v1', verdict: 'BLOCKED',
+      version: 'v2', verdict: 'BLOCKED',
       reachability: [{ primitive: 'addIssueDependency', callerChain: [] }],
       driftNotes: [],
       findings: [{ id: 'AB-1', class: 'DESIGN', summary: 'test-only callers' }],
@@ -80,7 +80,7 @@ describe('renderAsBuiltReport', () => {
     [false, 'no'],
   ])('renders a PLAN_GAP verdict with outcomeDelivered %s', (outcomeDelivered, rendered) => {
     const report = renderAsBuiltReport(persisted({
-      version: 'v1', verdict: 'PLAN_GAP', reachability: [], driftNotes: [],
+      version: 'v2', verdict: 'PLAN_GAP', reachability: [], driftNotes: [],
       outcomeDelivered, affectedOutcome: 'outcome-2: consumers read the typed verdict',
     }));
 

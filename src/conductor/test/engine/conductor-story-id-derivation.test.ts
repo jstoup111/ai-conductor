@@ -28,6 +28,7 @@ import { join } from 'node:path';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunOptions } from '../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
+import type { ConductState } from '../../src/types/index.js';
 import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';

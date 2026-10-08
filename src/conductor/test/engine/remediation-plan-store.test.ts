@@ -70,14 +70,14 @@ function input(attemptId = 'attempt-current') {
 
 function filesystemWithRenameSpy(renames: [string, string][]): RemediationPlanStoreFilesystem {
   return {
-    mkdir: (path) => mkdir(path, { recursive: true }),
+    mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
     readFile: (path) => readFile(path, 'utf8'),
     writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
     rename: async (from, to) => {
       renames.push([from, to]);
       await rename(from, to);
     },
-    rm: (path) => rm(path, { force: true }),
+    rm: (path) => rm(path, { force: true }).then(() => undefined),
   };
 }
 
@@ -124,14 +124,14 @@ describe('typed remediation plan store', () => {
     await mkdir(join(root, '.pipeline'), { recursive: true });
     await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify(artifact), 'utf8');
     const filesystem: RemediationPlanStoreFilesystem = {
-      mkdir: (path) => mkdir(path, { recursive: true }),
+      mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
       readFile: async (path) => {
         opened.push(path);
         return readFile(path, 'utf8');
       },
       writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
       rename: (from, to) => rename(from, to),
-      rm: (path) => rm(path, { force: true }),
+      rm: (path) => rm(path, { force: true }).then(() => undefined),
     };
 
     await expect(readTypedRemediationPlan(root, { attemptId: 'attempt-current' }, { filesystem })).resolves.toEqual({ kind: 'absent' });
@@ -173,11 +173,11 @@ describe('typed remediation plan store', () => {
   it('returns a named persistence fault when the injected atomic write fails and leaves no present plan', async () => {
     const root = await projectRoot();
     const filesystem: RemediationPlanStoreFilesystem = {
-      mkdir: (path) => mkdir(path, { recursive: true }),
+      mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
       readFile: (path) => readFile(path, 'utf8'),
       writeFile: async () => { throw new Error('disk full'); },
       rename: async () => { throw new Error('rename must not run'); },
-      rm: (path) => rm(path, { force: true }),
+      rm: (path) => rm(path, { force: true }).then(() => undefined),
     };
 
     await expect(persistRemediationPlan(root, input(), { filesystem })).resolves.toMatchObject({

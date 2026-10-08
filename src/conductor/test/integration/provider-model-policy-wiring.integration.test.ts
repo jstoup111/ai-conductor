@@ -1191,6 +1191,13 @@ it('binds every production step-resolution call to the policy owned by its execu
     callSites: [
       {
         file: 'engine/conductor.ts',
+        scope: 'planRemediation',
+        argumentCount: 5,
+        policyProvenance:
+          'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
+      },
+      {
+        file: 'engine/conductor.ts',
         scope: 'reconcileCurrentPrdWidening',
         argumentCount: 5,
         policyProvenance:

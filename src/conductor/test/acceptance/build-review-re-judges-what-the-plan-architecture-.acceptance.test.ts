@@ -199,7 +199,7 @@ function fakeRunner(fixture: Fixture, calls: StepName[], options: RunnerOptions 
               outcomeDelivered: true,
               affectedOutcome: 'The accepted behavior remains eventually consistent.',
             }
-          : { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] }, {
+          : { version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] }, {
           attemptId: runOptions?.runId ?? 'test-run',
           codeStamp: null,
           policy: AS_BUILT_TEST_POLICY,

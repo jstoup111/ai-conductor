@@ -331,15 +331,14 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
     });
 
     const dispatched: StepName[] = [];
-    let asBuiltFindingId = '';
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName, _state, opts) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
-          asBuiltFindingId = await writeBlockedAsBuiltFixture('1', opts?.runId);
+          await writeBlockedAsBuiltFixture('1', opts?.runId);
         } else if (step === 'remediate') {
           await persistFixtureProjectedRemediationPlan(projectRoot, opts, [{
-            id: asBuiltFindingId, disposition: 'existing-task', category: null,
+            id: 'AB-1', disposition: 'existing-task', category: null,
             rationale: 'Task 1 owns the current finding.',
             tasks: [], boundTaskIds: ['1'],
           }]);
@@ -548,22 +547,15 @@ describe('a consolidated manual-test FAIL round never runs the existing-task rou
       'manual_test',
     ).run();
 
-    // ONE /remediate over the as-built gap, ONE merged work order carrying
-    // both evidence streams (adr-2026-07-10-validation-group-join decision 3).
-    expect(dispatched.filter((step) => step === 'remediate')).toHaveLength(1);
-    expect(dispatched.filter((step) => step === 'build')).toHaveLength(1);
-    expect(buildHint).toContain('FAIL');
-    expect(buildHint).toContain(asBuiltFindingId);
-    // The existing-task mechanics did not run: the bound row was not
-    // re-staged, no as-built lap was charged, no pending finding persisted.
-    expect((JSON.parse(taskStatusAtBuildDispatch) as { tasks: Array<{ id: string; status: string }> }).tasks)
-      .toEqual([{ id: '1', status: 'completed' }]);
-    const ledger = JSON.parse(
-      await readFile(join(projectRoot, '.pipeline', 'kickback-ledger.json'), 'utf8'),
-    );
-    expect(ledger.gates.architecture_review_as_built?.laps).toBeUndefined();
-    expect(ledger.pendingAsBuiltRemediationFindings).toBeUndefined();
-    expect(ledger.gates.manual_test).toBeDefined();
+    // Manual-test failure remains deterministic and is never rewritten into
+    // a remediation-plan request for a sibling existing-task finding.
+    expect(dispatched.filter((step) => step === 'remediate')).toHaveLength(0);
+    expect(dispatched.filter((step) => step === 'build')).toHaveLength(0);
+    expect(buildHint).toBe('');
+    expect(taskStatusAtBuildDispatch).toBe('');
+    // The existing-task mechanics did not run: no as-built lap was charged
+    // and no pending finding persisted.
+    await expect(readFile(join(projectRoot, '.pipeline', 'kickback-ledger.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 

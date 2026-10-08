@@ -175,7 +175,7 @@ describe('validation-group kickback restages', () => {
               }],
               violations: 'The guard is missing.', resolution: 'Add the guard.',
             }
-            : { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] }, {
+            : { version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] }, {
             attemptId: options?.runId ?? 'test-run',
             codeStamp: null,
             policy: AS_BUILT_TEST_POLICY,

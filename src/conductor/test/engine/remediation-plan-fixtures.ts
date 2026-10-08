@@ -92,6 +92,8 @@ export async function persistFixtureTestRemediationPlan(
   options: StepRunOptions | undefined,
   dispositions: readonly {
     readonly id: string;
+    /** Resolve a stamped engine reference without coupling the fixture to its attempt id. */
+    readonly referenceKind?: 'prd-criterion' | 'as-built-finding' | 'refusal';
     readonly disposition: string;
     readonly category: string | null;
     readonly rationale: string;
@@ -122,6 +124,8 @@ export async function persistFixtureProjectedRemediationPlan(
   options: StepRunOptions | undefined,
   dispositions: readonly {
     readonly id: string;
+    /** Resolve a stamped engine reference without coupling the fixture to its attempt id. */
+    readonly referenceKind?: 'prd-criterion' | 'as-built-finding' | 'refusal';
     readonly disposition: string;
     readonly category: string | null;
     readonly rationale: string;
@@ -134,7 +138,10 @@ export async function persistFixtureProjectedRemediationPlan(
   const raw = dispositions.map((disposition) => {
     const reference = request.projection.requiredReferences.find((candidate) =>
       candidate.id === disposition.id ||
-      (candidate.kind === 'prd-criterion' && candidate.id.toLowerCase() === disposition.id.toLowerCase()),
+      (candidate.kind === 'prd-criterion' && candidate.id.toLowerCase() === disposition.id.toLowerCase()) ||
+      (candidate.kind === 'refusal' && `refusal-${candidate.id}` === disposition.id) ||
+      (candidate.kind === 'as-built-finding' && candidate.id.endsWith(`:${disposition.id.replace(/^AB-/, '')}`)) ||
+      candidate.kind === disposition.referenceKind,
     );
     if (reference !== undefined) {
       return {
@@ -147,7 +154,10 @@ export async function persistFixtureProjectedRemediationPlan(
       };
     }
     if (request.projection.source !== 'build-stall' || !/^stall:[A-Za-z0-9][A-Za-z0-9._-]*$/.test(disposition.id)) {
-      throw new Error(`fixture remediation disposition ${disposition.id} is not an engine-projected reference`);
+      throw new Error(
+        `fixture remediation disposition ${disposition.id} is not an engine-projected reference ` +
+        `(${request.projection.requiredReferences.map((candidate) => `${candidate.kind}:${candidate.id}`).join(', ') || 'none'})`,
+      );
     }
     return {
       reference: { kind: 'stall', id: disposition.id },

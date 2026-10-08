@@ -83,6 +83,7 @@ function buildReworkDisposition(
     rationale: 'remove the refused behavior',
     tasks: [{ id: 'remove-refused-story', title: 'Remove the refused behavior' }],
     ...overrides,
+    boundTaskIds: overrides?.boundTaskIds ?? [],
   };
 }
 
