@@ -5011,11 +5011,19 @@ export class Conductor {
   private async writeRefusalReworkHalt(
     detail: string,
     refused: readonly OverScopeRenderableFinding[],
+    plannerFault?: string,
   ): Promise<string> {
-    const reason = renderPrdAuditScopeHalt(
+    const refusedReason = renderPrdAuditScopeHalt(
       detail,
       renderOverScopeDecisionBlock(refused, refused, []),
     );
+    // The refusal decision remains the terminal authority for this round,
+    // but an exhausted typed planner must not disappear behind that stable
+    // decision block.  Keep the existing bytes exactly when no dispatch was
+    // attempted (for example a spent allowance).
+    const reason = plannerFault === undefined
+      ? refusedReason
+      : `${refusedReason}\n\nRemediation planner fault: ${plannerFault}`;
     await this.writeHaltMarker(reason + '\n', OVER_SCOPE_HALT_CLASS);
     return reason;
   }
@@ -12490,6 +12498,7 @@ export class Conductor {
               }
               if (prdAuditRoute.kind === 'over-scope-refusal-rework') {
                 const refusalRoute = prdAuditRoute.route;
+                let plannerFault: string | undefined;
                 // Durable admission is authoritative for refusal rework. A
                 // malformed or spent ledger must preserve the refused block,
                 // not be reclassified by the no-op escalation probe below.
@@ -12595,6 +12604,7 @@ export class Conductor {
                     process.off('SIGTERM', sigterm);
                     return;
                   }
+                  if (outcome?.kind === 'none') plannerFault = outcome.reason;
                   // A `halt` or `none` (or an append-side throw) from
                   // planRemediation on a refusal round falls through to the
                   // refused over-scope block below: the operator must see the
@@ -12604,6 +12614,7 @@ export class Conductor {
                 const refusedReason = await this.writeRefusalReworkHalt(
                   refusalRoute.detail,
                   refusalRoute.refused,
+                  plannerFault,
                 );
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(refusedReason);
@@ -14289,6 +14300,7 @@ export class Conductor {
               // re-surface on the next audit and HALT then. Falls back to the
               // deterministic classifyPrdAuditGaps routing when no usable plan is
               // produced or the remediation budget is exhausted.
+              let remediationPlannerFault: string | undefined;
               if (remediationRounds < prdAuditRemediationLapCap) {
                 const outcome = await this.planRemediation(
                   state,
@@ -14342,6 +14354,7 @@ export class Conductor {
                   return;
                 }
                 // No usable remediation plan → fall through to the fallback below.
+                remediationPlannerFault = outcome.reason;
               }
 
               // Fallback (no /remediate plan, or remediation budget exhausted):
@@ -14375,7 +14388,10 @@ export class Conductor {
                     `for the per-FR gap-class and file:line evidence, then make the code ` +
                     `changes needed to close each gap and commit them — do NOT rely on ` +
                     `the task list being done. The as-built code is re-audited after ` +
-                    `this build; an unaddressed gap will re-block.`,
+                    `this build; an unaddressed gap will re-block.` +
+                    (remediationPlannerFault === undefined
+                      ? ''
+                      : `\n\nRemediation planner fault: ${remediationPlannerFault}`),
                 );
 
                 // Task 7: Merged-PR guard on prd_audit fallback kickback (TS-1).
@@ -14405,9 +14421,12 @@ export class Conductor {
               // Both terminal branches now require an operator: product/plan
               // gaps need DECIDE input, while an implementation gap reaches
               // this writer only after autonomous self-healing is exhausted.
-              await this.writeHaltMarker(reason + '\n', 'needs-human');
-              const prUrl = await this.surfaceRemediationPr(reason);
-              await this.emitLoopHalt(reason, prUrl);
+              const terminalReason = remediationPlannerFault === undefined
+                ? reason
+                : `${reason}\n\nRemediation planner fault: ${remediationPlannerFault}`;
+              await this.writeHaltMarker(terminalReason + '\n', 'needs-human');
+              const prUrl = await this.surfaceRemediationPr(terminalReason);
+              await this.emitLoopHalt(terminalReason, prUrl);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
