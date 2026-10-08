@@ -30,13 +30,12 @@ keeps moving, and flag for a human ONLY the gaps a machine genuinely cannot clos
   merely because the finding came from an architecture audit or its id begins with `adr-`.
 - **`intended-drift` is not automatically a HALT.** It is `halt: product-scope` ONLY when the
   divergence reflects real unplanned product functionality. If it preserves approved architecture,
-  route it to `build`; route to `architecture_review` only when the approved architecture itself
-  must change or be clarified.
-- **Keep omissions distinct from decisions.** An in-scope planning omission is a plan miss, not an
-  architecture or design decision, so it routes to `plan`; it does not make `architecture_review`
-  appropriate. Positive example: a plan omitted an approved validation task, so select `plan` after
-  coverage proof. `plan` remains a routed disposition distinct from `halt`; its terminal needs-human
-  HALT is an engine outcome, not a HALT category.
+  route it to `build`; route to `architecture_review` only when changing or clarifying approved architecture is required.
+- **Keep omissions distinct from decisions.** A `plan` route is for an in-scope planning omission,
+  not an architecture or design decision; it does not make `architecture_review` appropriate.
+  Positive example: a plan omitted an approved validation task, so select `plan` after coverage
+  proof. `plan` remains a routed disposition distinct from `halt`; its terminal needs-human HALT is
+  an engine outcome, not a HALT category.
   Negative example: do not reopen architecture review when no approved architectural change or
   clarification is required.
 - **Check plan-task coverage before `plan`.** Before selecting `plan`, examine the approved plan's
