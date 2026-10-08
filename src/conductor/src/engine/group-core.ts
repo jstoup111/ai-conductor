@@ -18,7 +18,7 @@
 
 import { v4 as uuidv4 } from "uuid";
 import type { StepName, ConductState } from "../types/index.js";
-import type { StepRunResult, StepRunOptions } from "./conductor.js";
+import type { StepRunResult, StepRunOptions } from "./step-runner-types.js";
 import { sweepStaleReviewArtifacts } from "./artifacts.js";
 import type { ConductorEvent, ExecutionContext } from "../types/events.js";
 import type { HarnessConfig } from "../types/config.js";

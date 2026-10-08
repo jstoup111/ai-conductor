@@ -39,7 +39,7 @@ import type {
   StepRunner,
   StepRunResult,
   StepRunOptions,
-} from './conductor.js';
+} from './step-runner-types.js';
 import { listCommitsWithTrailers, resolveOriginRef } from './autoheal.js';
 import { readOperatorReseals } from './protected-artifact-seal.js';
 import { parseScopeTrailers } from './scope-trailer.js';

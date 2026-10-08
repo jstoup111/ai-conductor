@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import type { ConductState, FinishPublicationEvent, RunMode } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
-import type { StepRunResult } from './conductor.js';
+import type { StepRunResult } from './step-runner-types.js';
 import { type GhRunner, type GitRunner } from './pr-labels.js';
 import { executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
 import { headPushedToUpstream } from './push-evidence.js';

@@ -30,7 +30,7 @@ import {
 import { currentCommitSha } from './project-prelude.js';
 import { readHaltSidecarClassification, writeHaltMarker } from './halt-marker.js';
 import { deferredAutoParkHaltPresentation } from './auto-park-halt.js';
-import type { OperatorParkedTermination } from './conductor.js';
+import type { OperatorParkedTermination } from './conductor-options.js';
 import { computeTimingRollup } from './timing-rollup.js';
 import { readState } from './state.js';
 import type { GithubOperationRunner } from './github-operations.js';

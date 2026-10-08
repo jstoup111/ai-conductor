@@ -11,7 +11,7 @@ import type {
   CheckpointResponse,
   NavigableStep,
   ArtifactReviewResult,
-} from '../../engine/conductor.js';
+} from '../../engine/conductor-options.js';
 import { getRecoveryOptions } from '../../engine/recovery.js';
 import type { LiveRegion } from '../live-region.js';
 import type { UIPromptHost } from '../types.js';

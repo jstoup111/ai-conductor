@@ -30,7 +30,7 @@ import { surfaceQuarantine } from './setup-triage.js';
 import { verifyWorkOrder, type WorkOrder, type WorkOrderGitRunner } from './work-order.js';
 import type { SetupFailureError } from './worktree-prepare.js';
 import type { TriageOutcome } from './setup-triage.js';
-import type { OperatorParkedTermination } from './conductor.js';
+import type { OperatorParkedTermination } from './conductor-options.js';
 import type { WorkClaims } from './work-claims.js';
 
 /** Read-only liveness view of the daemon's active work-claim registry. */

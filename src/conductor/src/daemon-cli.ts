@@ -83,8 +83,8 @@ import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-f
 import {
   Conductor,
   createProvenanceGuardedFinishPresentationRepair,
-  type OperatorParkedTermination,
 } from './engine/conductor.js';
+import type { OperatorParkedTermination } from './engine/conductor-options.js';
 import { createProductionAcceptanceRedExec } from './engine/acceptance-red-runner.js';
 import {
   createProductionFinishPublicationCoordinator,
