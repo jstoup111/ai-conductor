@@ -168,7 +168,7 @@ export async function escalateBuildFailure(
         events: opts.events,
       },
     );
-    if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));
+    if (pushed.kind !== 'executed') throw new Error(buildFailureRemoteFailure(pushed));
   } catch (err) {
     log?.(`[escalate] push failed — skipping PR creation: ${err}`);
     return {}; // FR-7: push failure silently aborts (no partial PR)
@@ -274,7 +274,7 @@ export async function escalateBuildFailure(
   return { prUrl };
 }
 
-function remoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
+function buildFailureRemoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
   if (result.kind === 'failed') return result.error;
   if (result.kind === 'refused') return result.reason;
   return 'remote Git operation did not execute';

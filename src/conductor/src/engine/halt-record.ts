@@ -132,7 +132,7 @@ export async function recordHalt(
 
     try {
       const result = await publishHaltRecord(root, input.branch, remote, input.slug);
-      if (result.kind !== 'executed') return { kind: 'pushFailed', reason: remoteFailure(result) };
+      if (result.kind !== 'executed') return { kind: 'pushFailed', reason: haltRecordRemoteFailure(result) };
     } catch (error) {
       return { kind: 'pushFailed', reason: errorMessage(error) };
     }
@@ -170,7 +170,7 @@ export async function supersedeHaltRecord(
     try {
       const branch = await currentBranch(root);
       const result = await publishHaltRecord(root, branch, remote, slug);
-      if (result.kind !== 'executed') return { kind: 'pushFailed', reason: remoteFailure(result) };
+      if (result.kind !== 'executed') return { kind: 'pushFailed', reason: haltRecordRemoteFailure(result) };
     } catch (error) {
       return { kind: 'pushFailed', reason: errorMessage(error) };
     }
@@ -207,7 +207,7 @@ export async function publishHaltRecord(
   );
 }
 
-function remoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
+function haltRecordRemoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
   if (result.kind === 'failed') return result.error;
   if (result.kind === 'refused') return result.reason;
   return 'remote Git operation did not execute';

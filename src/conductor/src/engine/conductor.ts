@@ -27,8 +27,8 @@ import { findDocumentationDelivery } from './documentation-delivery.js';
 import { renderRebaseFenceDecisionNote } from './rebase-fence-decision-note.js';
 import {
   buildReviewConfidenceFloors,
+  rawBuildReviewFailIsEffectivelyAccepted,
   resolveEffectiveBuildReviewVerdict,
-  type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
@@ -131,7 +131,7 @@ import {
 import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { ExecutionLifecycle } from './execution-lifecycle.js';
-import { BuildProgressWatcher } from './build-progress-watcher.js';
+import { BuildProgressWatcher, isNoTaskProgressBuildStall } from './build-progress-watcher.js';
 import {
   resolveBuildProgressConfig,
   resolveGateCodeValidityConfig,
@@ -190,6 +190,8 @@ import {
 import {
   buildArtifactResolutionContext,
   findArtifactFiles as findArtifactFilesForStep,
+  snapshotArtifactMtimes,
+  selectChangedArtifacts,
   resolveArtifactFiles,
   extraArtifactGlobs,
   resolveFeaturePlanPath,
@@ -266,12 +268,11 @@ import {
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
 import {
   FullSuiteVerifier,
+  projectExecutionSummaryEntries,
+  testSuiteBudgetVerdict,
   type FullSuiteInspectionResult,
 } from './full-suite-verifier.js';
-import {
-  sanitizeFullSuiteDiagnosticOutput,
-  type FullSuiteEvidenceAttempt,
-} from './full-suite-evidence.js';
+import { sanitizeFullSuiteDiagnosticOutput } from './full-suite-evidence.js';
 import {
   extractFlaggedPaths,
   runScopeFailDisposition,
@@ -326,13 +327,8 @@ import {
   readBuildOutcome,
   resolveBuildOutcomeCategory,
   sameNoOpCycle,
-  writeBuildOutcome,
+  writeBuildOutcomeBestEffort,
 } from './build-outcome.js';
-import type { BuildOutcomeStore } from './build-outcome.js';
-
-async function writeBuildOutcomeBestEffort(projectRoot: string, outcome: BuildOutcomeStore): Promise<void> {
-  await writeBuildOutcome(projectRoot, outcome).catch(() => {});
-}
 import type { Track } from '../types/index.js';
 import {
   resolveStepConfig,
@@ -350,7 +346,7 @@ import {
 import { waitForCredentialsChange, readOperatorCredentialsState } from './self-host/operator-credentials.js';
 import { preflightBuildAuthCheck as checkBuildAuth } from './self-host/build-auth-preflight.js';
 import { readDaemonBuildToken, createDaemonTokenContentClassifier } from './self-host/daemon-build-token.js';
-import type { ChangedFile } from './self-host/release-gate.js';
+import { parseNameStatus, type ChangedFile } from './self-host/release-gate.js';
 import { writeSelfHostHalt, type GateVerdict } from './self-host/gate-halt.js';
 import { parseReleaseDisposition } from './release-metadata.js';
 import {
@@ -521,6 +517,7 @@ export {
   resolveRunnableResumeEntry,
 } from './resume-entry.js';
 export { isEngineComputedStep, writeFenceInstalledForProvider } from './step-completion.js';
+export { isNoTaskProgressBuildStall } from './build-progress-watcher.js';
 export {
   createFinishPresentationRepair,
   createProvenanceGuardedFinishPresentationRepair,
@@ -602,22 +599,6 @@ export type { AsBuiltGoverningClauseResolution } from './as-built-routing.js';
  */
 export const MAX_RECOVERY_RETRIES = 2;
 
-/**
- * A raw build-review FAIL may be non-blocking only when the current
- * disposition join resolves it to an effective PASS through an actual
- * accepted finding. The latter condition preserves the legacy scalar FAIL
- * behavior, which has no findings for a disposition to accept.
- */
-function rawBuildReviewFailIsEffectivelyAccepted(
-  resolution: BuildReviewEffectiveResolution,
-): boolean {
-  return (
-    resolution.ok &&
-    resolution.effective.verdict === 'PASS' &&
-    resolution.effective.acceptedFindingIds.length > 0
-  );
-}
-
 // ── Gate-driven loop (Phase 3) ──────────────────────────────────────────────
 /** Bound message-derived reset deadlines so a malformed provider response cannot wedge a run. */
 const MAX_RATE_LIMIT_DEADLINE_MS = 6 * 60 * 60 * 1000;
@@ -643,130 +624,10 @@ const LOOP_HALT_MARKER = HALT_MARKER;
 
 
 /**
- * Snapshot mtimes of a step's artifact files, keyed by path. Taken BEFORE the
- * step runs so the post-step pass can identify which artifacts the step
- * actually authored (new or rewritten) vs pre-existing historical ones.
- */
-async function snapshotArtifactMtimes(
-  projectRoot: string,
-  step: StepName,
-): Promise<Map<string, number>> {
-  const snapshot = new Map<string, number>();
-  // findArtifactFilesForStep returns absolute paths.
-  const files = await findArtifactFilesForStep(projectRoot, step);
-  for (const file of files) {
-    try {
-      const s = await stat(file);
-      snapshot.set(file, s.mtimeMs);
-    } catch {
-      // Raced deletion — treat as absent.
-    }
-  }
-  return snapshot;
-}
-
-/**
- * Files from `files` that are new or modified relative to `snapshot`
- * (pre-step). A file absent from the snapshot, or whose mtime changed, was
- * authored by the step this run. Pre-existing untouched files are excluded —
- * their markers (if any) were written by the run that authored them.
- */
-async function selectChangedArtifacts(
-  files: string[],
-  snapshot: Map<string, number> | null,
-): Promise<string[]> {
-  if (snapshot === null) return files;
-  const changed: string[] = [];
-  for (const file of files) {
-    const before = snapshot.get(file);
-    if (before === undefined) {
-      changed.push(file);
-      continue;
-    }
-    try {
-      const s = await stat(file);
-      if (s.mtimeMs !== before) changed.push(file);
-    } catch {
-      // Deleted during the step — nothing to stamp.
-    }
-  }
-  return changed;
-}
-
-/**
  * Render the operator-facing recovery for a terminal mechanical review fault.
  * The aggregate is the current-lap authority for the rubric and closed cause;
  * the ledger only supplies the shared allowance consumption.
  */
-/**
- * Parse `git diff --name-status` output into `ChangedFile[]` for the self-host
- * release-artifact migration classifier. Each line is `<status>\t<path>` for
- * A/M/D, or `R<score>\t<old>\t<new>` / `C<score>\t<old>\t<new>` for a
- * rename/copy — the origin path is preserved so a skill moved OUT of `skills/`
- * (a breaking symlink-target change) is classified on its source side too.
- * Malformed / blank lines are skipped.
- */
-function parseNameStatus(stdout: string): ChangedFile[] {
-  const out: ChangedFile[] = [];
-  for (const line of stdout.split('\n')) {
-    if (line.trim() === '') continue;
-    const parts = line.split('\t');
-    const status = parts[0];
-    if (status.startsWith('R') || status.startsWith('C')) {
-      // R<score>\t<old>\t<new> — need both origin and destination paths.
-      if (parts.length < 3) continue;
-      out.push({ status, origPath: parts[1], path: parts[2] });
-    } else {
-      if (parts.length < 2 || parts[1] === '') continue;
-      out.push({ status, path: parts[1] });
-    }
-  }
-  return out;
-}
-
-
-function testSuiteBudgetVerdict(inspection: FullSuiteInspectionResult) {
-  if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
-    const categories = inspection.evidence.driftLedger?.at(-1)?.categories;
-    return categories === undefined
-      ? undefined
-      : { outcome: 'preserved_within_budget' as const, categories };
-  }
-  if (
-    inspection.status === 'STALE' &&
-    (inspection.reason === 'drift_budget_exceeded' || inspection.reason === 'unbudgetable_drift')
-  ) {
-    return {
-      outcome: 'rerun_required' as const,
-      reason: inspection.reason,
-      category: inspection.category,
-      count: inspection.count,
-      bound: inspection.bound,
-    };
-  }
-  return undefined;
-}
-
-function projectExecutionSummaryEntries(
-  entries: readonly FullSuiteEvidenceAttempt[],
-): Array<Pick<FullSuiteEvidenceAttempt, 'index' | 'result' | 'durationMs'>> {
-  return entries.map(({ index, result, durationMs }) => ({ index, result, durationMs }));
-}
-
-/** Whether a failed BUILD attempt made no task or commit progress. */
-export function isNoTaskProgressBuildStall(input: {
-  attempt: number;
-  resolvedTasksBefore: number;
-  resolvedTasksAfter: number;
-  headMovedThisAttempt: boolean;
-  completionReason?: string;
-}): boolean {
-  return input.attempt >= 2 &&
-    input.resolvedTasksAfter <= input.resolvedTasksBefore &&
-    !input.headMovedThisAttempt &&
-    !input.completionReason?.startsWith('unverified Done-when checks require one BUILD review pass:');
-}
-
 export class Conductor {
   private stateFilePath: string;
   /** Current run state, retained so terminal events can be step-stamped. */

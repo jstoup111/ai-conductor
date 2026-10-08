@@ -22,6 +22,7 @@ import {
   type FullSuiteFailureReason,
   type FullSuitePassEvidence,
 } from './full-suite-evidence.js';
+import type { FullSuiteEvidenceAttempt } from './full-suite-evidence.js';
 import {
   FULL_SUITE_FINGERPRINT_CATEGORIES,
   classifyFullSuiteFingerprintPath,
@@ -113,6 +114,34 @@ export type FullSuiteInspectionResult =
   | { status: 'PRESERVED_WITHIN_BUDGET'; evidence: FullSuitePassEvidence }
   | FullSuiteStaleInspection
   | { status: 'FAILED'; reason: FullSuiteFailureReason; message: string };
+
+export function testSuiteBudgetVerdict(inspection: FullSuiteInspectionResult) {
+  if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
+    const categories = inspection.evidence.driftLedger?.at(-1)?.categories;
+    return categories === undefined
+      ? undefined
+      : { outcome: 'preserved_within_budget' as const, categories };
+  }
+  if (
+    inspection.status === 'STALE' &&
+    (inspection.reason === 'drift_budget_exceeded' || inspection.reason === 'unbudgetable_drift')
+  ) {
+    return {
+      outcome: 'rerun_required' as const,
+      reason: inspection.reason,
+      category: inspection.category,
+      count: inspection.count,
+      bound: inspection.bound,
+    };
+  }
+  return undefined;
+}
+
+export function projectExecutionSummaryEntries(
+  entries: readonly FullSuiteEvidenceAttempt[],
+): Array<Pick<FullSuiteEvidenceAttempt, 'index' | 'result' | 'durationMs'>> {
+  return entries.map(({ index, result, durationMs }) => ({ index, result, durationMs }));
+}
 
 export interface FullSuiteVerifierOptions {
   projectRoot: string;

@@ -556,7 +556,7 @@ export function makeProductionRepairPublisher(input: {
               events: input.events,
             },
           );
-          if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));
+          if (pushed.kind !== 'executed') throw new Error(shipmentEvidenceRemoteFailure(pushed));
         }
         return { headSha: (await input.runGit(['rev-parse', 'HEAD'], { cwd: worktree })).stdout.trim() };
       } finally {
@@ -641,7 +641,7 @@ async function requireRepairPublicationOperation(
   }
 }
 
-function remoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
+function shipmentEvidenceRemoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
   if (result.kind === 'failed') return result.error;
   if (result.kind === 'refused') return result.reason;
   return 'remote Git operation did not execute';

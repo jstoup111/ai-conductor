@@ -27,6 +27,24 @@ export interface ChangedFile {
   origPath?: string;
 }
 
+export function parseNameStatus(stdout: string): ChangedFile[] {
+  const out: ChangedFile[] = [];
+  for (const line of stdout.split('\n')) {
+    if (line.trim() === '') continue;
+    const parts = line.split('\t');
+    const status = parts[0];
+    if (status.startsWith('R') || status.startsWith('C')) {
+      // R<score>\t<old>\t<new> — need both origin and destination paths.
+      if (parts.length < 3) continue;
+      out.push({ status, origPath: parts[1], path: parts[2] });
+    } else {
+      if (parts.length < 2 || parts[1] === '') continue;
+      out.push({ status, path: parts[1] });
+    }
+  }
+  return out;
+}
+
 export interface BreakingSurfaces {
   breaking: boolean;
   /** True when the change set is unknown — errs toward requiring a block. */

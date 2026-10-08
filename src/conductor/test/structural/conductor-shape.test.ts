@@ -1,7 +1,23 @@
-// Covers: task:1
+// Covers: task:1, task:10
+import { readFile, readdir } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execa } from 'execa';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 import { checkConductorImports, checkConductorShape } from './conductor-shape-guard.js';
+
+interface ConductorInventory {
+  moduleLevelAtBase: string[];
+}
+
+const CONDUCTOR_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
+const ENGINE_ROOT = join(CONDUCTOR_ROOT, 'src/engine');
+const CONDUCTOR_PATH = join(ENGINE_ROOT, 'conductor.ts');
+const inventory = JSON.parse(
+  await readFile(new URL('./conductor-exports.json', import.meta.url), 'utf8'),
+) as ConductorInventory;
 
 const ALLOWED_TUNABLES = [
   'MAX_RECOVERY_RETRIES',
@@ -14,7 +30,79 @@ const ALLOWED_TUNABLES = [
 
 const ALLOWED_IMPORTERS = new Set(['index.ts', 'daemon-cli.ts']);
 
+async function engineModules(directory = ENGINE_ROOT): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nested = await Promise.all(entries.map(async (entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return engineModules(path);
+    return entry.isFile() && entry.name.endsWith('.ts') && path !== CONDUCTOR_PATH ? [path] : [];
+  }));
+  return nested.flat();
+}
+
+function declaredNames(source: string, fileName: string): Set<string> {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const names = new Set<string>();
+  for (const statement of sourceFile.statements) {
+    if (
+      ts.isFunctionDeclaration(statement)
+      || ts.isClassDeclaration(statement)
+      || ts.isInterfaceDeclaration(statement)
+      || ts.isTypeAliasDeclaration(statement)
+      || ts.isEnumDeclaration(statement)
+    ) {
+      if (statement.name !== undefined) names.add(statement.name.text);
+    }
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name)) names.add(declaration.name.text);
+      }
+    }
+  }
+  return names;
+}
+
+function inventoryName(name: string): string {
+  return name === 'appendRemediationTasks' ? 'appendConductorRemediationTasks' : name;
+}
+
 describe('structural: conductor shape guard', () => {
+  it('records the current merge-base guard inventory', async () => {
+    const { stdout: base } = await execa('git', ['merge-base', 'HEAD', 'origin/main'], { cwd: CONDUCTOR_ROOT });
+    const { stdout: baseConductor } = await execa(
+      'git',
+      ['show', `${base}:src/conductor/src/engine/conductor.ts`],
+      { cwd: CONDUCTOR_ROOT },
+    );
+    expect(inventory.moduleLevelAtBase).toEqual(
+      checkConductorShape(baseConductor, ALLOWED_TUNABLES).map((violation) => violation.name),
+    );
+  });
+
+  it('accepts the real conductor facade and locates each base module declaration once', async () => {
+    const conductor = await readFile(CONDUCTOR_PATH, 'utf8');
+    expect(checkConductorShape(conductor, ALLOWED_TUNABLES)).toEqual([]);
+
+    const modules = await engineModules();
+    const declarations = await Promise.all(modules.map(async (path) => ({
+      path: relative(ENGINE_ROOT, path),
+      names: declaredNames(await readFile(path, 'utf8'), path),
+    })));
+    const locations = Object.fromEntries(inventory.moduleLevelAtBase.map((name) => [
+      name,
+      declarations.filter((module) => module.names.has(inventoryName(name))).map((module) => module.path),
+    ]));
+    expect(locations).toEqual(expect.objectContaining(
+      Object.fromEntries(inventory.moduleLevelAtBase.map((name) => [name, expect.any(Array)])),
+    ));
+    for (const name of inventory.moduleLevelAtBase) expect(locations[name]).toHaveLength(1);
+  });
+
+  it('keeps the six facade tunables declared in conductor.ts', async () => {
+    const declarations = declaredNames(await readFile(CONDUCTOR_PATH, 'utf8'), CONDUCTOR_PATH);
+    expect(ALLOWED_TUNABLES.every((name) => declarations.has(name))).toBe(true);
+  });
+
   it.each([
     ['function', 'runNow', 'function runNow() {}'],
     ['const', 'NOT_A_TUNABLE', 'const NOT_A_TUNABLE = 1;'],

@@ -241,7 +241,7 @@ export async function withKickbackLedgerLease<T>(
 }
 
 /** A gate may be kicked back to BUILD this many times for one progress state. */
-export const MAX_KICKBACKS_PER_GATE = 2;
+export const KICKBACK_LEDGER_MAX_PER_GATE = 2;
 
 /** Cumulative build-review failures allowed before human intervention is required. */
 export const MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW = 5;
@@ -1009,7 +1009,7 @@ export function bumpKickbackGate(
   };
   const madeProgress =
     previous.treeHash !== input.treeHash || input.resolvedCount > previous.resolvedBefore;
-  const nextCount = madeProgress ? 1 : Math.min(previous.count + 1, MAX_KICKBACKS_PER_GATE);
+  const nextCount = madeProgress ? 1 : Math.min(previous.count + 1, KICKBACK_LEDGER_MAX_PER_GATE);
 
   const nextEntry: KickbackGateEntry = {
     ...previous,
@@ -1026,7 +1026,7 @@ export function bumpKickbackGate(
     cumulativeExhausted: nextEntry.cumulative > (
       nextEntry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW
     ),
-    exhausted: !madeProgress && previous.count >= MAX_KICKBACKS_PER_GATE,
+    exhausted: !madeProgress && previous.count >= KICKBACK_LEDGER_MAX_PER_GATE,
   };
 }
 

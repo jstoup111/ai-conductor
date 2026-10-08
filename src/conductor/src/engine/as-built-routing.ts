@@ -1,5 +1,5 @@
 import { asBuiltFindingDetail, asBuiltOutcome, readAsBuiltVerdict } from './as-built-verdict-store.js';
-import type { AsBuiltFinding, AsBuiltGoverningReference } from './as-built-contract.js';
+import type { AsBuiltGoverningReference } from './as-built-contract.js';
 
 /**
  * Authored `Governing clause` cells carry inline markdown. The clause grammar is
@@ -27,13 +27,13 @@ export function typedAsBuiltResolution(reference: AsBuiltGoverningReference): As
     : { kind: 'plan-task', clause, parentTask: reference.taskId, reference };
 }
 
-export function renderAsBuiltBlockedFindingDetail(findings: readonly AsBuiltFinding[] | undefined): string {
+export function renderAsBuiltBlockedFindingDetail(findings: readonly import('./as-built-contract.js').AsBuiltFinding[] | undefined): string {
   return findings && findings.length > 0 ? `\n\nBlocking findings:\n${asBuiltFindingDetail(findings)}` : '';
 }
 
 export async function readAsBuiltRoutingOutcome(projectRoot: string): Promise<{
   kind: 'approved' | 'plan-gap-delivered' | 'plan-gap-undelivered' | 'blocked-remediable' | 'blocked-design' | 'invalid';
-  findings?: readonly AsBuiltFinding[];
+  findings?: readonly import('./as-built-contract.js').AsBuiltFinding[];
 }> {
   const stored = await readAsBuiltVerdict(projectRoot);
   if (stored.kind !== 'present') return { kind: 'invalid' };
