@@ -194,7 +194,7 @@ function violation(
 }
 
 function hasDeclareModifier(node: ts.Node): boolean {
-  return node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ?? false;
+  return ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ?? false;
 }
 
 function declarationNames(list: ts.VariableDeclarationList): string[] {
@@ -203,7 +203,7 @@ function declarationNames(list: ts.VariableDeclarationList): string[] {
 
 function bindingNames(name: ts.BindingName): string[] {
   if (ts.isIdentifier(name)) return [name.text];
-  return name.elements.flatMap((element) => bindingNames(element.name));
+  return name.elements.flatMap((element) => ts.isOmittedExpression(element) ? [] : bindingNames(element.name));
 }
 
 function variableKind(list: ts.VariableDeclarationList): 'const' | 'let' | 'var' {

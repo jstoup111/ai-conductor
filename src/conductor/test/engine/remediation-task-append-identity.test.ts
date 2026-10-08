@@ -8,8 +8,8 @@ import { appendRemediationTasks as appendCriterionBoundRemediationTasks } from '
 describe('conductor remediation task append identity', () => {
   it('keeps the conductor shim bound to its renamed appender, not the criterion-bound appender', () => {
     expect({
-      conductorMatchesRenamedAppender: appendRemediationTasks === appendConductorRemediationTasks,
-      conductorDiffersFromCriterionBoundAppender: appendRemediationTasks !== appendCriterionBoundRemediationTasks,
+      conductorMatchesRenamedAppender: Object.is(appendRemediationTasks, appendConductorRemediationTasks),
+      conductorDiffersFromCriterionBoundAppender: !Object.is(appendRemediationTasks, appendCriterionBoundRemediationTasks),
     }).toEqual({
       conductorMatchesRenamedAppender: true,
       conductorDiffersFromCriterionBoundAppender: true,
