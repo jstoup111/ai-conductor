@@ -1827,6 +1827,7 @@ describe('engine/conductor', () => {
     });
   });
 
+  // Covers: task:23
   describe('Halt dispositions and partial plans (Task 23)', () => {
     const VALIDATION_GROUP_PREREQS = {
       worktree: 'done',
