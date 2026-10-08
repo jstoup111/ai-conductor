@@ -153,6 +153,16 @@ describe('stacked-delivery land rung', () => {
 
   });
 
+  it('lands a three-slice plan without max_slices when the flag is off', async () => {
+    await writeProjectConfig('stacked_prs:\n  enabled: false\n');
+    const threeSlicePlan = plan()
+      .replace('| 1 | First | 1, 2 |\n| 2 | Second | 3, 4 |', '| 1 | First | 1, 2 |\n| 2 | Second | 3 |\n| 3 | Third | 4 |');
+    const worktreePath = await seed(threeSlicePlan);
+
+    await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options()))
+      .resolves.toMatchObject({ branch: 'spec/stacked-delivery' });
+  });
+
   it('keeps the stacked-delivery rung inert without a project config', async () => {
     const worktreePath = await seed(plan({ spanning: true }), 'Tier: S\n');
     await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options()))
