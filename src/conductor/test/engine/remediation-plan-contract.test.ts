@@ -5,6 +5,7 @@ import {
   REMEDIATION_HALT_CATEGORIES,
   REMEDIATION_PUBLICATION_DISPOSITION,
   REMEDIATION_TARGET_STEPS,
+  type RemediationDisposition,
 } from '../../src/engine/artifacts.js';
 import {
   REMEDIATION_PLAN_CONTRACT_VERSION,
@@ -14,7 +15,7 @@ import {
 } from '../../src/engine/remediation-plan-contract.js';
 import type { RemediationProjection, RemediationRequiredReference } from '../../src/engine/remediation-projection.js';
 
-const expectedDispositions = [
+const expectedDispositions: readonly RemediationDisposition[] = [
   ...REMEDIATION_TARGET_STEPS,
   REMEDIATION_PUBLICATION_DISPOSITION,
   REMEDIATION_EXISTING_TASK_DISPOSITION,
@@ -88,10 +89,12 @@ describe('remediation plan contract', () => {
   it('derives its disposition and halt-category vocabularies from the engine constants', () => {
     const disposition = REMEDIATION_PLAN_SCHEMA.properties.dispositions.items.properties.disposition;
     const category = REMEDIATION_PLAN_SCHEMA.properties.dispositions.items.properties.category.anyOf[0];
+    const referenceKind = REMEDIATION_PLAN_SCHEMA.properties.dispositions.items.properties.reference.properties.kind;
 
     expect(REMEDIATION_PLAN_CONTRACT_VERSION).toBe('v1');
     expect(disposition.enum).toEqual(expectedDispositions);
     expect(category.enum).toEqual(REMEDIATION_HALT_CATEGORIES);
+    expect(referenceKind.enum).toEqual(['prd-criterion', 'as-built-finding', 'refusal', 'stall', 'test']);
   });
 
   // Covers: task:1
@@ -244,6 +247,43 @@ describe('remediation plan contract', () => {
     expect(test).toMatchObject({
       kind: 'accepted',
       dispositions: [{ reference: { kind: 'test', id: 'test:engine-contract' }, targetStep: 'halt', category: 'unanswerable' }],
+    });
+  });
+
+  // Covers: task:35
+  it('owns reference grammar, refusal identity, and halt categories in the schema and validator', () => {
+    const decisionId = 'decision-owned';
+    const schema = REMEDIATION_PLAN_SCHEMA.properties.dispositions.items.properties;
+    const haltCategory = schema.category.anyOf[0];
+
+    expect(schema.reference.properties.kind.enum).toContain('refusal');
+    expect(haltCategory.enum).toEqual(REMEDIATION_HALT_CATEGORIES);
+
+    const stall = validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'stall', id: 'stall:task-progress' }, { tasks: [] })],
+    }, projection('build-stall', []));
+    const test = validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'test', id: 'test:engine-contract' }, {
+        disposition: 'halt', category: 'unanswerable', tasks: [],
+      })],
+    }, projection('finish-verification', []));
+
+    expect(stall).toMatchObject({
+      kind: 'accepted', dispositions: [{ reference: { kind: 'stall', id: 'stall:task-progress' } }],
+    });
+    expect(test).toMatchObject({
+      kind: 'accepted',
+      dispositions: [{ reference: { kind: 'test', id: 'test:engine-contract' }, category: 'unanswerable' }],
+    });
+
+    expect(validateRemediationPlan({
+      version: REMEDIATION_PLAN_CONTRACT_VERSION,
+      dispositions: [disposition({ kind: 'refusal', id: decisionId })],
+    }, projection('prd-audit', [refusalReference(decisionId)], undefined, [refusal(decisionId)]))).toMatchObject({
+      kind: 'accepted',
+      dispositions: [{ reference: refusalReference(decisionId), targetStep: 'build' }],
     });
   });
 
