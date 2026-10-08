@@ -113,6 +113,7 @@ const BACKTICK_TOKEN = /`([^`\s]+)`/g;
 const STORY_LINE = /^[ \t]*\*\*Story:\*\*[ \t]*(?:(?:story|epic)\b[-\t ]+)?(n\/a|[A-Za-z0-9.-]+)/i;
 const STORY_LINE_VALUE = /^[ \t]*\*\*Story:\*\*[ \t]*(.*)$/i;
 const NON_STORY_VALUE = /^(?:n\/a|none|prerequisite|all)$/i;
+const STORY_N_A_PLACEHOLDER = '\u0000plan-task-n-a\u0000';
 
 /**
  * Returns every normalized story id for each `**Story:**` line in task text.
@@ -136,9 +137,18 @@ export function parsePlanTaskStoryLineIds(text: string): string[][] {
       continue;
     }
 
-    storyLines.push(withoutAnnotations
-      .split(/[,;&+]|(?<!n)\/(?!a)|\band\b/i)
-      .map((token) => token.trim().replace(/^(?:story|stories|epic)\b[-\t ]*/i, '').trim())
+    // Protect only `n/a` when it is a complete delimiter-separated token. Other
+    // slashes are story-id delimiters, including those in `1/a` and `n/2`.
+    const slashSafeValue = withoutAnnotations.replace(
+      /(^|[,;&+\s/])n\/a(?=$|[,;&+\s/])/gi,
+      `$1${STORY_N_A_PLACEHOLDER}`,
+    );
+    storyLines.push(slashSafeValue
+      .split(/[,;&+/]|\band\b/i)
+      .map((token) => token.trim()
+        .replaceAll(STORY_N_A_PLACEHOLDER, 'n/a')
+        .replace(/^(?:story|stories|epic)\b[-\t ]*/i, '')
+        .trim())
       .filter((token) => token.length > 0));
   }
   return storyLines;

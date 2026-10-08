@@ -52,6 +52,8 @@ describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)'
       ['Story 1', [['1']]],
       ['FR-14 (source=a, status=b) — happy path', [['FR-14']]],
       ['1/2', [['1', '2']]],
+      ['1/a', [['1', 'a']]],
+      ['n/2', [['n', '2']]],
       ['1 & 2', [['1', '2']]],
       ['1; 2', [['1', '2']]],
       ['1 + 2', [['1', '2']]],
