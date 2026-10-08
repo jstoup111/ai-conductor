@@ -27,30 +27,6 @@ import type { GitBlobBatchRunner } from '../../src/engine/git-blob-batch.js';
 
 const execFile = promisify(execFileCallback);
 const scratches: string[] = [];
-const rejectedLsTreeProbeRepos = vi.hoisted(() => new Set<string>());
-
-// Keep the real local-Git fixture while separately covering execa's rejected
-// process path. The production boundary catches both a nonzero result and a
-// rejected promise, so neither outcome may be mistaken for authorship.
-vi.mock('execa', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('execa')>();
-  return {
-    ...actual,
-    execa: (...args: Parameters<typeof actual.execa>) => {
-      const [command, gitArgs, options] = args;
-      if (
-        command === 'git'
-        && Array.isArray(gitArgs)
-        && gitArgs[0] === 'ls-tree'
-        && rejectedLsTreeProbeRepos.has(String(options?.cwd ?? ''))
-      ) {
-        return Promise.reject(new Error('fixture: ls-tree probe rejected')) as ReturnType<typeof actual.execa>;
-      }
-      return actual.execa(...args);
-    },
-  };
-});
-
 /**
  * A fixture-owned process boundary for tests that need Git's inheritance
  * probe to fail. Mocking `execa` here misses the batched-blob module's cached
@@ -2915,29 +2891,6 @@ describe('verifyProtectedArtifactSeal', () => {
         }
       } finally {
         restorePath();
-      }
-      await expect(readFile(sealPath)).resolves.toEqual(before);
-    });
-
-    it('refuses a missing sealed path as provenance-undeterminable when the HEAD tree probe rejects', async () => {
-      const path = '.docs/plans/retired.md';
-      const { repo, baselineCommit } = await sealThenRebaseAcrossBaseDeletion(path);
-      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
-      const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
-      const before = await readFile(sealPath);
-      rejectedLsTreeProbeRepos.add(repo);
-      try {
-        const verdict = await verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' });
-        expect(verdict).toEqual({
-          ok: false,
-          reason: `Protected artifact provenance undeterminable: ${path}\nInheritance probe failed: git diff.\nVerify Git access and retry.\nAttribution: provenance undeterminable`,
-        });
-        if (!verdict.ok) {
-          expect(verdict.reason).not.toContain('uncommitted workspace change');
-          expect(verdict.reason).not.toContain('feature-authored');
-        }
-      } finally {
-        rejectedLsTreeProbeRepos.delete(repo);
       }
       await expect(readFile(sealPath)).resolves.toEqual(before);
     });

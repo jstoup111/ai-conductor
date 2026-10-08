@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -10,6 +10,15 @@ export async function initTestRepo(dir: string): Promise<void> {
   execSync('git init -b main', { cwd: dir });
   execSync('git config user.email "test@example.com"', { cwd: dir });
   execSync('git config user.name "Test User"', { cwd: dir });
+
+  // A real-Git fixture must not inherit an operator checkout's hooks. Those
+  // hooks can run arbitrary repository tooling during a test rebase (and,
+  // notably, create temp files outside Vitest's run root). Point only this
+  // fixture at an empty hook directory so Git semantics remain real while the
+  // test process boundary stays isolated.
+  const hooksPath = join(dir, '.test-git-hooks');
+  mkdirSync(hooksPath);
+  execSync(`git config core.hooksPath "${hooksPath}"`, { cwd: dir });
 
   // Durability + no-repack config, local to this repo only. Some tokens
   // (e.g. core.fsync values) are unsupported on older git versions -

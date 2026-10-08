@@ -355,6 +355,7 @@ describe('dispatchResealCommand', () => {
         reason: 'Corrected after review.',
         featureDesc: 'repair',
         baseBranch: 'trunk',
+        onRebaseline: expect.any(Function),
       }]],
       out: [['Resealed protected artifacts: .docs/plans/repair.md']],
     });
