@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
@@ -3162,7 +3162,7 @@ describe('verifyProtectedArtifactSeal', () => {
       }).toEqual({
         verdict: {
           ok: false,
-          reason: `Protected artifact changed: ${path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.`,
+          reason: `Protected artifact changed: ${path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.\nAttribution: feature-authored (committed on this branch since merge-base ${mergeBase})`,
         },
         sealBytesUnchanged: true,
         baselineCommit: strandedBaseline,
@@ -3202,7 +3202,7 @@ describe('verifyProtectedArtifactSeal', () => {
 
       expect(verdict).toEqual({
         ok: false,
-        reason: `Unvouched engine remediation append: ${path}\nOperator-reseal exit: not-resealed; engine-append exit: unvouched.`,
+        reason: `Unvouched engine remediation append: ${path}\nOperator-reseal exit: not-resealed; engine-append exit: unvouched.\nAttribution: feature-authored (committed on this branch since merge-base ${await git(repo, ['merge-base', 'main', 'HEAD'])})`,
       });
       expect(events).toContainEqual(expect.objectContaining({
         type: 'protected_artifact_rebaseline_refused',
@@ -3243,7 +3243,7 @@ describe('verifyProtectedArtifactSeal', () => {
       }).toEqual({
         verdict: {
           ok: false,
-          reason: `Uncommitted protected artifact changed: ${path}\nRestore from HEAD.`,
+          reason: `Uncommitted protected artifact changed: ${path}\nRestore from HEAD.\nAttribution: uncommitted workspace change`,
         },
         sealBytesUnchanged: true,
         baselineCommit: strandedBaseline,
@@ -3459,7 +3459,7 @@ describe('verifyProtectedArtifactSeal', () => {
 
       expect(verdict.ok).toBe(false);
       expect((verdict as { reason: string }).reason).toBe(
-        'Protected artifact changed: .docs/plans/other-feature.md\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.',
+        `Protected artifact changed: .docs/plans/other-feature.md\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.\nAttribution: feature-authored (committed on this branch since merge-base ${await git(repo, ['merge-base', 'main', 'HEAD'])})`,
       );
       expect(
         await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'),
@@ -3491,7 +3491,7 @@ describe('verifyProtectedArtifactSeal', () => {
       }).toEqual({
         verdict: {
           ok: false,
-          reason: `Protected artifact changed: ${path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.`,
+          reason: `Protected artifact changed: ${path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.\nAttribution: feature-authored (committed on this branch since merge-base ${await git(repo, ['merge-base', 'main', 'HEAD'])})`,
         },
         sealUnchanged: true,
         baselineCommit: strandedBaseline,
@@ -3531,7 +3531,7 @@ describe('verifyProtectedArtifactSeal', () => {
       }).toEqual({
         verdict: {
           ok: false,
-          reason: `Uncommitted protected artifact changed: ${path}\nRestore from HEAD.`,
+          reason: `Uncommitted protected artifact changed: ${path}\nRestore from HEAD.\nAttribution: uncommitted workspace change`,
         },
         sealBytesUnchanged: true,
         baselineCommit: strandedBaseline,
@@ -3644,7 +3644,7 @@ describe('verifyProtectedArtifactSeal', () => {
         baseBranch: 'main',
       })).resolves.toEqual({
         ok: false,
-        reason: `Uncommitted protected artifact changed: ${path}\nRestore from HEAD.`,
+        reason: `Uncommitted protected artifact changed: ${path}\nRestore from HEAD.\nAttribution: uncommitted workspace change`,
       });
     });
 
@@ -3662,7 +3662,7 @@ describe('verifyProtectedArtifactSeal', () => {
         baseBranch: 'main',
       })).resolves.toEqual({
         ok: false,
-        reason: `Protected artifact changed: ${path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.`,
+        reason: `Protected artifact changed: ${path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.\nAttribution: feature-authored (committed on this branch since merge-base ${await git(repo, ['merge-base', 'main', 'HEAD'])})`,
       });
     });
 
@@ -3680,7 +3680,7 @@ describe('verifyProtectedArtifactSeal', () => {
         baseBranch: 'main',
       })).resolves.toEqual({
         ok: false,
-        reason: `Uncommitted protected artifact changed: ${path}\nRestore from HEAD.`,
+        reason: `Uncommitted protected artifact changed: ${path}\nRestore from HEAD.\nAttribution: uncommitted workspace change`,
       });
     });
 

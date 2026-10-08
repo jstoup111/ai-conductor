@@ -1290,18 +1290,18 @@ function rotationRefusalVerdict(
   if (rotation.condition === 'workspace-differs-from-head') {
     return {
       ok: false,
-      reason: `Uncommitted protected artifact changed: ${rotation.path}\nRestore from HEAD.`,
+      reason: `Uncommitted protected artifact changed: ${rotation.path}\nRestore from HEAD.\n${attributionLine('not-inherited', { headTouchedPath: false })}`,
     };
   }
   if (rotation.condition === 'engine-append-unvouched') {
     return {
       ok: false,
-      reason: `Unvouched engine remediation append: ${rotation.path}\nOperator-reseal exit: ${rotation.operatorResealExit}; engine-append exit: ${rotation.engineAppendExit}.`,
+      reason: `Unvouched engine remediation append: ${rotation.path}\nOperator-reseal exit: ${rotation.operatorResealExit}; engine-append exit: ${rotation.engineAppendExit}.\n${attributionLine('not-inherited', rotation)}`,
     };
   }
   return {
     ok: false,
-    reason: `Protected artifact changed: ${rotation.path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.`,
+    reason: `Protected artifact changed: ${rotation.path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.\n${attributionLine('not-inherited', rotation)}`,
   };
 }
 
