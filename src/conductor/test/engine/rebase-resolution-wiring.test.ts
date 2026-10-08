@@ -335,7 +335,7 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     expect(haltExists).toBe(true);
   });
 
-  it('finish-time untracked-collision refusal writes the never-started recovery note', async () => {
+  it('finish-time collision retry preserves the paused-rebase recovery note', async () => {
     const collision = await buildUntrackedCollisionRepo();
     const collisionState = join(collision.repo, 'conduct-state.json');
     await seedPreRebaseState(collisionState);
@@ -352,9 +352,9 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     try {
       await conductor.run();
       const halt = await readFile(join(collision.repo, '.pipeline/HALT'), 'utf8');
-      expect(halt).toContain('rebase did not start — parked for human recovery');
-      expect(halt).toContain('generated.txt');
-      expect(halt).toContain('No git rebase is in progress; do not run git rebase --continue.');
+      expect(halt).toContain('rebase conflict — parked for human resolution');
+      expect(halt).toContain('a.ts');
+      expect(halt).toContain('git rebase --continue');
     } finally { await rm(collision.repo, { recursive: true, force: true }); }
   });
 

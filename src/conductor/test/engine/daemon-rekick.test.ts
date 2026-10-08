@@ -1451,7 +1451,7 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     expect(inProgress).toBe(true);
   });
 
-  it('play-forward untracked-collision refusal writes the never-started recovery note', async () => {
+  it('play-forward collision retry preserves the paused-rebase recovery note', async () => {
     await initConflictRepo();
     await writeFile(join(dir, 'generated.txt'), 'untracked generated\n');
     expect(await git('status', '--porcelain')).toContain('?? generated.txt');
@@ -1465,9 +1465,9 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     })).resolves.toBe('halted');
 
     const halt = await readFile(join(dir, HALT_MARKER), 'utf8');
-    expect(halt).toContain('rebase did not start — parked for human recovery');
-    expect(halt).toContain('generated.txt');
-    expect(halt).toContain('No git rebase is in progress; do not run git rebase --continue.');
+    expect(halt).toContain('rebase conflict — parked for human resolution');
+    expect(halt).toContain('src/feature.ts');
+    expect(halt).toContain('git rebase --continue');
   });
 
   it('a re-conflict whose resolver reports setup-only exhaustion → halted, rebase left paused, never stamped done', async () => {
