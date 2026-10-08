@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { AS_BUILT_VERDICT_CONTRACT_VERSION } from '../../src/engine/as-built-contract.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
@@ -62,7 +63,7 @@ async function fixture(): Promise<string> {
   return root;
 }
 
-const APPROVED = { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] };
+const APPROVED = { version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict: 'APPROVED', reachability: [], driftNotes: [] };
 
 function harness(projectDir: string, featureDesc?: string, finalStructuredResult: unknown = APPROVED) {
   const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
@@ -128,8 +129,8 @@ describe('architecture_review_as_built dispatch with the real input projection',
     await execFileAsync('git', ['-C', root, 'add', '.']);
     await execFileAsync('git', ['-C', root, 'commit', '-m', 'another feature plan']);
     const { invoke, stepRunner } = harness(root, 'feature', {
-      version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
-      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Task 1 is unreached.' }],
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [{ class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Task 1 is unreached.' }],
       violations: 'Task 1 has no caller.', resolution: 'Wire task 1.',
     });
 

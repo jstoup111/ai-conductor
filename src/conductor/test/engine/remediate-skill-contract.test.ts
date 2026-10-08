@@ -9,28 +9,27 @@ function section(skill: string, heading: string): string {
 }
 
 describe('remediate build_review case-mode contract', () => {
-  it('keeps SHIP verdict inputs read-only and records resolved findings in the gap plan', async () => {
+  it('retains gap-plan judgment guidance while the engine owns planning mechanics', async () => {
     const skill = await readFile(remediateSkillPath, 'utf8');
-    const loadInput = section(skill, 'Practices')
-      .match(/### 1\. Load Input\n([\s\S]*?)(?=\n### 2\. Dispatch|$)/)?.[1] ?? '';
+    const guidance = section(skill, 'Gap-plan judgment guidance');
+    const refusalRework = section(skill, 'Engine-selected refusal-rework mode');
 
-    expect(loadInput).toMatch(/read-only evidence:[\s\S]*?`\.pipeline\/prd-audit\.md`/i);
-    expect(loadInput).toMatch(/read-only evidence:[\s\S]*?`\.pipeline\/architecture-review-as-built\.md`/i);
-    expect(loadInput).toMatch(/gap-plan mode,[\s\S]*?`\.pipeline\/remediation\.json`.*only write/i);
-    expect(loadInput).toMatch(/finding is resolved,[\s\S]*?record[\s\S]*?`\.pipeline\/remediation\.json`/i);
-    expect(loadInput).toMatch(/do not edit, delete, or recreate[\s\S]*?verdict\s+artifact/i);
+    expect(guidance).toMatch(/environmental stalls.*halt.*unanswerable/is);
+    expect(guidance).toMatch(/sealed-artifact amendments return to DECIDE/i);
+    expect(guidance).toMatch(/prefer autonomous remediation/i);
+    expect(guidance).toMatch(/recorded RED exception/i);
+    expect(guidance).toMatch(/low confidence halts/i);
+    expect(refusalRework).toMatch(/removal-only/i);
+    expect(skill).toMatch(/interactive.*human-readable remediation plan.*not a managed persisted result/is);
   });
 
-  it('selects case-v1 only from engine context and keeps the legacy gap-plan contract', async () => {
+  it('selects case-v1 only from engine context', async () => {
     const skill = await readFile(remediateSkillPath, 'utf8');
     const caseMode = section(skill, 'Engine-selected build_review case-v1 mode');
 
     expect(caseMode).toMatch(/engine-stamped `build_review`.*`case-v1`/i);
     expect(caseMode).toMatch(/only when.*engine context/i);
     expect(caseMode).toMatch(/do not create.*skill.*dispatch/i);
-    expect(skill).toMatch(/### 2\. Dispatch `remediation-planner`/);
-    expect(skill).toMatch(/Write the plan to \*\*`\.pipeline\/remediation\.json`\*\*/);
-    expect(skill).toMatch(/"dispositions"/);
   });
 
   it('names the complete bounded input and exact case-v1 output vocabulary', async () => {

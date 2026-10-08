@@ -32,6 +32,7 @@ function projection(
     version: 1,
     source,
     requiredReferences,
+    evidence: { excerpts: [], omittedFiles: [] },
     tasks,
     pendingAsBuiltFindings: [],
     priorLaps: [],
@@ -76,7 +77,12 @@ function disposition(reference: { kind: string; id: string }, overrides: Record<
 
 function expectRejected(result: ReturnType<typeof validateRemediationPlan>): readonly string[] {
   expect(result.kind).toBe('rejected');
-  expect(Object.keys(result)).toEqual(['kind', 'diagnostics']);
+  expect(Object.keys(result)).toEqual(result.kind === 'rejected' && result.rejected === undefined
+    ? ['kind', 'diagnostics']
+    : ['kind', 'diagnostics', 'rejected']);
+  if (result.kind === 'rejected' && result.rejected !== undefined) {
+    expect(result.rejected).toEqual(expect.any(Array));
+  }
   expect(result).not.toHaveProperty('dispositions');
   expect(result).not.toHaveProperty('verdict');
   expect(result).not.toHaveProperty('halt');
