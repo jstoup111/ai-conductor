@@ -51,6 +51,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Pi cost records now include nested pi-subagents children, and no longer show a complete cost while a background subagent run has not reported its usage. ([implementation PR #3026](https://github.com/jstoup111/ai-conductor/pull/3026)).
 - Daemon builds route fully refused over-scope findings into bounded BUILD rework. ([implementation PR #3010](https://github.com/jstoup111/ai-conductor/pull/3010)).
 - Feature branches handle base-deleted inherited protected artifacts without deadlocking. ([implementation PR #3041](https://github.com/jstoup111/ai-conductor/pull/3041)).
+- A no-op rebase no longer recounts a stale rebase kickback, which had halted features with a false "kickback ping-pong" after an earlier halt. ([implementation PR #3052](https://github.com/jstoup111/ai-conductor/pull/3052)).
 
 ## Migration
 
