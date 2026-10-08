@@ -4,6 +4,13 @@ spec_hash: 09ee4335734d4afa95a18e6f701a1cd50cebedd62732464a5f5a4a9f2c4a0021
 pr: https://github.com/jstoup111/ai-conductor/pull/3051
 shipped: 2026-10-08
 engine_version: 20261008T202636Z-81e35748ef5a
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "These are internal renames and extractions that keep behavior the same. They serve the decomposition's own guards: Story 1 single-home declarations and the Story 5 consumer registry. Public names keep working through aliases, and nothing changes for users or operators. They widen two modules' export surfaces slightly with new names that the stories did not plan."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
