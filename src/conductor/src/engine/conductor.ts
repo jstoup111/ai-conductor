@@ -5460,7 +5460,7 @@ export class Conductor {
     const admittedRefusalGapIds = new Set<string>();
     const refusalCriteriaByGapId = new Map<string, string>();
     if (refusalReworkRoute !== undefined) {
-      const admission = admitRefusalReworkPlan(plan, refusalReworkRoute.refusals);
+      const admission = admitRefusalReworkPlan(typedPlan.value.dispositions, refusalReworkRoute.refusals);
       if (admission.kind === 'rejected') {
         // The refused block is the operator-facing authority for this round:
         // the caller writes it under the over-scope class, never a generic
@@ -5664,9 +5664,8 @@ export class Conductor {
         // case — misses that credit and lands here instead. This exit then
         // reported set arithmetic alone, and the architectural decision the
         // planner escalated never reached the operator: the halt named an id
-        // bookkeeping failure while `.pipeline/remediation.json` held the only
-        // copy of the reason, and the re-dispatch that clears the halt sweeps
-        // that file. Report both.
+        // bookkeeping failure while the planner held the only copy of the
+        // reason. Report both.
         //
         // Deliberately NOT matched back to a finding. The correspondence
         // between gap ids and finding ids is exactly what this branch has just
@@ -9798,8 +9797,7 @@ export class Conductor {
                 });
                 const dispatchContext = withGroupRefusalReworkContext(
                   `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
-                  'Plan remediation per the /remediate skill and write ' +
-                  '.pipeline/remediation.json.',
+                  'Plan remediation per the /remediate skill; the engine validates and persists its typed result.',
                 );
                 if (
                   prdAuditRoute?.kind === 'over-scope-refusal-rework' &&
@@ -9919,7 +9917,7 @@ export class Conductor {
                     withGroupRefusalReworkContext(
                     'Blocking validation-group gaps at .pipeline/prd-audit.md and ' +
                     `${AS_BUILT_VERDICT_PATH}. Plan remediation per the ` +
-                    '/remediate skill and write .pipeline/remediation.json.',
+                    '/remediate skill; the engine validates and persists its typed result.',
                   ),
                     {
                     source: 'validation-group',
@@ -10095,8 +10093,7 @@ export class Conductor {
                 }
                 const dispatchContext = withGroupRefusalReworkContext(
                   `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
-                  'Plan remediation per the /remediate skill and write ' +
-                  '.pipeline/remediation.json.',
+                  'Plan remediation per the /remediate skill; the engine validates and persists its typed result.',
                 );
 
                 if (
@@ -10188,9 +10185,8 @@ export class Conductor {
                 }
 
                 // Task 24: remediationOutcome.kind === 'none' — the /remediate
-                // planner produced no usable plan for the non-MT gaps (an
-                // unreadable/malformed remediation.json, or a plan with no
-                // routable dispositions). The deterministic manual_test
+                // planner produced no usable typed plan for the non-MT gaps.
+                // The deterministic manual_test
                 // kickback stream is entirely independent of that LLM planner
                 // — it must still proceed rather than dead-ending in the
                 // generic "fail loudly" path below.
@@ -10280,8 +10276,7 @@ export class Conductor {
                 }
                 const dispatchContext = withGroupRefusalReworkContext(
                   `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
-                  'Plan remediation per the /remediate skill and write ' +
-                  '.pipeline/remediation.json.',
+                  'Plan remediation per the /remediate skill; the engine validates and persists its typed result.',
                 );
 
                 if (
@@ -12548,7 +12543,7 @@ export class Conductor {
                       steps,
                       withRefusalReworkContext(
                         'Blocking prd_audit gaps at .pipeline/prd-audit.md. ' +
-                          'Plan remediation per the /remediate skill and write .pipeline/remediation.json.' +
+                          'Plan remediation per the /remediate skill; the engine validates and persists its typed result.' +
                           (fixableCriteria.length === 0
                             ? ''
                             : `\n\nFIXABLE criteria in this audit: ${fixableCriteria.join(', ')}.`),
@@ -14211,7 +14206,7 @@ export class Conductor {
                   steps,
                   'Build stall detected. Agent needs input to proceed. A question is at ' +
                     '.pipeline/halt-user-input-required. Plan remediation per the /remediate ' +
-                    'skill and write .pipeline/remediation.json.',
+                    'skill; the engine validates and persists its typed result.',
                   {
                     source: 'build-stall',
                     evidence: [{ gate: 'build', evidenceFile: '.pipeline/halt-user-input-required' }],
@@ -14309,8 +14304,7 @@ export class Conductor {
                   steps,
                   'A blocking prd-audit is at .pipeline/prd-audit.md (an as-built ' +
                     `review may be at ${AS_BUILT_VERDICT_PATH}). Plan ` +
-                    'remediation per the /remediate skill and write ' +
-                    '.pipeline/remediation.json.',
+                    'remediation per the /remediate skill; the engine validates and persists its typed result.',
                   {
                     source: 'prd-audit',
                     evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
@@ -14540,7 +14534,7 @@ export class Conductor {
                   steps,
                   'A blocking as-built architecture review is at ' +
                     `${AS_BUILT_VERDICT_PATH}. Plan remediation per the ` +
-                    '/remediate skill and write .pipeline/remediation.json.',
+                    '/remediate skill; the engine validates and persists its typed result.',
                   {
                     source: 'architecture-review-as-built',
                     evidence: [{
@@ -14650,10 +14644,10 @@ export class Conductor {
                   ? `The finish step's fresh verification failed: ${lastError}. ` +
                       'Failing-test evidence, when the finish skill recorded it, is at ' +
                       '.pipeline/test-failures.md. Plan remediation per the /remediate ' +
-                      'skill and write .pipeline/remediation.json.'
+                      'skill; the engine validates and persists its typed result.'
                   : 'A blocking as-built architecture review is at ' +
                     `${AS_BUILT_VERDICT_PATH}. Plan remediation per ` +
-                      'the /remediate skill and write .pipeline/remediation.json.',
+                    'the /remediate skill; the engine validates and persists its typed result.',
                 finishGate
                   ? {
                       source: 'finish-verification',
@@ -17029,7 +17023,7 @@ export function buildRemediationHint(
   // gap turned into implementation work.
   if (fixes.length > 0 && fixes.every((g) => g.disposition === REMEDIATION_PUBLICATION_DISPOSITION)) {
     return (
-      `Remediating blocking ${source} gaps (see .pipeline/remediation.json and ` +
+      `Remediating blocking ${source} gaps (see the engine-owned typed remediation result and ` +
       `${evidenceFile}). These are PUBLICATION gaps: the implementation is complete and ` +
       'must not change. Fix only the pull request\'s published prose — rewrite the PR body ' +
       '(`## Why` / `## What Changed` / `## Testing`, plus the `Closes` reference) with a ' +
@@ -17039,7 +17033,7 @@ export function buildRemediationHint(
     );
   }
   return (
-    `Remediating blocking ${source} gaps (see .pipeline/remediation.json and ` +
+    `Remediating blocking ${source} gaps (see the engine-owned typed remediation result and ` +
     `${evidenceFile}). The task list may already show complete, but the ` +
     'following are NOT satisfied — make the code/spec changes and commit them; ' +
     'the as-built code is re-audited after this step:\n' +

@@ -2046,7 +2046,7 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
-    it('readRemediationPlanResult → null plan (unreadable /remediate plan) still lets the deterministic manual_test kickback proceed — LLM stream independence', async () => {
+    it('an unusable typed remediation result still lets the deterministic manual_test kickback proceed — LLM stream independence', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
@@ -2075,9 +2075,8 @@ describe('engine/conductor', () => {
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltApprovedFixture());
           } else if (step === 'remediate') {
             remediateCalls.push({ retryReason: opts?.retryReason });
-            // Deliberately write no (or unreadable) remediation.json — the
-            // planner produced no usable plan. readRemediationPlanResult returns
-            // a null plan → planRemediation resolves 'none'.
+            // Deliberately write no typed result: the planner produced no
+            // usable plan, so planRemediation resolves 'none'.
           }
           return { success: true };
         }),

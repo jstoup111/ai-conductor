@@ -358,7 +358,7 @@ function parseRemediationCaseJudgement(value: unknown): ParseResult<RemediationC
 
 /**
  * Reads only the additive case-mode remediation result. Legacy remediation
- * artifacts remain owned by `readRemediationPlan` in `artifacts.ts`.
+ * artifacts remain isolated from the typed remediation-plan store.
  */
 export async function readRemediationCaseJudgement(
   projectRoot: string,

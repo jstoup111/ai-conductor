@@ -52,6 +52,31 @@ function output() {
   };
 }
 
+const refusal = {
+  key: 'S9.1',
+  decisionId: 'decision-refused-9',
+  revision: 2,
+  rationale: 'The operator declined this behavior.',
+};
+
+function refusalOutput(overrides: Record<string, unknown> = {}) {
+  return {
+    ...output(),
+    dispositions: [
+      ...output().dispositions,
+      {
+        reference: { kind: 'refusal', id: refusal.decisionId },
+        disposition: 'build',
+        category: null,
+        rationale: 'Remove the refused behavior from the delivered flow.',
+        tasks: [{ id: 'remove-refused-9', title: 'Remove the refused behavior.' }],
+        boundTaskIds: [],
+        ...overrides,
+      },
+    ],
+  };
+}
+
 async function fixture(
   key: 'claude' | 'codex',
   outcomes: readonly RemediationPlanProviderOutcome[] = [
@@ -64,6 +89,7 @@ async function fixture(
     source?: string;
     evidenceFile?: string;
     stallQuestion?: string;
+    skipPlanRemediation?: boolean;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), 'conductor-remediation-typed-plan-'));
@@ -153,7 +179,7 @@ async function fixture(
   // halt can persist through the same state transition port.
   await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify(state), 'utf8');
   (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...state };
-  const outcome = await (conductor as unknown as {
+  const outcome = options.skipPlanRemediation ? { kind: 'none' } : await (conductor as unknown as {
     planRemediation(
       state: ConductState,
       steps: typeof ALL_STEPS,
@@ -171,6 +197,7 @@ async function fixture(
     planPath,
     provider,
     runner,
+    conductor,
     config,
     state,
     outcome,
@@ -180,6 +207,75 @@ async function fixture(
 }
 
 describe('Conductor typed remediation-plan admission', () => {
+  async function refusalRound(
+    outcomes: readonly RemediationPlanProviderOutcome[],
+    maxRetries = 2,
+  ) {
+    const result = await fixture('claude', outcomes, maxRetries, { skipPlanRemediation: true });
+    (result.conductor as unknown as {
+      routeCurrentPrdAuditOverScope: () => Promise<unknown>;
+    }).routeCurrentPrdAuditOverScope = async () => ({
+      kind: 'refusal-rework',
+      refusals: [refusal],
+      refused: [],
+      findings: [],
+      detail: 'OVER_SCOPE visible behavior on S9.1.',
+    });
+    const outcome = await (result.conductor as unknown as {
+      planRemediation(
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        context: string,
+        source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
+      ): Promise<{ kind: string; target?: string; reason?: string; detail?: string }>;
+    }).planRemediation(
+      result.state,
+      ALL_STEPS,
+      'PRD audit requires refusal rework.',
+      { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    );
+    return { ...result, outcome };
+  }
+
+  // Covers: task:29
+  it('routes validated refusal references through the typed plan and appends decision-bound rework tasks', async () => {
+    const result = await refusalRound([{ kind: 'structured', finalStructuredResult: refusalOutput() }]);
+
+    expect(result.outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(await readFile(result.planPath, 'utf8')).toContain(
+      '### Task rem-prd-audit-refusal-decision-refused-9:',
+    );
+  });
+
+  // Covers: task:29
+  it.each([
+    ['halt', { disposition: 'halt', category: 'product-scope', tasks: [] }],
+    ['existing-task', { disposition: 'existing-task', tasks: [], boundTaskIds: ['1'] }],
+    ['omission', null],
+  ])('rejects a refusal answered with %s without appending unrelated work', async (_label, override) => {
+    const result = await refusalRound([{
+      kind: 'structured',
+      finalStructuredResult: override === null
+        ? output()
+        : refusalOutput(override),
+    }]);
+
+    expect(result.outcome).toMatchObject({ kind: 'halt' });
+    expect(await readFile(result.planPath, 'utf8')).not.toContain('rem-prd-audit-refusal-decision-refused-9');
+  });
+
+  // Covers: task:29
+  it('retries a task-less refusal build as a whole-plan validation rejection', async () => {
+    const result = await refusalRound([
+      { kind: 'structured', finalStructuredResult: refusalOutput({ tasks: [] }) },
+      { kind: 'structured', finalStructuredResult: refusalOutput() },
+    ]);
+
+    expect(result.provider.invocationCount).toBe(2);
+    expect(result.outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(await readFile(result.planPath, 'utf8')).toContain('rem-prd-audit-refusal-decision-refused-9');
+  });
+
   // Covers: task:19
   it.each(['claude', 'codex'] as const)(
     'projects and dispatches a %s typed gap plan without consulting legacy remediation.json',

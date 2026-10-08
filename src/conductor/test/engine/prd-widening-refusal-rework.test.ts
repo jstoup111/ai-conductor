@@ -7,7 +7,7 @@ import {
   renderRefusalReworkContext,
   type RefusalReworkEvidence,
 } from '../../src/engine/prd-widening-refusal-rework.js';
-import type { RemediationGap, RemediationPlan } from '../../src/engine/artifacts.js';
+import type { AcceptedRemediationPlanDisposition } from '../../src/engine/remediation-plan-contract.js';
 
 const storyRefusal: RefusalReworkEvidence = {
   key: 'S2.1',
@@ -65,14 +65,20 @@ describe('renderRefusalReworkContext', () => {
   });
 });
 
-function buildReworkPlan(gaps: RemediationGap[]): RemediationPlan {
-  return { gaps, rejected: [], invalidTasklessBuild: false };
-}
-
-function buildReworkGap(overrides?: Partial<RemediationGap>): RemediationGap {
+function buildReworkDisposition(
+  overrides?: Partial<AcceptedRemediationPlanDisposition>,
+): AcceptedRemediationPlanDisposition {
   return {
-    id: 'refusal-dec-story-1',
+    reference: {
+      kind: 'refusal', id: 'dec-story-1', sourceGate: 'refusal-rework', revision: 3,
+      rationale: 'operator decided the behavior is not wanted',
+    },
+    requiredReference: {
+      kind: 'refusal', id: 'dec-story-1', sourceGate: 'refusal-rework', revision: 3,
+      rationale: 'operator decided the behavior is not wanted',
+    },
     disposition: 'build',
+    targetStep: 'build',
     category: null,
     rationale: 'remove the refused behavior',
     tasks: [{ id: 'remove-refused-story', title: 'Remove the refused behavior' }],
@@ -82,8 +88,7 @@ function buildReworkGap(overrides?: Partial<RemediationGap>): RemediationGap {
 
 describe('admitRefusalReworkPlan', () => {
   it('admits a build gap whose id matches the refusal decision and carries concrete tasks', () => {
-    const plan = buildReworkPlan([buildReworkGap()]);
-    const result = admitRefusalReworkPlan(plan, [storyRefusal]);
+    const result = admitRefusalReworkPlan([buildReworkDisposition()], [storyRefusal]);
 
     expect(result).toEqual({
       kind: 'admitted',
@@ -101,22 +106,23 @@ describe('admitRefusalReworkPlan', () => {
   });
 
   it('rejects a gap that is halt/deferral, naming the unbound refusal key', () => {
-    const plan = buildReworkPlan([buildReworkGap({ disposition: 'halt', category: 'product-scope' })]);
-    const result = admitRefusalReworkPlan(plan, [storyRefusal]);
+    const result = admitRefusalReworkPlan([
+      buildReworkDisposition({ disposition: 'halt', targetStep: 'halt', category: 'product-scope' }),
+    ], [storyRefusal]);
 
     expect(result).toEqual({ kind: 'rejected', criteria: ['S2.1'] });
   });
 
   it('rejects a matching gap with an empty task list, naming the unbound refusal key', () => {
-    const plan = buildReworkPlan([buildReworkGap({ tasks: [] })]);
-    const result = admitRefusalReworkPlan(plan, [storyRefusal]);
+    const result = admitRefusalReworkPlan([buildReworkDisposition({ tasks: [] })], [storyRefusal]);
 
     expect(result).toEqual({ kind: 'rejected', criteria: ['S2.1'] });
   });
 
   it('rejects a refusal with no matching gap id, naming the unbound refusal key', () => {
-    const plan = buildReworkPlan([buildReworkGap({ id: 'refusal-other-decision' })]);
-    const result = admitRefusalReworkPlan(plan, [storyRefusal]);
+    const result = admitRefusalReworkPlan([buildReworkDisposition({
+      reference: { kind: 'refusal', id: 'other-decision', sourceGate: 'refusal-rework', revision: 1, rationale: 'other' },
+    })], [storyRefusal]);
 
     expect(result).toEqual({ kind: 'rejected', criteria: ['S2.1'] });
   });

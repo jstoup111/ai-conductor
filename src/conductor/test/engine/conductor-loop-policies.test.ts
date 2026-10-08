@@ -2708,7 +2708,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
     [
       'none',
       async (dirPath: string) => {
-        // Malformed JSON -> readRemediationPlanResult returns a null plan -> outcome 'none'.
+        // No typed result leaves planRemediation with outcome 'none'.
         await writeFile(join(dirPath, '.pipeline/remediation.json'), '{not valid json');
       },
     ],

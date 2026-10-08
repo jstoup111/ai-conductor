@@ -14,6 +14,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { persistFixtureTestRemediationPlan } from './remediation-plan-fixtures.js';
 
 describe('sealed-artifact remediation routing', () => {
   let projectRoot: string;
@@ -34,16 +35,12 @@ describe('sealed-artifact remediation routing', () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  async function remediate(dispositions: unknown[], source = 'prd-audit', daemon = true) {
+  async function remediate(dispositions: Parameters<typeof persistFixtureTestRemediationPlan>[2], source = 'finish-verification', daemon = true) {
     const dispatched: StepName[] = [];
     const runner: StepRunner = {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         dispatched.push(step);
-        await writeFile(
-          join(projectRoot, '.pipeline/remediation.json'),
-          JSON.stringify({ dispositions }),
-          'utf8',
-        );
+        await persistFixtureTestRemediationPlan(projectRoot, options, dispositions);
         return { success: true };
       },
     };
@@ -73,7 +70,7 @@ describe('sealed-artifact remediation routing', () => {
       { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
       ALL_STEPS,
       'prd audit blocked',
-      { source, evidenceFile: '.pipeline/prd-audit.md' },
+      { source, evidenceFile: '.pipeline/finish-verification.md' },
     );
 
     return { dispatched, outcome, redirects };
@@ -82,29 +79,13 @@ describe('sealed-artifact remediation routing', () => {
   it('routes another feature\'s sealed-artifact amendment to DECIDE, never BUILD', async () => {
     const dispatched: StepName[] = [];
     const runner: StepRunner = {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         dispatched.push(step);
-        await writeFile(
-          join(projectRoot, '.pipeline/remediation.json'),
-          JSON.stringify({
-            dispositions: [
-              {
-                id: 'story-falsified',
-                disposition: 'build',
-                category: null,
-                rationale: 'The accepted story must be amended.',
-                tasks: [
-                  {
-                    id: 'rem-story-1',
-                    title: 'Amend .docs/stories/another-feature.md with the corrected assertion',
-                    status: 'pending',
-                  },
-                ],
-              },
-            ],
-          }),
-          'utf8',
-        );
+        await persistFixtureTestRemediationPlan(projectRoot, options, [{
+          id: 'story-falsified', disposition: 'build', category: null,
+          rationale: 'The accepted story must be amended.',
+          tasks: [{ id: 'rem-story-1', title: 'Amend .docs/stories/another-feature.md with the corrected assertion' }],
+        }]);
         return { success: true };
       },
     };
@@ -130,7 +111,7 @@ describe('sealed-artifact remediation routing', () => {
       { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
       ALL_STEPS,
       'prd audit blocked',
-      { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
+      { source: 'finish-verification', evidenceFile: '.pipeline/finish-verification.md' },
     );
 
     expect({ outcome, dispatched }).toMatchObject({
@@ -155,33 +136,19 @@ describe('sealed-artifact remediation routing', () => {
       redirects.push(event);
     });
     const runner: StepRunner = {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         dispatched.push(step);
-        await writeFile(
-          join(projectRoot, '.pipeline/remediation.json'),
-          JSON.stringify({
-            dispositions: [
-              {
-                id: 'citation-only',
-                disposition: 'build',
-                category: null,
-                rationale: 'Implementation drift; an existing plan task owns the remedy.',
-                tasks: [
-                  {
-                    id: 'rem-cite-1',
-                    title:
-                      'src/engine/conductor.ts:4671 — stop returning absent before any case is read, '
-                      + 'so unmatched open cases still resolve before PASS '
-                      + '(the sequence contract at .docs/architecture/sequences/another-feature.md:87), '
-                      + 'and a feature whose plan declares **Stories:** .docs/stories/other-name.md is admitted.',
-                    status: 'pending',
-                  },
-                ],
-              },
-            ],
-          }),
-          'utf8',
-        );
+        await persistFixtureTestRemediationPlan(projectRoot, options, [{
+          id: 'citation-only', disposition: 'build', category: null,
+          rationale: 'Implementation drift; an existing plan task owns the remedy.',
+          tasks: [{
+            id: 'rem-cite-1',
+            title: 'src/engine/conductor.ts:4671 — stop returning absent before any case is read, '
+              + 'so unmatched open cases still resolve before PASS '
+              + '(the sequence contract at .docs/architecture/sequences/another-feature.md:87), '
+              + 'and a feature whose plan declares **Stories:** .docs/stories/other-name.md is admitted.',
+          }],
+        }]);
         return { success: true };
       },
     };
@@ -207,7 +174,7 @@ describe('sealed-artifact remediation routing', () => {
       { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
       ALL_STEPS,
       'prd audit blocked',
-      { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
+      { source: 'finish-verification', evidenceFile: '.pipeline/finish-verification.md' },
     );
 
     expect(redirects).toEqual([]);
@@ -266,7 +233,7 @@ describe('sealed-artifact remediation routing', () => {
   it.each([
     ['incidental rationale context', { id: 'incidental', rationale: 'Update source; .docs/stories/another-feature.md is context only.', tasks: [{ id: 'source', title: 'src/x.ts' }] }],
     ['own-feature rationale', { id: 'own', rationale: 'Amend .docs/stories/feature.md.', tasks: [{ id: 'own-task', title: 'src/x.ts' }] }],
-    ['rationale-free gap', { id: 'absent', rationale: '', tasks: [{ id: 'none', title: 'src/x.ts' }] }],
+    ['minimal typed rationale', { id: 'absent', rationale: 'Repair the named source behavior.', tasks: [{ id: 'none', title: 'src/x.ts' }] }],
   ])('routes BUILD without redirecting a %s', async (_caseName, gap) => {
       await writeFile(join(projectRoot, '.docs/plans/feature.md'), '# Implementation plan\n', 'utf8');
       const { outcome, redirects } = await remediate([{ ...gap, disposition: 'build', category: null }]);
@@ -302,7 +269,7 @@ describe('sealed-artifact remediation routing', () => {
     expect(outcome).toMatchObject({ kind: 'halt' });
     expect(redirects).toEqual([{
       type: 'remediation_sealed_artifact_redirect',
-      gapId: 'title-event-gap',
+      gapId: 'test:title-event-gap',
       artifact: '.docs/specs/another-feature.md',
       directingClause: 'Amend .docs/specs/another-feature.md with the corrected assertion.',
       directingSource: 'task title',
@@ -323,7 +290,7 @@ describe('sealed-artifact remediation routing', () => {
       seen.push(event);
     });
     const conductor = new Conductor({ stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'), projectRoot,
-      stepRunner: { run: async (step) => { dispatched.push(step); await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({ dispositions })); return { success: true }; } },
+      stepRunner: { run: async (step, _state, options) => { dispatched.push(step); await persistFixtureTestRemediationPlan(projectRoot, options, dispositions); return { success: true }; } },
       events, mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1 });
     await (conductor as unknown as {
       planRemediation: (
@@ -331,16 +298,16 @@ describe('sealed-artifact remediation routing', () => {
         hintSource: { source: string; evidenceFile: string },
       ) => Promise<unknown>;
     }).planRemediation(
-      { session_started_at: Date.now() - 1000, feature_desc: 'feature' }, ALL_STEPS, 'blocked', { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' });
+      { session_started_at: Date.now() - 1000, feature_desc: 'feature' }, ALL_STEPS, 'blocked', { source: 'finish-verification', evidenceFile: '.pipeline/finish-verification.md' });
     expect(seen).toEqual([{
       type: 'remediation_sealed_artifact_redirect',
-      gapId: 'event-gap',
+      gapId: 'test:event-gap',
       artifact: '.docs/specs/another-feature.md',
       directingClause: 'Amend .docs/specs/another-feature.md.',
       directingSource: 'rationale',
     }]);
     expect(await readFile(join(projectRoot, '.pipeline/events.jsonl'), 'utf8')).toContain(
-      '"type":"remediation_sealed_artifact_redirect","gapId":"event-gap","artifact":".docs/specs/another-feature.md"',
+      '"type":"remediation_sealed_artifact_redirect","gapId":"test:event-gap","artifact":".docs/specs/another-feature.md"',
     );
     persister.stop();
   });
@@ -365,8 +332,8 @@ describe('sealed-artifact remediation routing', () => {
       stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
       projectRoot,
       stepRunner: {
-        run: async () => {
-          await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({ dispositions }));
+        run: async (_step, _state, options) => {
+          await persistFixtureTestRemediationPlan(projectRoot, options, dispositions);
           return { success: true };
         },
       },
@@ -387,7 +354,7 @@ describe('sealed-artifact remediation routing', () => {
         { session_started_at: Date.now() - 1_000, feature_desc: 'feature' },
         ALL_STEPS,
         'blocked',
-        { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
+        { source: 'finish-verification', evidenceFile: '.pipeline/finish-verification.md' },
       );
 
       const lines = (await readFile(join(projectRoot, '.pipeline/events.jsonl'), 'utf8'))
@@ -396,7 +363,7 @@ describe('sealed-artifact remediation routing', () => {
       expect(lines).toHaveLength(1);
       expect(JSON.parse(lines[0])).toMatchObject({
         type: 'remediation_sealed_artifact_redirect',
-        gapId: 'oversized-event-gap',
+        gapId: 'test:oversized-event-gap',
         artifact: '.docs/specs/another-feature.md',
         directingClause,
         directingSource: 'task title',
@@ -439,7 +406,7 @@ describe('sealed-artifact remediation routing', () => {
 
     expect(outcome).toMatchObject({ kind: 'halt' });
     expect(outcome.detail).toContain(
-      'ordinary-build-gap→build; ordinary-acceptance-gap→acceptance_specs; redirected-sealed-gap→plan',
+      'test:ordinary-build-gap→build; test:ordinary-acceptance-gap→acceptance_specs; test:redirected-sealed-gap→plan',
     );
     expect(outcome.detail).toContain('.docs/specs/another-feature.md');
     expect(outcome.detail).toContain('"Amend .docs/specs/another-feature.md with the corrected assertion."');
@@ -455,7 +422,7 @@ describe('sealed-artifact remediation routing', () => {
           title: 'Amend .docs/specs/another-feature.md with the corrected assertion.',
         }],
       },
-    ], 'prd-audit', false);
+    ], 'finish-verification', false);
 
     expect(routed).toMatchObject({ kind: 'route', target: 'plan' });
     expect(routed.evidence).toContain('.docs/specs/another-feature.md');
@@ -505,24 +472,12 @@ describe('remediation plan append without engine-state.json (engineer-specced da
 
   it('appends BUILD remediation tasks to the slug-resolved plan and seeds task status', async () => {
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(
-          join(projectRoot, '.pipeline/remediation.json'),
-          JSON.stringify({
-            dispositions: [
-              {
-                id: 'build_review:vacuous-test',
-                disposition: 'build',
-                category: null,
-                rationale: 'The changed test never drives the production path.',
-                tasks: [
-                  { id: 'rem-build-review-vacuous-1', title: 'Rewrite the test to drive Conductor.run()', status: 'pending' },
-                ],
-              },
-            ],
-          }),
-          'utf8',
-        );
+      run: async (_step, _state, options) => {
+        await persistFixtureTestRemediationPlan(projectRoot, options, [{
+          id: 'build-review-vacuous-test', disposition: 'build', category: null,
+          rationale: 'The changed test never drives the production path.',
+          tasks: [{ id: 'rem-build-review-vacuous-1', title: 'Rewrite the test to drive Conductor.run()' }],
+        }]);
         return { success: true };
       },
     };
@@ -570,24 +525,12 @@ describe('remediation plan append without engine-state.json (engineer-specced da
     await g(['commit', '-q', '-m', 'init']);
 
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(
-          join(projectRoot, '.pipeline/remediation.json'),
-          JSON.stringify({
-            dispositions: [
-              {
-                id: 'build_review:vacuous-test',
-                disposition: 'build',
-                category: null,
-                rationale: 'The changed test never drives the production path.',
-                tasks: [
-                  { id: 'rem-build-review-vacuous-1', title: 'Rewrite the test to drive Conductor.run()', status: 'pending' },
-                ],
-              },
-            ],
-          }),
-          'utf8',
-        );
+      run: async (_step, _state, options) => {
+        await persistFixtureTestRemediationPlan(projectRoot, options, [{
+          id: 'build-review-vacuous-test', disposition: 'build', category: null,
+          rationale: 'The changed test never drives the production path.',
+          tasks: [{ id: 'rem-build-review-vacuous-1', title: 'Rewrite the test to drive Conductor.run()' }],
+        }]);
         return { success: true };
       },
     };

@@ -26,6 +26,7 @@ import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { writeState } from '../../src/engine/state.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { PrdAuditJudgment } from '../../src/engine/prd-audit-contract.js';
+import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
 
 const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'test fixture' },
@@ -136,33 +137,16 @@ describe('planRemediation implementation-only authority routing', () => {
   });
 
   it('rejects an ADR-keyed remediation task from a gate without a growth allowance', async () => {
+    await writeBlockedAsBuiltFixture(projectRoot, 'ARCH-1');
     const dispatched: StepName[] = [];
     const runner: StepRunner = {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         dispatched.push(step);
-        await writeFile(
-          join(projectRoot, '.pipeline/remediation.json'),
-          JSON.stringify({
-            dispositions: [
-              {
-                id: 'adr-2026-07-27-provider-lifecycle',
-                disposition: 'build',
-                category: null,
-                rationale:
-                  'Approved architecture remains authoritative; implementation drift is confined to src/provider-home.ts:42 and its tests.',
-                tasks: [
-                  {
-                    id: 'rem-adr-1250-1',
-                    title:
-                      'src/provider-home.ts:42 — align implementation and tests with the approved provider lifecycle',
-                    status: 'pending',
-                  },
-                ],
-              },
-            ],
-          }),
-          'utf8',
-        );
+        await persistFixtureProjectedRemediationPlan(projectRoot, options, [{
+          id: 'ARCH-1', disposition: 'build', category: null,
+          rationale: 'Approved architecture remains authoritative; implementation drift is confined to src/provider-home.ts:42 and its tests.',
+          tasks: [{ id: 'rem-adr-1250-1', title: 'src/provider-home.ts:42 — align implementation and tests with the approved provider lifecycle' }],
+        }]);
         return { success: true };
       },
     };
@@ -292,21 +276,14 @@ describe('planRemediation implementation-only authority routing', () => {
       evidenceTaskIds: ['1'], ownerTaskId: '1',
     }]);
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
-          dispositions: [
-            {
-              id: 'S1.1', disposition: 'build', category: null,
-              rationale: 'Repair the authorized criterion.',
-              tasks: [{ id: 'rem-authorized', title: 'Implement the authorized repair' }],
-            },
-            {
-              id: 'FR-42', disposition: 'build', category: null,
-              rationale: 'Invented unmatched work.',
-              tasks: [{ id: 'rem-unmatched', title: 'Implement the unmatched repair' }],
-            },
-          ],
-        }), 'utf8');
+      run: async (_step, _state, options) => {
+        // The foreign FR-42 entry was a legacy-reader behavior.  A typed
+        // plan may contain only the engine-projected S1.1 reference.
+        await persistFixtureProjectedRemediationPlan(projectRoot, options, [{
+          id: 'S1.1', disposition: 'build', category: null,
+          rationale: 'Repair the authorized criterion.',
+          tasks: [{ id: 'rem-authorized', title: 'Implement the authorized repair' }],
+        }]);
         return { success: true };
       },
     };
@@ -354,14 +331,12 @@ describe('planRemediation implementation-only authority routing', () => {
       requirementAssociations: [], evidenceTaskIds: ['1'], ownerTaskId: '1',
     }]);
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
-          dispositions: [{
-            id: gapId, disposition: 'build', category: null,
-            rationale: 'Repair the criterion-bound implementation.',
-            tasks: [{ id: `rem-case-${gapId}`, title: 'Implement the criterion repair' }],
-          }],
-        }), 'utf8');
+      run: async (_step, _state, options) => {
+        await persistFixtureProjectedRemediationPlan(projectRoot, options, [{
+          id: gapId, disposition: 'build', category: null,
+          rationale: 'Repair the criterion-bound implementation.',
+          tasks: [{ id: `rem-case-${gapId}`, title: 'Implement the criterion repair' }],
+        }]);
         return { success: true };
       },
     };
@@ -382,7 +357,9 @@ describe('planRemediation implementation-only authority routing', () => {
     );
 
     expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
-    expect(outcome.hint).toContain(gapId);
+    // The validated projection keeps the canonical criterion spelling; a
+    // case-variant provider reference never becomes a second gap identity.
+    expect(outcome.hint).toContain(criterion);
     expect(await readFile(planPath, 'utf8')).toContain(`rem-case-${gapId}`);
   });
 
