@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:18
 import { describe, expect, it } from 'vitest';
 import { deriveStoryOwnership, type PlanSlice } from '../../src/engine/plan-slices.js';
 
