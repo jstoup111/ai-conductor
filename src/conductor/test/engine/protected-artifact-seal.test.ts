@@ -49,6 +49,21 @@ async function failGitDiffProbe(repo: string): Promise<() => void> {
   };
 }
 
+async function failGitLsTreeProbe(repo: string): Promise<() => void> {
+  const bin = join(repo, '.test-git-bin-ls-tree');
+  const realGit = (await execFile('which', ['git'])).stdout.trim();
+  await mkdir(bin, { recursive: true });
+  const shim = join(bin, 'git');
+  await writeFile(shim, `#!/bin/sh\nif [ "$1" = "ls-tree" ]; then exit 2; fi\nexec '${realGit}' "$@"\n`);
+  await chmod(shim, 0o755);
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}:${previousPath ?? ''}`;
+  return () => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  };
+}
+
 const protectedArtifactEventTypes: Record<
   Extract<ConductorEvent, { type: `protected_artifact_${string}` }>['type'],
   true
@@ -827,6 +842,9 @@ describe('resealProtectedArtifactSeal', () => {
       paths: [retired],
       deletedBy: { [retired]: deletedBy },
     });
+    expect(resealed.baselineCommit).toBe(seal.baselineCommit);
+    expect(resealed.rebaselines).toHaveLength(seal.rebaselines.length + 1);
+    expect(resealed.rebaselines.some(({ trigger }) => trigger === 'operator-reseal')).toBe(false);
     expect(resealed.protectedArtifacts).not.toContainEqual(expect.objectContaining({ path: retired }));
   });
 
@@ -2855,6 +2873,29 @@ describe('verifyProtectedArtifactSeal', () => {
       await expect(readFile(sealPath)).resolves.toEqual(before);
     });
 
+    it('refuses a missing sealed path as provenance-undeterminable when the HEAD tree probe fails', async () => {
+      const path = '.docs/plans/retired.md';
+      const { repo, baselineCommit } = await sealThenRebaseAcrossBaseDeletion(path);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+      const before = await readFile(sealPath);
+      const restorePath = await failGitLsTreeProbe(repo);
+      try {
+        const verdict = await verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' });
+        expect(verdict).toEqual({
+          ok: false,
+          reason: `Protected artifact provenance undeterminable: ${path}\nInheritance probe failed: git diff.\nVerify Git access and retry.\nAttribution: provenance undeterminable`,
+        });
+        if (!verdict.ok) {
+          expect(verdict.reason).not.toContain('uncommitted workspace change');
+          expect(verdict.reason).not.toContain('feature-authored');
+        }
+      } finally {
+        restorePath();
+      }
+      await expect(readFile(sealPath)).resolves.toEqual(before);
+    });
+
     it('refuses a feature deletion even when the base later deleted the same path without a rebase', async () => {
       const path = '.docs/plans/retired.md';
       const repo = await makeRepo({ [path]: 'approved plan\n' });
@@ -3817,7 +3858,7 @@ describe('verifyProtectedArtifactSeal', () => {
         baseBranch: 'main',
       })).resolves.toEqual({
         ok: false,
-        reason: `Indeterminate protected artifact target: ${path}`,
+        reason: `Indeterminate protected artifact target: ${path}\nAttribution: provenance undeterminable`,
       });
     });
 
@@ -4017,7 +4058,7 @@ describe('verifyProtectedArtifactSeal target containment', () => {
 
     await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toMatchObject({
       ok: false,
-      reason: 'Indeterminate protected artifact target: .docs/plans/feature.md',
+      reason: 'Indeterminate protected artifact target: .docs/plans/feature.md\nAttribution: provenance undeterminable',
     });
   });
 });

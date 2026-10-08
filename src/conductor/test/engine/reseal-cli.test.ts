@@ -1063,9 +1063,6 @@ describe('dispatchResealCommand', () => {
       await git(['add', '.']);
       await git(['commit', '-q', '-m', 'feature work']);
       await createProtectedArtifactSeal({ projectRoot: worktree, baselineCommit: (await git(['rev-parse', 'HEAD'])).stdout.trim() });
-      await put(own, 'operator-reseal amendment\n');
-      await git(['add', own]);
-      await git(['commit', '-q', '-m', 'amend own plan']);
       await git(['checkout', '-q', 'main']);
       await unlink(join(worktree, retired));
       await git(['add', '-A']);
@@ -1073,11 +1070,22 @@ describe('dispatchResealCommand', () => {
       await git(['checkout', '-q', 'repair']);
       await git(['rebase', '-q', 'main']);
 
-      const command = detectResealCommand(argv('--slug', 'repair', '--path', own, '--reason', 'Approved correction.'));
+      const command = detectResealCommand(argv('--slug', 'repair', '--path', retired, '--reason', 'Approved correction.'));
       if (!command) throw new Error('expected valid reseal command');
+      const events = new ConductorEventEmitter();
+      const rebaselines: unknown[] = [];
+      events.on('protected_artifact_rebaseline', (event) => { rebaselines.push(event); });
       await expect(dispatchResealCommand(command, {
-        cwd: root, isInteractive: true, events: new ConductorEventEmitter(),
+        cwd: root, isInteractive: true, events,
       })).resolves.toBe(0);
+      expect(rebaselines).toEqual([{
+        type: 'protected_artifact_rebaseline',
+        fromCommit: expect.any(String),
+        toCommit: expect.any(String),
+        trigger: 'inherited-base-deletion',
+        paths: [retired],
+        deletedBy: { [retired]: (await git(['rev-parse', 'main'])).stdout.trim() },
+      }]);
       await expect(verifyProtectedArtifactSeal({ projectRoot: worktree, baseBranch: 'main' }))
         .resolves.toMatchObject({ ok: true });
     } finally {

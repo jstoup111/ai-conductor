@@ -1005,17 +1005,25 @@ async function branchUntouchedInheritance(
       cwd: projectRoot,
       reject: false,
     }).catch(() => undefined);
-    if (!headTree || headTree.exitCode !== 0 || headTree.stdout.length !== 0) {
+    if (!headTree || headTree.exitCode !== 0) {
+      return {
+        inheritance: 'diff-probe-failed',
+        provenance: { ...provenance, headTouchedPath: 'indeterminate' },
+      };
+    }
+    if (headTree.stdout.length !== 0) {
       return { inheritance: 'not-inherited', provenance };
     }
     try {
       await lstat(join(projectRoot, path));
       return { inheritance: 'not-inherited', provenance };
     } catch (error) {
-      return {
-        inheritance: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'inherited' : 'not-inherited',
-        provenance,
-      };
+      return (error as NodeJS.ErrnoException).code === 'ENOENT'
+        ? { inheritance: 'inherited', provenance }
+        : {
+            inheritance: 'diff-probe-failed',
+            provenance: { ...provenance, headTouchedPath: 'indeterminate' },
+          };
     }
   }
 
@@ -1159,7 +1167,7 @@ async function inspectSeal(
       step: 'protected_artifact_seal_audit',
     });
     if (classification.kind === 'indeterminate') {
-      return { ok: false, reason: `Indeterminate protected artifact target: ${path}` };
+      return { ok: false, reason: `Indeterminate protected artifact target: ${path}\n${attributionLine('diff-probe-failed')}` };
     }
     actualPaths.push(classification.target);
   }
@@ -1182,7 +1190,7 @@ async function inspectSeal(
     }
     const content = await readContainedProtectedArtifact(projectRoot, path);
     if (content === undefined) {
-      return { ok: false, reason: `Indeterminate protected artifact target: ${path}` };
+      return { ok: false, reason: `Indeterminate protected artifact target: ${path}\n${attributionLine('diff-probe-failed')}` };
     }
     const sealedFingerprint = expected.get(path);
     const currentFingerprint = fingerprint(content);
@@ -1280,11 +1288,11 @@ function rotationRefusalVerdict(
   if (rotation.condition === 'baseline-unresolvable') {
     return {
       ok: false,
-      reason: `Protected artifact seal baseline is unresolvable: ${seal.baselineCommit}`,
+      reason: `Protected artifact seal baseline is unresolvable: ${seal.baselineCommit}\n${attributionLine('diff-probe-failed')}`,
     };
   }
   if (rotation.condition === 'head-unresolvable') {
-    return { ok: false, reason: `Protected artifact seal HEAD is unresolvable: ${headCommit}` };
+    return { ok: false, reason: `Protected artifact seal HEAD is unresolvable: ${headCommit}\n${attributionLine('diff-probe-failed')}` };
   }
   if (!('path' in rotation)) return inspection;
   if (rotation.condition === 'workspace-differs-from-head') {
@@ -1591,7 +1599,7 @@ export async function resealProtectedArtifactSeal({
   return persistProtectedArtifactSealRotation({
     projectRoot,
     seal,
-    recomputed: { ...recomputed, baselineCommit: toCommit },
+    recomputed: { ...recomputed, baselineCommit: survivingPaths.length > 0 ? toCommit : seal.baselineCommit },
     trigger,
     paths: survivingPaths,
     prune,

@@ -220,6 +220,13 @@ export async function dispatchResealCommand(
       reason: command.reason,
       featureDesc: command.slug,
       baseBranch: await resolveBaseBranch(worktree),
+      onRebaseline: async (event) => {
+        try {
+          await events.emit(event);
+        } catch {
+          // Resealing has already persisted the durable seal; rendering is best-effort.
+        }
+      },
     });
   } catch (error) {
     await refuse(error instanceof Error ? error.message : String(error));
