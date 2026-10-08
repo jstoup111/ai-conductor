@@ -499,6 +499,24 @@ describe('daemon closeout rendering', () => {
 });
 
 describe('protected artifact rotation rendering', () => {
+  // Covers: task:9
+  it('keeps the legacy rebaseline line unchanged when deleting commits are absent', () => {
+    const lines: string[] = [];
+
+    renderDaemonEvent({
+      type: 'protected_artifact_rebaseline',
+      trigger: 'defensive-history-rewrite',
+      fromCommit: '1234567890abcdef',
+      toCommit: 'fedcba0987654321',
+      paths: ['.docs/plans/feature.md'],
+      excludedBaseAheadPaths: ['.docs/specs/upstream.md'],
+    }, (line) => lines.push(line));
+
+    expect(lines).toEqual([
+      '· seal rebaselined 1234567890ab..fedcba098765 (defensive-history-rewrite) — 1 path(s); excluded base-ahead paths: .docs/specs/upstream.md',
+    ]);
+  });
+
   it('renders inherited deletion paths with their deleting commits', () => {
     const lines: string[] = [];
     const firstPath = '.docs/plans/retired-a.md';
