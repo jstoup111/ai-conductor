@@ -798,11 +798,13 @@ function remediationProjectionSource(source: string): RemediationProjectionSourc
   switch (source) {
     case 'validation-group': return 'validation-group';
     case 'prd-audit': return 'prd-audit';
+    case 'prd_audit': return 'prd-audit';
     case 'build-stall':
     case 'build_stall':
     case 'build_stall_zero_work': return 'build-stall';
     case 'finish-verification': return 'finish-verification';
     case 'architecture-review-as-built':
+    case 'architecture_review_as_built':
     case 'as-built architecture review': return 'as-built';
     default: return 'finish-verification';
   }

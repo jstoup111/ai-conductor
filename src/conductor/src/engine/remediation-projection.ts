@@ -137,8 +137,8 @@ export type RemediationProjectionResult =
 
 /** Largest observed serialized structured sections in the Task 8 remediation corpus. */
 export const REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES = {
-  requiredReferencesBytes: 339,
-  tasksBytes: 165,
+  requiredReferencesBytes: 685,
+  tasksBytes: 307,
   pendingAsBuiltFindingsBytes: 264,
   priorLapsBytes: 80,
   refusalsBytes: 109,
@@ -153,9 +153,9 @@ function roundUpPowerOfTwo(bytes: number): number {
 
 /** Finite engine bounds for required structured input; required values are never truncated. */
 export const REMEDIATION_PROJECTION_LIMITS = {
-  // Required-reference corpus maximum: 339 B; rounded up to 512 B.
+  // Required-reference corpus maximum: 685 B; rounded up to 1,024 B.
   requiredReferencesBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes),
-  // Owning-task corpus maximum: 165 B; rounded up to 256 B.
+  // Owning-task corpus maximum: 307 B; rounded up to 512 B.
   tasksBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes),
   // Stamped pending as-built finding corpus maximum: 264 B; rounded up to 512 B.
   pendingAsBuiltFindingsBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes),

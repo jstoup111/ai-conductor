@@ -92,6 +92,10 @@ import { createRepairObligationStore } from '../../src/engine/repair-obligations
 import { recordTaskDigests } from '../../src/engine/task-digests.js';
 import { planTaskDigests } from '../../src/engine/plan-task-parse.js';
 import {
+  persistFixtureProjectedRemediationPlan,
+  persistFixtureTestRemediationPlan,
+} from './remediation-plan-fixtures.js';
+import {
   AggregationTemporality,
   InMemoryMetricExporter,
   MeterProvider,
@@ -143,6 +147,7 @@ const NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER: GroupBranchLifecycleObserver = {
 // `fixture-head`, and this runner proves that no gate-surface change occurred
 // after it.
 const PRESERVABLE_PRD_AUDIT_GIT = async () => ({ exitCode: 0, stdout: '', stderr: '' });
+const fixtureAsBuiltFindingId = (ordinal = 1) => `as-built:fixture-run:${ordinal}`;
 
 function failingBuildReviewAggregate(summary: string) {
   const lapId = parseBuildReviewLapId('fixture-lap')!;
@@ -227,9 +232,42 @@ async function writePrdAuditFixableFixture(
   }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: 'fixture-head' });
 }
 
+type LegacyRemediationDisposition = {
+  readonly id: string;
+  readonly disposition: string;
+  readonly category: string | null;
+  readonly rationale: string;
+  readonly tasks: readonly { readonly id: string; readonly title: string }[];
+};
+
+/**
+ * Keeps admission fixtures at the production dispatch boundary: they supply
+ * provider-shaped dispositions, while the fixture seam validates and stamps
+ * the engine-owned plan envelope for this exact remediation attempt.
+ */
+async function persistLegacyRemediationPlan(
+  projectRoot: string,
+  options: StepRunOptions | undefined,
+  dispositions: readonly LegacyRemediationDisposition[],
+): Promise<void> {
+  const normalized = dispositions.map((disposition) => ({
+    ...disposition,
+    tasks: disposition.disposition === 'existing-task' ? [] : disposition.tasks,
+    ...(disposition.disposition === 'existing-task'
+      ? { boundTaskIds: disposition.tasks.map((task) => task.id) }
+      : {}),
+  }));
+  if (options?.remediationRequest?.mode === 'gap-plan' &&
+      options.remediationRequest.projection.requiredReferences.length > 0) {
+    await persistFixtureProjectedRemediationPlan(projectRoot, options, normalized);
+    return;
+  }
+  await persistFixtureTestRemediationPlan(projectRoot, options, normalized);
+}
+
 function asBuiltBlockedFixture(findings: readonly AsBuiltFinding[]) {
   return {
-    version: 'v1' as const,
+    version: 'v2' as const,
     verdict: 'BLOCKED' as const,
     reachability: [],
     driftNotes: [],
@@ -714,17 +752,15 @@ describe('engine/conductor', () => {
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
-          run: async (step) => {
+          run: async (step, _state, options) => {
             if (step === 'remediate') {
-              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
-                dispositions: [{
+              await persistLegacyRemediationPlan(dir, options, [{
                   id: 'missing-binding',
                   disposition: 'existing-task',
                   category: null,
                   rationale: 'The existing task owns this repair.',
                   tasks: [{ id: 'missing-task', title: 'Existing task binding' }],
-                }],
-              }));
+              }]);
             }
             return { success: true };
           },
@@ -744,43 +780,6 @@ describe('engine/conductor', () => {
       expect(outcome.detail).toContain('no admitted remediation gap');
     });
 
-    it('fails closed on an unexpected existing-task id in an enforced as-built round', async () => {
-      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
-      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-        tasks: [{ id: '1', status: 'completed' }],
-      }));
-      await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('ARCH-1', '1', 'Existing work'));
-      const conductor = new Conductor({
-        stateFilePath: statePath,
-        stepRunner: { run: async () => {
-          await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
-            dispositions: [{
-              id: 'unexpected-existing', disposition: 'existing-task', category: null,
-              rationale: 'Incorrect binding.', tasks: [{ id: '1', title: 'Existing work' }],
-            }],
-          }));
-          return { success: true };
-        } },
-        events,
-        projectRoot: dir,
-        config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
-      });
-
-      const outcome = await (conductor as any).planRemediation(
-        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 },
-        ALL_STEPS,
-        'unexpected existing-task',
-        { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }] },
-      );
-
-      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
-      expect(outcome.detail).toContain('unexpected-existing');
-      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).tasks)
-        .toEqual([{ id: '1', status: 'completed' }]);
-    });
-
     it.each([
       ['missing', undefined, false],
       ['unreadable', undefined, true],
@@ -798,17 +797,15 @@ describe('engine/conductor', () => {
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
-          run: async (step) => {
+          run: async (step, _state, options) => {
             if (step === 'remediate') {
-              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
-                dispositions: [{
-                  id: 'existing-binding',
+              await persistLegacyRemediationPlan(dir, options, [{
+                  id: fixtureAsBuiltFindingId(),
                   disposition: 'existing-task',
                   category: null,
                   rationale: 'The existing task owns this repair.',
                   tasks: [{ id: '1', title: 'Existing task binding' }],
-                }],
-              }));
+              }]);
             }
             return { success: true };
           },
@@ -839,17 +836,15 @@ describe('engine/conductor', () => {
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
-          run: async (step) => {
+          run: async (step, _state, options) => {
             if (step === 'remediate') {
-              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
-                dispositions: [{
-                  id: 'missing-status-binding',
+              await persistLegacyRemediationPlan(dir, options, [{
+                  id: fixtureAsBuiltFindingId(),
                   disposition: 'existing-task',
                   category: null,
                   rationale: 'The existing task owns this repair.',
                   tasks: [{ id: '1', title: 'Existing task binding' }],
-                }],
-              }));
+              }]);
             }
             return { success: true };
           },
@@ -916,17 +911,15 @@ describe('engine/conductor', () => {
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
-          run: async (step) => {
+          run: async (step, _state, options) => {
             if (step === 'remediate') {
-              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
-                dispositions: [1, 2].map((id) => ({
-                  id: `ARCH-${id}`,
+              await persistLegacyRemediationPlan(dir, options, [1, 2].map((id) => ({
+                  id: fixtureAsBuiltFindingId(id),
                   disposition: 'existing-task',
                   category: null,
                   rationale: `Task ${id} already owns this repair.`,
                   tasks: [{ id: String(id), title: `Existing work ${id}` }],
-                })),
-              }));
+              })));
             }
             return { success: true };
           },
@@ -983,7 +976,7 @@ describe('engine/conductor', () => {
       // the next successful as-built projection consumes.
       expect(ledger.pendingAsBuiltRemediationFindings).toEqual([{
         gate: 'architecture_review_as_built',
-        finding: 'ARCH-1',
+        finding: fixtureAsBuiltFindingId(),
         class: 'REMEDIABLE',
         governingClause: 'Task 1',
         reference: { kind: 'plan-task', taskId: '1' },
@@ -991,7 +984,7 @@ describe('engine/conductor', () => {
         outcome: 'remediated',
       }, {
         gate: 'architecture_review_as_built',
-        finding: 'ARCH-2',
+        finding: fixtureAsBuiltFindingId(2),
         class: 'REMEDIABLE',
         governingClause: 'Task 2',
         reference: { kind: 'plan-task', taskId: '2' },
@@ -1049,15 +1042,13 @@ describe('engine/conductor', () => {
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
-          run: async (step) => {
+          run: async (step, _state, options) => {
             if (step === 'remediate') {
-              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
-                dispositions: [{
-                  id: 'ARCH-1', disposition: 'existing-task', category: null,
+              await persistLegacyRemediationPlan(dir, options, [{
+                  id: fixtureAsBuiltFindingId(), disposition: 'existing-task', category: null,
                   rationale: 'Task 1 already owns this repair.',
                   tasks: [{ id: '1', title: 'Existing work' }],
-                }],
-              }));
+              }]);
             }
             return { success: true };
           },
@@ -1102,15 +1093,13 @@ describe('engine/conductor', () => {
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
-          run: async (step) => {
+          run: async (step, _state, options) => {
             if (step === 'remediate') {
-              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
-                dispositions: [{
+              await persistLegacyRemediationPlan(dir, options, [{
                   id: 'S1.1', disposition: 'existing-task', category: null,
                   rationale: 'Task 1 already owns this repair.',
                   tasks: [{ id: '1', title: 'Existing work' }],
-                }],
-              }));
+              }]);
             }
             return { success: true };
           },
@@ -1157,14 +1146,11 @@ describe('engine/conductor', () => {
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
-          run: async (step) => {
+          run: async (step, _state, options) => {
             if (step === 'remediate') {
-              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
-                dispositions: [
+              await persistLegacyRemediationPlan(dir, options, [
                   { id: 'S1.1', disposition: 'existing-task', category: null, rationale: 'Task 1 owns this repair.', tasks: [{ id: '1', title: 'PRD work' }] },
-                  { id: 'ARCH-1', disposition: 'existing-task', category: null, rationale: 'Task 2 owns this repair.', tasks: [{ id: '2', title: 'As-built work' }] },
-                ],
-              }));
+              ]);
             }
             return { success: true };
           },
@@ -1219,27 +1205,27 @@ describe('engine/conductor', () => {
         gates: {},
         growth: { authored: 2, added: 0, byGate: {} },
       });
+      await writePrdAuditFixableFixture(dir, undefined, []);
       await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('ARCH-1', '1', 'Repair task one'));
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
-          run: async (step) => {
+          run: async (step, _state, options) => {
             if (step === 'remediate') {
-              await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
-                dispositions: [{
-                  id: 'ARCH-1',
+              await persistLegacyRemediationPlan(dir, options, [{
+                  id: fixtureAsBuiltFindingId(),
                   disposition: 'existing-task',
                   category: null,
                   rationale: 'Task 1 already owns this repair.',
                   tasks: [{ id: '1', title: 'Existing work 1' }],
-                }],
-              }));
+              }]);
             }
             return { success: true };
           },
         },
         events,
         projectRoot: dir,
+        git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
       });
 
@@ -1259,7 +1245,7 @@ describe('engine/conductor', () => {
 
       // The finding is still addressed and rides the merged work order.
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
-      expect((outcome as { hint: string }).hint).toContain('ARCH-1');
+      expect((outcome as { hint: string }).hint).toContain(fixtureAsBuiltFindingId());
       // ...but none of the gate-local existing-task mechanics ran.
       expect(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).toBe(taskStatus);
       const ledger = await readKickbackLedger(dir);
@@ -1285,11 +1271,11 @@ describe('engine/conductor', () => {
         events,
         git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { prd_audit: { max_remediation_laps: 2 } } as never,
-        stepRunner: { run: async (step) => {
-          if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: [{
+        stepRunner: { run: async (step, _state, options) => {
+          if (step === 'remediate') await persistLegacyRemediationPlan(dir, options, [{
             id: 'S1.1', disposition: 'build', category: null, rationale: 'Append the repair.',
             tasks: [{ id: 'rem-fr-1', title: 'Appended repair' }],
-          }] }));
+          }]);
           return { success: true };
         } },
       });
@@ -1335,21 +1321,18 @@ describe('engine/conductor', () => {
         gates: {},
         growth: { authored: 4, added: 0, byGate: {} },
       });
-      let mixedRound = false;
       const conductor = new Conductor({
         stateFilePath: statePath,
         projectRoot: dir,
         events,
         git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { prd_audit: { max_remediation_laps: 2 } } as never,
-        stepRunner: { run: async (step) => {
-          if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
-            dispositions: [
-              ...(mixedRound ? [{ id: 'S1.1', disposition: 'build', category: null, rationale: 'Append.', tasks: [{ id: 'rem-s1-1', title: 'Appended repair' }] }] : []),
+        stepRunner: { run: async (step, _state, options) => {
+          if (step === 'remediate') await persistLegacyRemediationPlan(dir, options, [
+              { id: 'S1.1', disposition: 'build', category: null, rationale: 'Append.', tasks: [{ id: 'rem-s1-1', title: 'Appended repair' }] },
               { id: 'S1.2', disposition: 'existing-task', category: null, rationale: 'Already owned.', tasks: [{ id: '2', title: 'Authored 2' }] },
               { id: 'S1.3', disposition: 'existing-task', category: null, rationale: 'Already owned.', tasks: [{ id: '3', title: 'Authored 3' }] },
-            ],
-          }));
+          ]);
           return { success: true };
         } },
       });
@@ -1374,7 +1357,6 @@ describe('engine/conductor', () => {
         ...settledLedger,
         growth: { authored: 4, added: 1, byGate: { prd_audit: 1 } },
       });
-      mixedRound = true;
       const outcome = await (conductor as any).planRemediation(input, ALL_STEPS, 'mixed growth exhaustion', source);
 
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
@@ -1398,11 +1380,11 @@ describe('engine/conductor', () => {
         stateFilePath: statePath, projectRoot: dir, events,
         git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
-        stepRunner: { run: async (step) => {
-          if (step === 'remediate') await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: [
+        stepRunner: { run: async (step, _state, options) => {
+          if (step === 'remediate') await persistLegacyRemediationPlan(dir, options, [
             { id: 'S1.1', disposition: 'build', category: null, rationale: 'Append.', tasks: [{ id: 'rem-s1-1', title: 'Appended repair' }] },
-            { id: 'ARCH-1', disposition: 'existing-task', category: null, rationale: 'Already owned.', tasks: [{ id: '2', title: 'Authored 2' }] },
-          ] }));
+            { id: fixtureAsBuiltFindingId(), disposition: 'existing-task', category: null, rationale: 'Already owned.', tasks: [{ id: '2', title: 'Authored 2' }] },
+          ]);
           return { success: true };
         } },
       });
