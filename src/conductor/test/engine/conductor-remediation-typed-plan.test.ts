@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { Conductor } from '../../src/engine/conductor.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { REMEDIATION_TYPED_PLAN_PATH } from '../../src/engine/remediation-plan-store.js';
+import { readKickbackLedger, settlePendingRepair } from '../../src/engine/kickback-ledger.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -165,7 +166,17 @@ async function fixture(
     'PRD audit reported repairable criteria.',
     { source, evidence: [{ gate: source.includes('stall') ? 'build' : 'prd_audit', evidenceFile }] } as never,
   );
-  return { root, planPath, provider, outcome, blockedReasons, rejectedDispositions };
+  return {
+    root,
+    planPath,
+    provider,
+    runner,
+    config,
+    state,
+    outcome,
+    blockedReasons,
+    rejectedDispositions,
+  };
 }
 
 describe('Conductor typed remediation-plan admission', () => {
@@ -249,6 +260,69 @@ describe('Conductor typed remediation-plan admission', () => {
 
     expect(result.outcome).toMatchObject({ kind: 'route', target: 'build' });
     expect(result.provider.invocationCount).toBe(1);
+  });
+
+  // Covers: task:27
+  it('re-dispatches after restart with a fresh attempt, retains its receipt, and rejects the prior plan on a no-result retry', async () => {
+    const result = await fixture('claude', [
+      { kind: 'structured', finalStructuredResult: output() },
+      { kind: 'chat', output: 'the restarted attempt omitted its structured result' },
+    ], 1);
+    const firstPlan = JSON.parse(await readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8')) as {
+      attemptId: string;
+    };
+    const firstLedger = await readKickbackLedger(result.root);
+
+    const restarted = new Conductor({
+      stateFilePath: join(result.root, '.pipeline', 'conduct-state.json'),
+      stepRunner: result.runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: result.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      config: result.config,
+    });
+    (restarted as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...result.state };
+    const restartedOutcome = await (restarted as unknown as {
+      planRemediation(
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        context: string,
+        source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
+      ): Promise<{ kind: string; reason?: string }>;
+    }).planRemediation(
+      result.state,
+      ALL_STEPS,
+      'PRD audit reported repairable criteria after restart.',
+      { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    );
+
+    expect(result.provider.invocationCount).toBe(2);
+    expect(result.provider.calls[1]?.sessionId).not.toBe(result.provider.calls[0]?.sessionId);
+    expect(restartedOutcome).toMatchObject({
+      kind: 'none',
+      reason: expect.stringContaining('structured-result-missing'),
+    });
+    expect(JSON.parse(await readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8'))).toMatchObject({
+      attemptId: firstPlan.attemptId,
+    });
+    await expect(readKickbackLedger(result.root)).resolves.toMatchObject({
+      pendingRepair: firstLedger.pendingRepair,
+    });
+
+    const budgets = [{
+      gate: 'prd_audit' as const,
+      lapCap: 2,
+      growthCap: 2,
+      growth: { authored: 8, added: 0, byGate: {}, remaining: 2 },
+    }];
+    await expect(settlePendingRepair(result.root, budgets)).resolves.toEqual({ kind: 'settled' });
+    await expect(settlePendingRepair(result.root, budgets)).resolves.toEqual({ kind: 'none' });
+    await expect(readKickbackLedger(result.root)).resolves.toMatchObject({
+      gates: { prd_audit: { laps: 1 } },
+      growth: { added: 1, byGate: { prd_audit: 1 } },
+    });
   });
 
   // Covers: task:20
