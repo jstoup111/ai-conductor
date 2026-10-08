@@ -39,6 +39,8 @@ export interface ProtectedArtifactRebaseline {
   toCommit: string;
   trigger: string;
   paths: string[];
+  /** Maps each base-inherited deleted artifact path to its deleting base commit. */
+  deletedBy?: Record<string, string>;
   /** Verbatim rationale for an operator-initiated scoped reseal. */
   reason?: string;
 }
@@ -115,6 +117,7 @@ export type ProtectedArtifactSealRebaselineEvent =
       fromCommit: string;
       toCommit: string;
       paths: string[];
+      deletedBy?: Record<string, string>;
       excludedBaseAheadPaths?: string[];
       excludedOperatorResealedPaths?: string[];
       includedEngineAppendedPaths?: string[];
@@ -175,6 +178,8 @@ export interface RotateProtectedArtifactSealOptions {
   excludedBaseAheadPaths?: string[];
   excludedOperatorResealedPaths?: string[];
   includedEngineAppendedPaths?: string[];
+  /** Base-inherited protected artifacts to remove from the next sealed snapshot. */
+  prune?: { paths: string[]; deletedBy: Record<string, string> };
   fileOperations?: ProtectedArtifactSealFileOperations;
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
@@ -204,11 +209,19 @@ export interface VerifyProtectedArtifactSealOptions {
    * (fully protected, prior behavior).
    */
   baseBranch?: string;
+  /** Test seam for the atomic seal writer used by verification rebaselines. */
+  fileOperations?: ProtectedArtifactSealFileOperations;
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
 
 export type ProtectedArtifactSealVerdict =
-  | { ok: true; seal: ProtectedArtifactSeal; selfAmendments: ProtectedArtifactSelfAmendment[] }
+  | {
+      ok: true;
+      seal: ProtectedArtifactSeal;
+      selfAmendments: ProtectedArtifactSelfAmendment[];
+      /** Base-branch removals that a later seal writer may prune atomically. */
+      inheritedDeletions: { path: string; deletedBy: string }[];
+    }
   | { ok: false; reason: string };
 
 export interface ActiveStepArtifactExceptionInput {
@@ -541,6 +554,12 @@ function parseSeal(serialized: string): ProtectedArtifactSeal {
           typeof entry?.trigger === 'string' &&
           Array.isArray(entry?.paths) &&
           entry.paths.every((path: unknown) => typeof path === 'string') &&
+          (entry.deletedBy === undefined || (
+            typeof entry.deletedBy === 'object' &&
+            entry.deletedBy !== null &&
+            !Array.isArray(entry.deletedBy) &&
+            Object.values(entry.deletedBy).every((deletedBy: unknown) => typeof deletedBy === 'string')
+          )) &&
           (entry.reason === undefined || typeof entry.reason === 'string'),
       );
     if (
@@ -986,17 +1005,25 @@ async function branchUntouchedInheritance(
       cwd: projectRoot,
       reject: false,
     }).catch(() => undefined);
-    if (!headTree || headTree.exitCode !== 0 || headTree.stdout.length !== 0) {
+    if (!headTree || headTree.exitCode !== 0) {
+      return {
+        inheritance: 'diff-probe-failed',
+        provenance: { ...provenance, headTouchedPath: 'indeterminate' },
+      };
+    }
+    if (headTree.stdout.length !== 0) {
       return { inheritance: 'not-inherited', provenance };
     }
     try {
       await lstat(join(projectRoot, path));
       return { inheritance: 'not-inherited', provenance };
     } catch (error) {
-      return {
-        inheritance: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'inherited' : 'not-inherited',
-        provenance,
-      };
+      return (error as NodeJS.ErrnoException).code === 'ENOENT'
+        ? { inheritance: 'inherited', provenance }
+        : {
+            inheritance: 'diff-probe-failed',
+            provenance: { ...provenance, headTouchedPath: 'indeterminate' },
+          };
     }
   }
 
@@ -1004,6 +1031,74 @@ async function branchUntouchedInheritance(
   return {
     inheritance: workspace !== undefined && workspace === head.stdout ? 'inherited' : 'not-inherited',
     provenance,
+  };
+}
+
+type ProtectedArtifactInheritance = 'inherited' | 'not-inherited' | 'no-merge-base' | 'diff-probe-failed';
+
+function attributionLine(
+  inheritance: ProtectedArtifactInheritance,
+  provenance: Pick<ProtectedArtifactRotationEvidence, 'mergeBase' | 'headTouchedPath'> = {},
+): string {
+  if (inheritance === 'inherited') return 'Attribution: base-inherited';
+  if (inheritance === 'no-merge-base' || inheritance === 'diff-probe-failed') {
+    return 'Attribution: provenance undeterminable';
+  }
+  if (provenance.headTouchedPath === false) return 'Attribution: uncommitted workspace change';
+  if (provenance.headTouchedPath === true && provenance.mergeBase) {
+    return `Attribution: feature-authored (committed on this branch since merge-base ${provenance.mergeBase})`;
+  }
+  return 'Attribution: provenance undeterminable';
+}
+
+type InheritedFromBaseResult = {
+  inheritance: ProtectedArtifactInheritance;
+  mergeBase?: string;
+  headTouchedPath: boolean | 'indeterminate';
+};
+
+type DeletedProtectedArtifactClassification =
+  | { kind: 'inherited'; path: string; deletedBy: string }
+  | { kind: 'refused'; verdict: ProtectedArtifactSealVerdict };
+
+/**
+ * Classifies a missing sealed path without mutating the seal. The deleting
+ * commit is deliberately resolved only after provenance establishes that the
+ * base branch — rather than this feature — removed the path.
+ */
+async function classifyDeletedProtectedArtifact(
+  path: string,
+  probe: {
+    inheritedFromBase: (path: string) => Promise<InheritedFromBaseResult>;
+    missingBaseRef: () => Promise<string | undefined>;
+    deletingBaseCommit: (path: string) => Promise<string | undefined>;
+    undeterminableProvenance: (path: string, missingRef: string) => ProtectedArtifactSealVerdict;
+    noMergeBase: (path: string) => ProtectedArtifactSealVerdict;
+    failedInheritanceProbe: (path: string) => ProtectedArtifactSealVerdict;
+  },
+): Promise<DeletedProtectedArtifactClassification> {
+  const inheritance = await probe.inheritedFromBase(path);
+  if (inheritance.inheritance === 'inherited') {
+    const deletedBy = await probe.deletingBaseCommit(path);
+    if (deletedBy) return { kind: 'inherited', path, deletedBy };
+    return {
+      kind: 'refused',
+      verdict: {
+        ok: false,
+        reason: `Protected artifact provenance undeterminable: ${path}\nDeleting base commit not found.\n${attributionLine('diff-probe-failed')}`,
+      },
+    };
+  }
+  const missingRef = await probe.missingBaseRef();
+  if (missingRef) return { kind: 'refused', verdict: probe.undeterminableProvenance(path, missingRef) };
+  if (inheritance.inheritance === 'no-merge-base') return { kind: 'refused', verdict: probe.noMergeBase(path) };
+  if (inheritance.inheritance === 'diff-probe-failed') return { kind: 'refused', verdict: probe.failedInheritanceProbe(path) };
+  return {
+    kind: 'refused',
+    verdict: {
+      ok: false,
+      reason: `Protected artifact deleted: ${path}\n${attributionLine(inheritance.inheritance, inheritance)}`,
+    },
   };
 }
 
@@ -1030,23 +1125,33 @@ async function inspectSeal(
   };
   const undeterminableProvenance = (path: string, missingRef: string): ProtectedArtifactSealVerdict => ({
     ok: false,
-    reason: `Protected artifact provenance undeterminable: ${path}\nMissing base ref: ${missingRef}.\nProvide the base ref, then rebase onto it.`,
+    reason: `Protected artifact provenance undeterminable: ${path}\nMissing base ref: ${missingRef}.\nProvide the base ref, then rebase onto it.\n${attributionLine('diff-probe-failed')}`,
   });
   const noMergeBase = (path: string, baseBranch: string): ProtectedArtifactSealVerdict => ({
     ok: false,
-    reason: `Protected artifact provenance undeterminable: ${path}\nNo merge-base exists between HEAD and ${baseBranch}.\nRebase onto ${baseBranch} to establish shared history.`,
+    reason: `Protected artifact provenance undeterminable: ${path}\nNo merge-base exists between HEAD and ${baseBranch}.\nRebase onto ${baseBranch} to establish shared history.\n${attributionLine('no-merge-base')}`,
   });
   const failedInheritanceProbe = (path: string): ProtectedArtifactSealVerdict => ({
     ok: false,
-    reason: `Protected artifact provenance undeterminable: ${path}\nInheritance probe failed: git diff.\nVerify Git access and retry.`,
+    reason: `Protected artifact provenance undeterminable: ${path}\nInheritance probe failed: git diff.\nVerify Git access and retry.\n${attributionLine('diff-probe-failed')}`,
   });
-  const inheritedFromBase = async (path: string): Promise<
-    'inherited' | 'not-inherited' | 'no-merge-base' | 'diff-probe-failed'
-  > => {
+  const inheritedFromBase = async (path: string): Promise<InheritedFromBaseResult> => {
     const ref = await baseRef();
-    if (ref === undefined) return 'diff-probe-failed';
-    if (await matchesBaseTip(projectRoot, ref, path)) return 'inherited';
-    return (await branchUntouchedInheritance(projectRoot, ref, path)).inheritance;
+    if (ref === undefined) return { inheritance: 'diff-probe-failed', headTouchedPath: 'indeterminate' };
+    if (await matchesBaseTip(projectRoot, ref, path)) {
+      return { inheritance: 'inherited', headTouchedPath: 'indeterminate' };
+    }
+    const { inheritance, provenance } = await branchUntouchedInheritance(projectRoot, ref, path);
+    return { inheritance, ...provenance, headTouchedPath: provenance.headTouchedPath ?? 'indeterminate' };
+  };
+  const deletingBaseCommit = async (path: string): Promise<string | undefined> => {
+    const ref = await baseRef();
+    if (!ref) return undefined;
+    const deleted = await execa('git', ['log', '-1', '--diff-filter=D', '--format=%H', ref, '--', path], {
+      cwd: projectRoot,
+      reject: false,
+    }).catch(() => undefined);
+    return deleted?.exitCode === 0 && deleted.stdout.length > 0 ? deleted.stdout : undefined;
   };
 
   const expected = new Map(seal.protectedArtifacts.map((artifact) => [artifact.path, artifact.fingerprint]));
@@ -1062,7 +1167,7 @@ async function inspectSeal(
       step: 'protected_artifact_seal_audit',
     });
     if (classification.kind === 'indeterminate') {
-      return { ok: false, reason: `Indeterminate protected artifact target: ${path}` };
+      return { ok: false, reason: `Indeterminate protected artifact target: ${path}\n${attributionLine('diff-probe-failed')}` };
     }
     actualPaths.push(classification.target);
   }
@@ -1076,16 +1181,16 @@ async function inspectSeal(
       // this seal's baseline was taken. Tolerated only when the workspace copy
       // is byte-identical to the base tip's committed copy.
       const inheritance = await inheritedFromBase(path);
-      if (inheritance === 'inherited') continue;
+      if (inheritance.inheritance === 'inherited') continue;
       const missingRef = await missingBaseRef();
       if (missingRef) return undeterminableProvenance(path, missingRef);
-      if (inheritance === 'no-merge-base') return noMergeBase(path, baseBranch!);
-      if (inheritance === 'diff-probe-failed') return failedInheritanceProbe(path);
-      return { ok: false, reason: `Protected artifact added: ${path}` };
+      if (inheritance.inheritance === 'no-merge-base') return noMergeBase(path, baseBranch!);
+      if (inheritance.inheritance === 'diff-probe-failed') return failedInheritanceProbe(path);
+      return { ok: false, reason: `Protected artifact added: ${path}\n${attributionLine(inheritance.inheritance, inheritance)}` };
     }
     const content = await readContainedProtectedArtifact(projectRoot, path);
     if (content === undefined) {
-      return { ok: false, reason: `Indeterminate protected artifact target: ${path}` };
+      return { ok: false, reason: `Indeterminate protected artifact target: ${path}\n${attributionLine('diff-probe-failed')}` };
     }
     const sealedFingerprint = expected.get(path);
     const currentFingerprint = fingerprint(content);
@@ -1094,29 +1199,39 @@ async function inspectSeal(
       // self-amendment. The base branch is an independent authority, so content
       // it already contains is neither a local amendment nor a seal violation.
       const inheritance = await inheritedFromBase(path);
-      if (inheritance === 'inherited') continue;
+      if (inheritance.inheritance === 'inherited') continue;
       if (featureDesc && namesOwnFeature(path, featureDesc)) {
         selfAmendments.push({ path, sealedFingerprint: sealedFingerprint!, currentFingerprint });
       } else {
         const missingRef = await missingBaseRef();
         if (missingRef) return undeterminableProvenance(path, missingRef);
-        if (inheritance === 'no-merge-base') return noMergeBase(path, baseBranch!);
-        if (inheritance === 'diff-probe-failed') return failedInheritanceProbe(path);
+        if (inheritance.inheritance === 'no-merge-base') return noMergeBase(path, baseBranch!);
+        if (inheritance.inheritance === 'diff-probe-failed') return failedInheritanceProbe(path);
         // BASE-INHERITANCE TOLERANCE (#976). The mismatch is not this feature's
         // own amendment, and was not inherited from the base branch. The seal
         // therefore remains authoritative and the mutation must halt.
-        return { ok: false, reason: `Protected artifact changed: ${path}` };
+        return { ok: false, reason: `Protected artifact changed: ${path}\n${attributionLine(inheritance.inheritance, inheritance)}` };
       }
     }
   }
 
+  const inheritedDeletions: { path: string; deletedBy: string }[] = [];
   for (const path of expected.keys()) {
     if (excludedPaths?.has(path)) continue;
     if (!actualPaths.includes(path)) {
-      return { ok: false, reason: `Protected artifact deleted: ${path}` };
+      const classification = await classifyDeletedProtectedArtifact(path, {
+        inheritedFromBase,
+        missingBaseRef,
+        deletingBaseCommit,
+        undeterminableProvenance,
+        noMergeBase: (deletedPath) => noMergeBase(deletedPath, baseBranch!),
+        failedInheritanceProbe,
+      });
+      if (classification.kind === 'refused') return classification.verdict;
+      inheritedDeletions.push({ path: classification.path, deletedBy: classification.deletedBy });
     }
   }
-  return { ok: true, seal, selfAmendments };
+  return { ok: true, seal, selfAmendments, inheritedDeletions };
 }
 
 /**
@@ -1173,28 +1288,28 @@ function rotationRefusalVerdict(
   if (rotation.condition === 'baseline-unresolvable') {
     return {
       ok: false,
-      reason: `Protected artifact seal baseline is unresolvable: ${seal.baselineCommit}`,
+      reason: `Protected artifact seal baseline is unresolvable: ${seal.baselineCommit}\n${attributionLine('diff-probe-failed')}`,
     };
   }
   if (rotation.condition === 'head-unresolvable') {
-    return { ok: false, reason: `Protected artifact seal HEAD is unresolvable: ${headCommit}` };
+    return { ok: false, reason: `Protected artifact seal HEAD is unresolvable: ${headCommit}\n${attributionLine('diff-probe-failed')}` };
   }
   if (!('path' in rotation)) return inspection;
   if (rotation.condition === 'workspace-differs-from-head') {
     return {
       ok: false,
-      reason: `Uncommitted protected artifact changed: ${rotation.path}\nRestore from HEAD.`,
+      reason: `Uncommitted protected artifact changed: ${rotation.path}\nRestore from HEAD.\n${attributionLine('not-inherited', { headTouchedPath: false })}`,
     };
   }
   if (rotation.condition === 'engine-append-unvouched') {
     return {
       ok: false,
-      reason: `Unvouched engine remediation append: ${rotation.path}\nOperator-reseal exit: ${rotation.operatorResealExit}; engine-append exit: ${rotation.engineAppendExit}.`,
+      reason: `Unvouched engine remediation append: ${rotation.path}\nOperator-reseal exit: ${rotation.operatorResealExit}; engine-append exit: ${rotation.engineAppendExit}.\n${attributionLine('not-inherited', rotation)}`,
     };
   }
   return {
     ok: false,
-    reason: `Protected artifact changed: ${rotation.path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.`,
+    reason: `Protected artifact changed: ${rotation.path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.\n${attributionLine('not-inherited', rotation)}`,
   };
 }
 
@@ -1233,6 +1348,7 @@ interface ApplyPermittedProtectedArtifactSealRotationInput {
   excludedBaseAheadPaths?: string[];
   excludedOperatorResealedPaths?: string[];
   includedEngineAppendedPaths?: string[];
+  prune?: { paths: string[]; deletedBy: Record<string, string> };
 }
 
 async function applyPermittedProtectedArtifactSealRotation(
@@ -1244,6 +1360,7 @@ async function applyPermittedProtectedArtifactSealRotation(
     excludedBaseAheadPaths,
     excludedOperatorResealedPaths,
     includedEngineAppendedPaths,
+    prune,
   }: ApplyPermittedProtectedArtifactSealRotationInput,
 ): Promise<ProtectedArtifactSealVerdict> {
   const rotated = await rotateProtectedArtifactSeal({
@@ -1255,9 +1372,36 @@ async function applyPermittedProtectedArtifactSealRotation(
     excludedBaseAheadPaths,
     excludedOperatorResealedPaths,
     includedEngineAppendedPaths,
+    prune,
+    fileOperations: options.fileOperations,
     onRebaseline: options.onRebaseline,
   });
-  return { ok: true, seal: rotated, selfAmendments: [] };
+  return { ok: true, seal: rotated, selfAmendments: [], inheritedDeletions: [] };
+}
+
+async function persistInheritedDeletionPrune(
+  options: VerifyProtectedArtifactSealOptions,
+  seal: ProtectedArtifactSeal,
+  inspection: Extract<ProtectedArtifactSealVerdict, { ok: true }>,
+): Promise<ProtectedArtifactSealVerdict> {
+  const prune = {
+    paths: inspection.inheritedDeletions.map(({ path }) => path),
+    deletedBy: Object.fromEntries(inspection.inheritedDeletions.map(({ path, deletedBy }) => [path, deletedBy])),
+  };
+  const pruned = await persistProtectedArtifactSealRotation({
+    projectRoot: options.projectRoot,
+    seal,
+    recomputed: {
+      ...seal,
+      protectedArtifacts: seal.protectedArtifacts.filter(({ path }) => !prune.paths.includes(path)),
+    },
+    trigger: 'defensive-history-rewrite',
+    paths: [],
+    prune,
+    fileOperations: options.fileOperations ?? { writeFile, rename, rm },
+    onRebaseline: options.onRebaseline,
+  });
+  return { ...inspection, seal: pruned };
 }
 
 async function verifyExistingProtectedArtifactSeal(
@@ -1290,8 +1434,12 @@ async function verifyExistingProtectedArtifactSeal(
   });
   if (!rotation.permitted) {
     await reportRotationRefusal(options.onRebaseline, rotation);
-    return rotationRefusalVerdict(rotation, inspection, seal, context.headCommit);
+    const verdict = rotationRefusalVerdict(rotation, inspection, seal, context.headCommit);
+    return verdict.ok && verdict.inheritedDeletions.length > 0
+      ? persistInheritedDeletionPrune(options, seal, verdict)
+      : verdict;
   }
+  if (!inspection.ok) return inspection;
   return applyPermittedProtectedArtifactSealRotation({
     options,
     seal,
@@ -1300,6 +1448,12 @@ async function verifyExistingProtectedArtifactSeal(
     excludedBaseAheadPaths: rotation.excludedBaseAheadPaths,
     excludedOperatorResealedPaths: rotation.excludedOperatorResealedPaths,
     includedEngineAppendedPaths: rotation.includedEngineAppendedPaths,
+    prune: inspection.ok && inspection.inheritedDeletions.length > 0
+      ? {
+          paths: inspection.inheritedDeletions.map(({ path }) => path),
+          deletedBy: Object.fromEntries(inspection.inheritedDeletions.map(({ path, deletedBy }) => [path, deletedBy])),
+        }
+      : undefined,
   });
 }
 
@@ -1337,6 +1491,7 @@ export async function rotateProtectedArtifactSeal({
   excludedBaseAheadPaths,
   excludedOperatorResealedPaths,
   includedEngineAppendedPaths,
+  prune,
   fileOperations = { writeFile, rename, rm },
   onRebaseline,
 }: RotateProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
@@ -1350,6 +1505,7 @@ export async function rotateProtectedArtifactSeal({
     excludedBaseAheadPaths,
     excludedOperatorResealedPaths,
     includedEngineAppendedPaths,
+    prune,
     fileOperations,
     onRebaseline,
   });
@@ -1367,15 +1523,86 @@ export async function resealProtectedArtifactSeal({
   featureDesc,
   baseBranch,
 }: ResealProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
+  // Preserve scoped reseal's input contract before the broader inspection.
+  // The inspection can legitimately need base provenance for inherited
+  // deletions, but invalid scope must not be recast as provenance failure.
+  if (paths.length === 0) {
+    throw new Error('Scoped protected artifact reseal requires at least one path');
+  }
+  const sealedPaths = new Set(seal.protectedArtifacts.map((artifact) => artifact.path));
+  for (const path of paths) {
+    if (!isProtectedArtifactPath(path)) {
+      throw new Error(`Protected artifact reseal target is not protected: ${path}`);
+    }
+    if (!sealedPaths.has(path)) {
+      throw new Error(`Protected artifact reseal target is not sealed: ${path}`);
+    }
+  }
+  const target = await execa('git', ['rev-parse', '--verify', '--quiet', `${toCommit}^{commit}`], {
+    cwd: projectRoot,
+    reject: false,
+  }).catch(() => undefined);
+  if (!target || target.exitCode !== 0) {
+    throw new Error(`Protected artifact reseal target commit is unresolvable: ${toCommit}`);
+  }
+  // A base-aware reseal may prune an inherited deletion. Without a base branch
+  // there is no permitted provenance path, so retain the scoped target error.
+  if (!baseBranch) {
+    for (const path of paths) {
+      if (await readContainedProtectedArtifact(projectRoot, path) === undefined) {
+        throw new Error(`Protected artifact reseal target is deleted: ${path}`);
+      }
+    }
+  }
   const classification = await inspectSeal(projectRoot, seal, featureDesc, baseBranch, new Set(paths));
   if (!classification.ok) throw new Error(classification.reason);
-  const recomputed = await createScopedProtectedArtifactSeal({ projectRoot, seal, toCommit, paths });
+  // The initial inspection deliberately excludes requested paths: those paths
+  // are about to be operator-resealed. A missing requested path needs one
+  // narrower inspection of its own, though, so an inherited deletion can be
+  // pruned instead of reaching the old "reseal target is deleted" check.
+  const survivingPaths: string[] = [];
+  const inheritedDeletions = [...classification.inheritedDeletions];
+  for (const path of paths) {
+    if (await readContainedProtectedArtifact(projectRoot, path) !== undefined) {
+      survivingPaths.push(path);
+      continue;
+    }
+    const targetInspection = await inspectSeal(
+      projectRoot,
+      seal,
+      featureDesc,
+      baseBranch,
+      new Set(paths.filter((candidate) => candidate !== path)),
+    );
+    if (!targetInspection.ok) throw new Error(targetInspection.reason);
+    const inherited = targetInspection.inheritedDeletions.find((entry) => entry.path === path);
+    if (!inherited) {
+      // Keep the pre-existing target validation for a missing path outside the
+      // base-inheritance case (for example an unsealed target).
+      throw new Error(`Protected artifact reseal target is deleted: ${path}`);
+    }
+    inheritedDeletions.push(inherited);
+  }
+  const prune = inheritedDeletions.length > 0
+    ? {
+        paths: inheritedDeletions.map(({ path }) => path),
+        deletedBy: Object.fromEntries(inheritedDeletions.map(({ path, deletedBy }) => [path, deletedBy])),
+      }
+    : undefined;
+  const recomputed = survivingPaths.length > 0
+    ? await createScopedProtectedArtifactSeal({ projectRoot, seal, toCommit, paths: survivingPaths })
+    : {
+        ...seal,
+        baselineCommit: seal.baselineCommit,
+        protectedArtifacts: seal.protectedArtifacts.filter(({ path }) => !prune?.paths.includes(path)),
+      };
   return persistProtectedArtifactSealRotation({
     projectRoot,
     seal,
-    recomputed: { ...recomputed, baselineCommit: toCommit },
+    recomputed: { ...recomputed, baselineCommit: survivingPaths.length > 0 ? toCommit : seal.baselineCommit },
     trigger,
-    paths,
+    paths: survivingPaths,
+    prune,
     reason,
     fileOperations,
     onRebaseline,
@@ -1391,6 +1618,7 @@ interface PersistProtectedArtifactSealRotationOptions {
   excludedBaseAheadPaths?: string[];
   excludedOperatorResealedPaths?: string[];
   includedEngineAppendedPaths?: string[];
+  prune?: { paths: string[]; deletedBy: Record<string, string> };
   reason?: string;
   fileOperations: ProtectedArtifactSealFileOperations;
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
@@ -1405,21 +1633,38 @@ async function persistProtectedArtifactSealRotation({
   excludedBaseAheadPaths,
   excludedOperatorResealedPaths,
   includedEngineAppendedPaths,
+  prune,
   reason,
   fileOperations,
   onRebaseline,
 }: PersistProtectedArtifactSealRotationOptions): Promise<ProtectedArtifactSeal> {
-  const rotated: ProtectedArtifactSeal = {
-    ...recomputed,
-    rebaselines: [
-      ...seal.rebaselines,
-      {
+  const pruneEntry = prune && prune.paths.length > 0
+    ? {
+        fromCommit: seal.baselineCommit,
+        toCommit: seal.baselineCommit,
+        trigger: 'inherited-base-deletion',
+        paths: prune.paths,
+        deletedBy: prune.deletedBy,
+      }
+    : undefined;
+  const rotationEntry = !pruneEntry || paths.length > 0
+    ? {
         fromCommit: seal.baselineCommit,
         toCommit: recomputed.baselineCommit,
         trigger,
         paths,
         ...(reason === undefined ? {} : { reason }),
-      },
+      }
+    : undefined;
+  const rotated: ProtectedArtifactSeal = {
+    ...recomputed,
+    protectedArtifacts: pruneEntry
+      ? recomputed.protectedArtifacts.filter(({ path }) => !pruneEntry.paths.includes(path))
+      : recomputed.protectedArtifacts,
+    rebaselines: [
+      ...seal.rebaselines,
+      ...(pruneEntry ? [pruneEntry] : []),
+      ...(rotationEntry ? [rotationEntry] : []),
     ],
   };
   const sealPath = join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH);
@@ -1430,18 +1675,23 @@ async function persistProtectedArtifactSealRotation({
   try {
     await fileOperations.writeFile(temporaryPath, `${JSON.stringify(rotated, null, 2)}\n`);
     await fileOperations.rename(temporaryPath, sealPath);
-    await notifyRebaselineObserver(onRebaseline, {
-      type: 'protected_artifact_rebaseline',
-      trigger,
-      fromCommit: seal.baselineCommit,
-      toCommit: recomputed.baselineCommit,
-      paths,
-      ...(excludedBaseAheadPaths && excludedBaseAheadPaths.length > 0 ? { excludedBaseAheadPaths } : {}),
-      ...(excludedOperatorResealedPaths && excludedOperatorResealedPaths.length > 0
-        ? { excludedOperatorResealedPaths } : {}),
-      ...(includedEngineAppendedPaths && includedEngineAppendedPaths.length > 0
-        ? { includedEngineAppendedPaths } : {}),
-    });
+    if (pruneEntry) {
+      await notifyRebaselineObserver(onRebaseline, {
+        type: 'protected_artifact_rebaseline',
+        ...pruneEntry,
+      });
+    }
+    if (rotationEntry) {
+      await notifyRebaselineObserver(onRebaseline, {
+        type: 'protected_artifact_rebaseline',
+        ...rotationEntry,
+        ...(excludedBaseAheadPaths && excludedBaseAheadPaths.length > 0 ? { excludedBaseAheadPaths } : {}),
+        ...(excludedOperatorResealedPaths && excludedOperatorResealedPaths.length > 0
+          ? { excludedOperatorResealedPaths } : {}),
+        ...(includedEngineAppendedPaths && includedEngineAppendedPaths.length > 0
+          ? { includedEngineAppendedPaths } : {}),
+      });
+    }
     return rotated;
   } catch (error) {
     operationFailed = true;

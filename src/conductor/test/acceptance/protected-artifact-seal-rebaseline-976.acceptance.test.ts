@@ -925,7 +925,7 @@ describe('ST-976-3: a feature-authored mutation still blocks across a rebase', (
 
       expect(verdict).toEqual({
         ok: false,
-        reason: `Indeterminate protected artifact target: ${OTHER_PLAN}`,
+        reason: `Indeterminate protected artifact target: ${OTHER_PLAN}\nAttribution: provenance undeterminable`,
       });
       expect(await readSealRaw(repo)).toBe(before);
     },

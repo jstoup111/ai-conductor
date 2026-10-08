@@ -1130,6 +1130,8 @@ type ConductorEventBody =
       fromCommit: string;
       toCommit: string;
       paths: string[];
+      /** Maps each base-inherited deleted artifact path to its deleting base commit. */
+      deletedBy?: Record<string, string>;
       /** Base-ahead paths excluded after provenance proved they were not feature-authored. */
       excludedBaseAheadPaths?: string[];
       /** Feature-authored paths excluded because an operator reseal already approved their sealed content. */

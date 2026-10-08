@@ -1,15 +1,20 @@
-// Covers: task:5
+// Covers: task:5, task:8
 import { describe, expect, it, vi } from 'vitest';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
+import { access, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { promisify } from 'node:util';
 import { createProgram } from '../../src/cli.js';
 import { detectResealCommand, dispatchResealCommand } from '../../src/engine/reseal-cli.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { createProtectedArtifactSeal, verifyProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
 
 // argv is process.argv: [node, entry, subcommand, ...arguments].
 const argv = (...arguments_: string[]) => ['node', 'conduct', 'reseal', ...arguments_];
+const execFile = promisify(execFileCallback);
 
 describe('CLI surface — conduct reseal', () => {
   it('exposes the reseal command with its planned flags', () => {
@@ -350,6 +355,7 @@ describe('dispatchResealCommand', () => {
         reason: 'Corrected after review.',
         featureDesc: 'repair',
         baseBranch: 'trunk',
+        onRebaseline: expect.any(Function),
       }]],
       out: [['Resealed protected artifacts: .docs/plans/repair.md']],
     });
@@ -1034,4 +1040,57 @@ describe('dispatchResealCommand', () => {
     expect(source).toMatch(/detectResealCommand\(process\.argv\)/);
     expect(source.indexOf('detectResealCommand(process.argv)')).toBeLessThan(source.indexOf('opts = parseArgs(rest)'));
   });
+
+  it('recovers the #1752 shape through the public reseal dispatcher', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-inherited-deletion-'));
+    const worktree = join(root, '.worktrees', 'repair');
+    const git = (args: string[]) => execFile('git', args, { cwd: worktree });
+    const retired = '.docs/plans/retired.md';
+    const own = '.docs/plans/repair.md';
+    const put = async (path: string, content: string) => {
+      await mkdir(dirname(join(worktree, path)), { recursive: true });
+      await writeFile(join(worktree, path), content, 'utf8');
+    };
+    try {
+      await mkdir(worktree, { recursive: true });
+      await initTestRepo(worktree);
+      await put('.gitignore', '.pipeline/\n');
+      await put(retired, 'retired\n');
+      await put(own, 'approved\n');
+      await git(['add', '.']);
+      await git(['commit', '-q', '-m', 'approved artifacts']);
+      await git(['checkout', '-q', '-b', 'repair']);
+      await put('src/work.ts', 'work\n');
+      await git(['add', '.']);
+      await git(['commit', '-q', '-m', 'feature work']);
+      await createProtectedArtifactSeal({ projectRoot: worktree, baselineCommit: (await git(['rev-parse', 'HEAD'])).stdout.trim() });
+      await git(['checkout', '-q', 'main']);
+      await unlink(join(worktree, retired));
+      await git(['add', '-A']);
+      await git(['commit', '-q', '-m', 'retire inherited plan']);
+      await git(['checkout', '-q', 'repair']);
+      await git(['rebase', '-q', 'main']);
+
+      const command = detectResealCommand(argv('--slug', 'repair', '--path', retired, '--reason', 'Approved correction.'));
+      if (!command) throw new Error('expected valid reseal command');
+      const events = new ConductorEventEmitter();
+      const rebaselines: unknown[] = [];
+      events.on('protected_artifact_rebaseline', (event) => { rebaselines.push(event); });
+      await expect(dispatchResealCommand(command, {
+        cwd: root, isInteractive: true, events,
+      })).resolves.toBe(0);
+      expect(rebaselines).toEqual([{
+        type: 'protected_artifact_rebaseline',
+        fromCommit: expect.any(String),
+        toCommit: expect.any(String),
+        trigger: 'inherited-base-deletion',
+        paths: [retired],
+        deletedBy: { [retired]: (await git(['rev-parse', 'main'])).stdout.trim() },
+      }]);
+      await expect(verifyProtectedArtifactSeal({ projectRoot: worktree, baseBranch: 'main' }))
+        .resolves.toMatchObject({ ok: true });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30000);
 });

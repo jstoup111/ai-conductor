@@ -1,4 +1,4 @@
-// Covers: task:14
+// Covers: task:9, task:14
 // ─────────────────────────────────────────────────────────────────────────────
 // Task 12 (adr-2026-07-03-gated-snapshot-status-read-model): the daemon must
 // write `.daemon/gated.json` on EVERY discovery pass — populated, explicitly
@@ -499,6 +499,45 @@ describe('daemon closeout rendering', () => {
 });
 
 describe('protected artifact rotation rendering', () => {
+  // Covers: task:9
+  it('keeps the legacy rebaseline line unchanged when deleting commits are absent', () => {
+    const lines: string[] = [];
+
+    renderDaemonEvent({
+      type: 'protected_artifact_rebaseline',
+      trigger: 'defensive-history-rewrite',
+      fromCommit: '1234567890abcdef',
+      toCommit: 'fedcba0987654321',
+      paths: ['.docs/plans/feature.md'],
+      excludedBaseAheadPaths: ['.docs/specs/upstream.md'],
+    }, (line) => lines.push(line));
+
+    expect(lines).toEqual([
+      '· seal rebaselined 1234567890ab..fedcba098765 (defensive-history-rewrite) — 1 path(s); excluded base-ahead paths: .docs/specs/upstream.md',
+    ]);
+  });
+
+  it('renders inherited deletion paths with their deleting commits', () => {
+    const lines: string[] = [];
+    const firstPath = '.docs/plans/retired-a.md';
+    const secondPath = '.docs/plans/retired-b.md';
+    const firstCommit = '1234567890abcdef1234567890abcdef12345678';
+    const secondCommit = 'fedcba0987654321fedcba0987654321fedcba09';
+
+    renderDaemonEvent({
+      type: 'protected_artifact_rebaseline',
+      trigger: 'inherited-base-deletion',
+      fromCommit: firstCommit,
+      toCommit: firstCommit,
+      paths: [firstPath, secondPath],
+      deletedBy: { [firstPath]: firstCommit, [secondPath]: secondCommit },
+    }, (line) => lines.push(line));
+
+    expect(lines).toEqual([
+      `· seal rebaselined 1234567890ab..1234567890ab (inherited-base-deletion) — 2 path(s); pruned base-deleted paths: ${firstPath}@1234567890ab, ${secondPath}@fedcba098765`,
+    ]);
+  });
+
   it('renders each rotation variant with its provenance evidence', () => {
     const lines: string[] = [];
 

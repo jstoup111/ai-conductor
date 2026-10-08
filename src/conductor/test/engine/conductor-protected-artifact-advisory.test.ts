@@ -40,6 +40,7 @@ describe('conductor protected-artifact self-amendment advisory', () => {
           currentFingerprint: 'sha256:current-plan',
         },
       ],
+      inheritedDeletions: [],
     });
     const createSeal = vi.spyOn(protectedArtifactSeal, 'createProtectedArtifactSeal').mockResolvedValue({
       version: 2,
@@ -95,6 +96,7 @@ describe('conductor protected-artifact self-amendment advisory', () => {
       ok: true,
       seal: { version: 2, baselineCommit: 'approved-commit', protectedArtifacts: [], rebaselines: [] },
       selfAmendments: [],
+      inheritedDeletions: [],
     });
     vi.spyOn(protectedArtifactSeal, 'createProtectedArtifactSeal').mockResolvedValue({
       version: 2,
