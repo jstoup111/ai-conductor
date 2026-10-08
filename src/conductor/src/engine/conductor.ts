@@ -69,7 +69,13 @@ import {
 } from './prd-widening-refusal-rework.js';
 import type { RemediationCasePrdWideningRecord } from './remediation-case-store.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
-import type { RemediationProjection } from './remediation-projection.js';
+import {
+  buildRemediationProjection,
+  type RemediationProjection,
+  type RemediationProjectionSource,
+} from './remediation-projection.js';
+import { readTypedRemediationPlan } from './remediation-plan-store.js';
+import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
@@ -230,8 +236,6 @@ import {
   prdAuditTypedRouteReport,
   extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
-  readRemediationPlanResult,
-  renderRemediationPlanAbsence,
   REMEDIATION_EXISTING_TASK_DISPOSITION,
   REMEDIATION_PUBLICATION_DISPOSITION,
   remediationDispositionAppendsToPlan,
@@ -250,7 +254,6 @@ import {
   ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   MANUAL_TEST_CODE_STAMP,
   type RemediationGap,
-  type RemediationDispositionRejection,
   type CompletionContext,
   type CompletionResult,
   type FinishChoice,
@@ -789,18 +792,34 @@ interface RemediationHintSource {
   consolidatedManualTestFail?: boolean;
 }
 
-function formatRejectedDispositions(rejected: readonly RemediationDispositionRejection[]): string {
-  if (rejected.length === 0) return '';
-  if (rejected.every((rejection) => rejection.field === 'disposition')) {
-    return `${rejected.map(({ gapId, disposition }) => `${gapId} → "${disposition}"`).join(', ')}; ` +
-      `accepted dispositions are ${rejected[0].accepted.join(' | ')}`;
+// Covers: task:19
+function remediationProjectionSource(source: string): RemediationProjectionSource {
+  switch (source) {
+    case 'validation-group': return 'validation-group';
+    case 'prd-audit': return 'prd-audit';
+    case 'build-stall':
+    case 'build_stall':
+    case 'build_stall_zero_work': return 'build-stall';
+    case 'finish-verification': return 'finish-verification';
+    case 'architecture-review-as-built':
+    case 'as-built architecture review': return 'as-built';
+    default: return 'finish-verification';
   }
-  return rejected.map((rejection) => {
-    const field = rejection.field === 'category' ? 'category' : 'disposition';
-    const fieldPlural = field === 'category' ? 'categories' : 'dispositions';
-    return `${rejection.gapId} ${field} → "${rejection.disposition}"; ` +
-      `accepted ${fieldPlural} are ${rejection.accepted.join(' | ')}`;
-  }).join('; ');
+}
+
+/** Keep the established admission path on its legacy in-memory shape. */
+function remediationGapsFromTypedPlan(
+  dispositions: readonly AcceptedRemediationPlanDisposition[],
+): RemediationGap[] {
+  return dispositions.map((disposition) => ({
+    id: disposition.reference.id,
+    disposition: disposition.disposition,
+    category: disposition.category,
+    rationale: disposition.rationale,
+    tasks: disposition.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
+      ? disposition.boundTaskIds.map((id) => ({ id, title: `Existing task ${id}` }))
+      : disposition.tasks.map((task) => ({ ...task })),
+  }));
 }
 
 /** PRD-audit and as-built review own configured remediation allowances; other gates share the generic cap. */
@@ -5052,31 +5071,45 @@ export class Conductor {
         };
       }
     }
-    await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
-    const planResult = await readRemediationPlanResult(
-      this.projectRoot,
-      state.session_started_at,
-      hintSource.source,
-    );
-    if (!planResult.plan) {
-      return { kind: 'none', reason: renderRemediationPlanAbsence(planResult.cause) };
+    const attemptId = randomUUID();
+    const projectionResult = await buildRemediationProjection(this.projectRoot, {
+      source: remediationProjectionSource(hintSource.source),
+      activePlanPath: await this.getActivePlanPath() ?? undefined,
+      featureDesc: state.feature_desc,
+      attemptRunId: this.currentRunId,
+      config: this.config,
+      git: this.prdAuditGit(),
+      ...(prdAuditOverScopeRoute?.kind === 'refusal-rework'
+        ? { refusals: prdAuditOverScopeRoute.refusals }
+        : {}),
+    });
+    if (!projectionResult.ok) {
+      return {
+        kind: 'none',
+        reason: `remediation projection preparation fault (${projectionResult.fault.source}): ${projectionResult.fault.detail}`,
+      };
     }
-    const plan = planResult.plan;
-    for (const rejection of plan.rejected) {
-      try {
-        await this.events.emit({
-          type: 'remediation_disposition_rejected',
-          gapId: rejection.gapId,
-          disposition: rejection.disposition,
-          accepted: [...rejection.accepted],
-          field: rejection.field,
-        });
-      } catch {
-        // Rejection reporting is observability, not a dependency of its halt.
-      }
+    await this.stepRunner.run('remediate', state, {
+      runId: attemptId,
+      retryReason: dispatchContext,
+      remediationRequest: { mode: 'gap-plan', projection: projectionResult.projection },
+    });
+    const typedPlan = await readTypedRemediationPlan(this.projectRoot, { attemptId });
+    if (typedPlan.kind !== 'present') {
+      return {
+        kind: 'none',
+        reason: typedPlan.kind === 'invalid'
+          ? typedPlan.reason
+          : 'remediation planner produced no current typed plan',
+      };
     }
-    const droppedDispositionDetail = formatRejectedDispositions(plan.rejected);
-    const droppedSuffix = droppedDispositionDetail ? `; dropped: ${droppedDispositionDetail}` : '';
+    const plan = {
+      gaps: remediationGapsFromTypedPlan(typedPlan.value.dispositions),
+      rejected: [],
+      invalidTasklessBuild: false,
+    };
+    const droppedDispositionDetail = '';
+    const droppedSuffix = '';
     if (plan.gaps.length === 0 && !plan.invalidTasklessBuild) {
       const detail = `remediation planner returned no recognized disposition: ${droppedDispositionDetail}`;
       await reportRefusal(detail);
