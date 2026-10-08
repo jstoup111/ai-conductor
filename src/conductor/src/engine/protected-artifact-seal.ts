@@ -1517,13 +1517,53 @@ export async function resealProtectedArtifactSeal({
 }: ResealProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
   const classification = await inspectSeal(projectRoot, seal, featureDesc, baseBranch, new Set(paths));
   if (!classification.ok) throw new Error(classification.reason);
-  const recomputed = await createScopedProtectedArtifactSeal({ projectRoot, seal, toCommit, paths });
+  // The initial inspection deliberately excludes requested paths: those paths
+  // are about to be operator-resealed. A missing requested path needs one
+  // narrower inspection of its own, though, so an inherited deletion can be
+  // pruned instead of reaching the old "reseal target is deleted" check.
+  const survivingPaths: string[] = [];
+  const inheritedDeletions = [...classification.inheritedDeletions];
+  for (const path of paths) {
+    if (await readContainedProtectedArtifact(projectRoot, path) !== undefined) {
+      survivingPaths.push(path);
+      continue;
+    }
+    const targetInspection = await inspectSeal(
+      projectRoot,
+      seal,
+      featureDesc,
+      baseBranch,
+      new Set(paths.filter((candidate) => candidate !== path)),
+    );
+    if (!targetInspection.ok) throw new Error(targetInspection.reason);
+    const inherited = targetInspection.inheritedDeletions.find((entry) => entry.path === path);
+    if (!inherited) {
+      // Keep the pre-existing target validation for a missing path outside the
+      // base-inheritance case (for example an unsealed target).
+      throw new Error(`Protected artifact reseal target is deleted: ${path}`);
+    }
+    inheritedDeletions.push(inherited);
+  }
+  const prune = inheritedDeletions.length > 0
+    ? {
+        paths: inheritedDeletions.map(({ path }) => path),
+        deletedBy: Object.fromEntries(inheritedDeletions.map(({ path, deletedBy }) => [path, deletedBy])),
+      }
+    : undefined;
+  const recomputed = survivingPaths.length > 0
+    ? await createScopedProtectedArtifactSeal({ projectRoot, seal, toCommit, paths: survivingPaths })
+    : {
+        ...seal,
+        baselineCommit: seal.baselineCommit,
+        protectedArtifacts: seal.protectedArtifacts.filter(({ path }) => !prune?.paths.includes(path)),
+      };
   return persistProtectedArtifactSealRotation({
     projectRoot,
     seal,
     recomputed: { ...recomputed, baselineCommit: toCommit },
     trigger,
-    paths,
+    paths: survivingPaths,
+    prune,
     reason,
     fileOperations,
     onRebaseline,

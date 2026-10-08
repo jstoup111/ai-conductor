@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:6
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
@@ -743,6 +743,121 @@ describe('resealProtectedArtifactSeal', () => {
       ok: false,
       reason: 'Protected artifact changed: .docs/plans/untouched.md\nAttribution: uncommitted workspace change',
     });
+  });
+
+  async function resealFixtureWithInheritedDeletion({ amendOwn = true } = {}): Promise<{
+    repo: string;
+    seal: ProtectedArtifactSeal;
+    retired: string;
+    own: string;
+    other: string;
+    deletedBy: string;
+  }> {
+    const retired = '.docs/plans/retired.md';
+    const own = '.docs/plans/feature.md';
+    const other = '.docs/plans/other.md';
+    const repo = await makeRepo({
+      [retired]: 'retired plan\n',
+      [own]: 'approved feature plan\n',
+      [other]: 'another approved plan\n',
+    });
+    await git(repo, ['checkout', '-q', '-b', 'feature']);
+    await writeProjectFile(repo, 'src/feature.ts', 'feature work\n');
+    await git(repo, ['add', '-A']);
+    await git(repo, ['commit', '-q', '-m', 'feature work before seal']);
+    const seal = await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    if (amendOwn) {
+      await writeProjectFile(repo, own, 'committed non-append amendment\n');
+      await git(repo, ['add', own]);
+      await git(repo, ['commit', '-q', '-m', 'amend own plan']);
+    }
+    await git(repo, ['checkout', '-q', 'main']);
+    await rm(join(repo, retired));
+    await git(repo, ['add', '-A']);
+    await git(repo, ['commit', '-q', '-m', 'retire base plan']);
+    const deletedBy = await git(repo, ['rev-parse', 'HEAD']);
+    await git(repo, ['checkout', '-q', 'feature']);
+    await git(repo, ['rebase', '-q', 'main']);
+    return { repo, seal, retired, own, other, deletedBy };
+  }
+
+  it('prunes an inherited deletion before resealing an own non-append plan amendment (#1752)', async () => {
+    const { repo, seal, retired, own, deletedBy } = await resealFixtureWithInheritedDeletion();
+    const resealed = await resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: await git(repo, ['rev-parse', 'HEAD']),
+      trigger: 'operator-reseal',
+      paths: [own],
+      baseBranch: 'main',
+    });
+
+    expect(resealed.rebaselines.slice(-2)).toEqual([
+      {
+        fromCommit: seal.baselineCommit,
+        toCommit: seal.baselineCommit,
+        trigger: 'inherited-base-deletion',
+        paths: [retired],
+        deletedBy: { [retired]: deletedBy },
+      },
+      expect.objectContaining({ trigger: 'operator-reseal', paths: [own] }),
+    ]);
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' }))
+      .resolves.toMatchObject({ ok: true });
+  });
+
+  it('reseals an inherited-deleted target as a prune-only write', async () => {
+    const { repo, seal, retired, deletedBy } = await resealFixtureWithInheritedDeletion({ amendOwn: false });
+    const resealed = await resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: await git(repo, ['rev-parse', 'HEAD']),
+      trigger: 'operator-reseal',
+      paths: [retired],
+      baseBranch: 'main',
+    });
+
+    expect(resealed.rebaselines.at(-1)).toEqual({
+      fromCommit: seal.baselineCommit,
+      toCommit: seal.baselineCommit,
+      trigger: 'inherited-base-deletion',
+      paths: [retired],
+      deletedBy: { [retired]: deletedBy },
+    });
+    expect(resealed.protectedArtifacts).not.toContainEqual(expect.objectContaining({ path: retired }));
+  });
+
+  it('refuses a feature-authored deleted reseal target without changing the seal', async () => {
+    const path = '.docs/plans/deleted-by-feature.md';
+    const repo = await makeRepo({ [path]: 'approved plan\n' });
+    const seal = await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: await git(repo, ['rev-parse', 'HEAD']) });
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    const before = await readFile(sealPath, 'utf8');
+    await git(repo, ['checkout', '-q', '-b', 'feature']);
+    await rm(join(repo, path));
+    await git(repo, ['add', '-A']);
+    await git(repo, ['commit', '-q', '-m', 'delete protected plan']);
+
+    await expect(resealProtectedArtifactSeal({
+      projectRoot: repo, seal, toCommit: await git(repo, ['rev-parse', 'HEAD']), trigger: 'operator-reseal', paths: [path], baseBranch: 'main',
+    })).rejects.toThrow(new RegExp(`${path}\\nAttribution: feature-authored`));
+    await expect(readFile(sealPath, 'utf8')).resolves.toBe(before);
+  });
+
+  it('does not prune an inherited deletion when an out-of-scope workspace edit refuses the reseal', async () => {
+    const { repo, seal, retired, own, other } = await resealFixtureWithInheritedDeletion();
+    const before = await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8');
+    await writeProjectFile(repo, other, 'uncommitted edit\n');
+
+    await expect(resealProtectedArtifactSeal({
+      projectRoot: repo, seal, toCommit: await git(repo, ['rev-parse', 'HEAD']), trigger: 'operator-reseal', paths: [own], baseBranch: 'main',
+    })).rejects.toThrow(`Protected artifact changed: ${other}\nAttribution: uncommitted workspace change`);
+    expect(JSON.parse(await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8')).protectedArtifacts)
+      .toContainEqual(expect.objectContaining({ path: retired }));
+    await expect(readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8')).resolves.toBe(before);
   });
 
   it('permits an unlisted artifact inherited from the base tip without replacing its seal entry', async () => {
