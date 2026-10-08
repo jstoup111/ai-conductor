@@ -16,6 +16,10 @@ import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
 import * as protectedArtifactSeal from '../../src/engine/protected-artifact-seal.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import {
+  persistFixtureProjectedRemediationPlan,
+  persistFixtureRemediationPlan,
+} from './remediation-plan-fixtures.js';
 
 describe('BUILD pending-repair settlement transition (Task 6)', () => {
   let dir: string;
@@ -319,12 +323,12 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       projectRoot: dir,
       events: new ConductorEventEmitter(),
       config: { prd_audit: { max_remediation_laps: 1 } } as never,
-      stepRunner: { run: async (step) => {
+      stepRunner: { run: async (step, _state, options) => {
         if (step === 'remediate') {
-          await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: [{
+          await persistFixtureProjectedRemediationPlan(dir, options, [{
             id: 'S1.1', disposition: 'existing-task', category: null, rationale: 'Already owned.',
-            tasks: [{ id: '1', title: 'Existing repair' }],
-          }] }));
+            tasks: [], boundTaskIds: ['1'],
+          }]);
         }
         return { success: true };
       } },
@@ -475,11 +479,9 @@ describe('remediation halts without a planned repair (Task 11)', () => {
       events: new ConductorEventEmitter(),
       mode: 'auto', daemon: true, verifyArtifacts: false,
       stepRunner: {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           dispatched.push(step);
-          await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
-            dispositions: [{ id: 'S1.1', disposition: 'unrecognized', rationale: 'Needs a human.' }],
-          }));
+          await persistFixtureRemediationPlan(dir, options, { version: 'v1', dispositions: [] });
           return { success: true };
         },
       },

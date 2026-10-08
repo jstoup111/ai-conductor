@@ -27,6 +27,7 @@ import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { RebaseOutcome } from '../../src/engine/rebase.js';
 import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
+import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
 
 describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
   let dir: string;
@@ -98,16 +99,14 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     const conductor = new Conductor({
       stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
       stepRunner: {
-        run: async () => {
-          await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
-            dispositions: criteria.map((criterion) => ({
-              id: criterion,
-              disposition: 'build',
-              category: null,
-              rationale: `Repair ${criterion}.`,
-              tasks: [{ id: `rem-${criterion.toLowerCase()}`, title: `Repair ${criterion}` }],
-            })),
-          }));
+        run: async (_step, _state, options) => {
+          await persistFixtureProjectedRemediationPlan(root, options, criteria.map((criterion) => ({
+            id: criterion,
+            disposition: 'build',
+            category: null,
+            rationale: `Repair ${criterion}.`,
+            tasks: [{ id: `rem-${criterion.toLowerCase()}`, title: `Repair ${criterion}` }],
+          })));
           return { success: true };
         },
       },
@@ -119,6 +118,11 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       maxRetries: 1,
       config: { prd_audit: { max_remediation_laps: 1, max_appended_tasks: 10, max_appended_ratio: 1 } } as never,
     });
+    const state = { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState;
+    // This focused planner seam normally follows Conductor.run(), which owns
+    // the state baseline used when a deterministic input fault writes a HALT.
+    await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify(state));
+    (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...state };
     const outcome = await (conductor as unknown as {
       planRemediation: (
         state: ConductState,
@@ -127,7 +131,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
       ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
     }).planRemediation(
-      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      state,
       ALL_STEPS,
       'prd audit blocked',
       { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
@@ -161,7 +165,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
 
       const { outcome } = await runPrdAuditGrowthRemediation(dir);
 
-      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'mechanical' });
       expect(outcome.detail).toMatch(/kickback ledger/i);
 
       const plan = await readFile(join(dir, '.docs', 'plans', 'feature.md'), 'utf8');

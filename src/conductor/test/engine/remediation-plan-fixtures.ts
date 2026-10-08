@@ -64,7 +64,8 @@ export async function persistFixtureRemediationPlan(
   result: unknown,
 ): Promise<void> {
   const request = options?.remediationRequest;
-  if (request?.mode !== 'gap-plan' || options.runId === undefined) {
+  const runId = options?.runId;
+  if (request?.mode !== 'gap-plan' || runId === undefined) {
     throw new Error('fixture remediation dispatch requires a gap-plan request and run id');
   }
   const validated = validateRemediationPlan(result, request.projection);
@@ -72,7 +73,7 @@ export async function persistFixtureRemediationPlan(
     throw new Error(`fixture remediation plan rejected: ${validated.diagnostics.join('; ')}`);
   }
   const persisted = await persistRemediationPlan(projectRoot, {
-    attemptId: options.runId,
+    attemptId: runId,
     source: request.projection.source,
     requiredReferences: request.projection.requiredReferences,
     dispositions: validated.dispositions,
@@ -115,7 +116,7 @@ export async function persistFixtureTestRemediationPlan(
   });
 }
 
-/** Maps fixture IDs only to references the engine projected for this attempt. */
+/** Maps fixture IDs only to references the engine permits for this attempt. */
 export async function persistFixtureProjectedRemediationPlan(
   projectRoot: string,
   options: StepRunOptions | undefined,
@@ -135,11 +136,21 @@ export async function persistFixtureProjectedRemediationPlan(
       candidate.id === disposition.id ||
       (candidate.kind === 'prd-criterion' && candidate.id.toLowerCase() === disposition.id.toLowerCase()),
     );
-    if (reference === undefined) {
+    if (reference !== undefined) {
+      return {
+        reference: { kind: reference.kind, id: reference.id },
+        disposition: disposition.disposition,
+        category: disposition.category,
+        rationale: disposition.rationale,
+        tasks: disposition.tasks.map(({ id, title }) => ({ id, title })),
+        boundTaskIds: disposition.boundTaskIds ?? [],
+      };
+    }
+    if (request.projection.source !== 'build-stall' || !/^stall:[A-Za-z0-9][A-Za-z0-9._-]*$/.test(disposition.id)) {
       throw new Error(`fixture remediation disposition ${disposition.id} is not an engine-projected reference`);
     }
     return {
-      reference: { kind: reference.kind, id: reference.id },
+      reference: { kind: 'stall', id: disposition.id },
       disposition: disposition.disposition,
       category: disposition.category,
       rationale: disposition.rationale,
