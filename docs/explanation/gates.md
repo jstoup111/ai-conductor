@@ -458,10 +458,10 @@ requirements as context for intent when a PRD exists (FR-7). Each finding carrie
 No SHIP-phase gate — `prd_audit`, the as-built review, or `manual_test` — can send work back to `build`
 that the approved plan does not authorize; every off-plan need is a halt or a recorded, non-blocking
 finding (FR-17). At this feature's ship, FR-17 is delivered for `prd_audit` and the as-built review only;
-the `manual_test` route (`conductor.ts:4726-4800`) was out of scope because `manual_test` appears zero
+the `manual_test` route (`conductor.ts:6229-6296`) was out of scope because `manual_test` appears zero
 times in this feature's plan, stories, and coherence mapping — tracked as
 [#1826](https://github.com/jstoup111/ai-conductor/issues/1826), which also carries the `prd_audit`
-`impl-only` fallback (`conductor.ts:8872-8917`).
+`impl-only` fallback (`conductor.ts:12539-12605`).
 
 ### The as-built architecture review's checks and verdict
 

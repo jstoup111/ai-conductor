@@ -203,9 +203,9 @@ Intended layering is `types ← execution ← engine ← ui ← entry points`. M
 | tools → engine, types | — | Generators read engine metadata; the reverse never happens. |
 
 > **Known limitation.** `engine/` and `ui/` import each other, so the layering above is not enforceable
-> as a one-way rule. Engine-side value imports: `engine/conductor.ts:132` and `engine/event-persister.ts:4`
+> as a one-way rule. Engine-side value imports: `engine/conductor.ts:132` and `engine/event-persister.ts:13`
 > (`ConductorEventEmitter`), `engine/plugin-loader.ts:8-9` (`TerminalSubscriber`, `TerminalRenderer`).
-> UI-side value imports: `ui/terminal-renderer.ts:8,10`
+> UI-side value imports: `ui/terminal-renderer.ts:11,12,15`
 > (`getArtifactStatus`, `STEP_ARTIFACT_GLOBS`, `formatProgressDelta`), `ui/terminal/prompt-host.ts:15`
 > (`getRecoveryOptions`). Moving a symbol between the two layers can therefore create a runtime
 > initialization cycle that the type checker will not flag. Tracked in

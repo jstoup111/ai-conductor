@@ -428,7 +428,7 @@ Each branch writes a synthetic state key `<step_name>__<branch_name>` into
 (`src/conductor/src/types/config.ts:166-170`). See [artifacts](artifacts.md).
 
 Branch fan-out is bounded by [`validation_concurrency`](#validation_concurrency), clamped to the branch
-count (`src/conductor/src/engine/conductor.ts:6357`).
+count (`src/conductor/src/engine/conductor.ts:7048, 14176`).
 
 ### Disabling a step
 
@@ -1192,7 +1192,7 @@ once. `poll_seconds` also must not exceed `active_stall_minutes * 60`, checked a
 `45` when `active_stall_minutes` is omitted.
 
 Consumed by `src/conductor/src/engine/build-progress-watcher.ts:206`; `.enabled` gates the build step's
-watcher at `src/conductor/src/engine/conductor.ts:3712`.
+watcher at `src/conductor/src/engine/conductor.ts:9357`.
 
 When the watcher emits a quiet warning, the daemon log also shows `provider activity <age> ago` when
 the current build dispatch has a valid `step-heartbeat`. The age is display-only: a missing, stale,
@@ -1253,7 +1253,7 @@ with `build_progress_halt.attempt_ceiling (30) must not be below the resolved ma
 > `defaults.max_retries`. Tracked in [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
 
 Consumed at `src/conductor/src/daemon-cli.ts:429, 462` and
-`src/conductor/src/engine/conductor.ts:4298`. User-level values apply when the project omits this
+`src/conductor/src/engine/conductor.ts:11069-11072`. User-level values apply when the project omits this
 block; see [Load order and precedence](#load-order-and-precedence).
 
 ## retry_routing
@@ -1268,7 +1268,7 @@ Kill-switch for classifying a retry as a rerun versus a route to another step. V
 `enabled` is the only allowed key; an unknown key inside the block is a hard error. This is stricter than
 `kickback_escalation`, which silently discards its block instead.
 
-Consumed at `src/conductor/src/engine/conductor.ts:4149`.
+Consumed at `src/conductor/src/engine/conductor.ts:10364-10365, 10886-10887`.
 
 ## coverage_binding
 
@@ -1356,7 +1356,7 @@ non-numbers.
 
 `sandbox_build_env: false` does not merely relax the sandbox — it makes the self-build unrunnable, with
 `{ success: false, permissionDenied: true, output: 'Required safety protection unavailable:
-self-host-isolation' }` (`src/conductor/src/engine/conductor.ts:2049-2065`).
+self-host-isolation' }` (`src/conductor/src/engine/conductor.ts:4956-4962`).
 
 `live_containment: false` is a temporary compatibility opt-out, not an exclusion. The dispatch runs
 without the `bwrap` read-only live-checkout proof, so any live-checkout drift again follows the
@@ -1546,7 +1546,7 @@ opting a project out of the replacement authority.
 `build_review` is a gating built-in with no `configDisableAllowed`
 (`src/conductor/src/engine/steps.ts:158-161`), so `steps.build_review.disable: true` is a hard error. The
 config key is the only off switch. When disabled, the step is marked `skipped` and a `config_skip` event
-is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved once per pass.
+is emitted (`src/conductor/src/engine/conductor.ts:13937, 13948-13950, 13964-13966`), resolved once per pass.
 
 Each built-in or custom rubric accepts `timeout_seconds`, independently of `test_suite.timeout_seconds`.
 It defaults to 300 seconds, retaining the engine's existing five-minute review budget for projects
@@ -1760,7 +1760,7 @@ Contract (`src/conductor/src/engine/config.ts:934-957`): absent or `null` yields
 anything malformed — non-object, unknown inner key, or non-boolean `enabled` — is replaced with
 `{ enabled: true }` with **no warning**. The resolved block is written back.
 
-Consumed at `src/conductor/src/engine/conductor.ts:3362` (`?? true`). When enabled, the no-op
+Consumed at `src/conductor/src/engine/remediation-caps.ts:125` (`?? true`), called from `src/conductor/src/engine/conductor.ts:6087`. When enabled, the no-op
 escalation guard compares the pre- and post-build tree hashes (and resolved-task counts) for the
 kickback; an empty commit therefore does not count as progress. Setting `enabled: false` disables
 that tree-hash witness and reverts to re-kicking until the cap. It does not disable the durable
@@ -1795,7 +1795,7 @@ actually invalidates `build_review`, and does so once for that invalidation; a r
 the gate leaves the accumulated count intact. See
 `adr-2026-08-18-rebase-invalidation-refunds-build-review-convergence.md`.
 
-Consumed at `src/conductor/src/engine/conductor.ts:3703` (`?? true`). Setting `enabled: false`
+Consumed at `src/conductor/src/engine/conductor.ts:6088` (`?? true`). Setting `enabled: false`
 disables only the terminal halt; the counter is still maintained and still reported on the
 `kickback` event's `cumulativeCount`, so the history stays observable.
 
@@ -1975,7 +1975,7 @@ Not validated in `validateConfig` — it is allow-listed only, and all coercion 
 | Negative, non-finite, or non-number | `3`, silently |
 
 Consumed at `src/conductor/src/engine/autoresolve.ts:214`,
-`src/conductor/src/engine/conductor.ts:6548`, and `src/conductor/src/daemon-cli.ts:979, 1616`.
+`src/conductor/src/engine/conductor.ts:14490`, and `src/conductor/src/daemon-cli.ts:979, 1616`.
 
 ## validation_concurrency
 
@@ -1992,7 +1992,7 @@ the serial path.
 A non-number is a hard error (`config.ts:748-752`). Zero, negative, and `NaN` pass validation, but
 `resolveValidationConcurrency` (`config.ts:2009-2021`) silently substitutes `4`.
 
-Consumed at `src/conductor/src/engine/conductor.ts:1263`, then clamped to the branch count at `:6357`.
+Consumed at `src/conductor/src/engine/conductor.ts:2231`, then clamped to the branch count at `:7048` and `:14176`.
 
 ## daemon_concurrency
 
