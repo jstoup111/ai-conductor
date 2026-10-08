@@ -89,7 +89,7 @@ Two lookups that are easy to get wrong:
 - The `build_review` grader has no `build-review.ts`. The prompt and verdict shape live in
   `engine/build-review-prompt.ts`, the inputs in `engine/build-review-inputs.ts`, the routing decision in
   `engine/build-review-disposition.ts`, and verdict parsing plus the `completeness` rubric in
-  `engine/artifacts.ts:1080-1177`.
+  `engine/artifacts.ts:1122-1219`.
 - The daemon's ship-eligibility guard has no module of its own. It is inline in
   `engine/daemon-runner.ts` — `isVerifiedShip` at `:219` and `failureReasonForFalseShip` at `:228`.
 - Backlog priority resolution is `createPriorityResolver` in `engine/backlog-priority.ts:123`.
@@ -172,13 +172,13 @@ Seven files sit at the top level of `src/conductor/src/`.
 | --- | --- |
 | `index.ts` | The composition root and argv dispatcher. `bin/ai-conductor` execs `dist/index.js`, built from this file. |
 | `cli.ts` | The commander declaration surface. Builds the help text; most subcommands declared here are help-only. |
-| `daemon-cli.ts` | The daemon runtime. Registers zero commander commands; entered through `runDaemonMode` at `:491`, lazily imported from `index.ts` so non-daemon paths never load it. |
+| `daemon-cli.ts` | The daemon runtime. Registers zero commander commands; entered through `runDaemonMode` at `:1006`, lazily imported from `index.ts` so non-daemon paths never load it. |
 | `intake-loop-cli.ts` | `detectIntakeLoopCommand` `:49` / `dispatchIntakeLoop` `:106`, wired into `index.ts`. |
 | `intake-file-cli.ts` | Standalone `main()`; invoked by `skills/intake/scripts/intake-file`. |
 | `intake-backfill-cli.ts` | Standalone `main()`; invoked by `bin/intake-backfill`. |
 | `quarantine-engineer-signals-cli.ts` | Standalone `main()`; wraps `engine/engineer/quarantine.ts`. |
 
-`main()` in `index.ts:390` dispatches in strict priority order, each branch calling `process.exit`.
+`main()` in `index.ts:1933` dispatches in strict priority order, each branch calling `process.exit`.
 Subcommand detection runs first; the `detectInline` check at `:670` is the last fallthrough, and a bare
 invocation with no subcommand is rejected with guidance rather than silently starting a run.
 
