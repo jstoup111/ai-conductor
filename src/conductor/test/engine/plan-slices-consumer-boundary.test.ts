@@ -165,6 +165,6 @@ describe('plan-slices consumer boundary', () => {
     expect(sources.filter(({ source }) => /\bSlices\b/.test(source)).map(({ path }) => path).sort())
       .toEqual([join('engine', 'plan-slices.ts')]);
     expect(sources.filter(({ source }) => /\bstacked_prs\b/.test(source)).map(({ path }) => path).sort())
-      .toEqual([join('engine', 'config.ts'), join('types', 'config.ts')]);
+      .toEqual([join('engine', 'config.ts'), join('engine', 'plan-slices.ts'), join('types', 'config.ts')]);
   });
 });

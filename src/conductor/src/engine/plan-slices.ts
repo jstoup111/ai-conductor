@@ -37,6 +37,58 @@ export interface RegionCoupledCustomStep {
   coupling: 'in-region' | 'loop-coupled';
 }
 
+export interface StackEligibilityInput {
+  tier: 'S' | 'M' | 'L' | undefined;
+  signoff: 'approved' | undefined;
+  slicePositions: readonly number[];
+  maxSlices: number;
+  regionCoupledSteps: readonly RegionCoupledCustomStep[];
+  complexityPath: string;
+}
+
+export type StackEligibilityVerdict =
+  | { kind: 'eligible' }
+  | { kind: 'ineligible'; reasons: string[] };
+
+/**
+ * Determines whether a sliced plan remains safe to deliver as independent
+ * children under the currently resolved project configuration.
+ */
+export function evaluateStackEligibility({
+  tier,
+  signoff,
+  slicePositions,
+  maxSlices,
+  regionCoupledSteps,
+  complexityPath,
+}: StackEligibilityInput): StackEligibilityVerdict {
+  const reasons: string[] = [];
+
+  if (tier !== 'M' && tier !== 'L') {
+    reasons.push(`stacked delivery requires tier M or L (found ${tier ?? 'no tier'})`);
+  }
+  if (signoff !== 'approved') {
+    reasons.push(`no operator stacking sign-off is recorded in ${complexityPath}`);
+  }
+  if (slicePositions.length > maxSlices) {
+    reasons.push(`plan declares ${slicePositions.length} slices, exceeding stacked_prs.max_slices = ${maxSlices}`);
+  }
+  for (const position of slicePositions) {
+    if (position > MAX_CHILD_ID) {
+      reasons.push(`slice position ${position} is above the MAX_CHILD_ID ceiling of ${MAX_CHILD_ID}`);
+    }
+  }
+  for (const { name, coupling } of regionCoupledSteps) {
+    reasons.push(
+      coupling === 'in-region'
+        ? `custom step ${name} is inside the per-child region`
+        : `custom step ${name} is coupled to the per-child loop`,
+    );
+  }
+
+  return reasons.length === 0 ? { kind: 'eligible' } : { kind: 'ineligible', reasons };
+}
+
 /**
  * Finds custom steps that cannot safely run once per independent child.
  *
