@@ -2660,6 +2660,50 @@ describe('verifyProtectedArtifactSeal', () => {
       expect(afterSecond).toEqual(afterFirst);
     });
 
+    it('persists an inherited prune even when its rebaseline observer throws', async () => {
+      const path = '.docs/plans/retired.md';
+      const { repo, baselineCommit, deletedBy } = await sealThenRebaseAcrossBaseDeletion(path);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+
+      const verdict = await verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        baseBranch: 'main',
+        onRebaseline: () => { throw new Error('observer unavailable'); },
+      });
+      const persisted = JSON.parse(await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'));
+
+      expect({ verdict, persisted }).toEqual({
+        verdict: expect.objectContaining({ ok: true }),
+        persisted: expect.objectContaining({
+          protectedArtifacts: [],
+          rebaselines: [expect.objectContaining({
+            trigger: 'inherited-base-deletion', paths: [path], deletedBy: { [path]: deletedBy },
+          })],
+        }),
+      });
+    });
+
+    it('does not write when main deleted a sealed path that this feature has not merged', async () => {
+      const path = '.docs/plans/retired.md';
+      const repo = await makeRepo({ '.gitignore': '.pipeline/\n', [path]: 'approved plan\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'feature']);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+      const before = await readFile(sealPath);
+      await git(repo, ['checkout', '-q', 'main']);
+      await rm(join(repo, path));
+      await git(repo, ['add', '-A']);
+      await git(repo, ['commit', '-q', '-m', 'main retires plan']);
+      await git(repo, ['checkout', '-q', 'feature']);
+
+      const verdict = await verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' });
+
+      expect({ verdict, unchanged: (await readFile(sealPath)).equals(before) }).toEqual({
+        verdict: expect.objectContaining({ ok: true }), unchanged: true,
+      });
+    });
+
     it('refuses a committed feature deletion with feature-authored attribution', async () => {
       const path = '.docs/stories/own.md';
       const repo = await makeRepo({ [path]: 'approved story\n' });
@@ -2889,6 +2933,50 @@ describe('verifyProtectedArtifactSeal', () => {
         await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'),
       );
     }
+
+    it('atomically writes the inherited prune before a permitted rewritten-history rotation', async () => {
+      const retired = '.docs/plans/retired.md';
+      const { repo, strandedBaseline, rewrittenHead } = await makeRewrittenRepo({
+        initial: { [retired]: 'retired plan\n' },
+        baseAdvance: { [retired]: null, 'src/base.ts': 'base work\n' },
+      });
+      const deletedBy = await git(repo, ['log', '-1', '--format=%H', 'main', '--', retired]);
+      let renames = 0;
+
+      const verdict = await verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        baseBranch: 'main',
+        fileOperations: {
+          writeFile,
+          rename: async (...args: Parameters<typeof rename>) => {
+            renames += 1;
+            return rename(...args);
+          },
+          rm,
+        },
+      });
+      const seal = await readSeal(repo);
+
+      expect({ verdict, renames, entries: seal.rebaselines?.slice(-2) }).toEqual({
+        verdict: expect.objectContaining({ ok: true }),
+        renames: 1,
+        entries: [
+          {
+            fromCommit: strandedBaseline,
+            toCommit: strandedBaseline,
+            trigger: 'inherited-base-deletion',
+            paths: [retired],
+            deletedBy: { [retired]: deletedBy },
+          },
+          {
+            fromCommit: strandedBaseline,
+            toCommit: rewrittenHead,
+            trigger: 'defensive-history-rewrite',
+            paths: [retired],
+          },
+        ],
+      });
+    });
 
     it('rotates to HEAD and returns ok when every differing path is provably inherited from the base tip', async () => {
       const { repo, strandedBaseline, rewrittenHead } = await makeRewrittenRepo({
