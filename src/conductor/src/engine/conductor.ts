@@ -14615,6 +14615,12 @@ export class Conductor {
             // Finish remediation (daemon only): give the same /remediate
             // planner that routes a blocking prd_audit a shot at a failed finish
             // verification before the generic HALT.
+            // Retain an exhausted planner's final mechanical fault until that
+            // same generic terminal writes the FINISH lifecycle outcome.  A
+            // no-plan finish round deliberately keeps the established terminal
+            // (rather than inventing a remediation-specific halt), but it must
+            // not erase the diagnostic that explains why no route occurred.
+            let finishRemediationPlannerFault: string | undefined;
             if (
               this.daemon &&
               step.name === 'finish' &&
@@ -14725,7 +14731,9 @@ export class Conductor {
                 process.off('SIGTERM', sigterm);
                 return;
               }
-              // No usable remediation plan → fall through to the generic HALT below.
+              // No usable remediation plan → preserve its final named fault
+              // on the existing generic FINISH terminal below.
+              finishRemediationPlannerFault = outcome.reason;
             }
 
             // Unattended hard failure on a gating/structural step. Write a HALT
@@ -14775,9 +14783,12 @@ export class Conductor {
                           ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
                           : buildReviewSchemaFailureReason
                             ? buildReviewSchemaFailureReason
-                          : `step '${step.name}' failed in auto mode (retries exhausted)`;
+                            : `step '${step.name}' failed in auto mode (retries exhausted)`;
+            const terminalReason = finishRemediationPlannerFault === undefined
+              ? reason
+              : `${reason}\n\nRemediation planner fault: ${finishRemediationPlannerFault}`;
             if (!existingHalt || existingHalt.trim().length === 0) {
-              await this.writeHaltMarker(reason + '\n', 'needs-human');
+              await this.writeHaltMarker(terminalReason + '\n', 'needs-human');
             }
             // The HALT marker is written before escalation. All state transitions
             // have already crossed the state-store boundary.
@@ -14787,8 +14798,8 @@ export class Conductor {
             // hunting through daemon logs. surfaceRemediationPr is best-effort and
             // wraps escalation in try/catch — a throwing escalation must never
             // prevent the HALT path from returning cleanly (C1).
-            const prUrl = await this.surfaceRemediationPr(`${reason}\n${lastError}`);
-            await this.emitLoopHalt(reason, prUrl);
+            const prUrl = await this.surfaceRemediationPr(`${terminalReason}\n${lastError}`);
+            await this.emitLoopHalt(terminalReason, prUrl);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;

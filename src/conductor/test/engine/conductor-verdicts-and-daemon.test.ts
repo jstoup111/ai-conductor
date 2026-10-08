@@ -77,6 +77,12 @@ import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltFinding } from '../../src/engine/as-built-contract.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
+import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 
 function passingBuildReviewAggregate() {
   const lapId = parseBuildReviewLapId('fixture-lap')!;
@@ -3525,6 +3531,80 @@ describe('engine/conductor', () => {
     function remediationPlanFile(plan: unknown): Promise<void> {
       return writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify(plan));
     }
+
+    // Covers: task:26
+    it('keeps the finish lifecycle halt while naming an exhausted typed-plan fault and projecting test evidence to the runtime prompt', async () => {
+      await seedShipTail();
+      await writeFile(
+        join(dir, '.pipeline/test-failures.md'),
+        'test/finish-verification.test.ts: final verification remains red\n',
+      );
+
+      const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
+        success: true,
+        output: 'planner omitted the required structured result',
+        exitCode: 0,
+      }));
+      const provider: LLMProvider = {
+        lifecycleCapability: { synchronousSpawnPermit: true },
+        nativeSchemaCapability: { nativeOutputSchema: true },
+        invoke,
+      };
+      const config = {
+        llm_provider: 'claude',
+        steps: { remediate: { llm_provider: 'claude', max_retries: 1 } },
+      } as HarnessConfig;
+      const remediationRunner = new DefaultStepRunner({ invoke: vi.fn() }, 'finish-exhaustion', dir, {
+        config,
+        configuredProviders: ['claude'],
+        providerRuntimes: new ProviderRuntimeSet([{
+          key: 'claude',
+          provider,
+          lifecycleCapability: { synchronousSpawnPermit: true },
+          nativeSchemaCapability: { nativeOutputSchema: true },
+          policy: CLAUDE_MODEL_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+        }]),
+        sessionStore: new ProviderSessionStore(),
+      });
+      const runner: StepRunner = {
+        run: async (step, state, options) => step === 'remediate'
+          ? remediationRunner.run(step, state, options)
+          : { success: true }, // FINISH writes no choice, so its gate fails.
+      };
+      const halted: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') halted.push(event.reason);
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'finish',
+        maxRetries: 1,
+        config,
+      });
+
+      await conductor.run();
+
+      expect(invoke).toHaveBeenCalledOnce();
+      const prompt = (invoke.mock.calls as unknown as [InvokeOptions][])[0]?.[0].prompt;
+      expect(prompt).toContain('test:test-failures');
+      expect(prompt).toContain('test/finish-verification.test.ts: final verification remains red');
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        'Remediation planner fault: structured-result-missing',
+      );
+      expect(halted).toHaveLength(1);
+      expect(halted[0]).toContain('Remediation planner fault: structured-result-missing');
+      const state = await readState(statePath);
+      expect(state.ok && state.value.finish).toBe('failed');
+    });
 
     it('halts finish remediation that attempts unbounded plan growth', async () => {
       await seedShipTail();
