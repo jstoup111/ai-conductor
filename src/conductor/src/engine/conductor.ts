@@ -3881,8 +3881,11 @@ export class Conductor {
     await this.events.emit(event);
     if (!this.log) return;
     if (event.type === 'protected_artifact_rebaseline') {
+      const deletedBy = event.deletedBy
+        ? ` deletedBy=${Object.entries(event.deletedBy).map(([path, commit]) => `${path}@${commit}`).join(',')}`
+        : '';
       this.log(
-        `Protected artifact rebaseline: trigger=${event.trigger} fromCommit=${event.fromCommit} toCommit=${event.toCommit} paths=${event.paths.join(',')}`,
+        `Protected artifact rebaseline: trigger=${event.trigger} fromCommit=${event.fromCommit} toCommit=${event.toCommit} paths=${event.paths.join(',')}${deletedBy}`,
       );
     } else {
       this.log(

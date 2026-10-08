@@ -3620,10 +3620,15 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       const excludedOperatorResealedPaths = event.excludedOperatorResealedPaths?.length
         ? `; kept operator-resealed paths: ${event.excludedOperatorResealedPaths.join(', ')}`
         : '';
+      const prunedBaseDeletedPaths = event.deletedBy
+        ? `; pruned base-deleted paths: ${Object.entries(event.deletedBy)
+          .map(([path, commit]) => `${path}@${commit.slice(0, 12)}`)
+          .join(', ')}`
+        : '';
       log(
         `${dot} ${chalk.dim(
           `seal rebaselined ${from}..${to} (${event.trigger}) — ${event.paths.length} path(s)`
-          + `${excludedBaseAheadPaths}${excludedOperatorResealedPaths}`,
+          + `${excludedBaseAheadPaths}${excludedOperatorResealedPaths}${prunedBaseDeletedPaths}`,
         )}`,
       );
       break;

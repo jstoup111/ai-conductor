@@ -98,6 +98,39 @@ import {
   PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics';
 
+describe('protected artifact rebaseline logging', () => {
+  // Covers: task:9
+  it('logs inherited deletion paths with their full deleting commits', async () => {
+    const logs: string[] = [];
+    const conductor = new Conductor({
+      projectRoot: '/tmp/protected-artifact-rebaseline-log',
+      stateFilePath: '/tmp/protected-artifact-rebaseline-log/conduct-state.json',
+      stepRunner: createMockStepRunner(),
+      events: new ConductorEventEmitter(),
+      log: (line) => { logs.push(line); },
+    });
+    const firstPath = '.docs/plans/retired-a.md';
+    const secondPath = '.docs/plans/retired-b.md';
+    const firstCommit = '1234567890abcdef1234567890abcdef12345678';
+    const secondCommit = 'fedcba0987654321fedcba0987654321fedcba09';
+
+    await (conductor as unknown as {
+      surfaceProtectedArtifactRebaseline(event: ConductorEvent): Promise<void>;
+    }).surfaceProtectedArtifactRebaseline({
+      type: 'protected_artifact_rebaseline',
+      trigger: 'inherited-base-deletion',
+      fromCommit: firstCommit,
+      toCommit: firstCommit,
+      paths: [firstPath, secondPath],
+      deletedBy: { [firstPath]: firstCommit, [secondPath]: secondCommit },
+    });
+
+    expect(logs).toEqual([
+      `Protected artifact rebaseline: trigger=inherited-base-deletion fromCommit=${firstCommit} toCommit=${firstCommit} paths=${firstPath},${secondPath} deletedBy=${firstPath}@${firstCommit},${secondPath}@${secondCommit}`,
+    ]);
+  });
+});
+
 const NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER: GroupBranchLifecycleObserver = {
   onAdmitted: () => undefined,
   onAttempt: () => undefined,
