@@ -280,7 +280,9 @@ Verification also tolerates these cases without halting:
   commit (`git log -1 --diff-filter=D <base> -- <path>`) and prunes the path from the seal. It appends
   an `inherited-base-deletion` entry whose `fromCommit` and `toCommit` both equal the current baseline
   and whose `deletedBy` maps each pruned path to its deleting commit. The prune is written only when
-  the whole verdict passes; any refusal leaves the seal byte-identical. If no deleting commit is
+  the whole verdict passes; any refusal leaves the seal byte-identical. The
+  `protected_artifact_rebaseline` event carries the same `deletedBy` map, and the daemon log reports
+  it as `pruned base-deleted paths: <path>@<12-char sha>`. If no deleting commit is
   found, verification refuses with `Protected artifact provenance undeterminable: <path>` and
   `Deleting base commit not found.`
 
