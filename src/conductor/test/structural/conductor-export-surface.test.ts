@@ -45,12 +45,19 @@ function checkerExports(): string[] {
 }
 
 describe('conductor.js export surface', () => {
-  it('reports a dropped export', () => {
-    expect(diffExportSurface(['X'], [])).toEqual({ missing: ['X'], extra: [] });
-  });
+  it('reports named dropped and added exports against the resolved facade', () => {
+    const actual = checkerExports();
+    expect(diffExportSurface(inventory.exports, actual)).toEqual({ missing: [], extra: [] });
 
-  it('reports an added export', () => {
-    expect(diffExportSurface([], ['Y'])).toEqual({ missing: [], extra: ['Y'] });
+    const droppedExport = inventory.exports[0];
+    expect(droppedExport).toBeDefined();
+    expect(actual).toContain(droppedExport);
+    expect(diffExportSurface(inventory.exports, actual.filter((name) => name !== droppedExport)))
+      .toEqual({ missing: [droppedExport], extra: [] });
+
+    const addedExport = '__unexpected_conductor_export__';
+    expect(diffExportSurface(inventory.exports, [...actual, addedExport]))
+      .toEqual({ missing: [], extra: [addedExport] });
   });
 
   it('matches the checker-resolved export inventory', () => {
