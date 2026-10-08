@@ -1,9 +1,15 @@
-// Covers: task:2
+// Covers: task:2, task:12
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+
+import { buildRetryHint } from '../../src/engine/remediation-hints.js';
+import { findResumeIndex } from '../../src/engine/resume-entry.js';
+import { recordActivePlanPath } from '../../src/engine/artifact-approvals.js';
+import { toSpotAuditVerifierResult } from '../../src/engine/step-runner-types.js';
+import * as conductor from '../../src/engine/conductor.js';
 
 interface ExportSurface {
   exports: string[];
@@ -54,5 +60,14 @@ describe('conductor.js export surface', () => {
   it('does not expose base-private module declarations', () => {
     const exports = new Set(checkerExports());
     expect(inventory.nonExportedAtBase.filter((name) => exports.has(name))).toEqual([]);
+  });
+
+  it('re-exports moved values with their original object identities', async () => {
+    expect(conductor.buildRetryHint).toBe(buildRetryHint);
+    expect(conductor.findResumeIndex).toBe(findResumeIndex);
+    expect(conductor.recordActivePlanPath).toBe(recordActivePlanPath);
+
+    const dynamicallyImportedConductor = await import('../../src/engine/conductor.js');
+    expect(dynamicallyImportedConductor.toSpotAuditVerifierResult).toBe(toSpotAuditVerifierResult);
   });
 });

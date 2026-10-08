@@ -120,7 +120,7 @@ export function checkConductorImports(
     return sourceFile.statements.flatMap((statement) => {
       if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) return [];
       const specifier = statement.moduleSpecifier.text;
-      if (specifier !== './conductor.js') return [];
+      if (specifier !== './conductor.js' && specifier !== './engine/conductor.js') return [];
 
       const names = importBindingNames(statement);
       if (!allowedImporters.has(file)) return [{ file, specifier, names }];
@@ -193,7 +193,7 @@ function violation(
   };
 }
 
-function hasDeclareModifier(node: ts.Node): boolean {
+function hasDeclareModifier(node: ts.HasModifiers): boolean {
   return ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ?? false;
 }
 

@@ -1,4 +1,4 @@
-// Covers: task:1, task:10
+// Covers: task:1, task:10, task:12
 import { readFile, readdir } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,7 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 import { checkConductorImports, checkConductorShape } from './conductor-shape-guard.js';
+import { CONDUCTOR_DECOMPOSED_MODULES } from './conductor-shape-guard.js';
 
 interface ConductorInventory {
   moduleLevelAtBase: string[];
@@ -29,6 +30,19 @@ const ALLOWED_TUNABLES = [
 ];
 
 const ALLOWED_IMPORTERS = new Set(['index.ts', 'daemon-cli.ts']);
+const SOURCE_ROOT = join(CONDUCTOR_ROOT, 'src');
+const DIRECT_IMPORTERS = [
+  'engine/step-runners.ts',
+  'engine/group-core.ts',
+  'engine/finish-publication-production.ts',
+  'engine/self-host/build-auth-preflight.ts',
+  'engine/daemon-deps.ts',
+  'engine/daemon-runner.ts',
+  'ui/types.ts',
+  'ui/terminal/prompt-host.ts',
+  'engine/kickback-budget-cli.ts',
+  'engine/daemon-observe-cli.ts',
+];
 
 async function engineModules(directory = ENGINE_ROOT): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -38,6 +52,25 @@ async function engineModules(directory = ENGINE_ROOT): Promise<string[]> {
     return entry.isFile() && entry.name.endsWith('.ts') && path !== CONDUCTOR_PATH ? [path] : [];
   }));
   return nested.flat();
+}
+
+async function sourceModules(directory = SOURCE_ROOT): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nested = await Promise.all(entries.map(async (entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return sourceModules(path);
+    return entry.isFile() && entry.name.endsWith('.ts') ? [path] : [];
+  }));
+  return nested.flat();
+}
+
+function programForSource(): ts.Program {
+  const config = ts.readConfigFile(join(CONDUCTOR_ROOT, 'tsconfig.json'), ts.sys.readFile);
+  const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, CONDUCTOR_ROOT);
+  return ts.createProgram({
+    rootNames: ts.sys.readDirectory(SOURCE_ROOT, ['.ts'], undefined, ['**/*.ts']),
+    options: parsed.options,
+  });
 }
 
 function declaredNames(source: string, fileName: string): Set<string> {
@@ -206,5 +239,49 @@ describe('structural: conductor shape guard', () => {
         "export { exportedHelper } from './exported-helper.js';",
       ].join('\n'),
     }, ALLOWED_IMPORTERS)).toEqual([]);
+  });
+
+  it('allows only the two public entry points to import the conductor facade', async () => {
+    const files = Object.fromEntries(await Promise.all((await sourceModules()).map(async (path) => [
+      relative(SOURCE_ROOT, path),
+      await readFile(path, 'utf8'),
+    ])));
+
+    expect(checkConductorImports(files, ALLOWED_IMPORTERS)).toEqual([]);
+  });
+
+  it('has each direct consumer import moved declarations from their defining module', () => {
+    const program = programForSource();
+    const checker = program.getTypeChecker();
+    const decomposed = new Set(CONDUCTOR_DECOMPOSED_MODULES.map((path) => join(SOURCE_ROOT, path)));
+    const inventoryNames = new Set(inventory.moduleLevelAtBase.map(inventoryName));
+
+    for (const importer of DIRECT_IMPORTERS) {
+      const source = program.getSourceFile(join(SOURCE_ROOT, importer));
+      expect(source, `${importer} is in the TypeScript program`).toBeDefined();
+      for (const statement of source!.statements) {
+        if (!ts.isImportDeclaration(statement) || statement.importClause?.namedBindings === undefined) continue;
+        if (!ts.isNamedImports(statement.importClause.namedBindings)) continue;
+        for (const element of statement.importClause.namedBindings.elements) {
+          const importedName = (element.propertyName ?? element.name).text;
+          if (!inventoryNames.has(importedName)) continue;
+
+          const symbol = checker.getSymbolAtLocation(element.name);
+          const declaration = symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0
+            ? checker.getAliasedSymbol(symbol).valueDeclaration ?? checker.getAliasedSymbol(symbol).declarations?.[0]
+            : symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+          expect(declaration, `${importer} resolves ${importedName}`).toBeDefined();
+          const declarationPath = declaration!.getSourceFile().fileName;
+          expect(decomposed.has(declarationPath), `${importer} resolves ${importedName} to a decomposed module`).toBe(true);
+          expect(declarationPath).not.toBe(CONDUCTOR_PATH);
+
+          const specifier = statement.moduleSpecifier;
+          expect(ts.isStringLiteral(specifier), `${importer} has a string import specifier`).toBe(true);
+          const resolved = ts.resolveModuleName(specifier.getText(source!).slice(1, -1), source!.fileName, program.getCompilerOptions(), ts.sys)
+            .resolvedModule?.resolvedFileName;
+          expect(resolved, `${importer} directly names ${relative(SOURCE_ROOT, declarationPath)}`).toBe(declarationPath);
+        }
+      }
+    }
   });
 });
