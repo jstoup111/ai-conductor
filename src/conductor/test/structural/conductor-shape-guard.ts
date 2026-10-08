@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, posix, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
@@ -120,7 +120,7 @@ export function checkConductorImports(
     return sourceFile.statements.flatMap((statement) => {
       if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) return [];
       const specifier = statement.moduleSpecifier.text;
-      if (specifier !== './conductor.js' && specifier !== './engine/conductor.js') return [];
+      if (posix.normalize(posix.join(posix.dirname(file), specifier)) !== 'engine/conductor.js') return [];
 
       const names = importBindingNames(statement);
       if (!allowedImporters.has(file)) return [{ file, specifier, names }];

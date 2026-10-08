@@ -57,6 +57,14 @@ describe('no-operator-credential-coupling (Task 16 static gates)', () => {
   });
 
   it('the daemon-token build-auth dispatch/park branch never touches the operator credentials path', () => {
+    const daemonTokenGuardCount = CONDUCTOR_DECOMPOSED_MODULES.reduce(
+      (count, module) => count + readFileSync(join(SRC_DIR, module), 'utf-8')
+        .split('\n')
+        .filter((line) => /buildAuthMode\s*===\s*'daemon-token'/.test(line)).length,
+      0,
+    );
+    expect(daemonTokenGuardCount).toBeGreaterThan(0);
+
     const findings = CONDUCTOR_DECOMPOSED_MODULES.flatMap((module) =>
       daemonTokenCredentialFindings(module, readFileSync(join(SRC_DIR, module), 'utf-8')),
     );

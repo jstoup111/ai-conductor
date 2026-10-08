@@ -191,10 +191,20 @@ describe('structural: conductor shape guard', () => {
   });
 
   it.each([
+    ['engine/self-host/x.ts', "import { Conductor } from '../conductor.js';"],
+    ['ui/x.ts', "import { Conductor } from '../engine/conductor.js';"],
+    ['ui/terminal/x.ts', "import { Conductor } from '../../engine/conductor.js';"],
+  ])('rejects a nested module importing the conductor facade', (file, statement) => {
+    const violations = checkConductorImports({ [file]: statement }, ALLOWED_IMPORTERS);
+
+    expect(violations).toContainEqual(expect.objectContaining({ file }));
+  });
+
+  it.each([
     ['index.ts', 'buildRetryHint'],
     ['daemon-cli.ts', 'OperatorParkedTermination'],
   ])('rejects %s importing %s alongside Conductor', (file, extraName) => {
-    const statement = `import { Conductor, ${extraName} } from './conductor.js';`;
+    const statement = `import { Conductor, ${extraName} } from './engine/conductor.js';`;
     const violations = checkConductorImports({ [file]: statement }, ALLOWED_IMPORTERS);
 
     expect(violations).toContainEqual(expect.objectContaining({
@@ -205,7 +215,7 @@ describe('structural: conductor shape guard', () => {
 
   it('rejects an allowed importer that aliases Conductor', () => {
     const violations = checkConductorImports({
-      'index.ts': "import { Conductor as Runner } from './conductor.js';",
+      'index.ts': "import { Conductor as Runner } from './engine/conductor.js';",
     }, ALLOWED_IMPORTERS);
 
     expect(violations).toContainEqual(expect.objectContaining({
@@ -216,19 +226,19 @@ describe('structural: conductor shape guard', () => {
 
   it('rejects a destination module that imports Conductor type-only', () => {
     const violations = checkConductorImports({
-      'index.ts': "import type { Conductor } from './conductor.js';",
+      'index.ts': "import type { Conductor } from './engine/conductor.js';",
     }, ALLOWED_IMPORTERS);
 
     expect(violations).toContainEqual(expect.objectContaining({
       file: 'index.ts',
-      specifier: './conductor.js',
+      specifier: './engine/conductor.js',
     }));
   });
 
   it('accepts destination modules that import only Conductor by value', () => {
     expect(checkConductorImports({
-      'index.ts': "import { Conductor } from './conductor.js';",
-      'daemon-cli.ts': "import { Conductor } from './conductor.js';",
+      'index.ts': "import { Conductor } from './engine/conductor.js';",
+      'daemon-cli.ts': "import { Conductor } from './engine/conductor.js';",
     }, ALLOWED_IMPORTERS)).toEqual([]);
   });
 
@@ -238,6 +248,12 @@ describe('structural: conductor shape guard', () => {
         "import { helper } from './helper.js';",
         "export { exportedHelper } from './exported-helper.js';",
       ].join('\n'),
+    }, ALLOWED_IMPORTERS)).toEqual([]);
+  });
+
+  it('ignores a nested import whose normalized path is not the conductor facade', () => {
+    expect(checkConductorImports({
+      'ui/x.ts': "import { helper } from '../other/conductor.js';",
     }, ALLOWED_IMPORTERS)).toEqual([]);
   });
 
