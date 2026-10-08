@@ -1,4 +1,4 @@
-// Covers: S1.2, task:10
+// Covers: S1.2, task:10, task:35
 
 import { readFile } from 'node:fs/promises';
 
