@@ -13,6 +13,7 @@ import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.j
 import { PRD_AUDIT_VERDICT_PATH, persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
+import { persistFixtureProjectedRemediationPlan } from '../engine/remediation-plan-fixtures.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for `.docs/stories/parallel-validation-phase-fan-out-
@@ -368,7 +369,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       const calls: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           calls.push(step);
           if (step === 'manual_test') {
             throw new Error('agent crashed mid-session — no .pipeline marker written');
@@ -416,7 +417,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
         run_started_at: Date.now() - 1_000,
       });
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') {
             throw new Error('agent crashed before producing a verdict');
           }
@@ -478,21 +479,13 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_GAP);
+            await writePrdAuditPass(dir, options?.runId, 'FIXABLE');
           } else if (step === 'remediate') {
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: 'FR-2',
-                    disposition: 'build',
-                    category: null,
-                    rationale: 'repair the implementation gap',
-                    tasks: [{ id: 'r1', title: 'repair FR-2' }],
-                  },
-                ],
-              }),
-            );
+            await persistFixtureProjectedRemediationPlan(dir, options, [{
+              id: 'S1.1', disposition: 'build', category: null,
+              rationale: 'repair the implementation gap',
+              tasks: [{ id: 'r1', title: 'repair FR-2' }],
+            }]);
           }
           return { success: true } as StepRunResult;
         }),
@@ -597,20 +590,11 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_PASS);
           } else if (step === 'remediate') {
             remediateReasons.push(opts?.retryReason ?? '');
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: 'FR-2',
-                    disposition: 'build',
-                    category: null,
-                    rationale: 'fix the impl gap',
-                    tasks: [{ id: 'r1', title: 'fix FR-2' }],
-                  },
-                ],
-              }),
-            );
+            await persistFixtureProjectedRemediationPlan(dir, opts, [{
+              id: 'S1.1', disposition: 'build', category: null,
+              rationale: 'fix the impl gap',
+              tasks: [{ id: 'r1', title: 'fix FR-2' }],
+            }]);
           }
           return { success: true } as StepRunResult;
         }),
@@ -698,18 +682,11 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
             await writeRemediableAsBuiltVerdict(dir, opts?.runId, 'ARCH-1', '1', 'Add the missing guard');
           } else if (step === 'remediate') {
             remediateReasons.push(opts?.retryReason ?? '');
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [{
-                  id: 'ARCH-1',
-                  disposition: 'build',
-                  category: null,
-                  rationale: 'Add the missing guard.',
-                  tasks: [{ id: 'missing-guard', title: 'Add the missing guard' }],
-                }],
-              }),
-            );
+            await persistFixtureProjectedRemediationPlan(dir, opts, [{
+              id: 'ARCH-1', disposition: 'build', category: null,
+              rationale: 'Add the missing guard.',
+              tasks: [{ id: 'missing-guard', title: 'Add the missing guard' }],
+            }]);
           } else if (step === 'build') {
             const current = await readState(statePath);
             asBuiltRestagedBeforeBuild =
@@ -820,17 +797,11 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
             );
           } else if (step === 'remediate') {
             remediationReasons.push(opts?.retryReason ?? '');
-            await writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify({
-              dispositions: [
-                {
-                  id: 'S1.1',
-                  disposition: 'build',
-                  category: null,
-                  rationale: 'Implement the existing PRD criterion.',
-                  tasks: [{ id: 'shared-fix', title: 'Implement S1.1' }],
-                },
-              ],
-            }));
+            await persistFixtureProjectedRemediationPlan(dir, opts, [{
+              id: 'S1.1', disposition: 'build', category: null,
+              rationale: 'Implement the existing PRD criterion.',
+              tasks: [{ id: 'shared-fix', title: 'Implement S1.1' }],
+            }]);
           } else if (step === 'build') {
             return { success: false, error: 'stop after observing mixed remediation route' } as StepRunResult;
           }
@@ -945,12 +916,10 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
           } else if (step === 'architecture_review_as_built') {
             await writeRemediableAsBuiltVerdict(dir, opts?.runId, 'ARCH-1', '1', 'Add the missing guard');
           } else if (step === 'remediate') {
-            await writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify({
-              dispositions: [
-                { id: 'S1.1', disposition: 'build', category: null, rationale: 'Implement criterion.', tasks: [{ id: 'prd-fix', title: 'Implement S1.1' }] },
-                { id: 'ARCH-1', disposition: 'build', category: null, rationale: 'Add guard.', tasks: [{ id: 'as-built-fix', title: 'Add the missing guard' }] },
-              ],
-            }));
+            await persistFixtureProjectedRemediationPlan(dir, opts, [
+              { id: 'S1.1', disposition: 'build', category: null, rationale: 'Implement criterion.', tasks: [{ id: 'prd-fix', title: 'Implement S1.1' }] },
+              { id: 'ARCH-1', disposition: 'build', category: null, rationale: 'Add guard.', tasks: [{ id: 'as-built-fix', title: 'Add the missing guard' }] },
+            ]);
           }
           return { success: true } as StepRunResult;
         }),
@@ -1011,18 +980,11 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
             await writeRemediableAsBuiltVerdict(dir, opts?.runId, 'ARCH-1', '1', 'Add the missing guard');
           } else if (step === 'remediate') {
             remediateCalls++;
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [{
-                  id: 'ARCH-1',
-                  disposition: 'build',
-                  category: null,
-                  rationale: 'Add the missing guard.',
-                  tasks: [{ id: 'missing-guard', title: 'Add the missing guard' }],
-                }],
-              }),
-            );
+            await persistFixtureProjectedRemediationPlan(dir, opts, [{
+              id: 'ARCH-1', disposition: 'build', category: null,
+              rationale: 'Add the missing guard.',
+              tasks: [{ id: 'missing-guard', title: 'Add the missing guard' }],
+            }]);
           } else if (step === 'build') {
             // Stop after the rerouted build with neither a tree nor a
             // resolved-task movement. The second validator evaluation below
@@ -1103,20 +1065,10 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               policy: AS_BUILT_TEST_POLICY,
             });
           } else if (step === 'remediate') {
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: 'S1.1',
-                    disposition: 'halt',
-                    category: 'architectural-clarity',
-                    rationale: 'ambiguous aggregate boundary',
-                    tasks: [],
-                  },
-                ],
-              }),
-            );
+            await persistFixtureProjectedRemediationPlan(dir, options, [{
+              id: 'S1.1', disposition: 'halt', category: 'architectural-clarity',
+              rationale: 'ambiguous aggregate boundary', tasks: [],
+            }]);
           }
           return { success: true } as StepRunResult;
         }),
@@ -1455,18 +1407,11 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
             await writeRemediableAsBuiltVerdict(dir, opts?.runId, 'ARCH-1', '1', 'Add the missing guard');
           } else if (step === 'remediate') {
             remediateReasons.push(opts?.retryReason ?? '');
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [{
-                  id: 'ARCH-1',
-                  disposition: 'build',
-                  category: null,
-                  rationale: 'Add the missing guard.',
-                  tasks: [{ id: 'missing-guard', title: 'Add the missing guard' }],
-                }],
-              }),
-            );
+            await persistFixtureProjectedRemediationPlan(dir, opts, [{
+              id: 'ARCH-1', disposition: 'build', category: null,
+              rationale: 'Add the missing guard.',
+              tasks: [{ id: 'missing-guard', title: 'Add the missing guard' }],
+            }]);
           } else if (step === 'build') {
             buildHint = opts?.retryReason ?? '';
             return { success: false, error: 'stop after observing the merged reroute' } as StepRunResult;

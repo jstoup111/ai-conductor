@@ -28,6 +28,7 @@ import type { ConductorEvent } from '../../src/types/events.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
+import { persistFixtureProjectedRemediationPlan } from '../engine/remediation-plan-fixtures.js';
 
 let projectRoot: string;
 let stateFilePath: string;
@@ -169,22 +170,15 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
         if (step === 'architecture_review_as_built') {
           await writeBlockedAsBuiltFixture('1', opts?.runId);
         } else if (step === 'remediate') {
-          await writeFile(
-            join(projectRoot, '.pipeline', 'remediation.json'),
-            JSON.stringify({
-              dispositions: [{
-                id: 'ARCH-1',
-                disposition: 'existing-task',
-                category: null,
-                rationale: 'Tasks 1 and 2 own the current finding.',
-                tasks: [
-                  { id: '1', title: 'Repair the completed task' },
-                  { id: '2', title: 'Repair the sibling task' },
-                  { id: '2', title: 'Repair the sibling task duplicate' },
-                ],
-              }],
-            }),
-          );
+          await persistFixtureProjectedRemediationPlan(projectRoot, opts, [{
+            id: 'ARCH-1', disposition: 'existing-task', category: null,
+            rationale: 'Tasks 1 and 2 own the current finding.',
+            tasks: [
+              { id: '1', title: 'Repair the completed task' },
+              { id: '2', title: 'Repair the sibling task' },
+              { id: '2', title: 'Repair the sibling task duplicate' },
+            ],
+          }]);
         } else if (step === 'build') {
           buildHints.push(opts?.retryReason ?? '');
           taskStatusesAtBuildDispatch.push(await readFile(
@@ -303,23 +297,16 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
 
     const dispatched: StepName[] = [];
     const runner: StepRunner = {
-      run: vi.fn(async (step: StepName) => {
+      run: vi.fn(async (step: StepName, _state, opts) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
           await writeBlockedAsBuiltFixture('1');
         } else if (step === 'remediate') {
-          await writeFile(
-            join(projectRoot, '.pipeline', 'remediation.json'),
-            JSON.stringify({
-              dispositions: [{
-                id: 'ARCH-1',
-                disposition: 'existing-task',
-                category: null,
-                rationale: 'Task 1 owns the current finding.',
-                tasks: [{ id: '1', title: 'Repair the completed task' }],
-              }],
-            }),
-          );
+          await persistFixtureProjectedRemediationPlan(projectRoot, opts, [{
+            id: 'ARCH-1', disposition: 'existing-task', category: null,
+            rationale: 'Task 1 owns the current finding.',
+            tasks: [{ id: '1', title: 'Repair the completed task' }],
+          }]);
         } else if (step === 'build') {
           return { success: false, error: 'sentinel: stop after observing reopened BUILD dispatch' };
         }
@@ -343,25 +330,16 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
     let pendingAtBuildDispatch = false;
     const dispatched: StepName[] = [];
     const runner: StepRunner = {
-      run: vi.fn(async (step: StepName) => {
+      run: vi.fn(async (step: StepName, _state, opts) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
           await writeBlockedAsBuiltFixture('1');
         } else if (step === 'remediate') {
-          await writeFile(
-            join(projectRoot, '.pipeline', 'remediation.json'),
-            JSON.stringify({
-              dispositions: [
-                {
-                  id: 'ARCH-1',
-                  disposition: 'existing-task',
-                  category: null,
-                  rationale: 'Task 1 already owns the approved guard.',
-                  tasks: [{ id: '1', title: 'Add the approved guard' }],
-                },
-              ],
-            }),
-          );
+          await persistFixtureProjectedRemediationPlan(projectRoot, opts, [{
+            id: 'ARCH-1', disposition: 'existing-task', category: null,
+            rationale: 'Task 1 already owns the approved guard.',
+            tasks: [{ id: '1', title: 'Add the approved guard' }],
+          }]);
         } else if (step === 'build') {
           const status = JSON.parse(
             await readFile(join(projectRoot, '.pipeline', 'task-status.json'), 'utf8'),
@@ -509,18 +487,11 @@ describe('a consolidated manual-test FAIL round never runs the existing-task rou
         } else if (step === 'architecture_review_as_built') {
           await writeBlockedAsBuiltFixture('1', opts?.runId);
         } else if (step === 'remediate') {
-          await writeFile(
-            join(projectRoot, '.pipeline', 'remediation.json'),
-            JSON.stringify({
-              dispositions: [{
-                id: 'ARCH-1',
-                disposition: 'existing-task',
-                category: null,
-                rationale: 'Task 1 already owns the approved guard.',
-                tasks: [{ id: '1', title: 'Add the approved guard' }],
-              }],
-            }),
-          );
+          await persistFixtureProjectedRemediationPlan(projectRoot, opts, [{
+            id: 'ARCH-1', disposition: 'existing-task', category: null,
+            rationale: 'Task 1 already owns the approved guard.',
+            tasks: [{ id: '1', title: 'Add the approved guard' }],
+          }]);
         } else if (step === 'build') {
           buildHint = opts?.retryReason ?? '';
           taskStatusAtBuildDispatch = await readFile(
@@ -604,27 +575,18 @@ describe('a mixed prd_audit/as-built existing-task lap keeps every gate armed fo
           await writeBlockedAsBuiltFixture('2');
         } else if (step === 'remediate') {
           remediateCalls++;
-          await writeFile(
-            join(projectRoot, '.pipeline', 'remediation.json'),
-            JSON.stringify({
-              dispositions: [
-                {
-                  id: 'S1.1',
-                  disposition: 'existing-task',
-                  category: null,
-                  rationale: 'Task 1 already owns this repair.',
-                  tasks: [{ id: '1', title: 'PRD work' }],
-                },
-                {
-                  id: 'ARCH-1',
-                  disposition: 'existing-task',
-                  category: null,
-                  rationale: 'Task 2 already owns the approved guard.',
-                  tasks: [{ id: '2', title: 'Add the approved guard' }],
-                },
-              ],
-            }),
-          );
+          await persistFixtureProjectedRemediationPlan(projectRoot, options, [
+            {
+              id: 'S1.1', disposition: 'existing-task', category: null,
+              rationale: 'Task 1 already owns this repair.',
+              tasks: [{ id: '1', title: 'PRD work' }],
+            },
+            {
+              id: 'ARCH-1', disposition: 'existing-task', category: null,
+              rationale: 'Task 2 already owns the approved guard.',
+              tasks: [{ id: '2', title: 'Add the approved guard' }],
+            },
+          ]);
         } else if (step === 'build') {
           // Re-completing the re-staged rows moves no source tree bytes.
           await writeFile(join(projectRoot, '.pipeline', 'task-status.json'), completedRows);
@@ -676,23 +638,16 @@ describe('existing-task refusals carry the finding onto the spine (S1.4, S7.2)',
     emitter.on('gate_blocked', (event) => { events.push(event); });
     const dispatched: StepName[] = [];
     const runner: StepRunner = {
-      run: vi.fn(async (step: StepName) => {
+      run: vi.fn(async (step: StepName, _state, opts) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
           await writeBlockedAsBuiltFixture('1');
         } else if (step === 'remediate') {
-          await writeFile(
-            join(projectRoot, '.pipeline', 'remediation.json'),
-            JSON.stringify({
-              dispositions: [{
-                id: 'ARCH-1',
-                disposition: 'existing-task',
-                category: null,
-                rationale: 'Bound to a task the plan does not declare.',
-                tasks: [{ id: '99', title: 'No such task' }],
-              }],
-            }),
-          );
+          await persistFixtureProjectedRemediationPlan(projectRoot, opts, [{
+            id: 'ARCH-1', disposition: 'existing-task', category: null,
+            rationale: 'Bound to a task the plan does not declare.',
+            tasks: [{ id: '99', title: 'No such task' }],
+          }]);
         }
         return { success: true };
       }),
@@ -733,23 +688,16 @@ describe('existing-task refusals carry the finding onto the spine (S1.4, S7.2)',
     emitter.on('gate_blocked', (event) => { events.push(event); });
     const dispatched: StepName[] = [];
     const runner: StepRunner = {
-      run: vi.fn(async (step: StepName) => {
+      run: vi.fn(async (step: StepName, _state, opts) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
           await writeBlockedAsBuiltFixture('1');
         } else if (step === 'remediate') {
-          await writeFile(
-            join(projectRoot, '.pipeline', 'remediation.json'),
-            JSON.stringify({
-              dispositions: [{
-                id: 'ARCH-1',
-                disposition: 'existing-task',
-                category: null,
-                rationale: 'Task 1 already owns the approved guard.',
-                tasks: [{ id: '1', title: 'Add the approved guard' }],
-              }],
-            }),
-          );
+          await persistFixtureProjectedRemediationPlan(projectRoot, opts, [{
+            id: 'ARCH-1', disposition: 'existing-task', category: null,
+            rationale: 'Task 1 already owns the approved guard.',
+            tasks: [{ id: '1', title: 'Add the approved guard' }],
+          }]);
         }
         return { success: true };
       }),
