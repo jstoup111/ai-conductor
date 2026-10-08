@@ -494,7 +494,7 @@ export async function landSpec(
         tier,
         signoff: parseStackedDeliverySignoff(complexityContent) === 'approved' ? 'approved' : undefined,
         slicePositions: planSlicesValidation.slices.map(({ position }) => position),
-        maxSlices: configResult.config.stacked_prs.max_slices,
+        maxSlices: configResult.config.stacked_prs.max_slices ?? 1,
         regionCoupledSteps: customStepsInPerChildRegion(buildStepRegistry(configResult.config)),
         complexityPath: complexityFile
           ? relative(worktreePath, complexityFile).replaceAll('\\', '/')

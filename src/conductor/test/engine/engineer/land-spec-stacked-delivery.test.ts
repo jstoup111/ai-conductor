@@ -1,4 +1,4 @@
-// Covers: task:9
+// Covers: task:9, task:10, task:11, task:17, task:20
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { LandGateError, landSpec } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import type { OwnerConfig } from '../../../src/engine/owner-gate/identity.js';
+import { deriveStoryOwnership, evaluateStackEligibility, validatePlanSlices } from '../../../src/engine/plan-slices.js';
 
 const execFile = promisify(execFileCb);
 const IDEA = 'stacked delivery';
@@ -32,6 +33,16 @@ const STORIES = `# Stories: stacked delivery
 
 #### Negative Paths
 - Given an invalid child, when it lands, then it refuses.
+`;
+
+const THREE_STORIES = `${STORIES}
+## Story 3: third child
+### Acceptance Criteria
+#### Happy Path
+- Given a third child, when it lands, then it commits.
+
+#### Negative Paths
+- Given an invalid third child, when it lands, then it refuses.
 `;
 
 function task(id: number, story?: string): string {
@@ -86,7 +97,11 @@ async function writeProjectConfig(content: string): Promise<void> {
   await writeFile(join(repoPath, '.ai-conductor', 'config.yml'), content);
 }
 
-async function seed(planContent: string, complexity = 'Tier: M\n\nStacked-Delivery: approved\n'): Promise<string> {
+async function seed(
+  planContent: string,
+  complexity = 'Tier: M\n\nStacked-Delivery: approved\n',
+  stories = STORIES,
+): Promise<string> {
   const { worktreePath } = await createEngineerWorktree(repoPath, IDEA);
   await rm(join(worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
   await Promise.all([
@@ -94,7 +109,7 @@ async function seed(planContent: string, complexity = 'Tier: M\n\nStacked-Delive
       .map((directory) => mkdir(join(worktreePath, '.docs', directory), { recursive: true })),
   ]);
   await writeFile(join(worktreePath, '.docs', 'specs', 'stacked-delivery.md'), '# PRD: stacked delivery\n\nApproved.\n');
-  await writeFile(join(worktreePath, '.docs', 'stories', 'stacked-delivery.md'), STORIES);
+  await writeFile(join(worktreePath, '.docs', 'stories', 'stacked-delivery.md'), stories);
   await writeFile(join(worktreePath, '.docs', 'plans', 'stacked-delivery.md'), planContent);
   await writeFile(join(worktreePath, '.docs', 'complexity', 'stacked-delivery.md'), `# Complexity\n\n${complexity}`);
   await writeFile(join(worktreePath, '.docs', 'conflicts', 'stacked-delivery.md'), '# Conflicts\n\nNone.\n');
@@ -179,5 +194,96 @@ describe('stacked-delivery land rung', () => {
     expect(error).toBeInstanceOf(LandGateError);
     expect(error).toMatchObject({ gate: 'stacked-delivery' });
     expect((error as Error).message).toContain('stacked_prs.max_slices');
+  });
+
+  it('refuses a story cited in two children without creating a commit', async () => {
+    await writeProjectConfig('stacked_prs:\n  enabled: true\n  max_slices: 2\n');
+    const worktreePath = await seed(plan({ spanning: true }));
+    const headBefore = await git(['rev-parse', 'HEAD'], worktreePath);
+
+    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options())
+      .catch((reason: unknown) => reason);
+
+    expect(error).toMatchObject({ gate: 'stacked-delivery' });
+    expect((error as Error).message).toContain('Story 2 spans child positions 1 and 2');
+    expect(await git(['rev-parse', 'HEAD'], worktreePath)).toBe(headBefore);
+  });
+
+  it('reports every story that spans children in one refusal', async () => {
+    await writeProjectConfig('stacked_prs:\n  enabled: true\n  max_slices: 3\n');
+    const threeSlicePlan = plan({ spanning: true })
+      .replace(
+        '| 1 | First | 1, 2, 3 |\n| 2 | Second | 4 |',
+        '| 1 | First | 1, 2, 3, 5 |\n| 2 | Second | 7 |\n| 3 | Third | 4, 6 |',
+      )
+      .replace(
+        '## Coverage Check',
+        `${task(5, '3')}${task(6, 'Story 3')}${task(7, 'n/a')}## Coverage Check`,
+      );
+    const worktreePath = await seed(threeSlicePlan, undefined, THREE_STORIES);
+
+    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options())
+      .catch((reason: unknown) => reason);
+
+    expect(error).toMatchObject({ gate: 'stacked-delivery' });
+    expect((error as Error).message).toContain('Story 2 spans child positions 1 and 3');
+    expect((error as Error).message).toContain('Story 3 spans child positions 1 and 3');
+  });
+
+  it.each([
+    ['T2', '1, 2', 2],
+    ['T4', 'FR-1 and FR-2', 4],
+  ])('refuses multi-story lines on %s', async (taskName, storyLine, taskId) => {
+    await writeProjectConfig('stacked_prs:\n  enabled: true\n  max_slices: 2\n');
+    const planContent = plan().replace(
+      `### Task ${taskId}: Task ${taskId}\n**Story:** ${taskId === 2 ? 'Story 1' : '2'}`,
+      `### Task ${taskId}: Task ${taskId}\n**Story:** ${storyLine}`,
+    );
+    const worktreePath = await seed(planContent);
+
+    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options())
+      .catch((reason: unknown) => reason);
+
+    expect(error).toMatchObject({ gate: 'stacked-delivery' });
+    expect((error as Error).message).toContain(`Task ${taskName.slice(1)} has multiple story ids on Story line "${storyLine}"`);
+  });
+
+  it('does not refuse multi-story lines on an unsliced plan', async () => {
+    await writeProjectConfig('stacked_prs:\n  enabled: true\n  max_slices: 2\n');
+    const unslicedPlan = plan()
+      .replace('## Slices\n\n| Slice | Title | Tasks |\n| --- | --- | --- |\n| 1 | First | 1, 2 |\n| 2 | Second | 3, 4 |\n\n', '')
+      .replace('### Task 4: Task 4\n**Story:** 2', '### Task 4: Task 4\n**Story:** FR-1, FR-2, FR-3');
+    const worktreePath = await seed(unslicedPlan);
+
+    await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options()))
+      .resolves.toMatchObject({ branch: 'spec/stacked-delivery' });
+  });
+
+  it('joins exactly the ownership and eligibility reasons', async () => {
+    await writeProjectConfig('stacked_prs:\n  enabled: true\n  max_slices: 1\n');
+    const planContent = plan({ spanning: true });
+    const worktreePath = await seed(planContent);
+    const slices = validatePlanSlices(planContent);
+    expect(slices.kind).toBe('sliced');
+    if (slices.kind !== 'sliced') throw new Error('fixture must be sliced');
+    const ownership = deriveStoryOwnership(planContent, slices.slices, new Set(['1', '2']));
+    const eligibility = evaluateStackEligibility({
+      tier: 'M',
+      signoff: 'approved',
+      slicePositions: slices.slices.map(({ position }) => position),
+      maxSlices: 1,
+      regionCoupledSteps: [],
+      complexityPath: '.docs/complexity/stacked-delivery.md',
+    });
+    const reasons = [
+      ...(ownership.kind === 'invalid' ? ownership.violations.map(({ message }) => message) : []),
+      ...(eligibility.kind === 'ineligible' ? eligibility.reasons : []),
+    ];
+
+    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options())
+      .catch((reason: unknown) => reason);
+
+    expect(error).toMatchObject({ gate: 'stacked-delivery' });
+    expect((error as Error).message).toBe(`landSpec: ${reasons.join('; ')}`);
   });
 });
