@@ -113,7 +113,9 @@ async function fixture(
   });
   const events = new ConductorEventEmitter();
   const blockedReasons: string[] = [];
-  events.on('gate_blocked', (event) => { blockedReasons.push(event.reason); });
+  events.on('gate_blocked', (event) => {
+    if (event.type === 'gate_blocked') blockedReasons.push(event.reason);
+  });
   const conductor = new Conductor({
     stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
     stepRunner: runner,
