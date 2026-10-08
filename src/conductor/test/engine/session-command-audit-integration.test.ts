@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:5
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -87,19 +87,22 @@ describe('managed session instruction contexts', () => {
       .toContainEqual(expect.objectContaining({ reason: 'stale session-command context endpoint without an open region' }));
   });
 
-  it('carries a conductor retry/recovery contradiction from the registered production surface', () => {
-    const productionSource = readFileSync(join(__dirname, '../../src/engine/conductor.ts'), 'utf8');
-    const retrySurface = MANAGED_DISPATCH_PROMPT_SURFACES.find((surface) => surface.file === 'conductor.ts');
-    expect(retrySurface?.symbols).toContain('buildRetryHint');
-    const source = productionSource.replace(
-      '// ai-conductor:session-command-context=managed',
-      '// ai-conductor:session-command-context=operator-only',
-    );
-    expect(auditShippedManagedSessionInstructionSource({ file: 'engine/conductor.ts', source, family: 'engine' }))
+  it.each(['buildRetryHint', 'buildRemediationHint'])(
+    'carries an operator-only contradiction from %s in the registered remediation prompt surface',
+    (symbol) => {
+      const productionSource = readFileSync(join(__dirname, '../../src/engine/remediation-hints.ts'), 'utf8');
+      const retrySurface = MANAGED_DISPATCH_PROMPT_SURFACES.find((surface) => surface.file === 'remediation-hints.ts');
+      expect(retrySurface?.symbols).toContain(symbol);
+      const functionStart = productionSource.indexOf(`export function ${symbol}`);
+      const markerStart = productionSource.indexOf('// ai-conductor:session-command-context=managed', functionStart);
+      expect(markerStart).toBeGreaterThan(functionStart);
+      const source = `${productionSource.slice(0, markerStart)}// ai-conductor:session-command-context=operator-only\nconst injectedOperatorOnlyInstruction = 'Run ai-conductor daemon park feature-a';${productionSource.slice(markerStart + '// ai-conductor:session-command-context=managed'.length)}`;
+      expect(auditShippedManagedSessionInstructionSource({ file: 'engine/remediation-hints.ts', source, family: 'engine' }))
       .toContainEqual(expect.objectContaining({
         reason: 'managed dispatch cannot execute an operator-only instruction',
       }));
-  });
+    },
+  );
 
   it('carries a project-prelude contradiction from its registered managed surface', () => {
     const productionSource = readFileSync(join(__dirname, '../../src/engine/project-prelude.ts'), 'utf8');
