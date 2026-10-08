@@ -216,6 +216,11 @@ other gap should be turned into concrete work.
   preserves approved architecture belongs in BUILD, including a conforming as-built finding and an
   answerable build-stall question. Use `architecture_review` only when approved architecture itself
   must change or be clarified; do not use it where no architectural decision is needed.
+- **Reject contradictory dispositions.** Selecting `architecture_review` when no architectural
+  decision or product decision is needed is invalid; route clear conforming implementation, test, or
+  documentation work to BUILD instead. Selecting `build` when an unresolved or ambiguous
+  architectural decision remains is invalid; use `architecture_review` when approved architecture
+  must change or be clarified, or HALT for architectural clarity when a human decision is required.
 - **Coverage and planning judgment.** An implementation gap is ordinarily BUILD work; use
   `acceptance_specs` when the real miss is acceptance coverage. A baseline-passing test that needs
   strengthening within an existing task's RED/GREEN work is BUILD work, not a planning omission. An
