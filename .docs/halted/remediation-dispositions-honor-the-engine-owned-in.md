@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-08T20:26:12.936Z
 Slug: remediation-dispositions-honor-the-engine-owned-in
 Class: needs-human
 Halting step: unknown
