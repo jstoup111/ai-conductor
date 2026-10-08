@@ -1469,8 +1469,8 @@ removal attempts; other `needs-remediation` causes remain sticky.
 
 Opts a project into stacked delivery of a sliced plan. Plan-slice grammar validation (the
 `plan-slices` land gate and the `coverage_binding` slice layer) runs regardless of this block; the
-checks below run only when `enabled` is `true`. Build-loop slice checkpoints remain reserved for
-#2724.
+checks below run only when `enabled` is `true`. Build-loop slice checkpoints remain reserved for the
+stacked child-plans chain (#2940–#2949), which superseded #2724.
 
 | Key | Type | Validation | Default |
 | --- | --- | --- | --- |

@@ -395,7 +395,8 @@ build_review:
     testQuality:
       enabled: false
 
-# Reserved for #2724 build-loop slice checkpoints; currently inert.
+# enabled adds stacked-delivery checks at engineer/land and coverage_binding; build-loop slice
+# checkpoints remain reserved for the stacked child-plans chain (#2940–#2949).
 # stacked_prs:
 #   enabled: false
 
