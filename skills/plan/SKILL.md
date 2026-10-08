@@ -338,10 +338,16 @@ without making the task undeliverable or its evidence stale.
 
 ## Slice manifest
 
-When a plan must make its delivery slices explicit, declare one optional `## Slices` section
-before the first task heading. Its table header is exactly `Slice`, `Title`, `Tasks`. A slice
-lists its member task ids in the `Tasks` cell; every plan task belongs to exactly one slice, and a
-slice cannot be empty. Use at most five slices.
+For a Large feature, propose delivery slices only when the resolved project configuration enables
+`stacked_prs.enabled`. Slice a Medium feature only when the operator asks for it. On operator
+acceptance, declare one optional `## Slices` section before the first task heading and write
+`Stacked-Delivery: approved` into `.docs/complexity/<stem>.md`. If the operator declines, author
+no manifest and no sign-off line.
+
+The manifest table header is exactly `Slice`, `Title`, `Tasks`. A slice lists its member task ids in
+the `Tasks` cell; every plan task belongs to exactly one slice, and a slice cannot be empty. Keep
+each story's tasks in one slice, and make every `**Story:**` line cite exactly one id. The grammar
+bound is 9 slices; stacking remains bounded by `stacked_prs.max_slices`.
 
 Dependencies remain task-local. Every cited task heading must carry exactly one
 `**Dependencies:**` line: write `none` when it has no prerequisite, or a comma-separated list of
@@ -359,13 +365,23 @@ slice, never a later slice.
 | 2 | Follow-up | 3 |
 
 ### Task 1: Establish the foundation
+**Story:** 1
 **Dependencies:** none
 
 ### Task 2: Add the companion behavior
+**Story:** 1
 **Dependencies:** none
 
 ### Task 3: Connect the follow-up
+**Story:** 2
 **Dependencies:** Tasks 1, 2
+```
+
+For an accepted stacked-delivery proposal, record the sign-off in the complexity artifact:
+
+```markdown
+Tier: L
+Stacked-Delivery: approved
 ```
 
 ### `**Stories:**` Reference Forms
