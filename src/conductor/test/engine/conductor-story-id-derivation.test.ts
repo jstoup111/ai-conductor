@@ -26,10 +26,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Conductor } from '../../src/engine/conductor.js';
+import type { StepRunOptions } from '../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
 
 /**
  * Story 2.1 (nested id), Story 5 (plain), Story 5a (suffixed). Story 5a has
@@ -121,23 +123,16 @@ describe('prd_audit remediation authorization derives suffixed story ids', () =>
     const conductor = new Conductor({
       stateFilePath: join(dir, '.pipeline/conduct-state.json'),
       stepRunner: {
-        run: async (step: StepName) => {
+        run: async (step: StepName, _state: ConductState, options: StepRunOptions | undefined) => {
           if (step === 'remediate') {
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: 'S5a.1',
-                    disposition: 'existing-task',
-                    category: null,
-                    rationale: 'Task 1 already owns this repair.',
-                    tasks: [{ id: '1', title: 'Existing work' }],
-                  },
-                ],
-              }),
-              'utf8',
-            );
+            await persistFixtureProjectedRemediationPlan(dir, options, [{
+              id: 'S5a.1',
+              disposition: 'existing-task',
+              category: null,
+              rationale: 'Task 1 already owns this repair.',
+              tasks: [],
+              boundTaskIds: ['1'],
+            }]);
           }
           return { success: true };
         },
