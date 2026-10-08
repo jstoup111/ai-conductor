@@ -1,0 +1,1 @@
+Inapplicable: acceptance_specs — refactor: moving conductor.ts module-level code into engine modules preserves every observable behavior; the existing conductor/step-runner suite plus the review-C4 refactor-invariant regression tests authored in BUILD are the specification.
