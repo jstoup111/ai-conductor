@@ -863,7 +863,7 @@ from a `remediate` or `build_review` disposition asking for a DECIDE revision.
 **There is no grant for this.** The daemon may not re-plan under any authorization. Recover by hand:
 
 1. Read the halt body and the remediation that produced it
-   (`.worktrees/<slug>/.pipeline/remediation.json`) to see which plan change is actually being asked
+   (`.worktrees/<slug>/.pipeline/remediation-plan.json`) to see which plan change is actually being asked
    for. Verify the request against the gate evidence — a remediation whose fix would re-trigger the
    gate that caused it is wrong, and amending the plan to match it makes things worse.
 2. Make the plan edit yourself in the feature worktree. When BUILD discovered that an approved DECIDE
@@ -1000,17 +1000,24 @@ findings.
 ### An all-REMEDIABLE as-built review did not route
 
 **Symptom:** the `architecture_review_as_built` HALT says `remediation did not route:` and then
-names one of these causes: remediation is disabled, the run is not in daemon mode, or the planner
-did not write a usable remediation plan. The HALT also lists the `REMEDIABLE` blocking findings.
+names one of these causes: remediation is disabled, the run is not in daemon mode, or the planner's
+final named fault after its bounded retries. The HALT also lists the `REMEDIABLE` blocking findings.
 
 **Diagnosis:** read `.pipeline/architecture-review-as-built.md` for the finding details. If the
-cause names the planner, inspect `.pipeline/remediation.json`: it may be absent, stale, invalid JSON,
-missing a `dispositions` array, or contain no routable disposition. A `DESIGN` finding is different:
-it requires a human decision and names its governing clause instead of this routing cause.
+cause is a planner fault, it names the fault class. `structured-result-missing` means the provider
+returned no native result. `structured-result-rejected:` means the result failed validation, and the
+fault lists each field diagnostic, such as a missing required reference, a duplicate, or an
+unresolved `boundTaskIds`. `persistence-fault:` means the engine could not write
+`.pipeline/remediation-plan.json`. A `DESIGN` finding is different: it requires a human decision and
+names its governing clause instead of this routing cause.
 
 **Recovery:** enable `architecture_review_as_built.remediation.enabled` and re-run in daemon mode
-when those are the stated causes. Otherwise correct the remediation output so it is current JSON
-with at least one routable disposition for the listed finding, then use the [resume procedure](#clear-a-halt-and-let-the-feature-resume).
+when those are the stated causes. For a planner fault, remove the named cause. Rejections usually
+point at the projected evidence, such as an owner task missing from the active plan. A persistence
+fault usually points at the worktree filesystem. Then use the
+[resume procedure](#clear-a-halt-and-let-the-feature-resume). Do not hand-write
+`.pipeline/remediation-plan.json`: the engine reads only the plan persisted for the current attempt,
+so a hand-written plan reads as absent.
 
 **Verification:** the next dispatch either routes the repair work or writes a HALT with a new,
 specific cause; it must not repeat the same cause after its input has been corrected.
@@ -1567,26 +1574,50 @@ changes is that the named fault no longer halts the run. Expect to keep seeing t
 build-review fault events in `.pipeline/events.jsonl`. That is not a sign the record failed to take;
 confirm the record itself in `.pipeline/build-review-dispositions.json`.
 
-### Remediation supplied no recognized disposition
+### The remediation planner faulted
 
-**Symptom:** `.pipeline/HALT` begins with `remediation planner returned no recognized
-disposition:` and `.pipeline/HALT.class` reads `needs-human`. The remainder names every dropped
-gap as `<gap-id> → "<disposition>"` and gives the accepted vocabulary.
+**Symptom:** one of these appears in `.pipeline/HALT`:
 
-**Diagnosis:** inspect `.pipeline/remediation.json`. Each listed gap has a missing, non-string, or
-unrecognized `disposition`, so the engine rejects it instead of silently treating it as build work.
-It emits one `remediation_disposition_rejected` event per rejected gap to both
-`.pipeline/events.jsonl` and `.pipeline/audit-trail/events.jsonl`. A mixed remediation plan still
-routes its recognized gaps; only the rejected entries are dropped and reported.
+| HALT text | `HALT.class` | Meaning |
+| --- | --- | --- |
+| `Remediation planner fault: <fault>`, after the gate's own halt reason | the gate's terminal class | The bounded planner retries are exhausted. `<fault>` is the last attempt's fault |
+| `remediation projection input fault: source <source>, dimension <dimension> (actual <n>, limit <n>): <detail>` | `mechanical` | The engine could not prepare the planner input. The source was unreadable, stale, or a prior contract version, or a dimension exceeded its byte limit |
+| `remediate gap-plan cannot enforce its native output schema: candidate set [...]` | `mechanical` | No configured provider declares `nativeSchemaCapability.nativeOutputSchema` |
 
-**Recovery:** correct the remediation output so every intended gap uses one of the accepted
-dispositions named in the halt, then clear the halt using
-[the resume procedure](#clear-a-halt-and-let-the-feature-resume). Do not clear the halt first:
-the unchanged remediation output will halt again.
+A build-stall halt keeps the original stall question as its first lines.
 
-**Verification:** the next run either routes the recognized remediation work or halts for the
-documented reason belonging to a valid `halt` disposition. The rejected-disposition event is absent
-unless the corrected plan still contains an invalid entry.
+**Diagnosis:** the planner returns a native structured result. The engine validates it and persists
+it to `.pipeline/remediation-plan.json`; the provider writes no remediation file. The planner fault
+has three forms:
+
+- `structured-result-missing`: the provider returned no structured result.
+- `structured-result-rejected: <diagnostics>`: the result failed validation. Diagnostics name each
+  field: an unrecognized `disposition`, a missing or invalid halt `category`, a `build` with no task,
+  a required reference that is missing or answered twice, or `boundTaskIds` that do not bind the
+  owning active-plan task.
+- `persistence-fault: <reason>`: the engine could not write the plan.
+
+Each rejected `disposition`, `category`, or `boundTaskIds` field also emits a
+`remediation_disposition_rejected` event, with `gapId`, `disposition`, `accepted`, and `field`, to
+both `.pipeline/events.jsonl` and `.pipeline/audit-trail/events.jsonl`. A rejected result is never
+partially routed.
+
+**Recovery:** remove the named cause; do not hand-write the plan. The engine reads only the plan
+persisted for the current attempt, so a hand-written `remediation-plan.json` reads as absent.
+
+- **Input fault:** repair or re-run the named source. A missing or prior-version as-built verdict
+  needs a fresh `architecture_review_as_built` run.
+- **Native-schema fault:** configure a `remediate` candidate provider that declares
+  `nativeSchemaCapability.nativeOutputSchema`.
+- **Rejection:** check the diagnostics against the projected evidence. For example, an
+  `existing-task` owner must still be in the active plan.
+
+Then clear the halt using [the resume procedure](#clear-a-halt-and-let-the-feature-resume). Do not
+clear it without changing anything. The same input reproduces the same deterministic faults.
+
+**Verification:** the next remediation round persists `.pipeline/remediation-plan.json` and routes
+its work, or it halts for a valid `halt` disposition. No new `remediation_disposition_rejected`
+event appears for the corrected field.
 
 ### Remediation names an evidence-complete owning task
 
@@ -1600,9 +1631,9 @@ then re-stages that task and returns to BUILD. Earlier completion evidence canno
 ```bash
 python3 -c "
 import json
-d = json.load(open('.worktrees/<slug>/.pipeline/remediation.json'))
+d = json.load(open('.worktrees/<slug>/.pipeline/remediation-plan.json'))
 for x in d['dispositions']:
-    print(x['id'], x['disposition'], '|', x['rationale'][:120])
+    print(x['reference']['id'], x['disposition'], x['boundTaskIds'], '|', x['rationale'][:120])
 "
 ```
 
