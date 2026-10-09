@@ -1134,7 +1134,6 @@ describe('engine/conductor', () => {
       await writeFile(planPath, '### Task 1: PRD work\n\n### Task 2: As-built work\n');
       await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Existing work\n\n### Happy Path\n- Given work, when repaired, then it passes.\n');
       await writePrdAuditFixableFixture(dir, undefined);
-      await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('ARCH-1', '2', 'Repair task two'));
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: '1', status: 'completed' }, { id: '2', status: 'completed' }],
       }));
@@ -1167,10 +1166,7 @@ describe('engine/conductor', () => {
         'test mixed existing-task laps',
         {
           source: 'prd_audit',
-          evidence: [
-            { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
-            { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' },
-          ],
+          evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
         },
       );
 

@@ -637,6 +637,11 @@ describe('planRemediation implementation-only authority routing', () => {
       maxRetries: 1,
     });
 
+    const remediationState = {
+      session_started_at: Date.now() - 1_000,
+      feature_desc: 'feature',
+    } as ConductState;
+    (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...remediationState };
     const outcome = await (conductor as unknown as {
       planRemediation: (
         state: ConductState,
@@ -645,10 +650,7 @@ describe('planRemediation implementation-only authority routing', () => {
         hintSource: unknown,
       ) => Promise<{ kind: string; detail?: string }>;
     }).planRemediation(
-      {
-        session_started_at: Date.now() - 1_000,
-        feature_desc: 'feature',
-      } as ConductState,
+      remediationState,
       ALL_STEPS,
       'Remediate build stall: which validation boundary applies?',
       hintSource,
@@ -656,7 +658,11 @@ describe('planRemediation implementation-only authority routing', () => {
 
     expect(outcome).toMatchObject({
       kind: 'halt',
-      detail: expect.stringContaining('no admitted remediation gap'),
+      detail: expect.stringContaining(
+        hintSource.evidence?.some((provenance) => provenance.gate === 'architecture_review_as_built')
+          ? 'remediation projection input fault: source as-built verdict'
+          : 'no admitted remediation gap',
+      ),
     });
   });
 

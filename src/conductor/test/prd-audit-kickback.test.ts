@@ -64,6 +64,18 @@ const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
   diagramDrift: { enabled: false, reason: 'test fixture' },
 };
 
+async function persistBlockedAsBuiltFixture(root: string): Promise<void> {
+  await persistAsBuiltVerdict(root, {
+    version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+    findings: [{
+      id: 'AB-1', class: 'REMEDIABLE',
+      reference: { kind: 'plan-task', taskId: '1' },
+      summary: 'Restore the approved architecture boundary.',
+    }],
+    violations: 'fixture violations', resolution: 'fixture resolution',
+  }, { attemptId: 'fixture-run', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY });
+}
+
 // The Markdown governing-clause parser was retired in favour of typed verdict
 // references. These historical parser cases remain skipped until their direct
 // test block is removed with the legacy fixture consolidation.
@@ -1781,16 +1793,9 @@ describe('prd_audit kickback', () => {
       gates: {},
       growth: { authored: 2, added: 1, byGate: { prd_audit: 1 } },
     });
+    await persistBlockedAsBuiltFixture(root);
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(join(root, '.pipeline/remediation.json'), JSON.stringify({
-          dispositions: [{
-            id: 'arch-gap', disposition: 'build', category: null, rationale: 'Foreign append.',
-            tasks: [{ id: 'rem-arch', title: 'Unbounded architecture task' }],
-          }],
-        }));
-        return { success: true };
-      },
+      run: async () => ({ success: true }),
     };
     const conductor = new Conductor({
       stateFilePath: join(root, '.pipeline/conduct-state.json'), stepRunner: runner,
@@ -1801,10 +1806,12 @@ describe('prd_audit kickback', () => {
       } as never,
     });
 
+    const remediationState = { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState;
+    (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...remediationState };
     const outcome = await (conductor as unknown as {
       planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string }>;
     }).planRemediation(
-      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      remediationState,
       ALL_STEPS,
       'as-built blocked',
       { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
@@ -2619,16 +2626,9 @@ describe('prd_audit kickback', () => {
     await mkdir(join(root, '.pipeline'), { recursive: true });
     await writeFile(planPath, '### Task 1: authored\n### Task 2: authored\n');
     await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    await persistBlockedAsBuiltFixture(root);
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(join(root, '.pipeline/remediation.json'), JSON.stringify({
-          dispositions: [{
-            id: 'arch-gap', disposition: 'build', category: null, rationale: 'Foreign append.',
-            tasks: [{ id: 'rem-arch', title: 'Unbounded architecture task' }],
-          }],
-        }));
-        return { success: true };
-      },
+      run: async () => ({ success: true }),
     };
     const conductor = new Conductor({
       stateFilePath: join(root, '.pipeline/conduct-state.json'), stepRunner: runner,
@@ -2637,10 +2637,12 @@ describe('prd_audit kickback', () => {
       config: { architecture_review_as_built: { remediation: { enabled: false } } } as never,
     });
 
+    const remediationState = { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState;
+    (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...remediationState };
     const outcome = await (conductor as unknown as {
       planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string }>;
     }).planRemediation(
-      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      remediationState,
       ALL_STEPS,
       'as-built blocked',
       { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },

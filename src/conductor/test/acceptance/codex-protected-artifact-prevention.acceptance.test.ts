@@ -315,13 +315,16 @@ describe('Story 6: remediation cannot route a foreign protected artifact back to
         state: ConductState,
         steps: typeof ALL_STEPS,
         context: string,
-        source: { source: string; evidenceFile: string },
+        source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
       ) => Promise<{ kind: string; target?: string; detail?: string }>;
     }).planRemediation(
       remediationState,
       ALL_STEPS,
       'acceptance fixture',
-      { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
+      {
+        source: 'prd-audit',
+        evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
+      },
     );
 
     expect(remediateRuns).toBe(1);
