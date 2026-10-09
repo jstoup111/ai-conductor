@@ -9,9 +9,13 @@ const runRoot = installation.root;
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageVitest = join(packageRoot, 'node_modules', '.bin', 'vitest');
 const vitestCommand = existsSync(packageVitest) ? packageVitest : 'vitest';
+// A managed daemon process uses this private bypass to keep its PATH-level gh
+// observer from recursing.  Test fixtures own their own gh boundary, so passing
+// the bypass through makes production adapters escape those fixtures.
+const { CONDUCT_GH_REAL_EXECUTABLE: _managedGhObserverBypass, ...testEnvironment } = process.env;
 const child = spawn(vitestCommand, process.argv.slice(2), {
   env: {
-    ...process.env,
+    ...testEnvironment,
     AI_CONDUCTOR_TEST_TMP_ROOT: runRoot,
     TMPDIR: runRoot,
     // Native subprocesses do not consistently prefer TMPDIR: some read TMP

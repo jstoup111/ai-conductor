@@ -57,6 +57,7 @@ async function writeFakeVitest(path: string, binary: string) {
     '  originalTmpdir: process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR,',
     '  gitCeiling: process.env.GIT_CEILING_DIRECTORIES,',
     '  nodeOptions: process.env.NODE_OPTIONS,',
+    '  managedGhObserverBypass: process.env.CONDUCT_GH_REAL_EXECUTABLE,',
     '}), \'utf8\');',
     'process.exitCode = Number(process.env.FAKE_VITEST_EXIT_CODE ?? 0);',
     '',
@@ -104,6 +105,14 @@ describe('run-vitest startup', () => {
 
     expect(result.exitCode).toBe(0);
     expect(observation.binary).toBe('path');
+  });
+
+  it('does not forward the managed gh-observer bypass to Vitest', async () => {
+    const result = await launch({ CONDUCT_GH_REAL_EXECUTABLE: '/private/real-gh' });
+    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string | undefined>;
+
+    expect(result.exitCode).toBe(0);
+    expect(observation.managedGhObserverBypass).toBeUndefined();
   });
 
   it('fails without either Vitest binary and reclaims its run root', async () => {
