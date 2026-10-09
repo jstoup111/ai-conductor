@@ -877,3 +877,73 @@ All 26 citable decisions in the three ADRs amended by this spec are represented 
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-prd-audit-s1-1-1: src/conductor/src/engine/remediation-projection.ts:138-171 — replace REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES (Task 8 fixture measurements) with measurements from the repository .docs/ corpus at BUILD: tasks = largest serialized set of projected tasks (id+title+Done-when) for any single .docs/plans/*.md (the whole plan, as any task can own a FIXABLE criterion), requiredReferences = largest serialized FIXABLE-criterion + REMEDIABLE-finding + refusal reference set from recorded verdicts/shipped records (or the plan/story criterion text bound when none exists), pendingAsBuiltFindings/priorLaps/refusals likewise from the corpus; apply the D7.2 named-bound floor (≥256 KiB for plan-task and criterion dimensions) and round up; size totalBytes as the sum of the component limits plus envelope overhead (vocabulary, version, source). Record each measurement and its source path in the comment beside each constant (Task 10 Done-when). Keep the 'never truncate' fault path; update remediation-projection.test.ts and conductor-remediation-typed-plan.test.ts overflow cases to pass explicit small limitOverrides so the Task 10 / S1.7 overflow-fault coverage survives unchanged.
+**Gate:** prd-audit
+**Rationale:** remediation-projection.ts:139-171 sizes REMEDIATION_PROJECTION_LIMITS from unit-test fixtures (tasks 512 B, required references 1,024 B, total 2,048 B), but ADR D7.3 (amended #2522) and plan Task 10 step 3 require sizing from the corresponding .docs/ corpus at BUILD (the D7.1/D7.2 sibling definition); this feature's own plan has a 1,976 B Task 8 section, so one real owning task overflows. Owning plan Task 10 admits the fix, so this is conforming implementation drift and routes build. The task keeps Task 10's existing overflow-fault coverage (S1.7 test 'halts mechanically for a bounded remediation projection input fault') by passing explicit small limitOverrides instead of relying on the production constants. Sibling sites S1.2/S1.3 (same constants) are covered by the S1.2/S1.3 tasks; AB-1's total-vs-untyped-evidence accounting is a separate task under AB-1.
+**Criterion:** S1.1
+**Parent task:** 10
+**Done when:**
+- [test] S1.1 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-s1-1-1 is complete.
+
+### Task rem-prd-audit-rem-prd-audit-s1-1-2: src/conductor/test/engine/remediation-projection.test.ts — add a PRD-audit projection fixture whose owning task is a realistic plan section (copy this feature's Task 8 title + Done-when, ~2 KB) and several FIXABLE criteria owned by distinct tasks; assert buildRemediationProjection returns ok:true with every criterion and task present under the default REMEDIATION_PROJECTION_LIMITS; add the same realistic plan to one conductor-remediation-typed-plan.test.ts routing case so a non-toy typed plan routes successfully.
+**Gate:** prd-audit
+**Rationale:** remediation-projection.ts:139-171 sizes REMEDIATION_PROJECTION_LIMITS from unit-test fixtures (tasks 512 B, required references 1,024 B, total 2,048 B), but ADR D7.3 (amended #2522) and plan Task 10 step 3 require sizing from the corresponding .docs/ corpus at BUILD (the D7.1/D7.2 sibling definition); this feature's own plan has a 1,976 B Task 8 section, so one real owning task overflows. Owning plan Task 10 admits the fix, so this is conforming implementation drift and routes build. The task keeps Task 10's existing overflow-fault coverage (S1.7 test 'halts mechanically for a bounded remediation projection input fault') by passing explicit small limitOverrides instead of relying on the production constants. Sibling sites S1.2/S1.3 (same constants) are covered by the S1.2/S1.3 tasks; AB-1's total-vs-untyped-evidence accounting is a separate task under AB-1.
+**Criterion:** S1.1
+**Parent task:** 10
+**Done when:**
+- [test] S1.1 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-s1-1-2 is complete.
+
+### Task rem-prd-audit-rem-prd-audit-s1-2-1: src/conductor/test/engine/remediation-projection.test.ts — add an as-built projection fixture with multiple REMEDIABLE findings carrying realistic (~500 B) stamped-id summaries like this feature's AB-1/AB-2, a plan-task reference to a realistic owning task section, several pending stamped as-built findings across two laps, and populated prior laps; assert ok:true under default REMEDIATION_PROJECTION_LIMITS with every finding, pending entry and lap present (depends on rem-prd-audit-s1-1-1's resize of pendingAsBuiltFindingsBytes/tasksBytes/priorLapsBytes/totalBytes).
+**Gate:** prd-audit
+**Rationale:** remediation-projection.ts:375-388 and 420-427 project REMEDIABLE findings, owner tasks, pending findings and prior laps correctly, but under the same fixture-sized limits (lines 155-167: tasks 512 B, pending as-built 512 B, total 2,048 B); the constant resize is in rem-prd-audit-s1-1-1 (owning plan Task 10), and this task adds the as-built-specific corpus-scale coverage so the dimension cannot regress, keeping Task 8's existing as-built projection assertions.
+**Criterion:** S1.2
+**Parent task:** 10
+**Done when:**
+- [test] S1.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-s1-2-1 is complete.
+
+### Task rem-prd-audit-rem-prd-audit-s1-3-1: src/conductor/test/engine/remediation-projection.test.ts — add a validation-group fixture combining this feature's real-size prd-audit FIXABLE evidence (S1.1-S1.3 / S7.1 summaries, ~600-900 B each) with two REMEDIABLE as-built findings (AB-1/AB-2-size summaries); assert ok:true under default limits, the union contains every reference labelled with its sourceGate (prd_audit / architecture_review_as_built), and requiredReferences serialized size is below REMEDIATION_PROJECTION_LIMITS.requiredReferencesBytes.
+**Gate:** prd-audit
+**Rationale:** remediation-projection.ts:196-202 and 344-389 correctly build the sourceGate-labelled union for validation-group, but it is bounded by requiredReferencesBytes=1024 / totalBytes=2048 (lines 139-167) sized from fixtures; the resize is rem-prd-audit-s1-1-1 (plan Task 10), and this task pins the union at corpus scale, keeping Task 8's union/sourceGate assertions.
+**Criterion:** S1.3
+**Parent task:** 10
+**Done when:**
+- [test] S1.3 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-s1-3-1 is complete.
+
+### Task rem-prd-audit-rem-prd-audit-s7-1-1: src/conductor/src/engine/conductor.ts:5121-5130 + remediation-projection.ts:112-125/196-202 — derive the projection's included gates from hintSource.evidence (the caller's narrowed list) instead of from the source label alone: add an optional includedGates (or evidence gate list) to RemediationProjectionRequest, have includesPrdAudit/includesAsBuilt honor it, and pass hintSource.evidence.map(e => e.gate) from planRemediation so a validation-group round whose as-built evidence was withheld (conductor.ts:9913-9933, DESIGN/invalid) projects only the PRD-audit references; add a remediation-projection.test.ts case for validation-group with only prd_audit included asserting no as-built references and no as-built verdict read fault.
+**Gate:** prd-audit
+**Rationale:** conductor.ts:5121-5130 builds the projection from remediationProjectionSource(hintSource.source) alone, and remediation-projection.ts:196-202/369-389 always reads the as-built verdict for 'validation-group', ignoring that conductor.ts:9913-9933 deliberately withholds terminal (DESIGN/invalid) as-built evidence so PRD-owned work still proceeds (AB-R11 / APPROVED decision 3); the fix is determinable and owned by plan Task 28 (validation-group primacy / admission sets survive unchanged) and Task 19 (keep admission unchanged below the seam), so build. The task restores the two survivor assertions that were rewritten (every-as-built-blocked-verdict-halts-needs-human-i.acceptance.test.ts:403-408 and plan-growth-existing-task-restage.acceptance.test.ts:547-558) rather than weakening them, preserving Task 28's coverage. Sibling site: every other planRemediation call that narrows hintSource.evidence (as-built-only, prd-audit-only) is derived from the same evidence list by the same change so the source and evidence cannot drift.
+**Criterion:** S7.1
+**Parent task:** 28
+**Done when:**
+- [test] S7.1 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-s7-1-1 is complete.
+
+### Task rem-prd-audit-rem-prd-audit-s7-1-2: src/conductor/test/acceptance/every-as-built-blocked-verdict-halts-needs-human-i.acceptance.test.ts:403-408 and src/conductor/test/acceptance/plan-growth-existing-task-restage.acceptance.test.ts:547-558 — restore the pre-branch admission assertions (main's expect(plan).toContain('rem-prd-audit-') for the DESIGN-withheld round, and the 'ONE remediate, ONE build' merged manual-test + as-built work order for prd_audit 'skipped') with typed plans supplied through the Task 18 helper, and make them pass against rem-prd-audit-s7-1-1 rather than keeping the rewritten not.toContain / zero-dispatch expectations.
+**Gate:** prd-audit
+**Rationale:** conductor.ts:5121-5130 builds the projection from remediationProjectionSource(hintSource.source) alone, and remediation-projection.ts:196-202/369-389 always reads the as-built verdict for 'validation-group', ignoring that conductor.ts:9913-9933 deliberately withholds terminal (DESIGN/invalid) as-built evidence so PRD-owned work still proceeds (AB-R11 / APPROVED decision 3); the fix is determinable and owned by plan Task 28 (validation-group primacy / admission sets survive unchanged) and Task 19 (keep admission unchanged below the seam), so build. The task restores the two survivor assertions that were rewritten (every-as-built-blocked-verdict-halts-needs-human-i.acceptance.test.ts:403-408 and plan-growth-existing-task-restage.acceptance.test.ts:547-558) rather than weakening them, preserving Task 28's coverage. Sibling site: every other planRemediation call that narrows hintSource.evidence (as-built-only, prd-audit-only) is derived from the same evidence list by the same change so the source and evidence cannot drift.
+**Criterion:** S7.1
+**Parent task:** 28
+**Done when:**
+- [test] S7.1 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-prd-audit-s7-1-2 is complete.
+
+### Task rem-as-built-rem-as-built-ab1-1: src/conductor/src/engine/remediation-projection.ts:218-235 — compute the 'total' structured dimension over the projection with evidence excluded (structured-input accounting only), leaving untyped evidence governed solely by projectUntypedEvidence's perFileHunksBytes/totalDiffBytes caps and omission entries (:290-310); add remediation-projection.test.ts cases for a 3 KiB .pipeline/build-stall-question.md and a 3 KiB .pipeline/test-failures.md asserting ok:true with the content excerpted, and keep the existing over-cap omission (S1.8) and structured-overflow fault (S1.7) tests passing.
+**Gate:** as-built
+**Rationale:** remediation-projection.ts:167 sets totalBytes=2,048 and projectionLimitFault (:231) serializes the whole projection including evidence.excerpts, while projectUntypedEvidence (:300-310) retains excerpts up to the as-built per-file/total caps (256/512 KiB), so a 3 KiB stall question or test-failures.md mechanically faults instead of following D7.3's evidence-cap-and-omission contract; approved architecture (ADR adr-2026-09-07 D7.3, plan Tasks 9/10) is authoritative and the fix is conforming implementation, so build. Task 9's omission coverage (S1.8) and Task 10's structured-overflow coverage (S1.7) are preserved; both untyped sources (build-stall and finish-verification) are covered by the one change.
+**Governing clause:** adr-2026-09-07-durable-prd-widening-decision-reconciliation decision 7
+**Done when:**
+- adr-2026-09-07-durable-prd-widening-decision-reconciliation decision 7 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-as-built-ab1-1 is complete.
+
+### Task rem-as-built-rem-as-built-ab2-1: src/conductor/src/engine/remediation-projection.ts:281-310/423-428 — make projectUntypedEvidence return a typed result ({ ok: false, detail }) for non-ENOENT read errors instead of rethrowing, and have buildRemediationProjection return preparationFault('build-stall question' | 'finish test failures', `untyped evidence is unreadable: <path>: <error>`) naming the source path; add remediation-projection.test.ts cases (EISDIR/EACCES via a directory at each path) asserting a preparation-fault for both .pipeline/build-stall-question.md and .pipeline/test-failures.md, and one conductor-remediation-typed-plan.test.ts case asserting the halt goes through haltForRemediationValidatorFault with remediate invocationCount 0; keep the ENOENT-is-absent behavior.
+**Gate:** as-built
+**Rationale:** remediation-projection.ts:294-297 rethrows non-ENOENT read errors from projectUntypedEvidence, and neither buildRemediationProjection (:423-428) nor conductor.ts:5121 converts them, so an unreadable build-stall-question.md or test-failures.md escapes haltForRemediationValidatorFault, contrary to D7.3's named required-input fault contract; the fix mirrors the existing safelyReadLedger pattern (:248-266) and is owned by plan Task 10, so build. ENOENT stays honest absence (Task 9 coverage preserved).
+**Governing clause:** adr-2026-09-07-durable-prd-widening-decision-reconciliation decision 7
+**Done when:**
+- adr-2026-09-07-durable-prd-widening-decision-reconciliation decision 7 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-as-built-ab2-1 is complete.
