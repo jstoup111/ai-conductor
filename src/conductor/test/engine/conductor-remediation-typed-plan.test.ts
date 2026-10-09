@@ -13,6 +13,7 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { RemediationPlanProviderOutcome } from './remediation-plan-fixtures.js';
+import type { RemediationProjectionLimits } from '../../src/engine/remediation-projection.js';
 import type { ConductState } from '../../src/types/index.js';
 import { createRemediationPlanProviderFixture } from './remediation-plan-fixtures.js';
 
@@ -27,6 +28,23 @@ const plan = Array.from({ length: 8 }, (_, index) => [
   '**Done when:**',
   `- Task ${index + 1} is complete.`,
 ].join('\n')).join('\n\n');
+
+const realisticPlan = Array.from({ length: 8 }, (_, index) => {
+  const id = index + 1;
+  if (id !== 8) return [
+    `### Task ${id}: Authored task ${id}`,
+    '**Done when:**',
+    `- Task ${id} is complete.`,
+  ].join('\n');
+  return [
+    '### Task 8: Project typed sources, refusals and explicit absence',
+    '**Done when:**',
+    '- A PRD-audit projection carries every FIXABLE criterion by engine criterion id, its owning task, judgment summary, title, completion conditions, and accepted vocabulary rendered from code constants.',
+    '- An as-built projection carries every REMEDIABLE stamped finding, governing reference, pending history, and prior remediation laps without fabricating an authority.',
+    '- A validation-group projection preserves the source-labelled union, keeps required input untruncated under corpus-sized engine bounds, and faults incomplete required authority before provider dispatch.',
+    `- ${'The realistic Task 8 completion section remains available to the typed-plan routing boundary. '.repeat(18)}`,
+  ].join('\n');
+}).join('\n\n');
 
 function output() {
   return {
@@ -89,7 +107,9 @@ async function fixture(
     source?: string;
     evidenceFile?: string;
     stallQuestion?: string;
+    evidenceDirectory?: boolean;
     skipPlanRemediation?: boolean;
+    remediationProjectionLimitOverrides?: Partial<RemediationProjectionLimits>;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), 'conductor-remediation-typed-plan-'));
@@ -167,10 +187,13 @@ async function fixture(
     daemon: true,
     verifyArtifacts: false,
     config,
+    remediationProjectionLimitOverrides: options.remediationProjectionLimitOverrides,
   });
   const source = options.source ?? 'prd-audit';
   const evidenceFile = options.evidenceFile ?? '.pipeline/prd-audit.md';
-  if (options.stallQuestion !== undefined) {
+  if (options.evidenceDirectory) {
+    await mkdir(join(root, evidenceFile), { recursive: true });
+  } else if (options.stallQuestion !== undefined) {
     await writeFile(join(root, evidenceFile), options.stallQuestion, 'utf8');
   }
   const state = { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState;
@@ -280,7 +303,7 @@ describe('Conductor typed remediation-plan admission', () => {
   it.each(['claude', 'codex'] as const)(
     'projects and dispatches a %s typed gap plan without consulting legacy remediation.json',
     async (key) => {
-      const result = await fixture(key);
+      const result = await fixture(key, undefined, 2, { planText: realisticPlan });
 
       expect(result.provider.invocationCount).toBe(1);
       expect(result.provider.calls[0]?.nativeSchema).toBeDefined();
@@ -476,7 +499,10 @@ describe('Conductor typed remediation-plan admission', () => {
   it('halts mechanically for a bounded remediation projection input fault before provider dispatch', async () => {
     const oversizedTask = 'x'.repeat(600);
     const oversizedPlan = plan.replace('Authored task 1', oversizedTask);
-    const result = await fixture('codex', undefined, 2, { planText: oversizedPlan });
+    const result = await fixture('codex', undefined, 2, {
+      planText: oversizedPlan,
+      remediationProjectionLimitOverrides: { tasksBytes: 512 },
+    });
 
     expect(result.outcome).toMatchObject({ kind: 'halt' });
     expect(result.provider.invocationCount).toBe(0);
@@ -498,5 +524,20 @@ describe('Conductor typed remediation-plan admission', () => {
 
     expect(result.provider.invocationCount).toBe(0);
     await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(question);
+  });
+
+  // Covers: rem-as-built-ab2-1
+  it('halts through the remediation validator before provider dispatch for unreadable finish evidence', async () => {
+    const result = await fixture('codex', undefined, 2, {
+      source: 'finish-verification',
+      evidenceFile: '.pipeline/test-failures.md',
+      evidenceDirectory: true,
+    });
+
+    expect(result.outcome).toMatchObject({ kind: 'halt' });
+    expect(result.provider.invocationCount).toBe(0);
+    await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(
+      /source finish test failures: untyped evidence is unreadable: \.pipeline\/test-failures\.md/,
+    );
   });
 });

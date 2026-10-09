@@ -547,15 +547,23 @@ describe('a consolidated manual-test FAIL round never runs the existing-task rou
       'manual_test',
     ).run();
 
-    // Manual-test failure remains deterministic and is never rewritten into
-    // a remediation-plan request for a sibling existing-task finding.
-    expect(dispatched.filter((step) => step === 'remediate')).toHaveLength(0);
-    expect(dispatched.filter((step) => step === 'build')).toHaveLength(0);
-    expect(buildHint).toBe('');
-    expect(taskStatusAtBuildDispatch).toBe('');
-    // The existing-task mechanics did not run: no as-built lap was charged
-    // and no pending finding persisted.
-    await expect(readFile(join(projectRoot, '.pipeline', 'kickback-ledger.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    // The merged manual-test/as-built work order remains a single remediation
+    // admission and a single BUILD dispatch even when prd_audit was skipped.
+    expect(dispatched.filter((step) => step === 'remediate')).toHaveLength(1);
+    expect(dispatched.filter((step) => step === 'build')).toHaveLength(1);
+    expect(buildHint).not.toBe('');
+    expect(taskStatusAtBuildDispatch).not.toBe('');
+    // The existing-task mechanics did not run: the manual-test work order has
+    // its ordinary ledger row, but as-built gets no lap or pending finding.
+    expect(JSON.parse(await readFile(join(projectRoot, '.pipeline', 'kickback-ledger.json'), 'utf8'))).toMatchObject({
+      gates: { manual_test: expect.any(Object) },
+    });
+    const ledger = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'kickback-ledger.json'), 'utf8')) as {
+      gates: Record<string, unknown>;
+      pendingAsBuiltRemediationFindings?: unknown;
+    };
+    expect(ledger.gates).not.toHaveProperty('architecture_review_as_built');
+    expect(ledger.pendingAsBuiltRemediationFindings).toBeUndefined();
   });
 });
 

@@ -71,6 +71,7 @@ import type { RemediationCasePrdWideningRecord } from './remediation-case-store.
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import {
   buildRemediationProjection,
+  type RemediationProjectionLimits,
   type RemediationProjection,
   type RemediationProjectionSource,
 } from './remediation-projection.js';
@@ -1816,6 +1817,8 @@ export interface ConductorOptions {
   buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   /** Test seam for an adjudicated action-effect charge failure. */
   buildReviewChargeEffect?: typeof chargeBuildReviewEffectInLedger;
+  /** Test-only bound override for deterministic remediation projection faults. */
+  remediationProjectionLimitOverrides?: Partial<RemediationProjectionLimits>;
   /** Test seam; production resolves fresh committed feature evidence. */
   resolveFeatureCreationMutation?: typeof resolveFeatureRemoteMutation;
   /** Test seam; production resolves fresh guarded publication dependencies. */
@@ -2326,6 +2329,7 @@ export class Conductor {
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
+  private readonly remediationProjectionLimitOverrides: Partial<RemediationProjectionLimits> | undefined;
   private readonly executionLifecycle: ExecutionLifecycle;
   /** Route every conductor-owned marker failure through the existing event spine. */
   private async writeHaltMarker(
@@ -3869,6 +3873,7 @@ export class Conductor {
     );
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
+    this.remediationProjectionLimitOverrides = opts.remediationProjectionLimitOverrides;
     this.executionLifecycle = new ExecutionLifecycle({
       events: this.events,
       onTerminal: async ({ event }) => {
@@ -5128,10 +5133,11 @@ export class Conductor {
       attemptRunId: this.currentRunId,
       config: this.config,
       git: this.prdAuditGit(),
+      includedGates: hintSource.evidence.map((evidence) => evidence.gate),
       ...(prdAuditOverScopeRoute?.kind === 'refusal-rework'
         ? { refusals: prdAuditOverScopeRoute.refusals }
         : {}),
-    });
+    }, this.remediationProjectionLimitOverrides);
     if (!projectionResult.ok) {
       const { source, dimension, actual, limit, detail } = projectionResult.fault;
       const bounds = actual === undefined || limit === undefined

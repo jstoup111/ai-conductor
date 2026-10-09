@@ -403,9 +403,9 @@ describe('acceptance: a mixed DESIGN as-built report appends no as-built work', 
     // The DESIGN row withholds as-built remediation authority entirely, so no
     // as-built gap is admitted and no rem-as-built task is appended...
     expect(plan).not.toContain('rem-as-built-');
-    // A terminal DESIGN finding ends the joined remediation round before it
-    // can append work from either evidence stream.
-    expect(plan).not.toContain('rem-prd-audit-');
+    // Terminal DESIGN evidence is withheld from the projection, but it cannot
+    // erase the independent PRD-audit repair admitted in this joined round.
+    expect(plan).toContain('rem-prd-audit-');
     // The whole report still halts needs-human for the DESIGN row.
     const haltClass = await readFile(join(root, '.pipeline', 'HALT.class'), 'utf8').catch(() => '');
     expect(haltClass.trim()).toBe('needs-human');

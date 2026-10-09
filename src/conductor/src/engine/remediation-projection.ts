@@ -111,6 +111,12 @@ type RemediationEvidenceLimits = Pick<AsBuiltProjectionLimits, 'perFileHunksByte
 
 export interface RemediationProjectionRequest {
   readonly source: RemediationProjectionSource;
+  /**
+   * The authoritative evidence gates admitted by the caller for this round.
+   * When present, this is narrower than a source label for a validation-group
+   * round whose terminal sibling evidence was deliberately withheld.
+   */
+  readonly includedGates?: readonly string[];
   /** The engine-recorded active plan path when the caller has already resolved it. */
   readonly activePlanPath?: string;
   readonly featureDesc?: string;
@@ -135,15 +141,21 @@ export type RemediationProjectionResult =
       };
     };
 
-/** Largest observed serialized structured sections in the Task 8 remediation corpus. */
+/** Largest observed serialized structured sections in the repository corpus at BUILD. */
 export const REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES = {
-  requiredReferencesBytes: 685,
-  tasksBytes: 307,
-  pendingAsBuiltFindingsBytes: 264,
-  priorLapsBytes: 80,
-  refusalsBytes: 109,
-  totalBytes: 1_089,
+  requiredReferencesBytes: 3_911,
+  tasksBytes: 39_490,
+  pendingAsBuiltFindingsBytes: 1_383,
+  priorLapsBytes: 111,
+  refusalsBytes: 0,
 } as const;
+
+/** D7.2/D7.3 floor for the plan-task and criterion-bearing dimensions. */
+export const REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES = 256 * 1024;
+/** Non-empty allowance when a durable optional-history corpus is absent. */
+export const REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES = 4 * 1024;
+/** Covers the version, source, vocabulary, and JSON wrapper outside named dimensions. */
+export const REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES = 64 * 1024;
 
 function roundUpPowerOfTwo(bytes: number): number {
   let rounded = 1;
@@ -151,20 +163,48 @@ function roundUpPowerOfTwo(bytes: number): number {
   return rounded;
 }
 
+const REMEDIATION_PROJECTION_COMPONENT_LIMITS = {
+  // `.pipeline/prd-audit.json` + `.pipeline/architecture-review-as-built.json`: 3,911 B union; D7.2 floor → 262,144 B.
+  requiredReferencesBytes: roundUpPowerOfTwo(Math.max(
+    REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
+    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes,
+  )),
+  // `.docs/plans/engine-cannot-represent-more-than-one-branch-step-.md`: 39,490 B for all tasks; D7.2 floor → 262,144 B.
+  tasksBytes: roundUpPowerOfTwo(Math.max(
+    REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
+    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes,
+  )),
+  // `.pipeline/kickback-ledger.json`: 1,383 B pending finding set; optional-history floor → 4,096 B.
+  pendingAsBuiltFindingsBytes: roundUpPowerOfTwo(Math.max(
+    REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
+    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes,
+  )),
+  // `.pipeline/kickback-ledger.json`: 111 B prior-lap set; optional-history floor → 4,096 B.
+  priorLapsBytes: roundUpPowerOfTwo(Math.max(
+    REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
+    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorLapsBytes,
+  )),
+  // No `.docs/shipped` refusal record at BUILD (0 B); optional-history floor → 4,096 B.
+  refusalsBytes: roundUpPowerOfTwo(Math.max(
+    REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
+    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes,
+  )),
+} as const;
+
+const REMEDIATION_PROJECTION_TOTAL_LIMIT_BYTES = roundUpPowerOfTwo(
+  REMEDIATION_PROJECTION_COMPONENT_LIMITS.requiredReferencesBytes +
+  REMEDIATION_PROJECTION_COMPONENT_LIMITS.tasksBytes +
+  REMEDIATION_PROJECTION_COMPONENT_LIMITS.pendingAsBuiltFindingsBytes +
+  REMEDIATION_PROJECTION_COMPONENT_LIMITS.priorLapsBytes +
+  REMEDIATION_PROJECTION_COMPONENT_LIMITS.refusalsBytes +
+  REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES,
+);
+
 /** Finite engine bounds for required structured input; required values are never truncated. */
 export const REMEDIATION_PROJECTION_LIMITS = {
-  // Required-reference corpus maximum: 685 B; rounded up to 1,024 B.
-  requiredReferencesBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes),
-  // Owning-task corpus maximum: 307 B; rounded up to 512 B.
-  tasksBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes),
-  // Stamped pending as-built finding corpus maximum: 264 B; rounded up to 512 B.
-  pendingAsBuiltFindingsBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes),
-  // Stamped prior-lap corpus maximum: 80 B; rounded up to 128 B.
-  priorLapsBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorLapsBytes),
-  // Refusal corpus maximum: 109 B; rounded up to 128 B.
-  refusalsBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes),
-  // Complete stamped-contract projection corpus maximum: 1,089 B; rounded up to 2,048 B.
-  totalBytes: roundUpPowerOfTwo(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.totalBytes),
+  ...REMEDIATION_PROJECTION_COMPONENT_LIMITS,
+  // Sum of every structured component plus the version/source/vocabulary envelope → 1,048,576 B.
+  totalBytes: REMEDIATION_PROJECTION_TOTAL_LIMIT_BYTES,
   // Untyped-evidence per-file corpus bound is owned by the as-built projection.
   perFileHunksBytes: AS_BUILT_PROJECTION_LIMITS.perFileHunksBytes,
   // Untyped-evidence total corpus bound is owned by the as-built projection.
@@ -193,12 +233,14 @@ const REMEDIATION_DISPOSITIONS: readonly RemediationDisposition[] = [
   'halt',
 ];
 
-function includesPrdAudit(source: RemediationProjectionSource): boolean {
-  return source === 'prd-audit' || source === 'validation-group';
+function includesPrdAudit(request: RemediationProjectionRequest): boolean {
+  return request.includedGates?.includes('prd_audit') ??
+    (request.source === 'prd-audit' || request.source === 'validation-group');
 }
 
-function includesAsBuilt(source: RemediationProjectionSource): boolean {
-  return source === 'as-built' || source === 'validation-group';
+function includesAsBuilt(request: RemediationProjectionRequest): boolean {
+  return request.includedGates?.includes('architecture_review_as_built') ??
+    (request.source === 'as-built' || request.source === 'validation-group');
 }
 
 function preparationFault(
@@ -217,6 +259,11 @@ function serializedBytes(value: unknown): number {
   return utf8Bytes(JSON.stringify(value));
 }
 
+function structuredProjection(projection: RemediationProjection): Omit<RemediationProjection, 'evidence'> {
+  const { evidence: _evidence, ...structured } = projection;
+  return structured;
+}
+
 function projectionLimitFault(
   projection: RemediationProjection,
   source: RemediationProjectionSource,
@@ -228,7 +275,9 @@ function projectionLimitFault(
     { dimension: 'pending-as-built-findings', actual: serializedBytes(projection.pendingAsBuiltFindings), limit: limits.pendingAsBuiltFindingsBytes },
     { dimension: 'prior-laps', actual: serializedBytes(projection.priorLaps), limit: limits.priorLapsBytes },
     { dimension: 'refusals', actual: serializedBytes(projection.refusals), limit: limits.refusalsBytes },
-    { dimension: 'total', actual: serializedBytes(projection), limit: limits.totalBytes },
+    // Evidence is bounded and omitted by its independent as-built caps. The
+    // total named bound governs structured remediation input only (D7.3).
+    { dimension: 'total', actual: serializedBytes(structuredProjection(projection)), limit: limits.totalBytes },
   ];
   const overflow = dimensions.find(({ actual, limit }) => actual > limit);
   return overflow === undefined
@@ -285,29 +334,31 @@ async function projectUntypedEvidence(
   worktree: string,
   request: RemediationProjectionRequest,
   limits: RemediationEvidenceLimits,
-): Promise<RemediationProjectionEvidence> {
+): Promise<{ readonly ok: true; readonly evidence: RemediationProjectionEvidence } | { readonly ok: false; readonly detail: string }> {
   const source = untypedEvidenceSource(worktree, request);
-  if (source === undefined) return { excerpts: [], omittedFiles: [] };
+  if (source === undefined) return { ok: true, evidence: { excerpts: [], omittedFiles: [] } };
 
   let content: string;
   try {
     content = await readFile(join(worktree, source.path), 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { excerpts: [], omittedFiles: [] };
-    throw error;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { ok: true, evidence: { excerpts: [], omittedFiles: [] } };
+    }
+    return { ok: false, detail: `untyped evidence is unreadable: ${source.path}: ${errorDetail(error)}` };
   }
 
   const bytes = utf8Bytes(content);
   if (bytes > limits.perFileHunksBytes || bytes > limits.totalDiffBytes) {
-    return {
+    return { ok: true, evidence: {
       excerpts: [],
       omittedFiles: [{
         ...source,
         digest: `sha256:${createHash('sha256').update(content).digest('hex')}`,
       }],
-    };
+    } };
   }
-  return { excerpts: [{ ...source, content }], omittedFiles: [] };
+  return { ok: true, evidence: { excerpts: [{ ...source, content }], omittedFiles: [] } };
 }
 
 function projectPriorLaps(gates: Readonly<Record<string, { readonly laps?: number }>>): readonly RemediationProjectionPriorLap[] {
@@ -351,7 +402,7 @@ export async function buildRemediationProjection(
   const requiredReferences: RemediationRequiredReference[] = [];
   const ownerTaskIds = new Set<string>();
 
-  if (includesPrdAudit(request.source)) {
+  if (includesPrdAudit(request)) {
     let current: Awaited<ReturnType<typeof readCurrentPrdAuditVerdict>>;
     try {
       current = await readCurrentPrdAuditVerdict(worktree, {
@@ -377,7 +428,7 @@ export async function buildRemediationProjection(
     }
   }
 
-  if (includesAsBuilt(request.source)) {
+  if (includesAsBuilt(request)) {
     let current: Awaited<ReturnType<typeof readAsBuiltVerdict>>;
     try {
       current = await readAsBuiltVerdict(worktree);
@@ -429,12 +480,18 @@ export async function buildRemediationProjection(
   if (pending.kind === 'unreadable') return preparationFault('kickback ledger', pending.reason);
   if (ledger.kind === 'unreadable') return preparationFault('kickback ledger', ledger.reason);
   if (!taskContext.ok) return preparationFault('active plan', taskContext.detail);
+  if (!evidence.ok) {
+    return preparationFault(
+      request.source === 'build-stall' ? 'build-stall question' : 'finish test failures',
+      evidence.detail,
+    );
+  }
 
   const projection: RemediationProjection = {
     version: REMEDIATION_PROJECTION_VERSION,
     source: request.source,
     requiredReferences,
-    evidence,
+    evidence: evidence.evidence,
     tasks: taskContext.tasks,
     // Pre-v2 provider ids remain in the ledger for historical shipment
     // records, but are not planning context or remediation obligations.
