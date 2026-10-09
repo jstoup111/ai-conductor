@@ -153,14 +153,17 @@ export async function persistFixtureProjectedRemediationPlan(
         boundTaskIds: disposition.boundTaskIds ?? [],
       };
     }
-    if (request.projection.source !== 'build-stall' || !/^stall:[A-Za-z0-9][A-Za-z0-9._-]*$/.test(disposition.id)) {
+    const untypedKind = request.projection.source === 'build-stall' ? 'stall'
+      : request.projection.source === 'finish-verification' ? 'test'
+      : undefined;
+    if (untypedKind === undefined || !new RegExp(`^${untypedKind}:[A-Za-z0-9][A-Za-z0-9._-]*$`).test(disposition.id)) {
       throw new Error(
         `fixture remediation disposition ${disposition.id} is not an engine-projected reference ` +
         `(${request.projection.requiredReferences.map((candidate) => `${candidate.kind}:${candidate.id}`).join(', ') || 'none'})`,
       );
     }
     return {
-      reference: { kind: 'stall', id: disposition.id },
+      reference: { kind: untypedKind, id: disposition.id },
       disposition: disposition.disposition,
       category: disposition.category,
       rationale: disposition.rationale,

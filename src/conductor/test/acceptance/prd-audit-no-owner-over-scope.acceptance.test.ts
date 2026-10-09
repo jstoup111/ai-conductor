@@ -30,6 +30,7 @@ import {
 import { persistPrdWideningOffers } from '../../src/engine/prd-widening-offers.js';
 import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { persistFixtureProjectedRemediationPlan } from '../engine/remediation-plan-fixtures.js';
 
 const SUMMARY = 'unplanned npm test change';
 const ACTIVE_PLAN = '### Task 1: Planned behavior\n\n**Files:** src/example.ts\n';
@@ -132,15 +133,13 @@ describe('an accepted scope decision closes only its own blocker (S5.3)', () => 
         }
         if (step === 'remediate') {
           remediateRuns++;
-          await writeFile(join(root!, '.pipeline', 'remediation.json'), JSON.stringify({
-            dispositions: [{
-              id: 'S1.1',
-              disposition: 'build',
-              category: null,
-              rationale: 'Planned behavior is missing.',
-              tasks: [{ id: 'rem-s1-1', title: 'Implement the planned behavior' }],
-            }],
-          }));
+          await persistFixtureProjectedRemediationPlan(root!, options, [{
+            id: 'S1.1',
+            disposition: 'build',
+            category: null,
+            rationale: 'Planned behavior is missing.',
+            tasks: [{ id: 'rem-s1-1', title: 'Implement the planned behavior' }],
+          }]);
         }
         return { success: true };
       },
@@ -152,13 +151,15 @@ describe('an accepted scope decision closes only its own blocker (S5.3)', () => 
       // One authored task: a 0.25 ratio would leave the FIXABLE append no room.
       config: { prd_audit: { max_appended_ratio: 1 } } as never,
     });
+    const remediationState = { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState;
+    (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...remediationState };
     const outcome = await (conductor as unknown as {
       planRemediation: (
         state: ConductState, steps: typeof ALL_STEPS, context: string,
         source: { source: string; evidence: ReadonlyArray<{ gate: string; evidenceFile: string }> },
       ) => Promise<{ kind: string; detail?: string }>;
     }).planRemediation(
-      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      remediationState,
       ALL_STEPS, 'test remediation',
       { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
     );

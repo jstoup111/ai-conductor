@@ -92,6 +92,7 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
+import { persistFixtureProjectedRemediationPlan } from '../engine/remediation-plan-fixtures.js';
 
 describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () => {
   let dir: string;
@@ -155,7 +156,7 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
 
     let wiped = false;
     const runner: StepRunner = {
-      run: vi.fn(async (step: StepName) => {
+      run: vi.fn(async (step: StepName, _state, options) => {
         if (step === 'finish') {
           // Return { success: false } to trigger the remediation path in daemon mode.
           // In production, finish failures (test failures) would cause this.
@@ -176,28 +177,21 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
           // The conductor reads this file after /remediate returns to decide the next step.
           // We must recreate the .pipeline directory since we just deleted it.
           await mkdir(pipelineDir, { recursive: true });
-          const remediationPlan = {
-            dispositions: [
-              {
-                id: 'test-gap-1',
-                disposition: 'build',
-                category: null,
-                rationale: 'Attempt a finish-to-build re-run',
-                tasks: [
-                  {
-                    id: 'rem-pipeline-durability-1',
-                    title:
-                      'src/conductor/src/engine/conductor.ts — restore .pipeline run-state after a remediation kickback',
-                    status: 'pending',
-                  },
-                ],
-              },
-            ],
-          };
-          await writeFile(
-            join(pipelineDir, 'remediation.json'),
-            JSON.stringify(remediationPlan),
-          );
+          await persistFixtureProjectedRemediationPlan(dir, options, [
+            {
+              id: 'test:test-failures',
+              disposition: 'build',
+              category: null,
+              rationale: 'Attempt a finish-to-build re-run',
+              tasks: [
+                {
+                  id: 'rem-pipeline-durability-1',
+                  title:
+                    'src/conductor/src/engine/conductor.ts — restore .pipeline run-state after a remediation kickback',
+                },
+              ],
+            },
+          ]);
           return { success: true };
         }
         if (step === 'build') {
