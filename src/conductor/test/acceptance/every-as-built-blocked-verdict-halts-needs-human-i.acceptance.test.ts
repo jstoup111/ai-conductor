@@ -400,6 +400,7 @@ describe('acceptance: a mixed DESIGN as-built report appends no as-built work', 
     await conductor.run();
 
     const plan = await readFile(join(root, '.docs', 'plans', `${SLUG}.md`), 'utf8');
+    // Covers: rem-prd-audit-rem-prd-audit-s7-1-2
     // The DESIGN row withholds as-built remediation authority entirely, so no
     // as-built gap is admitted and no rem-as-built task is appended...
     expect(plan).not.toContain('rem-as-built-');

@@ -221,7 +221,7 @@ describe('remediation projection', () => {
     });
   });
 
-  // Covers: rem-prd-audit-s1-1-2
+  // Covers: rem-prd-audit-rem-prd-audit-s1-1-2
   it('admits a corpus-scale PRD-audit projection with every criterion and realistic owning task', async () => {
     const root = await fixture();
     await writeRealisticPlan(root);
@@ -273,7 +273,7 @@ describe('remediation projection', () => {
     });
   });
 
-  // Covers: rem-prd-audit-s1-2-1
+  // Covers: rem-prd-audit-rem-prd-audit-s1-2-1
   it('admits corpus-scale as-built findings, pending entries, and prior laps', async () => {
     const root = await fixture();
     await writeRealisticPlan(root);
@@ -401,7 +401,7 @@ describe('remediation projection', () => {
     });
   });
 
-  // Covers: rem-prd-audit-s1-3-1
+  // Covers: rem-prd-audit-rem-prd-audit-s1-3-1
   it('keeps the corpus-scale validation-group union under its required-reference bound', async () => {
     const root = await fixture();
     await writeRealisticPlan(root);
@@ -424,7 +424,7 @@ describe('remediation projection', () => {
       .toBeLessThan(REMEDIATION_PROJECTION_LIMITS.requiredReferencesBytes);
   });
 
-  // Covers: rem-prd-audit-s7-1-1
+  // Covers: rem-prd-audit-rem-prd-audit-s7-1-1
   it('honors a validation-group caller that includes only PRD-audit evidence', async () => {
     const root = await fixture();
     await writePrdVerdict(root);
@@ -533,7 +533,7 @@ describe('remediation projection', () => {
     });
   });
 
-  // Covers: rem-as-built-ab1-1
+  // Covers: rem-as-built-rem-as-built-ab1-1
   it.each([
     ['build-stall', '.pipeline/build-stall-question.md', 'stall:large-stall-evidence', 'large-stall-evidence'],
     ['finish-verification', '.pipeline/test-failures.md', 'test:test-failures', 'large-finish-verification-evidence'],
@@ -625,7 +625,7 @@ describe('remediation projection', () => {
     });
   });
 
-  // Covers: rem-as-built-ab2-1
+  // Covers: rem-as-built-rem-as-built-ab2-1
   it.each([
     ['build-stall', '.pipeline/build-stall-question.md', 'build-stall question'],
     ['finish-verification', '.pipeline/test-failures.md', 'finish test failures'],
@@ -643,7 +643,7 @@ describe('remediation projection', () => {
     });
   });
 
-  // Covers: task:10
+  // Covers: task:10, rem-prd-audit-rem-prd-audit-s1-1-1
   it('refuses an over-limit required structured dimension without shortening it', async () => {
     const root = await fixture();
     await writePrdVerdict(root);
