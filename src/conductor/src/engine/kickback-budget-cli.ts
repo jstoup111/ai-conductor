@@ -16,7 +16,7 @@ import { HALT_CLASS_MARKER } from './halt-marker.js';
 import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import { readKickbackHaltGeneration } from './daemon-rekick.js';
 import { loadConfig } from './config.js';
-import { prdAuditAppendCap } from './conductor.js';
+import { prdAuditAppendCap } from './remediation-caps.js';
 import { childStateExists, parseChildId } from './child-context.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';

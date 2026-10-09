@@ -180,7 +180,7 @@ Validation is fail-closed at the top level: an unrecognized key is a hard load e
 
 | Condition | Result |
 | --- | --- |
-| File absent | `{ type: 'missing' }`; the engine continues on defaults (`src/conductor/src/index.ts:714`), but the `test_suite` gate fails with `missing_config` |
+| File absent | `{ type: 'missing' }`; the engine continues on defaults (`src/conductor/src/index.ts:715`), but the `test_suite` gate fails with `missing_config` |
 | Unparseable YAML | `{ type: 'parse_error' }`; the message carries `YAML parse error at line N:` when js-yaml supplies a mark (`config.ts:149-162`) |
 | Empty document / `null` | Valid — resolves to `{}` with no warnings (`config.ts:199-201`) |
 | Root is not an object | `{ type: 'validation_error' }`, `Config must be an object` |
@@ -355,7 +355,7 @@ other key declares a custom step. `steps` must be an object, and each value must
 | `parallel` | array | See [parallel](#parallel) | none | `config.ts:422-466` |
 | `after` | string | **Custom steps only** — a built-in step with `after` is a hard error (`config.ts:529-531`) | required for custom steps | `steps.ts:561` |
 | `enforcement` | string | **Custom steps only** (`config.ts:532-534`); `structural`\|`advisory`\|`gating` | `advisory` | `steps.ts:599` |
-| `completion_artifact` | string | **Custom steps only** (`config.ts:535-537`); 7 constraints below | none | `src/conductor/src/engine/artifacts.ts:3086-3135` |
+| `completion_artifact` | string | **Custom steps only** (`config.ts:535-537`); 7 constraints below | none | `src/conductor/src/engine/artifacts.ts:3128-3177` |
 | `gate` | boolean | **Custom steps only**; a built-in step is a hard error | inherits the `after` target | `steps.ts:605` |
 | `kickback_target` | boolean | **Custom steps only**; a built-in step is a hard error | `false` | `steps.ts:606` |
 
@@ -428,7 +428,7 @@ Each branch writes a synthetic state key `<step_name>__<branch_name>` into
 (`src/conductor/src/types/config.ts:166-170`). See [artifacts](artifacts.md).
 
 Branch fan-out is bounded by [`validation_concurrency`](#validation_concurrency), clamped to the branch
-count (`src/conductor/src/engine/conductor.ts:6357`).
+count (`src/conductor/src/engine/conductor.ts:7048, 14180`).
 
 ### Disabling a step
 
@@ -508,7 +508,7 @@ position derives entirely from its `after` target. See [steps](steps.md) for the
 7. Equals its own `path.normalize()` form — `<field> must be normalized`.
 
 At completion time the artifact is checked in this order: custom predicate, configured
-`completion_artifact`, glob fallback (`artifacts.ts:3086-3135`). The artifact must be a regular file and
+`completion_artifact`, glob fallback (`artifacts.ts:3128-3177`). The artifact must be a regular file and
 its `mtimeMs` must be at or above the attempt or session freshness floor; a stale file reports
 `… is stale — <step> must rewrite it during this attempt`, and a missing floor reports that completion
 `cannot be verified without an attempt or session freshness floor`.
@@ -689,7 +689,7 @@ The block must configure at least one of `command`, `commands`, or `scoped_comma
 requires either `command` or `commands`; a scalar command and command list cannot be combined. A list keeps
 its declared order, runs every entry only when all earlier entries succeed, and records the failed entry and
 unexecuted remainder when it stops. Omitting the block entirely is a gating failure at SHIP: the verifier returns
-`{ status: 'FAILED', reason: 'missing_config' }` (`src/conductor/src/engine/full-suite-verifier.ts:717-724`)
+`{ status: 'FAILED', reason: 'missing_config' }` (`src/conductor/src/engine/full-suite-verifier.ts:746-753`)
 and the run HALTs. The gate itself is described in [gates](../explanation/gates.md).
 
 `verification.mode: scoped` derives selectors from the feature's changed test paths. A scoped PASS
@@ -730,8 +730,8 @@ Duplicates are rejected. An unregistered provider name is not caught at load —
 with a list of available providers (`provider-selection.ts:52-66`).
 
 An array is a fallback ladder, not a set. The **first** entry is inherited by every step that does not
-set its own `steps.<n>.llm_provider` (`provider-selection.ts:10-20`; `src/conductor/src/index.ts:1001`;
-`src/conductor/src/daemon-cli.ts:808`). `claude` and `codex` use harness model policies, optionally
+set its own `steps.<n>.llm_provider` (`provider-selection.ts:10-20`; `src/conductor/src/index.ts:1002`;
+`src/conductor/src/daemon-cli.ts:806`). `claude` and `codex` use harness model policies, optionally
 overridden by [`llm_providers`](#llm_providers). `pi` ships no model policy, so selecting it requires
 `llm_providers.pi`. Other registered providers warn and fall back to the Claude policy.
 
@@ -830,7 +830,7 @@ monitor:
 
 ## ui_renderer
 
-Plugin name for the run UI. Optional string, default `terminal` (`src/conductor/src/index.ts:1020-1023`).
+Plugin name for the run UI. Optional string, default `terminal` (`src/conductor/src/index.ts:1021-1024`).
 
 Not schema-validated — the key is allow-listed only. An unknown name makes `registry.get` **throw**
 `PluginNotFoundError` (`src/conductor/src/engine/plugin-registry.ts:37-46`), which is the opposite of
@@ -846,7 +846,7 @@ with `visualizers must be an array of strings` / `visualizers must contain only 
 (`src/conductor/src/engine/config.ts:788-795`).
 
 Each name is resolved against the plugin registry by `selectVisualizers`
-(`src/conductor/src/index.ts:236-274`). Resolution is soft, unlike `ui_renderer`:
+(`src/conductor/src/index.ts:237-275`). Resolution is soft, unlike `ui_renderer`:
 
 | Input | Result |
 | --- | --- |
@@ -862,12 +862,12 @@ name wins over the global one (`src/conductor/src/engine/plugin-loader.ts:144-16
 [`otel`](#otel) block and is attempted independently of `visualizers` for interactive runs and for
 each daemon-dispatched feature (`src/conductor/src/engine/otel/wire.ts`). Listing `otel` here warns
 `visualizer "otel" is configured through the "otel:" block; remove it from "visualizers".` and is
-otherwise ignored (`src/conductor/src/index.ts:243-248`).
+otherwise ignored (`src/conductor/src/index.ts:244-249`).
 
 ## memory_provider
 
 Plugin name for the memory store. Optional string, default `local`. Resolved by `resolveMemoryProvider`
-(`config.ts:1818-1852`), called at `src/conductor/src/daemon-cli.ts:835`.
+(`config.ts:1818-1852`), called at `src/conductor/src/daemon-cli.ts:833`.
 
 | Input | Result |
 | --- | --- |
@@ -1191,8 +1191,8 @@ it is a hard error naming both values — otherwise a step could be declared sta
 once. `poll_seconds` also must not exceed `active_stall_minutes * 60`, checked against the resolved
 `45` when `active_stall_minutes` is omitted.
 
-Consumed by `src/conductor/src/engine/build-progress-watcher.ts:206`; `.enabled` gates the build step's
-watcher at `src/conductor/src/engine/conductor.ts:3712`.
+Consumed by `src/conductor/src/engine/build-progress-watcher.ts:219`; `.enabled` gates the build step's
+watcher at `src/conductor/src/engine/conductor.ts:9357`.
 
 When the watcher emits a quiet warning, the daemon log also shows `provider activity <age> ago` when
 the current build dispatch has a valid `step-heartbeat`. The age is display-only: a missing, stale,
@@ -1252,8 +1252,8 @@ with `build_progress_halt.attempt_ceiling (30) must not be below the resolved ma
 > state the check exists to prevent. Set `attempt_ceiling` explicitly whenever you raise
 > `defaults.max_retries`. Tracked in [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
 
-Consumed at `src/conductor/src/daemon-cli.ts:429, 462` and
-`src/conductor/src/engine/conductor.ts:4298`. User-level values apply when the project omits this
+Consumed at `src/conductor/src/daemon-cli.ts:427, 460` and
+`src/conductor/src/engine/conductor.ts:11069-11072`. User-level values apply when the project omits this
 block; see [Load order and precedence](#load-order-and-precedence).
 
 ## retry_routing
@@ -1268,7 +1268,7 @@ Kill-switch for classifying a retry as a rerun versus a route to another step. V
 `enabled` is the only allowed key; an unknown key inside the block is a hard error. This is stricter than
 `kickback_escalation`, which silently discards its block instead.
 
-Consumed at `src/conductor/src/engine/conductor.ts:4149`.
+Consumed at `src/conductor/src/engine/conductor.ts:10364-10365, 10886-10887`.
 
 ## coverage_binding
 
@@ -1356,7 +1356,7 @@ non-numbers.
 
 `sandbox_build_env: false` does not merely relax the sandbox — it makes the self-build unrunnable, with
 `{ success: false, permissionDenied: true, output: 'Required safety protection unavailable:
-self-host-isolation' }` (`src/conductor/src/engine/conductor.ts:2049-2065`).
+self-host-isolation' }` (`src/conductor/src/engine/conductor.ts:4956-4962`).
 
 `live_containment: false` is a temporary compatibility opt-out, not an exclusion. The dispatch runs
 without the `bwrap` read-only live-checkout proof, so any live-checkout drift again follows the
@@ -1404,7 +1404,7 @@ Optional boolean, default `false` — written back into the config object (`conf
 
 Armed only when the build is also classified self-host:
 `(config?.auto_restart_on_stale_engine ?? false) && isSelfHost`
-(`src/conductor/src/daemon-cli.ts:761`; also `:1799`). Read at daemon startup, so a change requires a
+(`src/conductor/src/daemon-cli.ts:759`; also `:1797`). Read at daemon startup, so a change requires a
 daemon restart.
 
 User-level values apply when the project omits this key; see
@@ -1421,7 +1421,7 @@ back (`config.ts:812-815`).
 | Finite and `> 0` | As given |
 | Non-numeric, non-finite, **zero**, or negative | `300` plus one warning; never throws |
 
-Consumed at `src/conductor/src/daemon-cli.ts:1397, 1427` as `(… ?? 300) * 1000`. User-level values
+Consumed at `src/conductor/src/daemon-cli.ts:1395, 1425` as `(… ?? 300) * 1000`. User-level values
 apply when the project omits this key.
 
 ## codex_doctor_timeout_seconds
@@ -1444,7 +1444,7 @@ block is a hard error.
 
 Defaults are injected only when the block is present (`config.ts:817-829`); an absent block stays absent
 and each consumer applies `?? false` / `?? 60` inline
-(`src/conductor/src/daemon-cli.ts:1555, 1588, 1657-1659, 1747`). Both paths reach the same values.
+(`src/conductor/src/daemon-cli.ts:1553, 1586, 1655-1657, 1745`). Both paths reach the same values.
 
 Disabling it never halts — the sweep simply behaves as it did before the feature existed.
 
@@ -1546,7 +1546,7 @@ opting a project out of the replacement authority.
 `build_review` is a gating built-in with no `configDisableAllowed`
 (`src/conductor/src/engine/steps.ts:158-161`), so `steps.build_review.disable: true` is a hard error. The
 config key is the only off switch. When disabled, the step is marked `skipped` and a `config_skip` event
-is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved once per pass.
+is emitted (`src/conductor/src/engine/conductor.ts:13937, 13948-13950, 13964-13966`), resolved once per pass.
 
 Each built-in or custom rubric accepts `timeout_seconds`, independently of `test_suite.timeout_seconds`.
 It defaults to 300 seconds, retaining the engine's existing five-minute review budget for projects
@@ -1692,7 +1692,7 @@ Post-merge CI watch and fix loop. Normalized in place; the resolved value is wri
 
 | Key | Type | Default | Status |
 | --- | --- | --- | --- |
-| `ci_watch.enabled` | boolean | `true` | Works (`src/conductor/src/daemon-cli.ts:1678`) |
+| `ci_watch.enabled` | boolean | `true` | Works (`src/conductor/src/daemon-cli.ts:1676`) |
 | `ci_watch.cooldownMinutes` | finite non-negative number | `60` | Works |
 
 Normalization contract:
@@ -1760,7 +1760,7 @@ Contract (`src/conductor/src/engine/config.ts:934-957`): absent or `null` yields
 anything malformed — non-object, unknown inner key, or non-boolean `enabled` — is replaced with
 `{ enabled: true }` with **no warning**. The resolved block is written back.
 
-Consumed at `src/conductor/src/engine/conductor.ts:3362` (`?? true`). When enabled, the no-op
+Consumed at `src/conductor/src/engine/remediation-caps.ts:125` (`?? true`), called from `src/conductor/src/engine/conductor.ts:6087`. When enabled, the no-op
 escalation guard compares the pre- and post-build tree hashes (and resolved-task counts) for the
 kickback; an empty commit therefore does not count as progress. Setting `enabled: false` disables
 that tree-hash witness and reverts to re-kicking until the cap. It does not disable the durable
@@ -1795,7 +1795,7 @@ actually invalidates `build_review`, and does so once for that invalidation; a r
 the gate leaves the accumulated count intact. See
 `adr-2026-08-18-rebase-invalidation-refunds-build-review-convergence.md`.
 
-Consumed at `src/conductor/src/engine/conductor.ts:3703` (`?? true`). Setting `enabled: false`
+Consumed at `src/conductor/src/engine/conductor.ts:6088` (`?? true`). Setting `enabled: false`
 disables only the terminal halt; the counter is still maintained and still reported on the
 `kickback` event's `cumulativeCount`, so the history stays observable.
 
@@ -1804,7 +1804,7 @@ disables only the terminal halt; the counter is still maintained and still repor
 Re-surfaces gated-spec skip notices (no-PR, terminal-PR, no-Source-Ref) on the daemon log. Optional
 boolean; a non-boolean is a hard error (`config.ts:597-599`). The `false` default is applied at the
 wiring sites, not written back: `config?.daemon_verbose ?? false`
-(`src/conductor/src/daemon-cli.ts:1037, 1111, 1191`).
+(`src/conductor/src/daemon-cli.ts:1035, 1109, 1189`).
 
 ## reconcile_parked_auto_cleanup
 
@@ -1945,7 +1945,7 @@ Validation (`config.ts:652-662`): must be a string and `Date.parse` must succeed
 **rejected, never silently defaulted** — an un-owned spec must not be misclassified because of a
 fat-fingered date. The error names the value and shows the expected form.
 
-Absent resolves to `null` at the wiring site (`src/conductor/src/daemon-cli.ts:1229`), so un-owned
+Absent resolves to `null` at the wiring site (`src/conductor/src/daemon-cli.ts:1227`), so un-owned
 specs default-build. With a cutover, an un-owned spec whose plan first reached the default branch
 strictly before it is labeled grandfathered; specs merged on or after it also default-build.
 
@@ -1975,7 +1975,7 @@ Not validated in `validateConfig` — it is allow-listed only, and all coercion 
 | Negative, non-finite, or non-number | `3`, silently |
 
 Consumed at `src/conductor/src/engine/autoresolve.ts:214`,
-`src/conductor/src/engine/conductor.ts:6548`, and `src/conductor/src/daemon-cli.ts:979, 1616`.
+`src/conductor/src/engine/conductor.ts:14490`, and `src/conductor/src/daemon-cli.ts:977, 1614`.
 
 ## validation_concurrency
 
@@ -1992,7 +1992,7 @@ the serial path.
 A non-number is a hard error (`config.ts:748-752`). Zero, negative, and `NaN` pass validation, but
 `resolveValidationConcurrency` (`config.ts:2009-2021`) silently substitutes `4`.
 
-Consumed at `src/conductor/src/engine/conductor.ts:1263`, then clamped to the branch count at `:6357`.
+Consumed at `src/conductor/src/engine/conductor.ts:2231`, then clamped to the branch count at `:7048` and `:14180`.
 
 ## daemon_concurrency
 

@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, pi-per-step-model-selection-via-wrapped-providers:task:5
+// Covers: task:1, task:2, task:4, pi-per-step-model-selection-via-wrapped-providers:task:5
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -22,6 +22,8 @@ const none = (reason: string): ConsumerDeclaration => ({ consumer: 'none', reaso
 // so the declaration table below stays scannable.
 const RESOLVED_CONFIG = 'src/conductor/src/engine/resolved-config.ts';
 const CONDUCTOR = 'src/conductor/src/engine/conductor.ts';
+const REMEDIATION_CAPS = 'src/conductor/src/engine/remediation-caps.ts';
+const PRD_AUDIT_ROUTING = 'src/conductor/src/engine/prd-audit-routing.ts';
 const STEPS = 'src/conductor/src/engine/steps.ts';
 const DAEMON_CLI = 'src/conductor/src/daemon-cli.ts';
 const STEP_RUNNERS = 'src/conductor/src/engine/step-runners.ts';
@@ -95,13 +97,13 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
     CONDUCTOR,
   ]),
   conflict_check: consumer('skills/conflict-check/SKILL.md'),
-  prd_audit: consumer(CONDUCTOR),
+  prd_audit: consumer([REMEDIATION_CAPS, PRD_AUDIT_ROUTING]),
   architecture_review_as_built: consumer(AS_BUILT_POLICY),
   ci_watch: consumer(DAEMON_CLI),
   build_progress_halt: consumer(DAEMON_CLI),
   retry_routing: consumer(CONDUCTOR),
   wiring: none('deprecated compatibility no-op; build_review owns wiring judgement (#1025)'),
-  kickback_escalation: consumer(CONDUCTOR),
+  kickback_escalation: consumer(REMEDIATION_CAPS),
   cumulative_kickback_bound: consumer(CONDUCTOR),
   gate_code_validity: consumer('src/conductor/src/engine/gate-code-validity.ts'),
   daemon_verbose: consumer('src/conductor/src/engine/daemon-deps.ts'),
@@ -295,7 +297,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'ci_watch.cooldownMinutes': consumer('src/conductor/src/engine/ci-fix.ts'),
 
   // ── kickback bounds ───────────────────────────────────────────────────────
-  'kickback_escalation.enabled': consumer(CONDUCTOR),
+  'kickback_escalation.enabled': consumer(REMEDIATION_CAPS),
   'cumulative_kickback_bound.enabled': consumer(CONDUCTOR),
 
   // ── conflict_check ────────────────────────────────────────────────────────
@@ -304,10 +306,10 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'conflict_check.adr_corpus': consumer('skills/conflict-check/SKILL.md'),
 
   // ── prd_audit ─────────────────────────────────────────────────────────────
-  'prd_audit.max_remediation_laps': consumer(CONDUCTOR),
-  'prd_audit.max_appended_tasks': consumer(CONDUCTOR),
-  'prd_audit.max_appended_ratio': consumer(CONDUCTOR),
-  'prd_audit.halt_on_any_plan_gap': consumer(CONDUCTOR),
+  'prd_audit.max_remediation_laps': consumer(REMEDIATION_CAPS),
+  'prd_audit.max_appended_tasks': consumer(REMEDIATION_CAPS),
+  'prd_audit.max_appended_ratio': consumer(REMEDIATION_CAPS),
+  'prd_audit.halt_on_any_plan_gap': consumer(PRD_AUDIT_ROUTING),
 
   // ── architecture_review_as_built ──────────────────────────────────────────
   // `checks.<check>.tiers` is the as-built policy's own input; the remediation

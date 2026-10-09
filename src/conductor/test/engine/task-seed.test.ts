@@ -421,8 +421,9 @@ Content with \`src/file3.ts\`
           return entry.name.endsWith('.ts') ? [await fsPromises.readFile(path, 'utf8')] : [];
         }))).flat();
       };
-      const [conductor, artifacts, repairRestage] = await Promise.all([
+      const [conductor, buildReviewHaltRender, artifacts, repairRestage] = await Promise.all([
         fsPromises.readFile(new URL('../../src/engine/conductor.ts', import.meta.url), 'utf8'),
+        fsPromises.readFile(new URL('../../src/engine/build-review-halt-render.ts', import.meta.url), 'utf8'),
         fsPromises.readFile(new URL('../../src/engine/artifacts.ts', import.meta.url), 'utf8'),
         fsPromises.readFile(new URL('../../src/engine/repair-restage.ts', import.meta.url), 'utf8'),
       ]);
@@ -432,7 +433,7 @@ Content with \`src/file3.ts\`
 
       expect({
         dispatchOptionCount,
-        dispatch: conductor.includes('await seedTaskStatus(projectRoot, planPath, undefined, { dispatchBoundary: true });'),
+        dispatch: buildReviewHaltRender.includes('await seedTaskStatus(projectRoot, planPath, undefined, { dispatchBoundary: true });'),
         remediation: conductor.includes('await seedTaskStatus(this.projectRoot, planPath);'),
         completion: artifacts.includes('await seedTaskStatus(ctx.projectRoot, ctx.planPath, enginePlanPath);'),
         repairRestage: repairRestage.includes('await seedTaskStatus(projectRoot, planPath);'),

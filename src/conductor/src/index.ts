@@ -30,7 +30,8 @@ import { execa } from 'execa';
 import { v4 as uuidv4 } from 'uuid';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-import { Conductor, createProvenanceGuardedFinishPresentationRepair } from './engine/conductor.js';
+import { Conductor } from './engine/conductor.js';
+import { createProvenanceGuardedFinishPresentationRepair } from './engine/finish-presentation-repair.js';
 import { createProductionAcceptanceRedExec } from './engine/acceptance-red-runner.js';
 import {
   createProductionFinishPublicationCoordinator,

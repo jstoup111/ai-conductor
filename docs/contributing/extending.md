@@ -138,8 +138,8 @@ checklist: add the name first, then fix every type error `npm run typecheck` rep
 | 5 | `src/conductor/src/engine/resolved-config.ts` | `DEFAULT_STEP_RETRIES` (`:24`), `DEFAULT_STEP_REVIEW` (`:58`), and the mapping in `phaseForStep` (`:397`). |
 | 6 | `src/conductor/src/engine/model-table-metadata.ts` | `STEP_RATIONALE` (`:14`) and, if a skill drives the step, `SKILL_STEP_MAP` (`:72`). Then regenerate ARCHITECTURE.md. |
 | 7 | `src/conductor/src/engine/skill-invocation.ts:11` | A `SkillInvocationDescriptor` in `STEP_SKILL_INVOCATIONS` — either `{ kind: 'skill', skillName, arguments }` or `{ kind: 'engine-native' }`. Path resolution happens in `engine/skill-resolver.ts:65`. |
-| 8 (optional) | `src/conductor/src/engine/artifacts.ts` | `CUSTOM_COMPLETION_PREDICATES` (`:1306`) when file globs cannot express completion, and `GATE_ONLY_PREDICATES` (`:2394`) when the step is a gate-loop-only check. Both are `Partial`, so neither errors if you skip it. |
-| 9 (optional) | `src/conductor/src/engine/step-runners.ts:322` | Dispatch behavior in `DefaultStepRunner`. The `StepRunner` interface is `engine/conductor.ts:527`, with `StepRunOptions` at `:477` and `StepRunResult` at `:363`. |
+| 8 (optional) | `src/conductor/src/engine/artifacts.ts` | `CUSTOM_COMPLETION_PREDICATES` (`:2759`) when file globs cannot express completion, and `GATE_ONLY_PREDICATES` (`:3954`) when the step is a gate-loop-only check. Both are `Partial`, so neither errors if you skip it. |
+| 9 (optional) | `src/conductor/src/engine/step-runners.ts:962` | Dispatch behavior in `DefaultStepRunner`. The `StepRunner` interface is `engine/step-runner-types.ts:327`, with `StepRunOptions` at `:229` and `StepRunResult` at `:16`. |
 
 Skip helpers live alongside `ALL_STEPS`: `shouldSkipForTier` (`:420`), `shouldSkipForTrack` (`:431`),
 `shouldSkipForBootstrapMode` (`:451`), `shouldSkipForUpstreamSkip` (`:465`).
@@ -190,14 +190,14 @@ Set `enforcement: 'gating'` and a `prerequisites` list on the step in `engine/st
 
 ### Objective verdict gate
 
-The gate loop. Add the predicate to `GATE_ONLY_PREDICATES` in `engine/artifacts.ts:2394`; the loop
+The gate loop. Add the predicate to `GATE_ONLY_PREDICATES` in `engine/artifacts.ts:3954`; the loop
 machinery is `engine/gate-verdicts.ts` — `checkGateCompletion` (`:17`), `computeAndWriteVerdict` (`:62`),
 `writeVerdict` (`:78`), `readVerdict` (`:92`), `readAllVerdicts` (`:106`). Verdicts persist to
 `.pipeline/gates/<step>.json` (`GATES_DIR`, `:51`).
 
 Routing over verdicts is `engine/selector.ts`: `gateSatisfied` (`:53`), `selectNextGate` (`:111`),
 `earliestUnsatisfiedGateIndex` (`:130`). Kickbacks are capped by `MAX_KICKBACKS_PER_GATE` in
-`engine/conductor.ts:319`.
+`engine/remediation-caps.ts:14`.
 
 Supporting machinery, if your gate needs it: `engine/gate-invalidation.ts`, `engine/gate-writeback.ts`,
 `engine/gate-code-validity.ts`, `engine/gated-snapshot.ts`.
@@ -290,12 +290,12 @@ Create `src/conductor/src/engine/<name>-cli.ts` exporting a pair:
 
 Twenty-plus modules follow this shape; `engine/registry-cli.ts` (`detectRegistryCommand` `:184`,
 `dispatchRegistry` `:214`) and `engine/task-cli.ts` (`:20`, `:47`) are the cleanest references. Do not
-copy `detectOverlapScanCommand`, which is defined inline in `index.ts:318` — it is an inconsistency, not
+copy `detectOverlapScanCommand`, which is defined inline in `index.ts:700` — it is an inconsistency, not
 the pattern.
 
 ### 3. Wire it into main()
 
-Add the branch to `main()` in `src/conductor/src/index.ts:390`, **before** the `detectInline` fallthrough
+Add the branch to `main()` in `src/conductor/src/index.ts:1933`, **before** the `detectInline` fallthrough
 at `:670`. Each branch calls `process.exit`. Use the lazy `await import()` form for a heavy runtime, the
 way the daemon branch does — that is what keeps `daemon-cli.ts` off the hot path for every other command.
 

@@ -34,6 +34,19 @@ export interface BuildProgressSnapshot {
   noEvidenceAttempts: number;
 }
 
+export function isNoTaskProgressBuildStall(input: {
+  attempt: number;
+  resolvedTasksBefore: number;
+  resolvedTasksAfter: number;
+  headMovedThisAttempt: boolean;
+  completionReason?: string;
+}): boolean {
+  return input.attempt >= 2 &&
+    input.resolvedTasksAfter <= input.resolvedTasksBefore &&
+    !input.headMovedThisAttempt &&
+    !input.completionReason?.startsWith('unverified Done-when checks require one BUILD review pass:');
+}
+
 /**
  * Read a tolerant snapshot of build progress for `projectRoot`.
  *

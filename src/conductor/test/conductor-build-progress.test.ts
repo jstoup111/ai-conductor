@@ -52,7 +52,25 @@ vi.mock('../src/engine/build-progress-watcher.js', () => {
       stops.push(this.step);
     }
   }
-  return { BuildProgressWatcher: FakeBuildProgressWatcher };
+  return {
+    BuildProgressWatcher: FakeBuildProgressWatcher,
+    isNoTaskProgressBuildStall: ({
+      attempt,
+      resolvedTasksBefore,
+      resolvedTasksAfter,
+      headMovedThisAttempt,
+      completionReason,
+    }: {
+      attempt: number;
+      resolvedTasksBefore: number;
+      resolvedTasksAfter: number;
+      headMovedThisAttempt: boolean;
+      completionReason?: string;
+    }) => attempt >= 2 &&
+      resolvedTasksAfter <= resolvedTasksBefore &&
+      !headMovedThisAttempt &&
+      !completionReason?.startsWith('unverified Done-when checks require one BUILD review pass:'),
+  };
 });
 
 import { ConductorEventEmitter } from '../src/ui/events.js';

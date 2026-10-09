@@ -1,3 +1,4 @@
+// Covers: task:9
 // non-autonomy.test.ts — Structural non-autonomy guarantee (Task 30, FR-10, ADR-005 Condition 2)
 //
 // This test suite asserts the hardest structural invariant for the engineer:
@@ -197,6 +198,33 @@ function buildReachableSet(entryFiles: string[]): Set<string> {
   return visited;
 }
 
+const PUSH_CAPABLE_MODULES = [
+  'engine/post-finish-shipped-record.ts',
+  'engine/finish-presentation-repair.ts',
+];
+
+function findPushCapableViolations(reachable: Set<string>): string[] {
+  return PUSH_CAPABLE_MODULES
+    .filter((suffix) => reachable.has(join(CONDUCTOR_SRC, suffix)))
+    .map((suffix) => `VIOLATION: engineer transitively imports ${suffix}`);
+}
+
+function buildFixtureReachableSet(sources: Record<string, string>, entry: string): Set<string> {
+  const visited = new Set<string>();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = queue.pop()!;
+    if (visited.has(file) || sources[file] === undefined) continue;
+    visited.add(file);
+    for (const specifier of parseLocalImports(sources[file])) {
+      const withoutJs = specifier.endsWith('.js') ? specifier.slice(0, -3) : specifier;
+      const target = resolve(dirname(file), `${withoutJs}.ts`);
+      if (!visited.has(target)) queue.push(target);
+    }
+  }
+  return visited;
+}
+
 // ─── Test suite 1: Import graph non-autonomy ──────────────────────────────────
 
 describe('engineer import graph: structural non-autonomy (FR-10, ADR-005)', () => {
@@ -211,7 +239,7 @@ describe('engineer import graph: structural non-autonomy (FR-10, ADR-005)', () =
   });
 
   it('reachable set includes expected engineer surface files (sanity: walk is complete)', () => {
-    // Verify the walk reaches known engineer files so we know coverage is real.
+    // Keep the seed assertions, then prove the real walk goes beyond its seeds.
     const expectedInGraph = [
       'engine/engineer/handoff.ts',
       'engine/engineer/authored-ledger.ts',
@@ -222,6 +250,14 @@ describe('engineer import graph: structural non-autonomy (FR-10, ADR-005)', () =
       // These are direct seeds, so they must always be reachable.
       expect(reachable.has(absPath), `expected ${suffix} to be in reachable set`).toBe(true);
     }
+
+    // registry.ts is deliberately not an entry root: engineer-cli.ts reaches it
+    // through a static import. A walker that returns only its seeds must fail here.
+    const registryTs = join(CONDUCTOR_SRC, 'engine/registry.ts');
+    expect(ENGINEER_ENTRY_ROOTS).not.toContain(registryTs);
+    expect(parseLocalImports(readFileSync(join(CONDUCTOR_SRC, 'engine/engineer-cli.ts'), 'utf8')))
+      .toContain('./registry.js');
+    expect(reachable.has(registryTs), 'expected static engineer-cli -> registry.ts edge to be walked').toBe(true);
   });
 
   // ── Structural: forbidden module imports ──────────────────────────────────
@@ -235,6 +271,91 @@ describe('engineer import graph: structural non-autonomy (FR-10, ADR-005)', () =
       reachable.has(conductorTs),
       'VIOLATION: engineer transitively imports engine/conductor.ts (build entry)',
     ).toBe(false);
+  });
+
+  it('engineer does NOT transitively import push-capable finish modules', () => {
+    expect(findPushCapableViolations(reachable)).toEqual([]);
+    for (const module of PUSH_CAPABLE_MODULES) {
+      const source = readFileSync(join(CONDUCTOR_SRC, module), 'utf-8');
+      if (module.endsWith('post-finish-shipped-record.ts')) {
+        expect(source).toContain('export async function pushPostFinishShippedRecord');
+        expect(source).toContain('export async function refreshPostFinishShippedRecord');
+      } else {
+        expect(source).toContain('export function createFinishPresentationRepair');
+        expect(source).toContain('export function createProvenanceGuardedFinishPresentationRepair');
+      }
+    }
+  });
+
+  it.each([
+    ['post-finish-shipped-record.ts', 'direct'],
+    ['post-finish-shipped-record.ts', 'transitive'],
+    ['finish-presentation-repair.ts', 'direct'],
+    ['finish-presentation-repair.ts', 'transitive'],
+  ] as const)('reports a VIOLATION for a %s fixture import (%s)', (target, route) => {
+    const root = '/fixture/engineer.ts';
+    const intermediate = '/fixture/intermediate.ts';
+    const pushCapable = `/fixture/${target}`;
+    const sources: Record<string, string> = {
+      [root]: route === 'direct'
+        ? `import {} from './${target.replace('.ts', '.js')}';`
+        : "import {} from './intermediate.js';",
+      [pushCapable]: 'export {};',
+    };
+    if (route === 'transitive') sources[intermediate] = `import {} from './${target.replace('.ts', '.js')}';`;
+    const reachableFixture = buildFixtureReachableSet(sources, root);
+    const violations = [...reachableFixture]
+      .filter((file) => file === pushCapable)
+      .map(() => `VIOLATION: engineer transitively imports engine/${target}`);
+    expect(violations).toEqual([`VIOLATION: engineer transitively imports engine/${target}`]);
+  });
+
+  it('walks every decomposed-module edge in an A -> B -> forbidden fixture', () => {
+    const root = '/fixture/engineer.ts';
+    const intermediate = '/fixture/intermediate.ts';
+    const pushCapable = '/fixture/post-finish-shipped-record.ts';
+    const sources: Record<string, string> = {
+      [root]: "import {} from './intermediate.js';",
+      [intermediate]: "import {} from './post-finish-shipped-record.js';",
+      [pushCapable]: 'export {};',
+    };
+
+    const reachableFixture = buildFixtureReachableSet(sources, root);
+    expect(reachableFixture).toContain(intermediate);
+    const violations = [...reachableFixture]
+      .filter((file) => file === pushCapable)
+      .map(() => 'VIOLATION: engineer transitively imports engine/post-finish-shipped-record.ts');
+    expect(violations).toEqual(['VIOLATION: engineer transitively imports engine/post-finish-shipped-record.ts']);
+  });
+
+  it('non-push-capable destination modules cannot reach push-capable modules', () => {
+    const destinations = [
+      'step-runner-types.ts',
+      'conductor-options.ts',
+      'remediation-caps.ts',
+      'prd-audit-routing.ts',
+      'as-built-routing.ts',
+      'remediation-hints.ts',
+      'remediation-task-append.ts',
+      'resume-entry.ts',
+      'build-review-halt-render.ts',
+      'step-completion.ts',
+      'artifact-approvals.ts',
+    ];
+    for (const module of destinations) {
+      const destinationSeeds = [join(CONDUCTOR_SRC, 'engine', module)];
+      const reachableDestination = buildReachableSet(destinationSeeds);
+      if (module === 'step-runner-types.ts') {
+        const buildReviewInputsTs = join(CONDUCTOR_SRC, 'engine/build-review-inputs.ts');
+        // This destination is not an engineer walk seed. Its imported dependency
+        // proves the destination walk follows transitive static-import edges.
+        expect(destinationSeeds).not.toContain(buildReviewInputsTs);
+        expect(reachableDestination.has(buildReviewInputsTs),
+          'expected step-runner-types.ts -> build-review-inputs.ts edge to be walked').toBe(true);
+      }
+      const violations = PUSH_CAPABLE_MODULES.filter((suffix) => reachableDestination.has(join(CONDUCTOR_SRC, suffix)));
+      expect(violations, `VIOLATION: ${module} reaches ${violations.join(', ')}`).toEqual([]);
+    }
   });
 
   it('engineer does NOT transitively import step-runners.ts (build step executor)', () => {

@@ -37,6 +37,10 @@ export interface BuildOutcomeStore {
   records: BuildOutcomeRecord[];
 }
 
+export async function writeBuildOutcomeBestEffort(projectRoot: string, outcome: BuildOutcomeStore): Promise<void> {
+  await writeBuildOutcome(projectRoot, outcome).catch(() => {});
+}
+
 const BUILD_OUTCOME_PATH = '.pipeline/build-outcome.json';
 const BUILD_DISPUTE_PATH = '.pipeline/build-dispute.json';
 

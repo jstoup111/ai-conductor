@@ -291,12 +291,15 @@ export interface SpotAuditDispatchOptions {
 /**
  * Spot audit dispatch result.
  */
-export interface SpotAuditDispatchResult {
+export interface AttributionAuditDispatchResult {
   /** Whether audit was dispatched */
   dispatched: boolean;
   /** Error if dispatch failed */
   error?: string;
 }
+
+/** @deprecated Retained for direct-module consumers after the decomposition. */
+export type { AttributionAuditDispatchResult as SpotAuditDispatchResult };
 
 /**
  * Post-green non-blocking spot-audit dispatch.
@@ -320,7 +323,7 @@ export interface SpotAuditDispatchResult {
  * # Task 15: Post-green spot-audit dispatch
  * References: adr-2026-07-11-attribution-verdict-interface § "Spot-audit sampler"
  */
-export async function runSpotAudit(opts: SpotAuditDispatchOptions): Promise<SpotAuditDispatchResult> {
+export async function runSpotAudit(opts: SpotAuditDispatchOptions): Promise<AttributionAuditDispatchResult> {
   const { evidence, featureSlug, auditSamplePct, projectDir, featureWorktreePath, gateVerdictPath, dispatch, emitter } = opts;
   // Ledger is repo-local (ADR item 3); derive from projectDir unless overridden.
   const ledgerPath = opts.ledgerPath ?? join(projectDir, '.daemon', 'attribution-accuracy.jsonl');
