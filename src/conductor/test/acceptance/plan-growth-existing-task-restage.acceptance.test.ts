@@ -552,8 +552,10 @@ describe('a consolidated manual-test FAIL round never runs the existing-task rou
     // admission and a single BUILD dispatch even when prd_audit was skipped.
     expect(dispatched.filter((step) => step === 'remediate')).toHaveLength(1);
     expect(dispatched.filter((step) => step === 'build')).toHaveLength(1);
-    expect(buildHint).not.toBe('');
-    expect(taskStatusAtBuildDispatch).not.toBe('');
+    expect(buildHint).toContain('FAIL');
+    expect(buildHint).toContain(asBuiltFindingId);
+    expect(JSON.parse(taskStatusAtBuildDispatch).tasks)
+      .toEqual([{ id: '1', status: 'completed' }]);
     // The existing-task mechanics did not run: the manual-test work order has
     // its ordinary ledger row, but as-built gets no lap or pending finding.
     expect(JSON.parse(await readFile(join(projectRoot, '.pipeline', 'kickback-ledger.json'), 'utf8'))).toMatchObject({
