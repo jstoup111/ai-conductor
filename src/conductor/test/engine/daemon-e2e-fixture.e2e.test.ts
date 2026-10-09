@@ -140,7 +140,7 @@ function createFixtureAgentFake(
         output: 'fixture as-built review recorded approval',
         exitCode: 0,
         finalStructuredResult: {
-          version: 'v1',
+          version: 'v2',
           verdict: 'APPROVED',
           reachability: [],
           driftNotes: [],
