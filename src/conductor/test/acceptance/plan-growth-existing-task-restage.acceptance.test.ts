@@ -547,7 +547,7 @@ describe('a consolidated manual-test FAIL round never runs the existing-task rou
       'manual_test',
     ).run();
 
-    // Covers: rem-prd-audit-rem-prd-audit-s7-1-2
+    // Covers: task:rem-prd-audit-rem-prd-audit-s7-1-2
     // The merged manual-test/as-built work order remains a single remediation
     // admission and a single BUILD dispatch even when prd_audit was skipped.
     expect(dispatched.filter((step) => step === 'remediate')).toHaveLength(1);

@@ -299,7 +299,7 @@ describe('Conductor typed remediation-plan admission', () => {
     expect(await readFile(result.planPath, 'utf8')).toContain('rem-prd-audit-refusal-decision-refused-9');
   });
 
-  // Covers: task:19, rem-prd-audit-rem-prd-audit-s1-1-2
+  // Covers: task:19, task:rem-prd-audit-rem-prd-audit-s1-1-2
   it.each(['claude', 'codex'] as const)(
     'projects and dispatches a %s typed gap plan without consulting legacy remediation.json',
     async (key) => {
@@ -495,7 +495,7 @@ describe('Conductor typed remediation-plan admission', () => {
     await expect(readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  // Covers: task:21, rem-prd-audit-rem-prd-audit-s1-1-1
+  // Covers: task:21, task:rem-prd-audit-rem-prd-audit-s1-1-1
   it('halts mechanically for a bounded remediation projection input fault before provider dispatch', async () => {
     const oversizedTask = 'x'.repeat(600);
     const oversizedPlan = plan.replace('Authored task 1', oversizedTask);
@@ -526,7 +526,7 @@ describe('Conductor typed remediation-plan admission', () => {
     await expect(readFile(join(result.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(question);
   });
 
-  // Covers: rem-as-built-rem-as-built-ab2-1
+  // Covers: task:rem-as-built-rem-as-built-ab2-1
   it('halts through the remediation validator before provider dispatch for unreadable finish evidence', async () => {
     const result = await fixture('codex', undefined, 2, {
       source: 'finish-verification',
