@@ -5050,6 +5050,10 @@ export class Conductor {
     }
     | { kind: 'none'; reason: string }
   > {
+    // All production callers supply the provenance array. Keep this private
+    // routing seam tolerant of legacy direct callers while the older fixture
+    // shape is still in use; absent provenance is simply not prd_audit work.
+    const remediationEvidenceSources = hintSource.evidence ?? [];
     // Refusals stay on the normal event spine. This is intentionally the
     // existing gate_blocked member: remediation has no independent telemetry
     // file or side channel, and the existing persistence subscriber already
@@ -5058,7 +5062,7 @@ export class Conductor {
       try {
         await this.events.emit({
           type: 'gate_blocked',
-          step: hintSource.evidence?.[0]?.gate ?? 'remediate',
+          step: remediationEvidenceSources[0]?.gate ?? 'remediate',
           reason,
         });
       } catch {
@@ -5074,7 +5078,7 @@ export class Conductor {
     // fresh over-scope route, not from the (stale) caller hint. Keep the route
     // hoisted so admission and rejection can render the same decision block.
     let prdAuditOverScopeRoute: PrdAuditOverScopeRoute | undefined;
-    if (hintSource.evidence?.some((provenance) => provenance.gate === 'prd_audit')) {
+    if (remediationEvidenceSources.some((provenance) => provenance.gate === 'prd_audit')) {
       // The rendered Markdown report is deliberately not a remediation input.
       // A legacy or corrupt report cannot invent a repair route after the
       // typed-verdict migration; normal lifecycle handling will request a
@@ -5107,7 +5111,7 @@ export class Conductor {
       // group round (S5.3). Those retain their independent remediation route.
       if (
         overScopeRoute.kind === 'record' &&
-        hintSource.evidence.every((provenance) => provenance.gate === 'prd_audit') &&
+        remediationEvidenceSources.every((provenance) => provenance.gate === 'prd_audit') &&
         !(await this.prdAuditHasNonScopeBlockingFindings(this.currentRunId))
       ) {
         return { kind: 'none', reason: 'the recorded prd-audit scope acceptance closes the only blocking finding' };
@@ -5133,7 +5137,7 @@ export class Conductor {
       attemptRunId: this.currentRunId,
       config: this.config,
       git: this.prdAuditGit(),
-      includedGates: hintSource.evidence.map((evidence) => evidence.gate),
+      includedGates: remediationEvidenceSources.map((evidence) => evidence.gate),
       ...(prdAuditOverScopeRoute?.kind === 'refusal-rework'
         ? { refusals: prdAuditOverScopeRoute.refusals }
         : {}),
@@ -5319,10 +5323,6 @@ export class Conductor {
     // plan work, and appending it would amend `.docs/plans/<slug>.md` — a
     // protected artifact — producing self-amendment warnings for a change that
     // never belonged in the plan.
-    // All production callers supply the provenance array. Keep the private
-    // routing seam tolerant of legacy direct callers while the older fixture
-    // shape is still in use; absent provenance is simply not prd_audit work.
-    const remediationEvidenceSources = hintSource.evidence ?? [];
     const prdAuditEvidenceFile = remediationEvidenceSources.find(
       (provenance) => provenance.gate === 'prd_audit',
     )?.evidenceFile;
@@ -6551,7 +6551,7 @@ export class Conductor {
     const stallEvidence = hintSource.source === 'build-stall' ||
       hintSource.source === 'build_stall' ||
       hintSource.source === 'build_stall_zero_work'
-      ? hintSource.evidence.find((entry) => entry.gate === 'build')
+      ? hintSource.evidence?.find((entry) => entry.gate === 'build')
       : undefined;
     const stallQuestion = stallEvidence === undefined
       ? undefined
