@@ -139,6 +139,7 @@ import { ExecutionLifecycle } from './execution-lifecycle.js';
 import { BuildProgressWatcher, isNoTaskProgressBuildStall } from './build-progress-watcher.js';
 import { StepInFlightTicker } from './step-in-flight-ticker.js';
 import {
+  loadConfig,
   resolveBuildProgressConfig,
   resolveGateCodeValidityConfig,
   BUILD_PROGRESS_HALT_DEFAULTS,
@@ -173,7 +174,13 @@ import type {
   StateMutationResult,
 } from './conduct-state-store.js';
 import { createRoutedConductStateStore, readConductStateOverlay } from './conduct-state-store.js';
-import { isRegionStep, CHILD_REGION_STEPS, pipelinePathFor, type ChildId } from './child-context.js';
+import {
+  isRegionStep,
+  CHILD_REGION_STEPS,
+  listExistingChildren,
+  pipelinePathFor,
+  type ChildId,
+} from './child-context.js';
 import { resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import {
   advanceChildRegion,
@@ -2358,6 +2365,54 @@ export class Conductor {
     }
     this.activeRegionChild = child;
     this.persistedStateSnapshot = { ...state };
+  }
+
+  /**
+   * Resume derives its first candidate before the ordinary loop reaches a
+   * region step. Adopt the cursor-selected child here so index derivation and
+   * its state-only prerequisite clamp consume the same overlay as dispatch.
+   *
+   * Do not probe the cursor for an ordinary unconfigured workspace: it is a
+   * git fail-closed boundary and legacy resume workspaces may be non-git. A
+   * configured stack or durable child directory establishes child awareness.
+   */
+  private async activateChildRegionStateForResume(state: ConductState): Promise<boolean> {
+    const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    if (!slug) return true;
+
+    const [loadedConfig, existingChildren] = await Promise.all([
+      loadConfig(this.projectRoot),
+      listExistingChildren(this.projectRoot),
+    ]);
+    const stackConfigured = loadedConfig.ok && loadedConfig.config.stacked_prs?.enabled === true;
+    if (!stackConfigured && existingChildren.length === 0) return true;
+
+    const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+    if (cursor.kind === 'active') {
+      await this.activateChildRegionState(state, cursor.child);
+      return true;
+    }
+    if (cursor.kind === 'no-child') return true;
+
+    await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+    return false;
+  }
+
+  /**
+   * Whole-feature verdicts stay flat. For a selected child, each region
+   * verdict is replaced by the child's record; an absent child record masks a
+   * stale flat record so gateSatisfied falls back to child overlay state.
+   */
+  private async readGateVerdictOverlay(): Promise<Partial<Record<StepName, GateObjectiveVerdict>>> {
+    const verdicts = await readAllVerdicts(this.projectRoot);
+    if (this.activeRegionChild === undefined) return verdicts;
+
+    for (const step of CHILD_REGION_STEPS) {
+      const verdict = await readVerdict(this.projectRoot, step, this.activeRegionChild);
+      if (verdict) verdicts[step] = verdict;
+      else delete verdicts[step];
+    }
+    return verdicts;
   }
 
   /**
@@ -5876,6 +5931,7 @@ export class Conductor {
     if (this.fromStep) {
       startIndex = indexOf(this.fromStep);
     } else if (this.resume) {
+      if (!await this.activateChildRegionStateForResume(state)) return;
       // A restarted process has no `lastRebaseOutcome`, so the durable
       // operation descriptor is the only authority that can prevent it from
       // selecting finish across an interrupted/inconsistent rebase write.
@@ -5968,7 +6024,7 @@ export class Conductor {
       // Read verdicts and derive gate topology to find the earliest unsatisfied gate.
       let resumeClamp: { verdicts: Awaited<ReturnType<typeof readAllVerdicts>>; earliestGateIdx: number } | undefined;
       try {
-        const verdicts = await readAllVerdicts(this.projectRoot);
+        const verdicts = await this.readGateVerdictOverlay();
         const topo = deriveGateTopology(steps);
         const earliestGateIdx = earliestUnsatisfiedGateIndex({
           steps,
@@ -14373,7 +14429,7 @@ export class Conductor {
       await this.applyStateBatch({ name: 'record selector tail skips', mutations });
     }
 
-    const verdicts = await readAllVerdicts(this.projectRoot);
+    const verdicts = await this.readGateVerdictOverlay();
 
     // Kickback: a step re-opened an upstream gate (verdict is
     // {satisfied:false, kickback.from === this step}). Re-open that gate
