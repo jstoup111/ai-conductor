@@ -5,7 +5,12 @@ import { basename, join } from 'node:path';
 import { execa } from 'execa';
 import { writeHaltMarker } from '../../src/engine/halt-marker.js';
 import { PRE_PUSH_HOOK } from '../../src/engine/git-hook-assets.js';
-import type { HaltRecordRemoteOptions } from '../../src/engine/halt-record.js';
+import {
+  recordHalt,
+  supersedeHaltRecord,
+  type HaltRecordInput,
+  type HaltRecordRemoteOptions,
+} from '../../src/engine/halt-record.js';
 import type { RemoteGitExecutionResult, RemoteGitOperationDependencies } from '../../src/engine/remote-git-operations.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -23,7 +28,7 @@ afterEach(async () => {
   }
 });
 
-describe('writeHaltMarker lease publication', () => {
+describe('halt record lease publication', () => {
   it('publishes a post-rebase halt record to an unmoved bare remote', async () => {
     const { remote, worktree } = await makeFeatureRepository();
     await amendHead(worktree);
@@ -113,6 +118,43 @@ describe('writeHaltMarker lease publication', () => {
 
     expect(await gitDirValue(remote, ['rev-parse', `refs/heads/${branch}`])).toBe(await gitValue(worktree, ['rev-parse', 'HEAD']));
   });
+
+  // Covers: task:3
+  // A superseded halt record reaches origin after a local rewrite when the remote is unmoved.
+  it('publishes a post-rebase resolved halt record to an unmoved bare remote', async () => {
+    const { remote, worktree } = await makeFeatureRepository();
+    const input = await makeHaltRecordInput(worktree);
+
+    await expect(recordHalt(worktree, input, realGitRemote())).resolves.toEqual({ kind: 'written' });
+    await amendHead(worktree);
+
+    await expect(supersedeHaltRecord(worktree, input.slug, 'operator', realGitRemote()))
+      .resolves.toEqual({ kind: 'written' });
+
+    expect(await gitDirValue(remote, ['rev-parse', `refs/heads/${branch}`])).toBe(await gitValue(worktree, ['rev-parse', 'HEAD']));
+    await expect(gitDirValue(remote, ['show', `refs/heads/${branch}:.docs/halted/${input.slug}.md`]))
+      .resolves.toContain('Status: resolved');
+    await expect(gitDirValue(remote, ['show', `refs/heads/${branch}:.docs/halted/${input.slug}.md`]))
+      .resolves.toContain('Resolution cause: operator');
+  });
+
+  // Covers: task:3
+  // A foreign branch advance refuses the resolution lease but preserves its local resolved record.
+  it('retains a local resolved halt record after a foreign remote move', async () => {
+    const { remote, worktree } = await makeFeatureRepository();
+    const input = await makeHaltRecordInput(worktree);
+
+    await expect(recordHalt(worktree, input, realGitRemote())).resolves.toEqual({ kind: 'written' });
+    await amendHead(worktree);
+    const foreignSha = await advanceBranchFromForeignClone(remote);
+
+    await expect(supersedeHaltRecord(worktree, input.slug, 'operator', realGitRemote()))
+      .resolves.toMatchObject({ kind: 'pushFailed', reason: expect.stringContaining('stale info') });
+
+    expect(await gitDirValue(remote, ['rev-parse', `refs/heads/${branch}`])).toBe(foreignSha);
+    await expect(gitValue(worktree, ['show', `HEAD:.docs/halted/${input.slug}.md`]))
+      .resolves.toContain('Status: resolved');
+  });
 });
 
 async function makeFeatureRepository(): Promise<{ remote: string; worktree: string }> {
@@ -137,6 +179,19 @@ async function makeFeatureRepository(): Promise<{ remote: string; worktree: stri
 
 async function amendHead(cwd: string): Promise<void> {
   await execa('git', ['commit', '--amend', '--allow-empty', '-m', 'rebased'], { cwd });
+}
+
+async function makeHaltRecordInput(worktree: string): Promise<HaltRecordInput> {
+  return {
+    slug: basename(worktree),
+    haltClass: 'needs-human',
+    step: 'build',
+    phase: 'BUILD',
+    branch,
+    headSha: await gitValue(worktree, ['rev-parse', 'HEAD']),
+    haltedAt: '2026-10-10T00:00:00.000Z',
+    haltBody: 'operator decision required\n',
+  };
 }
 
 async function advanceBranchFromForeignClone(remote: string): Promise<string> {
