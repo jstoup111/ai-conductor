@@ -420,6 +420,58 @@ describe('PRD audit judgment contract', () => {
     });
   });
 
+  it('exempts only source-qualified coherence-waived requirements from coverage diagnostics', () => {
+    const path = '.docs/specs/feature.md';
+    const pass = {
+      criterion: { storyId: 'alpha', ordinal: 1 },
+      grade: 'PASS',
+      evidence: 'The criterion is satisfied by the delivered behavior.',
+      rationale: 'The projected story mapping covers the only traced requirement.',
+      requirementAssociations: [],
+      evidenceTaskIds: [],
+    };
+    const input = { version: 'v1', criterionJudgments: [pass], noOwnerObservations: [] };
+    const context = {
+      criteria: [{ id: 'Salpha.1', requirementAssociations: [{ path, requirementId: 'FR-1' }] }],
+      taskIds: new Set<string>(),
+      requirements: [{ path, requirements: [{ id: 'FR-1' }, { id: 'FR-17' }, { id: 'FR-18' }] }],
+    };
+
+    expect(validatePrdAuditJudgment(input, {
+      ...context,
+      waivedRequirements: [{ path, requirementId: 'FR-17' }],
+    })).toMatchObject({
+      ok: false,
+      diagnostics: [`requirement ${path}:FR-18 lacks a criterion association or valid PLAN_GAP evidence`],
+    });
+    expect(validatePrdAuditJudgment(input, {
+      ...context,
+      waivedRequirements: [{ path, requirementId: 'FR-17' }, { path, requirementId: 'FR-18' }],
+    })).toMatchObject({ ok: true });
+
+    const duplicatePass = { ...pass, criterion: { storyId: 'beta', ordinal: 1 } };
+    expect(validatePrdAuditJudgment({
+      version: 'v1', criterionJudgments: [pass, duplicatePass], noOwnerObservations: [],
+    }, {
+      criteria: [
+        { id: 'Salpha.1', requirementAssociations: [] },
+        { id: 'Sbeta.1', requirementAssociations: [] },
+      ],
+      taskIds: new Set<string>(),
+      requirements: [
+        { path: '.docs/specs/a.md', requirements: [{ id: 'FR-17' }] },
+        { path: '.docs/specs/b.md', requirements: [{ id: 'FR-17' }] },
+      ],
+      waivedRequirements: [],
+    })).toMatchObject({
+      ok: false,
+      diagnostics: [
+        'requirement .docs/specs/a.md:FR-17 lacks a criterion association or valid PLAN_GAP evidence',
+        'requirement .docs/specs/b.md:FR-17 lacks a criterion association or valid PLAN_GAP evidence',
+      ],
+    });
+  });
+
   it('exports a frozen schema and renders its contract shape', () => {
     expect(Object.isFrozen(PRD_AUDIT_JUDGMENT_SCHEMA)).toBe(true);
 
