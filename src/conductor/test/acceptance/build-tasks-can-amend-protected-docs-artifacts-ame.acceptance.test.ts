@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2, task:3
 /**
  * RED acceptance specs for #1293.
  *
@@ -291,7 +291,7 @@ describe('TS-1: accepted-artifact amendments are performed during DECIDE', () =>
   it('keeps the additive amendment form while excepting story artifacts from amendment records', async () => {
     const text = await readContract('HARNESS.md');
 
-    const additiveNonStoryContract = /accepted\s+DECIDE\s+artifact[\s\S]{0,180}\.docs\/stories\/[\s\S]{0,100}exception[\s\S]{0,220}all\s+other\s+accepted\s+DECIDE\s+artifacts[\s\S]{0,220}original\s+assertion[\s\S]{0,100}never\s+rewrite[\s\S]{0,80}delete[\s\S]{0,180}Amended\s+YYYY-MM-DD\s+by\s+#NNN/i;
+    const additiveNonStoryContract = /accepted\s+DECIDE\s+artifact[\s\S]{0,520}\.docs\/stories\/[\s\S]{0,100}exception[\s\S]{0,220}all\s+other\s+accepted\s+DECIDE\s+artifacts[\s\S]{0,220}original\s+assertion[\s\S]{0,100}never\s+rewrite[\s\S]{0,80}delete[\s\S]{0,180}Amended\s+YYYY-MM-DD\s+by\s+#NNN/i;
 
     expect(text).toMatch(additiveNonStoryContract);
     expect(text).toMatch(/\.docs\/stories\/[\s\S]{0,200}replace[\s\S]{0,120}in place[\s\S]{0,120}no amendment record/i);

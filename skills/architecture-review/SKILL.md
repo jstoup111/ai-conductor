@@ -50,16 +50,20 @@ story-phrasing nit or a coverage gap. The conductor caps re-openings and HALTs f
 
 **Accepted-artifact amendment:** When this review concludes that an accepted DECIDE assertion is
 falsified, amend that non-story artifact during the DECIDE pass; do not instruct a later phase to
-make the change. Add this note beside the original assertion:
+make the change. If it is already on the base branch, add this note beside the original assertion:
 
 ```markdown
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
 ```
 
-For every non-story artifact, the note is additive: the original assertion remains preserved; never
-rewrite or delete it, and create no separate record. Story artifacts under `.docs/stories/` are the
-exception: replace superseded assertions in place without an amendment record. The amended artifact is
-then part of the spec-branch baseline before BUILD begins.
+For every non-story artifact, the note is additive only when the artifact is already on the base
+branch: add the note; the original assertion remains preserved; never rewrite or delete it, and
+create no separate record. Story artifacts under `.docs/stories/` are the exception: replace
+superseded assertions in place without an amendment record. The amended artifact is then part of
+the spec-branch baseline before BUILD begins.
+
+An accepted DECIDE artifact absent from the base branch is a draft: revise it in place, remove
+superseded text, and add no amendment note or revision log.
 
 ### Lightweight Mode (Medium Complexity Tier)
 
