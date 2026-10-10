@@ -7708,7 +7708,7 @@ export class Conductor {
                       ...(isVerdictRunIdentityStep(member.name as StepName)
                         ? { runId: branchRunIds.get(member.name) }
                         : {}),
-                      ...(this.verifyArtifacts
+                      ...(isVerdictRunIdentityStep(member.name as StepName)
                         ? {
                             verifyDispatch: async (result: StepRunResult) => {
                               await this.stampVerdictRunIdentity(
@@ -7724,9 +7724,17 @@ export class Conductor {
                               if (handshake) {
                                 const reason = handshake.reason ??
                                   `post-dispatch verdict write handshake failed for ${member.name}`;
-                                branchHandshakeFailures.set(member.name, handshake);
-                                branchHandshakeRetryReasons.set(member.name, reason);
-                                return reason;
+                                if (this.verifyArtifacts) {
+                                  branchHandshakeFailures.set(member.name, handshake);
+                                  branchHandshakeRetryReasons.set(member.name, reason);
+                                  return reason;
+                                }
+                                // Verification-off groups retain their historic
+                                // dispatch-success semantics. Observe this
+                                // handshake for identity telemetry, but do not
+                                // retain a failure that could affect the join.
+                                branchHandshakeFailures.delete(member.name);
+                                return undefined;
                               }
                               branchHandshakeFailures.delete(member.name);
                               return undefined;

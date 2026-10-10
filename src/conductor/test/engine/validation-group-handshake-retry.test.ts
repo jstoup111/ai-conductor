@@ -219,7 +219,9 @@ describe('validation-group dispatch handshake retries', () => {
       expect(calls.filter((step) => step === member)).toHaveLength(1);
     }
     expect(calls.filter((step) => step === 'prd_audit')).toHaveLength(1);
-    expect(handshake).not.toHaveBeenCalled();
+    expect(handshake.mock.calls.map(([step]) => step).sort()).toEqual([
+      'architecture_review_as_built', 'manual_test', 'prd_audit',
+    ]);
     expect(events).toContainEqual(expect.objectContaining({
       type: 'parallel_completed', step: 'manual_test',
       branches: ['manual_test', 'prd_audit', 'architecture_review_as_built'],
