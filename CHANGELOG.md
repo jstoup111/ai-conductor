@@ -71,6 +71,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Pi users now receive protection against destructive Git commands during build dispatches. ([implementation PR #3081](https://github.com/jstoup111/ai-conductor/pull/3081)).
 - Validation-group reviews that kick back to build are no longer reported as interrupted in pipeline telemetry. ([implementation PR #3111](https://github.com/jstoup111/ai-conductor/pull/3111)).
 - The daemon now fills a free slot (for example, a feature whose halt you cleared) while a sibling self-host build holds back the origin refresh, instead of waiting for that build to finish; `daemon status` shows when a refresh is pending. ([implementation PR #3108](https://github.com/jstoup111/ai-conductor/pull/3108)).
+- Daemon runs route unretryable prerequisite failures without repeating affected steps. ([implementation PR #3088](https://github.com/jstoup111/ai-conductor/pull/3088)).
 
 ## Migration
 
