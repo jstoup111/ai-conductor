@@ -4,11 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parseChildId } from '../../src/engine/child-context.js';
+import { Conductor } from '../../src/engine/conductor.js';
 import {
   createRoutedConductStateStore,
   readConductStateOverlay,
 } from '../../src/engine/conduct-state-store.js';
+import { selectNextGate } from '../../src/engine/selector.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
+import type { ConductState } from '../../src/types/index.js';
 
 const roots: string[] = [];
 
@@ -56,5 +60,32 @@ describe('child-routed conduct state', () => {
       value: { build: 'done', last_step: 'build' },
     });
     await expect(readFile(join(root, '.pipeline', 'conduct-state.json'), 'utf8')).rejects.toThrow();
+  });
+
+  it('does not let a flat completed build skip the active child build in Conductor selection', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conduct-state-overlay-'));
+    roots.push(root);
+    const child = parseChildId(2)!;
+    await writeState(join(root, '.pipeline', 'conduct-state.json'), {
+      coverage_binding: 'done',
+      build: 'done',
+    });
+    await createRoutedConductStateStore(root, child).apply({
+      field: 'test_suite', expected: undefined, next: 'pending', intent: 'create child state without build',
+    });
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      daemon: false,
+    } as never);
+    const state: ConductState = { coverage_binding: 'done', build: 'done' };
+
+    await (conductor as unknown as {
+      activateChildRegionState: (value: ConductState, id: typeof child) => Promise<void>;
+    }).activateChildRegionState(state, child);
+
+    expect(state.build).toBeUndefined();
+    expect(selectNextGate({ steps: ALL_STEPS, state, verdicts: {}, regionStart: 'build' }))
+      .toMatchObject({ kind: 'run', step: 'build' });
   });
 });
