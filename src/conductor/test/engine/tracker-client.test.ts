@@ -196,7 +196,7 @@ describe('createGithubTrackerClient.readPullRequestMergeState', () => {
 
     expect(calls).toEqual([[
       'pr', 'view', 'https://github.com/acme/widget/pull/7',
-      '--json', 'state,mergeable,statusCheckRollup,labels,isDraft,body',
+      '--json', 'state,mergeable,statusCheckRollup,labels,isDraft,body,mergeStateStatus,baseRefName,headRefOid',
     ]]);
     expect(state).toMatchObject({ state: 'UNKNOWN', readFailure: { kind: 'runner' } });
   });
@@ -220,6 +220,7 @@ describe('makeProductionGh bot write credential', () => {
       savedEnvironment.set(key, process.env[key]);
     }
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.CONDUCT_GH_REAL_EXECUTABLE;
   });
 
   afterEach(() => {

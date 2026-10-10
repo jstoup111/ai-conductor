@@ -51,6 +51,12 @@ function prViewJson(opts: {
       mergeable: opts.mergeable ?? 'MERGEABLE',
       statusCheckRollup: opts.checks ?? [],
       labels: (opts.labels ?? []).map((name) => ({ name })),
+      // The readiness classifier deliberately treats an absent merge-state
+      // field as indeterminate. These CI-fix fixtures model a normal readable
+      // PR, so provide the fields returned by the current typed PR read.
+      mergeStateStatus: 'CLEAN',
+      baseRefName: 'main',
+      headRefOid: 'fixture-head',
     }),
   };
 }
