@@ -1298,3 +1298,11 @@ Scope note: 40 tasks puts this plan in the 21–40 warning band. The operator ch
 **Done when:**
 - adr-2026-10-03-stacked-child-plans-identity-and-state decision 8 is satisfied by this task.
 - The repair for task rem-as-built-rem-asbuilt-b00b54a4-5-r1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-0d789f28-1-r1: build-review-adjudication-coordinator.ts (~:470, :494, :527): read suppression history from the flat suppressionStore (after its persist), not from the child case store, and pass that whole-feature suppressions list into both assembleBuildReviewAdjudicationContext calls, while priorCases still come from the child store. Add a test with child 2 active, flat suppression history present and none under .pipeline/children/2/, asserting the judge's context.suppressionHistory contains the flat entries and priorCases contains only child 2's cases
+**Gate:** as-built
+**Rationale:** Verified (99%). In build-review-adjudication-coordinator.ts, lines 177-185 now persist suppressions through the flat, child-less suppressionStore. The coordinator then reads `prior` from the child-scoped `store` (:470) and passes prior.state.suppressions into both assembleBuildReviewAdjudicationContext calls (:494, :527). With a child active, the judge receives empty or stale suppression history instead of whole-feature history. A grep shows these two call sites are the only coordinator readers of state.suppressions; prd-widening and suppression-history readers use the flat store. ADR adr-2026-10-03 decision 8 is clear that suppressions stay whole-feature and only cases and credit receipts move per child. No architectural decision is needed, so this is a conforming BUILD repair that completes rem-asbuilt-b00b54a4-5-r1 under Task 28. Task 28's per-child case reads (priorCases from the child store) are preserved; only the suppression source changes. Suppressed-ID filtering is unaffected.
+**Governing clause:** adr-2026-10-03-stacked-child-plans-identity-and-state decision 8
+**Done when:**
+- adr-2026-10-03-stacked-child-plans-identity-and-state decision 8 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-0d789f28-1-r1 is committed and its targeted tests pass.
