@@ -103,13 +103,22 @@ export async function applyIssueEventSync(
 
   for (const edge of edges) {
     try {
-      links.push(...await createDependencyLinks([edge], {
+      const created = await createDependencyLinks([edge], {
         gh: deps.gh,
         operations: deps.operations,
         actor: deps.actor,
         cwd: deps.cwd,
         log,
-      }));
+      });
+      // The additive writer deliberately skips an unresolvable target rather
+      // than guessing its database id. At this event boundary that skip is a
+      // per-target outcome, not a silent success: callers need the target and
+      // reason while remaining free to process later declarations.
+      if (created.length === 0) {
+        failures.push({ target: edge.target, reason: 'target issue could not be resolved' });
+        continue;
+      }
+      links.push(...created);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       log(`[issue-event-sync] dependency link ${edge.target} failed: ${reason}`);

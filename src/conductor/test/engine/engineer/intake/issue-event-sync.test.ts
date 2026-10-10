@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:5
+// Covers: task:3, task:4, task:5, task:6
 
 import { describe, expect, it } from 'vitest';
 import type { GithubOperationRequest, GithubOperationRunner } from '../../../../src/engine/github-operations.js';
@@ -32,11 +32,16 @@ function formBody(): string {
   ].join('\n');
 }
 
-function makeDeps(existingTargets: readonly number[] = []) {
+function makeDeps(existingTargets: readonly number[] = [], options: {
+  readonly missingTargets?: readonly number[];
+  readonly networkError?: string;
+  readonly dependencyRefusal?: 'explicit-authorization-required' | 'cycle-rejection';
+} = {}) {
   const requests: GithubOperationRequest[] = [];
   const labels: string[] = [];
   const linkedTargets = new Set(existingTargets);
   const gh: GhRunner = async (args) => {
+    if (options.networkError) throw new Error(options.networkError);
     const path = args.find((arg) => arg.includes('/dependencies/blocked_by'));
     if (path && !args.includes('POST')) {
       return {
@@ -47,7 +52,11 @@ function makeDeps(existingTargets: readonly number[] = []) {
       };
     }
     const issue = args.find((arg) => /^repos\/acme\/app\/issues\/\d+$/.test(arg));
-    if (issue) return { stdout: JSON.stringify({ id: 1_000_000 + Number(issue.split('/').at(-1)) }) };
+    if (issue) {
+      const number = Number(issue.split('/').at(-1));
+      if (options.missingTargets?.includes(number)) return { stdout: '{}' };
+      return { stdout: JSON.stringify({ id: 1_000_000 + number }) };
+    }
     return { stdout: '{}' };
   };
   const operations: GithubOperationRunner = {
@@ -57,6 +66,7 @@ function makeDeps(existingTargets: readonly number[] = []) {
         labels.push((request.payload as { label: string }).label);
       }
       if (request.operation === 'intake.issue.dependency.add') {
+        if (options.dependencyRefusal) return { kind: 'refused', reason: options.dependencyRefusal };
         linkedTargets.add((request.payload as { dependency: { number: number } }).dependency.number);
       }
       return {};
@@ -199,4 +209,65 @@ describe('applyIssueEventSync', () => {
     expect(dependencyTargets(restored.requests)).toEqual(['acme/app#10']);
     expect([...restored.linkedTargets]).toEqual([10]);
   });
+
+  it('reports an unresolved target while retaining successful links and form labels', async () => {
+    const { deps, requests, labels } = makeDeps([], { missingTargets: [99_999] });
+
+    const report = await applyIssueEventSync(
+      opened(formBody().replace('#10', '#10 / #99999')),
+      deps,
+    );
+
+    expect(dependencyTargets(requests)).toEqual(['acme/app#10', 'acme/app#12']);
+    expect(labels).toEqual(expect.arrayContaining(['priority: high', 'size: M']));
+    expect(report.failures).toEqual([{
+      target: 'acme/app#99999',
+      reason: 'target issue could not be resolved',
+    }]);
+  });
+
+  it('reports guarded cycle refusals without writing the rejected link', async () => {
+    const { deps, requests, linkedTargets } = makeDeps([], { dependencyRefusal: 'cycle-rejection' });
+
+    const report = await applyIssueEventSync(opened('blocked by #10'), deps);
+
+    expect(dependencyTargets(requests)).toEqual(['acme/app#10']);
+    expect(linkedTargets).toEqual(new Set());
+    expect(report.links).toEqual([]);
+    expect(report.failures).toEqual([{
+      target: 'acme/app#10',
+      reason: expect.stringContaining('cycle-rejection'),
+    }]);
+  });
+
+  it('reports every network-failed target while still applying form labels', async () => {
+    const { deps, requests, labels } = makeDeps([], { networkError: 'network unavailable' });
+
+    const report = await applyIssueEventSync(opened(formBody()), deps);
+
+    expect(dependencyTargets(requests)).toEqual([]);
+    expect(labels).toEqual(expect.arrayContaining(['priority: high', 'size: M']));
+    expect(report.failures).toEqual([
+      { target: 'acme/app#10', reason: 'network unavailable' },
+      { target: 'acme/app#12', reason: 'network unavailable' },
+    ]);
+  });
+
+  it.each(['opened', 'edited'])(
+    'reports fresh explicit-authorization-required refusal for a %s event',
+    async (action) => {
+      const { deps, requests, linkedTargets } = makeDeps([], { dependencyRefusal: 'explicit-authorization-required' });
+      const event = action === 'edited' ? edited('blocked by #10') : opened('blocked by #10');
+
+      const report = await applyIssueEventSync(event, deps);
+
+      expect(dependencyTargets(requests)).toEqual(['acme/app#10']);
+      expect(linkedTargets).toEqual(new Set());
+      expect(report.links).toEqual([]);
+      expect(report.failures).toEqual([{
+        target: 'acme/app#10',
+        reason: expect.stringContaining('explicit-authorization-required'),
+      }]);
+    },
+  );
 });
