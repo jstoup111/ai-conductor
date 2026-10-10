@@ -218,7 +218,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         if (step === 'build_review') {
           await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
             verdict,
-            rubric: { testQuality: verdict === 'FAIL' },
+            rubric: { testQuality: verdict === 'FAIL', implementationQuality: false },
             findings: verdict === 'FAIL' ? { testQuality: ['test-insensitive'] } : {},
           }));
           return { success: true };
@@ -237,7 +237,10 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(),
       projectRoot: dir, verifyArtifacts: true, mode: 'auto', daemon: true,
       fromStep: 'build_review', maxRetries: 1,
-      config: { build_review: { enabled: true }, kickback_escalation: { enabled: false } },
+      config: {
+        build_review: { enabled: true, rubrics: { implementationQuality: { enabled: false } } },
+        kickback_escalation: { enabled: false },
+      },
       fullSuiteVerifier: {
         ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
         inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
@@ -280,7 +283,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
             join(dir, '.pipeline/build-review.json'),
             JSON.stringify({
               verdict: 'FAIL',
-              rubric: { testQuality: true, security: false },
+              rubric: { testQuality: true, security: false, implementationQuality: false },
               ...(lastReason === '' ? {} : { findings: { testQuality: [lastReason] } }),
             }),
           );
@@ -300,7 +303,10 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       fromStep: gate,
       maxRetries: 1,
       config: {
-        build_review: { enabled: gate === 'build_review' },
+        build_review: {
+          enabled: gate === 'build_review',
+          rubrics: { implementationQuality: { enabled: false } },
+        },
         kickback_escalation: { enabled: false },
       },
       fullSuiteVerifier: {
@@ -532,7 +538,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         if (step === 'build_review') {
           await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
             verdict: 'FAIL',
-            rubric: { testQuality: true },
+            rubric: { testQuality: true, implementationQuality: false },
             findings: { testQuality: ['test-insensitive'] },
           }));
         }
@@ -544,7 +550,10 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(),
       projectRoot: dir, verifyArtifacts: true, mode: 'auto', daemon: true,
       fromStep: 'build_review', maxRetries: 1,
-      config: { build_review: { enabled: true }, kickback_escalation: { enabled: false } },
+      config: {
+        build_review: { enabled: true, rubrics: { implementationQuality: { enabled: false } } },
+        kickback_escalation: { enabled: false },
+      },
       fullSuiteVerifier: {
         ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
         inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
@@ -588,7 +597,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         if (step === 'build_review') {
           await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
             verdict: 'FAIL',
-            rubric: { testQuality: true },
+            rubric: { testQuality: true, implementationQuality: false },
             findings: { testQuality: ['test-insensitive'] },
           }));
         }
@@ -616,7 +625,10 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       stateFilePath: statePath, stepRunner: runner, events,
       projectRoot: dir, verifyArtifacts: true, mode: 'auto', daemon: true,
       fromStep: 'build_review', maxRetries: 1,
-      config: { build_review: { enabled: true }, kickback_escalation: { enabled: false } },
+      config: {
+        build_review: { enabled: true, rubrics: { implementationQuality: { enabled: false } } },
+        kickback_escalation: { enabled: false },
+      },
       fullSuiteVerifier: {
         ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
         inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
@@ -659,7 +671,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
           if (step === 'build_review') {
             await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
               verdict,
-              rubric: { testQuality: verdict === 'FAIL' },
+              rubric: { testQuality: verdict === 'FAIL', implementationQuality: false },
             }));
             return { success: true };
           }
@@ -671,7 +683,10 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(),
         projectRoot: dir, verifyArtifacts: true, mode: 'auto', daemon: true,
         fromStep: 'build_review', maxRetries: 1,
-        config: { build_review: { enabled: true }, kickback_escalation: { enabled: false } },
+        config: {
+          build_review: { enabled: true, rubrics: { implementationQuality: { enabled: false } } },
+          kickback_escalation: { enabled: false },
+        },
         fullSuiteVerifier: {
           ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
           inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
@@ -1042,7 +1057,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
           if (step === 'build_review') {
             await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
               verdict: 'FAIL',
-              rubric: { testQuality: true },
+              rubric: { testQuality: true, implementationQuality: false },
               findings: { testQuality: ['test-insensitive'] },
             }));
             return { success: true };
@@ -1056,7 +1071,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         projectRoot: dir, verifyArtifacts: true, mode: 'auto', daemon: true,
         fromStep: 'build_review', maxRetries: 1,
         config: {
-          build_review: { enabled: true },
+          build_review: { enabled: true, rubrics: { implementationQuality: { enabled: false } } },
           cumulative_kickback_bound: { enabled: false },
           kickback_escalation: { enabled: false },
         },
