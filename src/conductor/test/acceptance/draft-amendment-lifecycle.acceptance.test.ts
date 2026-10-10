@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:3
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -56,5 +56,16 @@ describe('DECIDE artifact amendment lifecycle contract', () => {
 
     expect(hasStoryOnlyAmendmentException(contract)).toBe(true);
     expect(section).toMatch(/draft-amendment-note/);
+  });
+
+  it.each([
+    ['conflict-check', 'skills/conflict-check/SKILL.md'],
+    ['architecture-review', 'skills/architecture-review/SKILL.md'],
+    ['coherence-check', 'skills/coherence-check/SKILL.md'],
+  ])('%s restricts amendment notes to artifacts on the base and revises drafts in place', async (_name, path) => {
+    const contract = await readContract(path);
+
+    expect(contract).toMatch(/already on the base\s+branch[\s\S]{0,220}(?:add|use)[\s\S]{0,100}(?:amendment )?note/i);
+    expect(contract).toMatch(/absent from the base\s+branch[\s\S]{0,220}revise(?:d)?[\s\S]{0,100}in place[\s\S]{0,160}no amendment note/i);
   });
 });

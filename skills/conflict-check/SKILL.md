@@ -210,7 +210,7 @@ After user selects:
 DECIDE artifact, perform the amendment during the DECIDE pass in that artifact — never defer it
 as a later BUILD task. Story artifacts under `.docs/stories/` are the narrow exception: replace
 the superseded assertion in place and leave no amendment record. For all other accepted DECIDE
-artifacts, add this note beside the original assertion:
+artifacts already on the base branch, add this note beside the original assertion:
 
 ```markdown
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
@@ -219,6 +219,9 @@ artifacts, add this note beside the original assertion:
 For these non-story artifacts, the amendment is additive: the original assertion remains; do not
 rewrite or delete it, and create no separate record. This makes the correction part of the
 spec-branch baseline before BUILD starts.
+
+An accepted DECIDE artifact absent from the base branch is a draft: revise it in place, remove
+superseded text, and add no amendment note or revision log.
 
 **Conflict reports are overwritten on re-run.** If a re-check after resolution finds new or
 changed conflicts, overwrite the existing conflict report file. The report reflects the CURRENT
