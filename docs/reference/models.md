@@ -143,7 +143,7 @@ itself is in [configuration](configuration.md).
 
 `model_fallback_ladder` in config replaces the policy ladder wholesale:
 `this.config?.model_fallback_ladder ?? this.modelPolicy.modelFallbackLadder`
-(`src/conductor/src/engine/step-runners.ts:384`).
+(`src/conductor/src/engine/step-runners.ts:385`).
 
 ## Escalation on retry
 
@@ -180,15 +180,15 @@ model and effort values are dropped, because they were authored for the inherite
 ## CLI override
 
 `--model <name>` overrides the model for **every** step and beats every other source. Registered at
-`src/conductor/src/cli.ts:63`, plumbed through `cli.ts:353` → `src/conductor/src/index.ts:1007` →
-`step-runners.ts:418` → `resolved-config.ts:244`. It is also passed down to the provider CLIs
+`src/conductor/src/cli.ts:63`, plumbed through `cli.ts:353` → `src/conductor/src/index.ts:1008` →
+`step-runners.ts:419` → `resolved-config.ts:244`. It is also passed down to the provider CLIs
 (`src/conductor/src/execution/claude-provider.ts:668`,
 `src/conductor/src/execution/codex-provider.ts:493`). Flag semantics live in [cli](cli.md).
 
 There is no `--tier` flag; the tier comes from conductor state.
 
 > **Known limitation.** `ResolveOptions.effortCliOverride` (`resolved-config.ts:132-133`) and
-> `StepRunner.effortOverride` (`step-runners.ts:267-268`) are both documented as the CLI `--effort`
+> `StepRunner.effortOverride` (`step-runners.ts:268-269`) are both documented as the CLI `--effort`
 > override, and both sit at the top of the effort precedence chain — but `src/conductor/src/cli.ts`
 > registers no `--effort` option. The seam is reachable only from in-process callers. To change effort,
 > set `defaults.effort` or a per-step `effort` in config. Tracked in

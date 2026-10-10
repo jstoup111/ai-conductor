@@ -12,7 +12,7 @@ import type {
   CheckpointResponse,
   NavigableStep,
   ArtifactReviewResult,
-} from '../engine/conductor.js';
+} from '../engine/conductor-options.js';
 
 export interface UIRenderer {
   /** Stable diagnostic label used when the subscriber reports renderer_error. */

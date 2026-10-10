@@ -1205,12 +1205,6 @@ it('binds every production step-resolution call to the policy owned by its execu
       },
       {
         file: 'engine/conductor.ts',
-        scope: 'resolveGroupMembership',
-        argumentCount: 5,
-        policyProvenance: 'parameter:modelPolicy:ProviderModelPolicy',
-      },
-      {
-        file: 'engine/conductor.ts',
         scope: 'run',
         argumentCount: 5,
         policyProvenance:
@@ -1243,6 +1237,12 @@ it('binds every production step-resolution call to the policy owned by its execu
         argumentCount: 5,
         policyProvenance:
           'rubric-provider-selection:resolveProviderModelPolicy:ProviderModelPolicy',
+      },
+      {
+        file: 'engine/resume-entry.ts',
+        scope: 'resolveGroupMembership',
+        argumentCount: 5,
+        policyProvenance: 'parameter:modelPolicy:ProviderModelPolicy',
       },
       {
         file: 'engine/step-runners.ts',

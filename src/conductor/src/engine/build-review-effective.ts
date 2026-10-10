@@ -61,6 +61,16 @@ export type BuildReviewEffectiveResolution =
     }
   | { readonly ok: false; readonly reason: string };
 
+export function rawBuildReviewFailIsEffectivelyAccepted(
+  resolution: BuildReviewEffectiveResolution,
+): boolean {
+  return (
+    resolution.ok &&
+    resolution.effective.verdict === 'PASS' &&
+    resolution.effective.acceptedFindingIds.length > 0
+  );
+}
+
 function sameFeature(left: BuildReviewFeatureIdentity, right: BuildReviewFeatureIdentity): boolean {
   return left.version === right.version && left.repository === right.repository && left.feature === right.feature;
 }

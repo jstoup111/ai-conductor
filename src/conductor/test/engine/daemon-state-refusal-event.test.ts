@@ -1,3 +1,4 @@
+// Covers: task:9
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -53,9 +54,13 @@ vi.mock('../../src/engine/conductor.js', () => ({
       });
     }
   },
-  createFinishPresentationRepair: vi.fn(),
+}));
+
+const finishPresentationRepair = vi.hoisted(() => ({
   createProvenanceGuardedFinishPresentationRepair: vi.fn(),
 }));
+
+vi.mock('../../src/engine/finish-presentation-repair.js', () => finishPresentationRepair);
 
 vi.mock('../../src/engine/daemon-runner.js', () => ({
   makeRunFeature: (deps: {
@@ -99,6 +104,7 @@ import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 const directories: string[] = [];
 
 afterEach(async () => {
+  finishPresentationRepair.createProvenanceGuardedFinishPresentationRepair.mockClear();
   await Promise.all(directories.splice(0).map((directory) => rm(directory, {
     recursive: true,
     force: true,
@@ -140,5 +146,6 @@ describe('daemon skipped-to-stale refusal event wiring', () => {
         intent: 'restage ship tail after build kickback',
       }),
     ]);
+    expect(finishPresentationRepair.createProvenanceGuardedFinishPresentationRepair).toHaveBeenCalledOnce();
   });
 });

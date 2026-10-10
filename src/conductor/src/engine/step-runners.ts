@@ -33,7 +33,8 @@ import type { StepName, ConductState, ComplexityTier, ExecutionContext, RunMode 
 import { admitBuildReviewCustomSourceRegions } from './build-review-source-region-admission.js';
 import { BuildReviewScopeSource } from './build-review-scope-source.js';
 import type { HarnessConfig, EffortLevel, BuildReviewRubricId } from '../types/config.js';
-import { prdAuditScopeProjection, remediationLapCapForGate } from './conductor.js';
+import { remediationLapCapForGate } from './remediation-caps.js';
+import { prdAuditScopeProjection } from './prd-audit-routing.js';
 import { REMEDIATION_PLAN_SCHEMA, renderRemediationPlanShape, validateRemediationPlan } from './remediation-plan-contract.js';
 import { persistRemediationPlan, type RemediationPlanStoreFilesystem } from './remediation-plan-store.js';
 import type {
@@ -41,7 +42,7 @@ import type {
   StepRunner,
   StepRunResult,
   StepRunOptions,
-} from './conductor.js';
+} from './step-runner-types.js';
 import { listCommitsWithTrailers, resolveOriginRef } from './autoheal.js';
 import { readOperatorReseals } from './protected-artifact-seal.js';
 import { parseScopeTrailers } from './scope-trailer.js';

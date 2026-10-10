@@ -593,6 +593,48 @@ export async function findArtifactFiles(
   return files;
 }
 
+const findArtifactFilesForStep = findArtifactFiles;
+
+export async function snapshotArtifactMtimes(
+  projectRoot: string,
+  step: StepName,
+): Promise<Map<string, number>> {
+  const snapshot = new Map<string, number>();
+  // findArtifactFilesForStep returns absolute paths.
+  const files = await findArtifactFilesForStep(projectRoot, step);
+  for (const file of files) {
+    try {
+      const s = await stat(file);
+      snapshot.set(file, s.mtimeMs);
+    } catch {
+      // Raced deletion — treat as absent.
+    }
+  }
+  return snapshot;
+}
+
+export async function selectChangedArtifacts(
+  files: string[],
+  snapshot: Map<string, number> | null,
+): Promise<string[]> {
+  if (snapshot === null) return files;
+  const changed: string[] = [];
+  for (const file of files) {
+    const before = snapshot.get(file);
+    if (before === undefined) {
+      changed.push(file);
+      continue;
+    }
+    try {
+      const s = await stat(file);
+      if (s.mtimeMs !== before) changed.push(file);
+    } catch {
+      // Deleted during the step — nothing to stamp.
+    }
+  }
+  return changed;
+}
+
 export async function resolveArtifactFiles(
   dir: string,
   step: StepName,

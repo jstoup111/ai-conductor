@@ -7,6 +7,7 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 import { BUILT_IN_PROVIDERS } from '../../src/execution/provider-catalog.js';
+import { CONDUCTOR_DECOMPOSED_MODULES } from '../structural/conductor-shape-guard.js';
 
 const testRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(testRoot, '../..');
@@ -36,6 +37,10 @@ interface ProviderConstantBranchFinding {
   readonly constant: 'CLAUDE_PROVIDER' | 'CODEX_PROVIDER';
 }
 
+interface ConductorInventory {
+  readonly moduleLevelAtBase: readonly string[];
+}
+
 async function sourceFiles(directory: string): Promise<readonly string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const nested = await Promise.all(entries.map(async (entry) => {
@@ -44,6 +49,31 @@ async function sourceFiles(directory: string): Promise<readonly string[]> {
     return entry.isFile() && entry.name.endsWith('.ts') ? [path] : [];
   }));
   return nested.flat();
+}
+
+function topLevelDeclarationNames(source: ts.SourceFile): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const statement of source.statements) {
+    if (
+      ts.isFunctionDeclaration(statement)
+      || ts.isClassDeclaration(statement)
+      || ts.isInterfaceDeclaration(statement)
+      || ts.isTypeAliasDeclaration(statement)
+      || ts.isEnumDeclaration(statement)
+    ) {
+      if (statement.name !== undefined) names.add(statement.name.text);
+    }
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name)) names.add(declaration.name.text);
+      }
+    }
+  }
+  return names;
+}
+
+function inventoryName(name: string): string {
+  return name === 'appendRemediationTasks' ? 'appendConductorRemediationTasks' : name;
 }
 
 function declaredAdapterModules(): ReadonlySet<string> {
@@ -207,7 +237,7 @@ function findSelfHostProviderConstantBranches(
 
 async function productionSelfHostProviderConstantBranchFindings(): Promise<readonly ProviderConstantBranchFinding[]> {
   const modules = [
-    'engine/conductor.ts',
+    ...CONDUCTOR_DECOMPOSED_MODULES,
     'engine/self-host/provider-home.ts',
     'engine/self-host/live-boundary.ts',
   ];
@@ -220,6 +250,25 @@ async function productionSelfHostProviderConstantBranchFindings(): Promise<reado
 }
 
 describe('structural: built-in provider literals', () => {
+  it('computes every conductor decomposition destination from the base inventory', async () => {
+    const inventory = JSON.parse(await readFile(
+      new URL('../structural/conductor-exports.json', import.meta.url),
+      'utf8',
+    )) as ConductorInventory;
+    const engineRoot = join(sourceRoot, 'engine');
+    const destinations = (await sourceFiles(engineRoot)).flatMap(async (path) => {
+      const module = relative(sourceRoot, path);
+      const source = ts.createSourceFile(module, await readFile(path, 'utf8'), ts.ScriptTarget.Latest, true);
+      const names = topLevelDeclarationNames(source);
+      return inventory.moduleLevelAtBase.some((name) => names.has(inventoryName(name))) ? [module] : [];
+    });
+
+    expect(CONDUCTOR_DECOMPOSED_MODULES).toEqual([
+      'engine/conductor.ts',
+      ...(await Promise.all(destinations)).flat().sort(),
+    ]);
+  });
+
   it('declares existing provider-owned modules for each built-in provider', async () => {
     const catalogIds = BUILT_IN_PROVIDERS.map(({ id }) => id);
     const adapterEntries = Object.entries(ADAPTER_MODULES_BY_PROVIDER_ID);
@@ -241,6 +290,21 @@ describe('structural: built-in provider literals', () => {
     expect(findProviderLiterals('fixtures/provider-id-literal.ts', source, new Set())).toEqual([
       { file: 'fixtures/provider-id-literal.ts', line: 1, value: 'codex' },
     ]);
+  });
+
+  it('reports provider constants planted in a moved conductor destination module', async () => {
+    const module = CONDUCTOR_DECOMPOSED_MODULES.find((path) => path !== 'engine/conductor.ts');
+    expect(module).toBeDefined();
+    const source = ts.createSourceFile(
+      module!,
+      `${await readFile(join(sourceRoot, module!), 'utf8')}\nif (CLAUDE_PROVIDER === CODEX_PROVIDER) {}`,
+      ts.ScriptTarget.Latest,
+      true,
+    );
+
+    expect(findSelfHostProviderConstantBranches(module!, source)).toContainEqual(
+      expect.objectContaining({ file: module, constant: 'CLAUDE_PROVIDER' }),
+    );
   });
 
   it('reports a fixture provider display literal with its file and line', () => {

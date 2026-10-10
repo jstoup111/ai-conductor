@@ -7,10 +7,10 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import { renderDecideEntryHalt } from '../../src/engine/decide-entry-policy.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import {
-  MAX_KICKBACKS_PER_GATE,
   KICKBACK_LEDGER_PATH,
   readKickbackLedger,
-  } from '../../src/engine/kickback-ledger.js';
+} from '../../src/engine/kickback-ledger.js';
+import { MAX_KICKBACKS_PER_GATE } from '../../src/engine/remediation-caps.js';
 import {
   cleanupDecideEntryFixture,
   conductorFor,
@@ -159,4 +159,3 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
     expect(halt).not.toMatch(/could not be established/i);
   });
 });
-

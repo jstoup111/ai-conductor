@@ -33,7 +33,7 @@ export interface SessionCommandInstruction {
  */
 export const MANAGED_DISPATCH_PROMPT_SURFACES = [
   { file: 'step-runners.ts', symbols: ['buildSystemPrompt'] },
-  { file: 'conductor.ts', symbols: ['buildRetryHint', 'buildRemediationHint'] },
+  { file: 'remediation-hints.ts', symbols: ['buildRetryHint', 'buildRemediationHint'] },
   { file: 'project-prelude.ts', symbols: ['runProjectPrelude', 'invokePreludeSkill'] },
 ] as const;
 

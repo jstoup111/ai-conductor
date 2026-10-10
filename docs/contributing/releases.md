@@ -161,7 +161,7 @@ implementation PR's release metadata — the `## Migration` section of the PR bo
 
 #### Canonical breaking surfaces
 
-Reproduced verbatim from `release-gate.ts:108-113`:
+Reproduced verbatim from `release-gate.ts:126-131`:
 
 ```ts
 export const CANONICAL_BREAKING_SURFACES = [

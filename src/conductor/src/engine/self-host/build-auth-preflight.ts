@@ -12,7 +12,7 @@ import { HALT_MARKER, writeHaltMarker } from '../halt-marker.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import { readDaemonBuildToken } from './daemon-build-token.js';
 import { buildAuthRemediationMessage } from './build-auth-message.js';
-import type { StepRunResult } from '../conductor.js';
+import type { StepRunResult } from '../step-runner-types.js';
 
 /**
  * Pre-flight daemon build-auth token check (Task 6, TR-2/TR-3).

@@ -5,7 +5,6 @@ import {
   readdir,
   access as accessFile,
   unlink as unlinkFile,
-  rename as renameFile,
   stat,
 } from 'node:fs/promises';
 import { registerSighupPersistence } from './sighup-persistence.js';
@@ -26,11 +25,10 @@ import {
 } from './halt-marker.js';
 import { findDocumentationDelivery } from './documentation-delivery.js';
 import { renderRebaseFenceDecisionNote } from './rebase-fence-decision-note.js';
-import type { BuildReviewRepairProvenance } from './build-review-inputs.js';
 import {
   buildReviewConfidenceFloors,
+  rawBuildReviewFailIsEffectivelyAccepted,
   resolveEffectiveBuildReviewVerdict,
-  type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
@@ -50,9 +48,9 @@ import {
 } from './build-review-work-order.js';
 import { readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
-import { AcceptedWideningDecisionStore, type AcceptedWideningDecision } from './accepted-widenings.js';
+import { AcceptedWideningDecisionStore } from './accepted-widenings.js';
 import { preparePrdWideningEntry } from './prd-widening-entry.js';
-import { offeredCaseToPersistedOffer, persistPrdWideningOffers } from './prd-widening-offers.js';
+import { persistPrdWideningOffers } from './prd-widening-offers.js';
 import { buildPrdWideningContext, prdWideningSourceId } from './prd-widening-context.js';
 import { coordinatePrdWidening } from './prd-widening-coordinator.js';
 import { PRD_WIDENING_RECONCILIATION_SCHEMA } from './prd-widening-contract.js';
@@ -61,49 +59,35 @@ import {
   renderPrdAuditScopeHalt,
   renderPrdWideningRecovery,
 } from './prd-widening-recovery.js';
-import { classifyPrdWideningProjection, type PrdWideningClassification } from './prd-widening-classification.js';
 import {
   admitRefusalReworkPlan,
-  renderRefusalReworkContext,
-  type RefusalReworkEvidence,
 } from './prd-widening-refusal-rework.js';
-import type { RemediationCasePrdWideningRecord } from './remediation-case-store.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import {
   buildRemediationProjection,
   type RemediationProjectionLimits,
-  type RemediationProjection,
-  type RemediationProjectionSource,
 } from './remediation-projection.js';
 import { readTypedRemediationPlan } from './remediation-plan-store.js';
-import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
-import { executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
+import { executeGithubOperation } from './github-operations.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import type { BuildReviewFinding } from './build-review-domain.js';
 import { planContractPointers, priorAttemptPointers, readActivePlanPath } from './remediation-context-pointers.js';
-import type { CoverageBindingPayloadError } from './step-runners.js';
 import type {
-  AuthenticationReadiness,
   CodexProbeFailure,
   InvokeResult,
-  ProviderExitFacts,
   SelfHostAuthContext,
   SelfHostInvocation,
-  TokenUsage,
 } from '../execution/llm-provider.js';
-import type { ObservedInterval } from '../execution/observed-interval.js';
-import type { ManagedGhObservationCoverage } from '../execution/managed-session-preparation.js';
-import type { ConductState, ConductorEvent, ExecutionContext, FinishPublicationEvent } from '../types/index.js';
+import type { ConductState, ConductorEvent, ExecutionContext } from '../types/index.js';
 import type {
   StepName,
   StepStatus,
   StepDefinition,
-  Phase,
   RunMode,
   ComplexityTier,
   RecoveryOption,
@@ -111,13 +95,7 @@ import type {
   SchedulingUnitRef,
 } from '../types/index.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
-import type { ProviderSessionScope } from './provider-session.js';
-import type {
-  ProviderAttemptMetadata,
-  ProviderAttributionMetadata,
-  ProviderExecutionContext,
-  ProviderCandidate,
-} from './provider-execution.js';
+import type { ProviderExecutionContext, ProviderCandidate } from './provider-execution.js';
 import { formatProviderCapabilityGapMessages } from './provider-execution.js';
 import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
 import {
@@ -128,7 +106,6 @@ import {
   requireProviderCapability,
   supportsProviderCapability,
 } from '../execution/provider-catalog.js';
-import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import { redactSafetyText } from './safety-diagnostics.js';
 import { createEngineStateStore } from './engine-state-store.js';
 import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
@@ -142,7 +119,6 @@ import {
   classifyOutcome,
   makeSkippedOutcome,
   makeNoVerdictOutcome,
-  makeVerdictOutcome,
   buildParallelFailureEvents,
   type GroupMember,
   type BranchOutcome,
@@ -160,7 +136,7 @@ import {
 import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { ExecutionLifecycle } from './execution-lifecycle.js';
-import { BuildProgressWatcher } from './build-progress-watcher.js';
+import { BuildProgressWatcher, isNoTaskProgressBuildStall } from './build-progress-watcher.js';
 import {
   resolveBuildProgressConfig,
   resolveGateCodeValidityConfig,
@@ -187,8 +163,6 @@ import {
   saveStepStatus,
   requireStateMutation,
   getStepStatus,
-  stepSatisfied,
-  markDownstreamStale,
   filterRestageChanges,
   extractPrUrl,
 } from './state.js';
@@ -210,11 +184,9 @@ import {
   shouldSkipForBootstrapMode,
   shouldSkipForUpstreamSkip,
   getGroupForStep,
-  getStepDefinition,
   isFeatureDeclarable,
   VALIDATION_GROUP,
 } from './steps.js';
-import type { StepGroup } from '../types/index.js';
 import { checkGate } from './gates.js';
 import {
   resolvePlanContentScheduling,
@@ -223,24 +195,22 @@ import {
 import {
   buildArtifactResolutionContext,
   findArtifactFiles as findArtifactFilesForStep,
+  snapshotArtifactMtimes,
+  selectChangedArtifacts,
   resolveArtifactFiles,
-  stepArtifactContracts,
   extraArtifactGlobs,
   resolveFeaturePlanPath,
   resolveFeatureStoriesPath,
   recordAppendedRemediationTaskIds,
   STEP_ARTIFACT_GLOBS,
   checkStepCompletion,
-  CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
   readCurrentPrdAuditVerdict,
   prdAuditTypedRouteReport,
-  extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
   REMEDIATION_EXISTING_TASK_DISPOSITION,
   REMEDIATION_PUBLICATION_DISPOSITION,
   remediationDispositionAppendsToPlan,
-  remediationDispositionStep,
   sweepStaleReviewArtifacts,
   parseTrack,
   parseIntakeSourceRef,
@@ -255,7 +225,6 @@ import {
   ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   MANUAL_TEST_CODE_STAMP,
   type RemediationGap,
-  type RemediationDispositionRejection,
   type CompletionContext,
   type CompletionResult,
   type FinishChoice,
@@ -270,8 +239,6 @@ import { resolveHeadSha, resolvePrDisposition } from './run-provenance.js';
 import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
 import {
   AS_BUILT_VERDICT_PATH,
-  asBuiltFindingDetail,
-  asBuiltOutcome,
   asBuiltReviewRequired,
   persistAsBuiltVerdict,
   readAsBuiltVerdict,
@@ -283,12 +250,10 @@ import {
   readPrdAuditVerdict,
   type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
-import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
-import { AS_BUILT_VERDICT_CONTRACT_VERSION, type AsBuiltGoverningReference } from './as-built-contract.js';
+import { parsePlanTaskBodies } from './plan-task-parse.js';
+import { AS_BUILT_VERDICT_CONTRACT_VERSION } from './as-built-contract.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
 import {
-  appendRemediationTasks as appendCriterionBoundRemediationTasks,
-  buildRemediationDoneWhenChecks,
   PRD_AUDIT_REMEDIATION_GATE_SOURCE,
   refusalTaskIds,
   type CriterionBoundRemediationGap,
@@ -304,19 +269,14 @@ import {
   type IntentRelation,
   type OverScopeRenderableFinding,
 } from './accepted-widenings.js';
-import type { ScopeTrailer } from './scope-trailer.js';
-import { resolveScopeWideningRationale } from './scope-widening-rationale.js';
-import { STEP_SKILL_INVOCATIONS } from './skill-invocation.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
 import {
   FullSuiteVerifier,
+  projectExecutionSummaryEntries,
+  testSuiteBudgetVerdict,
   type FullSuiteInspectionResult,
-  type FullSuiteVerifierResult,
 } from './full-suite-verifier.js';
-import {
-  sanitizeFullSuiteDiagnosticOutput,
-  type FullSuiteEvidenceAttempt,
-} from './full-suite-evidence.js';
+import { sanitizeFullSuiteDiagnosticOutput } from './full-suite-evidence.js';
 import {
   extractFlaggedPaths,
   runScopeFailDisposition,
@@ -329,10 +289,7 @@ import {
   nonRetryablePublicationReason,
   renderProseHumanRequiredDetail,
   routeFinishPublicationDisposition,
-  type PublicationDisposition,
   type PublicationTransition,
-  type PrProseAuthoringRequest,
-  type PrProseJudgmentRequest,
 } from './finish-publication.js';
 import {
   bumpKickbackGateInLedger,
@@ -357,7 +314,6 @@ import {
   recordKickbackCapEvidence,
   type KickbackGateEntry,
   type chargeBuildReviewEffectInLedger,
-  type PendingAsBuiltRemediationFinding,
   type PlanGrowth,
 } from './kickback-ledger.js';
 import { renderKickbackBudgetView, renderKickbackRecoveryHint } from './kickback-budget-view.js';
@@ -367,7 +323,6 @@ import {
   readOperatorGrant,
   renderDecideEntryHalt,
 } from './decide-entry-policy.js';
-import { scanPlanProtectedTargets } from './plan-protected-targets.js';
 import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import {
   classifyBuildSettle,
@@ -376,13 +331,8 @@ import {
   readBuildOutcome,
   resolveBuildOutcomeCategory,
   sameNoOpCycle,
-  writeBuildOutcome,
+  writeBuildOutcomeBestEffort,
 } from './build-outcome.js';
-import type { BuildOutcomeStore } from './build-outcome.js';
-
-async function writeBuildOutcomeBestEffort(projectRoot: string, outcome: BuildOutcomeStore): Promise<void> {
-  await writeBuildOutcome(projectRoot, outcome).catch(() => {});
-}
 import type { Track } from '../types/index.js';
 import {
   resolveStepConfig,
@@ -400,7 +350,7 @@ import {
 import { waitForCredentialsChange, readOperatorCredentialsState } from './self-host/operator-credentials.js';
 import { preflightBuildAuthCheck as checkBuildAuth } from './self-host/build-auth-preflight.js';
 import { readDaemonBuildToken, createDaemonTokenContentClassifier } from './self-host/daemon-build-token.js';
-import type { ChangedFile } from './self-host/release-gate.js';
+import { parseNameStatus, type ChangedFile } from './self-host/release-gate.js';
 import { writeSelfHostHalt, type GateVerdict } from './self-host/gate-halt.js';
 import { parseReleaseDisposition } from './release-metadata.js';
 import {
@@ -457,12 +407,6 @@ import {
   ProtectedArtifactSealRejection,
   originDefaultBranch,
   type RebaseOutcome,
-  type ResolutionContext,
-  type ResolutionAttempt,
-  type SetupFailureContext,
-  type SetupFailureAttempt,
-  type CiFailureContext,
-  type CiFailureAttempt,
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
 import {
@@ -487,14 +431,19 @@ import {
   type TaskEvidence,
 } from './task-evidence.js';
 import { seedTaskStatus } from './task-seed.js';
+import {
+  renderExhaustedMechanicalBuildReviewHalt,
+  renderReadOnlyReviewUnavailableBuildReviewHalt,
+  seedBuildTaskTelemetry,
+} from './build-review-halt-render.js';
+import {
+  filterUnapprovedArtifacts,
+  recordApprovals,
+  recordActivePlanPath,
+} from './artifact-approvals.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { ShipmentEvidenceInput, ShipmentEvidenceResult } from './shipment-evidence.js';
 import {
-  rehabilitateHaltPr,
-  retitleFloor,
-  bodyFloor,
-  ensureShipReady,
-  postHaltHistoryComment,
   makeRetainedPrPresentable,
   clearHaltStateForResume,
 } from './halt-pr-rehabilitation.js';
@@ -506,172 +455,147 @@ import {
 } from './cost-rollup.js';
 import { openShipDraftPr } from './ship-draft-pr.js';
 import { createShipDraftPublicationDependencies } from './ship-draft-pr.js';
+import {
+  createFinishPresentationRepair,
+} from './finish-presentation-repair.js';
+import {
+  refreshPostFinishShippedRecord,
+} from './post-finish-shipped-record.js';
 import { extractRegionBytes, isEmptyRegion, restoreRegion } from './pr-body-regions.js';
 import { discardRegionCapture, readRegionCaptures, writeRegionCapture } from './pr-body-region-store.js';
 import { RegionRestoreError } from './region-restore-error.js';
 import { mirrorIssueCriticalityLabels } from './pr-criticality-labels.js';
-import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import type { ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
-import { resolveShipmentIdentity } from './shipment-identity.js';
 import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
 
-export type CheckpointResponse = 'continue' | 'back' | 'quit';
-
+import {
+  buildOutcomeRung,
+  formatProbeFailureClassification,
+  graderDispatchBackoffMs,
+  toSpotAuditVerifierResult,
+  type AuthRecoveryDisposition,
+  type SpotAuditDispatchResult,
+  type StepRunner,
+  type StepRunOptions,
+  type StepRunResult,
+} from "./step-runner-types.js";
+import type {
+  ArtifactReviewResult,
+  CheckpointResponse,
+  ConductorOptions,
+  FinishPublicationCoordinator,
+  NavigableStep,
+  OperatorParkedTermination,
+} from "./conductor-options.js";
+import {
+  clampToRunnablePrerequisite,
+  deriveGateTopology,
+  earliestResolvablePrerequisiteIndex,
+  findResumeIndex,
+  getNavigableSteps,
+  navigateBack,
+  resolveGroupMembership,
+  resolveLastStep,
+  resolveRunnableResumeEntry,
+} from './resume-entry.js';
+import {
+  hasCompletionContract,
+  isEngineComputedStep,
+  stepDeclaresReviewableArtifacts,
+  stepHasCompletionCheck,
+  writeFenceInstalledForProvider,
+} from './step-completion.js';
+export { buildOutcomeRung, graderDispatchBackoffMs, toSpotAuditVerifierResult } from "./step-runner-types.js";
+export type { ComplexityAssessment, SpotAuditDispatchResult, StepRunOptions, StepRunResult, StepRunner } from "./step-runner-types.js";
+export type { ArtifactReviewResult, CheckpointResponse, ConductorOptions, FinishPublicationCoordinator, NavigableStep, OperatorParkedTermination } from "./conductor-options.js";
+export {
+  clampToRunnablePrerequisite,
+  earliestResolvablePrerequisiteIndex,
+  findResumeIndex,
+  getNavigableSteps,
+  navigateBack,
+  resolveGroupMembership,
+  resolveLastStep,
+  resolveRunnableResumeEntry,
+} from './resume-entry.js';
+export { isEngineComputedStep, writeFenceInstalledForProvider } from './step-completion.js';
+export { isNoTaskProgressBuildStall } from './build-progress-watcher.js';
+export {
+  createFinishPresentationRepair,
+  createProvenanceGuardedFinishPresentationRepair,
+} from './finish-presentation-repair.js';
+export {
+  pushPostFinishShippedRecord,
+} from './post-finish-shipped-record.js';
 export type { SchedulingUnitRef } from '../types/scheduling-unit.js';
-
-export interface OperatorParkedTermination {
-  kind: 'operator-parked';
-  boundary: SchedulingUnitRef;
-}
-
-/**
- * Production-facing form of the existing FINISH presentation sequence.  The
- * coordinator calls this only after accepted prose is re-observed; the order
- * deliberately rehabilitates halt state and applies title/body floors before
- * making a draft mergeable.
- */
-export function createFinishPresentationRepair(input: {
-  projectRoot: string;
-  gh: GhRunner;
-  operations?: GithubOperationRunner;
-  log?: (message: string) => void;
-}): (request: { prUrl: string; state: ConductState; mode?: 'capture-only' | 'full' }) => Promise<void> {
-  return async ({ prUrl, state, mode = 'full' }) => {
-    const { projectRoot: cwd, gh } = input;
-    const repairLog = input.log ?? console.warn;
-    let sourceRef: string | undefined;
-    try {
-      const planPath = await resolveFeaturePlanPath(cwd, state.feature_desc);
-      if (planPath && state.feature_desc) {
-        sourceRef = parseIntakeSourceRef(await readFile(join(cwd, `.docs/intake/${planStem(planPath)}.md`), 'utf8').catch(() => null));
-      }
-    } catch { /* floors remain valid without an intake source reference */ }
-    let testEvidenceLine: string | undefined;
-    try {
-      const tasks = normalizeTasks(JSON.parse(await readFile(join(cwd, '.pipeline/task-status.json'), 'utf8')));
-      const completed = tasks.filter((task) => task.status === 'completed' || task.status === 'skipped').length;
-      if (completed > 0) testEvidenceLine = `${completed}/${tasks.length} plan tasks completed with evidence-gated commits`;
-    } catch { /* optional body evidence */ }
-    try {
-      const haltReason = await readFile(join(cwd, '.pipeline/halt-user-input-required'), 'utf8').catch(() => null);
-      const outcome = await postHaltHistoryComment({
-        gh, cwd, prUrl, haltReason, operations: input.operations, log: repairLog,
-      });
-      if (outcome === 'refused') {
-        throw new Error('guarded halt-history repair refused');
-      }
-    } catch (error) { repairLog(`[conductor-repair] postHaltHistoryComment failed: ${error}`); throw error; }
-    if (mode === 'capture-only') return;
-    try {
-      const outcome = await rehabilitateHaltPr({
-        gh, cwd, prUrl, sourceRef, preserveDraft: true, operations: input.operations, log: repairLog,
-      });
-      if (outcome === 'refused') throw new Error('guarded halt rehabilitation refused');
-    } catch (error) { repairLog(`[conductor-repair] rehabilitateHaltPr failed: ${error}`); throw error; }
-    try {
-      const outcome = await retitleFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, branch: state.worktree_branch, operations: input.operations }, repairLog);
-      if (outcome.outcome === 'refused') throw new Error('guarded title repair refused');
-    } catch (error) { repairLog(`[conductor-repair] retitleFloor failed: ${error}`); throw error; }
-    try {
-      const outcome = await bodyFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, sourceRef, testEvidenceLine, operations: input.operations }, repairLog);
-      if (outcome === 'refused') throw new Error('guarded body repair refused');
-    } catch (error) { repairLog(`[conductor-repair] bodyFloor failed: ${error}`); throw error; }
-    // Regions captured from completed project-owned steps are authoritative
-    // across every engine-owned presentation rewrite.
-    const captures = await readRegionCaptures(cwd, prUrl);
-    // A capture has no template bytes at this boundary; reconstruct the marker
-    // wrapper from its key and preserve the captured interior exactly.
-    // Every capture-present failure is a RegionRestoreError (ADR D6) so FINISH
-    // fails closed instead of treating it as a lost response.
-    if (Object.keys(captures).length > 0) try {
-      let body: string;
-      try {
-        const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
-        const value = (JSON.parse(stdout) as { body?: unknown }).body;
-        if (typeof value !== 'string') throw new Error('response has no string body');
-        body = value;
-      } catch (error) {
-        throw new Error(`region verification read failed for ${Object.keys(captures).join(', ')}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      let next = body;
-      for (const [key, bytes] of Object.entries(captures)) next = restoreRegion(next, { key, bytes });
-      if (next !== body) {
-        const target = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
-        const keys = Object.entries(captures).filter(([key, bytes]) => extractRegionBytes(body, key) !== bytes).map(([key]) => key);
-        if (!target || !input.operations) throw new Error(`guarded region restore unavailable for ${keys.join(', ') || 'unknown'}`);
-        const result = await executeGithubOperation({ operation: 'pull-request.edit', repository: target[1], resource: { kind: 'pull-request', number: Number(target[2]) }, context: { actor: 'finish-region-restore' }, payload: { body: next } }, input.operations);
-        if (result.kind !== 'executed') throw new RegionRestoreError('refused', keys, result.kind);
-      }
-      let verified: string;
-      try {
-        const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
-        const value = (JSON.parse(stdout) as { body?: unknown }).body;
-        if (typeof value !== 'string') throw new Error('response has no string body');
-        verified = value;
-      } catch (error) {
-        throw new Error(`region verification read failed for ${Object.keys(captures).join(', ')}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      for (const [key, bytes] of Object.entries(captures)) {
-        if (extractRegionBytes(verified, key) !== bytes) throw new RegionRestoreError('mismatch', [key]);
-      }
-    } catch (error) {
-      if (error instanceof RegionRestoreError) throw error;
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new RegionRestoreError('refused', Object.keys(captures), 'unavailable', `project-owned region restore failed: ${reason}`);
-    }
-    try {
-      const outcome = await ensureShipReady(
-        gh, cwd, prUrl, repairLog, undefined, input.operations,
-      );
-      if (outcome === 'refused') {
-        throw new Error('guarded ready-for-review repair refused');
-      }
-    } catch (error) { repairLog(`[conductor-repair] ensureShipReady failed: ${error}`); throw error; }
-  };
-}
-
-/**
- * Compose FINISH presentation repair at a live CLI root.  The guarded runner
- * is deliberately resolved for each repair attempt: its authorization reads
- * the current committed owner evidence when a mutation is requested, rather
- * than retaining a decision from coordinator construction.
- */
-export function createProvenanceGuardedFinishPresentationRepair(input: {
-  projectRoot: string;
-  git: GitRunner;
-  gh: GhRunner;
-  baseBranch: string;
-  log?: (message: string) => void;
-  events?: GithubOperationEventEmitter;
-}): (request: { prUrl: string; state: ConductState }) => Promise<void> {
-  return async ({ prUrl, state }) => {
-    const publication = await createShipDraftPublicationDependencies({
-      cwd: input.projectRoot,
-      branch: state.worktree_branch,
-      baseBranch: input.baseBranch,
-      featureDesc: state.feature_desc,
-      prUrl,
-      git: input.git,
-      gh: input.gh,
-      events: input.events,
-    });
-    if (!publication) {
-      throw new Error('guarded finish presentation repair unavailable: committed feature provenance could not be resolved');
-    }
-    const pull = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
-    if (!pull || pull[1].toLowerCase() !== publication.remoteMutation.provenance.repository.toLowerCase()) {
-      throw new Error('guarded finish presentation repair unavailable: pull request target could not be resolved');
-    }
-    await createFinishPresentationRepair({
-      projectRoot: input.projectRoot,
-      gh: input.gh,
-      operations: publication.operations,
-      log: input.log,
-    })({ prUrl, state });
-  };
-}
+import {
+  MAX_KICKBACKS_PER_GATE,
+  kickbackEscalationEnabled,
+  prdAuditAppendCap,
+  readRemediationGateAppendBudget,
+  remediationLapCapForGate,
+  validationJoinRemediationRoundCap,
+} from './remediation-caps.js';
+import type { RemediationGateAppendBudget } from './remediation-caps.js';
+import {
+  criterionStorySection,
+  prdAuditHaltsOnAnyPlanGap,
+  routeTypedPrdAuditOverScope,
+  withRefusalReworkContext,
+} from './prd-audit-routing.js';
+import type {
+  PrdAuditOverScopeRoute,
+  PrdAuditPlanGapRoute,
+  CurrentPrdAuditRoute,
+  RecordedAsBuiltRemediationFinding,
+} from './prd-audit-routing.js';
+export {
+  prdAuditAppendCap,
+  readRemediationGateAppendBudget,
+  remediationLapCapForGate,
+  validationJoinRemediationRoundCap,
+} from './remediation-caps.js';
+export { prdAuditScopeProjection, routeTypedPrdAuditOverScope } from './prd-audit-routing.js';
+export type { RemediationGateAppendBudget, RemediationLedgerGate } from './remediation-caps.js';
+export type {
+  PrdAuditOverScopeRoute,
+  PrdAuditPlanGapRoute,
+  RecordedAsBuiltRemediationFinding,
+  RecordedPrdAuditFinding,
+  RecordedReviewFinding,
+} from './prd-audit-routing.js';
+import {
+  buildRemediationHint,
+  buildRetryHint,
+  earliestRemediationTarget,
+  remediationDispositionRejectionsFromDispatchOutput,
+  remediationGapsFromTypedPlan,
+  remediationProjectionSource,
+  remediationGapTargetsAnotherFeatureSealedArtifact,
+  resolveExistingTaskBindingsForAdmission,
+} from './remediation-hints.js';
+import type {
+  RemediationGateProvenance,
+  RemediationHintSource,
+} from './remediation-hints.js';
+export {
+  buildRemediationHint,
+  buildRetryHint,
+  directedProtectedTarget,
+  earliestRemediationTarget,
+  resolveExistingTaskBindingsForAdmission,
+} from './remediation-hints.js';
+export type { ExistingTaskBindingResolution } from './remediation-hints.js';
+import { appendConductorRemediationTasks } from './remediation-task-append.js';
+import {
+  readAsBuiltRoutingOutcome,
+  renderAsBuiltBlockedFindingDetail,
+  typedAsBuiltResolution,
+  type AsBuiltGoverningClauseResolution,
+} from './as-built-routing.js';
+export type { AsBuiltGoverningClauseResolution } from './as-built-routing.js';
 
 /**
  * How many times a user may pick `retry` from the recovery menu for a single
@@ -681,607 +605,9 @@ export function createProvenanceGuardedFinishPresentationRepair(input: {
  */
 export const MAX_RECOVERY_RETRIES = 2;
 
-/**
- * A raw build-review FAIL may be non-blocking only when the current
- * disposition join resolves it to an effective PASS through an actual
- * accepted finding. The latter condition preserves the legacy scalar FAIL
- * behavior, which has no findings for a disposition to accept.
- */
-function rawBuildReviewFailIsEffectivelyAccepted(
-  resolution: BuildReviewEffectiveResolution,
-): boolean {
-  return (
-    resolution.ok &&
-    resolution.effective.verdict === 'PASS' &&
-    resolution.effective.acceptedFindingIds.length > 0
-  );
-}
-
 // ── Gate-driven loop (Phase 3) ──────────────────────────────────────────────
-// Gate topology — DERIVED from the resolved step registry, not hardcoded, so
-// custom config steps (and reordering) participate in the gate loop:
-//   - loopGate steps     → the selector-driven tail (build…finish by default)
-//   - kickbackTarget steps → upstream gates a downstream step may re-open
-//   - verdictSteps        → either of the above (verdict recomputed after run)
-//   - firstLoopIndex      → the front/loop boundary (first loopGate step)
-//   - regionStart         → where the selector starts scanning (first kickback target)
-interface GateTopology {
-  verdictSteps: Set<StepName>;
-  kickbackTargets: StepName[];
-  firstLoopIndex: number;
-  regionStart: StepName;
-}
-function deriveGateTopology(steps: StepDefinition[]): GateTopology {
-  const verdictSteps = new Set<StepName>();
-  const kickbackTargets: StepName[] = [];
-  let firstLoopIndex = steps.length;
-  steps.forEach((s, i) => {
-    if (s.loopGate) {
-      verdictSteps.add(s.name);
-      if (i < firstLoopIndex) firstLoopIndex = i;
-    }
-    if (s.kickbackTarget) {
-      verdictSteps.add(s.name);
-      kickbackTargets.push(s.name);
-    }
-  });
-  const regionStart =
-    kickbackTargets[0] ??
-    steps.find((s) => s.phase === 'DECIDE')?.name ??
-    steps[0]?.name;
-  return { verdictSteps, kickbackTargets, firstLoopIndex, regionStart };
-}
-/**
- * Engine-native steps that additionally dispatch a one-shot LLM rather than
- * computing their verdict in-process (`runBuildReview` / `dispatchVerifier` in
- * step-runners.ts). Their output can legitimately differ between attempts — a
- * transient grader-dispatch failure is exactly what the #814 backoff ladder
- * retries — so they keep the normal per-step retry budget.
- */
-const AGENT_DISPATCHING_ENGINE_NATIVE_STEPS: ReadonlySet<StepName> = new Set<StepName>([
-  'build_review',
-  'attribution_verify',
-]);
-
-/**
- * True for a step the engine computes ENTIRELY in-process: declared
- * `kind: 'engine-native'` in STEP_SKILL_INVOCATIONS (so `renderSkillInvocation`
- * throws for it and no agent is ever dispatched) and not one of the
- * LLM-dispatching engine-native steps above. Today: `test_suite`.
- *
- * Such a step is a deterministic function of the tree it runs against, so
- * re-running it over an unchanged tree cannot produce a different answer — every
- * retry is guaranteed waste. These steps get a retry budget of ONE: they run,
- * they are judged, and they are done. A genuine failure still routes exactly as
- * before (kickback / recovery menu) — just immediately, instead of after two
- * redundant recomputations.
- */
-export function isEngineComputedStep(step: StepName): boolean {
-  return (
-    Object.prototype.hasOwnProperty.call(STEP_SKILL_INVOCATIONS, step) &&
-    STEP_SKILL_INVOCATIONS[step]?.kind === 'engine-native' &&
-    !AGENT_DISPATCHING_ENGINE_NATIVE_STEPS.has(step)
-  );
-}
-
-// Anti-ping-pong: a single gate may be re-opened by kickback at most this many
-// times per feature before the loop HALTs for a human.
-const MAX_KICKBACKS_PER_GATE = 2;
 /** Bound message-derived reset deadlines so a malformed provider response cannot wedge a run. */
 const MAX_RATE_LIMIT_DEADLINE_MS = 6 * 60 * 60 * 1000;
-
-/**
- * Identifies the gate evidence that authorized a remediation dispatch. A
- * validation-group round can carry more than one gate, so this deliberately
- * preserves each gate-to-artifact pairing rather than flattening it into a
- * comma-delimited filename string.
- */
-interface RemediationGateProvenance {
-  gate: StepName;
-  evidenceFile: string;
-}
-
-interface RemediationHintSource {
-  source: string;
-  evidence: readonly RemediationGateProvenance[];
-  /**
-   * adr-2026-08-25 decision 8 (retained by decision 9): the same
-   * validation-group round carries a manual_test FAIL, so the consolidated
-   * kickback owns the work order. An existing-task gap still rides that
-   * merged route, but its gate-local mechanics — lap charge, pending finding,
-   * task-status re-stage, no-op baseline — must not run for this round.
-   */
-  consolidatedManualTestFail?: boolean;
-}
-
-// Covers: task:19
-function remediationProjectionSource(source: string): RemediationProjectionSource {
-  switch (source) {
-    case 'validation-group': return 'validation-group';
-    case 'prd-audit': return 'prd-audit';
-    case 'prd_audit': return 'prd-audit';
-    case 'build-stall':
-    case 'build_stall':
-    case 'build_stall_zero_work': return 'build-stall';
-    case 'finish-verification': return 'finish-verification';
-    case 'architecture-review-as-built':
-    case 'architecture_review_as_built':
-    case 'as-built architecture review': return 'as-built';
-    default: return 'finish-verification';
-  }
-}
-
-/** Keep the established admission path on its legacy in-memory shape. */
-function remediationGapsFromTypedPlan(
-  dispositions: readonly AcceptedRemediationPlanDisposition[],
-): RemediationGap[] {
-  return dispositions.map((disposition) => ({
-    id: disposition.reference.id,
-    disposition: disposition.disposition,
-    category: disposition.category,
-    rationale: disposition.rationale,
-    tasks: disposition.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
-      ? disposition.boundTaskIds.map((id) => ({ id, title: `Existing task ${id}` }))
-      : disposition.tasks.map((task) => ({ ...task })),
-  }));
-}
-
-/**
- * The runner preserves field-specific rejections in its structured-result
- * diagnostic because it must not persist a rejected typed plan. Recover only
- * the validated event payload here; all other malformed-output diagnostics
- * remain ordinary retryable planner faults.
- */
-function remediationDispositionRejectionsFromDispatchOutput(
-  output: string | undefined,
-): RemediationDispositionRejection[] {
-  const marker = '; rejections: ';
-  if (output === undefined || !output.startsWith('structured-result-rejected:')) return [];
-  const markerIndex = output.lastIndexOf(marker);
-  if (markerIndex === -1) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(output.slice(markerIndex + marker.length));
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
-  return parsed.flatMap((candidate): RemediationDispositionRejection[] => {
-    if (candidate === null || typeof candidate !== 'object') return [];
-    const rejection = candidate as Partial<RemediationDispositionRejection>;
-    if (
-      typeof rejection.gapId !== 'string' ||
-      typeof rejection.disposition !== 'string' ||
-      !Array.isArray(rejection.accepted) ||
-      !rejection.accepted.every((value) => typeof value === 'string') ||
-      (rejection.field !== 'disposition' && rejection.field !== 'category' && rejection.field !== 'boundTaskIds')
-    ) return [];
-    return [{
-      gapId: rejection.gapId,
-      disposition: rejection.disposition,
-      accepted: [...rejection.accepted],
-      field: rejection.field,
-    }];
-  });
-}
-
-/** PRD-audit and as-built review own configured remediation allowances; other gates share the generic cap. */
-export function remediationLapCapForGate(
-  gate: string,
-  config: HarnessConfig,
-  genericCap = MAX_KICKBACKS_PER_GATE,
-): number {
-  const remediationConfig = config as HarnessConfig & {
-    prd_audit?: { max_remediation_laps?: number };
-    architecture_review_as_built?: { max_remediation_laps?: number };
-  };
-  if (gate === 'prd_audit') {
-    return remediationConfig.prd_audit?.max_remediation_laps ?? 1;
-  }
-  if (gate === 'architecture_review_as_built') {
-    return remediationConfig.architecture_review_as_built?.max_remediation_laps ?? 1;
-  }
-  return genericCap;
-}
-
-/**
- * Round budget for the validation-group join's `/remediate` dispatch. The
- * process-local round counter must never bind tighter than the durable
- * per-gate lap caps `planRemediation` enforces from the kickback ledger —
- * otherwise an operator `kickback-budget raise` is silently ignored and the
- * join falls through to a generic needs-human halt. It still never drops
- * below MAX_KICKBACKS_PER_GATE, which bounds routes with no durable lap.
- */
-export async function validationJoinRemediationRoundCap(
-  projectRoot: string,
-  config: HarnessConfig,
-): Promise<number> {
-  const ledger = await readKickbackLedger(projectRoot).catch(() => undefined);
-  let cap = MAX_KICKBACKS_PER_GATE;
-  for (const gate of ['prd_audit', 'architecture_review_as_built'] as const) {
-    const gateCap = ledger?.gates[gate]?.effectiveLapCap ?? remediationLapCapForGate(gate, config);
-    cap = Math.max(cap, gateCap);
-  }
-  return cap;
-}
-
-/** Keep serial and validation-group refusal work orders byte-for-byte aligned. */
-function withRefusalReworkContext(
-  dispatchContext: string,
-  refusals: readonly RefusalReworkEvidence[] | undefined,
-): string {
-  return refusals === undefined
-    ? dispatchContext
-    : `${dispatchContext}\n\n${renderRefusalReworkContext(refusals)}`;
-}
-
-/**
- * Authored `Governing clause` cells carry inline markdown. The clause grammar is
- * anchored on a bare identifier, so a habitually backticked stem
- * (`` `adr-x` + Decision 4 ``) failed the match before any ADR lookup ran, and
- * every real-world REMEDIABLE finding became a needs-human HALT on substance the
- * bounded remediation route could have closed. Emphasis carries no meaning in
- * this cell; strip it before matching. `_` is left intact because it is a legal
- * character in a task id.
- */
-export type AsBuiltGoverningClauseResolution =
-  | { kind: 'adr'; clause: string; reference: AsBuiltGoverningReference }
-  | { kind: 'plan-task'; clause: string; parentTask: string; reference: AsBuiltGoverningReference };
-
-function renderAsBuiltGoverningReference(reference: AsBuiltGoverningReference): string {
-  return reference.kind === 'adr-decision'
-    ? `${reference.stem} decision ${reference.decision}`
-    : `Task ${reference.taskId}`;
-}
-
-function typedAsBuiltResolution(reference: AsBuiltGoverningReference): AsBuiltGoverningClauseResolution {
-  const clause = renderAsBuiltGoverningReference(reference);
-  return reference.kind === 'adr-decision'
-    ? { kind: 'adr', clause, reference }
-    : { kind: 'plan-task', clause, parentTask: reference.taskId, reference };
-}
-
-function renderAsBuiltBlockedFindingDetail(findings: readonly import('./as-built-contract.js').AsBuiltFinding[] | undefined): string {
-  return findings && findings.length > 0 ? `\n\nBlocking findings:\n${asBuiltFindingDetail(findings)}` : '';
-}
-
-async function readAsBuiltRoutingOutcome(projectRoot: string): Promise<{
-  kind: 'approved' | 'plan-gap-delivered' | 'plan-gap-undelivered' | 'blocked-remediable' | 'blocked-design' | 'invalid';
-  findings?: readonly import('./as-built-contract.js').AsBuiltFinding[];
-}> {
-  const stored = await readAsBuiltVerdict(projectRoot);
-  if (stored.kind !== 'present') return { kind: 'invalid' };
-  const kind = asBuiltOutcome(stored.value.verdict);
-  return {
-    kind,
-    ...(stored.value.verdict.verdict === 'BLOCKED' ? { findings: stored.value.verdict.findings } : {}),
-  };
-}
-
-/** The prd-audit cap is both an absolute count and a fraction of authored plan work. */
-export function prdAuditAppendCap(config: HarnessConfig, authoredTaskCount: number): number {
-  const prdAudit = (config as HarnessConfig & {
-    prd_audit?: { max_appended_tasks?: number; max_appended_ratio?: number };
-  }).prd_audit;
-  const maximum = prdAudit?.max_appended_tasks ?? 5;
-  const ratio = prdAudit?.max_appended_ratio ?? 0.25;
-  return Math.min(maximum, Math.floor(authoredTaskCount * ratio));
-}
-
-export type RemediationLedgerGate = 'prd_audit' | 'architecture_review_as_built';
-
-export interface RemediationGateAppendBudget {
-  gate: RemediationLedgerGate;
-  priorLaps: number;
-  lapCap: number;
-  /** Tasks authorized by this gate; any non-empty set consumes one lap. */
-  taskCount: number;
-  /** Tasks whose plan-growth attribution belongs to this gate. */
-  growthTaskCount: number;
-  growthCap: number;
-  growth: PlanGrowth;
-}
-
-/** Read the shared append allowance for a remediation gate without choosing its halt wording. */
-export async function readRemediationGateAppendBudget(
-  projectRoot: string,
-  config: HarnessConfig,
-  gate: RemediationLedgerGate,
-  lapCap: number,
-  taskCount: number,
-  growthTaskCount: number,
-  authoredTaskCount: number,
-): Promise<RemediationGateAppendBudget> {
-  const ledger = await readKickbackLedger(projectRoot);
-  const growthCap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(config, authoredTaskCount);
-  // A corrupt ledger must not be mistaken for fresh remediation allowance:
-  // budget recovery is an explicit operator decision, not a best-effort
-  // fallback. Scoped to THIS gate (adr-2026-08-31 decision 3) so a sibling
-  // gate's malformed entry does not halt a healthy one.
-  if (isUnreadableKickbackLedger(ledger)) {
-    throw new Error('kickback ledger is unreadable');
-  }
-  if (isUnreadableKickbackGate(ledger, gate)) {
-    // A malformed pending repair is deliberately scoped to its remediation
-    // gates and growth accounting. Preserve its exhausted-budget projection;
-    // only an unreadable ledger envelope blocks append before mutation.
-    if (isUnreadableKickbackGrowth(ledger)) {
-      return {
-        gate,
-        priorLaps: lapCap,
-        lapCap,
-        taskCount,
-        growthTaskCount,
-        growthCap,
-        growth: { authored: 0, added: growthCap, byGate: {}, remaining: 0 },
-      };
-    }
-    throw new Error(`kickback ledger gate '${gate}' is unreadable`);
-  }
-  const growth = await readGrowth(projectRoot, growthCap);
-  const priorLaps = (
-    ledger.gates[gate] as (KickbackGateEntry & { laps?: number }) | undefined
-  )?.laps ?? 0;
-  const effectiveLapCap = ledger.gates[gate]?.effectiveLapCap ?? lapCap;
-  return { gate, priorLaps, lapCap: effectiveLapCap, taskCount, growthTaskCount, growthCap, growth };
-}
-
-export interface RecordedPrdAuditFinding {
-  gate: 'prd_audit';
-  grade: 'PLAN_GAP' | 'OVER_SCOPE';
-  criterion: string;
-  summary: string;
-  accepted?: boolean;
-  decision?: 'accept' | 'refuse';
-  rationale?: string;
-  operator?: string;
-}
-
-/** A remediated as-built BLOCKED row retained after the rebuilt gate converges. */
-export type RecordedAsBuiltRemediationFinding = PendingAsBuiltRemediationFinding;
-
-export type RecordedReviewFinding = RecordedPrdAuditFinding | RecordedAsBuiltRemediationFinding;
-
-export type PrdAuditPlanGapRoute =
-  | { kind: 'none' }
-  | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
-  | { kind: 'halt'; haltClass: 'plan-gap'; detail: string; findings: RecordedPrdAuditFinding[] };
-
-function criterionStorySection(
-  storiesText: string,
-  criterion: string,
-): 'happy' | 'negative' | undefined {
-  // The story id uses the stories parser's heading alphabet (`[A-Za-z0-9.-]`,
-  // see `story-criteria.ts`): the
-  // trailing `.<digits>` is the criterion ordinal and everything before it is
-  // the heading id verbatim, so `S5a.3` and `S2.1.3` classify instead of
-  // silently returning undefined (#2219 / PR #2222 fixed the sibling sites).
-  const id = criterion.match(/^S([A-Za-z0-9.-]+)\.(\d+)$/i);
-  if (!id) return undefined;
-
-  const [, storyId, ordinal] = id;
-  const storyPrefix = `Story ${storyId} `;
-  const storyCriteria = extractAuthoritativeStoryCriteria(storiesText).filter((candidate) =>
-    candidate.toLowerCase().startsWith(storyPrefix.toLowerCase()),
-  );
-  const matchedCriterion = storyCriteria[Number(ordinal) - 1];
-  if (!matchedCriterion) return undefined;
-  if (matchedCriterion.toLowerCase().startsWith(`${storyPrefix}happy:`.toLowerCase())) {
-    return 'happy';
-  }
-  if (matchedCriterion.toLowerCase().startsWith(`${storyPrefix}negative:`.toLowerCase())) {
-    return 'negative';
-  }
-  return undefined;
-}
-
-export type PrdAuditOverScopeRoute =
-  | { kind: 'none' }
-  | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
-  | { kind: 'halt'; haltClass: OverScopeHaltClass; detail: string; findings: RecordedPrdAuditFinding[]; undecided: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; refused: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>; defects?: Array<{ kind: string; criterion?: string; message?: string }> }
-  | {
-    kind: 'refusal-rework';
-    refusals: RefusalReworkEvidence[];
-    findings: RecordedPrdAuditFinding[];
-    refused: Array<RecordedPrdAuditFinding & { relation: IntentRelation }>;
-    detail: string;
-  };
-
-/**
- * One PRD-audit route result shared by the serial SHIP walk and the
- * validation-group join. A recorded finding is an explicit accepted risk;
- * a halted finding keeps its route-specific operator decision. Keeping this
- * result above either execution shape prevents their gate-satisfaction logic
- * from drifting apart.
- */
-type CurrentPrdAuditRoute =
-  | { kind: 'none' }
-  | { kind: 'record' }
-  | { kind: 'plan-gap-halt'; route: Extract<PrdAuditPlanGapRoute, { kind: 'halt' }> }
-  | { kind: 'over-scope-halt'; route: Extract<PrdAuditOverScopeRoute, { kind: 'halt' }> }
-  | { kind: 'over-scope-refusal-rework'; route: Extract<PrdAuditOverScopeRoute, { kind: 'refusal-rework' }> }
-  // D8: the projection itself refused. Named, blocking, and ahead of every
-  // other route — an unrenderable decision must not be settled as satisfied.
-  | { kind: 'projection-halt'; reason: string };
-
-/**
- * Adapt the validated verdict to the existing widening domain without
- * re-reading its derived Markdown report.  Presentation ordinals remain only
- * locators for no-owner observations; their evidence and relation come from
- * the typed authority.
- */
-/** All-blocking-refused evidence; a missing NC snapshot is a persistence fault. */
-function buildRefusalReworkEvidence(
-  refused: ReadonlyArray<{ criterion: string }>,
-  classifications: ReadonlyMap<string, PrdWideningClassification>,
-  decisions: readonly AcceptedWideningDecision[],
-): { ok: true; refusals: RefusalReworkEvidence[] } | { ok: false; criterion: string } {
-  const refusals: RefusalReworkEvidence[] = [];
-  for (const finding of refused) {
-    const classification = classifications.get(finding.criterion);
-    const decision = classification?.kind === 'refused'
-      ? decisions.find((candidate) => candidate.id === classification.decisionId)
-      : undefined;
-    if (!decision) return { ok: false, criterion: finding.criterion };
-    const key = finding.criterion;
-    const decisionId = decision.id;
-    const revision = decision.revision;
-    const rationale = decision.rationale;
-    if (isPrdAuditNoOwnerOrdinal(finding.criterion)) {
-      const caseId = decision.originalCaseId;
-      const snapshot = decision.originalSource?.snapshot;
-      // The planner's NC context must be able to read the persisted original
-      // offer snapshot; without it the refusal is not admissible as rework
-      // input and falls back to the record-specific persistence recovery.
-      if (caseId === undefined || snapshot === undefined) return { ok: false, criterion: finding.criterion };
-      refusals.push({ key, decisionId, revision, rationale, caseId, snapshot });
-    } else {
-      refusals.push({ key, decisionId, revision, rationale });
-    }
-  }
-  return { ok: true, refusals };
-}
-
-export function routeTypedPrdAuditOverScope(
-  report: PrdAuditReport,
-  relations: ReadonlyMap<string, IntentRelation>,
-  decisions: readonly AcceptedWideningDecision[],
-  cases: readonly RemediationCasePrdWideningRecord[],
-): PrdAuditOverScopeRoute {
-  const overScope = report.findings.filter((finding) => finding.grade === 'OVER_SCOPE');
-  if (overScope.some((finding) => !relations.has(finding.criterion))) return { kind: 'none' };
-  // Keep routing on the exact same freshness-aware projection as artifact
-  // completion and rendered records.  This must not reconstruct freshness
-  // from a source link here: that would let a stale relation pass one reader
-  // while the other readers correctly reject it.
-  const classifications = classifyPrdWideningProjection({
-    findings: report.findings,
-    decisions,
-    cases,
-  });
-  const findings = overScope.map((finding) => {
-    const relation = relations.get(finding.criterion) as IntentRelation;
-    const summary = finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`;
-    if (relation !== 'outside-visible') {
-      return { gate: 'prd_audit' as const, grade: 'OVER_SCOPE' as const, criterion: finding.criterion, summary, relation, accepted: true, classification: 'not-blocking' as const };
-    }
-    if (!isPrdAuditNoOwnerOrdinal(finding.criterion)) {
-      const decision = decisions.filter((candidate) => candidate.criterion === finding.criterion).at(-1);
-      return {
-        gate: 'prd_audit' as const, grade: 'OVER_SCOPE' as const, criterion: finding.criterion, summary, relation,
-        accepted: decision?.authority === 'accept', classification: decision?.authority === 'accept' ? 'accepted' as const : decision?.authority === 'refuse' ? 'blocking-refused' as const : 'blocking-undecided' as const,
-        ...(decision ? { decision: decision.authority, rationale: decision.rationale, operator: decision.operator } : {}),
-      };
-    }
-    const sourceId = prdWideningSourceId(finding);
-    const record = cases.find((candidate) => candidate.relationships.some((item) => item.currentSourceId === sourceId));
-    const published = record?.relationships.filter((item) => item.currentSourceId === sourceId).at(-1);
-    // A validated renamed/reworded same-case relation must render the
-    // original editable offer as well.  Otherwise a stored refusal becomes
-    // an anonymous pending item and an operator cannot explicitly revise it.
-    const relationCase = published?.kind === 'same-case'
-      ? cases.find((candidate) => candidate.id === published.caseId)
-      : undefined;
-    const offer = cases.find((candidate) => candidate.originalSources.some((source) => source.sourceId === sourceId)) ?? relationCase;
-    const original = offer?.originalSources.find((source) => source.sourceId === sourceId) ?? offer?.originalSources[0];
-    const projected = classifications.get(finding.criterion)!;
-    const classification = projected;
-    const decision = classification.kind === 'accepted' || classification.kind === 'refused'
-      ? decisions.find((candidate) => candidate.id === classification.decisionId)
-      : undefined;
-    return {
-      gate: 'prd_audit' as const, grade: 'OVER_SCOPE' as const, criterion: finding.criterion, summary, relation,
-      accepted: classification.kind === 'accepted',
-      classification: classification.kind === 'refused' ? 'blocking-refused' as const : classification.kind === 'accepted' || classification.kind === 'not-blocking' ? 'accepted' as const : 'blocking-undecided' as const,
-      ...(decision ? { decision: decision.authority, rationale: decision.rationale, operator: decision.operator } : {}),
-      ...(offer && original ? {
-        offerEntryId: offer.id,
-        originalSource: { id: original.sourceId, snapshot: original.snapshot },
-        originalCaseId: offer.id,
-        ...(classification.kind === 'refused' && decision ? { kind: 'revise-decision' as const, priorDecision: { id: decision.id, revision: decision.revision } } : { kind: 'pending' as const }),
-      } : {}),
-    };
-  });
-  if (!findings.length) return { kind: 'none' };
-  const undecided = findings.filter((finding) => finding.classification === 'blocking-undecided');
-  const refused = findings.filter((finding) => finding.classification === 'blocking-refused');
-  const recorded = findings.map(({ relation: _relation, classification: _classification, ...finding }) => finding);
-  if (undecided.length || refused.length) {
-    const defects: Array<{ kind: string; criterion: string }> = [];
-    const editable = (items: typeof findings) => items.flatMap(({ classification: _classification, ...finding }) => {
-      if (!isPrdAuditNoOwnerOrdinal(finding.criterion)) return [finding];
-      const record = 'offerEntryId' in finding
-        ? cases.find((candidate) => candidate.id === finding.offerEntryId)
-        : undefined;
-      const offer = record && offeredCaseToPersistedOffer(record);
-      if (!offer) {
-        defects.push({ kind: 'projection-failed', criterion: finding.criterion });
-        return [];
-      }
-      // Verdict rows keep current report identities; editable offers retain
-      // their persisted identities, even after renumbering or wording drift.
-      return [{ ...finding, ...offer,
-        ...('kind' in finding && finding.kind === 'revise-decision' ? { kind: finding.kind, priorDecision: finding.priorDecision } : {}),
-      }];
-    });
-    const pendingOffers = editable(undecided);
-    const refusedOffers = editable(refused);
-    // Refusals with nothing left to decide and no projection defect route to
-    // bounded BUILD rework instead of re-halting (ADR D1). The evidence is
-    // derived from the durable decision; an NC refusal whose decision lacks
-    // its original-source snapshot is a persistence fault, not rework input.
-    if (undecided.length === 0 && defects.length === 0) {
-      const refusalEvidence = buildRefusalReworkEvidence(refused, classifications, decisions);
-      if (!refusalEvidence.ok) {
-        return {
-          kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS,
-          detail: renderPrdWideningRecovery('persistence-failed', [refusalEvidence.criterion]),
-          findings: recorded,
-          undecided: [],
-          refused: refusedOffers,
-        };
-      }
-      return {
-        kind: 'refusal-rework',
-        refusals: refusalEvidence.refusals,
-        findings: recorded,
-        refused: refusedOffers,
-        detail: `OVER_SCOPE visible behavior on ${refused.map((finding) => finding.criterion).join(', ')}.`,
-      };
-    }
-    return {
-      kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS,
-      detail: defects.length
-        ? renderPrdWideningRecovery('projection-failed', defects.map((defect) => defect.criterion))
-        : `OVER_SCOPE visible behavior on ${[...undecided, ...refused].map((finding) => finding.criterion).join(', ')}.`,
-      findings: recorded,
-      undecided: pendingOffers,
-      refused: refusedOffers,
-      ...(defects.length ? { defects } : {}),
-    };
-  }
-  const hasOtherBlockingGrade = report.findings.some((finding) => finding.grade !== 'PASS' && finding.grade !== 'OVER_SCOPE');
-  return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings: recorded };
-}
-
-/** Direct, immutable scope evidence passed to the PRD-audit reviewer. */
-export function prdAuditScopeProjection(input: {
-  resealEvidence: readonly { path: string; reason: string }[];
-  scopeTrailers: readonly ScopeTrailer[];
-}): {
-  resealEvidence: readonly { path: string; reason: string }[];
-  scopeTrailers: readonly ScopeTrailer[];
-} {
-  return {
-    resealEvidence: input.resealEvidence.map((entry) => ({ ...entry })),
-    // Reuse the common widening rationale precedence: a matching `Scope:`
-    // trailer is authored evidence, not an engine-invented explanation.
-    scopeTrailers: input.scopeTrailers.map((entry) => ({
-      path: entry.path,
-      rationale: resolveScopeWideningRationale(entry.path, input.scopeTrailers, '').rationale,
-    })),
-  };
-}
 
 /**
  * How many times one run may re-dispatch `finish` for a PUBLICATION defect —
@@ -1301,1025 +627,13 @@ const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
 
-export interface NavigableStep {
-  name: StepName;
-  label: string;
-  status: StepStatus;
-  phase: Phase;
-}
 
-export function navigateBack(
-  state: ConductState,
-  target: StepName,
-  steps: StepDefinition[] = ALL_STEPS,
-  preserve: readonly StepName[] = [],
-): { state: ConductState; index: number } {
-  const allStepNames = steps.map((s) => s.name);
-  const updated = markDownstreamStale(state, target, allStepNames, preserve);
-  (updated as Record<string, unknown>)[target] = 'pending';
-  const index = steps.findIndex((s) => s.name === target);
-  return { state: updated, index };
-}
-
-export function getNavigableSteps(
-  state: ConductState,
-  steps: StepDefinition[] = ALL_STEPS,
-): NavigableStep[] {
-  return steps
-    .filter((step) => {
-      const status = state[step.name];
-      return status === 'done' || status === 'stale';
-    })
-    .map((step) => ({
-      name: step.name,
-      label: step.label,
-      status: state[step.name] as StepStatus,
-      phase: step.phase,
-    }));
-}
-
-export interface StepRunResult {
-  success: boolean;
-  /** Pending-repair settlement halted BUILD at its final admission boundary. */
-  pendingRepairSettlementHalt?: true;
-  /** A queued self-host dispatch was parked before admission; no provider ran. */
-  operatorParkedBeforeDispatch?: true;
-  output?: string;
-  /** Bounded facts from an unclassified provider exit, forwarded to close events. */
-  exitFacts?: ProviderExitFacts;
-  /** Native-schema terminal value, retained verbatim for engine validation. */
-  finalStructuredResult?: unknown;
-  /** A typed refusal is an entry/environment outcome, never provider text. */
-  refusal?: {
-    kind: 'seal' | 'needs-human' | 'validation-verdict';
-    reason: string;
-  };
-  /** Retryable typed infrastructure failure from the coverage-binding judge. */
-  infrastructureFailure?: Pick<CoverageBindingPayloadError, 'name' | 'kind' | 'reason'>;
-  /** True only when this build-review lap observed an infrastructure fault. */
-  currentLapMechanicalFault?: boolean;
-  /** A custom review had no provider with an available read-only review mode. */
-  buildReviewReadOnlyReviewUnavailable?: true;
-  /**
-   * Typed only by the FINISH composition boundary. Kept unknown at this edge
-   * so malformed adapter results fail closed instead of reaching remediation.
-   */
-  publicationDisposition?: unknown;
-  /** Engine-observed provider subprocess intervals, forwarded without reinterpretation. */
-  observedIntervals?: readonly ObservedInterval[];
-  /** Bounded completeness of managed gh observation for this step outcome. */
-  managedGhObservationCoverage?: ManagedGhObservationCoverage;
-  /** Engine-native aggregate-suite result retained for Task 17 failure routing. */
-  fullSuiteVerification?: FullSuiteVerifierResult;
-  /**
-   * Set when re-dispatching this step cannot change its inputs. The named
-   * prerequisite must complete before another attempt can make progress.
-   */
-  unretryableInputs?: {
-    retryAfterStep: StepName;
-  };
-  /** Deterministic as-built input/capability failures never enter retries. */
-  asBuiltFault?: { kind: 'input' | 'capability'; reason: string };
-  /** Deterministic PRD-audit input/capability failures never enter retries. */
-  prdAuditFault?: { kind: 'input' | 'capability'; reason: string };
-  /** Provider routing identity and ordered candidate-attempt accounting. */
-  preferredProvider?: string;
-  actualProvider?: string;
-  attempts?: ProviderAttemptMetadata[];
-  /**
-   * Set when the provider detected a rate-limit signal in the output (or via
-   * marker file). The conductor waits `waitSeconds` and retries without
-   * burning the retry budget.
-   */
-  rateLimited?: boolean;
-  /** The rate-limit signal is a hard usage-cap exhaustion, not a transient throttle. */
-  usageExhausted?: boolean;
-  /**
-   * Number of seconds to wait before retrying after a rate-limit. Default 300.
-   */
-  waitSeconds?: number;
-  /**
-   * Task 18: Parsed absolute deadline (milliseconds since epoch) from rate-limit message.
-   * When set, represents a timezone-aware reset time extracted from the message
-   * (e.g., "resets 3:20pm (America/New_York)"). Used by the episode coordinator
-   * for deadline-first scheduling. Undefined if timezone is unknown or not present.
-   */
-  deadline?: number;
-  /**
-   * Set when the operator's OAuth token is expired or invalid.
-   * The conductor halts and reports the auth failure.
-   */
-  authFailure?: boolean;
-  /** The provider reported that the exact dispatched slash command is unavailable. */
-  commandUnresolved?: boolean;
-  /** The unavailable command name, without its leading slash. */
-  commandUnresolvedName?: string;
-  /** A provider's automatic permission review denied the requested action. */
-  permissionDenied?: boolean;
-  /** Every configured candidate was explicitly unavailable before invocation. */
-  providerSetupExhaustion?: ProviderSetupExhaustion;
-  /**
-   * Set by the runner's dispatch preflight when the step's working directory
-   * (the feature worktree) no longer exists. Terminal for this run: no provider
-   * was launched, retrying cannot recreate the path, and every later step would
-   * fail the same way. The conductor halts with this classified reason instead
-   * of burning the retry ladder on an opaque provider error.
-   */
-  worktreeMissing?: boolean;
-  /** Provider-owned, sanitized authentication readiness for this dispatch. */
-  authentication?: AuthenticationReadiness;
-  /**
-   * #814: set when a judged-gate grader (today: build_review) could not be
-   * DISPATCHED — the grader subprocess/session failed to run or exited without
-   * producing a verdict, as opposed to running and returning a not-PASS verdict
-   * (which arrives as `success:true` and is caught by the completion predicate,
-   * then routed as a kickback to build). This is an INFRASTRUCTURE failure: the
-   * conductor backs off between retries instead of burning the whole ladder in
-   * milliseconds, and names the dispatch failure in the HALT reason. It is never
-   * set when the grader ran and produced a real FAIL.
-   */
-  graderDispatchFailed?: boolean;
-  /**
-   * Task 3 (per-feature token accounting): token usage reported by the
-   * provider for this invocation, when available. Forwarded from
-   * `InvokeResult.tokenUsage` on the success path so callers can attribute
-   * cost/tokens to the step and feature.
-   */
-  tokenUsage?: TokenUsage;
-  /**
-   * Task 3 (per-feature token accounting): the resolved model string actually
-   * used for this invocation (post model-availability/ladder resolution).
-   */
-  model?: string;
-  /** Resolved provider effort level actually used for this invocation. */
-  effort?: EffortLevel;
-  /**
-   * Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o): base-
-   * freshness evidence from `assembleBuildReviewInputs`, set on every
-   * `runBuildReview` return path once inputs were successfully assembled.
-   * Pure telemetry — the conductor emits a `build_review_base` event from
-   * it and never lets it affect step outcome.
-   */
-  baseFreshness?: {
-    mergeBase: string;
-    trackingRefSha: string | null;
-    remoteHeadSha: string | null;
-    fresh: boolean;
-    /** Advisory commit records Git found patch-equivalent to the review base. */
-    filteredCommits?: readonly { readonly sha: string; readonly subject: string }[];
-    /** Advisory paths excluded from the graded diff by those commit records. */
-    excludedPaths?: readonly string[];
-  };
-  /**
-   * Task 24 (rebase-invalidated-test-failures-never-reach-build): which of the
-   * three repair-context cases this build_review graded under, from
-   * `assembleBuildReviewInputs`. Pure telemetry — the conductor emits a
-   * `build_review_repair_context` event from it and never lets it affect the
-   * step outcome.
-   */
-  repairProvenance?: BuildReviewRepairProvenance;
-}
-
-/**
- * Keep the persisted BUILD outcome rung identical to the rung used by the
- * no-movement admission guard.  A runner can resolve a different actual
- * model/effort than the base configuration, so `resolved` is deliberately not
- * an input here.
- */
-export function buildOutcomeRung(
-  result: Pick<StepRunResult, 'model' | 'effort'> | undefined,
-  escalation: { model: string; effort: EffortLevel },
-): { model: string; effort: EffortLevel } {
-  return {
-    model: result?.model ?? escalation.model,
-    effort: result?.effort ?? escalation.effort,
-  };
-}
-
-export interface SpotAuditDispatchResult {
-  success: boolean;
-  output?: string;
-  providerSetupExhaustion?: ProviderSetupExhaustion;
-  observedIntervals?: readonly ObservedInterval[];
-  authFailure?: boolean;
-  authentication?: AuthenticationReadiness;
-}
-
-type AuthRecoveryDisposition =
-  | { disposition: 'recovered' }
-  | { disposition: 'trial-required'; probeFailure: CodexProbeFailure }
-  | { disposition: 'halt'; haltReason: string };
-
-/** Renders only the closed probe classification retained across recovery. */
-function formatProbeFailureClassification(probeFailure: CodexProbeFailure): string {
-  const parserRejection = probeFailure.facts.parserRejection;
-  return `${probeFailure.kind}${parserRejection === undefined ? '' : `, parser-rejection: ${parserRejection}`}`;
-}
-
-/** Preserve recovery metadata when adapting a verifier dispatch for spot audit. */
-export function toSpotAuditVerifierResult(
-  result: SpotAuditDispatchResult,
-): SpotAuditDispatchResult & { output: string } {
-  return {
-    success: result.success,
-    output: result.output ?? '',
-    ...(result.observedIntervals
-      ? { observedIntervals: result.observedIntervals }
-      : {}),
-    ...(result.providerSetupExhaustion
-      ? { providerSetupExhaustion: result.providerSetupExhaustion }
-      : {}),
-    ...(result.authFailure !== undefined ? { authFailure: result.authFailure } : {}),
-    ...(result.authentication ? { authentication: result.authentication } : {}),
-  };
-}
-
-/**
- * #814: backoff (ms) before re-dispatching a grader whose previous dispatch
- * failed to run. Exponential with a cap so a transient spawn/startup failure has
- * time to clear, without materially slowing a healthy grader (which itself runs
- * for minutes). `attempt` is the 1-based number of the attempt about to run.
- */
-export function graderDispatchBackoffMs(attempt: number): number {
-  const BASE_MS = 2000;
-  const CAP_MS = 30000;
-  const exp = BASE_MS * 2 ** Math.max(0, attempt - 1);
-  return Math.min(CAP_MS, exp);
-}
-
-export interface ComplexityAssessment extends ProviderAttributionMetadata {
-  tier: ComplexityTier | null;
-}
-
-export interface StepRunOptions {
-  /** Per-dispatch cancellation authority for the provider invocation. */
-  abortSignal?: AbortSignal;
-  /** Configured skill path for a concurrent-group branch dispatch. */
-  branchSkill?: string;
-  /** Daemon-start capability observations for custom build-review candidates. */
-  readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>;
-  /**
-   * Durable PRD widening authority rendered by the engine for an audit
-   * reviewer. It is history for judgement only: the reviewer cannot use it to
-   * accept a current finding or copy it into a replacement report.
-   */
-  prdWideningReviewContext?: {
-    readonly version: 'v1';
-    readonly decisions: readonly AcceptedWideningDecision[];
-  };
-  /** Engine-owned constrained reconciliation through the existing remediate step. */
-  remediationRequest?: {
-    readonly mode: 'prd-widening-reconciliation';
-    readonly projection: string;
-    readonly nativeSchema: Readonly<Record<string, unknown>>;
-  } | {
-    /** Engine-owned input for a provider-native remediation disposition plan. */
-    readonly mode: 'gap-plan';
-    readonly projection: RemediationProjection;
-  };
-  /**
-   * This dispatch's engine-owned run identity, passed INTO the provider
-   * lifecycle so its `attempt.id` is this exact value
-   * (adr-2026-08-25-engine-stamped-ship-tail-verdict-run-identity D1). One id
-   * authority per dispatch: the value logged by the lifecycle is the value
-   * stamped into the verdict sidecar and read back by every identity reader.
-   * Absent for dispatches outside the identity seam, which keep the runner's
-   * own run-scoped attempt-id format.
-   */
-  runId?: string;
-  /** Existing-spine correlation for this one invocation; never runner-global state. */
-  executionContext?: ExecutionContext;
-  /**
-   * Retry hint injected into the system prompt when the conductor re-invokes
-   * this step after a completion-gate miss. Example: "previous attempt did not
-   * produce .docs/plans/*.md".
-   */
-  retryReason?: string;
-  /**
-   * Concurrent-group branch dispatch only (group-core.ts): a locally-minted
-   * session id that overrides the runner's shared `this.sessionId` so the
-   * branch never touches the main conductor session (adr-2026-07-10-
-   * concurrent-group-core.md). Absent for ordinary serial-loop steps.
-   */
-  sessionId?: string;
-  /**
-   * FINISH publication dispatch only: which bounded provider pass this
-   * invocation is. `author` mandates writing the retained PR's reader-facing
-   * title and body from the feature's own diff; `judge` mandates the bounded
-   * quality verdict. The publication coordinator selects it deterministically
-   * from its own observation of the PR body, so the provider is never left to
-   * infer which job it has.
-   */
-  finishProsePass?: 'author' | 'judge';
-  /**
-   * Concrete objection from the prior judgment of the retained PR revision.
-   * Present only for a bounded authoring revision lap; omitted when the body
-   * has not been authored yet.
-   */
-  revisionGuidance?: string;
-  /**
-   * Concurrent-group branch dispatch only: whether this branch dispatch
-   * should resume `sessionId` above (true on retry) or start it fresh
-   * (false on the branch's first attempt). Absent for ordinary serial-loop
-   * steps, where resume is derived from the runner's own session state.
-   */
-  resume?: boolean;
-  /**
-   * Concurrent-group provider-aware dispatch only: a detached session scope
-   * owned by this member execution. It keeps provider sessions isolated from
-   * both sibling branches and the serial conductor session.
-   */
-  providerSessions?: ProviderSessionScope;
-  /**
-   * The Conductor-owned, 1-based retry attempt. Provider-aware runners forward
-   * this unchanged so a fallback provider can resolve its own native escalation
-   * rung without deriving retry state from invocation/session counters.
-   */
-  attempt?: number;
-  /**
-   * Whether the current step's retry ladder is enabled. Forwarded with
-   * `attempt` so fallback providers preserve `escalate:false`.
-   */
-  escalate?: boolean;
-  /**
-   * Retry-as-escalation per-attempt overrides (#188). When set, the runner
-   * dispatches at this model/effort instead of the step's resolved base. The
-   * conductor computes them from `escalateAttempt(base, attempt, escalate)` on
-   * each attempt; the runner still routes `modelOverride` through
-   * `ModelAvailability.effectiveModel` so the escalated tier composes with the
-   * #186 availability ladder. Absent on attempt 1 / when `escalate:false`.
-   */
-  modelOverride?: string;
-  effortOverride?: EffortLevel;
-}
-
-export interface StepRunner {
-  run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult>;
-  /** Run identity held by provider-aware runners for self-host scratch leases. */
-  selfHostRunId?(): string;
-  /** Resolve the effective retry-escalation policy for a detached branch. */
-  escalateForStep?(step: StepName, state: ConductState): boolean;
-  /**
-   * Create a detached provider-session scope for one concurrent-group member.
-   * Legacy runners omit this seam and continue using scalar branch sessions.
-   */
-  beginProviderBranch?(step: StepName): ProviderSessionScope | undefined;
-  runInteractive?(
-    step: StepName,
-    failureContext: { reason?: string },
-  ): Promise<void>;
-  assessComplexity?(): Promise<ComplexityTier | ComplexityAssessment | null>;
-  /**
-   * Drop session state so the next invocation creates a fresh provider session.
-   * Called by the conductor before a step's first dispatch. `providerKey`
-   * targets one provider; absent, the runner's captured provider is reset.
-   */
-  resetSession?(step?: StepName, providerKey?: string): Promise<void>;
-  /**
-   * Attempt to resolve a paused rebase conflict in the feature worktree.
-   * Called by the conductor's engine-native rebase step (daemon only) when
-   * a `conflict_halt` outcome is produced and `rebase_resolution_attempts > 0`.
-   *
-   * The implementation MUST resolve the conflict files, stage them (`git add`),
-   * and run `git rebase --continue` so the rebase finishes. Returning
-   * `{ resolved: true }` when the rebase is NOT actually finished is treated as
-   * a failed attempt (counted toward the cap but retried). Returning
-   * `{ resolved: false, reason }` short-circuits all remaining attempts
-   * (the conductor HALTs immediately with `reason` in the HALT file).
-   *
-   * Errors thrown by this method are caught and converted to
-   * `{ resolved: false, reason: error.message }`, so an uncaught exception
-   * degrades gracefully to a conflict HALT.
-   */
-  resolveRebaseConflict?(ctx: ResolutionContext): Promise<ResolutionAttempt>;
-  /**
-   * Post-rebase evidence-citation translation capability (Task 15,
-   * adr-2026-07-12-rebase-evidence-stamp-translation.md), threaded into
-   * `performRebase`'s `opts.translateAfterRebase`. Optional purely for DI/test
-   * override — production wiring defaults to the real
-   * `rebase-translate.ts#translateAfterRebase` when this is absent (see
-   * `runRebaseStep`), so real daemon runs always translate.
-   */
-  translateAfterRebase?(
-    git: RebaseGitRunner,
-    projectRoot: string,
-    onto: string,
-    origHead: string,
-    head: string,
-    flatten?: import('./rebase.js').FlattenedReplayPlan,
-  ): Promise<void>;
-  /**
-   * Dispatch a semantic attribution verifier session for spot-audit sampling.
-   * Called by the conductor's build-gate post-green dispatch (Task 15).
-   *
-   * The verifier runs in a fresh session with the provided residue task IDs,
-   * collects candidate commits, and produces an attribution verdict.
-   * This method is optional — runners may choose not to expose dispatch.
-   */
-  dispatchVerifier?(opts: {
-    residueIds: string[];
-    planPath: string;
-    projectRoot: string;
-  }): Promise<SpotAuditDispatchResult>;
-  /**
-   * Dispatch the post-rebase regrade judgement (ADR-2026-07-20 amendment).
-   * Optional: a runner without it makes a changed replay fail closed.
-   */
-  dispatchRebaseRegradeJudgement?(prompt: string): Promise<{ success: boolean; output?: string }>;
-  /**
-   * Dispatch a fix-session to resolve a setup failure. Part of the two-stage
-   * setup-failure triage (TS-3). Uses a fresh one-shot session (never resumes
-   * the main conductor session) with the output tail in the system prompt.
-   *
-   * Always returns `{ attempted: true }` — the success of the fix is determined
-   * by whether the setup step subsequently passes, not by this method's result.
-   * Used to bootstrap a fresh session that attempts to fix the root cause so
-   * the setup step can be retried.
-   */
-  resolveSetupFailure?(ctx: SetupFailureContext): Promise<SetupFailureAttempt>;
-  /**
-   * Dispatch a fix-session to resolve a CI failure on a shipped PR. Uses a
-   * fresh one-shot session (never resumes the main conductor session) with
-   * the failure hint in the prompt so Claude can diagnose and fix it.
-   *
-   * Always returns `{ attempted: true }` — the success of the fix is
-   * determined by whether CI subsequently passes, not by this method's
-   * result.
-   */
-  resolveCiFailure?(ctx: CiFailureContext): Promise<CiFailureAttempt>;
-}
-
-export type ArtifactReviewResult = 'approved' | 'rejected' | 'skip';
-
-/**
- * Engine-owned FINISH publication composition. The coordinator owns every
- * deterministic publication effect and invokes `dispatchJudgment` only when
- * observed PR title/body prose needs a single quality pass.
- */
-export interface FinishPublicationCoordinator {
-  /** Production coordinators retain the current-HEAD SHIP-evidence fence. */
-  requiresArtifactValidation?: boolean;
-  advance(input: {
-    state: ConductState;
-    mode: RunMode;
-    daemon: boolean;
-    dispatchJudgment(request: PrProseJudgmentRequest): Promise<StepRunResult>;
-    /**
-     * The authoring pass that guarantees the judgment above never sees an
-     * unauthored body. Optional so an existing coordinator implementation keeps
-     * compiling; the coordinator fails closed on an unwired effect.
-     */
-    dispatchAuthoring?(request: PrProseAuthoringRequest): Promise<StepRunResult>;
-    emit(event: FinishPublicationEvent): Promise<void>;
-  }): Promise<PublicationDisposition>;
-}
-
-export interface ConductorOptions {
-  stateFilePath: string;
-  /**
-   * Persistent state authority for conductor-owned mutations. Production
-   * defaults to the filesystem adapter; tests and future hosted composition
-   * may supply another implementation of the same port.
-   */
-  stateStore?: ConductStateStore<ConductState>;
-  stepRunner: StepRunner;
-  events: ConductorEventEmitter;
-  featureSlug?: string;
-  operatorParkBoundary?: () => Promise<boolean>;
-  resume?: boolean;
-  fromStep?: StepName;
-  mode?: RunMode;
-  /** Optional engine-owned FINISH publication coordinator. */
-  finishPublication?: FinishPublicationCoordinator;
-  config?: HarnessConfig;
-  /**
-   * Provider-specific retry escalation ladder. Optional while callers migrate;
-   * Claude remains the compatibility default.
-   */
-  modelPolicy?: ProviderModelPolicy;
-  /** Shared provider routing state owned by this conductor run. */
-  providerExecution?: ProviderExecutionContext;
-  /**
-   * Resolved daemon executor-pool width. The daemon command layer supplies the
-   * CLI-or-config result; direct callers fall back to the validated config
-   * value. This fences compatibility dispatches that mutate process.env.
-   */
-  effectiveDaemonConcurrency?: number;
-  projectRoot: string;
-  /** Feature-scoped daemon logger; defaults to console warnings outside a feature run. */
-  log?: (message: string) => void;
-  /** Injectable native aggregate-suite verifier; production uses FullSuiteVerifier. */
-  fullSuiteVerifier?: Pick<FullSuiteVerifier, 'ensure' | 'inspect'> &
-    Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
-  /** Test seam for the engine-owned rebase adapter. */
-  performRebase?: typeof performRebase;
-  /** Test seam for the disposition-aware build_review completion join. */
-  buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
-  /** Test seam for an adjudicated action-effect charge failure. */
-  buildReviewChargeEffect?: typeof chargeBuildReviewEffectInLedger;
-  /** Test-only bound override for deterministic remediation projection faults. */
-  remediationProjectionLimitOverrides?: Partial<RemediationProjectionLimits>;
-  /** Test seam; production resolves fresh committed feature evidence. */
-  resolveFeatureCreationMutation?: typeof resolveFeatureRemoteMutation;
-  /** Test seam; production resolves fresh guarded publication dependencies. */
-  resolveShipDraftPublicationDependencies?: typeof createShipDraftPublicationDependencies;
-  /** Test seam for the guarded SHIP-start remote transport. */
-  shipDraftRemoteGit?: typeof executeRemoteGit;
-  /** Test seam for the guarded post-finish shipped-record publication context. */
-  postFinishRemoteMutation?: GithubMutationExecutionContext;
-  /** Feature description — used by the engine-run worktree step to name the
-   *  worktree/branch when state.feature_desc isn't set yet. */
-  featureDesc?: string;
-  /** Caller-known feature worktree branch to persist for SHIP consumers. */
-  worktreeBranch?: string;
-  /**
-   * When true, after each step that declares artifact globs, require at least
-   * one matching file on disk. If not, mark the step failed and route through
-   * the recovery menu. Default: false (opt-in — production wires this on).
-   */
-  verifyArtifacts?: boolean;
-  /**
-   * Daemon mode. Enables daemon-specific lifecycle behavior such as terminal
-   * markers, automated rebase, and remediation routing. Default false.
-   */
-  daemon?: boolean;
-  /**
-   * Harness self-host mode (Phase 6). True only when the daemon is building the
-   * harness repo ITSELF, as classified once at the daemon layer by
-   * `classifySelfHost` (path identity + config override). Combined with `daemon`
-   * it activates the self-host guardrail bundle (skill relink + sandboxed build
-   * env + VERSION/release finish gates) as one unit; for every other repo it is
-   * false and the build path is byte-for-byte unchanged. Default false.
-   */
-  selfHost?: boolean;
-  /**
-   * Base branch the self-build's changes are diffed against (`<base>...HEAD`) to
-   * classify breaking surfaces for the release-artifact migration gate (TR-10).
-   * Only consulted for a self-build; absent → the change set is undeterminable
-   * and the migration gate fails closed (requires a migration block). Default
-   * undefined.
-   */
-  baseBranch?: string;
-  /**
-   * Self-host guardrail collaborators (relink / sandbox / finish gates). Injected
-   * as one bundle so tests can drive the wired path hermetically. Defaults to the
-   * real primitives (`defaultSelfHostGuardrails`).
-   */
-  selfHostGuardrails?: SelfHostGuardrails;
-  /** Shared daemon owner for root mutations and per-dispatch boundary windows. */
-  liveBoundaryCoordinator?: LiveBoundaryCoordinator;
-  /**
-   * Maximum auto-retries before a failing step (including artifact miss)
-   * escalates to the recovery menu.
-   * Default: 3.
-   */
-  maxRetries?: number;
-  /**
-   * Sleep implementation for rate-limit waits. Defaults to setTimeout.
-   * Tests inject a spy to avoid real waits.
-   */
-  sleepFn?: (ms: number) => Promise<void>;
-  /**
-   * Injected command runner for the acceptance_specs RED-evidence self-heal
-   * (Task 9, acceptance-specs-halts-when-the-red-evidence-marke). Signature
-   * mirrors every other subprocess-boundary injectable in this file (`gh`,
-   * `git`, `runGh`, `escalateBuildFailure`): production wires the real
-   * `execFile`-based runner; tests inject a stub. Defaults to a real
-   * `child_process.execFile` (promisified) invocation of `contract.command`
-   * from `contract.cwd`.
-   */
-  acceptanceRedExec?: (command: string, cwd: string) => Promise<unknown>;
-  onCheckpoint?: (step: StepName) => Promise<CheckpointResponse>;
-  onNavigate?: (steps: NavigableStep[]) => Promise<StepName | null>;
-  onReviewArtifacts?: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
-  onRecovery?: (
-    step: StepName,
-    isGating: boolean,
-    context?: RecoveryContext,
-  ) => Promise<RecoveryOption>;
-  onComplexityAssessment?: (recommended: ComplexityTier | null) => Promise<ComplexityTier>;
-  /**
-   * Injectable escalation function called after any irrecoverable daemon HALT
-   * in auto mode. Defaults to the real `escalateBuildFailure` which opens a
-   * draft needs-remediation PR. Tests inject a spy to avoid real gh/git calls.
-   * The conductor wraps every call in try/catch — a throwing escalation must
-   * never prevent the HALT marker or state from being written (C1).
-   * Not called for rebase-conflict HALTs (pushing mid-rebase is unsafe).
-   */
-  escalateBuildFailure?: (opts: EscalateBuildFailureOpts) => Promise<EscalateBuildFailureResult>;
-  /**
-   * Shell runner for the `gh` CLI (owner identity resolution). Injected for
-   * tests; defaults to the real production gh. Used to resolve machine-scoped
-   * operator identity for plan-step owner stamping (Slice B, D4).
-   */
-  gh?: GhRunner;
-  /**
-   * Shell runner for the `git` CLI (push-evidence verification). Injected for
-   * tests; defaults to the real production git. Used to verify push status
-   * in the finish gate (daemon false-ship guard).
-   */
-  git?: GitRunner;
-  /**
-   * Shell runner for the `gh` CLI (merged-PR guard). Injected for
-   * tests; defaults to the real production gh. Used by the merged-PR guard
-   * to check recorded PR merge state at kickback and rebase entry points
-   * (ADR-2026-07-09-mid-run-merged-pr-guard, Task 3-5).
-   */
-  runGh?: GhRunner;
-  /**
-   * Test seam for the strict merged-history verifier. Production always uses
-   * `verifyMergedPrShipment`; a valid verdict still follows the normal gate
-   * loop instead of fabricating terminal markers.
-   */
-  verifyMergedShipment?: (
-    prUrl: string,
-    slug: string,
-  ) => Promise<VerifiedMergedPrResult>;
-  /** Test seam for the finish completion gate's strict evidence verifier. */
-  shipmentEvidence?: (input: ShipmentEvidenceInput) => Promise<ShipmentEvidenceResult>;
-  /**
-   * Optional rate-limit episode coordinator (Task 10). When provided and active,
-   * enables coordinated episode-aware backoff during rate-limit waits, allowing
-   * SIGTERM handling and deadline-coordinated redrives. If undefined, rate-limit
-   * handling falls back to bare sleep (existing behavior).
-   */
-  rateLimitEpisode?: RateLimitEpisode;
-  /** Frozen daemon-start capability observations for custom build-review candidates. */
-  readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>;
-  /**
-   * Task 22: Callback to register an in-flight rate-limit wait AbortController
-   * with the daemon-level handler. Called when a conductor creates a wait controller
-   * so process-level SIGTERM can abort all in-flight waits across N concurrent conductors.
-   * Only used in daemon mode; in interactive mode, per-conductor SIGTERM handlers
-   * manage individual controllers. Optional — if absent, the conductor works normally
-   * but its wait controller won't be aborted by process-level SIGTERM.
-   */
-  registerAbortController?: (controller: AbortController) => void;
-  /**
-   * Process termination boundary for signal handling. Production exits the
-   * process; tests inject a recorder so signal-persistence behavior can run
-   * without terminating the Vitest worker.
-   */
-  exitProcess?: (code: number) => void;
-}
-
-/**
- * Snapshot mtimes of a step's artifact files, keyed by path. Taken BEFORE the
- * step runs so the post-step pass can identify which artifacts the step
- * actually authored (new or rewritten) vs pre-existing historical ones.
- */
-async function snapshotArtifactMtimes(
-  projectRoot: string,
-  step: StepName,
-): Promise<Map<string, number>> {
-  const snapshot = new Map<string, number>();
-  // findArtifactFilesForStep returns absolute paths.
-  const files = await findArtifactFilesForStep(projectRoot, step);
-  for (const file of files) {
-    try {
-      const s = await stat(file);
-      snapshot.set(file, s.mtimeMs);
-    } catch {
-      // Raced deletion — treat as absent.
-    }
-  }
-  return snapshot;
-}
-
-/**
- * Files from `files` that are new or modified relative to `snapshot`
- * (pre-step). A file absent from the snapshot, or whose mtime changed, was
- * authored by the step this run. Pre-existing untouched files are excluded —
- * their markers (if any) were written by the run that authored them.
- */
-async function selectChangedArtifacts(
-  files: string[],
-  snapshot: Map<string, number> | null,
-): Promise<string[]> {
-  if (snapshot === null) return files;
-  const changed: string[] = [];
-  for (const file of files) {
-    const before = snapshot.get(file);
-    if (before === undefined) {
-      changed.push(file);
-      continue;
-    }
-    try {
-      const s = await stat(file);
-      if (s.mtimeMs !== before) changed.push(file);
-    } catch {
-      // Deleted during the step — nothing to stamp.
-    }
-  }
-  return changed;
-}
 
 /**
  * Render the operator-facing recovery for a terminal mechanical review fault.
  * The aggregate is the current-lap authority for the rubric and closed cause;
  * the ledger only supplies the shared allowance consumption.
  */
-export function renderExhaustedMechanicalBuildReviewHalt(
-  entry: Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'>,
-  currentLap: unknown,
-): string {
-  const aggregate = parseBuildReviewAggregate(currentLap);
-  const failure = aggregate && Object.values(aggregate.results).find(
-    (result) => result.kind === 'infrastructure-failure',
-  );
-  const consumed = entry.mechanicalFaults ?? 0;
-  if (!aggregate || !failure || failure.kind !== 'infrastructure-failure') {
-    const lastMechanicalFault = entry.lastMechanicalFault;
-    return `build_review mechanical fault allowance exhausted: ${consumed} of ` +
-      `${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed; current-lap diagnostic is unavailable` +
-      (lastMechanicalFault === undefined ? '' :
-        `; Last recorded fault: ${lastMechanicalFault.rubric} closed cause ${lastMechanicalFault.reason} ` +
-        `on lap ${lastMechanicalFault.lapId} (${lastMechanicalFault.detail}).`);
-  }
-  // ai-conductor:session-command-context=operator-only
-  const message = [
-    `build_review mechanical fault allowance exhausted: ${consumed} of ${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed.`,
-    `Current lap ${aggregate.lapId}: ${failure.rubric} closed cause ${failure.reason} (${failure.detail}).`,
-    `1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap ${aggregate.lapId} --rubric ${failure.rubric} --rationale "<rationale>".`,
-    '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
-  ].join('\n');
-  // /ai-conductor:session-command-context
-  return message;
-}
-
-/** Render the closed recovery for a custom review with no read-only candidate. */
-export function renderReadOnlyReviewUnavailableBuildReviewHalt(detail: string): string {
-  return [
-    'build_review halted: read-only-review-unavailable.',
-    detail,
-    'Install or enable a read-only review mode for one listed provider, or record reduced coverage for this rubric before re-queueing the feature.',
-  ].join('\n');
-}
-
-function hasCompletionContract(step: StepName, config: HarnessConfig): boolean {
-  if (config.steps?.[step]?.completion_artifact) return true;
-  if (CUSTOM_COMPLETION_PREDICATES[step]) return true;
-  return (STEP_ARTIFACT_GLOBS[step] ?? []).length > 0;
-}
-
-function stepDeclaresReviewableArtifacts(step: StepName, config: HarnessConfig): boolean {
-  return stepArtifactContracts(step).length > 0 || extraArtifactGlobs(step, config).length > 0;
-}
-
-function stepHasCompletionCheck(step: StepName, config: HarnessConfig): boolean {
-  return hasCompletionContract(step, config);
-}
-
-/** Seed best-effort task progress telemetry before every BUILD dispatch. */
-export async function seedBuildTaskTelemetry(
-  projectRoot: string,
-  featureDesc: string,
-): Promise<void> {
-  const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
-  if (!planPath) {
-    return;
-  }
-  try {
-    await seedTaskStatus(projectRoot, planPath, undefined, { dispatchBoundary: true });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn(`[task-telemetry] unable to seed task-status.json: ${message}`);
-  }
-}
-
-/**
- * Parse `git diff --name-status` output into `ChangedFile[]` for the self-host
- * release-artifact migration classifier. Each line is `<status>\t<path>` for
- * A/M/D, or `R<score>\t<old>\t<new>` / `C<score>\t<old>\t<new>` for a
- * rename/copy — the origin path is preserved so a skill moved OUT of `skills/`
- * (a breaking symlink-target change) is classified on its source side too.
- * Malformed / blank lines are skipped.
- */
-function parseNameStatus(stdout: string): ChangedFile[] {
-  const out: ChangedFile[] = [];
-  for (const line of stdout.split('\n')) {
-    if (line.trim() === '') continue;
-    const parts = line.split('\t');
-    const status = parts[0];
-    if (status.startsWith('R') || status.startsWith('C')) {
-      // R<score>\t<old>\t<new> — need both origin and destination paths.
-      if (parts.length < 3) continue;
-      out.push({ status, origPath: parts[1], path: parts[2] });
-    } else {
-      if (parts.length < 2 || parts[1] === '') continue;
-      out.push({ status, path: parts[1] });
-    }
-  }
-  return out;
-}
-
-interface PostFinishShippedRecordRefreshOptions {
-  runGit: GitRunner;
-  cwd: string;
-  requestedSlug: string;
-  pr: string;
-  log: (message: string) => void;
-  gh: GhRunner;
-  remoteGit?: typeof executeRemoteGit;
-  remoteMutation?: GithubMutationExecutionContext;
-  events: ConductorEventEmitter;
-}
-
-/** Refresh the final Cost block and make its push best-effort and non-blocking. */
-async function refreshPostFinishShippedRecord({
-  runGit,
-  cwd,
-  requestedSlug,
-  pr,
-  log,
-  gh,
-  remoteGit,
-  remoteMutation,
-  events,
-}: PostFinishShippedRecordRefreshOptions): Promise<void> {
-  try {
-    const planPaths = (await readdir(join(cwd, '.docs/plans')))
-      .filter((name) => name.endsWith('.md'))
-      .map((name) => join('.docs/plans', name));
-    const resolution = resolveShipmentIdentity(requestedSlug, planPaths);
-    if (resolution.kind !== 'resolved') {
-      throw new Error('unable to resolve canonical post-finish shipment identity');
-    }
-
-    // The refresh owns only its shipped marker. Refuse to enter the transaction
-    // when any tracked worktree or index change could be lost by recovery;
-    // untracked runtime state such as `.pipeline/` is deliberately irrelevant.
-    await runGit(['diff', '--quiet'], { cwd });
-    await runGit(['diff', '--cached', '--quiet'], { cwd });
-
-    const { stdout: preRefreshOut } = await runGit(['rev-parse', 'HEAD'], { cwd });
-    const preRefreshHead = preRefreshOut.trim();
-    await dispatchShippedRecord({ kind: 'write', slug: requestedSlug, pr }, cwd);
-    const { stdout: postRefreshOut } = await runGit(['rev-parse', 'HEAD'], { cwd });
-    const postRefreshHead = postRefreshOut.trim();
-    if (postRefreshHead === preRefreshHead) return;
-
-    // Prove the immutable commit object once. The later update-ref supplies the
-    // mutable-HEAD check atomically, so rollback cannot clobber another commit.
-    const { stdout: parentOut } = await runGit(
-      ['rev-parse', `${postRefreshHead}^`],
-      { cwd },
-    );
-    const { stdout: subjectOut } = await runGit(
-      ['show', '-s', '--format=%s', postRefreshHead],
-      { cwd },
-    );
-    const { stdout: pathsOut } = await runGit(
-      ['diff-tree', '--no-commit-id', '--name-only', '-r', postRefreshHead],
-      { cwd },
-    );
-    const paths = pathsOut.split('\n').filter((path) => path !== '');
-    const expected = resolution.identity;
-    if (
-      parentOut.trim() !== preRefreshHead ||
-      subjectOut.trim() !== `shipped record: ${expected.slug}` ||
-      paths.length !== 1 ||
-      paths[0] !== expected.recordPath
-    ) {
-      throw new Error('refusing to push an unverified post-finish commit');
-    }
-
-    try {
-      const { stdout: branchOut } = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
-      const resolvedMutation = remoteMutation ?? await resolveFeatureRemoteMutation({
-        cwd,
-        slug: requestedSlug,
-        branch: branchOut.trim(),
-        git: (args) => runGit(args, { cwd }),
-        gh,
-      });
-      await pushPostFinishShippedRecord({
-        runGit,
-        cwd,
-        branch: branchOut.trim(),
-        remoteGit,
-        remoteMutation: resolvedMutation,
-        events,
-      });
-    } catch (pushError) {
-      let recoveryHead = preRefreshHead;
-      let upstreamHead: string | undefined;
-      try {
-        const { stdout } = await runGit(
-          ['rev-parse', '--verify', '@{u}^{commit}'],
-          { cwd },
-        );
-        upstreamHead = stdout.trim() || undefined;
-      } catch {
-        // Missing/indeterminate upstream recovers to the known pushed parent.
-      }
-
-      if (upstreamHead !== postRefreshHead) {
-        if (upstreamHead) {
-          try {
-            await runGit(
-              ['merge-base', '--is-ancestor', preRefreshHead, upstreamHead],
-              { cwd },
-            );
-            const { stdout: postTreeOut } = await runGit(
-              ['rev-parse', '--verify', `${postRefreshHead}^{tree}`],
-              { cwd },
-            );
-            const { stdout: upstreamTreeOut } = await runGit(
-              ['rev-parse', '--verify', `${upstreamHead}^{tree}`],
-              { cwd },
-            );
-            if (upstreamTreeOut.trim() === postTreeOut.trim()) {
-              recoveryHead = upstreamHead;
-            }
-          } catch {
-            // An unrelated/indeterminate or tree-divergent upstream is unsafe;
-            // use the known pushed parent.
-          }
-        }
-        await runGit(['update-ref', 'HEAD', recoveryHead, postRefreshHead], { cwd });
-        await runGit(['reset', '--hard', 'HEAD'], { cwd });
-      }
-      throw pushError;
-    }
-  } catch (err) {
-    log(
-      `post-finish shipped-record refresh failed: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-  }
-}
-
-export async function pushPostFinishShippedRecord(input: {
-  runGit: GitRunner;
-  cwd: string;
-  branch: string;
-  remoteGit?: typeof executeRemoteGit;
-  remoteMutation?: GithubMutationExecutionContext;
-  events?: ConductorEventEmitter;
-}): Promise<void> {
-  const pushed = await (input.remoteGit ?? executeRemoteGit)(
-    ['push', 'origin', `HEAD:refs/heads/${input.branch}`],
-    {
-      cwd: input.cwd,
-      config: (args) => input.runGit(args, { cwd: input.cwd }),
-      runRemoteGit: input.runGit,
-      mutation: input.remoteMutation,
-      events: input.events,
-    },
-  );
-  if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));
-}
-
-function remoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
-  if (result.kind === 'failed') return result.error;
-  if (result.kind === 'refused') return result.reason;
-  return 'remote Git operation did not execute';
-}
-
-function testSuiteBudgetVerdict(inspection: FullSuiteInspectionResult) {
-  if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
-    const categories = inspection.evidence.driftLedger?.at(-1)?.categories;
-    return categories === undefined
-      ? undefined
-      : { outcome: 'preserved_within_budget' as const, categories };
-  }
-  if (
-    inspection.status === 'STALE' &&
-    (inspection.reason === 'drift_budget_exceeded' || inspection.reason === 'unbudgetable_drift')
-  ) {
-    return {
-      outcome: 'rerun_required' as const,
-      reason: inspection.reason,
-      category: inspection.category,
-      count: inspection.count,
-      bound: inspection.bound,
-    };
-  }
-  return undefined;
-}
-
-function projectExecutionSummaryEntries(
-  entries: readonly FullSuiteEvidenceAttempt[],
-): Array<Pick<FullSuiteEvidenceAttempt, 'index' | 'result' | 'durationMs'>> {
-  return entries.map(({ index, result, durationMs }) => ({ index, result, durationMs }));
-}
-
-/** Whether a failed BUILD attempt made no task or commit progress. */
-export function isNoTaskProgressBuildStall(input: {
-  attempt: number;
-  resolvedTasksBefore: number;
-  resolvedTasksAfter: number;
-  headMovedThisAttempt: boolean;
-  completionReason?: string;
-}): boolean {
-  return input.attempt >= 2 &&
-    input.resolvedTasksAfter <= input.resolvedTasksBefore &&
-    !input.headMovedThisAttempt &&
-    !input.completionReason?.startsWith('unverified Done-when checks require one BUILD review pass:');
-}
-
 export class Conductor {
   private stateFilePath: string;
   /** Current run state, retained so terminal events can be step-stamped. */
@@ -4418,9 +2732,7 @@ export class Conductor {
       }));
     if (findings.length === 0) return { kind: 'none' };
 
-    const haltOnAnyPlanGap = (this.config as HarnessConfig & {
-      prd_audit?: { halt_on_any_plan_gap?: boolean };
-    }).prd_audit?.halt_on_any_plan_gap === true;
+    const haltOnAnyPlanGap = prdAuditHaltsOnAnyPlanGap(this.config);
     const blocking = findings.filter(
       (finding) => haltOnAnyPlanGap || criterionStorySection(storiesText, finding.criterion) !== 'negative',
     );
@@ -5778,7 +4090,7 @@ export class Conductor {
       // Existing-task remediation deliberately reaches the budget block above
       // and records a gate lap below, but never enters plan append/staging.
       if (allTasks.length > 0 && planPath) {
-        const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks, {
+        const appendResult = await appendConductorRemediationTasks(this.projectRoot, planPath, allTasks, {
           ...(prdAuditRemediation || (asBuiltRemediation && asBuiltValidated)
             ? {
                 criterionBoundGaps: appendGaps,
@@ -7896,7 +6208,7 @@ export class Conductor {
     // clears) so a later, unrelated kickback starts with a fresh baseline.
     // Both the budget and this single-use baseline live in the durable ledger,
     // so daemon re-dispatch cannot reset either loop guard.
-    const kickbackEscalationEnabled = this.config.kickback_escalation?.enabled ?? true;
+    const kickbackEscalationIsEnabled = kickbackEscalationEnabled(this.config);
     const cumulativeKickbackBoundEnabled = this.config.cumulative_kickback_bound?.enabled ?? true;
     // Bound for the stale-lap FAIL discard below (#1740 follow-up): the
     // discard re-lands on build_review so the grader writes a current-lap
@@ -8009,7 +6321,7 @@ export class Conductor {
         progress,
         priorVerdict: ctx.priorVerdict,
         nextVerdict: false,
-        enabled: kickbackEscalationEnabled,
+        enabled: kickbackEscalationIsEnabled,
       });
       // #647 D3: when the intervening build DID make progress (so D2 never
       // fires), surface that classification for the audit trail's next
@@ -16660,775 +14972,15 @@ export class Conductor {
 
 }
 
-export function writeFenceInstalledForProvider(providerKey: string): boolean {
-  const descriptor = findBuiltInProviderDescriptor(providerKey);
-  return descriptor !== undefined && supportsProviderCapability(descriptor, 'writeFence');
-}
-
-/**
- * Pure helper (no side effects): resolves the "last step" that a run reached,
- * for use by the finally backstop's diagnostic HALT message so it never
- * surfaces the literal 'unknown' to operators. Preference order:
- *   1. state.last_step, if recorded
- *   2. breadcrumb.lastAdvancedStep, if the run tracked one
- *   3. the furthest-progressed 'done' step per canonical ALL_STEPS order
- *   4. the literal 'no step recorded' as a last resort
- */
-export function resolveLastStep(
-  state: Record<string, unknown> & { last_step?: string },
-  breadcrumb: { lastAdvancedStep?: string },
-): string {
-  if (state?.last_step) return state.last_step;
-  if (breadcrumb?.lastAdvancedStep) return breadcrumb.lastAdvancedStep;
-
-  let furthestIndex = -1;
-  let furthestStep: string | undefined;
-  for (let i = 0; i < ALL_STEPS.length; i++) {
-    const name = ALL_STEPS[i].name;
-    if (state?.[name] === 'done' && i > furthestIndex) {
-      furthestIndex = i;
-      furthestStep = name;
-    }
-  }
-  if (furthestStep) return furthestStep;
-
-  return 'no step recorded';
-}
-
-/**
- * Calculate the index in steps where resume should start, based on the current state.
- * Used for parity testing and direct resume-index calculation without gate verdict clamping.
- * Returns the index of the first pending step after the last done step, or 0 if feature is complete.
- */
-export function findResumeIndex(
-  state: ConductState,
-  steps: StepDefinition[] = ALL_STEPS,
-): number {
-  // If feature is already complete, treat as new feature (start from 0)
-  if (state.feature_status === 'complete') {
-    return 0;
-  }
-
-  // First, look for an in_progress step
-  for (let i = 0; i < steps.length; i++) {
-    if (getStepStatus(state, steps[i].name) === 'in_progress') {
-      return i;
-    }
-  }
-
-  // Otherwise, find the first pending step after the last done step
-  let lastDoneIndex = -1;
-  for (let i = 0; i < steps.length; i++) {
-    if (getStepStatus(state, steps[i].name) === 'done') {
-      lastDoneIndex = i;
-    }
-  }
-
-  return lastDoneIndex + 1;
-}
-
-/**
- * Walk a candidate resume index BACKWARD to the earliest step the gate loop
- * will actually admit.
- *
- * The verdict-aware resume clamp picks the earliest gate whose VERDICT is
- * unsatisfied, but the loop admits a step only when `checkGate` — which reads
- * STATE, not verdicts — passes. Those two predicates can disagree: a step whose
- * verdict says satisfied but whose state is `failed` is skipped by the clamp
- * and then rejected as an unsatisfied prerequisite by `checkGate`, so the loop
- * exits immediately through the markerless `gate_blocked` return (#1052).
- *
- * Given a candidate index, repeatedly replace it with the index of its earliest
- * unsatisfied prerequisite until `checkGate` passes. Movement is strictly
- * backward and bounded by `steps.length`, so this always terminates — even for
- * a malformed registry with a prerequisite cycle. Returns the candidate
- * unchanged when its gate already passes (the overwhelmingly common case) or
- * when no earlier prerequisite can be resolved.
- */
-export function clampToRunnablePrerequisite(
-  steps: StepDefinition[],
-  state: ConductState,
-  candidate: number,
-): number {
-  let idx = candidate;
-  for (let guard = 0; guard < steps.length; guard++) {
-    const step = steps[idx];
-    if (!step) return idx;
-    const gate = checkGate(step, state);
-    if (gate.passed) return idx;
-
-    const earliest = earliestResolvablePrerequisiteIndex(steps, state, step, idx);
-    if (earliest === -1) return idx;
-    idx = earliest;
-  }
-  return idx;
-}
-
-/**
- * Find the earliest unsatisfied prerequisite that can be reached by moving
- * backward from `beforeIndex`. Prerequisites absent from the resolved registry
- * or at/after the bound cannot be resolved by that movement.
- */
-export function earliestResolvablePrerequisiteIndex(
-  steps: StepDefinition[],
-  state: ConductState,
-  step: StepDefinition,
-  beforeIndex: number,
-  include: (prerequisite: StepName) => boolean = () => true,
-): number {
-  let earliest = -1;
-  for (const prereq of step.prerequisites) {
-    if (stepSatisfied(state, prereq)) continue;
-    if (!include(prereq)) continue;
-    const prereqIdx = steps.findIndex((candidate) => candidate.name === prereq);
-    if (prereqIdx < 0 || prereqIdx >= beforeIndex) continue;
-    if (earliest === -1 || prereqIdx < earliest) earliest = prereqIdx;
-  }
-  return earliest;
-}
-
-/**
- * Reconcile a resume candidate with the same state-only entry gate the main
- * loop will check before dispatching it. The backward walk is bounded and
- * does not mutate state. If a malformed resolved step list leaves the gate
- * refused, the loop's existing gate-refusal path owns that terminal outcome.
- */
-export function resolveRunnableResumeEntry(
-  steps: StepDefinition[],
-  state: ConductState,
-  candidate: number,
-): number {
-  return clampToRunnablePrerequisite(steps, state, candidate);
-}
-
-/**
- * Resolve which members of a built-in concurrent group (e.g.
- * `VALIDATION_GROUP`) are actually dispatchable, reusing the SAME per-step
- * skip predicates the pre-existing serial walk already applies
- * (tier/track/upstream-skip/config-disable) rather than reinventing skip
- * logic for the group. A member that would skip under the serial walk gets
- * a `SkippedOutcome` here too — never silently omitted, and never a
- * `VerdictOutcome`/`NoVerdictOutcome` that could fail the group.
- *
- * When every member skips, `allSkipped` is true and `dispatchable` is
- * empty — the caller marks the group itself skipped and dispatches nothing,
- * rather than dispatching a group of zero branches.
- */
-export function resolveGroupMembership(
-  group: StepGroup,
-  state: ConductState,
-  track: Track,
-  modelPolicy: ProviderModelPolicy,
-  config?: HarnessConfig,
-  reverifyDoneMembers = false,
-): { members: GroupMember[]; dispatchable: GroupMember[]; allSkipped: boolean } {
-  const tier = state.complexity_tier ?? 'L';
-  const members: GroupMember[] = group.members.map((name) => {
-    const stepDef = getStepDefinition(name);
-    const resolved = resolveStepConfig(
-      stepDef.name,
-      stepDef.phase,
-      modelPolicy,
-      config,
-      { tier: state.complexity_tier },
-    );
-    const skip =
-      getStepStatus(state, name) === 'skipped' ||
-      stepDef.skippableForTiers.includes(tier) ||
-      (stepDef.skippableForTracks ?? []).includes(track) ||
-      shouldSkipForUpstreamSkip(stepDef, state) ||
-      shouldSkipForBootstrapMode(stepDef.name, state.bootstrap_mode) ||
-      resolved.disabled;
-    // Task 27: resume-awareness — a member already marked 'done' in state
-    // (e.g. persisted mid-group, when a SIGINT landed after this member
-    // settled but before its siblings/the join did) is already satisfied.
-    // A BUILD repair invalidates the prior verification round. Its next
-    // group join is the only satisfaction authority, so every non-skipped
-    // member must dispatch rather than reuse a prior state/verdict.
-    const alreadyDone =
-      !skip &&
-      !reverifyDoneMembers &&
-      getStepStatus(state, name) === 'done';
-    return {
-      name,
-      skill: stepDef.skillName ?? '',
-      outcome: skip
-        ? makeSkippedOutcome()
-        : alreadyDone
-          ? makeVerdictOutcome('pass')
-          : makeNoVerdictOutcome('not-run'),
-    };
-  });
-  const dispatchable = members.filter(
-    (m) => m.outcome.kind === 'no-verdict' && m.outcome.reason === 'not-run',
-  );
-  return { members, dispatchable, allSkipped: dispatchable.length === 0 };
-}
-
-/**
- * The earliest target step among a set of remediation fixes. The loop
- * navigateBacks here and re-runs forward, so picking the earliest re-runs every
- * step a fix needs (e.g. an `architecture_review` fix + a `build` fix → start at
- * `architecture_review`). Unresolvable dispositions are surfaced to the caller
- * so it can refuse to route a remediation plan it cannot fully understand.
- */
-export function earliestRemediationTarget(
-  fixes: RemediationGap[],
-  steps: StepDefinition[],
-): { target: StepName; unresolved: string[] } {
-  let best: StepName = 'build';
-  let bestIdx = steps.length;
-  const unresolved = new Set<string>();
-  for (const g of fixes) {
-    // `publication` is a disposition, not a step name — it resolves to `finish`,
-    // the step that owns PR prose.
-    const stepName = remediationDispositionStep(g.disposition);
-    const idx = steps.findIndex((s) => s.name === stepName);
-    if (idx < 0) {
-      unresolved.add(g.disposition);
-      continue;
-    }
-    if (idx >= 0 && idx < bestIdx) {
-      bestIdx = idx;
-      best = stepName as StepName;
-    }
-  }
-  return { target: best, unresolved: [...unresolved] };
-}
-
-export type ExistingTaskBindingResolution =
-  | { kind: 'resolved'; ids: string[] }
-  | { kind: 'unresolvable'; id: string };
-
-/**
- * Resolve an existing-task remediation binding against the active plan. Keep
- * this at the admission seam so every caller shares plan-task-parse's grammar
- * and trailing-annotation normalization rather than recreating either locally.
- */
-export function resolveExistingTaskBindingsForAdmission(
-  tasks: ReadonlyArray<Pick<RemediationGap['tasks'][number], 'id'>>,
-  activePlanTaskIds: ReadonlySet<string>,
-): ExistingTaskBindingResolution {
-  const ids: string[] = [];
-  for (const task of tasks) {
-    const resolved = resolvePlanTaskReference(task.id, activePlanTaskIds);
-    if (resolved.kind !== 'resolved') {
-      return { kind: 'unresolvable', id: resolved.kind === 'unresolvable' ? resolved.ids.join(', ') : task.id };
-    }
-    for (const id of resolved.ids) if (!ids.includes(id)) ids.push(id);
-  }
-  return { kind: 'resolved', ids };
-}
-
-/**
- * Remediation tasks carry their concrete file scopes in titles rather than in
- * plan `**Files:**` blocks. Present those scopes to the shared plan scanner so
- * this route inherits the seal's directory and own-feature judgement.
- */
-function remediationGapTargetsAnotherFeatureSealedArtifact(
-  gap: RemediationGap,
-  activePlanStem: string,
-): {
-  artifact: string;
-  directingClause: string;
-  directingSource: 'task title' | 'rationale';
-} | undefined {
-  // Task titles are prose, not plan Files declarations — remediation tasks
-  // routinely cite .docs artifacts as evidence ("the sequence contract at
-  // .docs/architecture/sequences/<slug>.md:87 requires ..."), and treating the
-  // whole title as a Files line rerouted such gaps to the undispatchable
-  // `plan` disposition and surfaced them as bare `Missing:` halts. Apply the
-  // same directed-edit clause test the rationale already uses: only a
-  // protected path with an edit verb in its own preceding clause is a target.
-  const taskTarget = gap.tasks
-    .map((task) => directedProtectedTarget(task.title, activePlanStem))
-    .find((target) => target !== undefined);
-  if (taskTarget) {
-    return {
-      artifact: taskTarget.path,
-      directingClause: taskTarget.clause,
-      directingSource: 'task title',
-    };
-  }
-
-  // Rationale is prose rather than a plan Files declaration. Treat it as a
-  // target only when it both names a resolvable protected artifact and directs
-  // an edit; a context-only citation must not re-route source work.
-  const rationaleTarget = directedProtectedTarget(gap.rationale, activePlanStem);
-  return rationaleTarget === undefined
-    ? undefined
-    : {
-      artifact: rationaleTarget.path,
-      directingClause: rationaleTarget.clause,
-      directingSource: 'rationale',
-    };
-}
-
-/**
- * A protected `.docs` path counts as an edit target only when a directing
- * verb appears in the same clause before it; a context-only citation never
- * re-routes source work.
- */
-export function directedProtectedTarget(
-  prose: string,
-  activePlanStem: string,
-): { path: string; clause: string } | undefined {
-  const prosePaths = Array.from(
-    prose.matchAll(
-      /(?:^|[\s`])((?:\.\/)?\.docs\/(?:architecture|decisions|plans|stories|specs)\/[A-Za-z0-9._-]+\.md)\b/g,
-    ),
-  );
-  if (prosePaths.length === 0) return undefined;
-  const action = /\b(?:amend|change|delete|edit|remove|rewrite|update)\b/i;
-  const directedPaths = prosePaths.flatMap((match) => {
-    const path = match[1];
-    const pathOffset = (match.index ?? 0) + match[0].lastIndexOf(path);
-    // A semicolon separates independent clauses just as a sentence boundary
-    // does. Only an action in this path's own preceding clause can direct it.
-    const beforePath = prose.slice(0, pathOffset);
-    const clauseStart = Math.max(
-      beforePath.lastIndexOf('.'),
-      beforePath.lastIndexOf(';'),
-      beforePath.lastIndexOf('\n'),
-    );
-    const clause = prose.slice(clauseStart + 1).trim();
-    return action.test(beforePath.slice(clauseStart + 1)) ? [{ path, clause }] : [];
-  });
-  if (directedPaths.length === 0) return undefined;
-  const directedScope = `### Task directed: remediation\n\n**Files:** ${directedPaths.map(({ path }) => path).join(', ')}`;
-  const target = scanPlanProtectedTargets(directedScope, activePlanStem)[0]?.path;
-  const targetClause = target === undefined
-    ? undefined
-    : directedPaths.find(({ path }) => path.replace(/^\.\//, '') === target.replace(/^\.\//, ''))?.clause;
-  return targetClause === undefined || target === undefined
-    ? undefined
-    : { path: target, clause: normalizeDirectingClause(targetClause) };
-}
-
-function normalizeDirectingClause(clause: string): string {
-  const normalized = clause.replace(/\s+/g, ' ').trim();
-  return normalized.length <= 160 ? normalized : `${normalized.slice(0, 159)}…`;
-}
-
-/**
- * The retryReason handed to the remediation target step — names each gap, its
- * disposition, and its concrete tasks, and tells the agent to make the changes
- * even though the task list may show complete (the as-built code is re-audited).
- * `source`/`evidenceFile` name the gate that blocked and its gap artifact so the
- * same hint serves prd-audit, finish-verification, and as-built remediation.
- */
-export function buildRemediationHint(
-  fixes: RemediationGap[],
-  source = 'prd-audit',
-  evidenceFile = '.pipeline/prd-audit.md',
-): string {
-  // ai-conductor:session-command-context=managed
-  const lines = fixes.map((g) => {
-    const tasks = g.tasks.length ? ` Tasks: ${g.tasks.map((t) => t.title).join('; ')}` : '';
-    return `- ${g.id} [${g.disposition}]: ${g.rationale}.${tasks}`;
-  });
-  // A publication-only plan is a prose defect. The generic wording below tells
-  // the agent to "make the code/spec changes", which is exactly how a PR-body
-  // gap turned into implementation work.
-  if (fixes.length > 0 && fixes.every((g) => g.disposition === REMEDIATION_PUBLICATION_DISPOSITION)) {
-    return (
-      `Remediating blocking ${source} gaps (see the engine-owned typed remediation result and ` +
-      `${evidenceFile}). These are PUBLICATION gaps: the implementation is complete and ` +
-      'must not change. Fix only the pull request\'s published prose — rewrite the PR body ' +
-      '(`## Why` / `## What Changed` / `## Testing`, plus the `Closes` reference) with a ' +
-      '`pull-request.edit` request passed to `ai-conductor github-operation --request-file`, and correct the title or issue linkage if named below. Do not change ' +
-      'code, do not amend the plan, and do not re-run the build:\n' +
-      lines.join('\n')
-    );
-  }
-  return (
-    `Remediating blocking ${source} gaps (see the engine-owned typed remediation result and ` +
-    `${evidenceFile}). The task list may already show complete, but the ` +
-    'following are NOT satisfied — make the code/spec changes and commit them; ' +
-    'the as-built code is re-audited after this step:\n' +
-    lines.join('\n')
-  );
-  // /ai-conductor:session-command-context
-}
-
-/**
- * Build the retry hint injected into Claude's system prompt after a
- * completion-gate miss. The default hint assumes work is unfinished and
- * tells Claude to "finish the work now." That wording is actively
- * misleading when the real failure is a stale status file — Claude sees
- * "finish the work" and re-implements already-done tasks, producing
- * duplicate commits and never updating the tracking file. For `build`
- * with a "tasks not completed" reason, redirect Claude to verify on disk
- * before rewriting and to update `.pipeline/task-status.json` when the
- * work is already there.
- *
- * Task 11 (ADR D4): when the completion miss is classified `missing:'recording'`
- * (the finish skill did the real work but failed to record the outcome), the
- * standard hint would send Claude back through the full `/finish` walk —
- * needless churn when only `finish-record` needs to run. `pipelineDirArg`, when
- * provided, is the absolute `--pipeline-dir` value (mirrors the auto-mode
- * dispatch in step-runners.ts) so the narrow prompt points at the same
- * worktree pipeline dir regardless of cwd.
- */
-export function buildRetryHint(
-  step: StepName,
-  reason: string | undefined,
-  missing?: 'recording' | 'presentation' | 'uncommitted' | 'other',
-  pipelineDirArg?: string,
-): string {
-  // ai-conductor:session-command-context=managed
-  void pipelineDirArg;
-  const r = reason ?? 'unknown';
-  if (step === 'finish' && missing === 'presentation') {
-    // A publication defect: every evidence check passed and only the PR's own
-    // title/body/draft state is wrong. The default "finish the work now" hint
-    // reads as "the implementation is incomplete" and sends the agent back into
-    // the code — which is exactly how a 30-second `gh pr edit` once turned into
-    // an 18-task rebuild.
-    return (
-      `Previous attempt did not satisfy the completion check: ${r}. ` +
-      'The implementation, the tests and the shipped-record are already complete — ' +
-      'ONLY the pull request\'s presentation is wrong. Do NOT re-implement anything, ' +
-      'do not change code, do not touch the plan, and do not re-run the build. Fix the ' +
-      'PR in place:\n' +
-      '  1. Author a real body from the branch diff — `## Why`, `## What Changed`, ' +
-      '`## Testing`, plus the `Closes` reference — and submit it as a `pull-request.edit` ' +
-      'request through `ai-conductor github-operation --request-file <request.json>`. It must read like a clean first-pass finish: no halt ' +
-      'boilerplate, no remediation narrative (those belong in a guarded `pull-request.comment.create` request), and ' +
-      'no engine placeholder text.\n' +
-      '  2. If the PR is still a draft, submit a guarded `pull-request.ready` request through the same CLI.\n' +
-      'The engine-owned publication coordinator will re-observe the edited PR, record completion when authorized, and verify it.'
-    );
-  }
-  if (step === 'finish' && missing === 'recording') {
-    return (
-      `Previous attempt did not satisfy the completion check: ${r}. ` +
-      'The finish work itself appears done — only the outcome was not recorded. ' +
-      'Do NOT repeat the full /finish walk. The engine-owned publication coordinator ' +
-      'will re-observe the existing result, record completion when authorized, and verify it.'
-    );
-  }
-  if (step === 'manual_test') {
-    if (/is missing/i.test(r)) {
-      return (
-        `Previous attempt did not satisfy the completion check: ${r}. ` +
-        'Record manual-test results now via:\n' +
-        '  ai-conductor manual-test-record --results <path> --pipeline-dir <dir>\n' +
-        'or, if this is an automated/headless run with no human tester available:\n' +
-        '  ai-conductor manual-test-record --skip --reason <r> --pipeline-dir <dir>'
-      );
-    }
-    return `Previous attempt did not satisfy the completion check: ${r}. Finish the work now.`;
-  }
-  if (step === 'build') {
-    if (missing === 'uncommitted') {
-      return (
-        `Previous attempt did not satisfy the completion check: ${r}. ` +
-        'Commit the uncommitted paths, then re-run the build step.'
-      );
-    }
-    if (/^unverified Done-when checks require one BUILD review pass:/i.test(r)) {
-      return (
-        `Previous attempt did not satisfy the completion check: ${r}. ` +
-        'Review each named check: add or cite its covering test when possible, or confirm the recorded unverified reason. ' +
-        'Then complete the BUILD step.'
-      );
-    }
-    if (/tasks? not completed/i.test(r)) {
-      return (
-        `Previous attempt did not satisfy the completion check: ${r}. ` +
-        `Add a Task: <id> trailer to your commits to mark tasks completed. ` +
-        `Format: Task: 9\\nTask: 10 (one per line).`
-      );
-    }
-    if (/no tasks|missing.*task-status|plan is empty/i.test(r)) {
-      return (
-        `Previous attempt did not satisfy the completion check: ${r}. ` +
-        `Check your plan at .docs/plans/ — the seed step creates task-status.json from there.`
-      );
-    }
-  }
-  // /ai-conductor:session-command-context
-  return `Previous attempt did not satisfy the completion check: ${r}. Finish the work now.`;
-}
-
-/**
- * SHA-256 of a file's contents, hex encoded. Returns null if the file can't be read.
- */
-async function hashFile(path: string): Promise<string | null> {
-  try {
-    const buf = await readFile(path);
-    return createHash('sha256').update(buf).digest('hex');
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Approval key for an artifact file: path relative to projectRoot (falls back
- * to the absolute path if outside the root).
- */
-export function approvalKey(projectRoot: string, file: string): string {
-  const rel = relative(projectRoot, file);
-  return rel.startsWith('..') ? file : rel;
-}
-
-/**
- * Return the subset of `files` that are not yet approved OR whose content has
- * changed since approval. Files whose hash still matches the recorded approval
- * are filtered out (skip re-prompting).
- */
-export async function filterUnapprovedArtifacts(
-  files: string[],
-  approvals: Record<string, { sha256: string; approved_at: string }>,
-  projectRoot: string,
-): Promise<string[]> {
-  const out: string[] = [];
-  for (const file of files) {
-    const key = approvalKey(projectRoot, file);
-    const prior = approvals[key];
-    if (!prior) {
-      out.push(file);
-      continue;
-    }
-    const hash = await hashFile(file);
-    if (hash !== prior.sha256) {
-      out.push(file);
-    }
-  }
-  return out;
-}
-
-/**
- * Record approvals for a list of files. Returns a new approvals map (does not
- * mutate the input). Skips any file that cannot be read.
- */
-export async function recordApprovals(
-  approvals: Record<string, { sha256: string; approved_at: string }>,
-  files: string[],
-  projectRoot: string,
-): Promise<Record<string, { sha256: string; approved_at: string }>> {
-  const out = { ...approvals };
-  const now = new Date().toISOString();
-  for (const file of files) {
-    const hash = await hashFile(file);
-    if (!hash) continue;
-    const key = approvalKey(projectRoot, file);
-    out[key] = { sha256: hash, approved_at: now };
-  }
-  return out;
-}
-
-/**
- * Task 14: Record the active plan path in engine state.
- * The engine-recorded path is used by seedTaskStatus to resolve which plan to use,
- * preventing glob-first guessing when multiple plans exist.
- *
- * @param projectRoot - Project root directory
- * @param planPath - Path to the plan file (relative to projectRoot)
- */
-export async function recordActivePlanPath(projectRoot: string, planPath: string): Promise<void> {
-  const pipelineDir = join(projectRoot, '.pipeline');
-  await mkdir(pipelineDir, { recursive: true });
-  const engineStatePath = join(pipelineDir, 'engine-state.json');
-  const result = await createEngineStateStore(engineStatePath).update((state) => ({
-    ...state,
-    activePlanPath: planPath,
-  }));
-  if (!result.ok) {
-    throw new Error(`Failed to record active plan path (${result.kind}): ${result.message}`);
-  }
-}
-
-/**
- * Task 19: Append remediation tasks to the plan file with validation.
- *
- * Validates that all remediation task IDs are non-empty and match TASK_ID_PATTERN,
- * then appends them to the plan file. Gate-source prefix is expected but not required.
- *
- * @param projectRoot - Project root directory
- * @param planPath - Path to the plan file to append to
- * @param remediationList - List of remediation tasks with id and title
- * @param options - Optional logger function
- * @returns { success: true } on success, { success: false, error: string } on failure
- */
-export async function appendRemediationTasks(
-  projectRoot: string,
-  planPath: string,
-  remediationList: Array<{ id: string; title: string }>,
-  options?: {
-    log?: (msg: string) => void;
-    criterionBoundGaps?: CriterionBoundRemediationGap[];
-    gateSource?: string;
-  },
-): Promise<{ success: true; appendedIds: string[] } | { success: false; error: string }> {
-  const log = options?.log ?? (() => {});
-
-  // TASK_ID_PATTERN from autoheal.ts: [A-Za-z0-9._-]+
-  const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
-  const taskIdRegex = new RegExp(`^${TASK_ID_PATTERN}$`);
-
-  // Validate all task IDs before appending anything
-  for (const task of remediationList) {
-    // Check for empty ID
-    if (!task.id || task.id.trim() === '') {
-      return {
-        success: false,
-        error: `Task ID must be non-empty, but got empty string for title: "${task.title}"`,
-      };
-    }
-
-    // Check if ID matches pattern
-    if (!taskIdRegex.test(task.id)) {
-      return {
-        success: false,
-        error: `Task ID "${task.id}" does not match TASK_ID_PATTERN [A-Za-z0-9._-]+`,
-      };
-    }
-
-    // Warn if gate-source prefix is missing (rem-fr10-*, rem-adr-*, rem-test-*, etc.)
-    if (!task.id.startsWith('rem-')) {
-      log(`Warning: Task ID "${task.id}" missing gate-source prefix (expected rem-*)`);
-    }
-  }
-
-  // Read existing plan content
-  let planContent = '';
-  try {
-    planContent = await readFile(planPath, 'utf-8');
-  } catch {
-    // If plan file doesn't exist, start with empty content
-    planContent = '';
-  }
-
-  if (options?.criterionBoundGaps !== undefined && options.gateSource !== undefined) {
-    const rendered = appendCriterionBoundRemediationTasks(
-      planContent,
-      options.criterionBoundGaps,
-      options.gateSource,
-    );
-    const pipelineDir = join(projectRoot, '.pipeline');
-    await mkdir(pipelineDir, { recursive: true });
-    const tempFile = `${planPath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    try {
-      await writeFile(tempFile, rendered.planText, 'utf-8');
-      await renameFile(tempFile, planPath);
-    } catch (error) {
-      await unlinkFile(tempFile).catch(() => {});
-      return {
-        success: false,
-        error: `Failed to append remediation tasks to plan: ${error instanceof Error ? error.message : 'unknown error'}`,
-      };
-    }
-    return { success: true, appendedIds: rendered.ids };
-  }
-
-  // Parse existing task headers to detect duplicates and content drift
-  // Regex: ### Task <id>: <title>
-  const taskHeaderRegex = /^### Task ([A-Za-z0-9._-]+(?:-[a-f0-9]{6})?(?:-\d+)?): (.+)$/gm;
-  const existingTasks = new Map<string, { title: string; fullHeader: string }>();
-  let match;
-  while ((match = taskHeaderRegex.exec(planContent)) !== null) {
-    const taskId = match[1];
-    const taskTitle = match[2];
-    const fullHeader = match[0];
-    existingTasks.set(taskId, { title: taskTitle, fullHeader });
-  }
-
-  // Determine which tasks to append (idempotent upsert semantics)
-  const tasksToAppend: Array<{ id: string; title: string; finalId: string }> = [];
-  // Every requested task's id AS IT EXISTS IN THE PLAN after this call —
-  // whether newly appended, hash-suffixed, or already present. Callers
-  // record these so the build completion predicate can reject a later
-  // removal of the heading from the plan.
-  const appendedIds: string[] = [];
-
-  for (const task of remediationList) {
-    const existing = existingTasks.get(task.id);
-
-    if (existing) {
-      // Task ID already exists
-      if (existing.title === task.title) {
-        // Same ID, same content → idempotent, skip
-        log(`Task ${task.id} already exists with same content, skipping`);
-        appendedIds.push(task.id);
-        continue;
-      } else {
-        // Same ID, different content → create content-hash suffix to distinguish
-        const { createHash } = await import('crypto');
-        const contentHash = createHash('sha256')
-          .update(task.title)
-          .digest('hex')
-          .slice(0, 6);
-
-        const suffixedId = `${task.id}-${contentHash}`;
-
-        // Check if the suffixed ID already exists
-        if (existingTasks.has(suffixedId)) {
-          log(`Task ${suffixedId} already exists with same content, skipping`);
-          appendedIds.push(suffixedId);
-          continue;
-        }
-
-        log(
-          `Task ${task.id} exists with different content, using suffix: ${suffixedId}`,
-        );
-        tasksToAppend.push({ id: task.id, title: task.title, finalId: suffixedId });
-        appendedIds.push(suffixedId);
-      }
-    } else {
-      // New task ID, append as-is
-      tasksToAppend.push({ id: task.id, title: task.title, finalId: task.id });
-      appendedIds.push(task.id);
-    }
-  }
-
-  // Append tasks that don't have duplicates
-  let updated = planContent;
-  if (tasksToAppend.length > 0 && updated !== '' && !updated.endsWith('\n')) {
-    updated += '\n\n';
-  }
-  for (const task of tasksToAppend) {
-    const checks = buildRemediationDoneWhenChecks(
-      task.finalId,
-      'remediation',
-      undefined,
-      undefined,
-      undefined,
-      task.title,
-    );
-    updated += [
-      `### Task ${task.finalId}: ${task.title}`,
-      '**Done when:**',
-      ...checks.map((check) => `- ${check}`),
-      '',
-    ].join('\n');
-  }
-
-  // Write plan atomically using temp file + rename pattern
-  const pipelineDir = join(projectRoot, '.pipeline');
-  await mkdir(pipelineDir, { recursive: true });
-
-  const tempFile = `${planPath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  try {
-    await writeFile(tempFile, updated, 'utf-8');
-    // Rename temp file to target (atomic on most filesystems).
-    // MUST stay a static import: a dynamic `require` here is rewritten by
-    // esbuild into a shim that throws in the shipped pure-ESM bundle, and the
-    // catch below would swallow it into a silent remediation no-op.
-    await renameFile(tempFile, planPath);
-  } catch (error) {
-    // Clean up temp file if something went wrong
-    try {
-      await unlinkFile(tempFile);
-    } catch {
-      // Ignore cleanup errors
-    }
-    return {
-      success: false,
-      error: `Failed to append remediation tasks to plan: ${error instanceof Error ? error.message : 'unknown error'}`,
-    };
-  }
-
-  return { success: true, appendedIds };
-}
+export { appendConductorRemediationTasks as appendRemediationTasks } from "./remediation-task-append.js";
+export {
+  renderExhaustedMechanicalBuildReviewHalt,
+  renderReadOnlyReviewUnavailableBuildReviewHalt,
+  seedBuildTaskTelemetry,
+} from './build-review-halt-render.js';
+export {
+  approvalKey,
+  filterUnapprovedArtifacts,
+  recordApprovals,
+  recordActivePlanPath,
+} from './artifact-approvals.js';
