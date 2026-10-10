@@ -1,0 +1,7 @@
+# Track: A rejected case transition halts as corrupt case history
+
+Track: technical
+
+Scope boundary: Balanced, per intake jstoup111/ai-conductor#3123 outcomes. The remediation case store reports a proposed next state it refuses as a rejected transition, distinct from unreadable or corrupt persisted history, with the violated invariant and the offending case and source ids; the reconciler and build-review adjudication coordinator carry that detail onto the existing `remediation_adjudication_failed` event and the needs-human HALT, which states that persisted case history is valid and unchanged and names the recovery path; the stalled-feature runbook documents that recovery (inspect, then clear the halt once the proposed transition is admissible) without deleting case history or accepting findings. Excluded: changing the one-case-per-source invariant or admitting a new concern at a resolved anchor (#2464), recurrence and retry-limit handling (#3124), decision-stop interactions (#3005), a judge re-dispatch on rejection, and the separate accepted-widenings store.
+
+Engine-internal remediation case store, reconciler, and coordinator diagnostics with no product requirements; acceptance criteria live in stories. Approved approach: type the rejection at the store's single write seam (`mutate`) and propagate it. Rejected: coordinator-side re-validation of the proposed state (a second parsing authority), and retrying the judge with the rejection as feedback (overlaps #2464/#3124 and risks the non-converging re-litigation that closed #2924).
