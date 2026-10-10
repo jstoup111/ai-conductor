@@ -1,3 +1,5 @@
+// Covers: task:1
+
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
