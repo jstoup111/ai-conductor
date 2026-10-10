@@ -44,6 +44,7 @@ import type { ComplexityTier, StepName } from '../src/types/steps.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED/GREEN specs for the pure marker-region splicer (.docs/stories/
+// Covers: task:12
 // generated-model-table.md, TS-2 happy path 1; Task 6 of the implementation
 // plan). spliceGeneratedRegion must be a pure function: no I/O, deterministic,
 // replacing only the BEGIN/END marker region and leaving every other byte
