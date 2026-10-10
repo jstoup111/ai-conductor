@@ -27,6 +27,11 @@ function judgementSection(skill: string): string {
   return skill.split('## Judgement\n')[1]?.split('\n## ')[0] ?? '';
 }
 
+function forbiddenImplementationQualityQuestion(skill: string): string | undefined {
+  const question = judgementSection(skill);
+  return question.match(/(?:judge|determine|assess)[^.\n]*(acceptance.criteria|plan conformance|ADR conformance)/i)?.[0];
+}
+
 function expectVocabularyDefinitions(skill: string, rubric: keyof typeof BUILD_REVIEW_FINDING_VOCABULARIES): void {
   const judgement = judgementSection(skill);
 
@@ -133,5 +138,17 @@ describe('build-review implementation-quality skill contract', () => {
     expect(skill).not.toMatch(/scopeResolutions|counterfactualSensitivity|testScopeEvidence|relocationAudit/);
     expect(skill).toMatch(/acceptance-criteria compliance.*prd_audit/i);
     expect(skill).toMatch(/ADR conformance.*as-built architecture review/i);
+  });
+
+  it.each([
+    'Judge acceptance-criteria compliance.',
+    'Determine plan conformance.',
+    'Assess ADR conformance.',
+  ])('rejects a forbidden judgement question: %s', (question) => {
+    expect(forbiddenImplementationQualityQuestion(`## Judgement\n${question}`)).toBeDefined();
+  });
+
+  it('permits the shipped skill to name those reviews as exclusions, not its question', async () => {
+    expect(forbiddenImplementationQualityQuestion(await readFile(implementationQualitySkillPath, 'utf8'))).toBeUndefined();
   });
 });

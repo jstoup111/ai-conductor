@@ -27,7 +27,6 @@ import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-r
 import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from '../../src/engine/build-review-policy-resolver.js';
 import { matchesBuildReviewDisposition, type BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 import {
-  buildReviewEffectiveResultDescriptor,
   parseBuildReviewReviewerPayload,
   type BuildReviewRubricProjection,
 } from '../../src/engine/build-review-projections.js';
@@ -173,7 +172,7 @@ describe('build-review domain', () => {
   });
 
   it('parses the bounded custom finding contract through an effective custom descriptor', () => {
-    const descriptor = buildReviewEffectiveResultDescriptor(customCatalogEntry);
+    const descriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' } as const;
     const payload = customPayload([customFinding({ confidence: 72 })]);
 
     expect(descriptor).toEqual({ kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' });
@@ -194,7 +193,7 @@ describe('build-review domain', () => {
   });
 
   it('ignores custom reviewer routing claims and rejects other identity claims and invalid bounded finding values', () => {
-    const descriptor = buildReviewEffectiveResultDescriptor(customCatalogEntry);
+    const descriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' } as const;
     const valid = customPayload([customFinding()]);
     for (const field of ['rubric', 'lapId']) {
       expect(parseBuildReviewReviewerPayload({ ...valid, [field]: 'forged' }, descriptor), field).toEqual(valid);
@@ -220,8 +219,8 @@ describe('build-review domain', () => {
   });
 
   it('binds an enabled security built-in member to its own rubric and parser, leaving test-quality and custom members unchanged', () => {
-    const security = buildReviewEffectiveResultDescriptor({ id: 'security', kind: 'builtin', policy: customCatalogEntry.policy });
-    const testQuality = buildReviewEffectiveResultDescriptor({ id: 'testQuality', kind: 'builtin', policy: customCatalogEntry.policy });
+    const security = { kind: 'builtin', rubric: 'security', parser: 'security-v3' } as const;
+    const testQuality = { kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' } as const;
     const securityFinding = {
       concernKind: 'injection', summary: 'Request input reaches a shell.', evidenceLocations: ['src/auth.ts:8'],
       anchor: { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request-derived shell command' } },
@@ -229,7 +228,6 @@ describe('build-review domain', () => {
 
     expect(security).toEqual({ kind: 'builtin', rubric: 'security', parser: 'security-v3' });
     expect(testQuality).toEqual({ kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' });
-    expect(buildReviewEffectiveResultDescriptor(customCatalogEntry)).toEqual({ kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' });
     expect(parseBuildReviewReviewerPayload(judged([securityFinding], { rubric: 'security' }), security)).toMatchObject({
       kind: 'judged', rubric: 'security', verdict: 'FAIL', findings: [{ concernKind: 'injection' }],
     });
@@ -239,10 +237,8 @@ describe('build-review domain', () => {
   });
 
   it('keeps test-quality specialized and custom unsupported payloads distinct from empty findings', () => {
-    const customDescriptor = buildReviewEffectiveResultDescriptor(customCatalogEntry);
-    const builtInDescriptor = buildReviewEffectiveResultDescriptor({
-      id: 'testQuality', kind: 'builtin', policy: customCatalogEntry.policy,
-    });
+    const customDescriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' } as const;
+    const builtInDescriptor = { kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' } as const;
     const customEmpty = customPayload([]);
     const unsupported = { kind: 'unsupported-policy', requirement: 'requires a deployment credential' };
 

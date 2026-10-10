@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
 import type {
-  BuildReviewEffectiveResultDescriptor,
   BuildReviewInfrastructureFailure,
   BuildReviewLapId,
   BuildReviewScopeIncompleteFault,
@@ -10,7 +9,6 @@ import type {
 import type { BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import type { BuildReviewFrozenInputs, BuildReviewSourceSnapshot, BuildReviewUnresolvedMarker } from './build-review-inputs.js';
 import { getBuildReviewRubricDescriptor } from './build-review-registry.js';
-import type { ResolvedBuildReviewCatalogEntry } from './resolved-config.js';
 import { buildReviewScopeCandidateIdentityKey } from './build-review-scope-identity.js';
 import type {
   RevertedProductionFileReference,
@@ -189,23 +187,6 @@ export type BuildReviewRubricProjections = {
   readonly security: SecurityProjection;
   readonly implementationQuality: ImplementationQualityProjection;
 };
-
-/**
- * Bind parser choice to one already-resolved effective catalog member.  This
- * intentionally does not consult the built-in registry or an enabled map:
- * custom policy ids are dynamic while built-ins retain their bespoke parser.
- */
-export function buildReviewEffectiveResultDescriptor(
-  entry: ResolvedBuildReviewCatalogEntry,
-): BuildReviewEffectiveResultDescriptor {
-  if (entry.kind !== 'builtin') return Object.freeze({ kind: 'custom', rubric: entry.id, parser: 'custom-findings-v1' });
-  // Each built-in carries its own catalog id and parser tag; never relabel one as another.
-  return entry.id === 'security'
-    ? Object.freeze({ kind: 'builtin', rubric: 'security', parser: 'security-v3' })
-    : entry.id === 'implementationQuality'
-      ? Object.freeze({ kind: 'builtin', rubric: 'implementationQuality', parser: 'implementation-quality-v3' })
-    : Object.freeze({ kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' });
-}
 
 /** Parse a reviewer response using the parser bound by the effective member. */
 export { parseBuildReviewReviewerPayload } from './build-review-domain.js';

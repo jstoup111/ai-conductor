@@ -225,13 +225,19 @@ function policyContexts(
   return contexts;
 }
 
-function validateCustomScope(
+function validateAdmissionScope(
   policyContext: readonly BuildReviewAdjudicationPolicyContext[],
   planContract: BuildReviewAdjudicationPlanContract,
   taskStatus: BuildReviewAdjudicationTaskStatus,
 ): BuildReviewAdjudicationContextStop | undefined {
-  const custom = policyContext.some(isCustomPolicyContext);
-  if (!custom) return undefined;
+  // Implementation-quality repairs have the same admission boundary as
+  // custom-policy repairs: neither may grow the approved plan from a review
+  // finding.  The source rubric is engine-owned, so this cannot be bypassed
+  // by a provider choosing the older case-v1 envelope.
+  const requiresAdmission = policyContext.some((policy) =>
+    isCustomPolicyContext(policy) || policy.rubric === 'implementationQuality',
+  );
+  if (!requiresAdmission) return undefined;
   if (planContract.path === null || !Array.isArray(planContract.admittedTaskContracts)) {
     return { code: 'missing-scope-evidence', subject: 'admitted-task-contracts' };
   }
@@ -488,9 +494,11 @@ export function assembleBuildReviewAdjudicationContext(
   const attempted = new Set(input.attemptedCaseIds ?? []);
   const planContract = input.planContract ?? ABSENT_PLAN_CONTRACT;
   const taskStatus = input.taskStatus ?? ABSENT_TASK_STATUS;
-  const scopeStop = validateCustomScope(policyContext, planContract, taskStatus);
+  const scopeStop = validateAdmissionScope(policyContext, planContract, taskStatus);
   if (scopeStop) return { ok: false, stop: scopeStop };
-  const mode = policyContext.some(isCustomPolicyContext) ? 'case-v2' as const : 'case-v1' as const;
+  const mode = policyContext.some((policy) =>
+    isCustomPolicyContext(policy) || policy.rubric === 'implementationQuality',
+  ) ? 'case-v2' as const : 'case-v1' as const;
   const context: BuildReviewAdjudicationContext = Object.freeze({
     version: 'v1', mode, domain: 'build_review',
     lapId: input.aggregate.lapId, snapshotDigest: input.aggregate.snapshotDigest,

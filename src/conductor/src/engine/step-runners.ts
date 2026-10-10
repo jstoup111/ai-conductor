@@ -2951,12 +2951,13 @@ export class DefaultStepRunner implements StepRunner {
     inputs: BuildReviewFrozenInputs,
     config: ReturnType<typeof resolveBuildReviewConfig>,
     tier: ConductState['complexity_tier'],
+    planPath: string,
     executionContext?: ExecutionContext,
     readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
     child?: import('./child-context.js').ChildId,
   ): Promise<StepRunResult> {
     try {
-      return await this.runRubricBuildReviewInner(inputs, config, tier, executionContext, readOnlyReviewCapabilities, child);
+      return await this.runRubricBuildReviewInner(inputs, config, tier, planPath, executionContext, readOnlyReviewCapabilities, child);
     } finally {
       // A custom lap owns one source view for every catalog member. Some
       // built-in paths settle before dispatch (for example a deterministic
@@ -2974,6 +2975,7 @@ export class DefaultStepRunner implements StepRunner {
     inputs: BuildReviewFrozenInputs,
     config: ReturnType<typeof resolveBuildReviewConfig>,
     tier: ConductState['complexity_tier'],
+    planPath: string,
     executionContext?: ExecutionContext,
     readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
     child?: import('./child-context.js').ChildId,
@@ -3469,7 +3471,11 @@ export class DefaultStepRunner implements StepRunner {
     // Unit-level runner callers need only provide the frozen fields relevant
     // to their asserted branch. An omitted plan carries no declaration, so it
     // cannot suppress a finding.
-    const declaredPlanSource = await resolvePlanPatternSource('.docs/plans/current.md', inputs.planBody ?? '', async (path) => this.fileExists(join(this.projectDir, path)));
+    const declaredPlanSource = await resolvePlanPatternSource(
+      relative(this.projectDir, planPath).replaceAll('\\', '/'),
+      inputs.planBody ?? '',
+      async (path) => this.fileExists(join(this.projectDir, path)),
+    );
     const implementationQualityResult = validResults.implementationQuality;
     const declaredReplicationSuppressions = declaredPlanSource.kind === 'resolved' && implementationQualityResult.kind === 'judged'
       ? implementationQualityResult.findings.flatMap((finding) => {
@@ -5326,6 +5332,7 @@ export class DefaultStepRunner implements StepRunner {
         inputs,
         buildReviewConfig,
         tier,
+        planPath,
         executionContext,
         readOnlyReviewCapabilities,
         activeChild,

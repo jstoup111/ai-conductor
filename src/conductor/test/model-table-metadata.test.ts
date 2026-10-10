@@ -309,8 +309,8 @@ describe('AUXILIARY_MODEL_TABLE_ROWS auxiliary-judge registration', () => {
     expect(AUXILIARY_MODEL_TABLE_ROWS.find((row) => row.name === 'build-review-implementation-quality')).toMatchObject({
       executionPath: 'engine-managed auxiliary rubric',
       providerCells: {
-        claude: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
-        codex: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
+        claude: { model: 'opus', effort: 'medium' },
+        codex: { model: 'gpt-5.6-sol', effort: 'medium' },
       },
     });
     expect(STEP_RATIONALE.build_review).toMatch(/default-on implementation-quality rubric/i);

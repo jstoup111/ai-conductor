@@ -61,6 +61,19 @@ function securityAggregate() {
   });
 }
 
+function implementationQualityAggregate() {
+  return joinBuildReviewRubricOutcomes({
+    lapId, snapshotDigest,
+    results: {
+      testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+      implementationQuality: {
+        kind: 'judged', rubric: 'implementationQuality', lapId, snapshotDigest, contractVersion: 'v3', verdict: 'FAIL',
+        findings: [{ concernKind: 'primitive-obsession', summary: 'Raw string state permits invalid values.', evidenceLocations: ['src/state.ts:8'], anchor: { rubric: 'implementationQuality', locus: { path: 'src/state.ts', contentHash: HASH, display: 'changed state model' } } }],
+      },
+    },
+  });
+}
+
 function customAggregate(criteria?: readonly string[]) {
   const declaration = {
     version: 'v1' as const, rubricId: 'security', semanticSkill: 'security-review',
@@ -150,6 +163,16 @@ function priorDecisionStop(id: string): RemediationCaseRecord {
 }
 
 describe('build-review adjudication context', () => {
+  it('requires case-v2 admission for implementation-quality and exposes its raw source question', () => {
+    const missing = assembleBuildReviewAdjudicationContext({ aggregate: implementationQualityAggregate(), priorCases: [] });
+    expect(missing).toEqual({ ok: false, stop: { code: 'missing-scope-evidence', subject: 'admitted-task-contracts' } });
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: implementationQualityAggregate(), priorCases: [],
+      planContract: { path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '28', contract: 'Model the changed state.' }] },
+      taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '28', status: 'in_progress' }] },
+    });
+    expect(result).toMatchObject({ ok: true, context: { mode: 'case-v2', currentFindings: [expect.objectContaining({ rubric: 'implementationQuality' })], policyContext: [expect.objectContaining({ rubric: 'implementationQuality', question: 'Does the changed code introduce a concrete code-quality or domain-modelling defect?' })] } });
+  });
   it('projects a persisted decision stop with its owner and consistency evidence intact', () => {
     const stop = priorDecisionStop('stop-a');
     const result = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('alpha')), priorCases: [stop] });
