@@ -35,6 +35,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Feature cost totals, the shipped-record Cost block, --report and OTel cost metrics now include failed provider attempts for Claude, Codex and Pi, recorded through the existing cost telemetry. A failed attempt with no usable record is reported as unmetered, never as $0. ([implementation PR #3027](https://github.com/jstoup111/ai-conductor/pull/3027)).
 - Maintainers can classify confirmed maintenance changes and skip unnecessary acceptance specifications. ([implementation PR #3029](https://github.com/jstoup111/ai-conductor/pull/3029)).
 - Reviewers see plan task titles in landed specification commit bodies. ([implementation PR #3091](https://github.com/jstoup111/ai-conductor/pull/3091)).
+- ADR authors can cite decisions headed with ATX-numbered headings. ([implementation PR #3115](https://github.com/jstoup111/ai-conductor/pull/3115)).
 
 ### Removed
 
@@ -75,6 +76,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon runs route unretryable prerequisite failures without repeating affected steps. ([implementation PR #3088](https://github.com/jstoup111/ai-conductor/pull/3088)).
 - Self-host builds no longer halt when Claude Code's plugin sync rewrites its catalog caches or sync bookkeeping; installed plugins and plugin code stay guarded. ([implementation PR #3110](https://github.com/jstoup111/ai-conductor/pull/3110)).
 - Build review now returns malformed changed-test Covers markers to BUILD without consuming the mechanical fault allowance. ([implementation PR #3087](https://github.com/jstoup111/ai-conductor/pull/3087)).
+- Completed work stays closed when an older repair obligation is superseded. ([implementation PR #3082](https://github.com/jstoup111/ai-conductor/pull/3082)).
 
 ## Migration
 
