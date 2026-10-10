@@ -50,6 +50,19 @@ describe('GATE_SURFACE', () => {
 });
 
 describe('partitionDelta', () => {
+  it('routes newly recognized test-style paths to test and excludes them from runtime source', () => {
+    const paths = ['tests/unit/runner.spec.mts', 'src/a.spec.ts', 'Tests/Foo.cs'];
+
+    expect(partitionDelta(paths, [])).toEqual({
+      test: paths,
+      featureSrc: [],
+      foreignSrc: [],
+    });
+    for (const path of paths) {
+      expect(isRuntimeSourcePath(path)).toBe(false);
+    }
+  });
+
   it('splits D into test/featureSrc/foreignSrc groups relative to F', () => {
     const D = ['src/a.ts', 'x.test.ts', 'src/foreign.ts'];
     const F = ['src/a.ts', 'x.test.ts'];
