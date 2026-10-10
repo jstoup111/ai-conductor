@@ -169,7 +169,8 @@ worktree, never the primary checkout.
 4. `/architecture-diagram` — skipped at tier S.
 5. `/architecture-review` — skipped at tier S. Every ADR must be APPROVED before landing. Each ADR
    added or changed by the spec must also declare at least one citable decision: use a numbered item
-   in its `## Decision` section (preferred), a bold `D<number>` heading, or an ATX `D<number>` heading.
+   in its `## Decision` section (preferred), an ATX numbered heading (`### 4. Termination`), a bold
+   `D<number>` heading, or an ATX `D<number>` heading.
 6. `/stories` — must end `Status: Accepted`.
 7. `/conflict-check` — skipped at tier S.
 8. `/plan`.
