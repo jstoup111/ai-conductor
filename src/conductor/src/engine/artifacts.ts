@@ -67,6 +67,8 @@ import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
 import {
   deriveEffectiveBuildReviewVerdict,
   parseBuildReviewAggregate,
+  projectBuildReviewAggregateSources,
+  type BuildReviewAggregate,
   type BuildReviewEffectiveVerdict,
 } from './build-review-aggregate.js';
 import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
@@ -2334,10 +2336,19 @@ export function buildReviewFailureDetails(verdict: Pick<BuildReviewVerdict, 'rea
  */
 function effectiveBuildReviewFailureDetails(
   effective: BuildReviewEffectiveVerdict,
+  aggregate?: BuildReviewAggregate,
 ): string[] {
   const details: string[] = [];
   if (effective.unresolvedFindingIds.length > 0) {
-    details.push(`unresolved findings: ${effective.unresolvedFindingIds.join(', ')}`);
+    const sources = aggregate ? projectBuildReviewAggregateSources(aggregate) ?? [] : [];
+    const byId = new Map(sources.map((source) => [source.findingId, source]));
+    const findings = effective.unresolvedFindingIds.map((id) => {
+      const source = byId.get(id);
+      if (!source) return id;
+      const title = source.summary.replace(/\s+/g, ' ').trim();
+      return title ? `\"${title}\" [${source.rubric}]` : `[${source.rubric}] ${id}`;
+    });
+    details.push(`unresolved findings: ${findings.join(', ')}`);
   }
   if (effective.infrastructureFailureRubrics.length > 0) {
     details.push(`infrastructure failures: ${effective.infrastructureFailureRubrics.join(', ')}`);
@@ -3795,7 +3806,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
               if (effectiveResolution.effective.verdict === 'FAIL') {
                 return {
                   done: false,
-                  reason: `build_review effective FAILed: ${effectiveBuildReviewFailureDetails(effectiveResolution.effective).join('; ')} — fix in build, then the gate re-runs build_review`,
+                  reason: `build_review effective FAILed: ${effectiveBuildReviewFailureDetails(effectiveResolution.effective, aggregate).join('; ')} — fix in build, then the gate re-runs build_review`,
                   routeClass: 'named-route',
                 };
               }
@@ -3903,7 +3914,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       if (effectiveResolution.effective.verdict === 'FAIL') {
         return {
           done: false,
-          reason: `build_review effective FAILed: ${effectiveBuildReviewFailureDetails(effectiveResolution.effective).join('; ')} — fix in build, then the gate re-runs build_review`,
+          reason: `build_review effective FAILed: ${effectiveBuildReviewFailureDetails(effectiveResolution.effective, aggregate).join('; ')} — fix in build, then the gate re-runs build_review`,
           routeClass: 'named-route',
         };
       }

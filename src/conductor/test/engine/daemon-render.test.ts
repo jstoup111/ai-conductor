@@ -16,9 +16,9 @@ import type { ConductorEvent } from '../../src/types/index.js';
 // eslint-disable-next-line no-control-regex
 const ANSI = /\[[0-9;]*m/;
 
-function lines(event: ConductorEvent): string[] {
+function lines(event: ConductorEvent, verbose = false): string[] {
   const out: string[] = [];
-  renderDaemonEvent(event, (m) => out.push(m));
+  renderDaemonEvent(event, (m) => out.push(m), { verbose });
   return out;
 }
 
@@ -110,8 +110,26 @@ describe('renderDaemonEvent', () => {
       status: 'unavailable',
       reason: 'probe write was not refused',
     })).toEqual([
-      '· ⚠ build_review read-only capability unavailable: codex on linux — probe write was not refused',
+      '· ⚠ build_review read-only capability unavailable: codex on linux — probe write was not refused — no action needed: the gate re-runs build_review',
     ]);
+  });
+
+  it('puts every build_review warning at its presentation depth with the required next action', () => {
+    const retry = ' — no action needed: the gate re-runs build_review';
+    expect(lines({
+      type: 'build_review_cache_discarded', rubric: 'testQuality', lapId: 'lap', reason: 'engine-version-mismatch',
+      cachedEngineStamp: 'old', currentEngineStamp: 'new',
+    })[0]).toBe(`· ⚠ build_review cache discarded: testQuality (engine-version-mismatch; cached old -> current new)${retry}`);
+    expect(lines({
+      type: 'build_review_policy_failed', rubric: 'testQuality', lapId: 'lap', provider: 'codex',
+      stage: 'catalog', reason: 'no candidate',
+    })[0]).toBe(`·   ⚠ build_review [lap] testQuality policy catalog failed: no candidate${retry}`);
+    expect(lines({
+      type: 'build_review_rubric_infrastructure_failure', rubric: 'testQuality', lapId: 'lap', reason: 'timeout',
+    })[0]).toBe(`·   ⚠ build_review [lap] testQuality infrastructure failure: timeout${retry}`);
+    expect(lines({
+      type: 'build_review_scope_incomplete', rubric: 'testQuality', lapId: 'lap', candidates: [{ candidateId: 'missing', sourceRegion: { path: 'x', startLine: 1, endLine: 1, contentHash: 'x', display: 'x' }, obligationReferences: [], missingEvidenceReason: 'missing' }],
+    })[0]).toBe('· ⚠ build_review scope incomplete (testQuality; missing) — next: ai-conductor monitor all');
   });
 
   it('renders every confidence-suppressed build-review finding alongside the outer verdict', () => {
@@ -122,8 +140,8 @@ describe('renderDaemonEvent', () => {
         { rubric: 'testQuality', findingId: 'sha256:two', confidence: 40, floor: 50 },
       ],
     })).toEqual([
-      '· build_review suppressed testQuality:sha256:one (confidence 69 < floor 70)',
-      '· build_review suppressed testQuality:sha256:two (confidence 40 < floor 50)',
+      '·   build_review suppressed [testQuality] sha256:one (confidence 69 < floor 70)',
+      '·   build_review suppressed [testQuality] sha256:two (confidence 40 < floor 50)',
       '·   build_review [lap-current] outer verdict: PASS (raw: FAIL)',
     ]);
   });
@@ -642,9 +660,9 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
   it('handles every event type declared renderable by the sink registry', () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(join(here, '../../src/daemon-cli.ts'), 'utf8');
-    const functionStart = source.indexOf('function renderDaemonEventUnsafe(');
-    const functionEnd = source.indexOf('\n}\n', functionStart);
-    const functionSource = source.slice(functionStart, functionEnd);
+    const functionStart = source.indexOf('function renderDaemonEventWithPresentation(');
+    const functionEnd = source.indexOf('\nfunction buildReviewLapTag', functionStart);
+    const functionSource = source.slice(functionStart, functionEnd) + source.slice(source.indexOf('function renderDaemonEventUnsafe('));
     const handledTypes = new Set(
       [...functionSource.matchAll(/case '([^']+)'/g)].map((match) => match[1]),
     );
@@ -703,7 +721,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       decisionStops: [{ caseId: 'case-1', owner: 'architecture', sourceIds: ['security:f1'], rationale: 'The repairs contradict the approved boundary.' }],
     }).join('\n');
     expect(rendered).toContain('decision stop');
-    expect(rendered).toContain('case-1');
+    expect(rendered).not.toContain('case-1');
     expect(rendered).toContain('architecture');
     expect(rendered).toContain('The repairs contradict the approved boundary.');
   });
