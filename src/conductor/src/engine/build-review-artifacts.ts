@@ -9,6 +9,7 @@ import {
   type BuildReviewLapId,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
+import { isRegisteredRubric } from './build-review-registry.js';
 import { MAX_POLICY_BUNDLE_BYTES } from './build-review-policy-bundle.js';
 
 const ARTIFACT_VERSION = 2 as const;
@@ -115,7 +116,7 @@ export interface BuildReviewArtifactFilesystem {
 }
 
 function isRubric(value: unknown): value is BuildReviewRubricId {
-  return value === 'testQuality' || value === 'security';
+  return typeof value === 'string' && isRegisteredRubric(value);
 }
 
 function isCustomRubric(value: unknown): value is string {

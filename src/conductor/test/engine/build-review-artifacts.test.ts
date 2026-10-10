@@ -154,6 +154,26 @@ describe('build-review current-lap branch artifacts', () => {
     expect(await readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).toEqual(artifact);
   });
 
+  // Covers: task:1
+  it('persists an implementation-quality branch artifact', async () => {
+    const fs = filesystem();
+    const result = {
+      kind: 'judged' as const,
+      rubric: 'implementationQuality' as const,
+      lapId,
+      snapshotDigest: 'sha256:snapshot',
+      contractVersion: 'v3' as const,
+      findings: [],
+      verdict: 'PASS' as const,
+    };
+
+    const artifact = await writeBuildReviewBranchArtifact('/feature', {
+      rubric: 'implementationQuality', lapId, snapshotDigest: 'sha256:snapshot', result, provenance: { kind: 'fresh' },
+    }, fs);
+
+    expect(await readBuildReviewBranchArtifact('/feature', 'implementationQuality', lapId, 'sha256:snapshot', fs)).toEqual(artifact);
+  });
+
   it('round-trips optional counterfactual sensitivity through the stamped envelope, artifact, and aggregate', async () => {
     const projection = {
       rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v2', lapId, snapshotDigest: 'sha256:snapshot',
