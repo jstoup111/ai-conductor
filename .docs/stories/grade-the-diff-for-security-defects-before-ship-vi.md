@@ -18,7 +18,7 @@ As a project operator, I want `security` to be a registered build_review rubric 
 
 #### Happy Path
 
-- Given a project config with `build_review.rubrics.security.enabled: true`, when the build_review step classifies its branches, then `security` is a dispatchable branch alongside any other enabled member and carries its resolved `llm_provider`, `model`, `effort`, `model_fallback_ladder`, `max_retries`, `escalate`, and `min_confidence`.
+- Given a project config with `build_review.rubrics.security.enabled: true`, when the build_review step classifies its branches, then `security` is a dispatchable branch alongside any other enabled member (in a stacked feature, only at the leaf; non-leaf children skip it with reason `leaf-only`) and carries its resolved `llm_provider`, `model`, `effort`, `model_fallback_ladder`, `max_retries`, `escalate`, and `min_confidence`.
 - Given a project config that never mentions `security`, when configuration is resolved, then `security` resolves to `enabled: false` with default effort `high` and the branch settles as skipped with reason `disabled` without any provider, cache, or preflight work.
 - Given `build_review.rubrics.security.enabled: true` and every other member disabled, when the lap runs, then only `security` is dispatched and the outer verdict is derived from its judged result alone.
 

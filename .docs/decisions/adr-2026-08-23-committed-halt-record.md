@@ -44,10 +44,14 @@ to be a separate artifact.
    name and head SHA at halt time, the UTC timestamp, and a `Status:` line whose value is `halted`
    or `resolved`.
 
+> **Amended 2026-10-07 by #2942:** A record written for a stacked feature also carries a `Child:` field naming the active child (`adr-2026-10-07-per-child-build-region` decision 11).
+
 5. **Commit first, then push; the push is best-effort.** The commit is unconditional (subject to
    git succeeding); the push of the current branch follows. A push that fails for any reason —
    no remote, auth, non-fast-forward, offline — leaves the commit in place and emits
    `halt_record_push_failed` naming the reason. The halt record is never lost to a push failure.
+
+> **Amended 2026-10-07 by #2942:** When the checkout is a stacked child branch, the record is committed there with a `Child:` field and is never pushed; the leaf and non-stacked branches keep this decision (`adr-2026-10-07-per-child-build-region` decision 11).
 
 6. **Nothing in this path may throw.** The seam's existing contract ("a failed write must not
    crash the finish flow") extends unchanged over the record. Every arm returns a result;

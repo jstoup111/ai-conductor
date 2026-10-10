@@ -105,7 +105,7 @@ gate never looks.
 
 ### Done When
 - [ ] An engine self-heal in a `cd`-into-subdir project produces the marker at the worktree root.
-- [ ] The completion predicate reads only the worktree-root marker path (a test pins this).
+- [ ] The completion predicate reads only the worktree-root marker path for a feature with no children, and only the active child's marker path under `.pipeline/children/<k>/` for a stacked feature (tests pin both).
 
 ---
 

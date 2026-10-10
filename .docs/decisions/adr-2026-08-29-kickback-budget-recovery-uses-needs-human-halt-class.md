@@ -51,6 +51,8 @@ requires the selected feature, live needs-human marker, typed evidence, current 
 generation to agree under the kickback-ledger lease. Halt prose is diagnostic only and is never
 parsed to authorize mutation.
 
+> **Amended 2026-10-07 by #2942:** In a stacked feature the typed cap evidence is recorded in the halted child's ledger (`adr-2026-10-07-per-child-build-region` decision 10).
+
 ### D3 — Explicit authorization is consumed before generic needs-human retention
 
 After park and processed-work checks, the daemon halted-feature boundary checks for a resume
@@ -62,6 +64,8 @@ to the existing needs-human retention branch with no clear, sentinel, or dispatc
 This is operator-authorized daemon work, not an autonomous re-kick or auto-expiry. A pre-existing
 operator park continues to win before authorization consumption; the operator must explicitly
 unpark before the daemon can act.
+
+> **Amended 2026-10-07 by #2942:** The resume authorization is read and consumed from the halted child's ledger (`adr-2026-10-07-per-child-build-region` decision 10).
 
 ### D4 — All other recovery decisions carry forward unchanged
 
@@ -88,6 +92,8 @@ and the pure budget view remain authoritative; and mechanical-fault state remain
 > ledger entries, and is accepted only when `.pipeline/children/<k>/` exists. `raise` and `reset` take
 > no `--child` until #2942 writes per-child cap evidence. Without the flag, every subcommand's output
 > and effects are unchanged.
+
+> **Amended 2026-10-07 by #2942:** The "without the flag, unchanged" invariant holds for features with no children. For a feature with children, `inspect`, `raise` and `reset` default to the active child, and `raise`/`reset` accept `--child` (`adr-2026-10-07-per-child-build-region` decision 10).
 
 ### D5 — Raise grows the allowance the live evidence names, including plan growth
 

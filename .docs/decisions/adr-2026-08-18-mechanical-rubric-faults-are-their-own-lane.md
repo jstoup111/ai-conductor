@@ -138,6 +138,8 @@ cleared were unreachable.
 
 Amended 2026-08-18, before implementation, on operator decision recorded in that ADR's D6.
 
+> **Amended 2026-10-07 by #2942:** In a stacked feature the mechanical allowance counter lives on the active child's ledger entry, so it is per child (N×3 across N children) (`adr-2026-10-07-per-child-build-region` decision 10).
+
 ### D5 — Exhaustion is a `needs-human` HALT, not a park (OQ-4)
 
 `needs-human`, chosen not defaulted, for `adr-2026-08-17` D4's reason: `daemon-rekick.ts` clears and
@@ -150,6 +152,8 @@ Not a park: `adr-2026-08-06-honest-park-termination-boundary` and
 `adr-2026-08-05-every-dispatch-outcome-leaves-an-operator-lever` together require a terminal state
 that names its lever. The halt body renders the rubric, its closed reason, the bounded `detail`, the
 allowance consumed, and the action that resolves it, per `adr-2026-08-08`.
+
+> **Amended 2026-10-07 by #2942:** In a stacked feature the exhaustion HALT names the child (`adr-2026-10-07-per-child-build-region` decision 10).
 
 ### D6 — Reduced coverage is a distinct record kind in the existing store, never a finding acceptance
 

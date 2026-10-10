@@ -33,6 +33,8 @@ fails ~often on refactors and relocations because its revert-preflight classific
 
 > **Amended 2026-09-14 by #2034:** the registry gains a second built-in member, `security` (`skills/build-review-security/SKILL.md`), **enabled: false by default** like test-quality. Its question is whether the whole feature diff since the merge base introduces a security defect in a closed set of classes (the five named in #2034 plus the diff-gradable OWASP Top 10 categories, ten in all). This is the member this decision's Context anticipated; it is not a project-declared custom rubric. #2034 records the membership decision for this rubric only; #2020 keeps the general catalog-membership and blocking-authority question. Empty-container PASS, retired-key handling, and the prohibition on rubric-driven plan growth remain unchanged.
 
+> **Amended 2026-10-07 by #2942:** In a stacked feature, rubrics grade each child's diff against its parent tip, except `security`, which is skipped on non-leaf children and graded once at the leaf over a second, whole-feature snapshot based on the default branch (`adr-2026-10-07-per-child-build-region` decision 9).
+
 2. **Retired rubric keys** (`scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`,
    `wiring`) stay on the accepted-key list and are ignored with a one-time `config_deprecated_key`
    warning naming the key and this ADR — the adr-2026-08-14 wiring precedent, extended. They are

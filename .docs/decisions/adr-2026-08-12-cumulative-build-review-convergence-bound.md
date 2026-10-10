@@ -83,6 +83,8 @@ Read tolerance is unchanged and is load-bearing for compatibility: `isKickbackGa
 missing `cumulative` as a legacy entry and folds it to `0` rather than rejecting the ledger. An
 in-flight feature mid-run when this ships gets a fresh cumulative budget, never a spurious halt.
 
+> **Amended 2026-10-07 by #2942:** The cumulative field lives on the active child's ledger entry; every caller passes the child (`adr-2026-10-07-per-child-build-region` decision 10).
+
 ### D2 — A PASS clears the gate's cumulative count
 
 Today nothing clears a gate entry on PASS; the only clear is `clearKickbackLedger` at
@@ -109,6 +111,8 @@ re-dispatched. Classifying anything weaker would let the sweep recycle the halt 
 loop this bound exists to stop — the identical trade-off ADR-2026-07-26 D4 accepted, for the
 identical reason. **Accepted cost:** a feature that would have converged on lap 6 now waits for an
 operator.
+
+> **Amended 2026-10-07 by #2942:** The cap of 5 applies per child; the HALT names the child, and the feature-wide total is N×5 (`adr-2026-10-07-per-child-build-region` decision 10).
 
 ### D4 — Config-gated, default on
 

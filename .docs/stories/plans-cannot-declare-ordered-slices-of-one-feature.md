@@ -42,7 +42,7 @@ opted in, so that the grammar can land before any consumer of it exists.
 - Given a plan with no `## Slices` section whose tasks use free-form Dependencies prose such as "Tasks 1–9 all passing", when land runs, then no slice refusal is raised and the spec commits as it does today
 - Given a plan with no `## Slices` section and `stacked_prs.enabled` set to true, when land runs, then no slice refusal is raised and the spec commits
 - Given a plan with no `## Slices` section, when the `coverage_binding` step runs, then it records no slice membership, emits no slice event, and reaches the same completion status it reaches today
-- Given a well-formed sliced plan and `stacked_prs.enabled` false, when land and then the `coverage_binding` step run, then both succeed, `coverage_binding` reads the flag only to leave its stacked-delivery layer inert, and no build, finish or publication step reads the slice manifest or the flag
+- Given a well-formed sliced plan and `stacked_prs.enabled` false, when land and then the `coverage_binding` step run, then both succeed, `coverage_binding` reads the flag only to leave its stacked-delivery layer inert, and no build, finish or publication step creates a child or reads the slice manifest (the BUILD child cursor reads the flag only to decide whether to create children, and creates none when it is false)
 
 #### Negative Paths
 - Given a malformed slice manifest, when land runs once with `stacked_prs.enabled` false and once with it true, then both runs refuse with the identical slice refusal message

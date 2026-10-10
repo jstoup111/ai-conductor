@@ -101,6 +101,8 @@ backward.
 >   is unchanged.
 > - **D5:** `operator_rewind` carries the optional event `child` field.
 
+> **Amended 2026-10-07 by #2942:** For a feature with children the target child defaults to the active child, and a target child that is closed is refused naming #2943 (re-running it needs a restack) (`adr-2026-10-07-per-child-build-region` decision 11).
+
 ### D2 — Every state change is an authorized port mutation, never a file write
 
 Each demotion is submitted to `ConductStateStore` with the current value as the expected value and an
@@ -120,6 +122,8 @@ Rewinding to a step demotes that step and every non-skipped step after it in the
 rewind that left a downstream `done` would reproduce this issue's defect in the operator's own hands.
 Steps already `skipped` by tier, track, or bootstrap mode keep that status — a rewind is not a
 re-decision of what applies to the feature.
+
+> **Amended 2026-10-07 by #2942:** In a stacked feature the demotion set excludes closed children; demoting a closed child's region requires #2943 (`adr-2026-10-07-per-child-build-region` decision 11).
 
 ### D4 — Derived records that would contradict the new position are cleared in the same operation
 

@@ -197,12 +197,12 @@ downstream step marked done.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given children 1, 2 and 3 each with child state and every region step done, plus `manual_test` and `prd_audit` done, when `rewind --to build --child 2` runs, then child 2's `build`, `test_suite` and `build_review` are `stale` and its `acceptance_specs` is unchanged
+- Given children 1, 2 and 3 each with child state, none of them closed, and every region step done, plus `manual_test` and `prd_audit` done, when `rewind --to build --child 2` runs, then child 2's `build`, `test_suite` and `build_review` are `stale` and its `acceptance_specs` is unchanged
 - Given the same fixture, when that rewind runs, then every region step of child 3 is `stale` and every status of child 1 is unchanged
 - Given the same fixture, when that rewind runs, then every non-skipped whole-feature step after `build_review`, including `manual_test` and `prd_audit`, is `stale`, and `coverage_binding` is unchanged
 - Given the same fixture, when that rewind runs, then child 2's `last_step` names the region step before `build`, and the feature's `last_step` names the step before the first demoted whole-feature step
 - Given the same fixture, when that rewind completes, then the gate verdicts of every demoted step are removed, `.pipeline/HALT` and its class file are cleared as a rewind clears them today, and one `operator_rewind` event names the target step, child 2 and the demoted set
-- Given any `rewind --to <step>` invocation without `--child`, when it runs, then its output, state changes and event are byte-identical to today
+- Given any `rewind --to <step>` invocation without `--child` on a feature with no children, when it runs, then its output, state changes and event are byte-identical to today. On a feature with children, the target child defaults to the active child.
 
 #### Negative Paths
 - Given `rewind --to prd_audit --child 2`, when it runs, then it is refused with a message stating that only `acceptance_specs`, `build`, `test_suite` and `build_review` can be rewound per child, and nothing is written
@@ -230,7 +230,7 @@ cannot point a child's work at a task that another child owns.
 - Given a feature with child state for child 2 and task 7 recorded in the slice membership as belonging to slice position 2, when the operator runs `task start 7 --child 2`, then the command behaves exactly as `task start 7`, and `.pipeline/current-task` is written at its usual flat path
 - Given the same feature, when the operator runs `task done 7 --child 2` with any `--done-when` evidence, then it behaves exactly as the same command without `--child`
 - Given an engine-appended remediation task id that has no slice membership, when the operator runs `task start <id> --child 2`, then it is accepted
-- Given any `task` invocation with no `--child` flag, including `task start <id>` followed by extra arguments that are not `--child`, when it runs, then its output and writes are byte-identical to today
+- Given any `task` invocation with no `--child` flag on a feature with no children, including `task start <id>` followed by extra arguments that are not `--child`, when it runs, then its output and writes are byte-identical to today. On a feature with children, membership is validated against the active child.
 
 #### Negative Paths
 - Given task 3 whose recorded membership is slice position 1, when the operator runs `task start 3 --child 2`, then it is refused naming task 3, child 1 and child 2, and `.pipeline/current-task` is unchanged
@@ -254,10 +254,10 @@ entries, so that a stalled child can be diagnosed without hand-reading files.
 #### Happy Path
 - Given `.pipeline/children/2/kickback-ledger.json` with a `build_review` entry, when the operator runs `kickback-budget inspect --feature <slug> --child 2`, then the human output names child 2 once above that entry's gate block
 - Given the same ledger, when the operator runs `kickback-budget inspect --feature <slug> --child 2 --format json`, then the JSON object carries `"child": 2` alongside today's fields
-- Given any `kickback-budget` invocation without `--child`, when it runs, then its output is byte-identical to today
+- Given any `kickback-budget` invocation without `--child` on a feature with no children, when it runs, then its output is byte-identical to today. On a feature with children, it acts on the active child.
 
 #### Negative Paths
-- Given `kickback-budget raise` or `kickback-budget reset` with `--child 2`, when it runs, then it falls through exactly as an unrecognized flag does today, and no ledger is read or changed
+- Given `kickback-budget raise` or `kickback-budget reset` with `--child 3` and no `.pipeline/children/3/`, when it runs, then it is refused naming child 3 as having no child state, and no ledger is read or changed
 - Given no `.pipeline/children/3/`, when `inspect --child 3` runs, then it is refused naming child 3 as having no child state
 - Given a corrupt `children/2/kickback-ledger.json`, when `inspect --child 2` runs, then it prints today's `kickback-budget: ledger is unreadable.` error and exits 1
 - Given `inspect --feature <slug> --child 2 --child 2`, when it is parsed, then it falls through exactly as a repeated flag does today

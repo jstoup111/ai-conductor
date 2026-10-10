@@ -290,7 +290,7 @@ unchanged, so I don't accidentally rip out a legitimate outcome gate.
 **Requirement:** ADR-demote-task-stamping-to-telemetry (enforcement → advisory)
 
 As a committer, I want the opt-in attribution-enforcement commit gate to stop blocking commits while
-keeping trailer grammar validation, so stamps never block per #773.
+keeping trailer grammar validation, so stamps never block per #773. The one exception is a stacked child branch, where the commit-msg hook refuses a `Task:` id owned by a different child: a branch-membership check, not attribution.
 
 ### Acceptance Criteria
 

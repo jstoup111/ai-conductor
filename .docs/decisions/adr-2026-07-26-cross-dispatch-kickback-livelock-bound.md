@@ -100,6 +100,8 @@ The four other run-local counters (`stuckGate`, `prdAuditSelfHeals`, `remediatio
 > fresh-session clear also removes each existing per-child ledger, by explicit enumeration. Per-child
 > cap scope is enabled and recorded by #2942.
 
+> **Amended 2026-10-07 by #2942:** Region gate entries live in `.pipeline/children/<k>/kickback-ledger.json` for a stacked feature; whole-feature fields stay in the flat ledger (`adr-2026-10-07-per-child-build-region` decision 10).
+
 ### D2 — Tree-hash progress witness
 
 `classifyBuildProgress` compares tree hashes (`git rev-parse HEAD^{tree}`) rather than commit shas.
@@ -168,6 +170,8 @@ exhausted its budget over an unchanged tree has demonstrated it cannot self-heal
 a feature whose gate would have passed after an unrelated base advance now waits for an operator.
 This is revisitable without reopening the rest of the design: it is a single argument to
 `writeHaltMarker`.
+
+> **Amended 2026-10-07 by #2942:** A per-child cap HALT names the child as well as gate and reason (`adr-2026-10-07-per-child-build-region` decision 10).
 
 ### D5 — `wiring_check` joins the D2 pair
 
