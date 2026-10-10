@@ -40,14 +40,16 @@ describe('PiProvider prepared-worktree git guard integration', () => {
     const untracked = join(fixture, 'untracked.txt');
     await writeFile(untracked, 'keep me\n');
 
-    let resolvedGit: Awaited<ReturnType<typeof execa>> | undefined;
-    let clean: Awaited<ReturnType<typeof execa>> | undefined;
+    let resolvedGit: { stdout: string } | undefined;
+    let clean: { exitCode: number; stderr: string } | undefined;
     const guardedGit = join(fixture, '.pipeline', 'bin', 'git');
     const subprocessFactory: PiSubprocessFactory = async (_file, _args, options: ExecaOptions) => {
       const childOptions = { cwd: options.cwd, env: options.env, reject: false } as const;
-      resolvedGit = await execa('sh', ['-c', 'command -v git'], childOptions);
+      const command = await execa('sh', ['-c', 'command -v git'], childOptions);
+      resolvedGit = { stdout: command.stdout };
       if (resolvedGit.stdout.trim() === guardedGit) {
-        clean = await execa('sh', ['-c', 'git clean -f'], childOptions);
+        const refusal = await execa('sh', ['-c', 'git clean -f'], childOptions);
+        clean = { exitCode: refusal.exitCode, stderr: refusal.stderr };
       }
       return {
         stdout: JSON.stringify({
