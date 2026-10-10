@@ -144,25 +144,22 @@ function validateConsistency(
 ): RemediationCaseGraphRejection | undefined {
   const consistency = judgement.consistency as unknown as Record<string, unknown>;
   if (!nonEmptyString(consistency.rationale)) return 'missing-consistency-rationale';
-  if (!Array.isArray(consistency.sourceIds)) return 'missing-consistency-source';
+  // The consistency record names the *implicated* sources and cases
+  // (adr-2026-09-10-portable-build-review-policy D9), not every one:
+  // exhaustive source coverage is the graph's job, checked above.
+  if (!Array.isArray(consistency.sourceIds) || consistency.sourceIds.length === 0) return 'missing-consistency-source';
   const consistencySources = new Set<string>();
   for (const sourceId of consistency.sourceIds) {
     if (!nonEmptyString(sourceId) || !currentSources.has(sourceId)) return 'unknown-consistency-source';
     if (consistencySources.has(sourceId)) return 'duplicate-consistency-source';
     consistencySources.add(sourceId);
   }
-  for (const sourceId of currentSources) {
-    if (!consistencySources.has(sourceId)) return 'missing-consistency-source';
-  }
-  if (!Array.isArray(consistency.caseRefs)) return 'missing-consistency-case-reference';
+  if (!Array.isArray(consistency.caseRefs) || consistency.caseRefs.length === 0) return 'missing-consistency-case-reference';
   const consistencyCases = new Set<string>();
   for (const caseRef of consistency.caseRefs) {
     if (!nonEmptyString(caseRef) || !casesByRef.has(caseRef)) return 'unknown-consistency-case-reference';
     if (consistencyCases.has(caseRef)) return 'duplicate-consistency-case-reference';
     consistencyCases.add(caseRef);
-  }
-  for (const caseRef of casesByRef.keys()) {
-    if (!consistencyCases.has(caseRef)) return 'missing-consistency-case-reference';
   }
   return undefined;
 }

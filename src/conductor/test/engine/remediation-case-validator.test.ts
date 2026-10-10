@@ -345,9 +345,9 @@ describe('remediation case graph validator', () => {
     });
 
     it.each([
-      ['an omitted consistency source', {
+      ['an empty consistency source list', {
         ...VALID_CASE_V2_JUDGEMENT,
-        consistency: { ...VALID_CASE_V2_JUDGEMENT.consistency, sourceIds: VALID_CASE_V2_JUDGEMENT.consistency.sourceIds.slice(0, 3) },
+        consistency: { ...VALID_CASE_V2_JUDGEMENT.consistency, sourceIds: [] },
       }, 'missing-consistency-source'],
       ['a duplicate consistency source', {
         ...VALID_CASE_V2_JUDGEMENT,
@@ -365,9 +365,9 @@ describe('remediation case graph validator', () => {
         ...VALID_CASE_V2_JUDGEMENT,
         consistency: { ...VALID_CASE_V2_JUDGEMENT.consistency, caseRefs: ['case-a', 'case-b', 'case-missing'] },
       }, 'unknown-consistency-case-reference'],
-      ['an omitted consistency case reference', {
+      ['an empty consistency case reference list', {
         ...VALID_CASE_V2_JUDGEMENT,
-        consistency: { ...VALID_CASE_V2_JUDGEMENT.consistency, caseRefs: ['case-a', 'case-b'] },
+        consistency: { ...VALID_CASE_V2_JUDGEMENT.consistency, caseRefs: [] },
       }, 'missing-consistency-case-reference'],
       ['a duplicate consistency case reference', {
         ...VALID_CASE_V2_JUDGEMENT,
@@ -407,6 +407,20 @@ describe('remediation case graph validator', () => {
 
       expect(result).toEqual({ ok: false, reason });
       expect(authorizedActionCaseRefs(judgement as RemediationCaseJudgement, result)).toEqual([]);
+    });
+
+    it('accepts a blocked consistency record that names only the implicated source and case', () => {
+      const judgement = {
+        ...VALID_CASE_V2_JUDGEMENT,
+        consistency: {
+          verdict: 'blocked',
+          sourceIds: [VALID_CASE_V2_JUDGEMENT.consistency.sourceIds[0]],
+          caseRefs: [VALID_CASE_V2_JUDGEMENT.consistency.caseRefs[0]],
+          rationale: 'Only this source contradicts the approved plan; the others are independent.',
+        },
+      } as RemediationCaseJudgement;
+
+      expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement, CASE_V2_ADMISSION)).toMatchObject({ ok: true });
     });
 
     it.each([
