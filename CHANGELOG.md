@@ -11,6 +11,92 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-10
+
+### Added
+
+- Daemon operators receive an early refusal that identifies plan tasks conflicting with sealed story criteria or approved ADR decisions. ([implementation PR #2968](https://github.com/jstoup111/ai-conductor/pull/2968)).
+- Projects can declare selected pipeline steps inapplicable for an individual feature. ([implementation PR #2992](https://github.com/jstoup111/ai-conductor/pull/2992)).
+- Task completion now verifies `[test]`-tagged Done-when checks against committed test evidence. ([implementation PR #2989](https://github.com/jstoup111/ai-conductor/pull/2989)).
+- Daemon operators gain observable, enforced managed-session command boundaries. ([implementation PR #2920](https://github.com/jstoup111/ai-conductor/pull/2920)).
+- Pi builds can delegate each task to a same-model sub-agent: set `llm_providers.pi.subagents: true` after `pi install npm:pi-subagents`. ([implementation PR #3017](https://github.com/jstoup111/ai-conductor/pull/3017)).
+- Operators can select a child’s workflow state with --child when managing stacked features. ([implementation PR #3019](https://github.com/jstoup111/ai-conductor/pull/3019)).
+- Guided monitor sessions let operators choose their provider, model, and reasoning effort. ([implementation PR #3030](https://github.com/jstoup111/ai-conductor/pull/3030)).
+- Teams can safely opt into stacked delivery for eligible sliced plans. ([implementation PR #3039](https://github.com/jstoup111/ai-conductor/pull/3039)).
+- Daemon status shows each in-flight non-BUILD step while it runs. ([implementation PR #3085](https://github.com/jstoup111/ai-conductor/pull/3085)).
+- Guided monitor triage sessions now tell you when to quit and return to the queue. ([implementation PR #3080](https://github.com/jstoup111/ai-conductor/pull/3080)).
+- Stacked features now build each child in order while keeping task commits in their owning child. ([implementation PR #3053](https://github.com/jstoup111/ai-conductor/pull/3053)).
+- PRD audits now exempt requirements explicitly discharged by a coherence waiver. ([implementation PR #3084](https://github.com/jstoup111/ai-conductor/pull/3084)).
+- Users can distinguish gate telemetry and metrics by complexity tier. ([implementation PR #3089](https://github.com/jstoup111/ai-conductor/pull/3089)).
+
+### Changed
+
+- Operators receive PRD audits with bounded evidence and validated typed verdicts. ([implementation PR #2897](https://github.com/jstoup111/ai-conductor/pull/2897)).
+- Feature cost totals, the shipped-record Cost block, --report and OTel cost metrics now include failed provider attempts for Claude, Codex and Pi, recorded through the existing cost telemetry. A failed attempt with no usable record is reported as unmetered, never as $0. ([implementation PR #3027](https://github.com/jstoup111/ai-conductor/pull/3027)).
+- Maintainers can classify confirmed maintenance changes and skip unnecessary acceptance specifications. ([implementation PR #3029](https://github.com/jstoup111/ai-conductor/pull/3029)).
+- Reviewers see plan task titles in landed specification commit bodies. ([implementation PR #3091](https://github.com/jstoup111/ai-conductor/pull/3091)).
+- ADR authors can cite decisions headed with ATX-numbered headings. ([implementation PR #3115](https://github.com/jstoup111/ai-conductor/pull/3115)).
+- Composer `land`, `handoff`, and `forget` now post their GitHub issue write-backs from an operator session without an assignment or terminal prompt; daemon sessions keep the stricter rule. ([implementation PR #3134](https://github.com/jstoup111/ai-conductor/pull/3134)).
+
+### Removed
+
+- Plugin manifests now reject unsupported `step` and `hook` kinds. ([implementation PR #3032](https://github.com/jstoup111/ai-conductor/pull/3032)).
+- conflict-check always compares stories against the full approved ADR corpus; the `conflict_check.adr_corpus` config key is removed. ([implementation PR #3122](https://github.com/jstoup111/ai-conductor/pull/3122)).
+
+### Fixed
+
+- Builds now reopen completed tasks when their plan text changes. ([implementation PR #2929](https://github.com/jstoup111/ai-conductor/pull/2929)).
+- Harness operators gain git-side protection against destructive branch deletions and unseen remote-history overwrites in prepared worktrees. ([implementation PR #2969](https://github.com/jstoup111/ai-conductor/pull/2969)).
+- FINISH now retries a failed PR-description authoring run instead of halting, and authors PR prose from a bounded view of the diff. ([implementation PR #2993](https://github.com/jstoup111/ai-conductor/pull/2993)).
+- Test runs no longer export OpenTelemetry data or use your local configuration. ([implementation PR #2984](https://github.com/jstoup111/ai-conductor/pull/2984)).
+- Resumed features safely recover interrupted rebase transitions and report actionable recovery state. ([implementation PR #2988](https://github.com/jstoup111/ai-conductor/pull/2988)).
+- Coverage-binding conflict checks now read ADR decisions with their approved amendments, so a plan is no longer refused for contradicting a sentence an earlier amendment already superseded. ([implementation PR #3006](https://github.com/jstoup111/ai-conductor/pull/3006)).
+- Claude users receive reliable destructive-Git protection for valid abbreviated, bundled, and negated option spellings. ([implementation PR #2997](https://github.com/jstoup111/ai-conductor/pull/2997)).
+- coverage_binding no longer fails a judge batch when the judge appends a verdict for a claim id it was never issued, provided every issued claim id was answered. ([implementation PR #3011](https://github.com/jstoup111/ai-conductor/pull/3011)).
+- coverage_binding now judges each ADR decision together with every amendment recorded in that ADR, and re-judges a previously refused conflict after the halt is cleared instead of reusing the refusal. ([implementation PR #3012](https://github.com/jstoup111/ai-conductor/pull/3012)).
+- Self-host build_review rubrics routed to Codex no longer fail with an "ambiguous" installed-policy error, and no longer fail with a "scratch home is outside the worktree scratch root" error during native-schema setup. ([implementation PR #3023](https://github.com/jstoup111/ai-conductor/pull/3023)).
+- build_review rubrics routed to Claude run again instead of failing setup and halting for operator attention. Claude's read-only review cannot run any observed command (`gh` and the conductor launchers are explicitly denied), so it is admitted without an observation-destination proof. Any wider Claude review policy still has to prove that destination first, and `daemon status` now reports the same Claude availability that dispatch accepts. ([implementation PR #3024](https://github.com/jstoup111/ai-conductor/pull/3024)).
+- Self-host build_review rubrics routed to Codex no longer halt with "review-input-mutated" because the engine deleted the candidate's throwaway policy copy, or rewrote its own provider-lifecycle file, during the review lap; genuine policy or evidence edits during review are still detected. ([implementation PR #3025](https://github.com/jstoup111/ai-conductor/pull/3025)).
+- Pi cost records now include nested pi-subagents children, and no longer show a complete cost while a background subagent run has not reported its usage. ([implementation PR #3026](https://github.com/jstoup111/ai-conductor/pull/3026)).
+- Daemon builds route fully refused over-scope findings into bounded BUILD rework. ([implementation PR #3010](https://github.com/jstoup111/ai-conductor/pull/3010)).
+- Feature branches handle base-deleted inherited protected artifacts without deadlocking. ([implementation PR #3041](https://github.com/jstoup111/ai-conductor/pull/3041)).
+- A no-op rebase no longer recounts a stale rebase kickback, which had halted features with a false "kickback ping-pong" after an earlier halt. ([implementation PR #3052](https://github.com/jstoup111/ai-conductor/pull/3052)).
+- Remediation now preserves engine-owned dispositions when it creates follow-up work. ([implementation PR #3040](https://github.com/jstoup111/ai-conductor/pull/3040)).
+- Halt records now reach the remote branch after a daemon rebase. ([implementation PR #3079](https://github.com/jstoup111/ai-conductor/pull/3079)).
+- Draft PR bodies seeded from the PR template no longer halt the self-host release gate; commented template examples are ignored when parsing release metadata. ([implementation PR #3093](https://github.com/jstoup111/ai-conductor/pull/3093)).
+- build_review adjudication no longer halts on a plan's final task absorbing trailing plan sections, and adjudication-context halts now name the overflowing field and bound. ([implementation PR #3094](https://github.com/jstoup111/ai-conductor/pull/3094)).
+- Self-host builds no longer halt when a concurrent Codex session updates its session index or plugin-sync round marker. ([implementation PR #3095](https://github.com/jstoup111/ai-conductor/pull/3095)).
+- build_review no longer re-selects and halts a lap whose findings the adjudicator already settled (for example, rejected); the completion check now honors finalized remediation cases. ([implementation PR #3098](https://github.com/jstoup111/ai-conductor/pull/3098)).
+- FINISH no longer halts as non-advancing after recording the outcome when a PR carries accepted build-review risk; the accepted-risk PR section is now updated in place. ([implementation PR #3101](https://github.com/jstoup111/ai-conductor/pull/3101)).
+- Self-host builds no longer halt when Claude Code rewrites its plugin-sync round marker. ([implementation PR #3103](https://github.com/jstoup111/ai-conductor/pull/3103)).
+- Remediation tasks no longer carry an unprovable "re-run the gate" Done-when check that halted BUILD as a plan gap. ([implementation PR #3109](https://github.com/jstoup111/ai-conductor/pull/3109)).
+- Contributors can identify the active Vitest file when a Conductor CI shard ends unexpectedly. ([implementation PR #3083](https://github.com/jstoup111/ai-conductor/pull/3083)).
+- Operators can resolve GitHub intake issues with `compose forget --resolved-by` even after the ledger entry is absent. ([implementation PR #3090](https://github.com/jstoup111/ai-conductor/pull/3090)).
+- Pi users now receive protection against destructive Git commands during build dispatches. ([implementation PR #3081](https://github.com/jstoup111/ai-conductor/pull/3081)).
+- Validation-group reviews that kick back to build are no longer reported as interrupted in pipeline telemetry. ([implementation PR #3111](https://github.com/jstoup111/ai-conductor/pull/3111)).
+- The daemon now fills a free slot (for example, a feature whose halt you cleared) while a sibling self-host build holds back the origin refresh, instead of waiting for that build to finish; `daemon status` shows when a refresh is pending. ([implementation PR #3108](https://github.com/jstoup111/ai-conductor/pull/3108)).
+- Daemon runs route unretryable prerequisite failures without repeating affected steps. ([implementation PR #3088](https://github.com/jstoup111/ai-conductor/pull/3088)).
+- Self-host builds no longer halt when Claude Code's plugin sync rewrites its catalog caches or sync bookkeeping; installed plugins and plugin code stay guarded. ([implementation PR #3110](https://github.com/jstoup111/ai-conductor/pull/3110)).
+- Build review now returns malformed changed-test Covers markers to BUILD without consuming the mechanical fault allowance. ([implementation PR #3087](https://github.com/jstoup111/ai-conductor/pull/3087)).
+- Completed work stays closed when an older repair obligation is superseded. ([implementation PR #3082](https://github.com/jstoup111/ai-conductor/pull/3082)).
+- When merge-conflict autoresolve escalates on a failing test suite, the daemon log and the escalation comment now name the failing tests instead of only "exit code 1". ([implementation PR #3118](https://github.com/jstoup111/ai-conductor/pull/3118)).
+- Build review includes changed test files outside conventional test paths when they contain Covers markers. ([implementation PR #3092](https://github.com/jstoup111/ai-conductor/pull/3092)).
+- Operators receive the correct halt-clear recovery command when a BUILD plan gap cannot be rewound. ([implementation PR #3120](https://github.com/jstoup111/ai-conductor/pull/3120)).
+- build_review adjudication no longer halts when a blocked consistency verdict names only the implicated findings. ([implementation PR #3139](https://github.com/jstoup111/ai-conductor/pull/3139)).
+- The daemon no longer reports freshly landed, owned specs as un-owned; the owner gate reads ownership at the same base commit the backlog scan uses. ([implementation PR #3140](https://github.com/jstoup111/ai-conductor/pull/3140)).
+- A rejected custom build_review rubric result now names only the cited source regions that failed frozen-source admission, instead of reporting every cited region as mismatched. ([implementation PR #3155](https://github.com/jstoup111/ai-conductor/pull/3155)).
+- A config that still sets the retired `conflict_check` block is now ignored with a warning instead of failing validation. ([implementation PR #3157](https://github.com/jstoup111/ai-conductor/pull/3157)).
+
+## Migration
+
+```bash migration
+"${HARNESS_DIR}/bin/install" --update
+```
+
+```bash migration
+bin/install --update
+```
+
 ## [1.6.0] - 2026-10-06
 
 ### Added
