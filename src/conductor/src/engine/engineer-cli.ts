@@ -79,6 +79,13 @@ import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 import { createGithubTrackerClient, createGuardedGithubOperationRunner, GithubTrackerOperationRefusalError, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead, type GhRunner } from './tracker-client.js';
+import {
+  sweepDependencyDrift,
+  type DependencyDriftBlocker,
+  type DependencyDriftIssue,
+  type DependencyDriftResult,
+  type DependencyDriftTracker,
+} from './engineer/dependency-reconciler.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
 import { bindMutationToPullRequest } from './ship-draft-pr.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
@@ -102,6 +109,7 @@ type EngineerDispatchDescriptor =
   | { kind: 'launch-usage'; flag: '--provider' }
   | { kind: 'guide' }
   | { kind: 'projects' }
+  | { kind: 'dep-audit'; project: string }
   | { kind: 'worktree'; project: string; idea: string; sourceRef?: string; body?: string }
   | {
     kind: 'land'; project: string; idea: string; worktree: string; sourceRef?: string;
@@ -128,7 +136,7 @@ export type EngineerDispatch = EngineerDispatchDescriptor & {
 
 /** Single source of truth for the known deterministic subcommands (#524). */
 export const ENGINEER_SUBCOMMANDS = [
-  'projects', 'worktree', 'land', 'handoff', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
+  'projects', 'dep-audit', 'worktree', 'land', 'handoff', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
   'resolve', 'migrate-issue-deps',
 ] as const;
 
@@ -179,6 +187,14 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     const unk = findUnknownFlag(argv, []);
     if (unk) return { kind: 'reject', sub: 'projects', flag: unk };
     return { kind: 'projects' };
+  }
+
+  if (subCmd === 'dep-audit') {
+    const project = parseFlag(argv, '--project');
+    if (!project) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--project']);
+    if (unk) return { kind: 'reject', sub: 'dep-audit', flag: unk };
+    return { kind: 'dep-audit', project };
   }
 
   if (subCmd === 'worktree') {
@@ -527,6 +543,8 @@ export interface DispatchEngineerOpts {
   printErr?: (s: string) => void;
   /** Injected gh runner (for tests). */
   gh?: GhRunner;
+  /** Injectable read-only tracker seam for `compose dep-audit`. */
+  createDependencyDriftTracker?: () => DependencyDriftTracker;
   /** Test seam for fresh machine identity used by independently authorized intake writes. */
   intakeResolveActor?: () => Promise<OwnerResolution>;
   /** Existing event spine for intake mutation fallback telemetry. */
@@ -605,6 +623,81 @@ function spawnInteractiveHost(executable: string, argv: string[], cwd: string): 
     child.on('error', reject);
     child.on('exit', (code) => resolve(code ?? 0));
   });
+}
+
+function parseDependencyDriftIssues(value: string): DependencyDriftIssue[] {
+  const parsed: unknown = JSON.parse(value || '[]');
+  if (!Array.isArray(parsed)) throw new Error('open issue listing was not an array');
+  return parsed.map((issue) => {
+    if (!issue || typeof issue !== 'object') throw new Error('open issue listing contained an invalid issue');
+    const item = issue as { number?: unknown; body?: unknown };
+    if (typeof item.number !== 'number' || !Number.isSafeInteger(item.number)
+      || (typeof item.body !== 'string' && item.body != null)) {
+      throw new Error('open issue listing contained an invalid issue');
+    }
+    return { number: item.number, body: item.body ?? '' };
+  });
+}
+
+function parseDependencyDriftBlockers(value: string): DependencyDriftBlocker[] {
+  const parsed: unknown = JSON.parse(value || '[]');
+  if (!Array.isArray(parsed)) throw new Error('blocked_by response was not an array');
+  return parsed.map((blocker) => {
+    if (!blocker || typeof blocker !== 'object') throw new Error('blocked_by response contained an invalid blocker');
+    const item = blocker as { number?: unknown; state?: unknown; state_reason?: unknown; repository?: unknown; repository_url?: unknown };
+    if (typeof item.number !== 'number' || !Number.isSafeInteger(item.number)
+      || (item.state !== 'open' && item.state !== 'closed')) {
+      throw new Error('blocked_by response contained an invalid blocker');
+    }
+    return {
+      number: item.number,
+      state: item.state,
+      ...(typeof item.state_reason === 'string' ? { state_reason: item.state_reason } : {}),
+      ...(typeof item.repository === 'string' ? { repository: item.repository } : {}),
+      ...(typeof item.repository_url === 'string' ? { repository_url: item.repository_url } : {}),
+    };
+  });
+}
+
+function productionDependencyDriftTracker(gh: GhRunner, cwd: string): DependencyDriftTracker {
+  return {
+    async listOpenIssues(repository) {
+      const stdout = await runTrackerRepositoryRead(
+        gh, cwd, 'repository.read', repository, { kind: 'repository' },
+        ['issue', 'list', '--state', 'open', '--json', 'number,body', '--limit', '1000', '-R', repository],
+      );
+      return parseDependencyDriftIssues(stdout);
+    },
+    async getBlockedBy(repository, number) {
+      const stdout = await runTrackerRepositoryRead(
+        gh, cwd, 'issue.read', repository, { kind: 'issue', number },
+        ['api', `repos/${repository}/issues/${number}/dependencies/blocked_by`],
+      );
+      return parseDependencyDriftBlockers(stdout);
+    },
+  };
+}
+
+function dependencyRepository(project: { name: string; remote?: string }): string {
+  const match = project.remote?.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/);
+  return match?.[1] ?? project.name;
+}
+
+function formatDependencyDrift(result: DependencyDriftResult): string {
+  if (result.kind === 'repository-indeterminate') {
+    return `Dependency drift audit: indeterminate (${result.cause})`;
+  }
+  const findings = <T>(name: string, values: readonly T[], render: (value: T) => string): string =>
+    values.length === 0 ? `${name}: 0 findings` : `${name}: ${values.length} finding(s)\n${values.map((value) => `  ${render(value)}`).join('\n')}`;
+  return [
+    findings('unlinked', result.unlinked, (finding) => `${finding.source} → ${finding.target}`),
+    findings('stale', result.stale, (finding) => `${finding.source} → ${finding.target}`),
+    findings('cycles', result.cycles, (finding) => `{${finding.members.join(', ')}}`),
+    findings('contradictions', result.contradictions, (finding) => `${finding.source} → ${finding.target}`),
+    result.indeterminate.length === 0
+      ? 'indeterminate: 0 findings'
+      : `indeterminate: ${result.indeterminate.length} finding(s)\n${result.indeterminate.map((ref) => `  ${ref}`).join('\n')}`,
+  ].join('\n');
 }
 
 async function loadLaunchConfig(launchingDirectory: string): Promise<ConfigResult> {
@@ -743,6 +836,11 @@ export const SUBCOMMAND_HELP = {
     'Flags: none.\n' +
     'Mutates: nothing (read-only).\n' +
     'Loop fit: informational only — inspect which projects the engineer can route ideas to; not a step in the claim → worktree → land → handoff → resolve/forget loop.',
+  'dep-audit':
+    'compose dep-audit --project <name> — report unlinked, stale, cyclic, and contradictory issue dependencies.\n' +
+    'Flags: --project <name> (required; must name a registered project).\n' +
+    'Mutates: nothing (read-only tracker audit).\n' +
+    'Loop fit: out-of-band maintenance report; it never creates, removes, or changes dependency links.',
   worktree:
     'compose worktree --project <name> --idea "<idea>" [--source-ref <ref>] — create the per-idea worktree used to author a spec.\n' +
     'Flags: --project <name> (required), --idea "<text>" (required), --source-ref <ref> (optional — resolves the claim record for intake-sourced ideas).\n' +
@@ -810,6 +908,7 @@ function printGuide(print: (s: string) => void): void {
       '  ai-conductor compose --idea "<text>"                     — launch driving a specific idea (skips intake poll)\n' +
       '  ai-conductor compose [--provider <id>] [--idea "<text>"] — launch with an optional provider and/or specific idea\n' +
       '  ai-conductor compose projects                            — list registered projects\n' +
+      '  ai-conductor compose dep-audit --project <name>         — read-only dependency drift report\n' +
       '  ai-conductor compose claim                               — dequeue the oldest pending intake idea (JSON)\n' +
       '  ai-conductor compose worktree --project <n> --idea "<i>" [--source-ref <ref>]  — create the per-idea authoring worktree\n' +
       '  ai-conductor compose land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
@@ -1146,6 +1245,24 @@ export async function dispatchEngineer(
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const projects = await reader.listProjects();
       print(JSON.stringify(projects));
+      return 0;
+    }
+
+    // ── dep-audit ──────────────────────────────────────────────────────────────
+    // Resolve the local registry before constructing the tracker so an unknown
+    // project is a local refusal with no network/read-side effect.
+    case 'dep-audit': {
+      const reader = createRegistryReader(registryPath ? { registryPath } : {});
+      const projects = await reader.listProjects();
+      const record = projects.find((project) => project.name === dispatch.project);
+      if (!record) {
+        printErr(`compose dep-audit: project "${dispatch.project}" not found in registry.`);
+        return 1;
+      }
+      const repository = dependencyRepository(record);
+      const tracker = opts.createDependencyDriftTracker ?? (() => productionDependencyDriftTracker(gh, record.path));
+      const result = await sweepDependencyDrift({ repository, tracker: tracker() });
+      print(formatDependencyDrift(result));
       return 0;
     }
 
