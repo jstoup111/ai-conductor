@@ -372,6 +372,7 @@ describe('readWatch', () => {
     expect(reread[0].lastCiFixAt).toBeUndefined();
   });
 
+  // Covers: task:3
   it('round-trips readiness bookkeeping through rewriteWatch', async () => {
     const readinessEntry: WatchEntry = {
       prUrl: PR_URL,
@@ -390,6 +391,7 @@ describe('readWatch', () => {
     ]);
   });
 
+  // Covers: task:3
   it('keeps readiness bookkeeping undefined for a legacy watch line', async () => {
     await mkdir(join(tmpDir, '.daemon'), { recursive: true });
     await writeFile(
