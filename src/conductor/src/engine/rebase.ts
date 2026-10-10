@@ -14,6 +14,7 @@ import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
+import { isPinnedEngineGitCommand, withPinnedGitConfig } from './git-pinned-config.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
 import { classifyGitPushAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
@@ -120,6 +121,9 @@ export function makeGitRunner(cwd: string): GitRunner {
           botToken = token.token;
           env = { ...process.env, GH_TOKEN: botToken, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' };
         }
+      }
+      if (isPinnedEngineGitCommand(args)) {
+        env = withPinnedGitConfig(env ?? process.env);
       }
       const r = await execa('git', args, {
         cwd,
