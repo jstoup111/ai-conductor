@@ -24,6 +24,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Guided monitor sessions let operators choose their provider, model, and reasoning effort. ([implementation PR #3030](https://github.com/jstoup111/ai-conductor/pull/3030)).
 - Teams can safely opt into stacked delivery for eligible sliced plans. ([implementation PR #3039](https://github.com/jstoup111/ai-conductor/pull/3039)).
 - Daemon status shows each in-flight non-BUILD step while it runs. ([implementation PR #3085](https://github.com/jstoup111/ai-conductor/pull/3085)).
+- Guided monitor triage sessions now tell you when to quit and return to the queue. ([implementation PR #3080](https://github.com/jstoup111/ai-conductor/pull/3080)).
 
 ### Changed
 
