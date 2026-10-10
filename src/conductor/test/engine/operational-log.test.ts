@@ -7,9 +7,20 @@ import {
   formatDaemonFeatureTag,
   withDaemonLogFeatureOwnership,
 } from '../../src/engine/daemon-log.js';
+import { EVENT_SINKS } from '../../src/engine/event-sinks.js';
 import { createOperationalLogger } from '../../src/engine/operational-log.js';
 
 describe('operational logger', () => {
+  it('persists operational occurrences without rendering or exporting them yet', () => {
+    expect((EVENT_SINKS as Record<string, unknown>).operational_log).toEqual({
+      render: false,
+      persist: true,
+      audit: false,
+      otel: false,
+      otelTrace: false,
+    });
+  });
+
   it('emits raw typed occurrences best-effort while preserving local sink calls and results', async () => {
     const occurrences: unknown[] = [];
     const localCalls: unknown[][] = [];

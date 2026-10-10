@@ -10,6 +10,10 @@ export interface SinkDeclaration {
 }
 
 export const EVENT_SINKS = {
+  // ADR-014 D28: operational diagnostics already reach their local sink, so
+  // persist the typed occurrence without rendering or exporting it until the
+  // log-projection task claims the OTel declaration.
+  operational_log: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
   // ADR-014 D17: spool health must survive the process without becoming input
   // to the spool itself, a renderer stream, or aggregate usage accounting.
   otel_spool_drop: { render: false, persist: true, audit: false, otel: false, otelTrace: false },

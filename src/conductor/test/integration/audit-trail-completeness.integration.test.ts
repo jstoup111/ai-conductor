@@ -55,6 +55,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   AuditedEventType,
   'friction-mapped' | 'not-audited-by-design'
 > = {
+  // ADR-014 D28: local operational output already renders at source; its
+  // spine occurrence is durable but never an audit-trail friction record.
+  operational_log: 'not-audited-by-design',
   otel_spool_drop: 'not-audited-by-design',
   otel_spool_backlog: 'not-audited-by-design',
   daemon_backlog_snapshot: 'not-audited-by-design',
@@ -260,6 +263,10 @@ const EVENT_TYPE_CLASSIFICATION: Record<
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
 const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
+  operational_log: {
+    type: 'operational_log', severity: 'info', body: 'daemon started', occurredAt: 0,
+    ownership: { scope: 'project' },
+  },
   otel_spool_drop: {
     type: 'otel_spool_drop', signal: 'traces', reason: 'rejected', batches: 1, items: 1,
   },

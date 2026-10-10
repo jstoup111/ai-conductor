@@ -34,7 +34,9 @@ export function daemonProjectDiagnosticOwnership(): OperationalLogOwnership {
 }
 
 /** Preserve a complete feature slug as structured diagnostic ownership. */
-export function daemonFeatureDiagnosticOwnership(featureSlug: string): OperationalLogOwnership {
+export function daemonFeatureDiagnosticOwnership(
+  featureSlug: string,
+): Extract<OperationalLogOwnership, { scope: 'feature' }> {
   return Object.freeze({ scope: 'feature', featureSlug });
 }
 
