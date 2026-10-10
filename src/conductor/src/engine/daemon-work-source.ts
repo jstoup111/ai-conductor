@@ -92,8 +92,8 @@ export interface LocalWorkSourceDeps {
    * reads; `cutover` is the configured grandfather instant (or null default).
    */
   resolveDaemonOwner?: () => Promise<OwnerResolution>;
-  readStamp?: (slug: string) => Promise<OwnerStamp>;
-  readMergeTime?: (slug: string) => Promise<string | null>;
+  readStamp?: (slug: string, baseRef: string) => Promise<OwnerStamp>;
+  readMergeTime?: (slug: string, baseRef: string) => Promise<string | null>;
   cutover?: string | null;
   /**
    * Dependency-gate resolver factory (Task rem-fr4-1). Invoked FRESH on every

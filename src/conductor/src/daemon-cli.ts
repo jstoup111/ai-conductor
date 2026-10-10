@@ -2177,9 +2177,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         );
       },
       resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
-      readStamp: (slug) => readSpecOwnerStamp(ownerGit, baseBranch, slug),
-      readMergeTime: (slug) =>
-        firstAppearanceTime(ownerGit, baseBranch, `.docs/plans/${slug}.md`),
+      readStamp: (slug, baseRef) => readSpecOwnerStamp(ownerGit, baseRef, slug),
+      readMergeTime: (slug, baseRef) =>
+        firstAppearanceTime(ownerGit, baseRef, `.docs/plans/${slug}.md`),
       cutover: config?.owner_gate_cutover ?? null,
       // Dependency gate (rem-fr4-2): fresh BlockerResolver per discover() pass
       // — see LocalWorkSourceDeps.makeResolver doc — so the per-pass memo in
