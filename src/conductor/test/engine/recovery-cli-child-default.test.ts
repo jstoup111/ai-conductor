@@ -1,4 +1,4 @@
-// Covers: task:32 — operator recovery commands default to the cursor child.
+// Covers: task:32
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
