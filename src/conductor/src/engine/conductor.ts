@@ -137,6 +137,7 @@ import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { ExecutionLifecycle } from './execution-lifecycle.js';
 import { BuildProgressWatcher, isNoTaskProgressBuildStall } from './build-progress-watcher.js';
+import { StepInFlightTicker } from './step-in-flight-ticker.js';
 import {
   resolveBuildProgressConfig,
   resolveGateCodeValidityConfig,
@@ -9028,6 +9029,7 @@ export class Conductor {
                 subject: { kind: 'lifecycle-step', step: step.name },
               }
             : undefined;
+        const stepStartedAtMs = Date.now();
         await emitTracked({
           type: 'step_started',
           step: step.name,
@@ -9506,7 +9508,18 @@ export class Conductor {
                   },
                 })
               : null;
+          const stepInFlightTicker: StepInFlightTicker | null =
+            step.name !== 'build' && resolveBuildProgressConfig(this.config).enabled
+              ? new StepInFlightTicker({
+                  events: this.events,
+                  step: step.name,
+                  startedAtMs: stepStartedAtMs,
+                  featureSlug: state.feature_desc,
+                  config: this.config,
+                })
+              : null;
           buildWatcher?.start();
+          stepInFlightTicker?.start();
           // Approved DECIDE artifacts are a durable BUILD/SHIP boundary. Verify
           // every attempt before writing phase markers or starting dispatch; a
           // resume therefore cannot accept a dirty workspace as a new baseline.
@@ -9568,6 +9581,7 @@ export class Conductor {
           if (protectedArtifactIssue) {
             buildAttemptSettled = true;
             buildWatcher?.stop();
+            stepInFlightTicker?.stop();
             const dispatchIssue = protectedArtifactIssue;
             result = {
               success: false,
@@ -9773,6 +9787,7 @@ export class Conductor {
           } finally {
             buildAttemptSettled = true;
             buildWatcher?.stop();
+            stepInFlightTicker?.stop();
             // Task 4 (#788): the phase-active marker is written for any
             // BUILD/SHIP step, not gated on step.name === 'build'.
             removePhaseMarker(this.projectRoot);
