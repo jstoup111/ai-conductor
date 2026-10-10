@@ -161,7 +161,6 @@ import { SafetyAttemptCache, evaluateSafetyBoundary } from './safety-boundary.js
 import { runSpotAudit } from './attribution-audit.js';
 import {
   readState,
-  saveStepStatus,
   requireStateMutation,
   getStepStatus,
   filterRestageChanges,
@@ -175,7 +174,7 @@ import type {
 } from './conduct-state-store.js';
 import { createRoutedConductStateStore, readConductStateOverlay } from './conduct-state-store.js';
 import { isRegionStep, CHILD_REGION_STEPS, type ChildId } from './child-context.js';
-import { resolveActiveChild } from './child-cursor.js';
+import { resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import {
   advanceChildRegion,
   enterChildRegion,
@@ -648,10 +647,15 @@ export class Conductor {
   /** Current run state, retained so terminal events can be step-stamped. */
   private haltState: ConductState = {};
   private stateStore: ConductStateStore<ConductState>;
+  private readonly resolveActiveChild: typeof resolveActiveChild;
+  private readonly enterChildRegion: typeof enterChildRegion;
+  private readonly advanceChildRegion: typeof advanceChildRegion;
   /** Last state snapshot whose mutations this conductor has durably accepted. */
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
+  /** Cursor-selected owner of the current stacked BUILD region. */
+  private activeRegionChild: ChildId | undefined;
   private readonly remediationProjectionLimitOverrides: Partial<RemediationProjectionLimits> | undefined;
   private readonly executionLifecycle: ExecutionLifecycle;
   /** Route every conductor-owned marker failure through the existing event spine. */
@@ -668,6 +672,31 @@ export class Conductor {
       haltClass as Parameters<typeof writeHaltMarker>[2],
       this.events,
     );
+  }
+
+  /**
+   * Cursor failures are not ordinary dispatch errors: they mean this BUILD
+   * region has no safe child target. Keep their operator-facing recovery
+   * precise and terminal before any region state or provider work can start.
+   */
+  private async haltChildRegionRefusal(reason: string): Promise<void> {
+    const body = `child BUILD region refused: ${reason}`;
+    await this.writeHaltMarker(`${body}\n`, 'needs-human');
+    const prUrl = await this.surfaceRemediationPr(body);
+    await this.emitLoopHalt(body, prUrl);
+  }
+
+  private renderChildCursorRefusal(cursor: Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>): string {
+    switch (cursor.kind) {
+      case 'divergent':
+        return `child ${cursor.child} diverged from its declared successor; restack required (#2943)`;
+      case 'envelope-missing':
+        return 'coverage-binding envelope is missing while child state exists';
+      case 'detached-head':
+        return 'worktree is in detached HEAD while resolving the active child';
+      case 'git-error':
+        return 'git failed while resolving the active child cursor';
+    }
   }
 
   /** Delegate conductor lifecycle delivery to the shared engine owner. */
@@ -1297,6 +1326,7 @@ export class Conductor {
     };
 
     return {
+      ...(this.activeRegionChild === undefined ? {} : { activeChild: this.activeRegionChild }),
       sessionStartedAt: state.session_started_at,
       attemptStartedAt: this.currentAttemptStartedAt,
       attemptRunId: this.currentRunId,
@@ -2027,7 +2057,27 @@ export class Conductor {
     status: StepStatus,
   ): Promise<void> {
     await this.restoreMissingStateFile(state);
-    const result = await saveStepStatus(this.stateFilePath, step, status, this.stateStore);
+    // The routed child store owns BUILD-region fields.  Reading
+    // `stateFilePath` here would use the flat value as the compare-and-swap
+    // expectation while applying against the child's overlay, producing a
+    // false concurrent-write refusal after entering a region.
+    const result = await this.applyStateBatch({
+      name: 'save step status',
+      mutations: [
+        {
+          field: step,
+          expected: state[step],
+          intent: `save ${step} step status`,
+          next: status,
+        } as StateMutation<ConductState>,
+        {
+          field: 'last_step',
+          expected: state.last_step,
+          intent: 'record last completed step',
+          next: step,
+        },
+      ],
+    });
     requireStateMutation(result, `Conductor step-status update for ${step}`);
     if (result.kind === 'applied' && result.resolvedFields?.includes(step)) return;
     state[step] = status;
@@ -2196,6 +2246,9 @@ export class Conductor {
     );
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
+    this.resolveActiveChild = opts.childRegionLifecycle?.resolveActiveChild ?? resolveActiveChild;
+    this.enterChildRegion = opts.childRegionLifecycle?.enterChildRegion ?? enterChildRegion;
+    this.advanceChildRegion = opts.childRegionLifecycle?.advanceChildRegion ?? advanceChildRegion;
     this.remediationProjectionLimitOverrides = opts.remediationProjectionLimitOverrides;
     this.executionLifecycle = new ExecutionLifecycle({
       events: this.events,
@@ -2303,6 +2356,7 @@ export class Conductor {
       if (value === undefined) delete state[step];
       else state[step] = value;
     }
+    this.activeRegionChild = child;
     this.persistedStateSnapshot = { ...state };
   }
 
@@ -6565,10 +6619,10 @@ export class Conductor {
         if (isRegionStep(step.name)) {
           const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
           if (slug) {
-            const cursor = await resolveActiveChild(this.projectRoot, slug);
+            const cursor = await this.resolveActiveChild(this.projectRoot, slug);
             if (cursor.kind === 'active') {
               const target: ActiveChildLifecycleTarget = cursor;
-              const entered = await enterChildRegion(
+              const entered = await this.enterChildRegion(
                 this.projectRoot,
                 slug,
                 target,
@@ -6576,12 +6630,14 @@ export class Conductor {
                 activeChild,
               );
               if (entered.kind === 'refused') {
-                throw new Error(`child ${target.child} region entry refused: ${entered.reason}`);
+                await this.haltChildRegionRefusal(`child ${target.child} region entry refused: ${entered.reason}`);
+                return;
               }
               await this.activateChildRegionState(state, target.child);
               activeChild = target;
             } else if (cursor.kind !== 'no-child') {
-              throw new Error(`cannot enter BUILD region: child cursor returned ${cursor.kind}`);
+              await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+              return;
             }
           }
         }
@@ -9351,10 +9407,11 @@ export class Conductor {
           step.name === 'acceptance_specs' &&
           stepHasCompletionCheck(step.name, this.config)
         ) {
+          const preCheckContext = await this.completionCtx(state);
           const preCheck = await checkStepCompletion(
             this.projectRoot,
             step.name,
-            await this.completionCtx(state),
+            preCheckContext,
           );
           this.currentAttemptStartedAt = undefined;
           this.currentRunId = undefined;
@@ -9374,6 +9431,7 @@ export class Conductor {
                 this.acceptanceRedExec(command, opts.cwd);
               const healResult = await selfHealAcceptanceRed({
                 worktree: this.projectRoot,
+                ...(preCheckContext.activeChild === undefined ? {} : { child: preCheckContext.activeChild }),
                 specFiles: specFiles.map((f) => relative(this.projectRoot, f)),
                 exec,
               });
@@ -13631,18 +13689,23 @@ export class Conductor {
           ) {
             const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
             if (!slug) throw new Error('cannot advance child BUILD region without a feature slug');
-            const advanced = await advanceChildRegion(
+            const advanced = await this.advanceChildRegion(
               this.projectRoot,
               slug,
               activeChild,
               this.events,
             );
             if (advanced.kind === 'refused') {
-              throw new Error(`child ${activeChild.child} region exit refused: ${advanced.reason}`);
+              await this.haltChildRegionRefusal(`child ${activeChild.child} region exit refused: ${advanced.reason}`);
+              return;
             }
-            const next = await resolveActiveChild(this.projectRoot, slug);
+            const next = await this.resolveActiveChild(this.projectRoot, slug);
             if (next.kind !== 'active') {
-              throw new Error(`cannot resolve next child after closing ${activeChild.child}: ${next.kind}`);
+              const reason = next.kind === 'no-child'
+                ? `cannot resolve next child after closing ${activeChild.child}: cursor returned no-child`
+                : this.renderChildCursorRefusal(next);
+              await this.haltChildRegionRefusal(reason);
+              return;
             }
             activeChild = next;
             await this.activateChildRegionState(state, next.child);
