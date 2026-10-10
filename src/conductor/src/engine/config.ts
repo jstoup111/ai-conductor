@@ -161,8 +161,10 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   coverage_binding: ['judge'],
   'coverage_binding.judge': ['enabled', 'batch_size'],
   feature_applicability: ['enabled'],
-  otel: ['exporter', 'endpoint', 'file', 'protocol', 'headers', 'project_name', 'worker_name', 'attributes', 'provenance', 'spool'],
+  otel: ['exporter', 'endpoint', 'file', 'protocol', 'headers', 'project_name', 'worker_name', 'attributes', 'provenance', 'spool', 'logs'],
   'otel.spool': ['enabled', 'max_bytes'],
+  'otel.logs': ['enabled', 'endpoint', 'headers', 'spool'],
+  'otel.logs.spool': ['enabled', 'max_bytes'],
   markdown_viewer: ['preset', 'command', 'args', 'mode'],
   mermaid_renderer: ['preset', 'command', 'args', 'mode'],
 } as const;
@@ -1516,7 +1518,10 @@ export function validateConfig(
       obj.otel,
       CONFIG_CONSUMER_KEY_SETS.otel.map((key) => ({
         key,
-        isValid: (value: unknown) => key !== 'spool' || isPlainObject(value),
+        // Log validation belongs exclusively to resolveLogConfig(). Preserve its
+        // raw value so malformed log-only settings cannot reject or rewrite the
+        // parent telemetry configuration before that isolated resolver sees it.
+        isValid: (value: unknown) => key === 'logs' || key !== 'spool' || isPlainObject(value),
       })),
       warnings,
     );

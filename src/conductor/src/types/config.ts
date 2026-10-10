@@ -284,6 +284,26 @@ export interface OtelSpoolConfig {
   max_bytes?: number;
 }
 
+/** Durable OTLP/HTTP log export spool settings. */
+export interface OtelLogSpoolConfig {
+  /** Whether durable log spooling is enabled. Defaults to true. */
+  enabled?: boolean;
+  /** Maximum durable log spool size in bytes. Defaults to 64 MiB. */
+  max_bytes?: number;
+}
+
+/** OpenTelemetry log export configuration. */
+export interface OtelLogsConfig {
+  /** Enables OTLP/HTTP log export. */
+  enabled: boolean;
+  /** OTLP/HTTP log endpoint. Inherits the parent OTLP/HTTP endpoint when omitted. */
+  endpoint?: string;
+  /** OTLP HTTP header references. Replaces parent references when present. */
+  headers?: Record<string, OtelHeaderEnvironmentReference>;
+  /** Durable OTLP/HTTP log export spool settings. */
+  spool?: OtelLogSpoolConfig;
+}
+
 /**
  * OpenTelemetry exporter configuration. When present in HarnessConfig, the
  * OTel visualizer plugin is constructed and attached to the event bus.
@@ -310,6 +330,8 @@ export interface OtelConfig {
   provenance?: OtelProvenanceConfig;
   /** Durable OTLP/HTTP export spool settings. */
   spool?: OtelSpoolConfig;
+  /** Optional OTLP/HTTP log export configuration. */
+  logs?: OtelLogsConfig;
 }
 
 /**

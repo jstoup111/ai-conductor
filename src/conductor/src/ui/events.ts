@@ -13,6 +13,27 @@ export type EventHandler = (event: ConductorEvent) => void | Promise<void>;
 
 type HandlerMap = Map<ConductorEvent['type'], Set<EventHandler>>;
 
+/**
+ * The instant an event first enters the bus belongs to the occurrence, not
+ * to a particular listener's later delivery. Keep it as bus metadata so the
+ * closed event payload union remains unchanged.
+ */
+const observedAt = new WeakMap<ConductorEvent, string>();
+
+export function observedAtOf(event: ConductorEvent): string | undefined {
+  return observedAt.get(event);
+}
+
+/** Preserve an occurrence timestamp when forwarding into another bus. */
+export function preserveObservedAt(source: ConductorEvent, target: ConductorEvent): void {
+  const timestamp = observedAt.get(source);
+  if (timestamp !== undefined && !observedAt.has(target)) observedAt.set(target, timestamp);
+}
+
+function stampObservedAt(event: ConductorEvent): void {
+  if (!observedAt.has(event)) observedAt.set(event, new Date().toISOString());
+}
+
 export class ConductorEventEmitter {
   private handlers: HandlerMap = new Map();
 
@@ -22,6 +43,7 @@ export class ConductorEventEmitter {
    * crash the engine.
    */
   async emit(event: ConductorEvent): Promise<void> {
+    stampObservedAt(event);
     const handlers = this.handlers.get(event.type);
     if (!handlers || handlers.size === 0) return;
 
@@ -52,6 +74,7 @@ export class ConductorEventEmitter {
    * `emit()`.
    */
   async emitOrThrow(event: ConductorEvent): Promise<void> {
+    stampObservedAt(event);
     const handlers = this.handlers.get(event.type);
     if (!handlers || handlers.size === 0) return;
 

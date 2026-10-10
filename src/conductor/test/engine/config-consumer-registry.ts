@@ -37,6 +37,7 @@ const FULL_SUITE_FINGERPRINT = 'src/conductor/src/engine/full-suite-fingerprint.
 const FULL_SUITE_VERIFIER = 'src/conductor/src/engine/full-suite-verifier.ts';
 const HARNESS_COMMON = 'bin/lib/harness-common.sh';
 const OTEL_CONFIG = 'src/conductor/src/engine/otel/otel-config.ts';
+const LOG_CONFIG = 'src/conductor/src/engine/otel/log-config.ts';
 const MONITOR_CLI = 'src/conductor/src/engine/monitor-cli.ts';
 
 /**
@@ -248,6 +249,13 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'otel.spool': consumer(OTEL_CONFIG),
   'otel.spool.enabled': consumer(OTEL_CONFIG),
   'otel.spool.max_bytes': consumer(OTEL_CONFIG),
+  'otel.logs': consumer(LOG_CONFIG),
+  'otel.logs.enabled': consumer(LOG_CONFIG),
+  'otel.logs.endpoint': consumer(LOG_CONFIG),
+  'otel.logs.headers': consumer(LOG_CONFIG),
+  'otel.logs.spool': consumer(LOG_CONFIG),
+  'otel.logs.spool.enabled': consumer(LOG_CONFIG),
+  'otel.logs.spool.max_bytes': consumer(LOG_CONFIG),
   'build_review.enabled': consumer(RESOLVED_CONFIG),
   'build_review.perTaskFloor': none(
     'retired rubric-container knob: validateConfig warns and deletes it before resolution, so no resolved config ever carries it (adr-2026-08-22-build-review-opt-in-rubric-container)',

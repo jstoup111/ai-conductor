@@ -16,6 +16,7 @@ import { mkdir, stat, rename, readFile, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { daemonDir } from './daemon-lock.js';
+import type { OperationalLogOwnership } from '../types/events.js';
 
 const DAEMON_LOG_NAME = 'daemon.log';
 const ROTATED_LOG_NAME = 'daemon.log.1';
@@ -23,8 +24,30 @@ const ROTATED_LOG_NAME = 'daemon.log.1';
 const ROTATE_SIZE_BYTES = 1_000_000;
 const FEATURE_TAG_DISPLAY_LENGTH = 24;
 const featureOwnership = new AsyncLocalStorage<string>();
+const projectDiagnosticOwnership: OperationalLogOwnership = Object.freeze({ scope: 'project' });
 
 type DaemonActivityLogger = (message: string, featureOwned?: boolean) => void;
+
+/** Return the immutable project ownership used outside a feature executor. */
+export function daemonProjectDiagnosticOwnership(): OperationalLogOwnership {
+  return projectDiagnosticOwnership;
+}
+
+/** Preserve a complete feature slug as structured diagnostic ownership. */
+export function daemonFeatureDiagnosticOwnership(featureSlug: string): OperationalLogOwnership {
+  return Object.freeze({ scope: 'feature', featureSlug });
+}
+
+/**
+ * Capture diagnostic ownership from the executor's async scope before any
+ * display formatting can truncate or otherwise transform the feature slug.
+ */
+export function captureDaemonDiagnosticOwnership(): OperationalLogOwnership {
+  const featureSlug = featureOwnership.getStore();
+  return featureSlug === undefined
+    ? daemonProjectDiagnosticOwnership()
+    : daemonFeatureDiagnosticOwnership(featureSlug);
+}
 
 /** Render a feature slug for a daemon log tag, bounded for readable live output. */
 export function formatDaemonFeatureTag(featureSlug: string): string {
@@ -60,10 +83,10 @@ export function withDaemonLogFeatureOwnership<T>(
 
 /** Format a process-level console diagnostic with the current executor's tag. */
 export function formatDaemonConsoleTeeLine(level: string, message: string): string {
-  const slug = featureOwnership.getStore();
-  if (!slug) return formatDaemonActivityLine(`[${level}] ${message}`);
+  const ownership = captureDaemonDiagnosticOwnership();
+  if (ownership.scope === 'project') return formatDaemonActivityLine(`[${level}] ${message}`);
   return formatDaemonActivityLine(
-    `${formatDaemonFeatureTag(slug)} [${level}] ${message}`,
+    `${formatDaemonFeatureTag(ownership.featureSlug)} [${level}] ${message}`,
     true,
   );
 }
@@ -76,12 +99,12 @@ export function createOwnershipAwareDaemonLogger(
   baseLog: DaemonActivityLogger,
 ): (message: string) => void {
   return (message) => {
-    const slug = featureOwnership.getStore();
-    if (!slug) {
+    const ownership = captureDaemonDiagnosticOwnership();
+    if (ownership.scope === 'project') {
       baseLog(message);
       return;
     }
-    baseLog(`${formatDaemonFeatureTag(slug)} ${message}`, true);
+    baseLog(`${formatDaemonFeatureTag(ownership.featureSlug)} ${message}`, true);
   };
 }
 
@@ -164,12 +187,14 @@ function writeDaemonMessage(
 export function createFeatureDaemonLogger(
   featureSlug: string,
   baseLog: (message: string, featureOwned?: boolean) => void,
-  featureTag = formatDaemonFeatureTag(featureSlug),
+  featureTag?: string,
 ): (message: string) => void {
+  const ownership = daemonFeatureDiagnosticOwnership(featureSlug);
+  const tag = featureTag ?? formatDaemonFeatureTag(ownership.featureSlug);
   return (message) => {
     const lines = message.split(/\r?\n/);
     if (lines.at(-1) === '') lines.pop();
-    for (const line of lines) baseLog(`${featureTag} ${line}`, true);
+    for (const line of lines) baseLog(`${tag} ${line}`, true);
   };
 }
 

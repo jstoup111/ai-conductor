@@ -10,7 +10,12 @@ import type {
   CiRepairDiagnosticStage,
   ConductorEvent,
 } from '../types/index.js';
-import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
+import {
+  ConductorEventEmitter,
+  observedAtOf,
+  preserveObservedAt,
+  type EventHandler,
+} from '../ui/events.js';
 import { resolveExecutionIdentity, type ExecutionScope } from './execution-identity.js';
 import { persistedEventTypes } from './event-sinks.js';
 import { CloseoutEventTail } from './closeout-tail.js';
@@ -212,7 +217,7 @@ export class EventPersister {
           ? { observedIntervals: [...(lifecycleEvent?.observedIntervals ?? []), lifecycleInterval] }
           : {}),
         ...(activeInterval ? { activeInterval } : {}),
-        ts: new Date().toISOString(),
+        ts: observedAtOf(event) ?? new Date().toISOString(),
       });
       appendFileSync(this.filePath, record + '\n', 'utf-8');
       if (observationId !== undefined) this.persistedObservationIds.add(observationId);
@@ -327,6 +332,7 @@ class ForwardingEventEmitter extends ConductorEventEmitter {
     // member's nested subject is execution identity, not listener-local
     // decoration: the daemon-wide metrics projection must receive it intact.
     const forwarded = cloneForwardedEvent(event);
+    preserveObservedAt(event, forwarded);
     forwardedFromFeature.add(forwarded);
     if (this.slug) forwardedFeature.set(forwarded, this.slug);
     await this.globalEvents.emit(forwarded);
