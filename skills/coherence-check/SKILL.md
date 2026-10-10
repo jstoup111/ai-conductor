@@ -287,9 +287,11 @@ nothing still needs the subagent's clean result; do not mark rows `covered` on t
 re-read.
 
 When a contradiction is confirmed, amend the artifact during this DECIDE pass — do not
-defer it to BUILD. Follow the accepted-artifact amendment convention the sibling DECIDE
-skills use: add a dated note beside the original assertion, additively, leaving the
-original text in place.
+defer it to BUILD. An accepted DECIDE artifact absent from the base branch is a draft:
+revise it in place, remove superseded text, and add no amendment note or revision log.
+For an accepted non-story artifact already on the base branch, follow the accepted-artifact
+amendment convention the sibling DECIDE skills use: add a dated note beside the original
+assertion, additively, leaving the original text in place.
 
 ### 4e. PRD ↔ Stories Tie-Out
 

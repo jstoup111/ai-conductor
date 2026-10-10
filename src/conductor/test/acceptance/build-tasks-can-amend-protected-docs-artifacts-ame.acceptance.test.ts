@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 /**
  * RED acceptance specs for #1293.
  *
