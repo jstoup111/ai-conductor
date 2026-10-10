@@ -40,7 +40,7 @@ off the existing telemetry without re-deriving it from source.
 #### Happy Path
 - Given a self-host dispatch whose fingerprint completes, when the conductor receives the snapshot, then it emits exactly one `self_host_boundary_fingerprint` event carrying both surfaces' label, elapsed milliseconds, and file count, before the provider is launched.
 - Given that event is emitted with the production sinks attached, when the run's `.pipeline/events.jsonl` is read, then it contains one record of type `self_host_boundary_fingerprint` with the same per-surface values.
-- Given that event is emitted with the daemon renderer attached, when the daemon log is read, then it contains one line naming each surface with its duration and file count.
+- Given that event is the first boundary fingerprint of a feature dispatch, or the project config sets `daemon_verbose: true`, and it is emitted with the daemon renderer attached, when the daemon log is read, then it contains one line naming each surface with its duration and file count. A later fingerprint in the same dispatch renders only under `daemon_verbose: true`; `.pipeline/events.jsonl` still records every fingerprint event (#2867).
 
 #### Negative Paths
 - Given a dispatch that is not self-hosted, when a step is dispatched, then no `self_host_boundary_fingerprint` event is emitted.
