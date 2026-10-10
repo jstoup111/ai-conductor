@@ -1,4 +1,4 @@
-// Covers: task:10
+// Covers: task:11
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -9,6 +9,12 @@ import {
 
 const TEMPLATE_PATH = fileURLToPath(
   new URL('../../../../skills/architecture-review/templates/adr.md.template', import.meta.url),
+);
+const ARCHITECTURE_REVIEW_SKILL_PATH = fileURLToPath(
+  new URL('../../../../skills/architecture-review/SKILL.md', import.meta.url),
+);
+const VERIFY_CLAIMS_SKILL_PATH = fileURLToPath(
+  new URL('../../../../skills/verify-claims/SKILL.md', import.meta.url),
 );
 
 function assumptionsSection(template: string): string {
@@ -25,6 +31,21 @@ function firstDifferingColumn(actual: string, expected: string): string {
 }
 
 describe('ADR template assumption ledger', () => {
+  it('requires the ledger form and approval marker in the ADR authoring practices', async () => {
+    const [architectureReview, verifyClaims] = await Promise.all([
+      readFile(ARCHITECTURE_REVIEW_SKILL_PATH, 'utf8'),
+      readFile(VERIFY_CLAIMS_SKILL_PATH, 'utf8'),
+    ]);
+    const adrFormat = architectureReview.match(/\*\*ADR format:\*\*[\s\S]*?(?=\n\*\*Lightweight mode)/)?.[0] ?? '';
+    const ledgerRecording = verifyClaims.match(/### 5\. Record the Ledger[\s\S]*?(?=\n### 6\. Verdict)/)?.[0] ?? '';
+
+    expect(adrFormat).toContain('## Assumptions');
+    expect(adrFormat).toContain('APPROVED by operator YYYY-MM-DD');
+    expect(adrFormat).toMatch(/required in every new ADR/i);
+    expect(ledgerRecording).toContain('## Assumptions');
+    expect(ledgerRecording).toContain('APPROVED by operator YYYY-MM-DD');
+  });
+
   it('uses the parser header, with a mismatch that names the first differing column', async () => {
     const section = assumptionsSection(await readFile(TEMPLATE_PATH, 'utf8'));
     const header = section.split('\n').find((line) => line.trim().startsWith('| # |'));
