@@ -12536,6 +12536,14 @@ export class Conductor {
                       root: this.projectRoot,
                       gradedBaseSha: lastBuildReviewMergeBase,
                       flaggedPaths: extractFlaggedPaths(failureDetails),
+                      ...(this.activeRegionChild === undefined
+                        ? {}
+                        : {
+                            childBase: {
+                              slug: state.feature_desc ?? this.featureSlug ?? this.featureDesc ?? '',
+                              child: this.activeRegionChild,
+                            },
+                          }),
                       regrade: async () => 'pass',
                     });
                   } catch {

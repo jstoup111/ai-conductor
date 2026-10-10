@@ -5590,6 +5590,13 @@ export class DefaultStepRunner implements StepRunner {
     let containmentReport: ContainmentFloorReport | undefined;
     let inputs;
     try {
+      let activeChildBase = this.buildReviewInputOptions?.childBase;
+      if (activeChildBase === undefined && this.featureDesc !== '') {
+        const active = await resolveActiveChild(this.projectDir, this.featureDesc, { git: this.gitRunner });
+        if (active.kind === 'active') {
+          activeChildBase = { slug: this.featureDesc, child: active.child };
+        }
+      }
       // A custom member changes the lap's source authority from by-reference
       // to a detached, immutable view shared by every member in the lap.
       const lapMembers = this.usesInjectedBuildReviewGit && this.buildReviewInputOptions?.materialization === undefined
@@ -5603,6 +5610,7 @@ export class DefaultStepRunner implements StepRunner {
       inputs = {
         ...await assembleBuildReviewInputs(this.gitRunner, planPath, {
           ...this.buildReviewInputOptions,
+          ...(activeChildBase === undefined ? {} : { childBase: activeChildBase }),
           lapMembers,
           materialization: this.buildReviewInputOptions?.materialization ?? { projectRoot: this.projectDir },
         }),
