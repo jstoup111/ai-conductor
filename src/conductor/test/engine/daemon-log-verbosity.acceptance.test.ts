@@ -52,17 +52,19 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-async function runDaemonWithVerbosity(verbose: boolean): Promise<string[]> {
+async function runDaemonWithVerbosity(verbose?: boolean): Promise<string[]> {
   const repo = await mkdtemp(join(tmpdir(), 'daemon-log-verbosity-'));
   tempDirs.push(repo);
   fixture.worktreePath = join(repo, '.worktrees', 'feature-a');
   await mkdir(join(repo, '.ai-conductor'), { recursive: true });
   await mkdir(fixture.worktreePath, { recursive: true });
-  await writeFile(
-    join(repo, '.ai-conductor', 'config.yml'),
-    `daemon_verbose: ${verbose}\n`,
-    'utf8',
-  );
+  if (verbose) {
+    await writeFile(
+      join(repo, '.ai-conductor', 'config.yml'),
+      'daemon_verbose: true\n',
+      'utf8',
+    );
+  }
 
   const originalConsoleLog = console.log;
   console.log = () => {};
@@ -96,6 +98,7 @@ describe('acceptance: daemon log verbosity', () => {
     expect(lines[0]).toContain('[daemon][feature-a] provider diagnostic first');
     expect(lines[0]).toContain('+2 more lines');
     expect(lines[0]).toContain('daemon_verbose: true');
+    expect(lines[0]).toMatch(/^\d{4}-\d{2}-\d{2}T[^ ]+ \[daemon\]\[feature-a\] /);
   });
 
   it('shows every non-blank provider diagnostic line with marked continuations in verbose mode', async () => {
@@ -105,5 +108,8 @@ describe('acceptance: daemon log verbosity', () => {
     expect(lines[0]).toContain('[daemon][feature-a] provider diagnostic first');
     expect(lines[1]).toContain('[daemon][feature-a] │   provider child detail');
     expect(lines[2]).toContain('[daemon][feature-a] │ provider final detail');
+    for (const line of lines) {
+      expect(line).toMatch(/^\d{4}-\d{2}-\d{2}T[^ ]+ \[daemon\]\[feature-a\] /);
+    }
   });
 });
