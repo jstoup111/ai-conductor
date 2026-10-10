@@ -1,3 +1,4 @@
+// Covers: task:1
 // Covers: task:1, task:2, task:3
 /**
  * Unit specs for the claimed-environmental-blocker audit (#1106).
@@ -181,6 +182,17 @@ describe('environment claim audit', () => {
     expect(guarded.map((output) => auditEnvironmentBlockerClaims(output, CLAUDE_DISPATCH).message)).toEqual([null, null, null, null]);
     expect(auditEnvironmentBlockerClaims('The sandbox blocks git push --force-with-lease.', CLAUDE_DISPATCH).message).not.toBeNull();
     expect(auditEnvironmentBlockerClaims(guarded[0]!, { ...CLAUDE_DISPATCH, gitGuardInstalled: false }).message).not.toBeNull();
+  });
+
+  it('uses Pi guard-installation evidence for bare force-push claims', () => {
+    const output = 'The sandbox blocks git push --force.';
+
+    expect(auditEnvironmentBlockerClaims(output, {
+      provider: 'pi', writeFenceInstalled: false, gitGuardInstalled: true,
+    }).message).toBeNull();
+    expect(auditEnvironmentBlockerClaims(output, {
+      provider: 'pi', writeFenceInstalled: false, gitGuardInstalled: false,
+    }).message).not.toBeNull();
   });
 
   it('leaves ordinary sandbox prose that blames nothing alone', () => {
