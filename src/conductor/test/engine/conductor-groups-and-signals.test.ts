@@ -1716,6 +1716,13 @@ describe('engine/conductor', () => {
       events.on('kickback', (e) => {
         if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
       });
+      // Ordered member lifecycle, to prove every member that started in the
+      // kicked-back round closed before the kickback rather than being
+      // reported `step_interrupted` at run end.
+      const lifecycle: Array<{ type: string; step?: string }> = [];
+      for (const type of ['step_started', 'step_completed', 'step_failed', 'step_refused', 'step_interrupted', 'kickback'] as const) {
+        events.on(type, (e) => { lifecycle.push({ type: e.type, step: 'step' in e ? String(e.step) : undefined }); });
+      }
 
       const conductor = new Conductor({
         projectRoot: dir,
@@ -1730,6 +1737,18 @@ describe('engine/conductor', () => {
       });
 
       await conductor.run();
+
+      const firstKickback = lifecycle.findIndex((entry) => entry.type === 'kickback');
+      expect(firstKickback).toBeGreaterThan(0);
+      const beforeKickback = lifecycle.slice(0, firstKickback);
+      for (const member of ['prd_audit', 'architecture_review_as_built']) {
+        const started = beforeKickback.filter((e) => e.type === 'step_started' && e.step === member).length;
+        const closed = beforeKickback.filter((e) => e.step === member && e.type !== 'step_started').length;
+        expect({ member, started, closed }).toEqual({ member, started: 1, closed: 1 });
+      }
+      // The fixture ends the run inside the rerouted build, so only the group
+      // members are checked: none may be reported interrupted.
+      expect(lifecycle.filter((e) => e.type === 'step_interrupted' && e.step !== 'build')).toEqual([]);
 
       // Exactly one /remediate dispatch for the whole mixed-failure join.
       expect(remediateCalls).toHaveLength(1);
