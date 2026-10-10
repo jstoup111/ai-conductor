@@ -1090,6 +1090,47 @@ describe('engine/daemon-observe-cli', () => {
         );
         expect(inspect[0]).toContain('Kickback budget (architecture_review_as_built): 1/3 consumed; 2 remaining');
       });
+
+      // Covers: task:5
+      it('reports malformed pending-repair growth and remediation budgets as unavailable', async () => {
+        const repo = join(root, 'repo-broken-remediation');
+        const featureRoot = await writeActivePlan(repo, 'broken-feature', 19);
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {}, pendingRepair: { receiptId: 'broken' } }),
+          'utf8',
+        );
+        const out: string[] = [];
+
+        const { code } = await runDaemonStatus({ registryPath: await registry([record('repo-broken-remediation', repo)]), out: (line) => out.push(line) });
+
+        expect(code).toBe(0);
+        expect(out).toContain('  PLAN GROWTH [broken-feature]: unavailable (plan growth is unreadable)');
+        const budgets = out.filter((line) => line.includes('KICKBACK BUDGET [broken-feature]:'));
+        expect(budgets).toContain('  KICKBACK BUDGET [broken-feature]: prd_audit: budget unavailable (durable entry failed validation)');
+        expect(budgets).toContain('  KICKBACK BUDGET [broken-feature]: architecture_review_as_built: budget unavailable (durable entry failed validation)');
+        expect(budgets.join('\n')).not.toContain('consumed;');
+      });
+
+      // Covers: task:5
+      it('omits build-review budget without cap evidence or adjustment history', async () => {
+        const repo = join(root, 'repo-review-without-budget');
+        const featureRoot = await writeActivePlan(repo, 'review-feature', 19);
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {
+            build_review: { count: 1, cumulative: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 },
+          } }),
+          'utf8',
+        );
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-review-without-budget', repo)]), out: (line) => out.push(line) });
+
+        expect(out.filter((line) => line.includes('KICKBACK BUDGET [review-feature]:'))).not.toContainEqual(
+          expect.stringContaining('Kickback budget (build_review):'),
+        );
+      });
     });
 
     it('prints persisted in-flight steps only for a running daemon', async () => {
