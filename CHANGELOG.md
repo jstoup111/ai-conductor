@@ -77,6 +77,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Self-host builds no longer halt when Claude Code's plugin sync rewrites its catalog caches or sync bookkeeping; installed plugins and plugin code stay guarded. ([implementation PR #3110](https://github.com/jstoup111/ai-conductor/pull/3110)).
 - Build review now returns malformed changed-test Covers markers to BUILD without consuming the mechanical fault allowance. ([implementation PR #3087](https://github.com/jstoup111/ai-conductor/pull/3087)).
 - Completed work stays closed when an older repair obligation is superseded. ([implementation PR #3082](https://github.com/jstoup111/ai-conductor/pull/3082)).
+- When merge-conflict autoresolve escalates on a failing test suite, the daemon log and the escalation comment now name the failing tests instead of only "exit code 1". ([implementation PR #3118](https://github.com/jstoup111/ai-conductor/pull/3118)).
 
 ## Migration
 
