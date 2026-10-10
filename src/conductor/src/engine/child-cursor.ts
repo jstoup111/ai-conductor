@@ -23,6 +23,23 @@ export interface ActiveChildDependencies {
   readonly git?: GitRunner;
 }
 
+/**
+ * The base against which a child-local consumer must compare its inputs.
+ *
+ * `parent` deliberately carries the closure-ref tip rather than the current
+ * parent branch tip: halt-record commits may follow closure without becoming
+ * part of the child's reviewed contribution.
+ */
+export type ChildBaseResolution =
+  | { kind: 'none' }
+  | { kind: 'parent'; parent: ChildId; sha: string }
+  | { kind: 'parent-missing'; parent: ChildId; branch: string }
+  | { kind: 'parent-not-ancestor'; parent: ChildId; sha: string };
+
+export interface ChildBaseDependencies {
+  readonly git?: GitRunner;
+}
+
 const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
@@ -90,6 +107,67 @@ async function readRewriteMap(worktree: string): Promise<{ map: Record<string, s
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { map: {}, present: false } : 'git-error';
   }
+}
+
+/**
+ * Produces the local comparison base for a child region. This intentionally
+ * reads only local refs: child branches and their closure refs are daemon
+ * state, never a remote-discovery concern.
+ */
+export async function resolveChildBase(
+  worktree: string,
+  slug: string,
+  child?: ChildId,
+  dependencies: ChildBaseDependencies = {},
+): Promise<ChildBaseResolution> {
+  if (child === undefined) return { kind: 'none' };
+
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  let envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>>;
+  try {
+    envelope = await readCoverageBindingEnvelope(worktree, envelopeFilesystem);
+  } catch {
+    envelope = undefined;
+  }
+  const positions = positionsFromEnvelope(envelope);
+  const index = positions.indexOf(child);
+
+  // A position is first according to the sealed slice order, not its numeric
+  // spelling (a valid manifest may use a gap such as positions 1 and 3).
+  if (index === 0 || (positions.length === 0 && child === 1)) return { kind: 'none' };
+
+  // An absent or malformed envelope cannot establish a declared predecessor.
+  // Preserve the typed, fail-closed surface rather than guessing a diff base.
+  const parent = index > 0 ? positions[index - 1] : parseChildId(child - 1);
+  if (parent === undefined) return { kind: 'none' };
+  const branchResult = childBranchFor(slug, parent);
+  if (!branchResult.ok) {
+    return { kind: 'parent-missing', parent, branch: `feat/c${parent}/${slug}` };
+  }
+  const branch = branchResult.branch;
+
+  const closureRef = `refs/conductor/${slug}/closed/c${parent}`;
+  const closure = await runGit(git, ['rev-parse', '--verify', closureRef]);
+  if (!closure || closure.exitCode !== 0 || !closure.stdout.trim()) {
+    return { kind: 'parent-missing', parent, branch };
+  }
+
+  const branchExists = await runGit(git, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]);
+  if (!branchExists || branchExists.exitCode !== 0) {
+    return { kind: 'parent-missing', parent, branch };
+  }
+
+  const rewrites = await readRewriteMap(worktree);
+  if (rewrites === 'git-error') {
+    return { kind: 'parent-not-ancestor', parent, sha: closure.stdout.trim() };
+  }
+  const sha = resolveThroughMap(closure.stdout.trim(), rewrites.map);
+  const ancestry = await runGit(git, ['merge-base', '--is-ancestor', sha, 'HEAD']);
+  if (!ancestry || ancestry.exitCode !== 0) {
+    return { kind: 'parent-not-ancestor', parent, sha };
+  }
+
+  return { kind: 'parent', parent, sha };
 }
 
 async function onlyHaltRecordChanged(git: GitRunner, sha: string, slug: string): Promise<boolean | 'git-error'> {
