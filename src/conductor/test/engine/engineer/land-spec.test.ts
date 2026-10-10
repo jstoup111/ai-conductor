@@ -320,7 +320,9 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
     expect(message).toContain('Summary:\nGive reviewers a concise record of the decisions this spec lands.');
     expect(message).toContain('Track: technical; Tier: S');
     expect(message).toContain('Stories:\n- Story 1: Explain the landed decision\n- Story 2: Keep the commit evidence inert');
-    expect(message).toContain('Tasks: 3\n- Task 1\n- Task 2\n- Task 3');
+    expect(message).toContain(
+      'Tasks: 3\n- Task 1: Compose the summary\n- Task 2: Keep prose inert\n- Task 3: Commit the summary',
+    );
   });
 
   it('succeeds without a duplicate commit when valid artifacts are landed twice', async () => {

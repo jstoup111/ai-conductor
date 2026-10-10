@@ -45,10 +45,27 @@ describe('composeSpecCommitMessage', () => {
       '- Story 1: Show the decision summary',
       '- Story 2: Keep the summary inert',
     ]);
-    expect(message.split('\n')).toContain('Tasks: 3');
+    expect(message.split('\n\n').at(-1)).toBe([
+      'Tasks: 3',
+      '- Task 1: Compose the body',
+      '- Task 2: Guard trailer-shaped prose',
+      '- Task 3: Commit the summary',
+    ].join('\n'));
 
     const trailer = new RegExp(`^Task: ${TASK_ID_PATTERN}$`);
     expect(message.split('\n')).not.toContainEqual(expect.stringMatching(trailer));
+  });
+
+  it('renders a dash-delimited task heading title', () => {
+    const message = composeSpecCommitMessage(
+      'dash-delimited task title',
+      'technical',
+      'S',
+      '',
+      '### Task task_3 — Dash-delimited title',
+    );
+
+    expect(message.split('\n')).toContain('- Task task_3: Dash-delimited title');
   });
 
   it('removes copied trailer-shaped lines from the composed body', () => {
@@ -75,7 +92,7 @@ describe('composeSpecCommitMessage', () => {
         'Summary:\nKeep the summary reviewable.',
         'Track: technical; Tier: S',
         'Stories:\n- Story 1: Keep the summary inert',
-        'Tasks: 1\n- Task 1',
+        'Tasks: 1\n- Task 1: Filter copied trailers',
       ].join('\n\n'),
     );
   });
