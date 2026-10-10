@@ -434,8 +434,8 @@ Content with \`src/file3.ts\`
       expect({
         dispatchOptionCount,
         dispatch: buildReviewHaltRender.includes('await seedTaskStatus(projectRoot, planPath, undefined, { dispatchBoundary: true, childBase });'),
-        remediation: conductor.includes('await seedTaskStatus(this.projectRoot, planPath);'),
-        completion: artifacts.includes('await seedTaskStatus(ctx.projectRoot, ctx.planPath, enginePlanPath);'),
+        remediation: conductor.includes('await seedTaskStatus(this.projectRoot, planPath, undefined, {'),
+        completion: artifacts.includes('await seedTaskStatus(ctx.projectRoot, ctx.planPath, enginePlanPath, {'),
         repairRestage: repairRestage.includes('await seedTaskStatus(projectRoot, planPath);'),
       }).toEqual({ dispatchOptionCount: 1, dispatch: true, remediation: true, completion: true, repairRestage: true });
     });

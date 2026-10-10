@@ -3,13 +3,14 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const { resolveActiveChild, resolveChildBase, resolveCoverageBindingDecideSet } = vi.hoisted(() => ({
+const { hasDurableChildState, resolveActiveChild, resolveChildBase, resolveCoverageBindingDecideSet } = vi.hoisted(() => ({
+  hasDurableChildState: vi.fn(),
   resolveActiveChild: vi.fn(),
   resolveChildBase: vi.fn(),
   resolveCoverageBindingDecideSet: vi.fn(),
 }));
 
-vi.mock('../../src/engine/child-cursor.js', () => ({ resolveActiveChild, resolveChildBase }));
+vi.mock('../../src/engine/child-cursor.js', () => ({ hasDurableChildState, resolveActiveChild, resolveChildBase }));
 vi.mock('../../src/engine/coverage-binding-decide-set.js', () => ({ resolveCoverageBindingDecideSet }));
 
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
@@ -323,6 +324,7 @@ describe('acceptance_specs child with no owned criteria', () => {
     resolveActiveChild.mockResolvedValue({
       kind: 'active', child: child1, position: 1, isLeaf: false, branch: 'feat/c1/feature',
     });
+    hasDurableChildState.mockResolvedValue(true);
     const run = vi.fn().mockResolvedValue({ success: true });
 
     await new Conductor({
