@@ -481,3 +481,13 @@ Task 1 ─┬─ Task 2 ─┐
 **Done when:**
 - adr-2026-10-10-adr-assumption-ledger-contract decision 3 is satisfied by this task.
 - The repair for task rem-as-built-5-R2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-refusal-3a6c2bd7-e9cf-4155-8dbc-1410c2aa7453: In src/conductor/src/engine/conductor.ts (~line 14526), narrow the post-dispatch reopen/needs-human-HALT/loop_halt guard so it fires only when step.name === 'architecture_review' (keeping the existing `!verdict.satisfied && indexOf(step.name) < topo.firstLoopIndex` conditions). Every other pre-loop DECIDE gate must return to its pre-change path, with no HALT and no loop_halt from this branch. Keep the rem-prd-audit-9-R1 and R3 architecture_review tests in src/conductor/test/engine/conductor.test.ts passing unchanged. In src/conductor/test/engine/gate-loop.test.ts, add a regression assertion that an unsatisfied non-architecture_review pre-loop DECIDE gate (e.g. stories) writes no HALT marker and emits no loop_halt from this guard. The assertion must fail against the current un-narrowed guard.
+**Gate:** prd-audit
+**Rationale:** Verified at src/conductor/src/engine/conductor.ts:14526 (direct read): the post-dispatch reopen-and-HALT branch fires for any unsatisfied verdict step whose index is below topo.firstLoopIndex. It is not limited to architecture_review. That goes beyond what rem-prd-audit-9-R1 authorized, which was only wiring the architecture_review verdict at the DECIDE completion site. The rework is a clear code narrowing inside the scope of an existing approved task, and no architectural decision is needed. It removes the over-reach for every other pre-loop DECIDE gate (stories, plan, etc.), which go back to their prior converge-by-reopen behaviour, and keeps the authorized architecture_review halt. Completed behaviour that must survive: rem-prd-audit-9-R1 and R3 (architecture_review unsatisfied → halt/not done) and Task 9 (architecture_review blocks conductor runs on a bad ledger). This adds no new behaviour.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 3a6c2bd7-e9cf-4155-8dbc-1410c2aa7453 r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 3a6c2bd7-e9cf-4155-8dbc-1410c2aa7453 r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-3a6c2bd7-e9cf-4155-8dbc-1410c2aa7453 is committed and its targeted tests pass.
