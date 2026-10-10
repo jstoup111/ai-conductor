@@ -21,7 +21,7 @@ import {
 } from '../../src/engine/daemon-deps.js';
 import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
-import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type { GhRunner, PrMergeState } from '../../src/engine/pr-labels.js';
 import type {
   GithubOperationRequest,
   GithubOperationRunner,
@@ -235,6 +235,93 @@ describe('enrollWatch / readWatch round-trip', () => {
     await enrollWatch(tmpDir, entry());
     const result = await readWatch(tmpDir);
     expect(result).toHaveLength(1);
+  });
+});
+
+// ── Task 4: lazy mergeability re-read and head first-seen tracking ──────────
+
+function openMergeState(mergeable: string, headRefOid?: string): PrMergeState {
+  return {
+    state: 'OPEN',
+    mergeable,
+    headRefOid,
+    hasFailingOrPendingChecks: false,
+    labels: [],
+    checksOutcome: 'green',
+  };
+}
+
+describe('sweepMergeableLabels — Task 4 lazy re-read and head tracking', () => {
+  // Covers: task:4
+  it('re-reads an initially UNKNOWN open PR exactly once and keeps the second state', async () => {
+    const readPullRequestMergeState = vi.fn()
+      .mockResolvedValueOnce(openMergeState('UNKNOWN', 'A'))
+      .mockResolvedValueOnce(openMergeState('CONFLICTING', 'A'));
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      tracker: { readPullRequestMergeState },
+      now: () => new Date('2026-10-10T12:00:00.000Z'),
+    });
+
+    expect(readPullRequestMergeState).toHaveBeenCalledTimes(2);
+    expect(await readWatch(tmpDir)).toEqual([
+      expect.objectContaining({ headSha: 'A', headFirstSeenAt: '2026-10-10T12:00:00.000Z' }),
+    ]);
+  });
+
+  // Covers: task:4
+  it('does not re-read a PR whose first mergeability result is known', async () => {
+    const readPullRequestMergeState = vi.fn().mockResolvedValue(openMergeState('MERGEABLE', 'A'));
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({ projectRoot: tmpDir, tracker: { readPullRequestMergeState } });
+
+    expect(readPullRequestMergeState).toHaveBeenCalledTimes(1);
+  });
+
+  // Covers: task:4
+  it('persists first-seen head time, resets it for a new head, and initializes legacy entries', async () => {
+    const firstNow = new Date('2026-10-10T12:00:00.000Z');
+    const secondNow = new Date('2026-10-10T12:05:00.000Z');
+    const readPullRequestMergeState = vi.fn().mockResolvedValue(openMergeState('MERGEABLE', 'A'));
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      tracker: { readPullRequestMergeState },
+      now: () => firstNow,
+    });
+    expect(await readWatch(tmpDir)).toEqual([
+      expect.objectContaining({ headSha: 'A', headFirstSeenAt: firstNow.toISOString() }),
+    ]);
+
+    readPullRequestMergeState.mockResolvedValue(openMergeState('MERGEABLE', 'B'));
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      tracker: { readPullRequestMergeState },
+      now: () => secondNow,
+    });
+    expect(await readWatch(tmpDir)).toEqual([
+      expect.objectContaining({ headSha: 'B', headFirstSeenAt: secondNow.toISOString() }),
+    ]);
+  });
+
+  // Covers: task:4
+  it('retains the entry when the one allowed UNKNOWN re-read fails', async () => {
+    const readPullRequestMergeState = vi.fn()
+      .mockResolvedValueOnce(openMergeState('UNKNOWN', 'A'))
+      .mockRejectedValueOnce(new Error('transient reread failure'));
+    await enrollWatch(tmpDir, entry());
+
+    await expect(sweepMergeableLabels({
+      projectRoot: tmpDir,
+      tracker: { readPullRequestMergeState },
+    })).resolves.toBeUndefined();
+
+    expect(readPullRequestMergeState).toHaveBeenCalledTimes(2);
+    expect(await readWatch(tmpDir)).toHaveLength(1);
   });
 });
 

@@ -320,6 +320,8 @@ export interface CiFixDispatchOpts {
 export interface SweepOpts {
   projectRoot: string;
   log?: (msg: string) => void;
+  /** Clock override for persisted watch observations; defaults to `new Date()`. */
+  now?: () => Date;
   runGh?: GhRunner;
   /** Typed PR-state reader; raw gh remains scoped to legacy label mutations. */
   tracker?: Pick<TrackerClient, 'readPullRequestMergeState'>;
@@ -376,6 +378,7 @@ export async function sweepMergeableLabels({
   shippedRecordProbe,
   canRemoveWorktree,
   onEvent,
+  now = () => new Date(),
 }: SweepOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
   const prStateTracker = tracker ?? createGithubTrackerClient(gh);
@@ -399,10 +402,10 @@ export async function sweepMergeableLabels({
     // PR state. Only populated/consulted when ciFix is configured.
     const failedCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
 
-    for (const entry of entries) {
+    for (let entry of entries) {
       try {
         const entryGh = runnerForEntry(gh, entry, operations);
-        const state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
+        let state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
 
         // GitHub checks are authoritative for CI state. Retire the redundant
         // custom label whenever a reconciliation read finds it on a PR.
@@ -474,6 +477,21 @@ export async function sweepMergeableLabels({
           continue; // not added to survivors
         }
 
+        // GitHub can initially return UNKNOWN while it calculates mergeability
+        // for an otherwise readable OPEN PR. Give that lazy result exactly one
+        // more read; a second failure stays explicit on the state so the
+        // readiness classifier can safely call it indeterminate.
+        if (state.state === 'OPEN' && state.mergeable === 'UNKNOWN') {
+          try {
+            state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
+          } catch (error) {
+            state = {
+              ...state,
+              readFailure: { kind: 'runner', error },
+            };
+          }
+        }
+
         // FR-15: UNKNOWN state (transient read/fetch error) → log + skip this
         // iteration; keep the entry so it is retried on the next sweep cycle.
         if (state.state === 'UNKNOWN') {
@@ -489,6 +507,17 @@ export async function sweepMergeableLabels({
           );
           survivors.push(entry);
           continue;
+        }
+
+        // The timestamp begins with the first observation of a head and is
+        // reset only when that SHA changes. Missing head data leaves legacy
+        // bookkeeping intact until GitHub supplies an OID.
+        if (state.headRefOid && state.headRefOid !== entry.headSha) {
+          entry = {
+            ...entry,
+            headSha: state.headRefOid,
+            headFirstSeenAt: now().toISOString(),
+          };
         }
 
         // Entry is live — keep it in the registry.
