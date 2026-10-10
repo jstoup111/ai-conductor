@@ -8,7 +8,7 @@ import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-i
 import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId, type BuildReviewInfrastructureFailureReason } from './build-review-domain.js';
 import { buildReviewConfidenceFloors, deriveComposedBuildReviewEffectiveVerdict, resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import type { BuildReviewCustomDeclaration, BuildReviewCustomInfrastructureFailureReason } from './build-review-artifacts.js';
-import { RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
+import { finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { resolveCliFeatureWorktree } from './cli-operator-authority.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
@@ -328,7 +328,7 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
           return ledger.gates.build_review;
         })();
     // The same composed reducer the live gate uses, over the full record list.
-    const effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, records, reducedCoverage.records, minConfidence);
+    const effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, records, reducedCoverage.records, minConfidence, finalizedBuildReviewSourceIds(cases));
     if (!effective) throw new Error('current findings are invalid');
     const accepted = acceptedDispositions(aggregate, feature, effective, records);
     const faults = exhaustedMechanicalFaults(aggregate, gateEntry?.mechanicalFaults ?? 0);
@@ -338,6 +338,8 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     const {
       uncoveredInfrastructureFailureRubrics: _uncoveredInfrastructure,
       uncoveredScopeIncompleteRubrics: _uncoveredScopeIncomplete,
+      // Settlement is already published per case under `cases`.
+      settledFindingIds: _settled,
       ...reported
     } = effective;
     const output = {
