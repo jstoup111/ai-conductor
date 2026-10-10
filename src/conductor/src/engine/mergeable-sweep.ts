@@ -654,6 +654,8 @@ export async function sweepMergeableLabels({
         const clearingReadinessLabel =
           entry.escalationCause === 'shipped-readiness' && state.labels.includes('needs-remediation');
         entry = await maybeClearReadinessLabel(entry, state, readiness, entryGh, log);
+        const readinessEntryIdx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
+        if (readinessEntryIdx >= 0) survivors[readinessEntryIdx] = entry;
         const readinessLabelRemoved =
           clearingReadinessLabel && entry.labelClearAttempts === readinessClearAttempts + 1;
 

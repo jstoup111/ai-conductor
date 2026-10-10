@@ -1,4 +1,4 @@
-// Covers: task:7, task:13
+// Covers: task:13
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -13,8 +13,7 @@ import {
   type WatchEntry,
 } from '../../src/engine/mergeable-sweep.js';
 import type { GhRunner, PrMergeState } from '../../src/engine/pr-labels.js';
-import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
-import type { ShippedReadinessVerdict } from '../../src/engine/shipped-readiness.js';
+import type { GithubOperationRunner, GithubOperationRunnerResponse } from '../../src/engine/github-operations.js';
 
 const PR_URL = 'https://github.com/acme/widgets/pull/7';
 const legacyEntry = { prUrl: PR_URL, slug: 'widgets', repoCwd: '/repo' };
@@ -50,6 +49,7 @@ function fakeGh(
   state: string,
   removed: string[],
   added: string[] = [],
+  refuseLabelRemoval = false,
 ): GhRunner & GithubOperationRunner {
   const read: GhRunner = async (args) => {
     if (args[0] === 'pr' && args[1] === 'view') return { stdout: state };
@@ -60,12 +60,13 @@ function fakeGh(
       if (request.operation === 'pull-request.label.remove' && request.target.kind === 'pull-request') {
         const label = request.payload && 'label' in request.payload ? String(request.payload.label) : '';
         removed.push(`repos/${request.target.repository}/issues/${request.target.number}/labels/${label}`);
+        if (refuseLabelRemoval) return { kind: 'refused' as const, reason: 'other-owner' as const };
       }
       if (request.operation === 'pull-request.label.add' && request.target.kind === 'pull-request') {
         const label = request.payload && 'label' in request.payload ? String(request.payload.label) : '';
         added.push(`repos/${request.target.repository}/issues/${request.target.number}/labels/${label}`);
       }
-      return {};
+      return {} as GithubOperationRunnerResponse;
     },
   });
 }
@@ -146,24 +147,27 @@ describe('maybeClearConflictLabel', () => {
     expect(removed).toEqual([]);
   });
 
-  it('caps retries at three, clears the cause, and logs once without another removal', async () => {
-    const removed: string[] = [];
-    const logs: string[] = [];
-    const result = await maybeClearConflictLabel(
-      { ...caused, labelClearAttempts: 3 }, mergeable, fakeGh('', removed), (line) => logs.push(line),
-    );
-    expect(result).not.toHaveProperty('escalationCause');
-    expect(result).not.toHaveProperty('labelClearAttempts');
-    expect(removed).toEqual([]);
-    expect(logs).toEqual([`[mergeable-sweep] label clear retry cap reached for ${PR_URL}`]);
+  describe('retry cap', () => {
+    it('caps retries at three, clears the cause, and logs once without another removal', async () => {
+      const removed: string[] = [];
+      const logs: string[] = [];
+      const result = await maybeClearConflictLabel(
+        { ...caused, labelClearAttempts: 3 }, mergeable, fakeGh('', removed), (line) => logs.push(line),
+      );
+      expect(result).not.toHaveProperty('escalationCause');
+      expect(result).not.toHaveProperty('labelClearAttempts');
+      expect(removed).toEqual([]);
+      expect(logs).toEqual([`[mergeable-sweep] label clear retry cap reached for ${PR_URL}`]);
+    });
   });
 });
 
+// Covers: task:7
 describe('maybeClearReadinessLabel', () => {
   const caused: WatchEntry = { ...legacyEntry, escalationCause: 'shipped-readiness' };
   const readable: PrMergeState = {
     state: 'OPEN', mergeable: 'MERGEABLE', hasFailingOrPendingChecks: false,
-    labels: ['needs-remediation'], checksOutcome: 'success',
+    labels: ['needs-remediation'], checksOutcome: 'green',
   };
 
   it.each(['ready', 'conflicting', 'ci-failing'] as const)(
@@ -215,17 +219,32 @@ describe('maybeClearReadinessLabel', () => {
     expect(result).not.toHaveProperty('labelClearAttempts');
   });
 
-  it('caps failed removals at three, leaves the label, and drops only the cause', async () => {
+  it('caps three failed removals across ticks, leaves the label, and drops only the cause', async () => {
+    const project = await tempProject();
     const removed: string[] = [];
     const logs: string[] = [];
-    const result = await maybeClearReadinessLabel(
-      { ...caused, labelClearAttempts: 3 }, readable, 'ready', fakeGh('', removed), (line) => logs.push(line),
+    await rewriteWatch(project, [caused]);
+
+    const gh = fakeGh(
+      stateJson('MERGEABLE', ['needs-remediation'], [{ status: 'COMPLETED', conclusion: 'SUCCESS' }]),
+      removed,
+      [],
+      true,
     );
-    expect(result).toMatchObject(legacyEntry);
-    expect(result).not.toHaveProperty('escalationCause');
-    expect(result).not.toHaveProperty('labelClearAttempts');
-    expect(removed).toEqual([]);
+    for (let tick = 0; tick < 4; tick += 1) {
+      await sweepMergeableLabels({ projectRoot: project, runGh: gh, log: (line) => logs.push(line) });
+    }
+
+    expect(removed).toEqual([
+      'repos/acme/widgets/issues/7/labels/needs-remediation',
+      'repos/acme/widgets/issues/7/labels/needs-remediation',
+      'repos/acme/widgets/issues/7/labels/needs-remediation',
+    ]);
     expect(logs).toEqual([`[mergeable-sweep] readiness label clear retry cap reached for ${PR_URL}`]);
+    const [persisted] = await readWatch(project);
+    expect(persisted).toMatchObject(legacyEntry);
+    expect(persisted).not.toHaveProperty('escalationCause');
+    expect(persisted).not.toHaveProperty('labelClearAttempts');
   });
 });
 
