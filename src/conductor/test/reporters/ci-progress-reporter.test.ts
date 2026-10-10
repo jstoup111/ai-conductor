@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import type { TestCase, TestModule } from 'vitest/node';
 import { describe, expect, it } from 'vitest';
 import CiProgressReporter from './ci-progress-reporter.js';
@@ -31,6 +31,36 @@ function reporterWithOutput(): { reporter: CiProgressReporter; output: string[] 
   const reporter = new CiProgressReporter({ write: (line) => output.push(line) });
   reporter.onInit({ config: { root: '/pkg' } } as never);
   return { reporter, output };
+}
+
+function manualTimers() {
+  const callbacks = new Map<object, () => void>();
+  const cleared: object[] = [];
+  let unrefCalls = 0;
+
+  return {
+    setInterval(callback: () => void): object {
+      const handle = { unref: () => unrefCalls++ };
+      callbacks.set(handle, callback);
+      return handle;
+    },
+    clearInterval(handle: object): void {
+      cleared.push(handle);
+      callbacks.delete(handle);
+    },
+    tick(): void {
+      for (const callback of callbacks.values()) callback();
+    },
+    get cleared(): readonly object[] {
+      return cleared;
+    },
+    get unrefCalls(): number {
+      return unrefCalls;
+    },
+    get handle(): object | undefined {
+      return callbacks.keys().next().value as object | undefined;
+    },
+  };
 }
 
 describe('CiProgressReporter', () => {
@@ -107,5 +137,90 @@ describe('CiProgressReporter', () => {
       '[ci-progress] start test/a.test.ts\n',
       '[ci-progress] done test/a.test.ts passed 0.0s\n',
     ]);
+  });
+
+  it('reports a running module as stalled at 90 seconds and then every 90 seconds', () => {
+    let now = 0;
+    const timers = manualTimers();
+    const output: string[] = [];
+    const reporter = new CiProgressReporter({
+      write: (line) => output.push(line),
+      now: () => now,
+      setInterval: timers.setInterval as never,
+      clearInterval: timers.clearInterval as never,
+    });
+    reporter.onInit({ config: { root: '/pkg' } } as never);
+    reporter.onTestRunStart([]);
+    reporter.onTestModuleStart(testModule('/pkg/test/a.test.ts', 'passed', 0));
+
+    now = 75_000;
+    timers.tick();
+    expect(output).toEqual(['[ci-progress] start test/a.test.ts\n']);
+
+    for (now = 90_000; now <= 180_000; now += 15_000) timers.tick();
+
+    expect(output).toEqual([
+      '[ci-progress] start test/a.test.ts\n',
+      '[ci-progress] stalled test/a.test.ts no progress for 90s\n',
+      '[ci-progress] stalled test/a.test.ts no progress for 180s\n',
+    ]);
+  });
+
+  it('resets the watchdog when a test case reports progress', () => {
+    let now = 0;
+    const timers = manualTimers();
+    const output: string[] = [];
+    const module = testModule('/pkg/test/a.test.ts', 'passed', 0);
+    const reporter = new CiProgressReporter({
+      write: (line) => output.push(line),
+      now: () => now,
+      setInterval: timers.setInterval as never,
+      clearInterval: timers.clearInterval as never,
+    });
+    reporter.onInit({ config: { root: '/pkg' } } as never);
+    reporter.onTestRunStart([]);
+    reporter.onTestModuleStart(module);
+
+    for (now = 60_000; now <= 300_000; now += 60_000) {
+      reporter.onTestCaseResult({ ...testCase('passes', 'passed'), module } as TestCase);
+      timers.tick();
+    }
+
+    expect(output).toEqual(['[ci-progress] start test/a.test.ts\n']);
+  });
+
+  it('stops watching a completed module and clears the run watchdog', () => {
+    let now = 0;
+    const timers = manualTimers();
+    const output: string[] = [];
+    const module = testModule('/pkg/test/a.test.ts', 'passed', 0);
+    const reporter = new CiProgressReporter({
+      write: (line) => output.push(line),
+      now: () => now,
+      setInterval: timers.setInterval as never,
+      clearInterval: timers.clearInterval as never,
+    });
+    reporter.onInit({ config: { root: '/pkg' } } as never);
+    reporter.onTestRunStart([]);
+    const handle = timers.handle;
+    reporter.onTestModuleStart(module);
+    now = 90_000;
+    timers.tick();
+    reporter.onTestModuleEnd(module);
+    now = 105_000;
+    timers.tick();
+    reporter.onTestRunEnd([], [], 'passed');
+    now = 180_000;
+    timers.tick();
+
+    expect({ output, cleared: timers.cleared, unrefCalls: timers.unrefCalls }).toEqual({
+      output: [
+        '[ci-progress] start test/a.test.ts\n',
+        '[ci-progress] stalled test/a.test.ts no progress for 90s\n',
+        '[ci-progress] done test/a.test.ts passed 0.0s\n',
+      ],
+      cleared: [handle],
+      unrefCalls: 1,
+    });
   });
 });
