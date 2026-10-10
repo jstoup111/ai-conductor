@@ -29,6 +29,14 @@ import type { ChildId } from '../engine/child-context.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
+/** Immutable attribution for one operational diagnostic occurrence. */
+export type OperationalLogOwnership =
+  | { scope: 'project' }
+  | { scope: 'feature'; featureSlug: string };
+
+/** Source severity is preserved rather than inferred from formatted message text. */
+export type OperationalLogSeverity = 'info' | 'warn' | 'error';
+
 /** Closed disposition of pull-request publication for a completed run. */
 export type RunPrDisposition = 'opened' | 'none' | 'unrecorded';
 
@@ -391,6 +399,14 @@ type ConductorEventBody =
   | GithubBypassResultEvent
   | GithubPossibleBypassEvent
   | SessionEventDeliveryDiagnosticEvent
+  | {
+      /** A raw operational diagnostic with capture-time ownership. */
+      type: 'operational_log';
+      severity: OperationalLogSeverity;
+      body: string;
+      occurredAt: number;
+      ownership: OperationalLogOwnership;
+    }
   | {
       /** A durable spool batch was evicted locally or rejected by the backend. */
       type: 'otel_spool_drop';
