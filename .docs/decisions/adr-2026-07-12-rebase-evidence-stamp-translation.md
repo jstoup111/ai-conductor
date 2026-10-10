@@ -57,6 +57,8 @@ HEAD-moved, per this ADR's own Context — the feature exists because SHAs are r
    commits' diffs match. Both full and 7-char forms are indexed (task-status stores short shas).
    The map is persisted **transitively** to `.pipeline/rebase-rewrites.json` — a later rebase's
    `new→newer` repoints prior values so multi-rebase chains resolve.
+
+> **Amended 2026-10-10 by #2943:** For a stacked restack the old-to-new map is exact by construction, keyed by SHA, with pre-image range `oldParent..oldTip`; the resolver hand-off takes rebase's rewritten list (`adr-2026-10-10-stacked-restack-journaled-replay` decisions 6, 8).
 2. **Rewrites file-backed stores in place** (atomic temp+rename): `task-evidence.json`
    (`sha`, `citedShas[]`, `verdictAnchor`), `task-status.json` (`commit`, both forms), and
    `attribution-memo.json` (translate `verdictAnchor` and recompute the memo key onto the new

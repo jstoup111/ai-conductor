@@ -131,6 +131,8 @@ for the budget — a fresh budget, never a spurious halt — which is the correc
 whose bad outcome is halting real work, and it is the same direction `adr-2026-08-12` accepted for
 the #497 class.
 
+> **Amended 2026-10-10 by #2943:** The refund applies only to rebases whose cause is `base-refresh`. A stacked `feature-repair` restack never refunds; N=1 records omit `cause`, which reads as `base-refresh` (`adr-2026-10-10-stacked-restack-journaled-replay` decision 10).
+
 ### D3 — The refund rides the existing `kickback` event as an additive optional field
 
 The `kickback` member of `ConductorEvent` gains an optional field carrying what was credited and to

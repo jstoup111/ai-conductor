@@ -359,3 +359,5 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 - [ ] #2945: lift finish-record's child refusal, add the child→PR map, and remove child branches at
       teardown and reclaim only after the leaf merges.
 - [ ] #2943/#2944: amend the remaining ADRs listed in the #2940 design §6 when their behavior lands.
+
+> **Amended 2026-10-10 by #2943:** The #2943 follow-up (restack) is delivered by a journaled off-worktree replay. Re-validating closed children moved by a restack, re-validating a repaired closed child, and the closed-child rewind move to #2944 (`adr-2026-10-10-stacked-restack-journaled-replay`).

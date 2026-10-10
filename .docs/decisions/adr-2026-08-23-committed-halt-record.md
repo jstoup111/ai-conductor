@@ -34,6 +34,8 @@ to be a separate artifact.
    `src/conductor/src/engine/halt-marker.ts`, after the markers are written. No halt call site is
    edited, so no existing or future halt path can omit the record.
 
+> **Amended 2026-10-10 by #2943:** During a stacked restack, a halt raised from outside the executor first runs re-entry-guarded journal recovery to `synced` or `aborted`; the record and its head SHA are taken after recovery (`adr-2026-10-10-stacked-restack-journaled-replay` decision 4).
+
 3. **Only non-`mechanical` halt classes produce a record.** `mechanical` halts are re-kicked by
    the daemon with no operator involved, so a record for them is commit churn with no reader.
    `needs-human`, `plan-gap` and `protected-artifact` all terminate in operator action and all
@@ -54,6 +56,8 @@ to be a separate artifact.
 > **Amended 2026-10-07 by #2942:** When the checkout is a stacked child branch, the record is committed there with a `Child:` field and is never pushed; the leaf and non-stacked branches keep this decision (`adr-2026-10-07-per-child-build-region` decision 11).
 
 > **Amended 2026-10-09 by #2891:** The push publishes with `--force-with-lease`, leased on the branch's remote-tracking ref (the remote tip the daemon last observed), matching the SHIP draft-PR lease push (`ship-draft-pr.ts`). A non-fast-forward caused only by the daemon's own rebase is therefore published, not a failure. A remote moved by anyone else fails the lease (`stale info`), is never overwritten, and is reported as `halt_record_push_failed` exactly as before. A bare `--force` is never used.
+
+> **Amended 2026-10-10 by #2943:** In a stacked feature worktree the commit goes through the guarded engine-commit helper, and the push uses the explicit expected-SHA lease (`adr-2026-10-10-stacked-restack-journaled-replay` decisions 4, 11).
 
 6. **Nothing in this path may throw.** The seam's existing contract ("a failed write must not
    crash the finish flow") extends unchanged over the record. Every arm returns a result;

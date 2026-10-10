@@ -38,6 +38,8 @@ Option A, with hard containment rules:
 1. The **only** call site permitted to force-push is the engine-native early-draft refresh
    that runs immediately after the native rebase step reports success. It uses
    `git push --force-with-lease` — never bare `--force`.
+
+> **Amended 2026-10-10 by #2943:** Every engine force push (post-rebase draft refresh, `pushRefreshedBranch` for autoresolve and ci-fix, `publishHaltRecord`) fetches the one branch and leases with an explicit expected SHA from a decision table over the recorded pushed tip; tips are recorded at `executeRemoteGit` (`adr-2026-10-10-stacked-restack-journaled-replay` decision 11).
 2. Every other early-draft push (build start, loopGate step boundaries, engineer
    checkpoint pushes) is a plain fast-forward push; a rejected plain push outside the
    post-rebase site is a loud advisory failure, never an escalation to force.
