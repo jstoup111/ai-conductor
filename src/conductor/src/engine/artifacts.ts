@@ -95,6 +95,7 @@ import {
   readPrdAuditVerdict,
   type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
+import { evaluateAdrAssumptionLedgers } from './adr-assumption-ledger-scope.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
 import {
@@ -4201,6 +4202,22 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
 export const GATE_ONLY_PREDICATES: Partial<
   Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
 > = {
+  architecture_review: async (dir): Promise<CompletionResult> => {
+    const result = await evaluateAdrAssumptionLedgers({ worktreePath: dir });
+    if (result.kind === 'merge-base-unresolved') {
+      return { done: false, reason: result.detail };
+    }
+    if (result.failures.length === 0) return { done: true };
+
+    const diagnostics = result.failures.flatMap(({ path, diagnostics: failures }) =>
+      failures.map(({ rule, entryId }) => `${path}: ${rule}${entryId ? ` (${entryId})` : ''}`),
+    );
+    return {
+      done: false,
+      reason: `ADR assumption ledger requirements failed: ${diagnostics.join('; ')}`,
+    };
+  },
+
   // Stories pass when every story is readable under the shared accepted-story
   // predicate and the file has no DRAFT status. The predicate keeps the
   // heading/criterion convention in one place for this gate and land.
