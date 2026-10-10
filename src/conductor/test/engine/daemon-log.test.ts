@@ -10,6 +10,8 @@ import {
   daemonLogPath,
   formatDaemonLogLine,
   formatDaemonActivityLine,
+  composeDaemonLineBody,
+  formatNextAction,
   formatDaemonConsoleTeeLine,
   createDaemonModeLogger,
   createFeatureDaemonLogger,
@@ -275,6 +277,60 @@ describe('engine/daemon-log', () => {
         '[feature-a] setup complete',
         'global scan complete',
         '[feature-a] [feature-a] retrying build',
+      ]);
+    });
+  });
+
+  describe('daemon line bodies and next actions', () => {
+    // Covers: task:1
+    it.each([
+      [0, 'at the root', 'at the root'],
+      [1, 'one level deep', '· one level deep'],
+      [2, 'two levels deep', '·   two levels deep'],
+    ] as const)('places depth %s at its declared column', (depth, text, expected) => {
+      expect(composeDaemonLineBody({ depth, text })).toBe(expected);
+    });
+
+    // Covers: task:1
+    it('formats both kinds of next action', () => {
+      expect(formatNextAction({ kind: 'operator', action: 'ai-conductor monitor all' })).toBe(
+        ' — next: ai-conductor monitor all',
+      );
+      expect(
+        formatNextAction({ kind: 'none', why: 'the daemon retries automatically' }),
+      ).toBe(' — no action needed: the daemon retries automatically');
+    });
+
+    // Covers: task:1
+    it('normalizes a feature string message at depth zero in both sinks', () => {
+      const live: string[] = [];
+      const persisted: string[] = [];
+      const baseLog = createDaemonModeLogger({
+        writeLive: (line) => live.push(line),
+        writePersisted: (line) => persisted.push(line),
+      });
+
+      createFeatureDaemonLogger('feature-a', baseLog)('   ! [rejected] x');
+
+      expect(live).toEqual(['[daemon][feature-a] ! [rejected] x']);
+      expect(persisted).toEqual(live);
+    });
+
+    // Covers: task:1
+    it('accepts depth entries through both daemon loggers', () => {
+      const live: string[] = [];
+      const baseLog = createDaemonModeLogger({
+        writeLive: (line) => live.push(line),
+        writePersisted: () => {},
+      });
+      const featureLog = createFeatureDaemonLogger('feature-a', baseLog);
+
+      baseLog({ depth: 1, text: 'daemon detail' });
+      featureLog({ depth: 2, text: 'feature detail' });
+
+      expect(live).toEqual([
+        '[daemon] · daemon detail',
+        '[daemon][feature-a] ·   feature detail',
       ]);
     });
   });
