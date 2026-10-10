@@ -72,6 +72,13 @@ union carries zero daemon-named identifiers (grep-verified 2026-08-26).
 > `conduct-ts` (symlink onto the single launcher, invoked-name warning; decision 4 — aliases
 > never own a second implementation — applies unchanged). Alias retirement remains a later
 > major.
+
+> **Amended 2026-10-10 by #3156:** the operator has retired the `composer`/`engineer` skill
+> delegate seam ahead of the unscheduled alias-removal major (decision 4). `skills/engineer/` is
+> removed across two features — reference cleanup, then directory deletion — and ships as a
+> major release note with a consumer migration that drops the dangling `engineer` skill link.
+> Only the skill seam retires; the `compose`/`engineer` verb alias and the
+> `ai-conductor`/`conduct-ts`/`conduct` binary aliases (#2048) remain under decision 4 unchanged.
 - The v1 migration block covers: re-run `bin/install` (creates the `ai-conductor` symlink),
   optional continued use of `conduct-ts`/`engineer` under deprecation warnings.
 - Docs and skills speak `ai-conductor` / `compose` / `composer`; `daemon` wording is correct
