@@ -265,7 +265,19 @@ sidecar log.
 > pass with no operator action. Amendment claims use D5's digest cache and D13's exact-digest-set
 > validation. With D7's key off they are recorded `unjudged` and do not block. Criterion-claim
 > prompts, verdicts, and events are unchanged.
->
+
+> **Amended 2026-10-09 by #2982:** D18's quoted `by #N:` header is the authoring form HARNESS.md
+> prescribes, not the recognition grammar. Any line outside a fenced code block whose text,
+> after optional indentation and an optional blockquote marker, begins with the bold word
+> `Amended` starts an amendment note: the date, reference, and closing-bold position are not part
+> of the test, and `Amendment` or a mid-line `Amended` never qualifies. A blockquoted note runs to
+> the end of its quote, an unquoted note to the next blank line, quote line, or fence line, and a
+> following amendment header always starts a new note. Every amendment-note form in the default-branch corpus therefore
+> becomes a claim when a feature branch adds it. The merge-base exclusion and the `carried` /
+> `not-carried` / `no-plan-obligation` verdicts are unchanged; a note that obliges no plan work
+> passes as `no-plan-obligation`. No land refusal of non-canonical headers is added, because no
+> amendment-note form is left unread.
+
 > **D19 — On a D16 re-run, completed work the change contradicts is reopened, never re-planned.**
 > Only a run following a D16 void reopens. Then, (a) a criterion claim whose digest is absent from
 > the previous envelope's recorded digests and that cites a completed task, and (b) a completed task
