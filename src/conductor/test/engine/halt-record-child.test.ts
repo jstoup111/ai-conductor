@@ -72,7 +72,7 @@ describe('child halt records', () => {
       .resolves.toEqual({ status: 'written' });
 
     await expect(readFile(join(worktree, haltRecordPath('demo')), 'utf8')).resolves.toContain('Child: 2\n');
-    expect(remote.calls).toEqual([['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo']]);
+    expect(remote.calls).toEqual([['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo', '--force-with-lease']]);
   });
 
   it('keeps the N=1 record byte shape and publishes it', async () => {
@@ -83,7 +83,7 @@ describe('child halt records', () => {
       .resolves.toEqual({ status: 'written' });
 
     await expect(readFile(join(worktree, haltRecordPath('demo')), 'utf8')).resolves.not.toContain('\nChild:');
-    expect(remote.calls).toEqual([['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo']]);
+    expect(remote.calls).toEqual([['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo', '--force-with-lease']]);
   });
 
   it('refuses escalation from a child branch before any push or PR creation', async () => {
