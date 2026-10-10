@@ -267,6 +267,7 @@ describe('daemon E2E fixture', () => {
     }
   });
 
+  // Covers: task:14
   it('claims the fixture and dispatches its build through the scripted provider', async () => {
     const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-dispatch-'));
     const slug = 'daemon-e2e-fixture';
