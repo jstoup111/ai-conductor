@@ -255,7 +255,7 @@ describe('DefaultStepRunner', () => {
       llm_provider: 'claude',
       build_review: {
         enabled: true,
-        rubrics: { testQuality: { enabled: false } },
+        rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } },
         custom_rubrics: {
           portable: { enabled: true, skill: 'portable-policy', question: 'Check the frozen input.', llm_provider: 'claude' },
           portableTwo: { enabled: true, skill: 'portable-two-policy', question: 'Check the frozen input again.', llm_provider: 'claude' },
@@ -325,7 +325,7 @@ describe('DefaultStepRunner', () => {
       llm_provider: 'claude',
       build_review: {
         enabled: true,
-        rubrics: { testQuality: { enabled: false } },
+        rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } },
         custom_rubrics: {
           portable: {
             enabled: true, skill: 'portable-policy', question: 'Check the frozen input.',
@@ -4987,7 +4987,7 @@ TIER: M`,
         }),
         ...currentBuildReviewProof(),
         config: { llm_provider: providerKey, build_review: {
-          enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: providerKey } },
+          enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: providerKey }, implementationQuality: { enabled: false } },
         } } as HarnessConfig,
         providerRuntimes: new ProviderRuntimeSet([interactiveRuntime(providerKey, invoke)]),
         sessionStore: new ProviderSessionStore(), configuredProviders: [providerKey],
@@ -5312,7 +5312,7 @@ TIER: M`,
           pipelineDir: join(featureRoot, '.pipeline'),
           config: { test_suite: { scoped_command: 'node {selectors}' }, build_review: {
             enabled: true,
-            rubrics: { testQuality: { enabled: true } },
+            rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } },
           } } as HarnessConfig,
           buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS', fingerprint: 'proof' } } as never) },
         });
@@ -5415,7 +5415,7 @@ TIER: M`,
         gitRunner: scopedTestGit(), planPath, events,
         config: {
           test_suite: { scoped_command: 'exit 1' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true, min_confidence: 70 } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true, min_confidence: 70 }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         buildReviewEffectiveResolver: vi.fn(async (_projectRoot, aggregate) => {
           suppressedFindingId = projectBuildReviewAggregateSources(aggregate as never)![0]!.findingId;
@@ -5466,6 +5466,14 @@ TIER: M`,
         gitRunner: scriptedGit(),
         planPath,
         events,
+        config: {
+          build_review: {
+            rubrics: {
+              testQuality: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
+          },
+        } as HarnessConfig,
         ...currentBuildReviewProof(),
       });
       const dispatch = vi.spyOn(runner as any, 'dispatchBuildReviewRubric');
@@ -5586,7 +5594,7 @@ TIER: M`,
         name: 'test-quality is enabled explicitly',
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         expectedInvokeCalls: 1,
       },
@@ -5596,7 +5604,7 @@ TIER: M`,
           test_suite: { scoped_command: 'true' },
           build_review: {
             enabled: true,
-            rubrics: { testQuality: { enabled: true, model: 'opus' } },
+            rubrics: { testQuality: { enabled: true, model: 'opus' }, implementationQuality: { enabled: false } },
           },
           wiring: { entry_points: ['src/index.ts'] },
         } as HarnessConfig,
@@ -5636,7 +5644,7 @@ TIER: M`,
         planPath,
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         buildReviewInputOptions: {
           inspectTestSuite: async () => ({
@@ -5674,7 +5682,7 @@ TIER: M`,
         planPath,
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         ...currentBuildReviewProof(),
       });
@@ -5736,7 +5744,7 @@ TIER: M`,
       return {
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
       };
     }
@@ -5866,7 +5874,7 @@ TIER: M`,
       return {
         config: {
           test_suite: { scoped_command: 'exit 1' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
       };
     }
