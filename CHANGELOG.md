@@ -56,6 +56,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A no-op rebase no longer recounts a stale rebase kickback, which had halted features with a false "kickback ping-pong" after an earlier halt. ([implementation PR #3052](https://github.com/jstoup111/ai-conductor/pull/3052)).
 - Remediation now preserves engine-owned dispositions when it creates follow-up work. ([implementation PR #3040](https://github.com/jstoup111/ai-conductor/pull/3040)).
 - Halt records now reach the remote branch after a daemon rebase. ([implementation PR #3079](https://github.com/jstoup111/ai-conductor/pull/3079)).
+- Draft PR bodies seeded from the PR template no longer halt the self-host release gate; commented template examples are ignored when parsing release metadata. ([implementation PR #3093](https://github.com/jstoup111/ai-conductor/pull/3093)).
 
 ## Migration
 
