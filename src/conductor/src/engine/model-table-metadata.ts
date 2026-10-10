@@ -4,6 +4,8 @@ import {
   CLAUDE_DISPLAY_NAME,
   CLAUDE_PROVIDER,
   CODEX_DISPLAY_NAME,
+  CODEX_PROVIDER,
+  PI_PROVIDER,
 } from '../execution/provider-catalog.js';
 
 // These steps retain exhaustive provider-policy placeholders for StepName
@@ -191,9 +193,9 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
     name: 'build-review-implementation-quality',
     executionPath: 'engine-managed auxiliary rubric',
     providerCells: {
-      claude: { model: 'opus', effort: 'medium' },
-      codex: { model: 'gpt-5.6-sol', effort: 'medium' },
-      pi: { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
+      [CLAUDE_PROVIDER]: { model: 'opus', effort: 'medium' },
+      [CODEX_PROVIDER]: { model: 'gpt-5.6-sol', effort: 'medium' },
+      [PI_PROVIDER]: { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
     },
     why: 'Judges the whole feature diff for concrete, changed-hunk-anchored code-quality and domain-modelling defects in the closed implementation-quality vocabulary.',
   },
