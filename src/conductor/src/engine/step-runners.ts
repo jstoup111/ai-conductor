@@ -3362,6 +3362,13 @@ export class DefaultStepRunner implements StepRunner {
 
     const results = Object.fromEntries(await Promise.all(coordination.branches.map(async (branch) => {
       if (branch.kind === 'cache-hit' || branch.kind === 'dispatched') {
+        // The coordinator contract carries the snapshot identity needed to
+        // locate its durable branch artifact. Treat a violated contract as a
+        // per-rubric malformed result rather than crashing the entire lap and
+        // losing independently settled sibling findings.
+        if (typeof branch.result?.snapshotDigest !== 'string') {
+          return [branch.rubric, { kind: 'malformed' as const, rubric: branch.rubric }];
+        }
         const rawArtifact = await this.buildReviewArtifactReader(
           this.projectDir,
           branch.rubric,

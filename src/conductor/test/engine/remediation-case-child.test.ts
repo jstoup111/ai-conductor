@@ -123,6 +123,7 @@ describe('child-scoped build-review remediation cases', () => {
       projectRoot: root,
       stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
       stepRunner: {} as never,
+      events: new ConductorEventEmitter(),
     }) as unknown as {
       activeRegionChild: typeof child;
       durableBuildReviewRetryContext(hint: string | undefined): Promise<{ kind: string; context?: string }>;

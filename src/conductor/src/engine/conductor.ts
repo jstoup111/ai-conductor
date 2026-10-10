@@ -643,13 +643,6 @@ const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
 
-/** Session-local loop counters must not carry a prior child's failures forward. */
-function childScopedStepKey(step: StepName, child: ChildId | undefined): StepName {
-  return `${step}#${child === undefined ? 'feature' : child}` as StepName;
-}
-
-
-
 /**
  * Render the operator-facing recovery for a terminal mechanical review fault.
  * The aggregate is the current-lap authority for the rubric and closed cause;
@@ -671,6 +664,11 @@ export class Conductor {
   private activeRegionChild: ChildId | undefined;
   /** The cursor's leaf bit travels with child-local suite evidence. */
   private activeRegionIsLeaf: boolean | undefined;
+
+  /** Session-local loop counters must not carry a prior child's failures forward. */
+  private childScopedStepKey(step: StepName, child: ChildId | undefined): StepName {
+    return `${step}#${child === undefined ? 'feature' : child}` as StepName;
+  }
 
   /** Child-local suite selection has the same authoritative base as review. */
   private fullSuiteVerifyOptions(
@@ -6770,7 +6768,14 @@ export class Conductor {
         // region step can be skipped or dispatched.
         if (isRegionStep(step.name)) {
           const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
-          if (slug) {
+          // The cursor has no work in an ordinary flat feature. Besides
+          // avoiding needless Git probes, keeping this boundary explicit
+          // preserves the N=1 path for callers that intentionally provide no
+          // Git adapter. Durable child state remains sufficient to re-enter a
+          // stack even if its current config has since disabled creation.
+          const childCursorRelevant = this.config.stacked_prs?.enabled === true ||
+            (await listExistingChildren(this.projectRoot)).length > 0;
+          if (slug && childCursorRelevant) {
             const cursor = await this.resolveActiveChild(this.projectRoot, slug);
             if (cursor.kind === 'active') {
               const target: ActiveChildLifecycleTarget = cursor;
@@ -13480,7 +13485,7 @@ export class Conductor {
             // once retries are exhausted. Terminal-side prompt hosts should drop
             // `retry` from the menu when `retriesExhausted` is set; if a caller
             // ignores the context, this loop prevents an infinite retry storm.
-            const retryKey = childScopedStepKey(step.name, this.activeRegionChild);
+            const retryKey = this.childScopedStepKey(step.name, this.activeRegionChild);
             let count = 0;
             while (true) {
               count = recoveryRetries.get(retryKey) ?? 0;
@@ -14385,7 +14390,7 @@ export class Conductor {
         reason: verdict.reason,
       }));
       if (verdict.satisfied) {
-        stuckGate.delete(childScopedStepKey(step.name, this.activeRegionChild));
+        stuckGate.delete(this.childScopedStepKey(step.name, this.activeRegionChild));
       }
 
       // Task 15: Post-green spot-audit dispatch for semantic attribution verification.
@@ -14589,7 +14594,7 @@ export class Conductor {
     // Oscillation / stuck guard: cap how many times any single gate may be
     // selected before it satisfies. Catches a gate whose verdict never improves
     // and a build↔plan kickback oscillation.
-    const selectedKey = childScopedStepKey(selectedStep.name, this.activeRegionChild);
+    const selectedKey = this.childScopedStepKey(selectedStep.name, this.activeRegionChild);
     const sel = (stuckGate.get(selectedKey) ?? 0) + 1;
     stuckGate.set(selectedKey, sel);
     if (sel > MAX_GATE_SELECTIONS) {

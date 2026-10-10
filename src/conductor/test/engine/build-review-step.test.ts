@@ -29,6 +29,7 @@ import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import type { ResolvedBuildReviewCustomCatalogEntry } from '../../src/engine/resolved-config.js';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
+import type { ChildId } from '../../src/engine/child-context.js';
 
 const buildReviewPublication = vi.hoisted(() => ({ count: 0 }));
 const buildReviewRegistryOverride = vi.hoisted(() => ({ descriptor: undefined as unknown }));
@@ -124,7 +125,7 @@ describe('build_review oversized projection step', () => {
   });
 
   it('publishes a child build-review aggregate in that child\'s pipeline directory', async () => {
-    const child = 1 as import('../../src/engine/child-context.js').ChildId;
+    const child = 1 as ChildId;
     const runner = createRunner('projection-oversized: measured=1346093 bytes limit=1048576 bytes', 'projection-oversized', 'none', undefined, child);
 
     await runner.run('build_review', state);
@@ -134,11 +135,11 @@ describe('build_review oversized projection step', () => {
   });
 
   it('stamps an empty-set child PASS at the child verdict path', async () => {
-    const child = 1 as import('../../src/engine/child-context.js').ChildId;
+    const child = 1 as ChildId;
     const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'child-pass', projectRoot, {
       config: { gate_code_validity: { enabled: true } } as HarnessConfig,
     }) as unknown as {
-      publishBuildReviewPass(reason: 'test_quality_empty_scope', child: typeof child): Promise<{ success: boolean }>;
+      publishBuildReviewPass(reason: 'test_quality_empty_scope', child: ChildId): Promise<{ success: boolean }>;
     };
 
     await expect(runner.publishBuildReviewPass('test_quality_empty_scope', child)).resolves.toMatchObject({ success: true });
@@ -348,15 +349,17 @@ describe('build_review oversized projection step', () => {
     reason: 'projection-oversized' | 'provider-error' | 'invalid-structured-result' | 'native-schema-unsupported' = 'projection-oversized',
     securityResult: 'none' | 'finding' | 'pass' = 'none',
     effectiveResolver?: StepRunnerOptions['buildReviewEffectiveResolver'],
-    child?: import('../../src/engine/child-context.js').ChildId,
+    child?: ChildId,
   ): DefaultStepRunner {
-    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+    vi.mocked(coordinateBuildReviewRubrics).mockImplementation(async ({ inputs }) => ({
       kind: 'ready',
       branches: [
         { kind: 'infrastructure-failure', rubric: 'testQuality', reason, detail },
-        ...(securityResult === 'none' ? [] : [{ kind: 'dispatched', rubric: 'security' }]),
+        ...(securityResult === 'none' ? [] : [{
+          kind: 'dispatched', rubric: 'security', result: { snapshotDigest: inputs.sourceSnapshot.digest },
+        }]),
       ],
-    } as never);
+    } as never));
     const provider: LLMProvider = { invoke: vi.fn() };
     const runner = new DefaultStepRunner(provider, 'run-1', projectRoot, {
       planPath,
