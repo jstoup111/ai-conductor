@@ -28,6 +28,7 @@ import type {
   GithubOperationRunnerRefusal,
   GithubOperationRunnerResponse,
 } from '../../src/engine/github-operations.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -41,6 +42,7 @@ function prViewJson(
   checks: Array<{ status?: string; conclusion?: string }> = [],
   labels: string[] = [],
   isDraft = false,
+  extra: Record<string, unknown> = {},
 ): { stdout: string } {
   return {
     stdout: JSON.stringify({
@@ -51,6 +53,7 @@ function prViewJson(
       statusCheckRollup: checks,
       labels: labels.map((name) => ({ name })),
       isDraft,
+      ...extra,
     }),
   };
 }
@@ -402,8 +405,8 @@ describe('sweepMergeableLabels — Task 5 readiness routes', () => {
       return result;
     });
     const { gh, addLabelCalls, removeLabelCalls, allArgs } = makeFakeGh();
-    const autoresolveEligible = vi.fn(async () => ({ eligible: false }));
-    const ciFixEligible = vi.fn(async () => ({ eligible: false }));
+    const autoresolveEligible = vi.fn(async (_entry: WatchEntry, _state: PrMergeState) => ({ eligible: false }));
+    const ciFixEligible = vi.fn(async (_entry: WatchEntry, _state: PrMergeState) => ({ eligible: false }));
     const teardownWorktree = vi.fn(async () => undefined);
 
     for (const [name, url] of Object.entries(urls)) {
@@ -714,7 +717,7 @@ describe('readWatch', () => {
       repoCwd: '/fake/repo',
       headSha: 'abc123',
       headFirstSeenAt: '2026-10-10T14:30:00.000Z',
-      readinessEmitted: true,
+      readinessEmitted: { verdict: 'no-checks', headSha: 'abc123' },
       escalationCause: 'shipped-readiness',
     };
 
@@ -2111,6 +2114,107 @@ describe('sweepMergeableLabels — Task 8: pending no-op and failure event emiss
 });
 
 // ── Task 21: exhaustion — escalation exactly once ──────────────────────────
+
+// ── Task 8: shipped PR readiness event ─────────────────────────────────────
+
+describe('sweepMergeableLabels — Task 8: shipped_pr_readiness events', () => {
+  // Covers: task:8
+  it('emits only when the verdict changes and carries the observed readiness fields', async () => {
+    const events: ConductorEvent[] = [];
+    const state = prViewJson('OPEN', 'MERGEABLE', [], [], false, { headRefOid: 'head-1' });
+    const { gh } = makeFakeGh({ [PR_URL]: state });
+    await enrollWatch(tmpDir, {
+      ...entry(),
+      headSha: 'head-1',
+      headFirstSeenAt: '2026-10-10T12:00:00.000Z',
+    });
+    const now = () => new Date('2026-10-10T13:00:00.000Z');
+
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, now, onEvent: (event) => { events.push(event); } });
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, now, onEvent: (event) => { events.push(event); } });
+    state.stdout = prViewJson(
+      'OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], [], false,
+      { headRefOid: 'head-1' },
+    ).stdout;
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, now, onEvent: (event) => { events.push(event); } });
+
+    const readiness = events.filter(
+      (event): event is Extract<ConductorEvent, { type: 'shipped_pr_readiness' }> =>
+        event.type === 'shipped_pr_readiness',
+    );
+    expect(readiness).toHaveLength(2);
+    expect(readiness[0]).toMatchObject({
+      type: 'shipped_pr_readiness', prUrl: PR_URL, slug: 'test-feature',
+      verdict: 'no-checks', headSha: 'head-1', mergeable: 'MERGEABLE',
+      mergeStateStatus: 'CLEAN', checksOutcome: 'none', isDraft: false, baseRefName: 'main',
+    });
+    expect(readiness[1]).toMatchObject({ type: 'shipped_pr_readiness', verdict: 'ready' });
+  });
+
+  // Covers: task:8
+  it('emits for a new head, then remains quiet after a fresh sweep reloads the persisted pair', async () => {
+    const events: ConductorEvent[] = [];
+    const state = prViewJson(
+      'OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], [], false,
+      { headRefOid: 'head-1' },
+    );
+    const { gh } = makeFakeGh({ [PR_URL]: state });
+    await enrollWatch(tmpDir, entry());
+    const onEvent = (event: ConductorEvent): void => { events.push(event); };
+
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, onEvent });
+    state.stdout = prViewJson(
+      'OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], [], false,
+      { headRefOid: 'head-2' },
+    ).stdout;
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, onEvent });
+    const afterNewHead = events.filter(
+      (event): event is Extract<ConductorEvent, { type: 'shipped_pr_readiness' }> =>
+        event.type === 'shipped_pr_readiness',
+    );
+    expect(afterNewHead).toHaveLength(2);
+    expect(afterNewHead[1]).toMatchObject({ verdict: 'ready', headSha: 'head-2' });
+
+    const beforeReload = events.length;
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, onEvent });
+    expect(events.slice(beforeReload).filter((event) => event.type === 'shipped_pr_readiness')).toHaveLength(0);
+  });
+
+  // Covers: task:8
+  it('isolates a throwing listener so later entries still reconcile labels and dispatch', async () => {
+    const { gh, removeLabelCalls } = makeFakeGh({
+      [PR_URL]: prViewJson(
+        'OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], [], false,
+        { headRefOid: 'head-1' },
+      ),
+      [PR_URL_2]: prViewJson(
+        'OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], ['mergeable'], false,
+        { headRefOid: 'head-2' },
+      ),
+    });
+    const dispatched: WatchEntry[] = [];
+    await enrollWatch(tmpDir, entry(PR_URL));
+    await enrollWatch(tmpDir, entry(PR_URL_2, 'later-feature'));
+
+    let calls = 0;
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      onEvent: () => {
+        calls += 1;
+        if (calls === 1) throw new Error('ledger unavailable');
+      },
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async (watch) => { dispatched.push(watch); },
+      },
+    });
+
+    expect(removeLabelCalls).toContainEqual({ prUrl: PR_URL_2, label: 'mergeable' });
+    expect(dispatched).toEqual([expect.objectContaining({ prUrl: PR_URL_2 })]);
+  });
+});
 
 describe('sweepMergeableLabels — Task 21: exhaustion escalation exactly once', () => {
   it('failed entry with ciFixAttempts:2 → adds existing needs-remediation, upserts escalation comment, emits ci_failed(exhausted); repeat sweep is a no-op', async () => {
