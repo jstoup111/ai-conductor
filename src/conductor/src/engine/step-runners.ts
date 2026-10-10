@@ -70,8 +70,8 @@ import {
   resolveFeaturePlanPath,
   splitStoryBlocks,
   selectFeaturePlan,
-  BUILD_REVIEW_VERDICT,
 } from './artifacts.js';
+import { pipelinePathFor } from './child-context.js';
 import {
   customStepsInPerChildRegion,
   deriveStoryOwnership,
@@ -3033,7 +3033,7 @@ export class DefaultStepRunner implements StepRunner {
     // A prior lap's aggregate cannot represent this lap. Invalidate it before
     // dispatch so a mechanical early return leaves no stale semantic FAIL for
     // the conductor to route back to build.
-    const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
+    const effectivePipelineDir = this.buildReviewPipelineDir(child);
     await rm(join(effectivePipelineDir, 'build-review.json'), { force: true });
 
     const engineIdentity = await this.resolveBuildReviewEngineIdentity();
@@ -3354,7 +3354,7 @@ export class DefaultStepRunner implements StepRunner {
       return { success: true, output: 'build_review disabled' };
     }
     if (coordination.kind === 'passed') {
-      return this.publishBuildReviewPass(coordination.reason);
+      return this.publishBuildReviewPass(coordination.reason, child);
     }
     if (coordination.kind === 'refused') {
       return { success: false, output: `build_review refused: ${coordination.reason}` };
@@ -3566,7 +3566,7 @@ export class DefaultStepRunner implements StepRunner {
         : `build_review requires human action: ${infrastructureFailure.rubric} projection-oversized.`;
       return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
     }
-    if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
+    if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict(child);
     // A judged finding is a completed review, even when another rubric had a
     // mechanical fault. Let the conductor route that semantic failure through
     // its ordinary kickback budget; only a pure mechanical lap retries here.
@@ -4190,7 +4190,7 @@ export class DefaultStepRunner implements StepRunner {
         return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
       }
     }
-    const pipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
+    const pipelineDir = this.buildReviewPipelineDir(input.child);
     const aggregatePath = join(pipelineDir, 'build-review.json');
     // adr-2026-08-18 D9: effective state resolves BEFORE publication so a
     // reduced-coverage lap's evidence is stamped into the one aggregate that
@@ -4244,7 +4244,7 @@ export class DefaultStepRunner implements StepRunner {
     if (!persistedSuppressions.ok) {
       return { success: false, output: `build_review suppression history persistence failed: ${persistedSuppressions.reason}` };
     }
-    if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
+    if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict(input.child);
     return {
       success: effective.effective.verdict === 'PASS' || hasFinding,
       output: JSON.stringify(aggregate),
@@ -5800,13 +5800,14 @@ export class DefaultStepRunner implements StepRunner {
 
   private async publishBuildReviewPass(
     reason: 'build_review_no_rubrics' | 'test_quality_empty_scope',
+    child?: import('./child-context.js').ChildId,
   ): Promise<StepRunResult> {
     const verdict = {
       verdict: 'PASS' as const,
       reason,
       rubric: { testQuality: false },
     };
-    const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
+    const effectivePipelineDir = this.buildReviewPipelineDir(child);
     const verdictPath = join(effectivePipelineDir, 'build-review.json');
     try {
       await mkdir(effectivePipelineDir, { recursive: true });
@@ -5819,17 +5820,23 @@ export class DefaultStepRunner implements StepRunner {
         output: `build_review empty-set PASS publication failed: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
-    await this.stampBuildReviewVerdict();
+    await this.stampBuildReviewVerdict(child);
     return { success: true, output: JSON.stringify(verdict) };
   }
 
-  private async stampBuildReviewVerdict(): Promise<void> {
+  private buildReviewPipelineDir(child?: import('./child-context.js').ChildId): string {
+    return child === undefined
+      ? this.pipelineDir ?? join(this.projectDir, '.pipeline')
+      : pipelinePathFor(this.projectDir, '', child);
+  }
+
+  private async stampBuildReviewVerdict(child?: import('./child-context.js').ChildId): Promise<void> {
     if (!resolveGateCodeValidityConfig(this.config).enabled) {
       // gate_code_validity disabled: restore pre-feature behavior exactly —
       // no read-back, no codeStamp field, no git-diff calls.
       return;
     }
-    const verdictPath = join(this.projectDir, BUILD_REVIEW_VERDICT);
+    const verdictPath = pipelinePathFor(this.projectDir, 'build-review.json', child);
     let parsed: unknown;
     try {
       const raw = await readFile(verdictPath, 'utf-8');

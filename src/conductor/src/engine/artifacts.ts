@@ -2232,8 +2232,8 @@ export const BUILD_REVIEW_VERDICT = '.pipeline/build-review.json';
  * Best-effort: a missing file (already removed, or never written) is a no-op,
  * not an error.
  */
-export async function removeBuildReviewVerdict(dir: string): Promise<void> {
-  await rm(join(dir, BUILD_REVIEW_VERDICT), { force: true });
+export async function removeBuildReviewVerdict(dir: string, child?: ChildId): Promise<void> {
+  await rm(pipelinePathFor(dir, 'build-review.json', child), { force: true });
 }
 
 /**
@@ -2256,6 +2256,7 @@ export async function discardStaleLapBuildReviewFail(
   dir: string,
   verdictRaw: unknown,
   git?: GitRunner,
+  child?: ChildId,
 ): Promise<{ storedLapId: string; currentLapId: string } | null> {
   const aggregate = parseBuildReviewAggregate(verdictRaw);
   if (!aggregate || aggregate.verdict === 'PASS') return null;
@@ -2265,7 +2266,7 @@ export async function discardStaleLapBuildReviewFail(
     if (!sha) return null;
     const currentLapId = `lap-${sha}`;
     if (aggregate.lapId === currentLapId) return null;
-    await removeBuildReviewVerdict(dir).catch(() => {
+    await removeBuildReviewVerdict(dir, child).catch(() => {
       /* best-effort removal — the returned mismatch still suppresses the kickback */
     });
     return { storedLapId: aggregate.lapId, currentLapId };
@@ -3748,7 +3749,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // keep the gate unsatisfied (fail-closed) — a FAIL surfaces the grader's
   // reasons so the kickback message tells `build` what to fix.
   build_review: async (dir, ctx): Promise<CompletionResult> => {
-    const path = join(dir, BUILD_REVIEW_VERDICT);
+    const path = pipelinePathFor(dir, 'build-review.json', ctx.activeChild);
     const cmpFloor = verdictFreshnessComparand(ctx);
 
     // gate-code-validity-on-redispatch (#817): before falling into the

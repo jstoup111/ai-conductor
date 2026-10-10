@@ -4703,7 +4703,11 @@ export class Conductor {
     | { readonly kind: 'absent' }
     | { readonly kind: 'invalid'; readonly reason: string }
   > {
-    const featureRead = await readRemediationCaseStoreFeature(this.projectRoot);
+    const featureRead = await readRemediationCaseStoreFeature(
+      this.projectRoot,
+      undefined,
+      this.activeRegionChild,
+    );
     if (classifyBuildReviewDurableRead(featureRead) === 'absent') return { kind: 'absent' };
     if (!featureRead.ok) return { kind: 'invalid', reason: `case store ${featureRead.reason}` };
     if (!featureRead.feature) return { kind: 'absent' };
@@ -4715,7 +4719,9 @@ export class Conductor {
     // stable action effects it recorded are what bind the order's own effect
     // identity. No open action case means no live route, which is the same
     // benign absence as no order at all.
-    const state = await new RemediationCaseStore(this.projectRoot, feature).read();
+    const state = await new RemediationCaseStore(this.projectRoot, feature, {
+      ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
+    }).read();
     if (!state.ok) return { kind: 'invalid', reason: `case store ${state.reason}` };
     const openActionCases = new Map(state.state.cases.flatMap((record) =>
       isBuildEligibleActionCase(record)
@@ -4788,18 +4794,27 @@ export class Conductor {
     // neither and keeps its historical behavior.
     let verdictRaw: unknown;
     try {
-      verdictRaw = JSON.parse(await readFile(join(this.projectRoot, BUILD_REVIEW_VERDICT), 'utf-8'));
+      verdictRaw = JSON.parse(await readFile(
+        pipelinePathFor(this.projectRoot, 'build-review.json', this.activeRegionChild),
+        'utf-8',
+      ));
     } catch {
       return { kind: 'absent' };
     }
     const aggregate = parseBuildReviewAggregate(verdictRaw);
     if (!aggregate || aggregate.verdict !== 'PASS') return { kind: 'absent' };
-    const featureRead = await readRemediationCaseStoreFeature(this.projectRoot);
+    const featureRead = await readRemediationCaseStoreFeature(
+      this.projectRoot,
+      undefined,
+      this.activeRegionChild,
+    );
     if (classifyBuildReviewDurableRead(featureRead) === 'absent') return { kind: 'absent' };
     if (!featureRead.ok) return { kind: 'invalid', reason: `case store ${featureRead.reason}` };
     if (!featureRead.feature) return { kind: 'absent' };
     const feature = featureRead.feature;
-    const store = new RemediationCaseStore(this.projectRoot, feature);
+    const store = new RemediationCaseStore(this.projectRoot, feature, {
+      ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
+    });
     const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(this.projectRoot, feature);
     const missingAttemptEvidence = classifyBuildReviewDurableRead(attemptEvidence) === 'absent';
     if (missingAttemptEvidence) {
@@ -6425,7 +6440,7 @@ export class Conductor {
     let staleLapDiscards = 0;
 
     const pendingBuildKickbackGate = async (): Promise<string | null> => {
-      const ledger = await readKickbackLedger(this.projectRoot);
+      const ledger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
       const pending = Object.entries(ledger.gates)
         .filter(([, entry]) => !entry.priorVerdict)
         .map(([gate]) => gate);
@@ -10653,7 +10668,7 @@ export class Conductor {
             // failure, so stop here instead of entering the generic retry
             // loop below.
             if (step.name === 'build_review') {
-              const ledger = await readKickbackLedger(this.projectRoot);
+              const ledger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
               if (isUnreadableKickbackLedger(ledger)) {
                 const reason = 'build_review halted: kickback ledger is unreadable; budget enforcement requires human recovery.';
                 state[step.name] = 'failed';
@@ -10668,7 +10683,7 @@ export class Conductor {
               }
               const mechanicalEntry = ledger.gates.build_review;
               const aggregateRaw = await readFile(
-                join(this.projectRoot, BUILD_REVIEW_VERDICT),
+                pipelinePathFor(this.projectRoot, 'build-review.json', this.activeRegionChild),
                 'utf-8',
               ).then((content) => {
                 try {
@@ -12297,7 +12312,10 @@ export class Conductor {
               let verdictRaw: unknown = null;
               try {
                 verdictRaw = JSON.parse(
-                  await readFile(join(this.projectRoot, BUILD_REVIEW_VERDICT), 'utf-8'),
+                  await readFile(
+                    pipelinePathFor(this.projectRoot, 'build-review.json', this.activeRegionChild),
+                    'utf-8',
+                  ),
                 );
               } catch {
                 /* missing/unreadable — falls through to generic HALT below */
@@ -12314,6 +12332,8 @@ export class Conductor {
                 const staleLap = await discardStaleLapBuildReviewFail(
                   this.projectRoot,
                   verdictRaw,
+                  undefined,
+                  this.activeRegionChild,
                 );
                 if (staleLap) {
                   staleLapDiscards += 1;
@@ -12386,7 +12406,7 @@ export class Conductor {
                   // content-complete PASS was unreachable.
                   const uncoveredInfrastructure = effective.effective.uncoveredInfrastructureFailureRubrics;
                   const uncoveredScopeIncomplete = effective.effective.uncoveredScopeIncompleteRubrics ?? [];
-                  const mechanicalLedger = await readKickbackLedger(this.projectRoot);
+                  const mechanicalLedger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
                   if (isUnreadableKickbackGate(mechanicalLedger, 'build_review')) {
                     const reason = `build_review adjudication halted: kickback ledger gate 'build_review' is unreadable`;
                     await this.writeHaltMarker(reason + '\n', 'needs-human');
@@ -12529,7 +12549,7 @@ export class Conductor {
                     continue;
                   }
                   if (outcome.kind === 'repair') {
-                    const ledger = await readKickbackLedger(this.projectRoot);
+                    const ledger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
                     const count = ledger.gates.build_review?.count ?? 1;
                     const evidence = `build-review admitted repair ${outcome.caseIds.join(', ')}\n${outcome.trace}` +
                       (outcome.remainingInfrastructure ? `\n${BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE}` : '');
@@ -12573,6 +12593,7 @@ export class Conductor {
                             detail: scopeFault.detail,
                             lapId: aggregate.lapId,
                           },
+                    this.activeRegionChild,
                   );
                   if (bumpedMechanicalFaults.kind === 'unreadable') {
                     const reason = `build_review adjudication halted: ${bumpedMechanicalFaults.reason}`;
@@ -12697,7 +12718,7 @@ export class Conductor {
 
                 if (scopeFailDisposition?.kind === 'invalidated') {
                   if (await reenterBuildReviewIfEffectivePass()) continue;
-                  await removeBuildReviewVerdict(this.projectRoot).catch(() => {
+                  await removeBuildReviewVerdict(this.projectRoot, this.activeRegionChild).catch(() => {
                     /* best-effort removal */
                   });
                   const regradeCount = await readRegradeCount(this.projectRoot).catch(() => 0);
