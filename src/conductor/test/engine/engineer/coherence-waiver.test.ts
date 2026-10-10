@@ -6,6 +6,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  parseCoherenceWaiverDeclaration,
   parseCoherenceWaiver,
   evaluateCoherenceWaiver,
   type CoherenceWaiverChangedFile,
@@ -17,6 +18,25 @@ function gap(gapId: string): CoherenceGap {
 }
 
 const WAIVER_PATH = '.docs/coherence-waivers/my-spec.md';
+
+describe('parseCoherenceWaiverDeclaration', () => {
+  it('parses a mixed-id waiver declaration without applying the gap vocabulary', () => {
+    const text = 'Waives: outcome-3, FR-17\n\nRationale: FR-17 is documentation.';
+
+    expect(parseCoherenceWaiverDeclaration(text)).toEqual({
+      gapIds: ['outcome-3', 'FR-17'],
+      rationale: 'FR-17 is documentation.',
+    });
+  });
+
+  it.each([
+    ['the rationale is empty', 'Waives: FR-17\n\nRationale:'],
+    ['there is no Rationale: line', 'Waives: FR-17'],
+    ['there is no Waives: line', 'Rationale: FR-17 is documentation.'],
+  ])('returns null when %s', (_reason, text) => {
+    expect(parseCoherenceWaiverDeclaration(text)).toBeNull();
+  });
+});
 
 describe('parseCoherenceWaiver', () => {
   it('parses a valid Waives: + Rationale: block against the known gap-id vocabulary', () => {
