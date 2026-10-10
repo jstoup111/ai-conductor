@@ -1,7 +1,7 @@
 // Covers: task:1, task:3, task:5, task:6, task:7, task:9, task:rem-prd-audit-rem-s33-1, task:rem-prd-audit-rem-s34-1, S3.3, S3.4, S5.1, S5.2, S5.3, S5.4
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -1116,6 +1116,49 @@ describe('prd_audit kickback', () => {
         })],
       },
     });
+  });
+
+  // Covers: task:6
+  it('admits refusal rework when the daemon resolves its feature plan without activePlanPath', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      mode: 'auto',
+      beforeRun: async (root) => {
+        await rm(join(root, '.pipeline', 'engine-state.json'));
+        await writeFile(join(root, '.docs', 'plans', 'unrelated.md'), [
+          '### Task 1: unrelated work',
+          '### Task 2: unrelated work',
+          '### Task 3: unrelated work',
+        ].join('\n'));
+      },
+    });
+
+    expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain(
+      'Refused — rework required',
+    );
+  });
+
+  // Covers: task:6
+  it('refuses refusal rework when no daemon feature plan resolves', async () => {
+    const fixture = await runRefusalReworkRun({
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      mode: 'auto',
+      beforeRun: async (root) => {
+        await rm(join(root, '.pipeline', 'engine-state.json'));
+        await writeFile(join(root, '.docs', 'plans', 'unrelated.md'), [
+          '### Task 1: unrelated work',
+          '### Task 2: unrelated work',
+          '### Task 3: unrelated work',
+        ].join('\n'));
+        await rename(join(root, '.docs', 'plans', 'feature.md'), join(root, '.docs', 'plans', 'other-feature.md'));
+      },
+    });
+
+    expect(fixture.calls).not.toContain('remediate');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Refused — rework required: S2.1.',
+    );
   });
 
   it('charges admitted refusal rework to the existing prd_audit lap and growth ledger', async () => {

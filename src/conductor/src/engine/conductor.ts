@@ -316,7 +316,6 @@ import {
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   MAX_SUITE_INFRASTRUCTURE_RETRIES,
   bumpSuiteInfrastructureRetriesInLedger,
-  readGrowth,
   readKickbackLedger,
   isUnreadableKickbackLedger,
   refundBuildReviewKickback,
@@ -550,7 +549,7 @@ import {
   MAX_KICKBACKS_PER_GATE,
   kickbackEscalationEnabled,
   pendingRepairSettlementBudgets,
-  prdAuditAppendCap,
+  readPlanGrowthBudget,
   readRemediationGateAppendBudget,
   remediationLapCapForGate,
   validationJoinRemediationRoundCap,
@@ -6341,9 +6340,7 @@ export class Conductor {
         const entry = ledger.gates.prd_audit;
         const lapCap = entry?.effectiveLapCap ?? prdAuditRemediationLapCap;
         if ((entry?.laps ?? 0) >= lapCap) return false;
-        const unboundedGrowth = await readGrowth(this.projectRoot, Number.MAX_SAFE_INTEGER);
-        const growthCap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(this.config, unboundedGrowth.authored);
-        return (await readGrowth(this.projectRoot, growthCap)).remaining > 0;
+        return (await readPlanGrowthBudget(this.projectRoot, this.config, { persist: true })).growth.remaining > 0;
       } catch {
         return false;
       }
