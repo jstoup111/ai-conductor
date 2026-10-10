@@ -1,4 +1,5 @@
 // Covers: task:1, task:2, task:3, task:4
+// Covers: task:2
 // land-spec.test.ts — Story 2 (Slice B): landSpec fails CLOSED on unresolved
 // identity (adr-2026-07-01-machine-scoped-operator-identity, D3).
 //
@@ -119,6 +120,24 @@ const APPROVED_UNCITABLE_ADR = [
   '## Decision',
   '',
   'The decision has no numbered identifier.',
+  '',
+].join('\n');
+
+const APPROVED_ATX_NUMBERED_ADR = [
+  '# ADR: citable ATX decisions',
+  '',
+  '**Status:** Approved',
+  '',
+  '## Decision',
+  '',
+  '### 1. First',
+  'First body.',
+  '',
+  '### 2. Second',
+  'Second body.',
+  '',
+  '### 3. Third',
+  'Third body.',
   '',
 ].join('\n');
 
@@ -495,6 +514,47 @@ describe('landSpec ADR citability gate (Task 6)', () => {
     await writeFile(join(dir, '.docs', 'decisions', 'adr-existing.md'), APPROVED_UNCITABLE_ADR);
     await git(['add', '.docs/decisions/adr-existing.md'], dir);
     await git(['commit', '-m', 'make existing ADR uncitable'], dir);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/no citable decision.*adr-existing\.md/i);
+  });
+
+  it('lands an edited APPROVED ADR whose ATX-numbered decision headings are unchanged', async () => {
+    await mkdir(join(repoPath, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'decisions', 'adr-existing.md'), APPROVED_ATX_NUMBERED_ADR);
+    await git(['add', '.docs/decisions/adr-existing.md']);
+    await git(['commit', '-m', 'add existing ATX ADR']);
+
+    const dir = await seedValidWorktree();
+    await writeFile(
+      join(dir, '.docs', 'decisions', 'adr-existing.md'),
+      APPROVED_ATX_NUMBERED_ADR.replace('Second body.', 'Amended second body.'),
+    );
+    await git(['add', '.docs/decisions/adr-existing.md'], dir);
+    await git(['commit', '-m', 'amend ATX ADR body'], dir);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).resolves.toMatchObject({ slug: 'dep-bump' });
+  });
+
+  it('rejects an edited APPROVED ATX ADR whose Decision section becomes unnumbered prose', async () => {
+    await mkdir(join(repoPath, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'decisions', 'adr-existing.md'), APPROVED_ATX_NUMBERED_ADR);
+    await git(['add', '.docs/decisions/adr-existing.md']);
+    await git(['commit', '-m', 'add existing ATX ADR']);
+
+    const dir = await seedValidWorktree();
+    await writeFile(
+      join(dir, '.docs', 'decisions', 'adr-existing.md'),
+      APPROVED_ATX_NUMBERED_ADR.replace(
+        '### 1. First\nFirst body.\n\n### 2. Second\nSecond body.\n\n### 3. Third\nThird body.',
+        '### Approach\n\nUse the approach described here.',
+      ),
+    );
+    await git(['add', '.docs/decisions/adr-existing.md'], dir);
+    await git(['commit', '-m', 'make ATX ADR uncitable'], dir);
 
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
