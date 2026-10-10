@@ -5,9 +5,11 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  pendingRepairSettlementBudgets,
   readPlanGrowthBudget,
   readRemediationGateAppendBudget,
 } from '../../src/engine/remediation-caps.js';
+import { readKickbackLedger, settlePendingRepair } from '../../src/engine/kickback-ledger.js';
 
 const STORY_TWO_SLUG = 'growth-feature';
 const STORY_TWO_CONFIG = {
@@ -109,6 +111,80 @@ describe('readRemediationGateAppendBudget', () => {
       )).resolves.toMatchObject({
         growthCap: 12,
         growth: { authored: 24 },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('pendingRepairSettlementBudgets', () => {
+  // Covers: task:5
+  it('settles a pending prd-audit repair within the shared growth budget', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'remediation-caps-'));
+    try {
+      await writePlanFixture(root, STORY_TWO_SLUG, [taskHeadings('', 24), taskHeadings('rem-', 9)].join('\n'), {
+        growth: { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
+        pendingRepair: {
+          receiptId: 'repair-1',
+          charges: { prd_audit: { laps: 1, growth: 3 } },
+          taskIds: ['rem-prd-10'],
+        },
+      });
+
+      const budgets = await pendingRepairSettlementBudgets(root, STORY_TWO_CONFIG, await readKickbackLedger(root));
+
+      await expect(settlePendingRepair(root, budgets)).resolves.toEqual({ kind: 'settled' });
+      await expect(readKickbackLedger(root)).resolves.toMatchObject({
+        growth: { authored: 24, added: 12, byGate: { prd_audit: 8, architecture_review_as_built: 4 } },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:5
+  it('refuses a pending prd-audit repair that exceeds the shared growth budget', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'remediation-caps-'));
+    try {
+      await writePlanFixture(root, STORY_TWO_SLUG, [taskHeadings('', 24), taskHeadings('rem-', 9)].join('\n'), {
+        growth: { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
+        pendingRepair: {
+          receiptId: 'repair-1',
+          charges: { prd_audit: { laps: 1, growth: 4 } },
+          taskIds: ['rem-prd-10'],
+        },
+      });
+
+      const budgets = await pendingRepairSettlementBudgets(root, STORY_TWO_CONFIG, await readKickbackLedger(root));
+
+      await expect(settlePendingRepair(root, budgets)).resolves.toEqual({
+        kind: 'exhausted', gate: 'prd_audit', allowance: 'growth',
+      });
+      await expect(readKickbackLedger(root)).resolves.toMatchObject({
+        growth: { authored: 24, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:5
+  it('refuses growth when no plan or raised cap resolves the budget', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'remediation-caps-'));
+    try {
+      await writePlanFixture(root, STORY_TWO_SLUG, undefined, {
+        pendingRepair: {
+          receiptId: 'repair-1',
+          charges: { prd_audit: { laps: 1, growth: 1 } },
+          taskIds: ['rem-prd-1'],
+        },
+      }, false);
+
+      const budgets = await pendingRepairSettlementBudgets(root, {}, await readKickbackLedger(root));
+
+      await expect(settlePendingRepair(root, budgets)).resolves.toEqual({
+        kind: 'exhausted', gate: 'prd_audit', allowance: 'growth',
       });
     } finally {
       await rm(root, { recursive: true, force: true });

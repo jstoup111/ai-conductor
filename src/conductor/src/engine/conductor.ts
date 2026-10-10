@@ -549,6 +549,7 @@ export type { SchedulingUnitRef } from '../types/scheduling-unit.js';
 import {
   MAX_KICKBACKS_PER_GATE,
   kickbackEscalationEnabled,
+  pendingRepairSettlementBudgets,
   prdAuditAppendCap,
   readRemediationGateAppendBudget,
   remediationLapCapForGate,
@@ -9248,23 +9249,16 @@ export class Conductor {
           let growthCap: number | undefined;
           try {
             settlementLedger = await readKickbackLedger(this.projectRoot);
-            // Read the durable growth denominator before calculating the
-            // configured 25% cap. `readGrowth` also preserves the pending
-            // task exclusion, so an unsettled append cannot enlarge its own
-            // allowance.
-            const unboundedGrowth = await readGrowth(this.projectRoot, Number.MAX_SAFE_INTEGER);
-            growthCap = settlementLedger.effectiveGrowthCap ??
-              prdAuditAppendCap(this.config, unboundedGrowth.authored);
-            settlementGrowth = await readGrowth(this.projectRoot, growthCap);
+            const budgets = await pendingRepairSettlementBudgets(
+              this.projectRoot,
+              this.config,
+              settlementLedger,
+            );
+            growthCap = budgets[0]?.growthCap;
+            settlementGrowth = budgets[0]?.growth;
             settlement = await settlePendingRepair(
               this.projectRoot,
-              (['prd_audit', 'architecture_review_as_built'] as const).map((gate) => ({
-                gate,
-                lapCap: settlementLedger!.gates[gate]?.effectiveLapCap ??
-                  remediationLapCapForGate(gate, this.config),
-                growthCap: growthCap!,
-                growth: settlementGrowth!,
-              })),
+              budgets,
               { events: { emit: (event) => this.events.emit(event) } },
             );
           } catch (error) {

@@ -6,6 +6,8 @@ import {
   readGrowthAccounting,
   readKickbackLedger,
   type KickbackGateEntry,
+  type KickbackLedger,
+  type PendingRepairSettlementBudget,
   type PlanGrowth,
 } from './kickback-ledger.js';
 
@@ -82,6 +84,21 @@ export async function readPlanGrowthBudget(
   const cap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(config, unbounded.growth.authored);
   const accounting = await readGrowthAccounting(projectRoot, cap, options);
   return { growth: accounting.growth, cap, capSource, authoredSource: accounting.authoredSource };
+}
+
+/** Build the durable allowance snapshots required to settle a pending BUILD repair. */
+export async function pendingRepairSettlementBudgets(
+  projectRoot: string,
+  config: HarnessConfig,
+  ledger: KickbackLedger,
+): Promise<PendingRepairSettlementBudget[]> {
+  const { cap: growthCap, growth } = await readPlanGrowthBudget(projectRoot, config, { persist: true });
+  return (['prd_audit', 'architecture_review_as_built'] as const).map((gate) => ({
+    gate,
+    lapCap: ledger.gates[gate]?.effectiveLapCap ?? remediationLapCapForGate(gate, config),
+    growthCap,
+    growth,
+  }));
 }
 
 export type RemediationLedgerGate = 'prd_audit' | 'architecture_review_as_built';
