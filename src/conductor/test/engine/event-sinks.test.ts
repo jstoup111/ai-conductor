@@ -18,6 +18,7 @@ import {
   type SinkDeclaration,
 } from '../../src/engine/event-sinks.js';
 import type { SchedulingUnitRef } from '../../src/engine/conductor.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -247,6 +248,11 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'step_inapplicable',
   'step_inapplicable_ignored',
   'step_inapplicable_refused',
+  'child_started',
+  'child_closed',
+  'child_switched',
+  'rebase_skipped_for_stack',
+  'story_reowned',
 ] satisfies Array<ConductorEvent['type']>;
 
 const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
@@ -468,6 +474,43 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
+  // Covers: task:3
+  it('persists child lifecycle and ownership events through the canonical event spine', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'child-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const childOne = parseChildId(1)!;
+    const childEvents = [
+      { type: 'child_started', child: childOne, position: 1, branch: 'feat/c1/demo' },
+      { type: 'child_closed', child: childOne, position: 1, branch: 'feat/c1/demo', tip: 'child-one-tip' },
+      { type: 'child_switched', from: 1, to: 2, position: 2, branch: 'feat/daemon-demo' },
+      { type: 'rebase_skipped_for_stack', child: childOne, reason: 'active child is not the leaf' },
+      { type: 'story_reowned', story: '2', from: 1, to: 2 },
+    ] satisfies ConductorEvent[];
+
+    try {
+      persister.start();
+      for (const event of childEvents) await events.emit(event);
+      persister.stop();
+
+      const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => {
+          const { ts: _ts, ...record } = JSON.parse(line);
+          return record;
+        });
+
+      expect(records).toEqual(childEvents);
+      for (const event of childEvents) {
+        expect(EVENT_SINKS[event.type]).toMatchObject({ persist: true });
+      }
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('routes active build stalls through render, persistence, and OTel with a closed stall reason', async () => {
     const reasons: string[] = [];
     const events = new ConductorEventEmitter();
