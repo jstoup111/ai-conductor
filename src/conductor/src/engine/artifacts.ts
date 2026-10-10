@@ -4433,13 +4433,23 @@ export function parseAdrAssumptionLedger(content: string): AdrAssumptionLedgerPa
     '',
   );
   const lines = withoutFencedCodeBlocks.split(/\r?\n/);
-  const sectionStart = lines.findIndex((line) => ADR_ASSUMPTION_LEDGER_HEADING_RE.test(line));
-  if (sectionStart === -1) {
+  const sectionStarts = lines
+    .map((line, index) => (ADR_ASSUMPTION_LEDGER_HEADING_RE.test(line) ? index : -1))
+    .filter((index) => index !== -1);
+  if (sectionStarts.length === 0) {
     return {
       kind: 'diagnostics',
       diagnostics: [{ rule: 'missing-section', detail: 'ADR is missing a ## Assumptions heading.' }],
     };
   }
+  if (sectionStarts.length > 1) {
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'malformed-header', detail: 'ADR has a duplicate ## Assumptions heading.' }],
+    };
+  }
+
+  const sectionStart = sectionStarts[0];
 
   const sectionLines: string[] = [];
   for (const line of lines.slice(sectionStart + 1)) {
@@ -4451,6 +4461,35 @@ export function parseAdrAssumptionLedger(content: string): AdrAssumptionLedgerPa
     return {
       kind: 'diagnostics',
       diagnostics: [{ rule: 'empty-section', detail: 'ADR has an empty ## Assumptions section.' }],
+    };
+  }
+
+  const nonBlankSectionLines = sectionLines.filter((line) => line.trim() !== '');
+  const hasEmptyStatement = nonBlankSectionLines.includes('No load-bearing assumptions.');
+  const headerIndex = nonBlankSectionLines.findIndex((line) => line.trim() === ADR_ASSUMPTION_LEDGER_HEADER);
+  if (headerIndex === -1) {
+    if (hasEmptyStatement && nonBlankSectionLines.length === 1) return { kind: 'ok' };
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'malformed-header', detail: 'ADR assumptions ledger has an invalid table header.' }],
+    };
+  }
+
+  const dataRows = nonBlankSectionLines
+    .slice(headerIndex + 1)
+    .filter((line) => /^\s*\|/.test(line))
+    .filter((line) => !/^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line));
+  if (dataRows.length === 0) {
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'empty-section', detail: 'ADR assumptions ledger has no data rows.' }],
+    };
+  }
+
+  if (hasEmptyStatement && dataRows.some((row) => row.split('|')[5]?.trim().toLowerCase() === 'yes')) {
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'contradictory-empty-statement', detail: 'No load-bearing assumptions conflicts with a yes row.' }],
     };
   }
 
