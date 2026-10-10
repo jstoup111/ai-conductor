@@ -4547,18 +4547,18 @@ export type RetryDecision =
     };
 
 /**
- * Pure, synchronous rerun-vs-route classifier for the SHIP-tail verdict steps
- * (issue #646). A terminal refusal is classified before the eligible-step
- * check, so callers must keep out-of-scope steps such as `build` from this
- * helper. In scope, signal (a) "named-route" fires when the step has a real, fresh, non-passing
+ * Pure, synchronous rerun-vs-route classifier. Terminal refusals and typed
+ * unretryable inputs apply before verdict-step eligibility; the latter applies
+ * to every step except `build`. Legacy signals remain scoped to the SHIP-tail
+ * verdict steps (issue #646). Signal (a) "named-route" fires when the step has a real, fresh, non-passing
  * decision to route on — `completion.routeClass === 'named-route'` for the
  * review steps, or `prdAuditNonClean` for prd_audit — regardless of attempt
  * number. Signal (b) "identical-repeat" fires only when the retry has already
  * happened once (`attempt >= 2`) and produced the exact same reason on inputs
  * that provably haven't changed. The conductor computes `inputsUnchanged` and
  * `prdAuditNonClean` and passes them in. Signal (c) "unretryable-inputs"
- * fires on the first attempt when the runner reports inputs that only another
- * step can change. This helper does no I/O.
+ * fires on the first attempt for every step except `build` when the runner
+ * reports inputs that only another step can change. This helper does no I/O.
  */
 export function classifyRetryDecision(input: {
   step: StepName;
@@ -4583,9 +4583,10 @@ export function classifyRetryDecision(input: {
   if (terminalRefusal === 'needs-human' || terminalRefusal === 'validation-verdict') {
     return { decision: 'route', signal: 'terminal-refusal' };
   }
+  if (step !== 'build' && unretryableInputs) {
+    return { decision: 'route', signal: 'unretryable-inputs' };
+  }
   if (!RETRY_CLASSIFY_STEPS.has(step)) return { decision: 'rerun' };
-
-  if (unretryableInputs) return { decision: 'route', signal: 'unretryable-inputs' };
 
   // D5: no verdict for this dispatch is a retryable absence, even when its
   // diagnostic happens to repeat byte-for-byte. This must outrank a PRD
