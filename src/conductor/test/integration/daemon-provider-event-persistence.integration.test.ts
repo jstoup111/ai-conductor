@@ -428,7 +428,7 @@ describe('daemon feature provider-event persistence', () => {
       ),
       createsFeatureScope: daemonSource.includes('const beginFeatureRun'),
       bindsProviderSinksToFeatureBus:
-        daemonSource.includes('createProviderExecution(featureEvents, featureLog)'),
+        daemonSource.includes('createProviderExecution(featureEvents, featureLog, featureLog.forwarded)'),
       passesScopeIntoRunnerDeps: daemonSource.includes('beginFeatureRun,'),
       runConductorAcceptsFeatureBus:
         /const runConductorInWorktree = async \([\s\S]*?featureEvents: ConductorEventEmitter/.test(

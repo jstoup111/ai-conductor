@@ -1390,7 +1390,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const globalPresenter = createDaemonEventPresenter({
     log: (entry) => globalSubscriberLog(composeDaemonLineBody(entry)),
     verbose: config?.daemon_verbose ?? false,
-    render: renderDaemonEventWithPresentation,
+    render: (event, output) => renderDaemonEventWithPresentation(event, output, globalSubscriberLog),
   });
   subscriber.start([daemonLogRenderer]);
   const readOnlyReviewCapabilityProbe =
@@ -1452,7 +1452,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       (message) => log(message, true),
       formatDaemonFeatureTag(slug),
     ) as FeatureDaemonLogger;
-    const scopedPresenter = createDaemonEventPresenter({ log: scopedLog, verbose: config?.daemon_verbose ?? false, render: renderDaemonEventWithPresentation });
+    const scopedPresenter = createDaemonEventPresenter({
+      log: scopedLog,
+      verbose: config?.daemon_verbose ?? false,
+      render: (event, output) => renderDaemonEventWithPresentation(event, output, scopedLog),
+    });
     scopedEvents.on('provider_attempt', (event) => scopedPresenter.render(event));
     scopedEvents.on('provider_fallback', (event) => scopedPresenter.render(event));
     scopedEvents.on('session_policy', (event) => scopedPresenter.render(event));
@@ -1552,7 +1556,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     if (visualizer) activeDispatchVisualizers.add(visualizer);
     // This presenter intentionally belongs to this dispatch, not its feature:
     // a redispatch gets fresh once/whenChanged memory.
-    const featurePresenter = createDaemonEventPresenter({ log: featureLog, verbose: config?.daemon_verbose ?? false, render: renderDaemonEventWithPresentation });
+    const featurePresenter = createDaemonEventPresenter({
+      log: featureLog,
+      verbose: config?.daemon_verbose ?? false,
+      render: (event, output) => renderDaemonEventWithPresentation(event, output, featureLog),
+    });
     const renderEvent = (event: ConductorEvent) => featurePresenter.render(event);
     const renderableEvents = renderedEventTypes();
     for (const type of renderableEvents) featureEvents.on(type, renderEvent);
@@ -2800,12 +2808,21 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 return await withFeatureEventPersistence({
                   worktreePath: join(projectRoot, '.worktrees', entry.slug), globalEvents: events, featureSlug: entry.slug,
                   run: async (featureEvents) => {
+                const recoveryLog = createFeatureDaemonLogger(
+                  entry.slug,
+                  (message) => log(message, true),
+                  formatDaemonFeatureTag(entry.slug),
+                );
                 subscribeRecoverySessionOccurrences(
                   featureEvents,
                   createDaemonEventPresenter({
-                    log: createFeatureDaemonLogger(entry.slug, (message) => log(message, true), formatDaemonFeatureTag(entry.slug)),
+                    log: recoveryLog,
                     verbose: config?.daemon_verbose ?? false,
-                    render: renderDaemonEventWithPresentation,
+                    render: (event, output) => renderDaemonEventWithPresentation(
+                      event,
+                      output,
+                      recoveryLog,
+                    ),
                   }),
                 );
                   // Create a real Tier-2 resolver that dispatches to the /rebase skill
@@ -2907,12 +2924,21 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               return await withFeatureEventPersistence({
                 worktreePath: join(projectRoot, '.worktrees', entry.slug), globalEvents: events, featureSlug: entry.slug,
                 run: async (featureEvents) => {
+              const recoveryLog = createFeatureDaemonLogger(
+                entry.slug,
+                (message) => log(message, true),
+                formatDaemonFeatureTag(entry.slug),
+              );
               subscribeRecoverySessionOccurrences(
                 featureEvents,
                 createDaemonEventPresenter({
-                  log: createFeatureDaemonLogger(entry.slug, (message) => log(message, true), formatDaemonFeatureTag(entry.slug)),
+                  log: recoveryLog,
                   verbose: config?.daemon_verbose ?? false,
-                  render: renderDaemonEventWithPresentation,
+                  render: (event, output) => renderDaemonEventWithPresentation(
+                    event,
+                    output,
+                    recoveryLog,
+                  ),
                 }),
               );
               const dispatchCiFix = createDaemonCiFixDispatch({
