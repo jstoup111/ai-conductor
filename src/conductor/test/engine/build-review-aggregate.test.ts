@@ -53,6 +53,14 @@ function securityJudged(findings: readonly BuildReviewFinding[] = []): BuildRevi
   };
 }
 
+function implementationQualityJudged(findings: readonly BuildReviewFinding[] = []): BuildReviewJudgedResult {
+  return { kind: 'judged', rubric: 'implementationQuality', lapId, snapshotDigest, contractVersion: 'v3', findings, verdict: findings.length ? 'FAIL' : 'PASS' };
+}
+
+function implementationQualityFinding(): BuildReviewFinding {
+  return { concernKind: 'duplication', summary: 'The changed target duplicates the declared source.', evidenceLocations: ['src/source.ts:8'], anchor: { rubric: 'implementationQuality', locus: { path: 'src/target.ts', contentHash: HASH, display: 'copied branch' } } };
+}
+
 function results(testQuality: BuildReviewRubricResult, security: BuildReviewRubricResult = securityJudged()) {
   return {
     testQuality,
@@ -85,6 +93,20 @@ function currentAggregate() {
 }
 
 describe('build-review raw aggregate', () => {
+  it('preserves passing peers beside an implementation-quality failure and suppresses a declared replication identity', () => {
+    const finding = implementationQualityFinding();
+    const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v3', concernKind: finding.concernKind, anchor: finding.anchor })!;
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest,
+      results: { testQuality: judged(), security: securityJudged(), implementationQuality: implementationQualityJudged([finding]) },
+      declaredReplicationSuppressions: [{ findingId: identity.id, sourcePath: 'src/source.ts', targetPath: 'src/target.ts' }],
+    });
+
+    expect(aggregate.verdict).toBe('FAIL');
+    expect(aggregate.results.testQuality).toEqual(judged());
+    expect(aggregate.results.security).toEqual(securityJudged());
+    expect(deriveEffectiveBuildReviewVerdict(aggregate)).toMatchObject({ verdict: 'PASS', suppressedFindingIds: [identity.id], unresolvedFindingIds: [] });
+  });
   it('normalizes omitted default-off security at the join boundary while the persisted parser stays exhaustive', () => {
     const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: judged() } });
 

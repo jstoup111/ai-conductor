@@ -289,7 +289,7 @@ require_absent_pattern 'composer contains no legacy conduct-ts engineer CLI exam
 
 # build_review output shape is engine-owned. These rules stop the shipped
 # rubric skills from reintroducing a competing prose payload contract.
-for build_review_skill in build-review-test-quality build-review-security; do
+for build_review_skill in build-review-test-quality build-review-security build-review-implementation-quality; do
   build_review_skill_file="$HARNESS_DIR/skills/${build_review_skill}/SKILL.md"
   require_absent_pattern "${build_review_skill} forbids ^## Result contract" \
     '^## Result contract' "$build_review_skill_file"
@@ -298,6 +298,9 @@ for build_review_skill in build-review-test-quality build-review-security; do
   require_absent_pattern "${build_review_skill} forbids ^Return exactly one provider payload" \
     '^Return exactly one provider payload' "$build_review_skill_file"
 done
+
+require_pattern 'implementation-quality Codex skill is explicit-only' \
+  'allow_implicit_invocation:[[:space:]]*false' "$HARNESS_DIR/skills/build-review-implementation-quality/agents/openai.yaml"
 
 require_pattern 'composer makes the host-agent session model provider-neutral' \
   'live supported host-agent session|supported host-agent session|host-agent session' \

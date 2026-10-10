@@ -212,7 +212,7 @@ import { renderBuildReviewFrozenInputScope } from './build-review-materializatio
 import { probeReadOnlyReviewCapability, type ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import { BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES } from './build-review-input-integrity.js';
 import { BuildReviewLapGate } from './build-review-lap-gate.js';
-import { stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
+import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
 import {
   coordinateBuildReviewRubrics,
   emitBuildReviewCacheDiscard,
@@ -3466,10 +3466,25 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
 
+    const declaredPlanSource = await resolvePlanPatternSource('.docs/plans/current.md', inputs.planBody, async (path) => this.fileExists(join(this.projectDir, path)));
+    const implementationQualityResult = validResults.implementationQuality;
+    const declaredReplicationSuppressions = declaredPlanSource.kind === 'resolved' && implementationQualityResult.kind === 'judged'
+      ? implementationQualityResult.findings.flatMap((finding) => {
+        if (finding.concernKind !== 'duplication' || finding.anchor.locus.path !== declaredPlanSource.renameMap.reduce(
+          (path, pair) => path.replaceAll(pair.source, pair.target), declaredPlanSource.sourcePath,
+        ) || finding.evidenceLocations.some((location) => location.split(':', 1)[0] !== declaredPlanSource.sourcePath)) return [];
+        const identity = canonicalizeBuildReviewFindingIdentity({
+          rubric: 'implementationQuality', contractVersion: implementationQualityResult.contractVersion,
+          concernKind: finding.concernKind, anchor: finding.anchor,
+        });
+        return identity ? [{ findingId: identity.id, sourcePath: declaredPlanSource.sourcePath, targetPath: finding.anchor.locus.path }] : [];
+      })
+      : [];
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId,
       snapshotDigest: inputs.sourceSnapshot.digest,
       results: validResults,
+      declaredReplicationSuppressions,
       ...(customResults === undefined ? {} : {
         customResults,
         currentCustomRubrics: customEntries.map((entry) => entry.id),

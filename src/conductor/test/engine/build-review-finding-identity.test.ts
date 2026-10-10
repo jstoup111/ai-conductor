@@ -91,6 +91,14 @@ function customPayload(overrides: Record<string, unknown> = {}): Record<string, 
 }
 
 describe('build-review finding identity', () => {
+  it('round-trips an implementation-quality payload only when its anchor rubric agrees', () => {
+    const payload = {
+      rubric: 'implementationQuality', contractVersion: 'v3', concernKind: 'duplication',
+      anchor: { rubric: 'implementationQuality', locus: { path: 'src/domain.ts', contentHash: HASH_A } },
+    } as const;
+    expect(parseBuildReviewFindingCanonicalPayload(payload)).toEqual(payload);
+    expect(parseBuildReviewFindingCanonicalPayload({ ...payload, anchor: { ...payload.anchor, rubric: 'security' } })).toBeUndefined();
+  });
   it('gives implementation-quality findings a stable identity despite summary drift', () => {
     const first = canonicalizeBuildReviewFindingIdentity(implementationQualityFinding({ summary: 'Repeated transition.' }));
     const drifted = canonicalizeBuildReviewFindingIdentity(implementationQualityFinding({ summary: 'Same concrete defect, reworded.' }));

@@ -80,7 +80,9 @@ function source(overrides: Partial<Source> = {}): Source {
       },
       sourceSnapshot: {
         digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head',
-        diff: FIXTURE_DIFF, planBody: '# Approved plan\n',
+        diff: FIXTURE_DIFF, planBody: '# Approved plan\n', planPath: '.docs/plans/private-plan.md',
+        storiesPath: 'stories/private-story.md', storiesContent: 'private stories body',
+        adrPath: 'decisions/private-adr.md', adrContent: 'private ADR body',
         changedTestTitles: [{ selector: 'test/a.test.ts', titleText: 'a > persists', staticExtractionFallback: false }],
       },
     } as unknown as Source['inputs'],
@@ -333,7 +335,10 @@ describe('build-review rubric projections', () => {
       'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase',
       'projectionVersion', 'rubric', 'snapshotDigest',
     ]);
-    expect(JSON.stringify(projections.implementationQuality)).not.toContain('# Approved plan');
+    const serializedImplementationQuality = JSON.stringify(projections.implementationQuality);
+    for (const privateInput of ['# Approved plan', 'stories/private-story.md', 'private stories body', 'decisions/private-adr.md', 'private ADR body']) {
+      expect(serializedImplementationQuality).not.toContain(privateInput);
+    }
     expect(projections.implementationQuality.snapshotDigest).toBe(projections.security.snapshotDigest);
   });
 

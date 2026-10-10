@@ -878,9 +878,9 @@ export function diagnoseBuildReviewJudgedResultRejection(value: unknown, rubric:
   const source = object(value);
   if (!source) return Object.freeze({ kind: 'explained', problems: Object.freeze([rejectionProblem('$', 'must be an object', 'the result is not a single JSON object')]) });
   const problems: BuildReviewJudgedResultRejectionProblem[] = [];
-  if (rubric === 'security') {
+  if (rubric === 'security' || rubric === 'implementationQuality') {
     for (const field of TEST_QUALITY_EVIDENCE_FIELDS) {
-      if (source[field] !== undefined) problems.push(rejectionProblem(field, 'is test-quality evidence and is forbidden for security', `"${field}" is test-quality evidence and is forbidden for security`));
+      if (source[field] !== undefined) problems.push(rejectionProblem(field, `is test-quality evidence and is forbidden for ${rubric}`, `"${field}" is test-quality evidence and is forbidden for ${rubric}`));
     }
   }
   if (source.kind !== 'judged') problems.push(rejectionProblem('kind', `must be exactly the string "judged" (got ${(JSON.stringify(source.kind) ?? 'no kind field').slice(0, 64)})`, `top-level "kind" must be exactly the string "judged" (got ${(JSON.stringify(source.kind) ?? 'no kind field').slice(0, 64)})`));
@@ -904,9 +904,9 @@ export function diagnoseBuildReviewJudgedResultRejection(value: unknown, rubric:
       const anchor = object(item.anchor);
       if (!anchor) { problems.push(rejectionProblem(`findings[${index}].anchor`, `is required: a nested object {"rubric": "${rubric}", "locus": {"path", "contentHash", "display"}} — never flattened top-level fields, and never an alternate name such as "anchors"`)); return; }
       if (anchor.rubric !== rubric) problems.push(rejectionProblem(`findings[${index}].anchor.rubric`, `must be "${rubric}"`));
-      const locus = rubric === 'security' ? securityRegion(anchor.locus) : region(anchor.locus);
+      const locus = rubric === 'security' || rubric === 'implementationQuality' ? securityRegion(anchor.locus) : region(anchor.locus);
       if (!locus) problems.push(rejectionProblem(`findings[${index}].anchor.locus`, 'must be a content-region reference {"path", "contentHash", "display", "occurrence"?}'));
-      else if (rubric === 'security' && references && !references.changedContentRegions.some((candidate) => sameRegion(candidate, locus))) problems.push(rejectionProblem(`findings[${index}].anchor.locus.contentHash`, 'must equal a contentHash listed by the projected changed content regions', `findings[${index}].anchor.locus must reference a projected changed content region (path, contentHash, and occurrence must match one)`));
+      else if ((rubric === 'security' || rubric === 'implementationQuality') && references && !references.changedContentRegions.some((candidate) => sameRegion(candidate, locus))) problems.push(rejectionProblem(`findings[${index}].anchor.locus.contentHash`, 'must equal a contentHash listed by the projected changed content regions', `findings[${index}].anchor.locus must reference a projected changed content region (path, contentHash, and occurrence must match one)`));
       else if (rubric === 'testQuality' && references?.changedTestRegions && !references.changedTestRegions.some((candidate) => sameRegion(candidate, locus))) problems.push(rejectionProblem(`findings[${index}].anchor.locus.contentHash`, 'must equal a contentHash listed by the projected in-scope content regions', `findings[${index}].anchor.locus must reference a projected in-scope content region (path, contentHash, and occurrence must match one)`));
     });
     const duplicates = new Map<string, number>();

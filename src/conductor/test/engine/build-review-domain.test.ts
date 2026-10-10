@@ -91,6 +91,24 @@ describe('build-review domain', () => {
     expect(describeBuildReviewJudgedResultRejection({ ...payload, findings: [{ ...payload.findings[0], concernKind: 'unmet-acceptance-criterion' }] }, 'implementationQuality', expected, references)).toContain('one of');
     expect(parseBuildReviewFindingAnchor({ ...anchor, locus: { ...anchor.locus, line: 8 } }, references)).toBeUndefined();
   });
+  it('accepts every implementation-quality kind only at a changed region, and rejects forbidden evidence', () => {
+    const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
+    const locus = { path: 'src/domain.ts', contentHash: HASH, display: 'introduced domain state' };
+    const references = { changedTests: [], changedContentRegions: [locus], changedPaths: [locus.path], planTasks: [] };
+    const base = { kind: 'judged', rubric: 'implementationQuality', ...expected, contractVersion: 'v3' };
+    const findings = BUILD_REVIEW_FINDING_VOCABULARIES.implementationQuality.concernKinds.map((concernKind) => ({ concernKind, summary: `${concernKind} in changed code`, evidenceLocations: ['src/domain.ts:8'], anchor: { rubric: 'implementationQuality', locus } }));
+    const parsed = parseBuildReviewJudgedResult({ ...base, findings }, references);
+    expect(parsed).toMatchObject({ verdict: 'FAIL' });
+    expect(parsed?.kind === 'judged' ? parsed.findings : []).toHaveLength(7);
+    expect(parseBuildReviewJudgedResult({ ...base, findings: [] }, references)).toMatchObject({ verdict: 'PASS', findings: [] });
+    for (const [field, value] of [['scopeResolutions', []], ['counterfactualSensitivity', 'supports'], ['relocationAudit', []]] as const) {
+      const invalid = { ...base, findings: [findings[0]], [field]: value };
+      expect(parseBuildReviewJudgedResult(invalid, references)).toBeUndefined();
+      expect(describeBuildReviewJudgedResultRejection(invalid, 'implementationQuality', expected, references)).toContain(field);
+    }
+    const unmatched = { ...base, findings: [{ ...findings[0], anchor: { rubric: 'implementationQuality', locus: { ...locus, contentHash: `sha256:${'b'.repeat(64)}` } } }] };
+    expect(describeBuildReviewJudgedResultRejection(unmatched, 'implementationQuality', expected, references)).toContain('projected changed content region');
+  });
   it('keeps the security concern vocabulary closed to the approved ten kinds', () => {
     expect(BUILD_REVIEW_FINDING_VOCABULARIES.security.concernKinds).toEqual([
       'committed-secret', 'injection', 'broken-access-control', 'path-traversal',

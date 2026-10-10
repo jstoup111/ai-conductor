@@ -1,5 +1,5 @@
 // Covers: task:12
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
@@ -18,6 +18,9 @@ const securitySkillPath = fileURLToPath(
 );
 const implementationQualitySkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-implementation-quality/SKILL.md', import.meta.url),
+);
+const implementationQualityOpenAiPath = fileURLToPath(
+  new URL('../../../../skills/build-review-implementation-quality/agents/openai.yaml', import.meta.url),
 );
 
 function judgementSection(skill: string): string {
@@ -122,10 +125,12 @@ describe('build-review Security skill contract', () => {
 describe('build-review implementation-quality skill contract', () => {
   it('is a gated, judgement-only contract with a findings-only result', async () => {
     const skill = await readFile(implementationQualitySkillPath, 'utf8');
+    await expect(access(implementationQualityOpenAiPath)).resolves.toBeUndefined();
+    await expect(readFile(implementationQualityOpenAiPath, 'utf8')).resolves.toMatch(/allow_implicit_invocation:\s*false/);
     expectVocabularyDefinitions(skill, 'implementationQuality');
     expect(skill).toMatch(/judgement-only contract/i);
     expect(skill).toMatch(/Return only.*findings/i);
-    expect(skill).not.toMatch(/scopeResolutions|counterfactualSensitivity/);
+    expect(skill).not.toMatch(/scopeResolutions|counterfactualSensitivity|testScopeEvidence|relocationAudit/);
     expect(skill).toMatch(/acceptance-criteria compliance.*prd_audit/i);
     expect(skill).toMatch(/ADR conformance.*as-built architecture review/i);
   });
