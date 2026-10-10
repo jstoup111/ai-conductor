@@ -155,7 +155,7 @@ strict Dependencies grammar, and none that contradicts this design. The decision
      path and halt writer. It names each violation, never appends a task, and never routes to
      `plan` (D6).
 
-     > **Amended 2026-10-10 by #PRNUM:** An `invalid` result no longer refuses. `coverage_binding` is
+     > **Amended 2026-10-10 by #3164:** An `invalid` result no longer refuses. `coverage_binding` is
      > a no-op (`adr-2026-08-31-coverage-binding-judge-step`, amended). It logs the violations, records
      > no membership, and the feature builds flat. The land `plan-slices` rung (Decision 5) is now the
      > only refusing check. Membership recording, `plan_slices_changed`, the baseline rule, and the

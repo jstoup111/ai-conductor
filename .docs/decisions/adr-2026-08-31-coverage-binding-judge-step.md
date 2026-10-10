@@ -56,7 +56,7 @@ Two facts fix the design space:
 
 ## Decision
 
-> **Amended 2026-10-10 by #PRNUM:** The pre-BUILD judge is retired and `coverage_binding` is a
+> **Amended 2026-10-10 by #3164:** The pre-BUILD judge is retired and `coverage_binding` is a
 > no-op step. With the judge enabled, it caused 38% of halts, and its refusals had no operator lever.
 > It was already disabled in this repository on 2026-10-06 (#3014). The step keeps its id, position,
 > phase, completion artifact, config keys, and event types, so existing configs, ledgers, and resume

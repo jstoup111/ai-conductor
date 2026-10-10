@@ -54,7 +54,7 @@ The operator selected shared semantics for explicitly reopened tasks, confirmed 
 > key), never to another gate's allowance. For decision 8, its governing review is the feature's next `build_review` lap;
 > `coverage_binding` does not re-review repaired code.
 >
-> **Amended 2026-10-10 by #PRNUM:** Decision 10 is retired. `coverage_binding` is now a no-op
+> **Amended 2026-10-10 by #3164:** Decision 10 is retired. `coverage_binding` is now a no-op
 > (`adr-2026-08-31-coverage-binding-judge-step`, amended), so it never admits a repair or reopens a
 > task. `gates.coverage_binding` is no longer charged. Decisions 1–9 are unchanged.
 
