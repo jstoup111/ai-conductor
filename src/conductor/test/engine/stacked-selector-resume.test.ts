@@ -112,7 +112,9 @@ describe('stacked selector and resume overlays', () => {
     const flat = {
       ...doneThrough('manual_test'),
       feature_desc: 'demo',
-      last_step: 'manual_test',
+      // doneThrough('manual_test') stops at build_review. On child entry the
+      // routed child state deliberately replaces this flat breadcrumb.
+      last_step: 'build_review',
     } as ConductState;
     const statePath = join(root, '.pipeline', 'conduct-state.json');
     await writeState(statePath, flat);

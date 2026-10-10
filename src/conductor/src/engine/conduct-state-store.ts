@@ -53,7 +53,13 @@ export async function readConductStateOverlay(
   const regionEntries = Object.entries(region.value).filter(
     ([field]) => isRegionStep(field) || field === 'last_step',
   );
-  return { ok: true, value: { ...base.value, ...Object.fromEntries(regionEntries) } };
+  // A child's cursor is authoritative only when it exists in that child
+  // document. Do not inherit the flat cursor from an earlier child: the
+  // routed writer would then compare it against an absent child value and
+  // refuse the first resumed region transition as a false conflict.
+  const featureState = { ...base.value };
+  if (!Object.hasOwn(region.value, 'last_step')) delete featureState.last_step;
+  return { ok: true, value: { ...featureState, ...Object.fromEntries(regionEntries) } };
 }
 
 /**

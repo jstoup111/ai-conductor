@@ -2416,6 +2416,13 @@ export class Conductor {
       if (value === undefined) delete state[step];
       else state[step] = value;
     }
+    // `last_step` is written alongside every region status through the routed
+    // store.  Keeping the flat breadcrumb here makes its compare-and-swap
+    // expectation target a field that does not exist in the child state,
+    // falsely reporting a concurrent update on the first resumed dispatch.
+    const lastStep = overlay.value.last_step;
+    if (lastStep === undefined) delete state.last_step;
+    else state.last_step = lastStep;
     this.activeRegionChild = child;
     this.activeRegionIsLeaf = isLeaf;
     this.persistedStateSnapshot = { ...state };

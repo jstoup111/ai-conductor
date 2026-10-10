@@ -92,7 +92,10 @@ describe('stacked BUILD region events', () => {
         fromStep: 'acceptance_specs',
         events,
         verifyArtifacts: false,
-        stepRunner: { run: async () => ({ success: true }) },
+        // The no-owned-criteria verdict is emitted before the next region
+        // dispatch. Stop there so this focused event test cannot enter an
+        // unrelated mocked-success build loop.
+        stepRunner: { run: async () => { throw new Error('stop after no-owned-criteria event'); } },
       }).run();
 
       const records = await persistedEvents();
@@ -123,7 +126,9 @@ describe('stacked BUILD region events', () => {
         fromStep: 'acceptance_specs',
         events,
         verifyArtifacts: false,
-        stepRunner: { run: async () => ({ success: true }) },
+        // step_started is emitted before invoking the runner; terminate at
+        // that seam rather than allowing the fixture to traverse later gates.
+        stepRunner: { run: async () => { throw new Error('stop after region step start'); } },
       }).run();
 
       const starts = (await persistedEvents()).filter((event) =>
