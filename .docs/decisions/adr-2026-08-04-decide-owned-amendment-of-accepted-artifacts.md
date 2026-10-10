@@ -57,6 +57,13 @@ The note form is the convention already used throughout this repository's corpus
 Amendments are additive. The original assertion is never rewritten or deleted; the note sits with it,
 so a reader of the old text sees the correction beside it rather than a silent replacement.
 
+> **Amended 2026-10-10 by #2499:** the additive note form applies only to accepted DECIDE artifacts
+> already on the base branch (the default branch at the spec branch's merge base). An artifact
+> absent from the base branch — including one this spec branch already committed — is a draft: it is
+> revised in place to state only the current approved scope, with no amendment note; git history and
+> the spec PR carry provenance. The never-rewrite/never-delete safeguard is unchanged for artifacts
+> on the base branch. Operator decision, delegated 2026-10-09 (`.docs/plans/draft-spec-corrections-retain-obsolete-text-under-.md`).
+
 ### 2. The ban on tasking a mutation binds every skill, not just `plan`
 
 The amendment intent originates in three different DECIDE skills, so a single-skill fix would leave
@@ -148,6 +155,9 @@ already provides; what was missing was a sanctioned way to satisfy it, which is 
 > no change of substance. Each id names a decision exactly as already stated above.
 >
 > **D1** — An amendment to an accepted `.docs/` artifact is written into that artifact during the DECIDE pass that necessitates it, committed on the spec branch, in the codified additive `> **Amended YYYY-MM-DD by #NNN:**` note form; the original assertion is never rewritten or deleted. (above: "### 1. The mutation happens at DECIDE, in place")
+>
+> **Amended 2026-10-10 by #2499:** D1's additive form is scoped to artifacts already on the base branch; drafts absent from it are revised in place (see the note under "### 1").
+>
 > **D2** — The ban on tasking a mutation binds every skill: the contract is stated once in `HARNESS.md` and each affected skill carries the obligation given in the table above. (above: "### 2. The ban on tasking a mutation binds every skill")
 > **D3** — The ban covers the sealed directories (five, as amended 2026-08-19 by #1736 above) and other features' artifacts only; own-feature paths remain tolerated. (above: "### 3. Scope of the ban: sealed directories, other features' artifacts")
 > **D4** — Enforcement is deterministic and engine-side at two checkpoints, a blocking authoring-time `conduct-ts` check invoked by `/plan` and a land-time gate in `land-spec.ts`, mechanical and not LLM-judged. (above: "### 4. Enforcement is deterministic and engine-side")
