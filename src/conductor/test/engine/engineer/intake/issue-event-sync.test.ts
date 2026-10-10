@@ -1,4 +1,4 @@
-// Covers: task:3, task:4
+// Covers: task:3, task:4, task:5
 
 import { describe, expect, it } from 'vitest';
 import type { GithubOperationRequest, GithubOperationRunner } from '../../../../src/engine/github-operations.js';
@@ -16,6 +16,13 @@ function opened(body: string) {
   };
 }
 
+function edited(body: string) {
+  return {
+    ...opened(body),
+    action: 'edited',
+  };
+}
+
 function formBody(): string {
   return [
     '### Priority', '', 'high', '',
@@ -28,11 +35,12 @@ function formBody(): string {
 function makeDeps(existingTargets: readonly number[] = []) {
   const requests: GithubOperationRequest[] = [];
   const labels: string[] = [];
+  const linkedTargets = new Set(existingTargets);
   const gh: GhRunner = async (args) => {
     const path = args.find((arg) => arg.includes('/dependencies/blocked_by'));
     if (path && !args.includes('POST')) {
       return {
-        stdout: JSON.stringify(existingTargets.map((number) => ({
+        stdout: JSON.stringify([...linkedTargets].map((number) => ({
           number,
           repository_url: `https://api.github.com/repos/${REPOSITORY}`,
         }))),
@@ -48,6 +56,9 @@ function makeDeps(existingTargets: readonly number[] = []) {
       if (request.operation === 'intake.issue.label.add') {
         labels.push((request.payload as { label: string }).label);
       }
+      if (request.operation === 'intake.issue.dependency.add') {
+        linkedTargets.add((request.payload as { dependency: { number: number } }).dependency.number);
+      }
       return {};
     },
   };
@@ -56,6 +67,7 @@ function makeDeps(existingTargets: readonly number[] = []) {
     deps: { gh, operations, actor: 'intake-operator', cwd: '/repo' },
     requests,
     labels,
+    linkedTargets,
   };
 }
 
@@ -151,5 +163,40 @@ describe('applyIssueEventSync', () => {
     await applyIssueEventSync(opened('blocked by #20'), deps);
 
     expect(requests).toEqual([]);
+  });
+
+  it('adds new edited declarations while retaining existing blocked_by links', async () => {
+    const { deps, requests, linkedTargets } = makeDeps([10]);
+
+    await applyIssueEventSync(edited('blocked by #10 and depends on #11'), deps);
+
+    expect(dependencyTargets(requests)).toEqual(['acme/app#11']);
+    expect([...linkedTargets].sort((left, right) => left - right)).toEqual([10, 11]);
+    expect(requests.filter((request) => request.operation === 'intake.issue.dependency.remove')).toEqual([]);
+  });
+
+  it.each([
+    ['removed declaration', 'No dependency is declared here.', [10]],
+    ['replacement declaration', 'blocked by #12', [10, 12]],
+  ])('never removes a prior link after an edited $s', async (_name, body, expectedTargets) => {
+    const { deps, requests, linkedTargets } = makeDeps([10]);
+
+    await applyIssueEventSync(edited(body), deps);
+
+    expect(requests.filter((request) => request.operation === 'intake.issue.dependency.remove')).toEqual([]);
+    expect([...linkedTargets].sort((left, right) => left - right)).toEqual(expectedTargets);
+    if (body === 'blocked by #12') expect(dependencyTargets(requests)).toEqual(['acme/app#12']);
+  });
+
+  it('uses the current edited body as the declaration of record', async () => {
+    const alreadyLinked = makeDeps([10]);
+    await applyIssueEventSync(edited('blocked by #10'), alreadyLinked.deps);
+    expect(dependencyTargets(alreadyLinked.requests)).toEqual([]);
+    expect([...alreadyLinked.linkedTargets]).toEqual([10]);
+
+    const restored = makeDeps();
+    await applyIssueEventSync(edited('blocked by #10'), restored.deps);
+    expect(dependencyTargets(restored.requests)).toEqual(['acme/app#10']);
+    expect([...restored.linkedTargets]).toEqual([10]);
   });
 });

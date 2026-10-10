@@ -72,12 +72,16 @@ export async function applyIssueEventSync(
   event: IssueEventSyncEvent,
   deps: IssueEventSyncDeps,
 ): Promise<IssueEventSyncReport> {
+  // GitHub supplies the post-edit body. Treat that snapshot as an additive
+  // declaration: create every currently declared edge, but never reconcile a
+  // removed declaration by deleting an existing blocked_by link.
   const body = event.issue.body ?? '';
   const ref = `${event.repository.full_name}#${event.issue.number}`;
   const log = deps.log ?? (() => {});
+  const isFormSubmission = isIssueFormSubmission(body);
   let labels: SyncIssueLabelsResult | undefined;
 
-  if (isIssueFormSubmission(body)) {
+  if (isFormSubmission) {
     labels = await syncIssueLabels(formFields(body), ref, {
       gh: deps.gh,
       labelOperations: deps.operations,
@@ -90,7 +94,7 @@ export async function applyIssueEventSync(
   const { edges } = declaredEdges({
     ref,
     body,
-    formDependsOn: isIssueFormSubmission(body)
+    formDependsOn: isFormSubmission
       ? [extractField(body, 'Depends on')].filter((value): value is string => value !== undefined)
       : [],
   });
