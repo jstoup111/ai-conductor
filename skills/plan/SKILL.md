@@ -244,11 +244,11 @@ The tag is part of the authored check text and makes the task-close boundary req
 conjunctions: every outcome it states — including absence and no-op outcomes such as "no dispatch
 is attempted", "nothing is published", or "the branch settles `absent`" — must be explicitly
 required by at least one check in a cited task, with the same precision the criterion uses
-("byte-identical" is not satisfied by "deep-equal"). The `coverage_binding` judge refuses the plan
-before BUILD when any outcome is only implied. One check may carry several outcomes; when a task's
+("byte-identical" is not satisfied by "deep-equal"). The independent coverage judgement (§7a) refuses
+the plan before it lands when any outcome is only implied. One check may carry several outcomes; when a task's
 criteria need more than five checks to cover, split the task rather than dropping outcomes.
 
-Five drift shapes account for most `coverage_binding` refusals; check each mapped criterion for them:
+Five drift shapes account for most coverage-judgement refusals; check each mapped criterion for them:
 
 - **Layer drift.** The check asserts a lower mechanism than the criterion names — two render calls
   where the criterion says two dispatches, a store where it says the resolved candidate list. Assert
@@ -547,13 +547,12 @@ must be taken from one cited task's `Done when` block, and the disposition is
 #### 7a. Independent Coverage Judgement
 
 **GATE: before the plan lands, a fresh subagent judges every criterion row. The plan's author never
-judges its own checks.** The `coverage_binding` step applies this same judgement before BUILD. A
-refusal there halts the feature and needs an amendment and an operator reseal; a refusal here is a
-one-turn fix.
+judges its own checks.** This is the only coverage judgement: the engine's `coverage_binding` step
+is a no-op and does not re-judge before BUILD.
 
 1. Build one claim per criterion row: the exact criterion text and every `Done when` bullet of each
    cited task, verbatim. Include nothing else — no plan prose, stories, files, or rationale — so the
-   subagent sees exactly what the gate sees. Number the claims.
+   subagent sees only the claim and its checks. Number the claims.
 2. Dispatch one subagent with fresh context through the selected host's available subagent facility.
    Instruct it to apply `skills/coverage-binding/SKILL.md` exactly — its judgement policy and its
    result contract, using the claim numbers as claim ids — and to read nothing beyond the supplied
@@ -568,8 +567,7 @@ one-turn fix.
 5. Never overrule a refusal by argument, and never edit a criterion to fit a check. Criteria change
    only through the stories step.
 
-For M and L plans, `coherence-check` repeats this judgement on its own criterion rows, because those
-rows are what `coverage_binding` judges at those tiers.
+For M and L plans, `coherence-check` repeats this judgement on its own criterion rows.
 
 #### 7b. Independent Contradiction Judgement
 

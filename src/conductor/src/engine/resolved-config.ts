@@ -79,7 +79,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   architecture_diagram: 'auto',
   architecture_review: 'conditional',
   worktree: 'auto',
-  coverage_binding: 'auto', // engine-native gate; the judge config is resolved separately
+  coverage_binding: 'auto', // engine-native no-op gate; records plan slice topology only
   acceptance_specs: 'auto',
   build: 'auto',
   build_review: 'conditional', // marker written only on FAIL verdict (kickback)
@@ -124,16 +124,6 @@ export function resolveDaemonConcurrency(config?: HarnessConfig): number {
  * by default — the intended behavior change, documented as a migration note.
  */
 export const DEFAULT_STEP_ESCALATE = true;
-
-/** Resolve the default-off coverage-binding judge configuration. */
-export function resolveCoverageBindingConfig(
-  config: Pick<HarnessConfig, 'coverage_binding'> | undefined,
-): { judgeEnabled: boolean; batchSize: number } {
-  return {
-    judgeEnabled: config?.coverage_binding?.judge?.enabled ?? false,
-    batchSize: config?.coverage_binding?.judge?.batch_size ?? 8,
-  };
-}
 
 /** Resolve the project-only feature applicability opt-in. */
 export function resolveFeatureApplicabilityConfig(

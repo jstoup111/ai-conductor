@@ -126,7 +126,8 @@ export const CELLS: Cell[] = [
     name: 'flag-on-ineligible',
     configYaml: 'stacked_prs:\n  enabled: true\n  max_slices: 2\n',
     planMd: INELIGIBLE_TWO_SLICE_PLAN,
-    coverageBinding: 'refused',
+    // An ineligible stack builds flat: coverage_binding no longer refuses it.
+    coverageBinding: 'done',
     complexityMd: 'Tier: M\n',
     storiesFixture: 'two',
   },

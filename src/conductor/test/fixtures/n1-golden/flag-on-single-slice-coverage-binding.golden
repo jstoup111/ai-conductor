@@ -4,19 +4,7 @@
   "slug": "n1-golden",
   "runId": "n1-golden-session",
   "status": "disabled",
-  "entries": [
-    {
-      "kind": "conflict",
-      "digest": "sha256:1838d94c89440387f09aa3952ecc8b37032c57922f512e4f8c8f2c1d27a462f0",
-      "claimKind": "criterion",
-      "claimId": "stories#unparseable",
-      "verdict": "unjudged"
-    }
-  ],
-  "adrLayer": {
-    "disposition": "not-applicable",
-    "adrIds": []
-  },
+  "entries": [],
   "sliceMembership": {
     "taskSlices": {
       "1": 1,

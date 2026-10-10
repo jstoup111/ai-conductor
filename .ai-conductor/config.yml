@@ -202,9 +202,8 @@ llm_providers:
 
 # Pre-BUILD coverage-binding judge. Disabled 2026-10-06 (operator order): its
 # refusals halted features on false or pedantic verdicts with no operator
-# lever, across codex terra and claude sonnet. Mechanical checks (plan slices,
-# architecture obligation coverage) still run. Re-enable once refusals are
-# verified before they halt. The shipped default is false.
+# lever, across codex terra and claude sonnet. Retired 2026-10-10: the step is
+# now a no-op that only records plan slice topology, and this key is ignored.
 coverage_binding:
   judge:
     enabled: false

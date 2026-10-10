@@ -158,7 +158,7 @@ the effective verdict. A `projection-oversized` infrastructure failure includes 
 counts and halts for an operator without consuming the shared mechanical-fault allowance. The optional
 excerpt, deterministic reason, and unresolved-marker count are included only when the event supplies them.
 
-A rebase that changes the active feature’s stories or PRD reruns its PRD audit and coverage binding. Changes to its plan or coherence carrier rerun coverage binding. Document-only changes leave BUILD and aggregate test proof intact; unrelated features’ documents leave these reviews intact. Rebase events name the input paths responsible for each decision.
+A rebase that changes the active feature’s stories or PRD reruns its PRD audit and coverage binding. Changes to its plan or coherence carrier rerun coverage binding. Coverage binding is a no-op that only re-records the plan's slice topology, so a rerun never halts or reopens work. Document-only changes leave BUILD and aggregate test proof intact; unrelated features’ documents leave these reviews intact. Rebase events name the input paths responsible for each decision.
 
 ### Protected-artifact rebaselines
 
@@ -916,7 +916,7 @@ skippable only when both of these also hold:
   active story, PRD, plan, or coherence carrier differs between the branch's merge-base and the base
   ref. If the base gained code after `build_review` graded the diff, `test_suite` proved a tree, or
   `manual_test` exercised behavior, those verdicts predate it. A changed active review input can
-  also change the PRD-audit or coverage-binding result. In either case the engine rebases and lets
+  also change the PRD-audit result or the plan's recorded slice topology. In either case the engine rebases and lets
   delta-aware invalidation decide what to re-verify. Unrelated documentation still permits a skip.
 - **The base is not a degraded fallback.** When an `origin` remote exists but its default-branch
   discovery or `git fetch` failed, the engine compares against the LOCAL base branch, which in a
@@ -1058,7 +1058,7 @@ and only a delta that lands inside that surface invalidates it.
 | `manual_test` | all runtime source | any runtime source path, feature-owned or not |
 | `build_review` | the feature's own code and tests | the feature's own source **or** its own test files |
 | `prd_audit` | the feature's own runtime source, active stories, and PRD | the feature's own source, active story, or active PRD |
-| `coverage_binding` | the feature's own runtime source, active stories, PRD, plan, coherence carrier, and ADRs the feature's documents cite | the feature's own source or one of those active review inputs |
+| `coverage_binding` (no-op; re-records slice topology) | the feature's own runtime source, active stories, PRD, plan, coherence carrier, and ADRs the feature's documents cite | the feature's own source or one of those active review inputs |
 | `architecture_review_as_built` | the feature's own runtime source | the feature's own source |
 
 `build_review` grades the feature's own code and tests — currently only the opt-in `testQuality`

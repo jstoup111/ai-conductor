@@ -155,6 +155,12 @@ into one stack-eligibility verdict. Land and `coverage_binding` both evaluate it
        reopen eligibility) therefore survives the refusal and the operator's fix.
      - It never appends a task and never routes to `plan`.
 
+     > **Amended 2026-10-10 by #PRNUM:** At `coverage_binding` the predicates no longer refuse.
+     > The step is a no-op (`adr-2026-08-31-coverage-binding-judge-step`, amended). An ownership
+     > violation or an ineligible verdict is logged, and no `storyOwnership` is recorded, so the
+     > feature builds flat. The land `stacked-delivery` rung is the only refusing point. Decision 6's
+     > ownership recording on an eligible run is unchanged.
+
 6. **Ownership is recorded, feature-scoped.** On a valid sliced, flag-on run, `coverage_binding`
    records `story id → child position` in its envelope beside the slice membership
    (`adr-2026-09-29-plan-slice-manifest` D6). It follows the same rules as that membership:

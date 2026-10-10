@@ -1812,7 +1812,8 @@ export function validateConfig(
     }
   }
 
-  // coverage_binding — default-off pre-BUILD criterion-to-Done-when judge.
+  // coverage_binding — retained for compatibility; the step is a no-op and
+  // never reads judge.enabled or judge.batch_size.
   {
     const err = validateCoverageBindingBlock(obj.coverage_binding);
     if (err) return { ok: false, error: err };

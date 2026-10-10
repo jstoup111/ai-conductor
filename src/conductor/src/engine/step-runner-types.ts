@@ -1,6 +1,5 @@
 import type { BuildReviewRepairProvenance } from './build-review-inputs.js';
 import type { MalformedCoversMarker } from './build-review-test-scope.js';
-import type { CoverageBindingPayloadError } from './step-runners.js';
 import type { AuthenticationReadiness, CodexProbeFailure, ProviderExitFacts, TokenUsage } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
 import type { ManagedGhObservationCoverage } from '../execution/managed-session-preparation.js';
@@ -33,8 +32,6 @@ export interface StepRunResult {
     kind: 'seal' | 'needs-human' | 'validation-verdict';
     reason: string;
   };
-  /** Retryable typed infrastructure failure from the coverage-binding judge. */
-  infrastructureFailure?: Pick<CoverageBindingPayloadError, 'name' | 'kind' | 'reason'>;
   /** True only when this build-review lap observed an infrastructure fault. */
   currentLapMechanicalFault?: boolean;
   /** A custom review had no provider with an available read-only review mode. */

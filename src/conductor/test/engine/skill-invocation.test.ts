@@ -119,7 +119,7 @@ describe('provider-native skill invocation', () => {
 
   it.each([
     ['build-review-security', '/skill:build-review-security'],
-    ['coverage-binding', '/skill:coverage-binding'],
+    ['rebase-regrade', '/skill:rebase-regrade'],
   ])('renders Pi auxiliary skill %s', (skillName, expected) => {
     expect(renderAuxiliarySkillInvocation(skillName, 'pi')).toBe(expected);
   });

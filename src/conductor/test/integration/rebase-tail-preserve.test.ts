@@ -74,25 +74,6 @@ const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   diagramDrift: { enabled: false, reason: 'test fixture' },
 };
 
-function coverageBindingBatchOutput(
-  prompt: string,
-  verdict: 'asserts' | 'does-not-assert' = 'asserts',
-): string {
-  const body = prompt.slice(prompt.lastIndexOf('\n\n{') + 2);
-  const { claims, taskTable } = JSON.parse(body) as { claims: Array<{ id: string }>; taskTable?: unknown };
-  return JSON.stringify({
-    verdicts: claims.map(({ id }) => taskTable !== undefined
-      ? { id, verdict: 'consistent' }
-      : verdict === 'asserts'
-      ? { id, verdict }
-      : {
-          id,
-          verdict,
-          missingAssertion: 'The pair does not prove the criterion.',
-        }),
-  });
-}
-
 describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
   let dir: string;
   let statePath: string;
@@ -414,117 +395,22 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     expect(afterReplay.indexOf('manual_test')).toBeGreaterThan(proofAt);
   });
 
-  it('refreshes changed coverage pairs with the existing runner before verification, without reopening authoring or BUILD', async () => {
-    const config = { coverage_binding: { judge: { enabled: true } } };
-    let providerCalls = 0;
-    const provider: LLMProvider = {
-      lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: async (options) => {
-        providerCalls++;
-        return { success: true, output: coverageBindingBatchOutput(options.prompt), exitCode: 0 };
-      },
-    };
-    const oldRunner = new DefaultStepRunner(provider, 'coverage-before-rebase', dir, {
-      featureDesc: 'add-foo', planPath: join(dir, '.docs/plans/add-foo.md'), config: config as never,
-    });
-    await oldRunner.run('coverage_binding', { complexity_tier: 'M' });
-    await prepareChangedCoveragePair();
-
-    const counts: Record<string, number> = {};
-    await conductorWith(coverageRefreshRunner(counts, provider, config), config, undefined, 'coverage_binding').run();
-
-    expect(providerCalls).toBe(2);
-    expect(counts.coverage_binding).toBe(1);
-    expect(counts.acceptance_specs ?? 0).toBe(0);
-    expect(JSON.parse(await readFile(join(dir, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({
-      status: 'done', entries: [{ verdict: 'asserts' }, { kind: 'conflict', verdict: 'consistent' }],
-    });
-  });
-
-  it('retains the unchanged coverage-pair digest cache without invoking its judge', async () => {
-    const config = { coverage_binding: { judge: { enabled: true } } };
-    let providerCalls = 0;
-    const provider: LLMProvider = {
-      lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: async (options) => {
-        providerCalls++;
-        return { success: true, output: coverageBindingBatchOutput(options.prompt), exitCode: 0 };
-      },
-    };
-    await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
-    await advanceBaseForeignRuntimeOnly();
-    const oldRunner = new DefaultStepRunner(provider, 'coverage-before-rebase', dir, {
-      featureDesc: 'add-foo', planPath: join(dir, '.docs/plans/add-foo.md'), config: config as never,
-    });
-    await oldRunner.run('coverage_binding', { complexity_tier: 'M' });
-    // The seed proves the cache contains a judged entry; the assertion below
-    // observes only the post-rebase refresh.
-    providerCalls = 0;
-    await writeState(statePath, { ...FRONT_DONE_M });
-
-    const counts: Record<string, number> = {};
-    await conductorWith(coverageRefreshRunner(counts, provider, config), config, undefined, 'coverage_binding').run();
-
-    expect(counts.coverage_binding).toBe(1);
-    expect(providerCalls).toBe(0);
-    expect(JSON.parse(await readFile(join(dir, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({
-      status: 'done', entries: [{ verdict: 'asserts' }, { kind: 'conflict', verdict: 'consistent' }],
-    });
-  });
-
-  it('uses the existing disabled envelope without invoking a coverage provider', async () => {
+  it('refreshes the no-op coverage step after a rebase without a provider call or reopening acceptance authoring', async () => {
     await prepareChangedCoveragePair();
     let providerCalls = 0;
     const provider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: async (options) => {
+      invoke: async () => {
         providerCalls++;
-        return { success: true, output: coverageBindingBatchOutput(options.prompt), exitCode: 0 };
+        return { success: true, output: '{}', exitCode: 0 };
       },
     };
     const counts: Record<string, number> = {};
     await conductorWith(coverageRefreshRunner(counts, provider, {}), {}, undefined, 'coverage_binding').run();
 
     expect(counts.coverage_binding).toBe(1);
+    expect(counts.acceptance_specs ?? 0).toBe(0);
     expect(providerCalls).toBe(0);
-    expect(JSON.parse(await readFile(join(dir, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'disabled' });
-  });
-
-  it('routes a does-not-assert coverage result to its existing human refusal without authoring or publication', async () => {
-    await prepareChangedCoveragePair();
-    const config = { coverage_binding: { judge: { enabled: true } } };
-    const provider: LLMProvider = {
-      lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: async (options) => ({
-        success: true,
-        output: coverageBindingBatchOutput(options.prompt, 'does-not-assert'),
-        exitCode: 0,
-      }),
-    };
-    const counts: Record<string, number> = {};
-    await conductorWith(coverageRefreshRunner(counts, provider, config), config, undefined, 'coverage_binding').run();
-
-    expect(counts.coverage_binding).toBe(1);
-    expect(counts.acceptance_specs ?? 0).toBe(0);
-    expect(counts.finish ?? 0).toBe(0);
-    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toMatch(/coverage_binding refused/);
-    expect(JSON.parse(await readFile(join(dir, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'refused' });
-  });
-
-  it.each([
-    ['unavailable', async () => ({ success: false, output: 'coverage provider unavailable', exitCode: 1 })],
-    ['malformed', async () => ({ success: true, output: '{"verdict":"partial"}', exitCode: 0 })],
-  ])('keeps %s coverage results in the existing bounded failure route', async (_kind, invoke) => {
-    await prepareChangedCoveragePair();
-    const config = { coverage_binding: { judge: { enabled: true } } };
-    const provider: LLMProvider = { lifecycleCapability: { synchronousSpawnPermit: true }, invoke };
-    const counts: Record<string, number> = {};
-    await conductorWith(coverageRefreshRunner(counts, provider, config), config, undefined, 'coverage_binding').run();
-
-    expect(counts.coverage_binding).toBe(1);
-    expect(counts.acceptance_specs ?? 0).toBe(0);
-    expect(counts.finish ?? 0).toBe(0);
-    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toMatch(/coverage_binding.*retries exhausted/);
-    expect(JSON.parse(await readFile(join(dir, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'failed' });
+    expect(JSON.parse(await readFile(join(dir, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'disabled', entries: [] });
   });
 });

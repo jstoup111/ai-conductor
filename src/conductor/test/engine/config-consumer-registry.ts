@@ -91,7 +91,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
     STEP_RUNNERS,
   ]),
   build_review: consumer(RESOLVED_CONFIG),
-  coverage_binding: consumer(RESOLVED_CONFIG),
+  coverage_binding: none('inert compatibility block: coverage_binding is a no-op and still validates its retired judge keys so existing configs load (adr-2026-08-31-coverage-binding-judge-step, amended 2026-10-10)'),
   feature_applicability: consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
     CONDUCTOR,
@@ -282,11 +282,10 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.custom_rubrics.min_confidence': consumer(RESOLVED_CONFIG),
 
   // ── coverage_binding ────────────────────────────────────────────────────
-  // The step runner consumes the resolved boolean; resolution is the sole
-  // reader of the raw nested configuration.
-  'coverage_binding.judge': consumer(RESOLVED_CONFIG),
-  'coverage_binding.judge.enabled': consumer(RESOLVED_CONFIG),
-  'coverage_binding.judge.batch_size': consumer(RESOLVED_CONFIG),
+  // Retired judge keys: validated for compatibility, read by nothing.
+  'coverage_binding.judge': none('inert compatibility block: coverage_binding is a no-op and still validates its retired judge keys so existing configs load (adr-2026-08-31-coverage-binding-judge-step, amended 2026-10-10)'),
+  'coverage_binding.judge.enabled': none('inert compatibility block: coverage_binding is a no-op and still validates its retired judge keys so existing configs load (adr-2026-08-31-coverage-binding-judge-step, amended 2026-10-10)'),
+  'coverage_binding.judge.batch_size': none('inert compatibility block: coverage_binding is a no-op and still validates its retired judge keys so existing configs load (adr-2026-08-31-coverage-binding-judge-step, amended 2026-10-10)'),
   'feature_applicability.enabled': consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
     CONDUCTOR,
