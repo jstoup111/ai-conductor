@@ -1602,7 +1602,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     item: BacklogItem,
     providerExecution = createProviderExecution(),
     featureEvents: ConductorEventEmitter = events,
-    featureLog = log,
+    featureLog: (message: string) => void = log,
     sessionId = uuidv4(),
   ) => {
     const pipelineDir = join(wt.path, '.pipeline');
@@ -1845,7 +1845,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     worktree: FeatureWorktree,
     item: BacklogItem,
     providerExecution = createProviderExecution(),
-    featureLog = log,
+    featureLog: (message: string) => void = log,
     featureEvents?: ConductorEventEmitter,
     workOrderBaseSha?: string,
   ) => {

@@ -45,7 +45,16 @@ export type NextAction =
   | { kind: 'none'; why: string };
 
 export type DaemonLogMessage = string | DaemonLogEntry;
-type DaemonActivityLogger = ((message: DaemonLogMessage, featureOwned?: boolean) => void) & {
+/**
+ * This is intentionally a method-derived callback: daemon internals can pass it
+ * through older string-only dependency seams while new presentation code sends
+ * structured entries. The logger normalizes both forms at its own boundary.
+ */
+type BivariantDaemonActivityLogger = {
+  log(message: DaemonLogMessage, featureOwned?: boolean): void;
+}['log'];
+type DaemonActivityLogger = BivariantDaemonActivityLogger;
+type MarkedDaemonActivityLogger = DaemonActivityLogger & {
   [daemonActivityLogger]: true;
 };
 type StringDaemonLogger = (message: string, featureOwned?: boolean) => void;
@@ -185,7 +194,7 @@ export function createDaemonModeLogger(sinks: {
         sinks,
       );
     }
-  }) as DaemonActivityLogger;
+  }) as MarkedDaemonActivityLogger;
   logger[daemonActivityLogger] = true;
   return logger;
 }
@@ -254,17 +263,17 @@ function writeDaemonMessage(
  * Derive an immutable feature-owned logger from a daemon logger. The base logger
  * remains responsible for adding its `[daemon]` prefix and choosing live/file sinks.
  */
-export function createFeatureDaemonLogger<T extends DaemonActivityLogger | StringDaemonLogger>(
+export function createFeatureDaemonLogger<T extends StringDaemonLogger>(
   featureSlug: string,
   baseLog: T,
   featureTag?: string,
-): T extends DaemonActivityLogger ? FeatureDaemonLogger : StringDaemonLogger;
+): FeatureDaemonLogger;
 export function createFeatureDaemonLogger(
   featureSlug: string,
   baseLog: DaemonActivityLogger | StringDaemonLogger,
   featureTag = formatDaemonFeatureTag(featureSlug),
 ): FeatureDaemonLogger {
-  const entryLog = baseLog as DaemonActivityLogger;
+  const entryLog = baseLog as MarkedDaemonActivityLogger;
   const featureLog = ((message: DaemonLogMessage) => {
     if (!entryLog[daemonActivityLogger]) {
       if (typeof message !== 'string') throw new TypeError('string daemon logger received a structured entry');
