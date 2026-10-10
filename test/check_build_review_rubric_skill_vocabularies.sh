@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Covers: task:11
 set -euo pipefail
 
 # Keep the provider-facing concern-kind definitions and anchor reference

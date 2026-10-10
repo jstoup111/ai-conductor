@@ -1,4 +1,4 @@
-// Covers: task:10
+// Covers: task:3, task:10
 import { createHash } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
