@@ -4,6 +4,49 @@ spec_hash: 896e5ffcc76bb1ca1b8736dd92704ad44816e7113ec0a5afad96a516d231cdb0
 pr: https://github.com/jstoup111/ai-conductor/pull/3053
 shipped: 2026-10-10
 engine_version: 20261010T155737Z-b85f1ff7f575
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This is test-harness hygiene: it keeps the git-heavy child fixtures from writing into the real /tmp through an inherited external-diff hook. It does not change product behavior or anything a user sees."
+    accepted: false
+    authority: engine
+  - gate: architecture_review_as_built
+    finding: "as-built:b00b54a4-c3c5-4f0d-91d2-87e915181bd4:2"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-07-per-child-build-region decision 4"
+    outcome: remediated
+    summary: "Unresolved prior finding; verified, 99% confidence. conduct-state-store.ts:60-62 retains flat region statuses missing from the child document. conductor.ts:2412-2415 adopts them and :6811 consumes them when selecting work. A missing child build status can inherit flat build:done."
+  - gate: architecture_review_as_built
+    finding: "as-built:b00b54a4-c3c5-4f0d-91d2-87e915181bd4:3"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-07-per-child-build-region decision 6"
+    outcome: remediated
+    summary: "Unresolved prior finding; verified, 99% confidence. task-membership-check-cli.ts:76 checks only extractBodyTaskIds(message)[0]. An owned Task trailer followed by a foreign-child trailer passes, while recovery consumes every trailer. Membership validation must cover every supplied task ID."
+  - gate: architecture_review_as_built
+    finding: "as-built:b00b54a4-c3c5-4f0d-91d2-87e915181bd4:1"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-07-per-child-build-region decision 2"
+    outcome: remediated
+    summary: "Unresolved prior finding; verified, 99% confidence. conductor.ts:2447 and :6776 bypass cursor resolution when stacking is disabled and child directories are absent, ignoring surviving child branches and closure refs. Worktree recreation can therefore resume an existing stack through flat region handling."
+  - gate: architecture_review_as_built
+    finding: "as-built:b00b54a4-c3c5-4f0d-91d2-87e915181bd4:4"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-07-per-child-build-region decision 8"
+    outcome: remediated
+    summary: "Unresolved prior finding; verified, 99% confidence. artifacts.ts:2958 and conductor.ts:4323 call seedTaskStatus without available child context. task-seed.ts:159-184 consequently uses default-branch history and :499-508 can restore completed rows despite a missing child parent, violating the nothing-proven policy."
+  - gate: architecture_review_as_built
+    finding: "as-built:b00b54a4-c3c5-4f0d-91d2-87e915181bd4:5"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-03-stacked-child-plans-identity-and-state decision 8"
+    outcome: remediated
+    summary: "Unresolved prior finding; verified, 99% confidence. step-runners.ts:3559-3564 and :4245-4250, plus build-review-adjudication-coordinator.ts:194-205, persist suppressions through child-local remediation stores. Suppressions must remain whole-feature; the child amendment relocates cases and credit receipts only."
+  - gate: architecture_review_as_built
+    finding: "as-built:0d789f28-7bdf-4c6b-beb2-cce3fc899786:1"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-03-stacked-child-plans-identity-and-state decision 8"
+    outcome: remediated
+    summary: "Verified, 99% confidence: build-review-adjudication-coordinator.ts:177–185 now persists suppressions in the flat feature store, but :470 reads the child case store and both :494 and :527 pass that store's suppressions into adjudication context. Child reviews therefore receive empty or stale suppression history instead of whole-feature history. The changed writer introduced this mismatch, making it eligible for re-review. Current suppressed-ID filtering remains intact."
 ---
 
 ## Cost
