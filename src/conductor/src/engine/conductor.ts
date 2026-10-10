@@ -8466,6 +8466,14 @@ export class Conductor {
                 if (remediationOutcome === undefined ||
                     (remediationOutcome.kind !== 'route' && await haltGroupedRefusalRework())) return;
                 if (remediationOutcome.kind === 'route') {
+                  // Each member closes its own admitted execution before the
+                  // group does: a member left open here was later reported as
+                  // `step_interrupted` by run-end closeOpen, although it had
+                  // returned its verdict.
+                  await closeSettledMembers(
+                    outcomes,
+                    `Validation group "${step.name}" kicked back to ${remediationOutcome.target}: as-built review BLOCKED with remediable findings.`,
+                  );
                   await emitTracked({
                     type: 'parallel_failure',
                     step: step.name,
@@ -8787,6 +8795,10 @@ export class Conductor {
                     `commits, and manual-test re-runs after this build.`;
                   const mergedHint = `${mtHint}\n\n${remediationOutcome.hint}`;
 
+                  await closeSettledMembers(
+                    outcomes,
+                    `Validation group "${step.name}" kicked back to ${mergedTarget}: manual_test FAIL with remediation.`,
+                  );
                   await emitTracked({
                     type: 'kickback',
                     from: step.name,
@@ -8947,6 +8959,10 @@ export class Conductor {
                     (remediationOutcome.kind !== 'route' && await haltGroupedRefusalRework())) return;
 
                 if (remediationOutcome.kind === 'route') {
+                  await closeSettledMembers(
+                    outcomes,
+                    `Validation group "${step.name}" kicked back to ${remediationOutcome.target}: ${gapMemberNames.join(', ')} gaps routed to remediation.`,
+                  );
                   await emitTracked({
                     type: 'kickback',
                     from: step.name,
