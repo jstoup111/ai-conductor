@@ -80,6 +80,11 @@ void restackRefusalReasonContract;
 const restackRefusalWithUnknownReason = { type: 'restack_refused', reason: 'unexpected-reason' } satisfies ConductorEvent;
 void restackRefusalWithUnknownReason;
 
+const DEPENDENCY_EVENT_TYPES = [
+  'land_dependency_decided',
+  'dependency_drift_swept',
+] as const;
+
 const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'step_started',
   'step_completed',
@@ -230,6 +235,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'bot_co_author_skipped',
   'intake_inbound_sanitized',
   'intake_overlap_checked',
+  ...DEPENDENCY_EVENT_TYPES,
   // S7.5: the budget basis on a post-rebase preservation is only observable
   // if it reaches .pipeline/events.jsonl — its sibling rebase_gate_invalidated
   // is already persisted, so an unpersisted preservation reads as silence.
@@ -581,6 +587,50 @@ describe('event sink subscriptions', () => {
     expect(emitRestackRefused({ reason: 'published-stack' })).toEqual({
       type: 'restack_refused',
       reason: 'published-stack',
+    });
+  });
+
+  it('registers dependency land and drift decisions as persistence-only spine events', () => {
+    const events = [
+      {
+        type: 'land_dependency_decided',
+        repository: 'acme/conductor',
+        sourceRef: 'acme/conductor#536',
+        proposals: ['acme/conductor#101'],
+        accepted: ['acme/conductor#101'],
+        declined: [],
+        skipped: null,
+        writes: [{ target: 'acme/conductor#101', status: 'created' }],
+      },
+      {
+        type: 'dependency_drift_swept',
+        repository: 'acme/conductor',
+        status: 'swept',
+        unlinked: [],
+        stale: [],
+        cycles: [],
+        contradictions: [],
+        indeterminate: [],
+      },
+    ] satisfies ConductorEvent[];
+
+    expect({
+      events,
+      sinks: DEPENDENCY_EVENT_TYPES.map((type) => EVENT_SINKS[type]),
+      persisted: DEPENDENCY_EVENT_TYPES.map((type) => persistedEventTypes().includes(type)),
+      rendered: DEPENDENCY_EVENT_TYPES.map((type) => renderedEventTypes().includes(type)),
+      audited: DEPENDENCY_EVENT_TYPES.map((type) => auditedEventTypes().includes(type)),
+      otel: DEPENDENCY_EVENT_TYPES.map((type) => otelEventTypes().includes(type)),
+    }).toEqual({
+      events,
+      sinks: [
+        { render: false, persist: true, audit: false, otel: false },
+        { render: false, persist: true, audit: false, otel: false },
+      ],
+      persisted: [true, true],
+      rendered: [false, false],
+      audited: [false, false],
+      otel: [false, false],
     });
   });
 
