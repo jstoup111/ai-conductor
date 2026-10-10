@@ -20,6 +20,7 @@ import { emitEngineerSignal, resolveEngineerDir } from './engine/engineer-store.
 import {
   makeAutoresolveEligibility,
   resolveConflictingPr,
+  summarizeSuiteFailure,
 } from './engine/autoresolve.js';
 import {
   isEligibleForCiFix,
@@ -2753,6 +2754,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     await execFile('sh', ['-c', cmd], {
                       cwd: projectRoot,
                       encoding: 'utf-8',
+                      // A full suite prints well over the 1 MiB default; an
+                      // overflow must not masquerade as a test failure.
+                      maxBuffer: 64 * 1024 * 1024,
                     });
                     return {
                       exitCode: 0,
@@ -2760,10 +2764,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                       configured: true,
                     };
                   } catch (err: any) {
+                    // execFile reports a non-zero exit as a numeric `code`, a
+                    // kill as `signal`, and spawn failures as string codes.
+                    const exitCode = typeof err.code === 'number' ? err.code : err.signal ? 128 : 1;
+                    const cause = typeof err.code === 'number'
+                      ? ''
+                      : `runner: ${err.signal ? `killed by ${err.signal}` : String(err.code ?? err.message ?? 'unknown error')}\n`;
                     return {
-                      exitCode: err.code === 'ERR_CHILD_PROCESS_EXIT' ? (err.status || 1) : 1,
+                      exitCode,
                       durationMs: Date.now() - startMs,
                       configured: true,
+                      summary: summarizeSuiteFailure(`${cause}${String(err.stdout ?? '')}`, String(err.stderr ?? '')),
                     };
                   }
                 };

@@ -54,6 +54,45 @@ const execFile = promisify(execFileCb);
 /**
  * Classifies a conflict set for resolution routing.
  */
+/** Result of the suite gate's injected runner. `summary` is set only on failure. */
+export interface SuiteRunResult {
+  exitCode: number;
+  durationMs: number;
+  configured: boolean;
+  /** Bounded, operator-readable digest of a failing run's output. */
+  summary?: string;
+}
+
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
+const SUITE_SIGNAL_LINE = /(\bFAIL\b|\u00d7|Test Files|Tests\s|AssertionError|Error:|leaked|ELIFECYCLE|exit code|timed out|Killed|out of memory)/;
+
+/**
+ * Digest a failing suite run for the operator. The suite gate used to discard
+ * all output, so four consecutive autoresolve escalations on 2026-10-10 said
+ * only "suite exited with code 1" and their worktrees were reaped before anyone
+ * could see which test failed. Keeps the lines that name a failure or the
+ * totals, falling back to the run's tail, and bounds the result so it is safe
+ * to log and to post in an escalation comment.
+ */
+export function summarizeSuiteFailure(
+  stdout: string,
+  stderr: string,
+  limits: { maxLines?: number; maxChars?: number } = {},
+): string {
+  const maxLines = limits.maxLines ?? 30;
+  const maxChars = limits.maxChars ?? 3_000;
+  const lines = `${stdout}\n${stderr}`
+    .replace(ANSI_ESCAPE, '')
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() !== '');
+  const signal = lines.filter((line) => SUITE_SIGNAL_LINE.test(line));
+  const picked = (signal.length > 0 ? signal : lines.slice(-maxLines)).slice(0, maxLines);
+  const text = picked.join('\n');
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars)}\n… (truncated)`;
+}
+
 export function classifyConflictScope(conflicts: string[]): 'test-only' | 'mixed' {
   return conflicts.length > 0 && conflicts.every(isTestPath) ? 'test-only' : 'mixed';
 }
@@ -1024,7 +1063,7 @@ export async function resolveConflictingPr(
   config: { enabled: boolean; suiteCommand: string; cooldownMinutes: number; attemptCap: number },
   deps: {
     runGh: PrLabelsGhRunner;
-    runSuite: (projectRoot: string) => Promise<{ exitCode: number; durationMs: number; configured: boolean }>;
+    runSuite: (projectRoot: string) => Promise<SuiteRunResult>;
     resolver: RebaseResolver;
     log: (msg: string) => void;
     /** Re-check active daemon ownership at each resolution-worktree removal. */
@@ -1307,10 +1346,14 @@ export async function resolveConflictingPr(
     const suiteRunResult = await deps.runSuite(worktreePath);
     const suiteOk = suiteRunResult.exitCode === 0 && suiteRunResult.configured !== false;
     if (!suiteOk) {
+      const summary = suiteRunResult.summary?.trim();
       const reason = suiteRunResult.configured === false
         ? 'no suite command configured'
-        : `suite exited with code ${suiteRunResult.exitCode}`;
-      log(`${prUrl}: suite gate failed: ${reason}`);
+        : `suite exited with code ${suiteRunResult.exitCode}${
+          summary ? `\n\n\`\`\`text\n${summary.replace(/```/g, "'''")}\n\`\`\`` : ''
+        }`;
+      log(`${prUrl}: suite gate failed: suite exited with code ${suiteRunResult.exitCode}`);
+      for (const line of summary ? summary.split('\n') : []) log(`${prUrl}: suite: ${line}`);
       await escalate(prUrl, 'suite-gate', reason, {
         runGh: deps.runGh,
         operations,
