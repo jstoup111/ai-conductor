@@ -1,4 +1,4 @@
-// Covers: task:11
+// Covers: task:11, task:12
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -57,6 +57,29 @@ function recordingGh({ unavailable, rateLimit }: { unavailable?: boolean; rateLi
     if (text.includes('dependencies/blocked_by')) return { stdout: '[]' };
     if (text.includes('issue list')) return { stdout: '[]' };
     if (text.includes('--json state')) return { stdout: 'OPEN' };
+    throw new Error(`unexpected gh call: ${text}`);
+  };
+  return { gh, calls };
+}
+
+function dependencyGh({ body = 'Depends on #520 / #600.', writeFails = false }: { body?: string; writeFails?: boolean } = {}): { gh: GhRunner; calls: string[][] } {
+  const calls: string[][] = [];
+  const gh: GhRunner = async (args) => {
+    calls.push(args);
+    const text = args.join(' ');
+    if (text === 'api user --jq .login') return { stdout: 'operator\n' };
+    if (text.includes('issue view 536') && text.includes('--json body')) return { stdout: JSON.stringify({ body }) };
+    if (text.includes('dependencies/blocked_by')) {
+      if (text.includes('--method POST')) {
+        if (writeFails) throw new Error('dependency endpoint unavailable');
+        return { stdout: '' };
+      }
+      return { stdout: '[]' };
+    }
+    if (text.includes('issue list')) return { stdout: '[]' };
+    if (text.includes('--json state')) return { stdout: 'OPEN' };
+    if (text.includes('issue view 536') && text.includes('--json assignees')) return { stdout: JSON.stringify({ assignees: [{ login: 'operator' }] }) };
+    if (text.includes('api repos/owner/repo/issues/520')) return { stdout: JSON.stringify({ id: 5200 }) };
     throw new Error(`unexpected gh call: ${text}`);
   };
   return { gh, calls };
@@ -132,5 +155,80 @@ describe('compose land dependency refusal integration', () => {
     expect(await git(['rev-parse', 'HEAD'], worktree)).toBe(before);
     expect(cli.err.join('\n')).toMatch(message);
     expect((await events()).at(-1)).toEqual(expect.objectContaining({ type: 'land_gate_rejected', gate: 'dependency-decisions-invalid' }));
+  });
+});
+
+describe('compose land dependency post-commit integration', () => {
+  it('writes only accepted edges after commit and records the complete decision', async () => {
+    const worktree = await seed(); const recording = dependencyGh();
+    const cli = dispatch([
+      '--project', 'target', '--idea', 'dependency gate', '--worktree', worktree,
+      '--source-ref', 'owner/repo#536', '--depends-on', 'owner/repo#520',
+      '--decline-dependency', 'owner/repo#600',
+    ], recording.gh, quietGit);
+    const before = await git(['rev-parse', 'HEAD'], worktree);
+    expect(await cli.run()).toBe(0);
+    expect(await git(['rev-parse', 'HEAD'], worktree)).not.toBe(before);
+    expect(recording.calls.map((call) => call.join(' ')).filter((call) => call.includes('--method POST'))).toEqual([
+      expect.stringContaining('repos/owner/repo/issues/536/dependencies/blocked_by'),
+    ]);
+    expect(await events()).toEqual(expect.arrayContaining([expect.objectContaining({
+      type: 'land_dependency_decided', sourceRef: 'owner/repo#536',
+      proposals: ['owner/repo#520', 'owner/repo#600'], accepted: ['owner/repo#520'],
+      declined: ['owner/repo#600'], skipped: null,
+      writes: [expect.objectContaining({ target: 'owner/repo#520', status: 'created' })],
+    })]));
+  });
+
+  it('commits with zero writes when all proposals are declined or none exist', async () => {
+    const declinedWorktree = await seed(); const declined = dependencyGh();
+    const declinedCli = dispatch([
+      '--project', 'target', '--idea', 'dependency gate', '--worktree', declinedWorktree,
+      '--source-ref', 'owner/repo#536', '--decline-dependency', 'owner/repo#520',
+      '--decline-dependency', 'owner/repo#600',
+    ], declined.gh, quietGit);
+    expect(await declinedCli.run()).toBe(0);
+    expect(declined.calls.map((call) => call.join(' ')).filter((call) => call.includes('--method POST'))).toEqual([]);
+
+    const noneWorktree = await seed('no proposals'); const none = dependencyGh({ body: 'Related to #520.' });
+    const noneCli = dispatch(['--project', 'target', '--idea', 'no proposals', '--worktree', noneWorktree, '--source-ref', 'owner/repo#536'], none.gh, quietGit);
+    expect(await noneCli.run()).toBe(0);
+    expect(none.calls.map((call) => call.join(' ')).filter((call) => call.includes('--method POST'))).toEqual([]);
+  });
+
+  it('never writes an accepted edge when a later land gate rejects the commit', async () => {
+    const worktree = await seed('render rejection'); const recording = dependencyGh();
+    await writeFile(join(worktree, '.docs', 'specs', 'render-rejection.md'), '# PRD: render rejection\n\n```mermaid\nthis is not a diagram\n```\n');
+    const cli = dispatch([
+      '--project', 'target', '--idea', 'render rejection', '--worktree', worktree,
+      '--source-ref', 'owner/repo#536', '--depends-on', 'owner/repo#520', '--decline-dependency', 'owner/repo#600',
+    ], recording.gh, quietGit);
+    expect(await cli.run()).toBe(1);
+    expect(recording.calls.map((call) => call.join(' ')).filter((call) => call.includes('--method POST'))).toEqual([]);
+  });
+
+  it('records a skipped unavailable check and retains a committed spec when a post-commit write fails', async () => {
+    const skippedWorktree = await seed(); const unavailable = recordingGh({ unavailable: true });
+    const skippedCli = dispatch([
+      '--project', 'target', '--idea', 'dependency gate', '--worktree', skippedWorktree,
+      '--source-ref', 'owner/repo#536', '--skip-dependency-check', 'GitHub outage',
+    ], unavailable.gh, quietGit);
+    expect(await skippedCli.run()).toBe(0);
+    expect(await events()).toEqual(expect.arrayContaining([expect.objectContaining({
+      type: 'land_dependency_decided', skipped: { reason: 'GitHub outage' }, proposals: [], accepted: [], declined: [], writes: [],
+    })]));
+
+    const failedWorktree = await seed('failed dependency write'); const failed = dependencyGh({ writeFails: true });
+    const failedCli = dispatch([
+      '--project', 'target', '--idea', 'failed dependency write', '--worktree', failedWorktree,
+      '--source-ref', 'owner/repo#536', '--depends-on', 'owner/repo#520', '--decline-dependency', 'owner/repo#600',
+    ], failed.gh, quietGit);
+    const before = await git(['rev-parse', 'HEAD'], failedWorktree);
+    expect(await failedCli.run()).toBe(0);
+    expect(await git(['rev-parse', 'HEAD'], failedWorktree)).not.toBe(before);
+    expect(failedCli.err.join('\n')).toContain('dependency write failed');
+    expect((await events()).at(-1)).toEqual(expect.objectContaining({
+      type: 'land_dependency_decided', writes: [expect.objectContaining({ target: 'owner/repo#520', status: 'failed' })],
+    }));
   });
 });
