@@ -96,7 +96,6 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
     'src/conductor/src/engine/engineer/land-spec.ts',
     CONDUCTOR,
   ]),
-  conflict_check: consumer('skills/conflict-check/SKILL.md'),
   prd_audit: consumer([REMEDIATION_CAPS, PRD_AUDIT_ROUTING]),
   architecture_review_as_built: consumer(AS_BUILT_POLICY),
   ci_watch: consumer(DAEMON_CLI),
@@ -300,11 +299,6 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   // ── kickback bounds ───────────────────────────────────────────────────────
   'kickback_escalation.enabled': consumer(REMEDIATION_CAPS),
   'cumulative_kickback_bound.enabled': consumer(CONDUCTOR),
-
-  // ── conflict_check ────────────────────────────────────────────────────────
-  // The corpus scope is consumed by the skill prompt, not the engine: the
-  // validator normalizes the value and the skill reads it at step 2.
-  'conflict_check.adr_corpus': consumer('skills/conflict-check/SKILL.md'),
 
   // ── prd_audit ─────────────────────────────────────────────────────────────
   'prd_audit.max_remediation_laps': consumer(REMEDIATION_CAPS),

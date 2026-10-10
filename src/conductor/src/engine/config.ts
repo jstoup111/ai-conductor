@@ -77,7 +77,6 @@ export async function emitDeprecatedConfigKeyEvents(
 const VALID_PHASES = new Set(['SETUP', 'UNDERSTAND', 'DECIDE', 'BUILD', 'SHIP']);
 const VALID_EFFORTS = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'max']);
 const VALID_ENFORCEMENTS = new Set<EnforcementLevel>(['structural', 'advisory', 'gating']);
-const VALID_ADR_CORPORA = new Set(['change_set', 'repo_wide']);
 const VALID_COMPLEXITY_TIERS = new Set(['S', 'M', 'L']);
 const AS_BUILT_CHECK_NAMES = new Set([
   'reachability',
@@ -115,7 +114,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'rebase_resolution_attempts', 'validation_concurrency', 'daemon_concurrency', 'daemon_heap_limit_mb',
     'daemon_heap_dump_threshold_mb', 'daemon_heap_dump_retention', 'harness_self_host',
     'model_fallback_ladder', 'auto_restart_on_stale_engine', 'engine_refresh_min_interval_seconds',
-    'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'stacked_prs', 'build_review', 'conflict_check',
+    'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'stacked_prs', 'build_review',
     'prd_audit', 'architecture_review_as_built', 'ci_watch', 'build_progress_halt',
     'retry_routing', 'coverage_binding', 'wiring', 'kickback_escalation', 'cumulative_kickback_bound',
     'feature_applicability',
@@ -143,7 +142,6 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   ci_watch: ['enabled', 'cooldownMinutes'],
   kickback_escalation: ['enabled'],
   cumulative_kickback_bound: ['enabled'],
-  conflict_check: ['adr_corpus'],
   prd_audit: ['max_remediation_laps', 'max_appended_tasks', 'max_appended_ratio', 'halt_on_any_plan_gap'],
   architecture_review_as_built: ['checks', 'remediation', 'max_remediation_laps'],
   'architecture_review_as_built.remediation': ['enabled'],
@@ -1578,35 +1576,6 @@ export function validateConfig(
         obj.architecture_review_as_built,
       );
     }
-  }
-
-  // conflict_check — ADR corpus scope for conflict-check. The default keeps
-  // consumer checks bounded to ADRs in the current change set.
-  if (obj.conflict_check !== undefined) {
-    if (!isPlainObject(obj.conflict_check)) {
-      return errVal('conflict_check must be an object');
-    }
-    const conflictCheck = obj.conflict_check as Record<string, unknown>;
-    // Read the accepted key set from the shared source, as every other block
-    // does. A hardcoded literal here left registry totality unable to cover a
-    // future accepted key: the key set would grow and this check would not.
-    const knownConflictCheckKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS.conflict_check);
-    for (const key of Object.keys(conflictCheck)) {
-      if (!knownConflictCheckKeys.has(key)) {
-        return errVal(`Unknown key in conflict_check: "${key}"`);
-      }
-    }
-    if (
-      conflictCheck.adr_corpus !== undefined &&
-      !VALID_ADR_CORPORA.has(conflictCheck.adr_corpus as string)
-    ) {
-      return errVal('conflict_check.adr_corpus must be change_set|repo_wide');
-    }
-    obj.conflict_check = {
-      adr_corpus: conflictCheck.adr_corpus ?? 'change_set',
-    };
-  } else if (materializeDefaults) {
-    obj.conflict_check = { adr_corpus: 'change_set' };
   }
 
   // build_review — default-on judgement gate at the build → manual_test seam

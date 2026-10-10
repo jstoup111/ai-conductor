@@ -347,8 +347,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `requires: [verify-claims]`, no model pin.
 - **Engine step** — `conflict_check` (index 8, DECIDE, prerequisite `stories`, skipped at tier S).
 - **Inputs** — all `.docs/stories/*.md`; active `.docs/specs/`; prior `.docs/conflicts/` reports; and
-  approved ADRs. `conflict_check.adr_corpus` defaults to `change_set`; `repo_wide` narrows all approved
-  ADRs to the stories' subject and records the ADRs examined and narrowed out.
+  approved ADRs, always repo-wide: narrowed to the stories' subject, with the ADRs examined and narrowed
+  out recorded.
 - **Outputs** — `.docs/conflicts/<date>-<description>.md`, overwritten on re-run; in-place edits to
   affected story files; superseding ADRs. An ADR-versus-story conflict quotes both opposing sentences
   verbatim; multi-sentence excerpts use `[…]` for every omitted span.

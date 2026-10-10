@@ -52,7 +52,6 @@ describe('config consumer registry', () => {
       'ci_watch',
       'kickback_escalation',
       'cumulative_kickback_bound',
-      'conflict_check',
       'prd_audit',
       'architecture_review_as_built',
       'architecture_review_as_built.remediation',

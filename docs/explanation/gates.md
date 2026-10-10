@@ -241,9 +241,9 @@ PRD, so it has no requirement layer to tie out against. What the gate does not j
 `fail` verdict the `/coherence-check` skill records, not a set comparison. Story-versus-story contradictions
 belong to `conflict-check` earlier in DECIDE; this gate compares each story against the PRD only.
 
-Earlier in DECIDE, `conflict_check` also compares each relevant story with the selected approved ADR
-corpus. The default `change_set` corpus is bounded to the current spec's ADRs; `repo_wide` narrows all
-approved ADRs to overlapping subjects and records the ADRs it examined and excluded. That judgment resolves
+Earlier in DECIDE, `conflict_check` also compares each relevant story with the approved ADR corpus. It
+always considers every approved ADR, narrows to overlapping subjects, and records the ADRs it examined
+and excluded. That judgment resolves
 ADR-versus-story conflicts before planning. This is separate from the coherence gate: any current-change-set
 ADR path engages its ADR layer, while only non-deleted ADR files enter the traceability-row pool; no
 conceptual applicability judgment expands that row set.
