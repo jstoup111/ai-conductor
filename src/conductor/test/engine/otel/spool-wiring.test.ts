@@ -30,6 +30,23 @@ async function endpoint(server: Server): Promise<string> {
   return `http://127.0.0.1:${address.port}`;
 }
 
+/**
+ * Settles when the fixture collector has answered a request. The drainer's
+ * POST is real loopback I/O, so its arrival is awaited on the collector's own
+ * signal; a bounded count of event-loop turns raced it and flaked on loaded
+ * CI runners. The deadline only fails the test, it never lets one pass.
+ */
+function collectorArrival(deadlineMs = 5_000): { arrive(): void; arrived: Promise<void> } {
+  let arrive!: () => void;
+  const signal = new Promise<void>((resolve) => { arrive = resolve; });
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`collector received no request within ${deadlineMs}ms`)), deadlineMs);
+    timer.unref();
+  });
+  return { arrive, arrived: Promise.race([signal, deadline]).finally(() => clearTimeout(timer)) };
+}
+
 function exportSpan(exporter: { export(spans: ReadableSpan[], callback: () => void): void }, span: ReadableSpan): Promise<void> {
   return new Promise((resolve) => exporter.export([span], resolve));
 }
@@ -47,10 +64,12 @@ describe("resolveSpoolDir", () => {
     const previous = process.env[header];
     process.env[header] = "before";
     let received = "";
+    const arrival = collectorArrival();
     const collector = createServer(async (request, response) => {
       received = String(request.headers.authorization);
       for await (const _chunk of request) { /* consume */ }
       response.writeHead(200).end();
+      arrival.arrive();
     });
     const config = resolveOtelConfig({ otel: {
       exporter: "otlp", endpoint: await endpoint(collector), headers: { Authorization: { env: header } }, spool: { enabled: true },
@@ -61,9 +80,12 @@ describe("resolveSpoolDir", () => {
     await runtime.store.write("traces", Buffer.from("batch"));
     process.env[header] = "after";
     const draining = runtime.drainer.drainUntilStopped();
-    for (let turn = 0; turn < 1_000 && received === ''; turn += 1) await new Promise<void>((resolve) => setImmediate(resolve));
-    await runtime.drainer.stop();
-    await draining;
+    try {
+      await arrival.arrived;
+    } finally {
+      await runtime.drainer.stop();
+      await draining;
+    }
     expect(received).toBe("after");
     if (previous === undefined) delete process.env[header]; else process.env[header] = previous;
   });
@@ -92,11 +114,13 @@ describe("resolveSpoolDir", () => {
     const previous = process.env[header];
     process.env[header] = secret;
     const received: Buffer[] = [];
+    const arrival = collectorArrival();
     const collector = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       received.push(Buffer.concat(chunks));
       response.writeHead(200).end();
+      arrival.arrive();
     });
     const config = resolveOtelConfig({ otel: {
       exporter: "otlp", endpoint: await endpoint(collector), headers: { Authorization: { env: header } },
@@ -127,11 +151,18 @@ describe("resolveSpoolDir", () => {
       expect(file.content).not.toContain(secret);
     }
     const draining = runtime.drainer.drainUntilStopped();
-    for (let turn = 0; turn < 1_000 && (received.length === 0 || (await runtime.store.list("traces")).length !== 0); turn += 1) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
+    try {
+      await arrival.arrived;
+      // After the acknowledged POST the drainer deletes the batch locally; that
+      // is filesystem work in this process, not network I/O, so a bounded
+      // turn count suffices for it.
+      for (let turn = 0; turn < 1_000 && (await runtime.store.list("traces")).length !== 0; turn += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    } finally {
+      await runtime.drainer.stop();
+      await draining;
     }
-    await runtime.drainer.stop();
-    await draining;
     await runtime.lease.release();
     if (previous === undefined) delete process.env[header]; else process.env[header] = previous;
 
