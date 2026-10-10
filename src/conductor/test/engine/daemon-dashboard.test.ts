@@ -24,6 +24,15 @@ function item(slug: string, tier?: ComplexityTier): BacklogItem {
 
 describe('engine/daemon-dashboard — inFlightSteps (Task 5)', () => {
   const event = (type: string, step: string, ts: number) => ({ type, step, ts });
+  const executionEvent = (type: string, step: string, ts: number, executionId: string) => ({
+    type,
+    step,
+    ts,
+    executionContext: {
+      executionId,
+      subject: { kind: 'lifecycle-step', step },
+    },
+  });
 
   it('keeps only the latest unterminated starts, in start order', () => {
     expect(inFlightSteps([
@@ -49,6 +58,21 @@ describe('engine/daemon-dashboard — inFlightSteps (Task 5)', () => {
       event('step_retry', 'test_suite', 11),
       event('step_retry', 'test_suite', 12),
     ])).toEqual([{ step: 'test_suite', startedAtMs: 10 }]);
+  });
+
+  it('keeps a newer execution open when an older execution terminal arrives late', () => {
+    expect(inFlightSteps([
+      executionEvent('step_started', 'test_suite', 10, 'first-execution'),
+      executionEvent('step_started', 'test_suite', 20, 'second-execution'),
+      executionEvent('step_completed', 'test_suite', 30, 'first-execution'),
+    ])).toEqual([{ step: 'test_suite', startedAtMs: 20 }]);
+  });
+
+  it('pairs context-free legacy events by step name', () => {
+    expect(inFlightSteps([
+      event('step_started', 'test_suite', 10),
+      event('step_completed', 'test_suite', 20),
+    ])).toEqual([]);
   });
 });
 

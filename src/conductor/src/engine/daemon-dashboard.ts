@@ -598,8 +598,17 @@ export function inFlightSteps(events: readonly Record<string, unknown>[]): InFli
   const inFlight = new Map<string, InFlightStep>();
   for (const event of events) {
     if (typeof event.step !== 'string') continue;
+    const executionId = isRecord(event.executionContext)
+      && typeof event.executionContext.executionId === 'string'
+      ? event.executionContext.executionId
+      : undefined;
+    // Context-aware events identify a logical execution. Older ledgers have
+    // no context, so retain their historical step-name pairing.
+    const key = executionId === undefined
+      ? `legacy:${event.step}`
+      : `execution:${executionId}`;
     if (event.type === 'step_started' && typeof event.ts === 'number' && Number.isFinite(event.ts)) {
-      inFlight.set(event.step, { step: event.step, startedAtMs: event.ts });
+      inFlight.set(key, { step: event.step, startedAtMs: event.ts });
       continue;
     }
     if (
@@ -608,7 +617,7 @@ export function inFlightSteps(events: readonly Record<string, unknown>[]): InFli
       || event.type === 'step_interrupted'
       || event.type === 'step_refused'
     ) {
-      inFlight.delete(event.step);
+      inFlight.delete(key);
     }
   }
   return [...inFlight.values()];
