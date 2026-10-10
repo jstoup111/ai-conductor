@@ -1004,6 +1004,13 @@ the earlier tier's last value remains available. Query cumulative feature totals
 for example `max by (feature, tier) (...)`; summing those cross-tier series can double-count a
 feature that was re-tiered.
 
+The `conductor.gate.verdicts` counter (`step`, `outcome` = `pass` or `fail`) and the
+`conductor.gate.kickbacks` counter (`from`, `to`) carry the same optional raw `tier` label, taken
+from the `tier` field of the producing `gate_verdict` or `kickback` event. The conductor stamps the
+run's complexity tier on those events when one is resolved; untiered runs omit the label.
+Kickbacks from `rebase` are invalidations, not gate outcomes, and stay tierless. Split gate pass
+rates by tier with, for example, `sum by (step, outcome, tier) (...)`.
+
 Dispatch metrics use the same projection as the shipped-record cost rollup. Every invoked
 `provider_attempt` contributes one `conductor.step.dispatches` point, including failed attempts; an
 unavailable provider that was never invoked does not. A successful attempt suppresses its matching
