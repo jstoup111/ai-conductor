@@ -44,7 +44,9 @@ export function composeSpecCommitMessage(
 
   const tasks = [...parsePlanTaskTitles(planText)];
   if (tasks.length > 0) {
-    sections.push(`Tasks: ${tasks.length}\n${tasks.map(([id, title]) => `- Task ${id}: ${title}`).join('\n')}`);
+    sections.push(
+      `Tasks: ${tasks.length}\n${tasks.map(([id, title]) => (title ? `- Task ${id}: ${title}` : `- Task ${id}`)).join('\n')}`,
+    );
   }
 
   return [subjectFor(idea), ...sections].join('\n\n');

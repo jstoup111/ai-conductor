@@ -1,7 +1,10 @@
 // Covers: task:1, task:2
 import { describe, expect, it } from 'vitest';
 import { composeSpecCommitMessage } from '../../../src/engine/engineer/spec-commit-message.js';
-import { TASK_ID_PATTERN } from '../../../src/engine/plan-task-parse.js';
+import {
+  TASK_ID_PATTERN,
+  TASK_TRAILER_LINE_PATTERN,
+} from '../../../src/engine/plan-task-parse.js';
 
 describe('composeSpecCommitMessage', () => {
   it('composes the current subject and an inert DECIDE-artifact summary', () => {
@@ -66,6 +69,51 @@ describe('composeSpecCommitMessage', () => {
     );
 
     expect(message.split('\n')).toContain('- Task task_3: Dash-delimited title');
+  });
+
+  it.each(['### Task 4', '### Task 4:'])('renders an untitled task heading without a colon: %s', (heading) => {
+    let message = '';
+
+    expect(() => {
+      message = composeSpecCommitMessage('untitled task', 'technical', 'S', '', heading);
+    }).not.toThrow();
+
+    const taskLines = message.split('\n').filter((line) => line.startsWith('- Task 4'));
+    expect(taskLines).toEqual(['- Task 4']);
+    expect(taskLines).not.toContainEqual(expect.stringMatching(/^- Task 4:/));
+  });
+
+  it('excludes task headings inside fenced code blocks', () => {
+    const message = composeSpecCommitMessage(
+      'fenced task heading',
+      'technical',
+      'S',
+      '',
+      [
+        '### Task 1: Real task',
+        '',
+        '```markdown',
+        '### Task 9: Example heading',
+        '```',
+      ].join('\n'),
+    );
+
+    expect(message).toContain('Tasks: 1');
+    expect(message.split('\n')).not.toContainEqual(expect.stringMatching(/^- Task 9/));
+  });
+
+  it('does not emit a task trailer when a heading title is trailer-shaped', () => {
+    const message = composeSpecCommitMessage(
+      'trailer-shaped task title',
+      'technical',
+      'S',
+      '',
+      '### Task 1: Task: 71',
+    );
+
+    expect(message.split('\n')).toContain('- Task 1: Task: 71');
+    const trailer = new RegExp(TASK_TRAILER_LINE_PATTERN);
+    expect(message.split('\n').map((line) => line.trim())).not.toContainEqual(expect.stringMatching(trailer));
   });
 
   it('removes copied trailer-shaped lines from the composed body', () => {
