@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1 — coherence waiver declaration grammar.
 // Tests for the coherence waiver parser/evaluator (Task 13).
 //
 // Mirrors src/engine/self-host/release-gate.ts's parseWaiver/findWaiverInDiff
