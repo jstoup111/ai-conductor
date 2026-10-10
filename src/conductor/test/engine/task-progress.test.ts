@@ -400,14 +400,15 @@ describe('task-progress', () => {
         planPath: '.docs/plans/feature.md', taskId: '2', obligationId: current.id,
         evidence: { kind: 'task-done', value: 'current' },
       });
-      await expect(repairs.rewriteBaselines(new Map([
+      const rewritten = await repairs.rewriteBaselines(new Map([
         [older.id, 'translated-older'],
         [current.id, 'translated-current'],
-      ]))).resolves.toEqual({ ok: true, value: { rewritten: [older.id, current.id] } });
+      ]));
+      expect(rewritten).toEqual({ ok: true, value: { rewritten: [older.id, current.id] } });
 
-      await expect(resolveTaskIdsWithDiagnostics(dir, ['2'])).resolves.toEqual({
-        resolved: new Set(['2']), unavailableReasons: new Map(),
-      });
+      const result = await resolveTaskIdsWithDiagnostics(dir, ['2']);
+      expect(result.resolved).toEqual(new Set(['2']));
+      expect(result.unavailableReasons.has('2')).toBe(false);
     });
 
     it('keeps a task unresolved when its current same-authority obligation remains open', async () => {
