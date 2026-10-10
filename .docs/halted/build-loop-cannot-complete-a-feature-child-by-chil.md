@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-10T10:22:21.222Z
 Slug: build-loop-cannot-complete-a-feature-child-by-chil
 Class: needs-human
 Halting step: unknown
