@@ -78,7 +78,10 @@ export interface WatchEntry {
   ciFixAttempts?: number;
   lastCiFixAt?: string;
   ciFailureDetected?: boolean;
-  escalationCause?: 'conflict-resolution';
+  headSha?: string;
+  headFirstSeenAt?: string;
+  readinessEmitted?: boolean;
+  escalationCause?: 'conflict-resolution' | 'shipped-readiness';
   labelClearAttempts?: number;
 }
 
@@ -205,7 +208,17 @@ export async function readWatch(projectRoot: string): Promise<WatchEntry[]> {
               ...(typeof raw.ciFailureDetected === 'boolean' && {
                 ciFailureDetected: raw.ciFailureDetected,
               }),
-              ...(raw.escalationCause === 'conflict-resolution' && { escalationCause: 'conflict-resolution' as const }),
+              ...(typeof raw.headSha === 'string' && { headSha: raw.headSha }),
+              ...(typeof raw.headFirstSeenAt === 'string' && {
+                headFirstSeenAt: raw.headFirstSeenAt,
+              }),
+              ...(typeof raw.readinessEmitted === 'boolean' && {
+                readinessEmitted: raw.readinessEmitted,
+              }),
+              ...((raw.escalationCause === 'conflict-resolution' ||
+                raw.escalationCause === 'shipped-readiness') && {
+                escalationCause: raw.escalationCause,
+              }),
               ...(typeof raw.labelClearAttempts === 'number' && { labelClearAttempts: raw.labelClearAttempts }),
             };
             return [entry];
