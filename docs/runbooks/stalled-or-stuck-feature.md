@@ -1318,7 +1318,9 @@ without re-writing the same halt.
 ### Clear a halt and let the feature resume
 
 **Blast radius:** clearing the halt makes the feature eligible for dispatch again on the next
-poll. Fix the cause first, or it halts again immediately.
+poll, including while sibling features are running and an origin refresh is waiting behind their
+provider windows (`daemon status` shows `ROOT REFRESH: pending`). It needs neither a base advance
+nor new task progress. Fix the cause first, or it halts again immediately.
 
 #### Audited clear
 

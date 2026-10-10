@@ -468,6 +468,12 @@ For every halted or in-progress feature with an honored
 [per-feature applicability](steps.md#per-feature-applicability) declaration, it prints
 `inapplicable [<slug>]: <step> — <reason>`.
 
+While the repo's daemon is running and its newest `daemon_backlog_snapshot` shows a free slot while
+an origin refresh is still pending, it prints `ROOT REFRESH: pending — <n> slot(s) free, <m> busy; …`.
+On a self-host daemon whose containment is unproven, that refresh waits for every open provider
+window to close. The free slots still fill from local discovery, so a cleared halt or an unparked
+feature is dispatched without waiting. This line tells a refresh-blocked pool from an empty backlog.
+
 While the repo's daemon is running, it prints `IN FLIGHT [<slug>]: <step> running <age>` for each step
 in an in-progress feature's `.pipeline/events.jsonl` that has a `step_started` event and no terminal
 step event (`step_completed`, `step_failed`, `step_interrupted`, or `step_refused`). Events pair by

@@ -605,6 +605,12 @@ export interface DaemonTickSnapshot {
   inFlight: string[];
   blocked: Record<'paused' | 'build_auth_missing' | 'gh_version' | 'episode_active', boolean>;
   pollDurationMs: number;
+  /**
+   * #2275: an origin refresh is running off the loop — typically held by the
+   * live-boundary coordinator behind an open provider window. Free slots still
+   * fill from local discovery; this tells refresh-blocked from an empty backlog.
+   */
+  rootRefreshPending: boolean;
 }
 
 export interface DaemonOptions {
@@ -1150,6 +1156,61 @@ export async function runDaemon(
     await deps.writePersistedBaseSha?.(current);
   };
 
+  // ── Background origin refresh (single flight) ─────────────────────────────
+  // A self-host root fast-forward waits for every open provider fingerprint
+  // window (LiveBoundaryCoordinator.runMutation). Awaited inline, it froze this
+  // loop for a whole provider attempt: no discovery, dispatch into free slots,
+  // worker collection, or tick telemetry. With work in flight the refresh runs
+  // off the loop and its result — base-advance re-kick plus the refreshed
+  // backlog — is folded into a later pass. Dispatch admission stays with the
+  // coordinator: a dispatch queued behind a pending root mutation still waits
+  // for it ("waiting for root-mutation admission"), exactly as before.
+  let refreshJob: Promise<void> | undefined;
+  let refreshedBacklog: BacklogItem[] | undefined;
+
+  const startRefresh = (): Promise<void> | undefined => {
+    if (refreshJob || !maintenance.refreshStartable()) return refreshJob;
+    const job = (async () => {
+      try {
+        const refreshed = await maintenance.refreshOnly(() => deps.discoverBacklog({ refresh: true }));
+        if (refreshed !== undefined) {
+          refreshedBacklog = refreshed;
+          // Wake a busy poll so the result is folded promptly. The idle waker
+          // is left alone: a drained loop awaits the job inline before idling,
+          // and a held wake signal would cost it a spurious idle poll.
+          wakeBusyPoll?.();
+        }
+      } catch (err) {
+        log(
+          `[daemon] background root refresh failed (${err instanceof Error ? err.message : String(err)}); a later pass will retry`,
+        );
+      } finally {
+        refreshJob = undefined;
+      }
+    })();
+    refreshJob = job;
+    return job;
+  };
+
+  /** Fold a completed refresh: re-kick on a base advance, then pick from its backlog. */
+  const foldRefresh = async (pickCtx: PickEligibleCtx): Promise<BacklogItem | undefined> => {
+    const refreshed = refreshedBacklog;
+    if (refreshed === undefined) return undefined;
+    refreshedBacklog = undefined;
+    // FR-6: the refresh already fetched origin, so the discovery ref is current —
+    // re-read the base SHA WITHOUT a second fetch and, on a genuine advance,
+    // re-kick before consuming the backlog so a freshly-cleared marker is
+    // un-parked in THIS pass (its dispatch still flows through the existing
+    // un-park path, FR-8 — the sweep issues none).
+    await maintenance.run('rekick', () => maybeRekick(false));
+    const parkedBeforeRefresh = new Set(claims.listParked());
+    const picked = await pickEligible({ items: refreshed }, pickCtx);
+    for (const slug of claims.listParked()) {
+      if (!parkedBeforeRefresh.has(slug)) registerWatcher(slug);
+    }
+    return picked;
+  };
+
   // Startup advance check: refresh so a base that moved on origin while the
   // daemon was DOWN is caught (FR-5 downtime-advance path).
   // FR-14: sweep mergeable labels on startup (after reconciliation).
@@ -1351,6 +1412,7 @@ export async function runDaemon(
         inFlight: workers.map((worker) => worker.slug),
         blocked: { paused, build_auth_missing: buildAuthMissing, gh_version: ghVersionBlocked, episode_active: episodeActive },
         pollDurationMs: snapshot?.pollDurationMs ?? 0,
+        rootRefreshPending: refreshJob !== undefined,
       });
     };
 
@@ -1401,22 +1463,15 @@ export async function runDaemon(
         // With no local candidate, maintenance may refresh origin into this free
         // slot. The scheduler rate-limits the busy path to the poll interval;
         // WorkOrders keep already-dispatched work pinned to its original base.
+        if (!next) next = await foldRefresh(pickCtx);
         if (!next) {
-          const refreshed = await maintenance.refreshAndRekick(
-            () => deps.discoverBacklog({ refresh: true }),
-            () => maybeRekick(false),
-          );
-          if (refreshed !== undefined) {
-            // FR-6: the refresh above already fetched origin, so the discovery ref is
-            // current — re-read the base SHA WITHOUT a second fetch and, on a genuine
-            // advance, re-kick before consuming the backlog so a freshly-cleared
-            // marker is un-parked in THIS iteration (its dispatch still flows through
-            // the existing un-park path, FR-8 — the sweep issues none).
-            const parkedBeforeRefresh = new Set(claims.listParked());
-            next = await pickEligible({ items: refreshed }, pickCtx);
-            for (const slug of claims.listParked()) {
-              if (!parkedBeforeRefresh.has(slug)) registerWatcher(slug);
-            }
+          const job = startRefresh();
+          // Drained: no executor holds a provider window, so the refresh cannot
+          // be held by the coordinator — finish it inline and keep the serial,
+          // once-mode, and idle-timeout semantics of a single pass unchanged.
+          if (job && maintenance.isDrained()) {
+            await job;
+            next = await foldRefresh(pickCtx);
           }
         }
       }
@@ -1751,6 +1806,10 @@ export async function runDaemon(
   while (inFlight.size > 0) {
     await collectOne();
   }
+  // A background refresh settles once the workers above have closed their
+  // provider windows; await it so shutdown never orphans a root mutation.
+  // Its result is discarded — no dispatch follows.
+  if (refreshJob) await refreshJob;
 
   // Dispose all remaining watchers before exiting
   for (const dispose of watchers.values()) {

@@ -417,6 +417,8 @@ type ConductorEventBody =
       inFlight: string[];
       blocked: Record<DispatchBlockReason, boolean>;
       pollDurationMs: number;
+      /** #2275: an origin refresh is in flight off the dispatch loop (absent on older records). */
+      rootRefreshPending?: boolean;
     }
   | {
       type: 'daemon_memory_sample';
