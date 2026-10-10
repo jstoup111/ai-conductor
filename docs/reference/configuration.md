@@ -1214,6 +1214,11 @@ event per movement episode, then applies `active_stall_action`:
 
 A provider with no fresh heartbeat is *quiet*, not active, and is never ended by this policy.
 
+**Non-build steps.** While any other lifecycle step runs — serially or as a validation-group member —
+the engine emits a `step_in_flight` event every `heartbeat_minutes` with the step name and elapsed
+time. `enabled: false` suppresses it. The daemon log renders it as `▶ <step> running <age> · <slug>`.
+The heartbeat is display-only and never ends a step.
+
 ## provider_stream
 
 Cadence for live `provider_stream_progress` events on the conductor event spine. The engine attaches
