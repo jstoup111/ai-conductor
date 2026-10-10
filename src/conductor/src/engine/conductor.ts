@@ -173,7 +173,7 @@ import type {
   StateMutationResult,
 } from './conduct-state-store.js';
 import { createRoutedConductStateStore, readConductStateOverlay } from './conduct-state-store.js';
-import { isRegionStep, CHILD_REGION_STEPS, type ChildId } from './child-context.js';
+import { isRegionStep, CHILD_REGION_STEPS, pipelinePathFor, type ChildId } from './child-context.js';
 import { resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import {
   advanceChildRegion,
@@ -5881,14 +5881,30 @@ export class Conductor {
       // selecting finish across an interrupted/inconsistent rebase write.
       let rebaseClassification = await classifyRebaseOperation(this.projectRoot);
       if (rebaseClassification.kind === 'applying') {
+        // Resume may begin directly at the rebase fence, before the loop has
+        // reached a region step. Re-adopt the cursor-selected child so the
+        // interrupted operation reads and mutates that child's state/verdicts.
+        const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+        if (slug) {
+          const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+          if (cursor.kind === 'active') {
+            await this.activateChildRegionState(state, cursor.child);
+          } else if (cursor.kind !== 'no-child') {
+            await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+            return;
+          }
+        }
         const rebaseIndex = indexOf('rebase');
         const completion = await completeInterruptedRebaseOperation({
           projectRoot: this.projectRoot,
-          stateFilePath: this.stateFilePath,
+          stateFilePath: this.activeRegionChild === undefined
+            ? this.stateFilePath
+            : pipelinePathFor(this.projectRoot, 'conduct-state.json', this.activeRegionChild),
           stateStore: this.stateStore,
           operation: rebaseClassification.operation,
           downstreamSteps: steps.slice(rebaseIndex + 1).map((step) => step.name),
           preVerify: (step) => this.preVerifyRebaseGate(state, step),
+          child: this.activeRegionChild,
         });
         if (completion.stateResult === 'refused') {
           await this.writeHaltMarker(
@@ -14737,7 +14753,7 @@ export class Conductor {
       const outcome: RebaseOutcome = { kind: 'noop', baseSha: null };
       this.lastRebaseOutcome = outcome;
       const ranManualTest = getStepStatus(state, 'manual_test') !== 'skipped';
-      await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest);
+      await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest, undefined, undefined, undefined, this.activeRegionChild);
       if (outcome.baseSha !== null && outcome.baseSha !== undefined) {
         state.rebase_base_sha = outcome.baseSha;
         await this.persistPendingStateChanges(state, 'persist rebase base provenance');
@@ -14882,6 +14898,7 @@ export class Conductor {
           : {}),
         emit: async (event) => { await this.events?.emit(event); },
       },
+      this.activeRegionChild,
     );
 
     // The replay decision has already written the authoritative gate verdicts.
@@ -14896,13 +14913,16 @@ export class Conductor {
     if (transitionReplay) {
       const transition = await applyRebaseTransition({
         projectRoot: this.projectRoot,
-        stateFilePath: this.stateFilePath,
+        stateFilePath: this.activeRegionChild === undefined
+          ? this.stateFilePath
+          : pipelinePathFor(this.projectRoot, 'conduct-state.json', this.activeRegionChild),
         stateStore: this.stateStore,
         replay: transitionReplay,
         invalidated: verdict.kickedBack,
         preserved: verdict.preservedGates ?? [],
         preservedCandidates: verdict.preservedCandidates ?? [],
         reverified: verdict.reverified,
+        child: this.activeRegionChild,
       });
       if (transition.stateResult === 'refused') {
         await this.writeHaltMarker('rebase continuation state transition was refused; inspect concurrent state updates before resuming\n', 'needs-human');

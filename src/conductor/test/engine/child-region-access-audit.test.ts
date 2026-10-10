@@ -135,7 +135,39 @@ const PENDING_CHILD_WIRING = [
 ] as const;
 
 const ACCESS_ALLOWLIST: readonly AllowlistEntry[] = [
-  ...PENDING_CHILD_WIRING.map((site) => ({ site, classification: 'pending-child-wiring' as const })),
+  ...PENDING_CHILD_WIRING
+    .filter((site) => !site.startsWith('engine/rebase-transition.ts:') && !site.startsWith('engine/rebase.ts:'))
+    .map((site) => ({ site, classification: 'pending-child-wiring' as const })),
+  { site: 'engine/rebase-transition.ts:54:updateKickbackLedger', classification: 'pending-child-wiring' as const },
+  ...[
+    'engine/rebase-transition.ts:171:readVerdict',
+    'engine/rebase-transition.ts:242:readVerdict',
+    'engine/rebase-transition.ts:277:readVerdict',
+    'engine/rebase-transition.ts:301:ConductStateStore.applyBatch',
+    'engine/rebase-transition.ts:316:readVerdict',
+    'engine/rebase-transition.ts:329:readVerdict',
+    'engine/rebase-transition.ts:334:writeVerdict',
+    'engine/rebase-transition.ts:346:readVerdict',
+    'engine/rebase.ts:2334:readVerdict',
+    'engine/rebase.ts:2377:writeVerdict',
+    'engine/rebase.ts:2391:writeVerdict',
+    'engine/rebase.ts:2566:readVerdict',
+    'engine/rebase.ts:2678:readVerdict',
+    'engine/rebase.ts:2689:readVerdict',
+  ].map((site) => ({ site, classification: 'child-aware' as const })),
+  ...[
+    'engine/rebase-transition.ts:239:readVerdict',
+    'engine/rebase-transition.ts:283:writeVerdict',
+    'engine/rebase-transition.ts:358:writeVerdict',
+    'engine/rebase-transition.ts:383:readVerdict',
+    'engine/rebase-transition.ts:384:readVerdict',
+    'engine/rebase.ts:2430:writeVerdict',
+    'engine/rebase.ts:2490:writeVerdict',
+  ].map((site) => ({
+    site,
+    classification: 'whole-feature-only' as const,
+    reason: 'The rebase and coverage-binding gates remain feature-wide.',
+  })),
   {
     site: 'engine/kickback-ledger.ts:1060:bumpKickbackGate',
     classification: 'whole-feature-only',
@@ -245,6 +277,8 @@ describe('child-region flat-access audit', () => {
       .map((entry) => entry.site)
       .sort();
 
-    expect(pending).toEqual(EXPECTED_PENDING_CHILD_WIRING);
+    expect(pending).toEqual(EXPECTED_PENDING_CHILD_WIRING.filter(
+      (site) => !site.startsWith('engine/rebase-transition.ts:') && !site.startsWith('engine/rebase.ts:'),
+    ).concat('engine/rebase-transition.ts:54:updateKickbackLedger').sort());
   });
 });

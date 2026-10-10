@@ -227,6 +227,39 @@ describe('applyRebaseTransition', () => {
     expect(result.stateResult).toBe('applied');
   });
 
+  it('applies a rebase invalidation through the active child state and verdict paths', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    const stateFilePath = join(dir, '.pipeline/children/2/conduct-state.json');
+    await mkdir(join(dir, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(stateFilePath, JSON.stringify({ build_review: 'done' }));
+    await writeVerdict(dir, 'build_review', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
+    }, 2);
+
+    const result = await applyRebaseTransition({
+      projectRoot: dir,
+      stateFilePath,
+      stateStore: createFilesystemConductStateStore(stateFilePath),
+      replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      invalidated: ['build_review'],
+      preserved: [],
+      preservedCandidates: [],
+      child: 2,
+    });
+
+    expect(result.stateResult).toBe('applied');
+    expect(await readVerdict(dir, 'build_review', 2)).toMatchObject({
+      satisfied: false,
+      kickback: { from: 'rebase' },
+    });
+    expect(await readVerdict(dir, 'build_review')).toBeNull();
+    expect(JSON.parse(await (await import('node:fs/promises')).readFile(stateFilePath, 'utf8')))
+      .toMatchObject({ build_review: 'pending' });
+  });
+
   it('does not attach an older replay preservation record to a newer ordinary verdict', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
     dirs.push(dir);
