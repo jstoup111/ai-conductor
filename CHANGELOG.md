@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-10-09
+## [1.7.0] - 2026-10-10
 
 ### Added
 
@@ -52,6 +52,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon builds route fully refused over-scope findings into bounded BUILD rework. ([implementation PR #3010](https://github.com/jstoup111/ai-conductor/pull/3010)).
 - Feature branches handle base-deleted inherited protected artifacts without deadlocking. ([implementation PR #3041](https://github.com/jstoup111/ai-conductor/pull/3041)).
 - A no-op rebase no longer recounts a stale rebase kickback, which had halted features with a false "kickback ping-pong" after an earlier halt. ([implementation PR #3052](https://github.com/jstoup111/ai-conductor/pull/3052)).
+- Remediation now preserves engine-owned dispositions when it creates follow-up work. ([implementation PR #3040](https://github.com/jstoup111/ai-conductor/pull/3040)).
 
 ## Migration
 
