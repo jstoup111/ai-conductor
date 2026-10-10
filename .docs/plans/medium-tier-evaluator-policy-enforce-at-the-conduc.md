@@ -692,3 +692,12 @@ Task 1 ─┬─ Task 2
 **Done when:**
 - Task 1 is satisfied by this task.
 - Re-run as-built and confirm task rem-as-built-1 is complete.
+
+### Task rem-prd-audit-10-2: Amend skills/build-review-implementation-quality/SKILL.md excess-complexity definition to cover ≥4-level flattenable nesting without a correctness-cost requirement, and assert it in src/conductor/test/engine/build-review-rubric-skills.test.ts
+**Gate:** prd-audit
+**Rationale:** Verified (95%): the S6.2 story criterion (stories line 164) says a function that nests four or more conditional levels, where a flat structure expresses the same logic, must yield one excess-complexity finding anchored to that function's hunk. The shipped skills/build-review-implementation-quality/SKILL.md:27-28 also requires 'a concrete correctness cost'. Behavior-equivalent deep nesting has no correctness cost by construction, so the skill text tells the rubric NOT to report the criterion's own example. The plan (line 383: 'deep nesting → excess-complexity') and the story agree; only the skill text drifted. No architectural or product decision is needed. This is conforming skill-text repair inside task 10, which authors this feature's own new skill. Repair: (1) rewrite the excess-complexity definition. It should cover changed control/data flow that is unnecessarily hard to follow, explicitly including four or more nested conditional levels where a flatter structure expresses the same logic. Drop the correctness-cost requirement for this kind. Keep the non-finding (ordinary conditional logic with clear bounded cases) and the existing exclusion of style preferences. (2) Strengthen build-review-rubric-skills.test.ts (task 10 done-when 4) to assert that the excess-complexity definition names deep or flattenable nesting and does not demand a correctness cost. Preserve: the seven-kind vocabulary, the hunk-anchor rule, the style exclusion, the forbidden-question exclusions (S5.5, S6.6-S6.9), and the vocabulary-drift check (S5.1) all stay unchanged. Sibling check: the other six kind definitions passed audit; no further sites need changes.
+**Criterion:** S6.2
+**Parent task:** 10
+**Done when:**
+- [test] S6.2 is satisfied by this task.
+- The repair for task rem-prd-audit-10-2 is committed and its targeted tests pass.
