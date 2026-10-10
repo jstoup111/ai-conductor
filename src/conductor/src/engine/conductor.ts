@@ -7319,7 +7319,9 @@ export class Conductor {
                     subject: { kind: 'lifecycle-step', step: member.name as StepName },
                   };
                   memberExecutionContexts.set(member.name, executionContext);
-                  return runGroupBranch(member, state, {
+                  let stepInFlightTicker: StepInFlightTicker | null = null;
+                  try {
+                    return await runGroupBranch(member, state, {
                       stepRunner: this.stepRunner,
                       providerAvailability: this.providerExecution?.providerAvailability,
                       onProviderSuppressed: this.providerExecution?.onProviderSuppressed,
@@ -7335,6 +7337,14 @@ export class Conductor {
                             index: indexOf(observation.member as StepName),
                             executionContext,
                           });
+                          stepInFlightTicker = new StepInFlightTicker({
+                            events: this.events,
+                            step: member.name as StepName,
+                            startedAtMs: Date.now(),
+                            featureSlug: state.feature_desc,
+                            config: this.config,
+                          });
+                          stepInFlightTicker.start();
                         },
                         onAttempt: async (observation) => {
                           if (observation.result !== undefined) {
@@ -7363,6 +7373,7 @@ export class Conductor {
                           });
                         },
                         onSettled: async (observation) => {
+                          stepInFlightTicker?.stop();
                           await emitTracked({
                             type: 'group_member_step',
                             member: observation.member,
@@ -7425,6 +7436,9 @@ export class Conductor {
                         }
                       },
                     }, memberAttemptBudgets.get(member.name)!);
+                  } finally {
+                    stepInFlightTicker?.stop();
+                  }
                 }),
                 cap,
               );
