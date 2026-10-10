@@ -70,6 +70,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators can resolve GitHub intake issues with `compose forget --resolved-by` even after the ledger entry is absent. ([implementation PR #3090](https://github.com/jstoup111/ai-conductor/pull/3090)).
 - Pi users now receive protection against destructive Git commands during build dispatches. ([implementation PR #3081](https://github.com/jstoup111/ai-conductor/pull/3081)).
 - Validation-group reviews that kick back to build are no longer reported as interrupted in pipeline telemetry. ([implementation PR #3111](https://github.com/jstoup111/ai-conductor/pull/3111)).
+- The daemon now fills a free slot (for example, a feature whose halt you cleared) while a sibling self-host build holds back the origin refresh, instead of waiting for that build to finish; `daemon status` shows when a refresh is pending. ([implementation PR #3108](https://github.com/jstoup111/ai-conductor/pull/3108)).
 
 ## Migration
 
