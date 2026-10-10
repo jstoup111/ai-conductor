@@ -1,4 +1,4 @@
-// Covers: task:3, task:1
+// Covers: task:4, task:3, task:1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readFile } from 'fs/promises';
 import { join } from 'path';
@@ -6,11 +6,12 @@ import { tmpdir } from 'os';
 import {
   EventPersister,
   EventPersistError,
+  forwardedFeatureOf,
   isForwardedFromFeature,
   startFeatureEventPersistence,
 } from '../../src/engine/event-persister.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
-import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { ConductorEventEmitter, observedAtOf } from '../../src/ui/events.js';
 import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
 import type { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import type { ChildId } from '../../src/engine/child-context.js';
@@ -533,6 +534,47 @@ describe('EventPersister', () => {
       probeFailureKind: 'timeout',
       nextDisposition: 'trial-required',
       forwarded: true,
+    });
+  });
+
+  it('preserves an occurrence timestamp and complete feature/execution attribution when forwarding to the root bus', async () => {
+    const globalEvents = new ConductorEventEmitter();
+    const rootEventsPath = join(tempDir, 'daemon-events.jsonl');
+    const rootPersister = new EventPersister(rootEventsPath, globalEvents, scriptedClock(0));
+    const executionContext = configuredMember('dispatch-42', 'reviewer');
+    let forwarded: ProviderAttemptEvent | undefined;
+    globalEvents.on('provider_attempt', (event) => {
+      if (event.type === 'provider_attempt') forwarded = event;
+    });
+    rootPersister.start();
+    const scope = startFeatureEventPersistence(tempDir, globalEvents, 'feature-with-the-complete-slug');
+
+    await scope.events.emit({
+      type: 'provider_attempt',
+      step: 'build',
+      provider: 'codex',
+      outcome: 'success',
+      invoked: true,
+      executionContext,
+    });
+    await scope.drain();
+    scope.stop();
+    rootPersister.stop();
+
+    const localRecord = JSON.parse((await readFile(join(tempDir, '.pipeline', 'events.jsonl'), 'utf-8')).trim());
+    const rootRecord = JSON.parse((await readFile(rootEventsPath, 'utf-8')).trim());
+    expect({
+      sourceTimestamp: localRecord.ts,
+      forwardedTimestamp: rootRecord.ts,
+      forwardedOccurrenceTimestamp: forwarded === undefined ? undefined : observedAtOf(forwarded),
+      featureSlug: forwarded === undefined ? undefined : forwardedFeatureOf(forwarded),
+      executionContext: forwarded?.executionContext,
+    }).toEqual({
+      sourceTimestamp: localRecord.ts,
+      forwardedTimestamp: localRecord.ts,
+      forwardedOccurrenceTimestamp: localRecord.ts,
+      featureSlug: 'feature-with-the-complete-slug',
+      executionContext,
     });
   });
 
