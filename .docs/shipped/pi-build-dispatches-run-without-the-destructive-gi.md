@@ -4,13 +4,6 @@ spec_hash: 46be3e69a49f72d67e967b57e75a82c2024360304930175381e1f6f371af8cfb
 pr: https://github.com/jstoup111/ai-conductor/pull/3081
 shipped: 2026-10-10
 engine_version: 20261010T011143Z-f79d1fd8d7cd
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-1
-    summary: "No plan task covers these documentation corrections. They fix unrelated, pre-existing drift in contributor docs (test counts and a Codex smoke missing from the table). They are accurate, documentation-only, and change no runtime behavior. They are outside this feature's stated intent (guard Pi dispatches) but not user-visible product behavior."
-    accepted: false
-    authority: engine
 ---
 
 ## Cost
@@ -30,7 +23,8 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","7b33f2a5-de8c-43a9-a24f-7c698d2ce71e","lifecycle-step","finish"]
+active_ms: 7059454
+reason: provider-evidence-incomplete
 
 ## Build Review
 laps_to_pass: 1
