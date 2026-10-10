@@ -82,16 +82,25 @@ export class DaemonMaintenance {
     await this.run('sweep', sweep);
   }
 
-  async refreshAndRekick<T>(
-    refresh: () => Promise<T>,
-    rekick: () => Promise<void>,
-  ): Promise<T | undefined> {
+  /** True when the rate limit and pool policy would let a refresh start now. */
+  refreshStartable(): boolean {
+    return this.refreshDue() && this.permits('refresh');
+  }
+
+  /**
+   * The origin refresh, rate-limited to the refresh interval. The dispatcher
+   * runs it off its loop and folds the result (and its re-kick) into a later
+   * pass, so a refresh held by the live-boundary coordinator never stalls it.
+   * Any settlement stamps the rate limit, so a failing refresh is retried at
+   * the refresh interval rather than on every pass.
+   */
+  async refreshOnly<T>(refresh: () => Promise<T>): Promise<T | undefined> {
     if (!this.refreshDue()) return undefined;
-    const refreshed = await this.run('refresh', refresh);
-    if (refreshed === undefined) return undefined;
-    this.lastRefreshAt = this.now();
-    await this.run('rekick', rekick);
-    return refreshed;
+    try {
+      return await this.run('refresh', refresh);
+    } finally {
+      this.lastRefreshAt = this.now();
+    }
   }
 
   /** Runs the timer-driven sweep while executors occupy every pool slot. */

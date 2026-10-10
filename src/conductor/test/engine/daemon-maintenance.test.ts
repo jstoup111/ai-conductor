@@ -155,6 +155,9 @@ describe('engine/daemon-maintenance', () => {
 
         secondObservedFirstPinned =
           firstRunning && firstWorktreeHead === 'base-s1' && rootBase === 'base-s2';
+        // The refresh result is folded on a later pass; first stays in flight
+        // until second has observed it.
+        releaseFirst?.();
         return { slug: order.slug, status: 'done' };
       },
     };
@@ -174,9 +177,6 @@ describe('engine/daemon-maintenance', () => {
           }
           localDiscoveries++;
           if (localDiscoveries === 1) return [{ slug: 'first' }];
-          if (localDiscoveries === 2) {
-            setImmediate(() => releaseFirst?.());
-          }
           return [];
         },
         runFeature: async () => {
@@ -200,7 +200,7 @@ describe('engine/daemon-maintenance', () => {
     expect(result.processed.map((outcome) => outcome.slug).sort()).toEqual(['first', 'second']);
   });
 
-  it('rate-limits busy refreshes while preserving their refresh-and-rekick policy', async () => {
+  it('rate-limits busy refreshes, including one that failed', async () => {
     let now = 0;
     const maintenance = new DaemonMaintenance(
       () => 1,
@@ -211,21 +211,24 @@ describe('engine/daemon-maintenance', () => {
       2,
     );
     const operations: string[] = [];
+    let fail = true;
     const refresh = async () => {
       operations.push('refresh');
+      if (fail) throw new Error('fetch failed');
       return [] as string[];
     };
-    const rekick = async () => {
-      operations.push('rekick');
-    };
 
-    await maintenance.refreshAndRekick(refresh, rekick);
+    expect(maintenance.refreshStartable()).toBe(true);
+    await expect(maintenance.refreshOnly(refresh)).rejects.toThrow('fetch failed');
+    fail = false;
     now = 99;
-    await maintenance.refreshAndRekick(refresh, rekick);
+    expect(maintenance.refreshStartable()).toBe(false);
+    await expect(maintenance.refreshOnly(refresh)).resolves.toBeUndefined();
     now = 100;
-    await maintenance.refreshAndRekick(refresh, rekick);
+    expect(maintenance.refreshStartable()).toBe(true);
+    await expect(maintenance.refreshOnly(refresh)).resolves.toEqual([]);
 
-    expect(operations).toEqual(['refresh', 'rekick', 'refresh', 'rekick']);
+    expect(operations).toEqual(['refresh', 'refresh']);
   });
 
   it('base-advance re-kick skips an in-flight halted slug before it can be rebased', async () => {

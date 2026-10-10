@@ -472,19 +472,18 @@ function readOnlyReviewCapability(event: unknown): ReadOnlyReviewCapability | un
   };
 }
 
-/** Scan the whole JSONL ledger backwards, stopping when every seen provider has
- * its latest capability record.  Chunks may start mid-record, so only complete
- * lines are parsed. */
-async function readLatestReadOnlyReviewCapabilities(repoPath: string): Promise<ReadOnlyReviewCapability[]> {
+/** Visit `.daemon/events.jsonl` newest-first until `visit` returns true.
+ * Chunks may start mid-record, so only complete lines are parsed; a missing,
+ * unreadable, or malformed ledger never makes status fail. */
+async function scanEventsNewestFirst(repoPath: string, visit: (event: unknown) => boolean): Promise<void> {
   const path = join(repoPath, '.daemon', 'events.jsonl');
   let size: number;
   try {
     size = (await stat(path)).size;
   } catch {
-    return [];
+    return;
   }
 
-  const latestByProvider = new Map<string, ReadOnlyReviewCapability>();
   let end = size;
   let suffix = '';
   try {
@@ -499,12 +498,14 @@ async function readLatestReadOnlyReviewCapabilities(repoPath: string): Promise<R
         suffix = start > 0 ? (lines.shift() ?? '') : '';
         for (const line of lines.reverse()) {
           if (line.trim() === '') continue;
+          let event: unknown;
           try {
-            const event = readOnlyReviewCapability(JSON.parse(line));
-            if (event && !latestByProvider.has(event.provider)) latestByProvider.set(event.provider, event);
+            event = JSON.parse(line);
           } catch {
             // A concurrent append or malformed unrelated event does not make status fail.
+            continue;
           }
+          if (visit(event)) return;
         }
         end = start;
       }
@@ -512,10 +513,42 @@ async function readLatestReadOnlyReviewCapabilities(repoPath: string): Promise<R
       await handle.close();
     }
   } catch {
-    return [];
+    return;
   }
+}
 
+/** Latest capability record per provider, scanning the whole ledger. */
+async function readLatestReadOnlyReviewCapabilities(repoPath: string): Promise<ReadOnlyReviewCapability[]> {
+  const latestByProvider = new Map<string, ReadOnlyReviewCapability>();
+  await scanEventsNewestFirst(repoPath, (raw) => {
+    const event = readOnlyReviewCapability(raw);
+    if (event && !latestByProvider.has(event.provider)) latestByProvider.set(event.provider, event);
+    return false;
+  });
   return [...latestByProvider.values()];
+}
+
+/**
+ * #2275: when the newest dispatcher tick shows a free slot while an origin
+ * refresh is still pending (held behind an open provider window), say so — so
+ * an operator can tell refresh-blocked from an empty backlog. Silent otherwise.
+ */
+export async function renderRootRefreshSection(repoPath: string, out: (line: string) => void): Promise<void> {
+  let latest: { busy: number; free: number; pending: boolean } | undefined;
+  await scanEventsNewestFirst(repoPath, (raw) => {
+    if (typeof raw !== 'object' || raw === null) return false;
+    const record = raw as Record<string, unknown>;
+    if (record.type !== 'daemon_backlog_snapshot') return false;
+    const slots = record.slots as { busy?: unknown; free?: unknown } | undefined;
+    if (typeof slots?.busy !== 'number' || typeof slots.free !== 'number') return false;
+    latest = { busy: slots.busy, free: slots.free, pending: record.rootRefreshPending === true };
+    return true;
+  });
+  if (!latest?.pending || latest.free === 0) return;
+  out(
+    `  ROOT REFRESH: pending — ${latest.free} slot(s) free, ${latest.busy} busy; ` +
+      'origin refresh waits for an open provider window, free slots still fill from local discovery',
+  );
 }
 
 async function renderReadOnlyReviewCapabilitySection(repoPath: string, out: (line: string) => void): Promise<void> {
@@ -706,7 +739,10 @@ export async function runDaemonStatus(
       await renderBlockedSection(record.path, out, clock);
       await renderAgreementLine(record.path, out);
       await renderInapplicableSection(record.path, out);
-      if (row.liveness === 'running') await renderInFlightSection(record.path, out, clock);
+      if (row.liveness === 'running') {
+        await renderRootRefreshSection(record.path, out);
+        await renderInFlightSection(record.path, out, clock);
+      }
       await renderPlanGrowthSection(record.path, out);
     }
   }
