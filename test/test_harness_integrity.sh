@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Covers: task:4
 # BEGIN integrity failure reporting
 set -eEuo pipefail
 
@@ -863,6 +864,37 @@ if [ -f "$daemon_triage_skill" ]; then
   fi
 fi
 assert "skills/daemon-triage/SKILL.md keeps its phase-marker precondition advisory-only" "$daemon_triage_contract"
+
+# 9h. Monitor-hosted guided sessions need a closeout cue only after triage is
+# actually complete. Keep this isolated subsection pinned to the exact marker
+# emitted by the monitor opening prompt, without imposing monitor language on
+# direct daemon-triage invocations.
+daemon_triage_monitor_closeout=1
+if [ -f "$daemon_triage_skill" ]; then
+  daemon_triage_monitor_section=$(awk '
+    /^### 7\. Close a monitor-hosted session$/ {
+      found = 1
+      capture = 1
+    }
+    capture && found && /^## / { exit }
+    capture && found && /^### / && $0 != "### 7. Close a monitor-hosted session" { exit }
+    capture { print }
+    END {
+      if (!found) exit 1
+    }
+  ' "$daemon_triage_skill" || true)
+  if grep -Fq 'Session host: conduct monitor queue.' <<<"$daemon_triage_monitor_section" \
+    && grep -Fq 'Triage for <slug> is complete. Quit this session to return to the monitor queue. Quit instruction: <quit instruction>' <<<"$daemon_triage_monitor_section" \
+    && grep -Fq 'Do not send this message while any proposed action awaits approval, any approved action is still running, any approved action'"'"'s result is not yet appended to *Actions taken*, or a follow-up to a failed action is still open.' <<<"$daemon_triage_monitor_section" \
+    && grep -Fq 'If the opening input does not contain that line, this step does not apply: use no monitor-queue wording and no quit cue.' <<<"$daemon_triage_monitor_section" \
+    && grep -Fq 'Triage is complete when the triage report is written and every approved action has either completed and been appended to *Actions taken* or been declined — including a diagnosis-only run with no approved actions, a run whose approved actions all completed, and a run where the operator declined every remaining proposal.' <<<"$daemon_triage_monitor_section" \
+    && grep -Fq 'While a proposed action awaits approval, end the message with that approval request.' <<<"$daemon_triage_monitor_section" \
+    && grep -Fq "'Session host: conduct monitor queue.'" "${HARNESS_DIR}/src/conductor/src/engine/monitor/session.ts" \
+    && grep -Fq 'monitor-hosted completion cue' "$daemon_triage_skill"; then
+    daemon_triage_monitor_closeout=0
+  fi
+fi
+assert "skills/daemon-triage/SKILL.md pins the monitor-hosted completion cue" "$daemon_triage_monitor_closeout"
 
 # 9c. Every vX.Y.Z tag has a matching ## [X.Y.Z] section in CHANGELOG.md.
 # Only run when we're inside the harness repo's own git dir AND CHANGELOG.md

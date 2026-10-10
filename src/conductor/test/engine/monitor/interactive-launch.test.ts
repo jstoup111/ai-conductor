@@ -23,6 +23,10 @@ const openingPrompt = [
   'Reason: test failure',
   'Classification: mechanical',
   'Recovery procedure: Follow the mechanical halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
+  'Session host: conduct monitor queue.',
+  'Quitting this session returns the operator to the monitor queue.',
+  'Quit instruction: /quit',
+  'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
 ].join('\n');
 
 const claudeOpeningPrompt = [
@@ -33,6 +37,10 @@ const claudeOpeningPrompt = [
   'Reason: test failure',
   'Classification: mechanical',
   'Recovery procedure: Follow the mechanical halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
+  'Session host: conduct monitor queue.',
+  'Quitting this session returns the operator to the monitor queue.',
+  'Quit instruction: /quit',
+  'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
 ].join('\n');
 
 describe('guided monitor interactive launch', () => {

@@ -288,6 +288,25 @@ independent of whether the operator approves it. Append to *Actions taken* as
 each approved action completes, not in a batch at the end: if a recovery goes
 wrong midway, the record must already show what had actually run.
 
+### 7. Close a monitor-hosted session
+
+This step applies only when the opening input contains the line `Session host: conduct monitor queue.`
+
+Triage is complete when the triage report is written and every approved action has either completed and been appended to *Actions taken* or been declined — including a diagnosis-only run with no approved actions, a run whose approved actions all completed, and a run where the operator declined every remaining proposal.
+
+When triage is complete, the session's final message is:
+
+`Triage for <slug> is complete. Quit this session to return to the monitor queue. Quit instruction: <quit instruction>`
+
+Replace `<quit instruction>` with the value from the opening input's `Quit
+instruction:` line, so the generic provider fallback remains correct.
+
+Do not send this message while any proposed action awaits approval, any approved action is still running, any approved action's result is not yet appended to *Actions taken*, or a follow-up to a failed action is still open.
+
+While a proposed action awaits approval, end the message with that approval request.
+
+If the opening input does not contain that line, this step does not apply: use no monitor-queue wording and no quit cue.
+
 ## Verification
 
 - [ ] The skill was directly operator-invoked, never auto-dispatched
@@ -313,4 +332,7 @@ wrong midway, the record must already show what had actually run.
 - [ ] *Actions taken* records each approved action and its result, appended as it
       completed — empty if the run was diagnosis-only
 - [ ] Feature-side vs harness-side called explicitly
+- [ ] The monitor-hosted completion cue is sent only when the opening input carried the
+      monitor-host line and nothing was pending or awaiting approval; never in a
+      directly invoked session
 <!-- /ai-conductor:session-command-context -->

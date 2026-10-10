@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   BUILT_IN_PROVIDERS,
   DEFAULT_PROVIDER,
+  findBuiltInProviderDescriptor,
   PROVIDER_CAPABILITY_OWNERS,
   ProviderCapabilityUnsupportedError,
   requireProviderCapability,
@@ -20,6 +21,10 @@ const executableOverrides = ['CLAUDE_EXECUTABLE', 'CODEX_EXECUTABLE', 'PI_EXECUT
 const originalExecutableOverrides = new Map(
   executableOverrides.map((name) => [name, process.env[name]]),
 );
+
+function interactiveLaunchFor(provider: (typeof BUILT_IN_PROVIDERS)[number] | undefined) {
+  return provider && 'interactiveLaunch' in provider ? provider.interactiveLaunch : undefined;
+}
 
 afterEach(() => {
   for (const name of executableOverrides) {
@@ -148,6 +153,14 @@ describe('built-in provider catalog', () => {
       readOnlyReview: [true, true, true],
       readOnlyReviewUnsupported: undefined,
     });
+  });
+
+  it('declares interactive quit instructions only for supported providers', () => {
+    expect({
+      claude: interactiveLaunchFor(findBuiltInProviderDescriptor('claude'))?.quitInstruction,
+      codex: interactiveLaunchFor(findBuiltInProviderDescriptor('codex'))?.quitInstruction,
+      pi: interactiveLaunchFor(findBuiltInProviderDescriptor('pi')),
+    }).toEqual({ claude: '/quit', codex: '/quit', pi: undefined });
   });
 
   it('renders selected model and effort through the catalog-owned interactive argv', () => {

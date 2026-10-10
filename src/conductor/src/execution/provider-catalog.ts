@@ -47,6 +47,8 @@ export interface ProviderFactoryOptions {
 export interface InteractiveLaunch {
   readonly sessionMarkers: readonly string[];
   readonly acceptedEfforts: readonly EffortLevel[];
+  /** The operator-typed command that ends the interactive session. */
+  readonly quitInstruction?: string;
   readonly argv: (options: InteractiveLaunchArgvOptions) => string[];
 }
 
@@ -179,6 +181,7 @@ export const BUILT_IN_PROVIDERS = [
     interactiveLaunch: {
       sessionMarkers: ['CLAUDECODE'],
       acceptedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      quitInstruction: '/quit',
       argv: ({ prompt, permissionMode = 'default', model, effort }) => {
         return [
           '--permission-mode', permissionMode,
@@ -232,6 +235,7 @@ export const BUILT_IN_PROVIDERS = [
     interactiveLaunch: {
       sessionMarkers: ['CODEX_THREAD_ID', 'CODEX_SESSION_ID'],
       acceptedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      quitInstruction: '/quit',
       argv: ({ prompt, model, effort }) => [
         ...(model === undefined ? [] : ['--model', model]),
         ...(effort === undefined ? [] : ['--config', `model_reasoning_effort="${effort}"`]),

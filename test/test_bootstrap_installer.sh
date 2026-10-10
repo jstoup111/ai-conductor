@@ -7,6 +7,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_SCRIPT="$HARNESS_DIR/docs/install.sh"
+# This test replaces PATH to isolate prerequisite discovery. Capture the real Git
+# binary before that replacement so a harness-injected git guard is never used as
+# the fixture's transport implementation.
+SYSTEM_GIT=$(PATH=/usr/bin:/bin command -v git)
 
 TMP_ROOT=$(mktemp -d)
 trap 'rm -rf "$TMP_ROOT"' EXIT
@@ -87,7 +91,7 @@ fi
 if [ "\$1" = clone ] && [ -n "\${CLONE_START_STDOUT-}" ]; then
   /bin/cat "\$CASE_STDOUT_PATH" > "\$CLONE_START_STDOUT"
 fi
-exec '$(command -v git)' "\$@"
+exec '$SYSTEM_GIT' "\$@"
 EOF
 chmod +x "$FRESH_INSTALL_PATH/git"
 for tool in mkdir mv rm rmdir; do
@@ -111,7 +115,8 @@ fi
 exec "$REAL_MKDIR" "$@"
 EOF
 chmod +x "$LOST_RACE_PATH/mkdir"
-for tool in git mv rm rmdir; do
+ln -s "$SYSTEM_GIT" "$LOST_RACE_PATH/git"
+for tool in mv rm rmdir; do
   ln -s "$(command -v "$tool")" "$LOST_RACE_PATH/$tool"
 done
 for tool in gh node npm tmux; do
@@ -178,7 +183,7 @@ run_case() {
     channel_env=("AI_CONDUCTOR_CHANNEL=$CASE_CHANNEL")
   fi
   env -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GIT_ASKPASS -u GIT_CREDENTIAL_HELPER -u AI_CONDUCTOR_CHANNEL \
-    "${channel_env[@]}" HOME="$case_home" PATH="${CASE_PATH-$PATH}" REAL_GIT="$(command -v git)" AI_CONDUCTOR_REPO_URL="${CASE_REPO_URL-$SOURCE_REPO}" INSTALLER_RECORD="${CASE_INSTALLER_RECORD-$RECORD}" UPDATE_RECORD="${CASE_UPDATE_RECORD-$RECORD}" INSTALLER_EXIT_CODE="${INSTALLER_EXIT_CODE-0}" CASE_STDOUT_PATH="$case_stdout" CLONE_START_STDOUT="$clone_start_stdout" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
+    "${channel_env[@]}" HOME="$case_home" PATH="${CASE_PATH-$PATH}" REAL_GIT="$SYSTEM_GIT" AI_CONDUCTOR_REPO_URL="${CASE_REPO_URL-$SOURCE_REPO}" INSTALLER_RECORD="${CASE_INSTALLER_RECORD-$RECORD}" UPDATE_RECORD="${CASE_UPDATE_RECORD-$RECORD}" INSTALLER_EXIT_CODE="${INSTALLER_EXIT_CODE-0}" CASE_STDOUT_PATH="$case_stdout" CLONE_START_STDOUT="$clone_start_stdout" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
   CASE_STATUS=$?
   set -e
   CASE_STDOUT=$(< "$case_stdout")
@@ -707,13 +712,13 @@ ln -s "$PREREQUISITE_PATH/python3" "$CONCURRENT_PATH/python3"
 : > "$CONCURRENT_UPDATE_RECORD"
 : > "$CONCURRENT_LOCK_ATTEMPTS"
 set +e
-env HOME="$CONCURRENT_HOME" PATH="$CONCURRENT_PATH" REAL_GIT="$(command -v git)" REAL_MKDIR="$(command -v mkdir)" CONCURRENT_LOCK="$CONCURRENT_LOCK" CONCURRENT_LOCK_ATTEMPTS="$CONCURRENT_LOCK_ATTEMPTS" CONCURRENT_CLONE_READY="$CONCURRENT_CLONE_READY" CONCURRENT_CLONE_RELEASE="$CONCURRENT_CLONE_RELEASE" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$CONCURRENT_INSTALLER_RECORD" UPDATE_RECORD="$CONCURRENT_UPDATE_RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/concurrent-one.stdout" 2> "$TMP_ROOT/concurrent-one.stderr" & concurrent_one=$!
+env HOME="$CONCURRENT_HOME" PATH="$CONCURRENT_PATH" REAL_GIT="$SYSTEM_GIT" REAL_MKDIR="$(command -v mkdir)" CONCURRENT_LOCK="$CONCURRENT_LOCK" CONCURRENT_LOCK_ATTEMPTS="$CONCURRENT_LOCK_ATTEMPTS" CONCURRENT_CLONE_READY="$CONCURRENT_CLONE_READY" CONCURRENT_CLONE_RELEASE="$CONCURRENT_CLONE_RELEASE" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$CONCURRENT_INSTALLER_RECORD" UPDATE_RECORD="$CONCURRENT_UPDATE_RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/concurrent-one.stdout" 2> "$TMP_ROOT/concurrent-one.stderr" & concurrent_one=$!
 for _ in $(seq 1 100); do
   [ -e "$CONCURRENT_CLONE_READY" ] && break
   /bin/sleep 0.01
 done
 if [ -e "$CONCURRENT_CLONE_READY" ]; then
-  env HOME="$CONCURRENT_HOME" PATH="$CONCURRENT_PATH" REAL_GIT="$(command -v git)" REAL_MKDIR="$(command -v mkdir)" CONCURRENT_LOCK="$CONCURRENT_LOCK" CONCURRENT_LOCK_ATTEMPTS="$CONCURRENT_LOCK_ATTEMPTS" CONCURRENT_CLONE_READY="$CONCURRENT_CLONE_READY" CONCURRENT_CLONE_RELEASE="$CONCURRENT_CLONE_RELEASE" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$CONCURRENT_INSTALLER_RECORD" UPDATE_RECORD="$CONCURRENT_UPDATE_RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/concurrent-two.stdout" 2> "$TMP_ROOT/concurrent-two.stderr" & concurrent_two=$!
+  env HOME="$CONCURRENT_HOME" PATH="$CONCURRENT_PATH" REAL_GIT="$SYSTEM_GIT" REAL_MKDIR="$(command -v mkdir)" CONCURRENT_LOCK="$CONCURRENT_LOCK" CONCURRENT_LOCK_ATTEMPTS="$CONCURRENT_LOCK_ATTEMPTS" CONCURRENT_CLONE_READY="$CONCURRENT_CLONE_READY" CONCURRENT_CLONE_RELEASE="$CONCURRENT_CLONE_RELEASE" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$CONCURRENT_INSTALLER_RECORD" UPDATE_RECORD="$CONCURRENT_UPDATE_RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/concurrent-two.stdout" 2> "$TMP_ROOT/concurrent-two.stderr" & concurrent_two=$!
   for _ in $(seq 1 100); do
     [ "$(wc -l < "$CONCURRENT_LOCK_ATTEMPTS")" -ge 2 ] && break
     /bin/sleep 0.01

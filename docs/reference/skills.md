@@ -178,6 +178,10 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `step-heartbeat`, `phase-active`, `gates/<step>.json`), plus the branch's commit log.
 - **Outputs** — a triage report at `.daemon/triage/<slug>-<timestamp>.md`. Deliberately **not** under
   `.pipeline/` — triage output is not feature evidence and must never be read as such by a gate.
+- **Monitor-hosted sessions** — when the opening input carries `Session host: conduct monitor queue.`
+  (set by [`ai-conductor monitor`](cli.md#ai-conductor-monitor)), the final message after triage
+  completes tells the operator to quit and return to the monitor queue, with the provider's quit
+  instruction. Directly invoked sessions get no quit cue.
 - **Gate role** — none. Diagnosis is unconditionally read-only; gathering evidence never changes the
   state being measured. It may then carry out recovery, but **every** mutation — clearing a halt,
   park/unpark, editing `.pipeline/`, any writing git command — is presented with its blast radius and

@@ -330,6 +330,12 @@ The monitor remains active until interrupted (`Ctrl-C`). It offers one halted fe
 guided session and re-derives the queue between passes, so resolved or parked work is not offered
 again. An empty queue prints `Monitor queue is empty; staying active.` and rechecks every second.
 
+Each guided session opens `daemon-triage` with the halt details and a monitor-hosting block: the
+line `Session host: conduct monitor queue.`, a note that quitting returns to the queue, and the
+provider's quit instruction (`/quit` for `claude` and `codex`). When triage completes with no action
+pending or awaiting approval, the session's final message reads `Triage for <slug> is complete. Quit
+this session to return to the monitor queue.` followed by that quit instruction.
+
 Each offer prints `<project>: <slug> — <reason> (<halt class>) [<band>; <basis>]`. Queue order:
 
 1. Undeferred halts before deferred halts.
