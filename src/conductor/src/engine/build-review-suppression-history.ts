@@ -5,6 +5,7 @@ import {
   type RemediationCaseStoreFailureReason,
   type RemediationCaseSuppressionEntry,
 } from './remediation-case-store.js';
+import type { ChildId } from './child-context.js';
 
 export interface BuildReviewCustomSuppressionSource {
   readonly rubric: string;
@@ -85,11 +86,15 @@ export async function persistBuildReviewSuppressions(input: {
   readonly projectRoot: string;
   readonly feature: RemediationCaseFeatureIdentity;
   readonly suppressions: readonly RemediationCaseSuppressionEntry[];
+  /** Active stacked BUILD child; omitted preserves feature-wide history. */
+  readonly child?: ChildId;
   /** Injected only by callers that already hold the store for this feature. */
   readonly store?: RemediationCaseStore;
 }): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason }> {
   if (input.suppressions.length === 0) return { ok: true };
-  const store = input.store ?? new RemediationCaseStore(input.projectRoot, input.feature);
+  const store = input.store ?? new RemediationCaseStore(input.projectRoot, input.feature, {
+    ...(input.child === undefined ? {} : { child: input.child }),
+  });
   const persisted = await store.mutate(async (state) => {
     const byFindingId = new Map((state.suppressions ?? []).map((entry) => [entry.findingId, entry]));
     for (const entry of input.suppressions) byFindingId.set(entry.findingId, entry);

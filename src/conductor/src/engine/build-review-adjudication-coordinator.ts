@@ -29,6 +29,7 @@ import type { BumpKickbackGateInput, chargeBuildReviewEffectInLedger } from './k
 import type { EffectMarkerTrackerClient } from './tracker-client.js';
 import type { RemediationCaseDeferralEffect } from './remediation-case-artifact.js';
 import type { ConductorEvent } from '../types/events.js';
+import type { ChildId } from './child-context.js';
 
 type RemediationCaseLifecycleEvent = Extract<ConductorEvent, {
   type: 'remediation_adjudication_started' | 'remediation_adjudication_completed' | 'remediation_adjudication_failed'
@@ -123,6 +124,8 @@ async function sourceTaskStatus(projectRoot: string): Promise<BuildReviewAdjudic
 export interface BuildReviewAdjudicationCoordinatorInput {
   readonly projectRoot: string;
   readonly feature: BuildReviewFeatureIdentity;
+  /** Child whose review lap owns this case history. */
+  readonly child?: ChildId;
   readonly aggregate: BuildReviewAggregate;
   readonly operatorResolvedFindingIds: ReadonlySet<string>;
   /** Engine-owned sub-floor identities; never written to the operator store. */
@@ -168,7 +171,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     await input.emit?.({ type: 'remediation_adjudication_failed', domain: 'build_review', lapId: input.aggregate.lapId, reason: detail });
     return { ok: false, detail };
   };
-  const store = new RemediationCaseStore(input.projectRoot, input.feature);
+  const store = new RemediationCaseStore(input.projectRoot, input.feature, {
+    ...(input.child === undefined ? {} : { child: input.child }),
+  });
   // Not a second writer: the same seam the effective-verdict path already ran
   // for this lap. Its upsert is keyed by finding id, so re-running it here is a
   // no-op refresh rather than a duplicate row.
