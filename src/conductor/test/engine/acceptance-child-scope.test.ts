@@ -14,7 +14,6 @@ vi.mock('../../src/engine/coverage-binding-decide-set.js', () => ({ resolveCover
 
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import {
-  ACCEPTANCE_SPECS_RED_EVIDENCE,
   checkStepCompletion,
 } from '../../src/engine/artifacts.js';
 import { parseChildId } from '../../src/engine/child-context.js';
@@ -74,6 +73,76 @@ describe('acceptance_specs child scope', () => {
     expect(systemPrompt).toContain('active child 1');
     expect(systemPrompt).toContain('Story 1: first child');
     expect(systemPrompt).not.toContain('Story 2: second child');
+  });
+});
+
+describe('acceptance_specs prior-child-green exception', () => {
+  const roots: string[] = [];
+  const child2 = parseChildId(2)!;
+
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+    vi.resetAllMocks();
+  });
+
+  async function createFile(root: string, relativePath: string, content: string): Promise<void> {
+    const path = join(root, relativePath);
+    await mkdir(join(path, '..'), { recursive: true });
+    await writeFile(path, content);
+  }
+
+  async function seed(attribution: string): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'acceptance-prior-child-green-'));
+    roots.push(root);
+    await createFile(root, 'test/acceptance/feature.acceptance.test.ts', '// generated child 2 spec\n');
+    await createFile(
+      root,
+      '.pipeline/children/2/acceptance-specs-red.json',
+      JSON.stringify({
+        outcome: 'specs-generated',
+        command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
+        targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
+        executed: 1,
+        passed: 1,
+        failed: 0,
+        skipped: 0,
+        errors: 0,
+        failingTests: [],
+        ranAt: '2026-10-09T12:00:00.000Z',
+        intentRationale: 'Child 1 already implemented this child 2 criterion.',
+        exception: {
+          kind: 'prior-child-green',
+          reason: 'The child 2 acceptance spec passes because child 1 already delivered the behavior.',
+          attribution,
+        },
+      }),
+    );
+    return root;
+  }
+
+  it('accepts child 2 only when prior-child-green names its parent closure tip', async () => {
+    const root = await seed('parent-closure-tip');
+    resolveChildBase.mockResolvedValue({ kind: 'parent', parent: 1, sha: 'parent-closure-tip' });
+
+    await expect(checkStepCompletion(root, 'acceptance_specs', {
+      activeChild: child2,
+      featureDesc: 'feature',
+    })).resolves.toEqual({ done: true, viaException: true });
+    expect(resolveChildBase).toHaveBeenCalledWith(root, 'feature', child2, {});
+  });
+
+  it('refuses a prior-child-green attribution other than the parent closure tip', async () => {
+    const root = await seed('some-other-sha');
+    resolveChildBase.mockResolvedValue({ kind: 'parent', parent: 1, sha: 'parent-closure-tip' });
+
+    await expect(checkStepCompletion(root, 'acceptance_specs', {
+      activeChild: child2,
+      featureDesc: 'feature',
+    })).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: expect.stringContaining('some-other-sha'),
+    });
   });
 });
 

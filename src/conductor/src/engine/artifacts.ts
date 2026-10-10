@@ -1649,6 +1649,21 @@ export interface AcceptanceRedRemediationException {
   attribution: string;
 }
 
+/**
+ * A child-owned acceptance spec can legitimately be green when an earlier
+ * child delivered the behavior first. Its attribution is checked against the
+ * earlier child's durable closure tip at the completion boundary.
+ */
+export interface AcceptanceRedPriorChildGreenException {
+  kind: 'prior-child-green';
+  reason: string;
+  attribution: string;
+}
+
+export type AcceptanceRedException =
+  | AcceptanceRedRemediationException
+  | AcceptanceRedPriorChildGreenException;
+
 export interface AcceptanceSpecsGeneratedEvidence {
   outcome: 'specs-generated';
   /** The exact test command run (for the audit trail / reason messages). */
@@ -1667,8 +1682,8 @@ export interface AcceptanceSpecsGeneratedEvidence {
   ranAt: string;
   /** Why the observed failures prove the feature remains unimplemented. */
   intentRationale: string;
-  /** Recorded authorization for a remediation that could not establish RED separately. */
-  exception?: AcceptanceRedRemediationException;
+  /** Recorded authorization for a run that could not establish ordinary RED separately. */
+  exception?: AcceptanceRedException;
   /** Raw runner summary line, e.g. pytest's "5 failed in 12.3s". */
   summary?: string;
 }
@@ -1767,15 +1782,15 @@ export function validateAcceptanceRedEvidence(
       reason: `acceptance-specs RED run executed 0 tests — the command did not select the feature's specs`,
     };
   }
-  const hasRemediationException = hasRecordedRemediationException(e.exception);
-  if ('exception' in e && !hasRemediationException) {
+  const hasRecordedException = hasRecordedAcceptanceRedException(e.exception);
+  if ('exception' in e && !hasRecordedException) {
     return {
       ok: false,
       class: 'shape',
-      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record a remediation "exception" with a non-empty reason and attribution`,
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record a recognized "exception" with a non-empty reason and attribution`,
     };
   }
-  if (failed < 1 && !hasRemediationException) {
+  if (failed < 1 && !hasRecordedException) {
     return {
       ok: false,
       class: 'outcome',
@@ -1797,7 +1812,7 @@ export function validateAcceptanceRedEvidence(
     };
   }
   if (
-    (!hasRemediationException &&
+    (!hasRecordedException &&
       (!Array.isArray(e.failingTests) || e.failingTests.length === 0)) ||
     (Array.isArray(e.failingTests) &&
       e.failingTests.some(
@@ -2128,16 +2143,71 @@ function isDispositionOnlyEvidence(ev: unknown): ev is AcceptanceDispositionOnly
   return typeof ev === 'object' && ev !== null && (ev as Record<string, unknown>).outcome === 'disposition-only';
 }
 
-function hasRecordedRemediationException(exception: unknown): boolean {
+function hasRecordedAcceptanceRedException(exception: unknown): boolean {
   if (typeof exception !== 'object' || exception === null) return false;
   const candidate = exception as Record<string, unknown>;
   return (
-    candidate.kind === 'remediation' &&
+    (candidate.kind === 'remediation' || candidate.kind === 'prior-child-green') &&
     typeof candidate.reason === 'string' &&
     candidate.reason.trim() !== '' &&
     typeof candidate.attribution === 'string' &&
     candidate.attribution.trim() !== ''
   );
+}
+
+function priorChildGreenAttribution(exception: unknown): string | undefined {
+  if (!hasRecordedAcceptanceRedException(exception)) return undefined;
+  const candidate = exception as Record<string, unknown>;
+  return candidate.kind === 'prior-child-green' ? candidate.attribution as string : undefined;
+}
+
+async function validatePriorChildGreenAttribution(
+  dir: string,
+  ctx: CompletionContext,
+  attribution: string,
+): Promise<CompletionResult | null> {
+  if (ctx.activeChild === undefined || !ctx.featureDesc) {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} requires an active child and feature slug`,
+    };
+  }
+  const childBase = await resolveChildBase(
+    dir,
+    slugify(ctx.featureDesc),
+    ctx.activeChild,
+    { ...(ctx.git === undefined ? {} : { git: ctx.git }) },
+  );
+  if (childBase.kind === 'none') {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} is invalid for child ${ctx.activeChild}: it has no parent closure tip`,
+    };
+  }
+  if (childBase.kind === 'parent-missing') {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} cannot resolve parent child ${childBase.parent} branch ${childBase.branch}`,
+    };
+  }
+  if (childBase.kind === 'parent-not-ancestor') {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} cannot use parent child ${childBase.parent} closure tip ${childBase.sha}: it is not an ancestor of HEAD`,
+    };
+  }
+  if (attribution !== childBase.sha) {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} does not match parent child ${childBase.parent} closure tip ${childBase.sha}`,
+    };
+  }
+  return null;
 }
 
 /**
@@ -3151,6 +3221,15 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (!verdict.ok) {
       return { done: false, reason: verdict.reason, acceptanceRedRefusalClass: verdict.class };
     }
+    const priorChildGreen = priorChildGreenAttribution(
+      typeof parsed === 'object' && parsed !== null
+        ? (parsed as Record<string, unknown>).exception
+        : undefined,
+    );
+    if (priorChildGreen !== undefined) {
+      const attributionRefusal = await validatePriorChildGreenAttribution(dir, ctx, priorChildGreen);
+      if (attributionRefusal) return attributionRefusal;
+    }
     if (isDispositionOnlyEvidence(parsed)) {
       // rem-build-review-task13-1: the zero-spec check counts only the
       // FEATURE's own acceptance specs — the acceptance corpus is
@@ -3274,7 +3353,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       viaException:
         typeof parsed === 'object' &&
         parsed !== null &&
-        hasRecordedRemediationException((parsed as Record<string, unknown>).exception),
+        hasRecordedAcceptanceRedException((parsed as Record<string, unknown>).exception),
     };
   },
 
