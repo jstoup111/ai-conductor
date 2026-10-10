@@ -20,6 +20,7 @@ import { parseEnvelope } from '../../../src/engine/engineer/intake/port.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import type { HandoffDeps } from '../../../src/engine/engineer/handoff.js';
 import type { InteractiveGithubOperationConfirmation } from '../../../src/engine/github-operation-approval.js';
+import type { GithubIssueTarget } from '../../../src/engine/github-operations.js';
 
 const execFile = promisify(execFileCb);
 
@@ -395,12 +396,13 @@ describe('engineer forget (T23, FR-40)', () => {
     const { gh, calls } = makeGh({}, undefined, []);
     const confirmations: Array<{
       operation: string;
-      target: { repository: string; kind: string; number: number };
+      target: GithubIssueTarget;
       writeCount: number;
     }> = [];
     const githubOperationConfirmation: InteractiveGithubOperationConfirmation = {
       mode: 'interactive',
       confirm: async (prompt) => {
+        if (prompt.target.kind !== 'issue') throw new Error(`expected issue target, got ${prompt.target.kind}`);
         confirmations.push({ operation: prompt.operation, target: prompt.target, writeCount: calls.length });
         return true;
       },
