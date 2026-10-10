@@ -466,7 +466,7 @@ export async function runLiveE2ERunBody(
             featureDesc: slug, pipelineDir, planPath, mode: 'auto',
             // The test-quality preflight cannot run in this standalone temp
             // repository, so disable the sole optional rubric.
-            config: { build_review: { maxParallel: 1, rubrics: { testQuality: { enabled: false } } } },
+            config: { build_review: { maxParallel: 1, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } } } },
             buildReviewInputOptions: {
               inspectTestSuite: async () => ({
                 status: 'CURRENT',

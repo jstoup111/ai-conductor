@@ -295,7 +295,7 @@ describe('build-review rubric projections', () => {
     const projections = deriveBuildReviewRubricProjections(source());
     const projection: TestQualityProjection = projections.testQuality;
 
-    expect(Object.keys(projections)).toEqual(['testQuality', 'security']);
+    expect(Object.keys(projections)).toEqual(['testQuality', 'security', 'implementationQuality']);
     expect(Object.keys(projection).sort()).toEqual([
       'changedFiles', 'changedTestSelectors', 'changedTestTitles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
       'mergeBase', 'preflight', 'projectionVersion', 'revertedProductionManifest', 'rubric', 'runnerSelectors', 'snapshotDigest', 'testScope', 'testSuiteProof', 'unresolvedMarkers',
@@ -316,6 +316,12 @@ describe('build-review rubric projections', () => {
     expect(projection).not.toHaveProperty('diff');
     expect(projection.preflight).not.toHaveProperty('counterfactualSensitivity');
     expect(Object.isFrozen(projection)).toBe(true);
+    expect(Object.keys(projections.implementationQuality).sort()).toEqual([
+      'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase',
+      'projectionVersion', 'rubric', 'snapshotDigest',
+    ]);
+    expect(JSON.stringify(projections.implementationQuality)).not.toContain('# Approved plan');
+    expect(projections.implementationQuality.snapshotDigest).toBe(projections.security.snapshotDigest);
   });
 
   it('canonically serializes unordered evidence so member order never perturbs the projection or digest', () => {

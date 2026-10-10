@@ -54,6 +54,14 @@ function securityFinding(rest: Record<string, unknown> = {}): Record<string, unk
   };
 }
 
+function implementationQualityFinding(rest: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    rubric: 'implementationQuality', contractVersion: 'v3', concernKind: 'duplication',
+    anchor: { rubric: 'implementationQuality', locus: { path: 'src/domain.ts', contentHash: HASH_A, display: 'duplicated state transition' } },
+    ...rest,
+  };
+}
+
 const customStamp = {
   rubric: 'portablePolicy',
   lapId: 'lap-1',
@@ -83,6 +91,12 @@ function customPayload(overrides: Record<string, unknown> = {}): Record<string, 
 }
 
 describe('build-review finding identity', () => {
+  it('gives implementation-quality findings a stable identity despite summary drift', () => {
+    const first = canonicalizeBuildReviewFindingIdentity(implementationQualityFinding({ summary: 'Repeated transition.' }));
+    const drifted = canonicalizeBuildReviewFindingIdentity(implementationQualityFinding({ summary: 'Same concrete defect, reworded.' }));
+    expect(drifted).toEqual(first);
+    expect(first?.canonicalPayload.rubric).toBe('implementationQuality');
+  });
   it('gives security findings the same identity when only display evidence changes', () => {
     const first = canonicalizeBuildReviewFindingIdentity(securityFinding({ summary: 'Shell command includes request input.', evidenceLocations: ['src/auth.ts:8'] }));
     const drifted = canonicalizeBuildReviewFindingIdentity(securityFinding({ summary: 'Reworded.', evidenceLocations: ['src/auth.ts:42'], anchor: { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH_A, display: 'different display' } } }));

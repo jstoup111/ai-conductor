@@ -64,7 +64,8 @@ export function classifyBuildReviewPolicyIncompatibility(
 export interface BuildReviewContentRegionReference { readonly path: string; readonly contentHash: string; readonly display: string; readonly occurrence?: number; }
 export type BuildReviewFindingAnchor =
   | { readonly rubric: 'testQuality'; readonly locus: BuildReviewContentRegionReference }
-  | { readonly rubric: 'security'; readonly locus: BuildReviewContentRegionReference };
+  | { readonly rubric: 'security'; readonly locus: BuildReviewContentRegionReference }
+  | { readonly rubric: 'implementationQuality'; readonly locus: BuildReviewContentRegionReference };
 export interface BuildReviewFindingReferenceContext { readonly changedTests: readonly string[]; readonly changedTestRegions?: readonly BuildReviewContentRegionReference[]; readonly changedContentRegions: readonly BuildReviewContentRegionReference[]; readonly changedPaths: readonly string[]; readonly planTasks: readonly string[]; }
 
 /** Compatibility title fields are authoritative only for projections before typed scope. */
@@ -97,6 +98,7 @@ export interface BuildReviewJudgedResult { readonly kind: 'judged'; readonly rub
 export type BuildReviewEffectiveResultDescriptor =
   | { readonly kind: 'builtin'; readonly rubric: 'testQuality'; readonly parser: 'test-quality-v3' }
   | { readonly kind: 'builtin'; readonly rubric: 'security'; readonly parser: 'security-v3' }
+  | { readonly kind: 'builtin'; readonly rubric: 'implementationQuality'; readonly parser: 'implementation-quality-v3' }
   | { readonly kind: 'custom'; readonly rubric: string; readonly parser: 'custom-findings-v1' };
 export type BuildReviewCustomFindingContractVersion = 'v1';
 export interface BuildReviewCustomFinding {
@@ -150,6 +152,11 @@ export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
       'unsafe-deserialization', 'cryptographic-failure', 'security-misconfiguration',
       'authentication-failure', 'integrity-failure', 'ssrf',
     ]),
+    anchorFields: Object.freeze({}),
+  }),
+  implementationQuality: Object.freeze({
+    members: Object.freeze(['duplication', 'excess-complexity', 'obscured-intent', 'primitive-obsession', 'representable-invalid-state', 'non-exhaustive-domain-match', 'non-semantic-name']),
+    concernKinds: Object.freeze(['duplication', 'excess-complexity', 'obscured-intent', 'primitive-obsession', 'representable-invalid-state', 'non-exhaustive-domain-match', 'non-semantic-name']),
     anchorFields: Object.freeze({}),
   }),
 });
@@ -219,7 +226,7 @@ function buildReviewJudgedV3Schema(rubric: BuildReviewRubricId): BuildReviewJudg
                     // Security loci are sha256 content hashes; test-quality loci
                     // may also carry projected title hashes, so only non-blankness
                     // is grammar there and membership stays in the diagnosis.
-                    contentHash: rubric === 'security' ? CONTENT_HASH_STRING : NON_BLANK_STRING,
+                    contentHash: rubric === 'security' || rubric === 'implementationQuality' ? CONTENT_HASH_STRING : NON_BLANK_STRING,
                     display: NON_BLANK_STRING,
                     occurrence: { type: 'integer' },
                   },
@@ -287,6 +294,7 @@ export const BUILD_REVIEW_JUDGED_V3_SCHEMA = buildReviewJudgedV3Schema('testQual
 export const BUILD_REVIEW_JUDGED_V3_SCHEMAS = Object.freeze({
   testQuality: BUILD_REVIEW_JUDGED_V3_SCHEMA,
   security: buildReviewJudgedV3Schema('security'),
+  implementationQuality: buildReviewJudgedV3Schema('implementationQuality'),
 });
 
 export function normalizeBuildReviewFindingVocabularyMember(value: string): string { return value.toLowerCase().replaceAll('_', '-'); }
@@ -617,9 +625,12 @@ export function parseBuildReviewFindingAnchor(value: unknown, references?: Build
   const source = object(value);
   const locus = source && region(source.locus);
   if (source?.rubric === 'testQuality' && locus && (!references?.changedTestRegions || references.changedTestRegions.some((candidate) => sameRegion(candidate, locus)))) return { rubric: 'testQuality', locus };
-  const securityLocus = source?.rubric === 'security' ? securityRegion(source.locus) : undefined;
-  return securityLocus && (!references || references.changedContentRegions.some((candidate) => sameRegion(candidate, securityLocus)))
-    ? { rubric: 'security', locus: securityLocus }
+  const contentRubric = source?.rubric === 'security' || source?.rubric === 'implementationQuality'
+    ? source.rubric
+    : undefined;
+  const contentLocus = contentRubric ? securityRegion(source!.locus) : undefined;
+  return contentLocus && (!references || references.changedContentRegions.some((candidate) => sameRegion(candidate, contentLocus)))
+    ? { rubric: contentRubric!, locus: contentLocus }
     : undefined;
 }
 function finding(value: unknown, rubric: BuildReviewRubricId, references?: BuildReviewFindingReferenceContext): BuildReviewFinding | undefined { const source = object(value); const anchor = source && parseBuildReviewFindingAnchor(source.anchor, references); const confidence = source?.confidence; const concernKind = parseBuildReviewFindingConcernKind(source?.concernKind, rubric); if (!source || !anchor || anchor.rubric !== rubric || !concernKind || !text(source.summary) || !Array.isArray(source.evidenceLocations) || source.evidenceLocations.length === 0 || source.evidenceLocations.some((item) => !text(item)) || (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100))) return undefined; return { concernKind, summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations] as string[]), anchor, ...(confidence === undefined ? {} : { confidence: confidence as number }) }; }
@@ -645,9 +656,9 @@ function hasDuplicateJudgedFindingIdentity(findings: readonly BuildReviewFinding
   return false;
 }
 
-export function parseBuildReviewJudgedResult(value: unknown, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): BuildReviewJudgedResult | undefined { const source = object(value); const rubric = source?.rubric; const contractVersion = parseBuildReviewRubricContractVersion(source?.contractVersion); if (rubric === 'security' && TEST_QUALITY_EVIDENCE_FIELDS.some((field) => source?.[field] !== undefined)) return undefined; if (!source || source.kind !== 'judged' || (rubric !== 'testQuality' && rubric !== 'security') || !parseBuildReviewLapId(source.lapId) || !text(source.snapshotDigest) || !contractVersion || !Array.isArray(source.findings)) return undefined; const scopeResolutions = source.scopeResolutions === undefined ? undefined : (scopeContext ? parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext) : parsePersistedBuildReviewCandidateScopeResolutions(source.scopeResolutions)); const findings = source.findings.map((entry) => finding(entry, rubric, references)); const counterfactualSensitivity = source.counterfactualSensitivity === undefined ? undefined : parseCounterfactualSensitivity(source.counterfactualSensitivity); if (findings.some((entry) => !entry) || hasDuplicateJudgedFindingIdentity(findings as BuildReviewFinding[], contractVersion) || (source.scopeResolutions !== undefined && !scopeResolutions) || (scopeContext && scopeContext.candidates.length > 0 && scopeResolutions === undefined) || (source.counterfactualSensitivity !== undefined && !counterfactualSensitivity)) return undefined; return { kind: 'judged', rubric, lapId: source.lapId as BuildReviewLapId, snapshotDigest: source.snapshotDigest, contractVersion, findings: Object.freeze(findings as BuildReviewFinding[]), ...(scopeResolutions === undefined ? {} : { scopeResolutions }), ...(counterfactualSensitivity === undefined ? {} : { counterfactualSensitivity }), verdict: findings.length ? 'FAIL' : 'PASS' }; }
-export function parseBuildReviewSkip(value: unknown): BuildReviewSkip | undefined { const source = object(value); return source?.kind === 'skipped' && (source.rubric === 'testQuality' || source.rubric === 'security') && (source.reason === 'disabled' || (source.rubric === 'testQuality' && source.reason === 'test_quality_empty_scope')) ? { kind: 'skipped', rubric: source.rubric, reason: source.reason } : undefined; }
-export function parseBuildReviewInfrastructureFailure(value: unknown): BuildReviewInfrastructureFailure | undefined { const source = object(value); return source?.kind === 'infrastructure-failure' && (source.rubric === 'testQuality' || source.rubric === 'security') && typeof source.reason === 'string' && (Object.values(mapBuildReviewCoordinatorFailureReason) as string[]).includes(source.reason) && text(source.detail) ? { kind: 'infrastructure-failure', rubric: source.rubric, reason: source.reason as BuildReviewInfrastructureFailureReason, detail: source.detail } : undefined; }
+export function parseBuildReviewJudgedResult(value: unknown, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): BuildReviewJudgedResult | undefined { const source = object(value); const rubric = source?.rubric; const contractVersion = parseBuildReviewRubricContractVersion(source?.contractVersion); if ((rubric === 'security' || rubric === 'implementationQuality') && TEST_QUALITY_EVIDENCE_FIELDS.some((field) => source?.[field] !== undefined)) return undefined; if (!source || source.kind !== 'judged' || (rubric !== 'testQuality' && rubric !== 'security' && rubric !== 'implementationQuality') || !parseBuildReviewLapId(source.lapId) || !text(source.snapshotDigest) || !contractVersion || !Array.isArray(source.findings)) return undefined; const scopeResolutions = source.scopeResolutions === undefined ? undefined : (scopeContext ? parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext) : parsePersistedBuildReviewCandidateScopeResolutions(source.scopeResolutions)); const findings = source.findings.map((entry) => finding(entry, rubric, references)); const counterfactualSensitivity = source.counterfactualSensitivity === undefined ? undefined : parseCounterfactualSensitivity(source.counterfactualSensitivity); if (findings.some((entry) => !entry) || hasDuplicateJudgedFindingIdentity(findings as BuildReviewFinding[], contractVersion) || (source.scopeResolutions !== undefined && !scopeResolutions) || (scopeContext && scopeContext.candidates.length > 0 && scopeResolutions === undefined) || (source.counterfactualSensitivity !== undefined && !counterfactualSensitivity)) return undefined; return { kind: 'judged', rubric, lapId: source.lapId as BuildReviewLapId, snapshotDigest: source.snapshotDigest, contractVersion, findings: Object.freeze(findings as BuildReviewFinding[]), ...(scopeResolutions === undefined ? {} : { scopeResolutions }), ...(counterfactualSensitivity === undefined ? {} : { counterfactualSensitivity }), verdict: findings.length ? 'FAIL' : 'PASS' }; }
+export function parseBuildReviewSkip(value: unknown): BuildReviewSkip | undefined { const source = object(value); return source?.kind === 'skipped' && (source.rubric === 'testQuality' || source.rubric === 'security' || source.rubric === 'implementationQuality') && (source.reason === 'disabled' || (source.rubric === 'testQuality' && source.reason === 'test_quality_empty_scope')) ? { kind: 'skipped', rubric: source.rubric, reason: source.reason } : undefined; }
+export function parseBuildReviewInfrastructureFailure(value: unknown): BuildReviewInfrastructureFailure | undefined { const source = object(value); return source?.kind === 'infrastructure-failure' && (source.rubric === 'testQuality' || source.rubric === 'security' || source.rubric === 'implementationQuality') && typeof source.reason === 'string' && (Object.values(mapBuildReviewCoordinatorFailureReason) as string[]).includes(source.reason) && text(source.detail) ? { kind: 'infrastructure-failure', rubric: source.rubric, reason: source.reason as BuildReviewInfrastructureFailureReason, detail: source.detail } : undefined; }
 function customFinding(value: unknown): BuildReviewCustomFinding | undefined {
   const source = object(value);
   const requiredKeys = ['concernId', 'summary', 'evidenceLocations', 'sourceRegions'];

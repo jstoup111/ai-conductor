@@ -116,8 +116,9 @@ export interface TestQualityProjection extends CommonProjection<'testQuality'> {
 
 /** Whole-diff, by-reference projection for the security review branch. */
 export interface SecurityProjection extends CommonProjection<'security'> {}
+export interface ImplementationQualityProjection extends CommonProjection<'implementationQuality'> {}
 
-export type BuildReviewRubricProjection = TestQualityProjection | SecurityProjection;
+export type BuildReviewRubricProjection = TestQualityProjection | SecurityProjection | ImplementationQualityProjection;
 
 /** Test-scope fields belong exclusively to the test-quality rubric. */
 export function isTestQualityProjection(
@@ -184,6 +185,7 @@ export function buildReviewRubricPromptView(projection: BuildReviewRubricProject
 export type BuildReviewRubricProjections = {
   readonly testQuality: TestQualityProjection;
   readonly security: SecurityProjection;
+  readonly implementationQuality: ImplementationQualityProjection;
 };
 
 /**
@@ -198,6 +200,8 @@ export function buildReviewEffectiveResultDescriptor(
   // Each built-in carries its own catalog id and parser tag; never relabel one as another.
   return entry.id === 'security'
     ? Object.freeze({ kind: 'builtin', rubric: 'security', parser: 'security-v3' })
+    : entry.id === 'implementationQuality'
+      ? Object.freeze({ kind: 'builtin', rubric: 'implementationQuality', parser: 'implementation-quality-v3' })
     : Object.freeze({ kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' });
 }
 
@@ -494,5 +498,6 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
     preflight: source.testQuality.preflight,
   }) as TestQualityProjection;
   const security = seal(common(source, 'security')) as SecurityProjection;
-  return Object.freeze({ testQuality, security });
+  const implementationQuality = seal(common(source, 'implementationQuality')) as ImplementationQualityProjection;
+  return Object.freeze({ testQuality, security, implementationQuality });
 }

@@ -56,6 +56,10 @@ function config(testQualityEnabled: boolean, securityEnabled = false, maxProject
     rubrics: {
       testQuality: { ...policy, enabled: testQualityEnabled, max_projection_bytes: maxProjectionBytes },
       security: { ...policy, enabled: securityEnabled, effort: 'high' },
+      // These coordinator fixtures exercise the older branches explicitly;
+      // implementation quality is default-on in production and must not
+      // create an unsolicited third dispatch here.
+      implementationQuality: { ...policy, enabled: false },
     },
   } as unknown as ResolvedBuildReviewConfig;
 }
@@ -69,6 +73,7 @@ function configWithSecurityModel(model: string): ResolvedBuildReviewConfig {
 }
 
 const disabledSecurityBranch = { kind: 'skipped', rubric: 'security', reason: 'disabled' } as const;
+const disabledImplementationQualityBranch = { kind: 'skipped', rubric: 'implementationQuality', reason: 'disabled' } as const;
 
 function projectionWithCanonicalByteLength(byteLength: number): BuildReviewCoordinationInput["projections"] {
   const lapId = parseBuildReviewLapId("lap-current")!;
@@ -147,7 +152,7 @@ describe("build-review coordinator: registered dispatch", () => {
         kind: 'infrastructure-failure',
         reason: 'invalid-structured-result',
         providerSetupExhaustion: { candidates: [{ provider: 'codex' }] },
-      }, disabledSecurityBranch],
+      }, disabledSecurityBranch, disabledImplementationQualityBranch],
     });
     expect(testQualityBranch(result)).not.toHaveProperty('findings');
   });
@@ -300,6 +305,12 @@ describe("build-review coordinator: registered dispatch", () => {
       reason: "disabled",
     });
     expect(emit).toHaveBeenCalledWith({
+      type: "build_review_rubric_skipped",
+      rubric: "implementationQuality",
+      lapId: "lap-current",
+      reason: "disabled",
+    });
+    expect(emit).toHaveBeenCalledWith({
       type: "build_review_outer_verdict",
       lapId: "lap-current",
       rawVerdict: "PASS",
@@ -420,7 +431,7 @@ describe("build-review coordinator: registered dispatch", () => {
     );
     expect(result).toMatchObject({
       kind: "ready",
-      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-structured-result" }, disabledSecurityBranch],
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-structured-result" }, disabledSecurityBranch, disabledImplementationQualityBranch],
     });
   });
 
@@ -483,7 +494,7 @@ describe("build-review coordinator: registered dispatch", () => {
 
     expect(classifyBuildReviewRubricBranches(config(true), [])).toMatchObject({
       kind: "ready",
-      branches: [{ rubric: "testQuality", skillName: "build-review-test-quality" }, disabledSecurityBranch],
+      branches: [{ rubric: "testQuality", skillName: "build-review-test-quality" }, disabledSecurityBranch, disabledImplementationQualityBranch],
     });
     expect(dispatchModel).toHaveBeenCalledTimes(1);
     expect(dispatchModel).toHaveBeenCalledWith(
@@ -499,6 +510,7 @@ describe("build-review coordinator: registered dispatch", () => {
       branches: [
         { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
         { rubric: 'security', skillName: 'build-review-security', policy: expect.objectContaining({ enabled: true, effort: 'high' }) },
+        disabledImplementationQualityBranch,
       ],
     });
 
@@ -509,6 +521,7 @@ describe("build-review coordinator: registered dispatch", () => {
       branches: [
         { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
         disabledSecurityBranch,
+        disabledImplementationQualityBranch,
       ],
     });
   });
@@ -534,6 +547,7 @@ describe("build-review coordinator: registered dispatch", () => {
       branches: [
         { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
         { kind: 'dispatched', rubric: 'security', result: { verdict: 'PASS' } },
+        disabledImplementationQualityBranch,
       ],
     });
   });
@@ -740,7 +754,7 @@ describe("build-review coordinator: security envelope", () => {
     expect(input.preflight).not.toHaveBeenCalled();
     expect(input.dispatchModel).toHaveBeenCalledTimes(1);
     expect(securityBranch(result)).toMatchObject({ kind: 'dispatched', result: { verdict: 'FAIL' } });
-    expect(result).toMatchObject({ kind: 'ready', branches: [ { kind: 'skipped', rubric: 'testQuality', reason: 'test_quality_empty_scope' }, { rubric: 'security' } ] });
+    expect(result).toMatchObject({ kind: 'ready', branches: [ { kind: 'skipped', rubric: 'testQuality', reason: 'test_quality_empty_scope' }, { rubric: 'security' }, disabledImplementationQualityBranch ] });
   });
 
   it("maps a security-review refusal to infrastructure rather than an empty pass", async () => {
@@ -875,11 +889,12 @@ describe("build-review coordinator: frozen fan-out", () => {
       emit,
     }));
 
-    expect(result).toMatchObject({ kind: "ready", branches: [{ kind: "dispatched", rubric: "testQuality" }, disabledSecurityBranch] });
+    expect(result).toMatchObject({ kind: "ready", branches: [{ kind: "dispatched", rubric: "testQuality" }, disabledSecurityBranch, disabledImplementationQualityBranch] });
     // Disabled rubrics settle before cache, preflight, or provider work.
     expect(emit.mock.calls.map(([event]) => event)).toEqual([
       { type: "build_review_rubric_started", rubric: "testQuality", lapId: "lap-current" },
       { type: "build_review_rubric_skipped", rubric: "security", lapId: "lap-current", reason: "disabled" },
+      { type: "build_review_rubric_skipped", rubric: "implementationQuality", lapId: "lap-current", reason: "disabled" },
       { type: "build_review_rubric_result", rubric: "testQuality", lapId: "lap-current", verdict: "PASS" },
       {
         type: 'build_review_scope_summary', rubric: 'testQuality', lapId: 'lap-current',
@@ -964,13 +979,15 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(input.writeArtifact).not.toHaveBeenCalled();
     expect(result).toEqual({
       kind: "ready",
-      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason, detail }, disabledSecurityBranch],
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason, detail }, disabledSecurityBranch, disabledImplementationQualityBranch],
     });
     expect(emit.mock.calls.map(([event]) => event)).toEqual([{
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current",
       reason, excerpt: detail,
     }, {
       type: "build_review_rubric_skipped", rubric: "security", lapId: "lap-current", reason: "disabled",
+    }, {
+      type: "build_review_rubric_skipped", rubric: "implementationQuality", lapId: "lap-current", reason: "disabled",
     }]);
   });
 
@@ -1071,6 +1088,8 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
       type: "build_review_rubric_started", rubric: "testQuality", lapId: "lap-current",
     }, {
       type: "build_review_rubric_skipped", rubric: "security", lapId: "lap-current", reason: "disabled",
+    }, {
+      type: "build_review_rubric_skipped", rubric: "implementationQuality", lapId: "lap-current", reason: "disabled",
     }, {
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "invalid-provider-result",
       cause: "malformed-artifact",
@@ -1664,7 +1683,7 @@ describe("build-review coordinator: engine-held rubric isolation", () => {
         rubric: "testQuality",
         reason: "projection-oversized",
         detail: "measured=1346093 bytes limit=1048576 bytes",
-      }, disabledSecurityBranch],
+      }, disabledSecurityBranch, disabledImplementationQualityBranch],
     });
     expect(dispatchModel).not.toHaveBeenCalled();
     expect(emit).toHaveBeenCalledWith({
@@ -1721,6 +1740,7 @@ describe("build-review coordinator: engine-held rubric isolation", () => {
       branches: [
         { kind: "infrastructure-failure", reason: "projection-oversized", detail: `measured=${measured} bytes limit=${measured - 1} bytes` },
         disabledSecurityBranch,
+        disabledImplementationQualityBranch,
       ],
     });
     expect(dispatchModel).toHaveBeenCalledTimes(1);
@@ -1745,7 +1765,7 @@ describe("build-review coordinator: engine-held rubric isolation", () => {
 
     expect(result).toEqual({
       kind: "ready",
-      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "projection-rubric-mismatch" }, disabledSecurityBranch],
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "projection-rubric-mismatch" }, disabledSecurityBranch, disabledImplementationQualityBranch],
     });
     expect(input.readCache).not.toHaveBeenCalled();
     expect(input.dispatchModel).not.toHaveBeenCalled();
@@ -1754,6 +1774,8 @@ describe("build-review coordinator: engine-held rubric isolation", () => {
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "projection-rubric-mismatch",
     }, {
       type: "build_review_rubric_skipped", rubric: "security", lapId: "lap-current", reason: "disabled",
+    }, {
+      type: "build_review_rubric_skipped", rubric: "implementationQuality", lapId: "lap-current", reason: "disabled",
     }]);
   });
 });

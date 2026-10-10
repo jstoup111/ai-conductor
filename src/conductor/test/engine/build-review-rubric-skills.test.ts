@@ -18,6 +18,7 @@ import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
 const skill = fileURLToPath(new URL('../../../../skills/build-review-test-quality/SKILL.md', import.meta.url));
 const securitySkill = fileURLToPath(new URL('../../../../skills/build-review-security/SKILL.md', import.meta.url));
+const implementationQualitySkill = fileURLToPath(new URL('../../../../skills/build-review-implementation-quality/SKILL.md', import.meta.url));
 const retired = ['build-review-scope', 'build-review-root-cause', 'build-review-completeness'];
 const hash = (text: string) => `sha256:${createHash('sha256').update(text).digest('hex')}`;
 
@@ -56,6 +57,18 @@ function judgedSecurityFixture(path: string, concernKind?: string, evidenceLocat
 }
 
 describe('build-review rubric skill catalog', () => {
+  it('ships the implementation-quality skill with its complete vocabulary and non-findings', async () => {
+    const content = await readFile(implementationQualitySkill, 'utf8');
+    expect(content).toMatch(/^name: build-review-implementation-quality$/m);
+    expect(content).toMatch(/^enforcement: gating$/m);
+    expect(content).toMatch(/^phase: build$/m);
+    const judgement = judgementSection(content);
+    for (const kind of BUILD_REVIEW_FINDING_VOCABULARIES.implementationQuality.concernKinds) {
+      expect(judgement).toContain(`\`${kind}\``);
+    }
+    expect(content).toMatch(/hunk that introduces/i);
+    expect(content).toMatch(/style preferences/i);
+  });
   it('contains only the test-quality judgement skill', async () => {
     await expect(readFile(skill, 'utf8')).resolves.toContain('name: build-review-test-quality');
     const [testInsensitive] = BUILD_REVIEW_FINDING_VOCABULARIES.testQuality.concernKinds;
