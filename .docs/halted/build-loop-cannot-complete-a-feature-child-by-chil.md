@@ -1,27 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-10T10:22:21.222Z
+Status: halted
 Slug: build-loop-cannot-complete-a-feature-child-by-chil
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-build-loop-cannot-complete-a-feature-child-by-chil
-Head SHA: 9f3e8be70e1662d921890835ebb9243f88a73b57
-Halted at: 2026-10-10T04:52:11.553Z
+Head SHA: b925adc67422d9070edae3d5da6912fb3aabc5c3
+Halted at: 2026-10-10T13:59:58.074Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-conductor error: Error: step-transition (build): Expected coverage_binding to match before reopen coverage_binding selected gate
-    at Conductor.applyStateBatch (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261010T011143Z-f79d1fd8d7cd/chunk-G6CKN227.js:19748:36)
-    at async Conductor.commitStateChanges (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261010T011143Z-f79d1fd8d7cd/chunk-G6CKN227.js:19802:20)
-    at async Conductor.advanceTail (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261010T011143Z-f79d1fd8d7cd/chunk-G6CKN227.js:28116:7)
-    at async Conductor.run (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261010T011143Z-f79d1fd8d7cd/chunk-G6CKN227.js:27649:23)
-    at async Object.runConductorInWorktree (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261010T011143Z-f79d1fd8d7cd/daemon-cli-UVK3LM6U.js:5974:36)
-    at async file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261010T011143Z-f79d1fd8d7cd/daemon-cli-UVK3LM6U.js:3294:36
-    at async runFeature (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261010T011143Z-f79d1fd8d7cd/daemon-cli-UVK3LM6U.js:1890:18)
+Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — Blocking findings: as-built:202a5000-5cb7-480b-a1e6-ec63bf8af14f:1 (REMEDIABLE; adr-2026-10-07-per-child-build-region decision 2): Verified, 99% confidence: conductor.ts:2447 and :6776 bypass cursor resolution when stacking is disabled and child directories are absent, ignoring surviving child branches and closure refs. After worktree recreation this permits flat region handling despite an existing stack.; as-built:202a5000-5cb7-480b-a1e6-ec63bf8af14f:2 (REMEDIABLE; adr-2026-10-07-per-child-build-region decision 4): Verified, 99% confidence: conduct-state-store.ts:60-62 retains flat region statuses absent from the child document. conductor.ts:2412-2415 adopts them and :6811 uses them for skipping completed work. An absent child build status can therefore inherit flat build:done instead of remaining unsatisfied.; as-built:202a5000-5cb7-480b-a1e6-ec63bf8af14f:3 (REMEDIABLE; adr-2026-10-07-per-child-build-region decision 6): Verified, 97% confidence: task-membership-check-cli.ts:77 validates only extractBodyTaskIds(message)[0]. A commit with an owned Task trailer followed by a foreign-child Task trailer passes membership validation, although task recovery consumes every trailer. Validate every supplied task ID.; as-built:202a5000-5cb7-480b-a1e6-ec63bf8af14f:4 (REMEDIABLE; adr-2026-10-07-per-child-build-region decision 8): Verified, 97% confidence: artifacts.ts:2958 and conductor.ts:4323 call seedTaskStatus without available child context. Missing-row recovery consequently uses default-branch history through task-seed.ts:159-184 and can restore completed rows at :499-508 even when the child parent is missing, contrary to the required nothing-proven policy.; as-built:202a5000-5cb7-480b-a1e6-ec63bf8af14f:5 (REMEDIABLE; adr-2026-10-03-stacked-child-plans-identity-and-state decision 8): Verified, 99% confidence: suppressions must remain whole-feature, but step-runners.ts:3559-3564 and :4245-4250, plus build-review-adjudication-coordinator.ts:194-205, route suppression history into child-local remediation stores. The child amendment moves cases and credit receipts, not suppressions.; as-built:202a5000-5cb7-480b-a1e6-ec63bf8af14f:6 (DESIGN; adr-2026-10-07-per-child-build-region decision 3): Verified plan gap, 99% confidence: sealed stories/build-loop-cannot-complete-a-feature-child-by-chil.md:86 requires creating feat/c3/demo for positions 1 and 3, while D3 prohibits creating a branch for the highest-position leaf. child-cursor.ts:267-272 and child-lifecycle.ts:298-305 faithfully implement the ADR. Reconcile the accepted artifacts; do not direct BUILD to create an unauthorized leaf branch.
+
+Blocking findings:
+as-built:202a5000-5cb7-480b-a1e6-ec63bf8af14f:1 (REMEDIABLE; adr-2026-10-07-per-child-build-region decision 2): Verified, 99% confidence: conductor.ts:2447 and :6776 bypass cursor resolution when stacking is disabled and child directories are absent, ignoring surviving child branches and closure refs. After worktree recreation this permits flat region handling despite an existing stack.; as-built:202a5000-5cb7-480b-a1e6-ec63bf8af14f:2 (REMEDIABLE; adr-2026-10-07-per-child-build-region decision 4): Verified, 99% confidence: conduct-state-store.ts:60-62 retains flat region statuses absent from the child document. conductor.ts:2412-2415 adopts them and :6811 uses them for skipping completed work. An absent child build status can therefore inherit flat build:done instead of remaining unsatisfied.; as-built:202a5000-5cb7-480b-a1e6-ec63bf8af14f:3 (REMEDIABLE; adr-2026-10-07-per-child-build-region decision 6): Verified, 97% confidence: task-membership-check-cli.ts:77 validates only extractBodyTaskIds(message)[0]. A commit with an owned Task trailer followed by a foreign-child Task trailer passes membership validation, although task recovery consumes every trailer. Validate every supplied task ID.; as-built:202a5000-5cb7-480b-a1e6-ec63bf8af14f:4 (REMEDIABLE; adr-2026-10-07-per-child-build-region decision 8): Verified, 97% confidence: artifacts.ts:2958 and conductor.ts:4323 call seedTaskStatus without available child context. Missing-row recovery consequently uses default-branch history through task-seed.ts:159-184 and can restore completed rows at :499-508 even when the child parent is missing, contrary to the required nothing-proven policy.; as-built:202a5000-5cb7-480b-a1e6-ec63bf8af14f:5 (REMEDIABLE; adr-2026-10-03-stacked-child-plans-identity-and-state decision 8): Verified, 99% confidence: suppressions must remain whole-feature, but step-runners.ts:3559-3564 and :4245-4250, plus build-review-adjudication-coordinator.ts:194-205, route suppression history into child-local remediation stores. The child amendment moves cases and credit receipts, not suppressions.; as-built:202a5000-5cb7-480b-a1e6-ec63bf8af14f:6 (DESIGN; adr-2026-10-07-per-child-build-region decision 3): Verified plan gap, 99% confidence: sealed stories/build-loop-cannot-complete-a-feature-child-by-chil.md:86 requires creating feat/c3/demo for positions 1 and 3, while D3 prohibits creating a branch for the highest-position leaf. child-cursor.ts:267-272 and child-lifecycle.ts:298-305 faithfully implement the ADR. Reconcile the accepted artifacts; do not direct BUILD to create an unauthorized leaf branch.
 ```
