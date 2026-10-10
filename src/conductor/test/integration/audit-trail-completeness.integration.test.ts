@@ -28,6 +28,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { StepName, ConductState, ConductorEvent } from '../../src/types/index.js';
 import { EVENT_SINKS, auditedEventTypes, persistedEventTypes } from '../../src/engine/event-sinks.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import { writeState } from '../../src/engine/state.js';
 
 /**
@@ -81,6 +82,13 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   coverage_binding_invalidated: 'not-audited-by-design',
   coverage_binding_task_reopened: 'not-audited-by-design',
   plan_slices_changed: 'not-audited-by-design',
+  // Per-child transitions remain in the durable event spine but are not
+  // audit-trail friction records (event-sinks declares audit: false).
+  child_started: 'not-audited-by-design',
+  child_closed: 'not-audited-by-design',
+  child_switched: 'not-audited-by-design',
+  rebase_skipped_for_stack: 'not-audited-by-design',
+  story_reowned: 'not-audited-by-design',
   config_deprecated_key: 'not-audited-by-design',
   build_review_read_only_capability: 'not-audited-by-design',
   contained_live_checkout_drift: 'not-audited-by-design',
@@ -357,6 +365,13 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     removed: ['3'],
     manifest: 'unchanged',
   },
+  child_started: { type: 'child_started', child: parseChildId(1)!, position: 1, branch: 'feat/c1/feature' },
+  child_closed: {
+    type: 'child_closed', child: parseChildId(1)!, position: 1, branch: 'feat/c1/feature', tip: 'a'.repeat(40),
+  },
+  child_switched: { type: 'child_switched', from: 1, to: 2, position: 2, branch: 'feat/c2/feature' },
+  rebase_skipped_for_stack: { type: 'rebase_skipped_for_stack', child: parseChildId(1)!, reason: 'intermediate child' },
+  story_reowned: { type: 'story_reowned', story: '1', from: 1, to: 2 },
   config_deprecated_key: {
     type: 'config_deprecated_key',
     key: 'build_review.rubrics.scope',
