@@ -70,7 +70,8 @@ describe('fresh-session enforcement (claude adapter)', () => {
     expect(args).not.toContain('--resume');
   });
 
-  it('reports each replacement through the threaded diagnostic channel', async () => {
+  // Covers: task:18
+  it('reports resume suppression through the threaded diagnostic channel', async () => {
     const { provider } = claudeCapture();
     const diagnosticLog = vi.fn();
 
@@ -78,9 +79,8 @@ describe('fresh-session enforcement (claude adapter)', () => {
 
     const notice = diagnosticLog.mock.calls
       .map(([message]) => message as string)
-      .find((message) => message.includes('caller-reused-session-id'));
-    expect(notice).toContain('fresh session');
-    expect(notice).toContain('suppressed resume');
+      .find((message) => message.includes('resume was suppressed'));
+    expect(notice).toContain('no action needed');
   });
 });
 
@@ -113,7 +113,8 @@ describe('fresh-session enforcement (codex adapter)', () => {
     return { argv, provider: new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory as any) };
   }
 
-  it('never forwards the caller-supplied session id and reports the replacement', async () => {
+  // Covers: task:18
+  it('never forwards the caller-supplied session id and reports resume suppression', async () => {
     const { argv, provider } = codexCapture();
     const diagnosticLog = vi.fn();
 
@@ -123,12 +124,47 @@ describe('fresh-session enforcement (codex adapter)', () => {
     expect(argv[0]!.join(' ')).not.toContain('caller-reused-session-id');
     const notice = diagnosticLog.mock.calls
       .map(([message]) => message as string)
-      .find((message) => message.includes('caller-reused-session-id'));
-    expect(notice).toContain('fresh session');
+      .find((message) => message.includes('resume was suppressed'));
+    expect(notice).toContain('no action needed');
   });
 });
 
 describe('enforceFreshSessionOptions', () => {
+  // Covers: task:18
+  it('keeps routine fresh-session replacement silent', () => {
+    const diagnosticLog = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const enforced = enforceFreshSessionOptions(
+        { ...baseOptions, resume: false, diagnosticLog },
+        'claude',
+      );
+
+      expect(enforced.sessionId).toMatch(UUID_RE);
+      expect(enforced.sessionId).not.toBe(baseOptions.sessionId);
+      expect(enforced.resume).toBe(false);
+      expect(diagnosticLog).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // Covers: task:18
+  it('reports resume suppression through diagnostics with the no-action suffix', () => {
+    const diagnosticLog = vi.fn();
+
+    const enforced = enforceFreshSessionOptions({ ...baseOptions, diagnosticLog }, 'claude');
+
+    expect(enforced.resume).toBe(false);
+    expect(diagnosticLog).toHaveBeenCalledOnce();
+    const [notice] = diagnosticLog.mock.calls[0]! as [string];
+    expect(notice).toContain('resume was suppressed');
+    expect(notice).toMatch(
+      / — no action needed: every provider dispatch starts a fresh session by design$/,
+    );
+  });
+
   it('mints a unique fresh UUID and forces resume off on every call', () => {
     const first = enforceFreshSessionOptions(baseOptions, 'claude');
     const second = enforceFreshSessionOptions(baseOptions, 'claude');
@@ -149,7 +185,7 @@ describe('enforceFreshSessionOptions', () => {
 
       enforceFreshSessionOptions(baseOptions, 'claude');
       expect(warn).toHaveBeenCalledOnce();
-      expect(String(warn.mock.calls[0]![0])).toContain('suppressed resume');
+      expect(String(warn.mock.calls[0]![0])).toContain('resume was suppressed');
     } finally {
       warn.mockRestore();
     }

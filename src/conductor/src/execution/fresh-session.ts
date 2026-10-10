@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { formatNextAction } from '../engine/daemon-log.js';
 import type { InvokeOptions } from './llm-provider.js';
 
 /**
@@ -21,21 +22,22 @@ export function enforceFreshSessionOptions(
 ): InvokeOptions {
   const freshSessionId = randomUUID();
   const suppressedResume = options.resume === true;
-  const notice =
-    `Provider ${provider}: replaced caller-supplied session ${options.sessionId} ` +
-    `with fresh session ${freshSessionId}` +
-    `${suppressedResume ? ' and suppressed resume' : ''} ` +
-    '(provider session reuse is removed by design; fresh session per invocation).';
-  try {
-    if (options.diagnosticLog) {
-      options.diagnosticLog(notice);
-    } else if (suppressedResume) {
-      // Only an actual resume request warrants console noise; the routine
-      // fresh-for-fresh replacement is visible in the threaded diagnostic log.
-      console.warn(notice);
+  if (suppressedResume) {
+    const notice =
+      `Provider ${provider}: resume was suppressed` +
+      formatNextAction({
+        kind: 'none',
+        why: 'every provider dispatch starts a fresh session by design',
+      });
+    try {
+      if (options.diagnosticLog) {
+        options.diagnosticLog(notice);
+      } else {
+        console.warn(notice);
+      }
+    } catch {
+      // Visibility is best-effort; never affects provider dispatch.
     }
-  } catch {
-    // Visibility is best-effort; never affects provider dispatch.
   }
   return { ...options, sessionId: freshSessionId, resume: false };
 }
