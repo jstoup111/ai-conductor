@@ -2005,6 +2005,7 @@ type ConductorEventBody =
   | {
       type: 'restack_refused';
       reason: RestackRefusalReason;
+      child?: ChildId;
       detail?: string;
     }
   | {
