@@ -1,4 +1,4 @@
-// Covers: task:2, task:5, task:6, task:7, task:8, task:9
+// Covers: task:2, task:3, task:5, task:6, task:7, task:8, task:9
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -508,6 +508,49 @@ describe('MetricsListener dispatch dimensions', () => {
       expect(untiered('conductor.feature.shipped')).toEqual([{ project: 'project', worker: 'worker', feature: 'untiered' }]);
       expect(untiered('conductor.feature.duration.wall')).toEqual([{ project: 'project', worker: 'worker', feature: 'untiered' }]);
       expect(untiered('conductor.feature.duration.active')).toEqual([{ project: 'project', worker: 'worker', feature: 'untiered' }]);
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
+  });
+});
+
+describe('MetricsListener gate-tier projection (Task 3)', () => {
+  it('labels tiered gate verdicts and kickbacks while preserving tierless aggregate points', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const emitter = new ConductorEventEmitter();
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      undefined,
+      'feature',
+    );
+    listener.start(emitter);
+
+    try {
+      for (const tier of ['S', 'M', undefined] as const) {
+        await emitter.emit({ type: 'gate_verdict', step: 'build', satisfied: true, ...(tier === undefined ? {} : { tier }) });
+        await emitter.emit({ type: 'kickback', from: 'build_review', to: 'build', count: 1, ...(tier === undefined ? {} : { tier }) });
+      }
+      await provider.forceFlush();
+
+      const points = (name: string) => pointsForInstrument(exporter, name)
+        .map((point) => ({ attributes: point.attributes, value: point.value }));
+      const labels = { project: 'project', worker: 'worker', feature: 'feature' };
+      expect(points('conductor.gate.verdicts')).toEqual([
+        { attributes: { step: 'build', outcome: 'pass', tier: 'S', ...labels }, value: 1 },
+        { attributes: { step: 'build', outcome: 'pass', tier: 'M', ...labels }, value: 1 },
+        { attributes: { step: 'build', outcome: 'pass', ...labels }, value: 1 },
+      ]);
+      expect(points('conductor.gate.kickbacks')).toEqual([
+        { attributes: { from: 'build_review', to: 'build', tier: 'S', ...labels }, value: 1 },
+        { attributes: { from: 'build_review', to: 'build', tier: 'M', ...labels }, value: 1 },
+        { attributes: { from: 'build_review', to: 'build', ...labels }, value: 1 },
+      ]);
+      expect(points('conductor.gate.verdicts').reduce((total, point) => total + Number(point.value), 0)).toBe(3);
+      expect(points('conductor.gate.kickbacks').reduce((total, point) => total + Number(point.value), 0)).toBe(3);
     } finally {
       listener.stop();
       await provider.shutdown();
