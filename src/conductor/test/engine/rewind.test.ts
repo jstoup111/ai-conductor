@@ -14,7 +14,7 @@ import type {
   StateMutation,
   StateMutationResult,
 } from '../../src/engine/conduct-state-store.js';
-import { clearHaltAtomically, detectRewindCommand, dispatchRewindCommand, rewindState } from '../../src/engine/rewind.js';
+import { clearHaltAtomically, detectRewindCommand, dispatchRewindCommand, inPlaceHaltRecoveryHint, rewindState } from '../../src/engine/rewind.js';
 
 class RecordingStateStore implements ConductStateStore<ConductState> {
   readonly batches: NamedAtomicStateMutationBatch<ConductState>[] = [];
@@ -161,6 +161,17 @@ describe('rewindState', () => {
       .rejects.toThrow('test_suite: expected done, current failed');
   });
 
+  it('names halt clear for an in-place halted step', () => {
+    expect(inPlaceHaltRecoveryHint({ last_step: 'build', build: 'refused' }, 'build', 'plan-gap-feature')).toBe(
+      'rewind: "build" is the halted step itself (status refused); after resolving the cause, resume it in place with: ai-conductor halt clear --feature plan-gap-feature --rationale "<what you fixed>"',
+    );
+  });
+
+  it('returns no in-place hint for a done status or non-current target', () => {
+    expect(inPlaceHaltRecoveryHint({ last_step: 'build', build: 'done' }, 'build', 'plan-gap-feature')).toBeUndefined();
+    expect(inPlaceHaltRecoveryHint({ last_step: 'build', build: 'refused' }, 'test_suite', 'plan-gap-feature')).toBeUndefined();
+  });
+
   describe('dispatchRewindCommand', () => {
   it('uses resolved config so a declared custom target is accepted at the command boundary', async () => {
     const config: HarnessConfig = {
@@ -238,6 +249,106 @@ describe('rewindState', () => {
       error.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  async function expectInPlaceHaltClearHint(status: 'refused' | 'failed'): Promise<void> {
+    const parent = await mkdtemp(join(tmpdir(), 'rewind-plan-gap-parent-'));
+    const worktree = join(parent, 'plan-gap-feature');
+    const statePath = join(worktree, '.pipeline/conduct-state.json');
+    const haltPath = join(worktree, '.pipeline/HALT');
+    const haltClassPath = join(worktree, '.pipeline/HALT.class');
+    const state: ConductState = { ...completeState, last_step: 'build', build: status };
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`);
+      await writeFile(haltPath, 'Plan gap: task 11, Done when check 2 cannot be satisfied under the approved plan.\n');
+      await writeFile(haltClassPath, 'plan-gap\n');
+      const before = await Promise.all([statePath, haltPath, haltClassPath].map((path) => readFile(path, 'utf-8')));
+
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, worktree)).resolves.toBe(1);
+
+      expect(error.mock.calls).toEqual([
+        ['rewind: Rewind target "build" must be earlier than current step "build"'],
+        [expect.stringContaining('ai-conductor halt clear --feature plan-gap-feature --rationale')],
+      ]);
+      await expect(Promise.all([statePath, haltPath, haltClassPath].map((path) => readFile(path, 'utf-8')))).resolves.toEqual(before);
+    } finally {
+      error.mockRestore();
+      await rm(parent, { recursive: true, force: true });
+    }
+  }
+
+  it('names halt clear when the current halted build step is refused', async () => {
+    await expectInPlaceHaltClearHint('refused');
+  });
+
+  it('names halt clear when the current halted build step is failed', async () => {
+    await expectInPlaceHaltClearHint('failed');
+  });
+
+  async function expectNoInPlaceHaltClearHint({
+    state,
+    target,
+    markers,
+    refusal,
+  }: {
+    state: ConductState;
+    target: string;
+    markers: boolean;
+    refusal?: string;
+  }): Promise<void> {
+    const parent = await mkdtemp(join(tmpdir(), 'rewind-plan-gap-parent-'));
+    const worktree = join(parent, 'plan-gap-feature');
+    const statePath = join(worktree, '.pipeline/conduct-state.json');
+    const haltPath = join(worktree, '.pipeline/HALT');
+    const haltClassPath = join(worktree, '.pipeline/HALT.class');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`);
+      if (markers) {
+        await writeFile(haltPath, 'operator action required\n');
+        await writeFile(haltClassPath, 'needs-human\n');
+      }
+      const paths = markers ? [statePath, haltPath, haltClassPath] : [statePath];
+      const before = await Promise.all(paths.map((path) => readFile(path, 'utf-8')));
+
+      await expect(dispatchRewindCommand({ kind: 'rewind', target }, worktree)).resolves.toBe(1);
+
+      if (refusal) expect(error).toHaveBeenCalledWith(refusal);
+      expect(error.mock.calls.some(([message]) => typeof message === 'string' && message.includes('halt clear'))).toBe(false);
+      await expect(Promise.all(paths.map((path) => readFile(path, 'utf-8')))).resolves.toEqual(before);
+    } finally {
+      error.mockRestore();
+      await rm(parent, { recursive: true, force: true });
+    }
+  }
+
+  it('does not name halt clear when build is done at current target build', async () => {
+    await expectNoInPlaceHaltClearHint({
+      state: { ...completeState, last_step: 'build', build: 'done' },
+      target: 'build',
+      markers: true,
+      refusal: 'rewind: Rewind target "build" must be earlier than current step "build"',
+    });
+  });
+
+  it('does not name halt clear when refused build targets test_suite', async () => {
+    await expectNoInPlaceHaltClearHint({
+      state: { ...completeState, last_step: 'build', build: 'refused' },
+      target: 'test_suite',
+      markers: true,
+      refusal: 'rewind: Rewind target "test_suite" must be earlier than current step "build"',
+    });
+  });
+
+  it('does not name halt clear when refused build lacks HALT and HALT.class', async () => {
+    await expectNoInPlaceHaltClearHint({
+      state: { ...completeState, last_step: 'build', build: 'refused' },
+      target: 'build',
+      markers: false,
+    });
   });
 
   it('restores state through the mutation port when derived-record cleanup fails, leaving retry valid', async () => {

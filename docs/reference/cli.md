@@ -1276,6 +1276,10 @@ Returns a halted feature to an earlier pipeline step. Run it from that feature's
 `--to` is required and must name a step in the resolved registry that is strictly earlier than the
 feature's recorded `last_step`. The command refuses an unknown, current, or later target without
 mutating state. It also refuses if the state changed while the rewind was being applied.
+When a halted feature's refused target is the halted step itself (`last_step`, with status
+`refused` or `failed`), it also prints the in-place recovery command, `ai-conductor halt clear
+--feature <slug> --rationale "<what you fixed>"`, where `<slug>` is the worktree directory name. See
+[`ai-conductor halt clear`](#ai-conductor-halt-clear).
 
 On success, it marks the target and every later non-skipped step `stale`, clears their gate verdicts,
 then clears both `.pipeline/HALT` and `.pipeline/HALT.class` atomically. It emits an `operator_rewind`
