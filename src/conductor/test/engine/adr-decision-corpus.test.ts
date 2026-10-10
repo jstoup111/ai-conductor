@@ -1,3 +1,4 @@
+// Covers: task:1
 // Covers: task:4
 import { describe, expect, it } from 'vitest';
 import { readFile, readdir } from 'fs/promises';
@@ -92,7 +93,7 @@ describe('ADR decision corpus compatibility', () => {
       // Any line that opens with a decision number, under any emphasis the
       // template permits. This is deliberately looser than the parser: a shape
       // matched here and missed there is exactly the gap that halts a feature.
-      const numbered = [...section.matchAll(/^\s*[*_]{0,2}(\d+)\.\s+\S/gm)].map((match) => match[1]!);
+      const numbered = [...section.matchAll(/^\s*(?:#{1,6}\s+)?[*_]{0,2}(\d+)\.\s+\S/gm)].map((match) => match[1]!);
       if (numbered.length === 0) continue;
 
       const parsed = parseAdrDecisions(content);
