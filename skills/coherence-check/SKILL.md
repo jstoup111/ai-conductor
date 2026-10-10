@@ -238,6 +238,22 @@ across *different* layers — an outcome and a task, an FR and a story, an ADR a
 contradictions are what `/conflict-check` already sweeps for, and cross-layer ones are
 what nothing else sees.
 
+**Task-versus-task oscillation.** For each pair of tasks sharing a behavior, entity, file or
+fixture, ask **"if I fully complete task A, does task B's `Done when` still hold?"** in both
+directions: A against B, then B against A. #1535's Task 3 and Task 9 are the worked example:
+compare their quoted `Done when` text, rather than assuming that an acyclic dependency graph
+makes their assertions compatible.
+
+When the quoted text establishes an invalidation, set the affected `task` row's verdict to
+`fail` and use Notes to quote the opposing text from both tasks. A pair that fails in both
+directions is an oscillation; one that fails in one direction is a contradiction. Record both as
+`fail`, because the dependency graph does not stop BUILD from completing the two tasks in either
+order. The row verdict is `fail`, never `oscillation` or `interference`.
+
+If an apparent interference cannot be grounded in quoted text from both tasks, raise it to the
+operator as an assumption and record no `fail`. Pairs with nothing shared need no row, section,
+or verdict; existing `task` rows keep their coverage verdicts.
+
 Ground every `fail` in the specific opposing text from both artifacts, per the
 verify-claims protocol in Section 5. "These feel like they might conflict" is not a
 finding. If a suspected contradiction cannot be grounded in quoted text, surface it as
