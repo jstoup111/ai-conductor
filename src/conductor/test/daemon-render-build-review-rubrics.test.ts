@@ -1,4 +1,4 @@
-// Covers: task:8
+// Covers: task:6, task:8
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import chalk from 'chalk';
 
@@ -9,9 +9,9 @@ vi.mock('execa', () => ({ execa: vi.fn() }));
 import { renderDaemonEvent } from '../src/daemon-cli.js';
 import type { ConductorEvent } from '../src/types/index.js';
 
-function lines(event: ConductorEvent): string[] {
+function lines(event: ConductorEvent, verbose = false): string[] {
   const output: string[] = [];
-  renderDaemonEvent(event, (line) => output.push(line));
+  renderDaemonEvent(event, (line) => output.push(line), { verbose });
   return output;
 }
 
@@ -28,7 +28,7 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
   it('labels a started rubric branch with its lap tag', () => {
     expect(lines({
       type: 'build_review_rubric_started', rubric: 'testQuality', lapId: 'lap-12345678',
-    })).toEqual(['·   build_review [lap-12345678] testQuality started']);
+    }, true)).toEqual(['·   build_review [lap-12345678] testQuality started']);
   });
 
   it('labels a cached rubric branch distinctly from a fresh start', () => {
@@ -40,10 +40,10 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
   it('keeps starts from separate laps distinguishable', () => {
     const first = lines({
       type: 'build_review_rubric_started', rubric: 'testQuality', lapId: 'first-lap-1234',
-    });
+    }, true);
     const second = lines({
       type: 'build_review_rubric_started', rubric: 'testQuality', lapId: 'second-lap-5678',
-    });
+    }, true);
 
     expect(first).toEqual(['·   build_review [first-lap-1234] testQuality started']);
     expect(second).toEqual(['·   build_review [second-lap-5678] testQuality started']);
@@ -53,7 +53,7 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
   it('renders a short lap identifier in full', () => {
     expect(lines({
       type: 'build_review_rubric_started', rubric: 'testQuality', lapId: 'lap',
-    })).toEqual(['·   build_review [lap] testQuality started']);
+    }, true)).toEqual(['·   build_review [lap] testQuality started']);
   });
 
   it.each(['PASS', 'FAIL'] as const)('states a judged %s result', (verdict) => {
@@ -107,12 +107,12 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
       type: 'build_review_rubric_infrastructure_failure', rubric: 'testQuality', lapId: 'lap-12345678',
       reason: 'scoped run timed out', excerpt: 'timed out after 30 seconds',
     })).toEqual([
-      '·   build_review [lap-12345678] testQuality infrastructure failure: scoped run timed out — timed out after 30 seconds',
+      '·   ⚠ build_review [lap-12345678] testQuality infrastructure failure: scoped run timed out — timed out after 30 seconds — no action needed: the gate re-runs build_review',
     ]);
     expect(lines({
       type: 'build_review_rubric_infrastructure_failure', rubric: 'testQuality', lapId: 'lap-12345678',
       reason: 'scoped run timed out',
-    })).toEqual(['·   build_review [lap-12345678] testQuality infrastructure failure: scoped run timed out']);
+    })).toEqual(['·   ⚠ build_review [lap-12345678] testQuality infrastructure failure: scoped run timed out — no action needed: the gate re-runs build_review']);
   });
 
   it('names the case when a remediation refutation is recorded', () => {
@@ -121,7 +121,7 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
       domain: 'build_review',
       lapId: 'lap-12345678',
       caseId: 'case-42',
-    })).toEqual(['· build_review refuted remediation case case-42']);
+    })).toEqual(['· build_review refuted remediation case']);
   });
 
   it('keeps infrastructure failure distinct from judged failure in plain text', () => {
@@ -148,8 +148,9 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
     ];
 
     for (const event of events) {
-      expect(lines(event)).toHaveLength(1);
-      expect(lines(event)[0]).not.toContain('{');
+      const rendered = lines(event, event.type === 'build_review_rubric_started');
+      expect(rendered).toHaveLength(1);
+      expect(rendered[0]).not.toContain('{');
     }
   });
 
@@ -161,5 +162,31 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
 
     expect(() => lines(event)).not.toThrow();
     expect(JSON.stringify(event)).toBe(before);
+  });
+
+  it('keeps adjudication case ids in verbose detail while preserving the decision rationale', () => {
+    const event: ConductorEvent = {
+      type: 'remediation_adjudication_completed', domain: 'build_review', lapId: 'lap-12345678',
+      caseIds: ['case-42'], effectIds: [],
+      decisionStops: [{
+        caseId: 'case-42', owner: 'architecture', sourceIds: ['security:f1'],
+        rationale: 'The repairs contradict the approved boundary.',
+      }],
+    };
+
+    expect(lines(event).join('\n')).toContain('architecture');
+    expect(lines(event).join('\n')).toContain('1 source');
+    expect(lines(event).join('\n')).toContain('The repairs contradict the approved boundary.');
+    expect(lines(event).join('\n')).not.toContain('case-42');
+    expect(lines(event, true).join('\n')).toContain('case-42');
+  });
+
+  it('keeps a refuted remediation case id in verbose detail', () => {
+    const event: ConductorEvent = {
+      type: 'remediation_case_refuted', domain: 'build_review', lapId: 'lap-12345678', caseId: 'case-42',
+    };
+
+    expect(lines(event).join('\n')).not.toContain('case-42');
+    expect(lines(event, true).join('\n')).toContain('case-42');
   });
 });

@@ -37,6 +37,7 @@ export const DAEMON_EVENT_PRESENTATION = {
   build_review_cache_hit: depthTwo, build_review_cache_discarded: defaultPresentation,
   build_review_rubric_infrastructure_failure: depthTwo, build_review_scope_incomplete: defaultPresentation,
   build_review_outer_verdict: depthTwo, remediation_adjudication_completed: defaultPresentation,
+  build_review_adjudicated: defaultPresentation,
   remediation_case_refuted: defaultPresentation, step_started: defaultPresentation, step_completed: depthTwo,
   step_failed: defaultPresentation, step_interrupted: defaultPresentation, step_refused: defaultPresentation,
   step_status_write_refused: defaultPresentation, github_operation_refused: defaultPresentation,
@@ -108,7 +109,10 @@ export function createDaemonEventPresenter({
       info: emit,
       warning: (text, next) => emit(`⚠ ${text}${formatNextAction(next)}`),
       halt: (text, next) => emit(`✋ ${text}${formatNextAction(next)}`),
-      detail: (text) => { if (verbose) log({ depth: presentation.depth, text }); },
+      // Detail is subordinate to the event's declared line.  Keep it one
+      // visual level deeper without letting an already-deep event escape the
+      // three-column daemon log grammar.
+      detail: (text) => { if (verbose) log({ depth: Math.min(2, presentation.depth + 1) as DaemonLogDepth, text }); },
       once: (key) => {
         if (onceKeys.has(key)) return silentOutput;
         onceKeys.add(key);

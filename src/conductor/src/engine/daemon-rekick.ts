@@ -46,6 +46,30 @@ import {
   isUnreadableKickbackLedger,
   readKickbackLedger,
 } from './kickback-ledger.js';
+import { formatNextAction, type NextAction } from './daemon-log.js';
+import { recoveryProcedure } from './monitor/session.js';
+
+/**
+ * Daemon-lifetime dedupe for retained halts.  Retention is evaluated by more
+ * than one sweep; this keeps an unchanged halt useful rather than noisy.
+ */
+export function createRetentionLogGate(log: (message: string) => void): {
+  observe(slug: string, disposition: string, subject: string): void;
+  forget(slug: string): void;
+} {
+  const seen = new Map<string, string>();
+  return {
+    observe(slug, disposition, subject) {
+      if (seen.get(slug) === disposition) return;
+      seen.set(slug, disposition);
+      const known = RETAINED_HALT_CLASSES.has(disposition) || disposition === 'mechanical' || disposition === 'legacy'
+        ? disposition : 'unclassified';
+      const next: NextAction = { kind: 'operator', action: `ai-conductor monitor all — ${recoveryProcedure(known as HaltDisposition)}` };
+      log(`${subject}: ${slug} retained — halt disposition ${disposition}${formatNextAction(next)}`);
+    },
+    forget(slug) { seen.delete(slug); },
+  };
+}
 
 /** What an automatic path decided about one worktree's live halt classification. */
 export interface HaltRetentionDecision {

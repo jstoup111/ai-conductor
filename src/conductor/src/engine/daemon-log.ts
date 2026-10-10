@@ -77,6 +77,16 @@ export function formatNextAction(next: NextAction): string {
     : ` — no action needed: ${next.why}`;
 }
 
+/** Stable raw-log warning shape for daemon paths that do not emit an event. */
+export function formatDaemonWarning(text: string, next: NextAction): string {
+  return `WARNING: ${text}${formatNextAction(next)}`;
+}
+
+/** Stable raw-log halt shape for daemon paths that do not emit an event. */
+export function formatDaemonHalt(text: string, next: NextAction): string {
+  return `✋ ${text}${formatNextAction(next)}`;
+}
+
 function normalizeDaemonLogMessage(message: DaemonLogMessage): DaemonLogEntry {
   if (typeof message === 'string') return { depth: 0, kind: 'authored', text: message.trimStart() };
   return { ...message, kind: message.kind ?? 'authored', text: message.text.trimStart() };
