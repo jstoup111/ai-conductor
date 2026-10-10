@@ -190,6 +190,10 @@ const APPROVED_ADR = [
   '',
   '1. **Keep coherence validation at land time.**',
   '',
+  '## Assumptions',
+  '',
+  'No load-bearing assumptions.',
+  '',
 ].join('\n');
 
 const ATX_APPROVED_ADR = [
@@ -202,6 +206,10 @@ const ATX_APPROVED_ADR = [
   '### 1. Keep coherence validation at land time.',
   '',
   '### 2. Refuse uncovered decisions.',
+  '',
+  '## Assumptions',
+  '',
+  'No load-bearing assumptions.',
   '',
 ].join('\n');
 

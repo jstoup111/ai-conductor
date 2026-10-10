@@ -116,6 +116,17 @@ const APPROVED_CITABLE_ADR = [
   '',
 ].join('\n');
 
+const LEGACY_CITABLE_ADR = [
+  '# ADR: legacy citable decision',
+  '',
+  '**Status:** Approved',
+  '',
+  '## Decision',
+  '',
+  '1. **Keep the legacy decision citable.**',
+  '',
+].join('\n');
+
 const APPROVED_UNCITABLE_ADR = [
   '# ADR: uncitable decision',
   '',
@@ -643,8 +654,8 @@ describe('Task 3: landSpec canonical ADR filename gate merge-base exemptions', (
   it('lands a new canonical ADR while legacy sequential ADRs inherited from main remain exempt', async () => {
     await mkdir(join(repoPath, '.docs', 'decisions'), { recursive: true });
     await Promise.all([
-      writeFile(join(repoPath, '.docs', 'decisions', 'adr-001-legacy.md'), APPROVED_CITABLE_ADR),
-      writeFile(join(repoPath, '.docs', 'decisions', 'adr-0002-legacy.md'), APPROVED_CITABLE_ADR),
+      writeFile(join(repoPath, '.docs', 'decisions', 'adr-001-legacy.md'), LEGACY_CITABLE_ADR),
+      writeFile(join(repoPath, '.docs', 'decisions', 'adr-0002-legacy.md'), LEGACY_CITABLE_ADR),
     ]);
     await git(['add', '.docs/decisions']);
     await git(['commit', '-m', 'add legacy sequential ADRs']);
@@ -662,13 +673,13 @@ describe('Task 3: landSpec canonical ADR filename gate merge-base exemptions', (
 
   it('lands after a merge-base-existing sequential ADR is modified and committed in the worktree', async () => {
     await mkdir(join(repoPath, '.docs', 'decisions'), { recursive: true });
-    await writeFile(join(repoPath, '.docs', 'decisions', 'adr-001-legacy.md'), APPROVED_CITABLE_ADR);
+    await writeFile(join(repoPath, '.docs', 'decisions', 'adr-001-legacy.md'), LEGACY_CITABLE_ADR);
     await git(['add', '.docs/decisions/adr-001-legacy.md']);
     await git(['commit', '-m', 'add legacy sequential ADR']);
 
     const dir = await seedValidWorktree();
     const adrPath = join(dir, '.docs', 'decisions', 'adr-001-legacy.md');
-    await writeFile(adrPath, `${APPROVED_CITABLE_ADR}\nUpdated while preserving citation.\n`);
+    await writeFile(adrPath, `${LEGACY_CITABLE_ADR}\nUpdated while preserving citation.\n`);
     await git(['add', '.docs/decisions/adr-001-legacy.md'], dir);
     await git(['commit', '-m', 'update legacy sequential ADR'], dir);
 
