@@ -4,6 +4,13 @@ spec_hash: e56239264d322054759a75a1a8aebe37f585a57387d689cc4ceea73e1fdef060
 pr: https://github.com/jstoup111/ai-conductor/pull/3089
 shipped: 2026-10-10
 engine_version: 20261010T142412Z-f61646aaea57
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "The documentation edits are not owned by any plan task. They only describe behavior that Tasks 1-4 deliver, add no behavior, and directly serve the feature's goal of splitting gate telemetry by tier."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
