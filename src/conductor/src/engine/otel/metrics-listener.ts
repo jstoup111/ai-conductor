@@ -96,11 +96,11 @@ export class MetricsListener {
     pipeline_closeout: (listener, event) => listener.feature(event)?.onPipelineCloseout(event as Extract<OtelEvent, { type: 'pipeline_closeout' }>),
     gate_verdict: (listener, event) => {
       const verdict = event as Extract<OtelEvent, { type: 'gate_verdict' }>;
-      listener.feature(verdict)?.onGateVerdict(verdict.step, verdict.satisfied ? 'pass' : 'fail');
+      listener.feature(verdict)?.onGateVerdict(verdict.step, verdict.satisfied ? 'pass' : 'fail', verdict.tier);
     },
     kickback: (listener, event) => {
       const kickback = event as Extract<OtelEvent, { type: 'kickback' }>;
-      listener.feature(kickback)?.onKickback(kickback.from, kickback.to);
+      listener.feature(kickback)?.onKickback(kickback.from, kickback.to, kickback.tier);
     },
     step_inapplicable: (listener, event) => {
       const inapplicable = event as Extract<OtelEvent, { type: 'step_inapplicable' }>;

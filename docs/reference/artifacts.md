@@ -904,6 +904,10 @@ dispatch outcome and received a computed verdict, including an accepted-risk-adj
 result. The ledger is historical observability, not the authority to resume: the engine still
 recomputes the on-disk gate evidence before it admits a step.
 
+`gate_verdict` and conductor-emitted `kickback` events carry an optional `tier`: the run's
+complexity tier when one is resolved. A `kickback` from `rebase` never carries one. The tier feeds
+the `tier` label on the gate counters; see [`otel`](configuration.md#otel).
+
 `build_review_disposition_accepted` and `build_review_disposition_refused` are declared `persist:
 false` deliberately: they are written by the external build-review CLI to its own pipeline-owned
 ledger and tailed onto the live bus, so re-persisting them here would duplicate the same occurrence.

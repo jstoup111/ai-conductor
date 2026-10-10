@@ -295,9 +295,13 @@ async function fixture(options: FixtureOptions = {}) {
   const events = new ConductorEventEmitter();
   const kickbacks: Array<{ from: string; to: string }> = [];
   const kickbackEvidence: string[] = [];
+  const gateVerdicts: Array<{ step: StepName; satisfied: boolean }> = [];
   const lifecycle: ConductorEvent[] = [];
   const loopHalts: ConductorEvent[] = [];
   events.on('kickback', (event) => { if (event.type === 'kickback') { kickbacks.push({ from: event.from, to: event.to }); kickbackEvidence.push(event.evidence ?? ''); } });
+  events.on('gate_verdict', (event) => {
+    if (event.type === 'gate_verdict') gateVerdicts.push({ step: event.step, satisfied: event.satisfied });
+  });
   events.on('loop_halt', (event) => { loopHalts.push(event); });
   for (const type of [
     'remediation_adjudication_started', 'remediation_adjudication_completed', 'remediation_adjudication_failed',
@@ -354,7 +358,7 @@ async function fixture(options: FixtureOptions = {}) {
   });
 
   return {
-    projectRoot, feature, dispatched, retryReasons, kickbacks, kickbackEvidence, lifecycle, loopHalts, ghCalls, resolver,
+    projectRoot, feature, dispatched, retryReasons, kickbacks, kickbackEvidence, gateVerdicts, lifecycle, loopHalts, ghCalls, resolver,
     remediateDispatches: () => remediateDispatches, artifactMtimes,
     readJson: async (relative: string): Promise<unknown> =>
       JSON.parse(await readFile(join(projectRoot, relative), 'utf8')) as unknown,
@@ -627,11 +631,15 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(covered.remediateDispatches()).toBe(0);
   });
 
+  // Covers: task:5
   it('keeps an uncovered infrastructure branch in the mechanical lane without a semantic kickback', async () => {
     const uncovered = await fixture({ infrastructure: 'uncovered' });
 
     expect(uncovered.dispatched).not.toContain('build');
     expect(uncovered.kickbacks).toEqual([]);
+    expect(uncovered.gateVerdicts.filter((event) =>
+      event.step === 'build_review' && !event.satisfied,
+    )).toEqual([]);
     expect(uncovered.remediateDispatches()).toBe(0);
     // An uncovered fault is not PASS: it exhausts the bounded mechanical
     // allowance, preserves the source diagnostic, and then writes the

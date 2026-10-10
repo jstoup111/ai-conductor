@@ -1,6 +1,6 @@
-// Covers: task:12, task:13, task:14, task:15, task:17
+// Covers: task:4, task:12, task:13, task:14, task:15, task:17
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AggregationTemporality, InMemoryMetricExporter, MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
@@ -9,6 +9,7 @@ import { Conductor } from '../test-conductor.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
 import { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
@@ -16,6 +17,7 @@ import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { CapturingSpanExporter } from '../fixtures/capturing-span-exporter.js';
 import type { FinishPublicationCoordinator, StepRunner } from '../../src/engine/conductor.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import type { ConductState, ConductorEvent, ExecutionContext, StepName } from '../../src/types/index.js';
 
 interface MetricPoint { attributes: Record<string, unknown>; value: unknown; }
@@ -43,6 +45,13 @@ interface ConfiguredFixture extends Omit<SerialFixture, 'calls' | 'step'> {
 }
 
 const directories: string[] = [];
+
+const GATE_TELEMETRY_AS_BUILT_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'telemetry fixture' },
+  planGap: { enabled: true, reason: 'telemetry fixture' },
+  adrCompliance: { enabled: false, reason: 'telemetry fixture' },
+  diagramDrift: { enabled: false, reason: 'telemetry fixture' },
+};
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -171,6 +180,66 @@ async function runSerial(input: {
     metrics.stop();
     await meterProvider.shutdown();
     await visualizer?.stop();
+  }
+}
+
+/** Runs only the validation tail needed to emit an objective verdict and its kickback. */
+async function runTieredGateTelemetry(): Promise<{ events: ConductorEvent[]; metrics: InMemoryMetricExporter }> {
+  const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-tiered-gate-telemetry-'));
+  directories.push(projectRoot);
+  const stateFilePath = join(projectRoot, '.pipeline', 'conduct-state.json');
+  await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+  await writeState(stateFilePath, {
+    ...Object.fromEntries(ALL_STEPS.map(({ name }) => [name, 'done'])),
+    manual_test: 'pending', prd_audit: 'pending', architecture_review_as_built: 'pending',
+    finish: 'pending', track: 'product', complexity_tier: 'M',
+  } as ConductState);
+  await Promise.all(['plans', 'stories', 'specs'].map((directory) => mkdir(join(projectRoot, '.docs', directory), { recursive: true })));
+  const planPath = join(projectRoot, '.docs', 'plans', 'active.md');
+  await Promise.all([
+    writeFile(planPath, '### Task 1: Repair the validation gap\n\n**Criterion:** S1.1\n'),
+    writeFile(join(projectRoot, '.docs', 'stories', 'active.md'), '## Story 1\n\n### Happy Path\n\n- The repair succeeds.\n'),
+    writeFile(join(projectRoot, '.docs', 'specs', 'active.md'), '## Functional Requirements\n\n- **FR-1:** The repair succeeds.\n'),
+    writeFile(join(projectRoot, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath })),
+  ]);
+
+  const events = new ConductorEventEmitter();
+  const observed: ConductorEvent[] = [];
+  events.on('gate_verdict', (event) => { observed.push(event); });
+  events.on('kickback', (event) => { observed.push(event); });
+  const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  const meterProvider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+  const listener = new MetricsListener(new MetricsRecorder(meterProvider.getMeter('tiered-gate-telemetry'), { project: 'project', worker: 'worker' }), () => 1_000, 'tiered-gate-telemetry');
+  listener.start(events);
+  const conductor = new Conductor({
+    projectRoot, stateFilePath, events, fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1,
+    stepRunner: {
+      run: async (step, _state, options) => {
+        if (step === 'manual_test') {
+          await writeFile(join(projectRoot, '.pipeline', 'manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
+        } else if (step === 'prd_audit') {
+          await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | MISSING | impl-gap | feature.ts:1 | no |\n');
+        } else if (step === 'architecture_review_as_built') {
+          await persistAsBuiltVerdict(projectRoot, {
+            version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
+          }, { attemptId: options?.runId ?? 'test-run', codeStamp: null, policy: GATE_TELEMETRY_AS_BUILT_POLICY });
+        } else if (step === 'build') {
+          return { success: false, error: 'stop after tiered gate telemetry observation' };
+        }
+        return { success: true };
+      },
+    },
+  });
+  (conductor as any).planRemediation = async () => ({
+    kind: 'route', target: 'build', evidence: 'validated gap', hint: 'repair the gap',
+  });
+  try {
+    await conductor.run();
+    await meterProvider.forceFlush();
+    return { events: observed, metrics: exporter };
+  } finally {
+    listener.stop();
+    await meterProvider.shutdown();
   }
 }
 
@@ -457,6 +526,27 @@ function assertOneMemberLifecycle(
 }
 
 describe('serial conductor telemetry parity', () => {
+  it('exports tiered gate verdict and kickback counters from one conductor run', async () => {
+    const fixture = await runTieredGateTelemetry();
+    const verdictEvents = fixture.events.filter((event): event is Extract<ConductorEvent, { type: 'gate_verdict' }> =>
+      event.type === 'gate_verdict',
+    );
+    const kickbackEvents = fixture.events.filter((event): event is Extract<ConductorEvent, { type: 'kickback' }> =>
+      event.type === 'kickback',
+    );
+    const verdictPoints = metricPoints(fixture.metrics, 'conductor.gate.verdicts');
+    const kickbackPoints = metricPoints(fixture.metrics, 'conductor.gate.kickbacks');
+
+    expect(verdictEvents.length).toBeGreaterThan(0);
+    expect(kickbackEvents.length).toBeGreaterThan(0);
+    expect(verdictPoints.length).toBeGreaterThan(0);
+    expect(kickbackPoints.length).toBeGreaterThan(0);
+    expect(verdictPoints.every((point) => point.attributes.tier === 'M')).toBe(true);
+    expect(kickbackPoints.every((point) => point.attributes.tier === 'M')).toBe(true);
+    expect(verdictPoints.every((point) => typeof point.attributes.step === 'string' && typeof point.attributes.outcome === 'string')).toBe(true);
+    expect(verdictPoints.reduce((sum, point) => sum + Number(point.value), 0)).toBe(verdictEvents.length);
+  });
+
   it('persists and projects one width-one fallback serial execution with bounded attribution', async () => {
     const fixture = await runSerial({
       outcomes: [{ success: true, model: 'gpt-5.6-luna', effort: 'high', preferredProvider: 'codex', actualProvider: 'claude' }], widthOneGroup: true,

@@ -8,6 +8,7 @@ import {
   stat,
 } from 'node:fs/promises';
 import { registerSighupPersistence } from './sighup-persistence.js';
+import { withGateTier } from './gate-event-tier.js';
 import { existsSync, readdirSync, rmdirSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import {
@@ -736,7 +737,12 @@ export class Conductor {
 
   /** Delegate conductor lifecycle delivery to the shared engine owner. */
   private emitExecutionEvent(event: ConductorEvent): Promise<void> {
-    return this.executionLifecycle.emit(this.withActiveRegionChild(event));
+    return this.executionLifecycle.emit(this.stampGateTier(this.withActiveRegionChild(event)));
+  }
+
+  /** Stamp conductor-emitted gate outcomes with the run tier, preserving rebase provenance. */
+  private stampGateTier(event: ConductorEvent): ConductorEvent {
+    return withGateTier(event, this.haltState.complexity_tier);
   }
 
   /**
@@ -6597,13 +6603,13 @@ export class Conductor {
       if (manualTestSelfHeals < MAX_KICKBACKS_PER_GATE) {
         manualTestSelfHeals++;
         const evidence = failRows.join('\n');
-        await this.events.emit({
+        await this.events.emit(this.stampGateTier({
           type: 'kickback',
           from: 'manual_test',
           to: 'build',
           evidence,
           count: manualTestSelfHeals,
-        });
+        }));
         // Hand BUILD the bugs it must fix. The whitewash guard on the
         // manual_test gate refuses a PASS rewrite with no new commits,
         // so a no-op BUILD cannot silently converge this loop.
@@ -14324,14 +14330,14 @@ export class Conductor {
           reason: v.kickback?.evidence ?? '',
         }, kickbackChild);
         const count = kickback.entry.count;
-        await this.events.emit({
+        await this.events.emit(this.stampGateTier({
           type: 'kickback',
           from: stepName,
           to: target,
           evidence: v.kickback?.evidence,
           count,
           ...(kickbackChild === undefined ? {} : { child: kickbackChild }),
-        });
+        }));
         if (kickback.exhausted) {
           const pingPongReason =
             `kickback ping-pong: ${target} re-opened ${count + 1} times ` +
@@ -14462,14 +14468,14 @@ export class Conductor {
             }, 'build_review', this.activeRegionChild);
             if (credited) convergenceCredit = { gate: target };
           }
-          await this.events.emit(this.withActiveRegionChild({
+          await this.events.emit(this.stampGateTier(this.withActiveRegionChild({
             type: 'kickback',
             from: 'rebase',
             to: target,
             evidence: verdict.kickback.evidence,
             count: 1,
             ...(convergenceCredit === undefined ? {} : { convergenceCredit }),
-          }));
+          })));
           if (getStepStatus(state, target) !== 'skipped') reopened[target] = 'pending';
         }
         await this.commitStateChanges(state, 'reopen persisted rebase kickbacks', reopened);
@@ -14503,12 +14509,12 @@ export class Conductor {
           step.name === 'build' ? this.activeRegionChild : undefined,
         );
       }
-      await this.events.emit(this.withActiveRegionChild({
+      await this.events.emit(this.stampGateTier(this.withActiveRegionChild({
         type: 'gate_verdict',
         step: step.name,
         satisfied: verdict.satisfied,
         reason: verdict.reason,
-      }));
+      })));
       if (verdict.satisfied) {
         stuckGate.delete(this.childScopedStepKey(step.name, this.activeRegionChild));
       }
