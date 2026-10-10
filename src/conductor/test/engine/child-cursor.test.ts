@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:5
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -161,6 +161,18 @@ describe('resolveActiveChild', () => {
     await writeFile(join(repository, 'child-change.txt'), 'needs restack\n');
     await git(['add', 'child-change.txt']);
     await git(['commit', '-qm', 'child drift']);
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'divergent', child: 1 });
+  });
+
+  it('fails closed as divergent when a closure is not an ancestor of the next non-leaf child', async () => {
+    await configureStacked(repository, true);
+    await seal(repository, [1, 2, 3]);
+    const closure = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
+    await git(['branch', 'feat/c1/demo', closure]);
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', closure]);
+    const unrelatedTip = (await git(['commit-tree', `${closure}^{tree}`, '-m', 'unrelated child base'])).trim();
+    await git(['branch', 'feat/c2/demo', unrelatedTip]);
 
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'divergent', child: 1 });
   });
