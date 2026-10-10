@@ -117,9 +117,11 @@ export function detectRewindCommand(argv: string[]): RewindDispatch | null {
 }
 
 export function inPlaceHaltRecoveryHint(state: ConductState, target: string, slug: string): string | undefined {
+  // ai-conductor:session-command-context=operator-only
   const status = state[target as keyof ConductState];
   if (state.last_step !== target || (status !== 'refused' && status !== 'failed')) return undefined;
   return `rewind: "${target}" is the halted step itself (status ${status}); after resolving the cause, resume it in place with: ai-conductor halt clear --feature ${slug} --rationale "<what you fixed>"`;
+  // /ai-conductor:session-command-context
 }
 
 export async function clearHaltAtomically(
