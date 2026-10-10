@@ -2809,6 +2809,7 @@ describe('prd_audit kickback', () => {
     expect(ledger.growth?.added ?? 0).toBe(0);
   });
 
+  // Covers: task:4
   it('honors a raised configurable growth cap before appending every FIXABLE task', async () => {
     const criteria = ['S2.1', 'S2.2', 'S2.3', 'S2.4', 'S2.5', 'S2.6'];
     const fixture = await createPrdAuditRemediationFixture({
