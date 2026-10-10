@@ -75,7 +75,7 @@ describe('engine git pinned config', () => {
     ['merge-tree', ['merge-tree', '--write-tree', 'main', 'HEAD']],
     ['cherry-pick', ['cherry-pick', 'deadbeef']],
     ['commit-tree after global config', ['-c', 'author.name=Engine', 'commit-tree', 'deadbeef']],
-  ])('keeps %s argv byte-for-byte and pins config only in the child environment', async (_name, args) => {
+  ])('pins every engine replay subcommand without changing its argv', async (_name, args) => {
     await makeGitRunner('/fixture')(args);
 
     expect(mocks.execa).toHaveBeenCalledWith('git', args, {
