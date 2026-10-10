@@ -1,0 +1,121 @@
+// Covers: task:3
+
+import { describe, expect, it } from 'vitest';
+import type { GithubOperationRequest, GithubOperationRunner } from '../../../../src/engine/github-operations.js';
+import type { GhRunner } from '../../../../src/engine/tracker-client.js';
+import { applyIssueEventSync } from '../../../../src/engine/engineer/intake/issue-event-sync.js';
+
+const REPOSITORY = 'acme/app';
+
+function opened(body: string) {
+  return {
+    action: 'opened',
+    repository: { full_name: REPOSITORY },
+    issue: { number: 20, body },
+    sender: { login: 'intake-operator' },
+  };
+}
+
+function formBody(): string {
+  return [
+    '### Priority', '', 'high', '',
+    '### Size', '', 'M', '',
+    '### Depends on', '', '#10', '',
+    '### Observed', '', 'This is blocked by #12.',
+  ].join('\n');
+}
+
+function makeDeps(existingTargets: readonly number[] = []) {
+  const requests: GithubOperationRequest[] = [];
+  const labels: string[] = [];
+  const gh: GhRunner = async (args) => {
+    const path = args.find((arg) => arg.includes('/dependencies/blocked_by'));
+    if (path && !args.includes('POST')) {
+      return {
+        stdout: JSON.stringify(existingTargets.map((number) => ({
+          number,
+          repository_url: `https://api.github.com/repos/${REPOSITORY}`,
+        }))),
+      };
+    }
+    const issue = args.find((arg) => /^repos\/acme\/app\/issues\/\d+$/.test(arg));
+    if (issue) return { stdout: JSON.stringify({ id: 1_000_000 + Number(issue.split('/').at(-1)) }) };
+    return { stdout: '{}' };
+  };
+  const operations: GithubOperationRunner = {
+    async run(request) {
+      requests.push(request);
+      if (request.operation === 'intake.issue.label.add') {
+        labels.push((request.payload as { label: string }).label);
+      }
+      return {};
+    },
+  };
+
+  return {
+    deps: { gh, operations, actor: 'intake-operator', cwd: '/repo' },
+    requests,
+    labels,
+  };
+}
+
+function dependencyTargets(requests: readonly GithubOperationRequest[]): string[] {
+  const writes = requests
+    .filter((request) => request.operation === 'intake.issue.dependency.add')
+    .map((request) => {
+      expect(request.target).toEqual({ repository: REPOSITORY, kind: 'issue', number: 20 });
+      const payload = request.payload as { dependency: { repository: string; number: number } };
+      return `${payload.dependency.repository}#${payload.dependency.number}`;
+    });
+  return writes;
+}
+
+describe('applyIssueEventSync', () => {
+  it.each([
+    ['This is blocked by #10.', ['acme/app#10']],
+    ['Depends on: #10 / #11', ['acme/app#10', 'acme/app#11']],
+    ['Gated on #10', ['acme/app#10']],
+  ])('links declared prose from an opened non-form issue: %s', async (body, targets) => {
+    const { deps, requests } = makeDeps();
+
+    const report = await applyIssueEventSync(opened(body), deps);
+
+    expect(dependencyTargets(requests)).toEqual(targets);
+    expect(report.failures).toEqual([]);
+  });
+
+  it('unions form Depends-on and prose edges while retaining issue-form labels', async () => {
+    const { deps, requests, labels } = makeDeps();
+
+    const report = await applyIssueEventSync(opened(formBody()), deps);
+
+    expect(dependencyTargets(requests)).toEqual(['acme/app#10', 'acme/app#12']);
+    expect(labels).toEqual(expect.arrayContaining(['priority: high', 'size: M']));
+    expect(report.labels).toMatchObject({ priorityLabel: 'priority: high', sizeLabel: 'size: M' });
+  });
+
+  it('reports an existing edge without posting it again', async () => {
+    const { deps, requests } = makeDeps([10]);
+
+    const report = await applyIssueEventSync(opened('blocked by #10'), deps);
+
+    expect(dependencyTargets(requests)).toEqual([]);
+    expect(report.links).toMatchObject([{ edge: { target: 'acme/app#10' }, status: 'already-present' }]);
+    expect(report.failures).toEqual([]);
+  });
+
+  it('deduplicates repeated declarations and leaves unrelated or absent prose untouched', async () => {
+    const duplicate = makeDeps();
+    await applyIssueEventSync(opened('blocked by #10; then blocked by #10'), duplicate.deps);
+    expect(dependencyTargets(duplicate.requests)).toEqual(['acme/app#10']);
+
+    const noDeclaration = makeDeps();
+    const report = await applyIssueEventSync(opened('No dependency is declared here.'), noDeclaration.deps);
+    expect(dependencyTargets(noDeclaration.requests)).toEqual([]);
+    expect(report.failures).toEqual([]);
+
+    const related = makeDeps();
+    await applyIssueEventSync(opened('blocked by #10 and related to #11'), related.deps);
+    expect(dependencyTargets(related.requests)).toEqual(['acme/app#10']);
+  });
+});
