@@ -30,6 +30,7 @@ import {
   type GitRunner,
 } from './rebase.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
+import { resolveActiveChild } from './child-cursor.js';
 import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import { applyRebaseTransition } from './rebase-transition.js';
@@ -785,6 +786,27 @@ export async function resumeRebaseFirst(opts: {
 
   // One-shot: consume the sentinel up front so a crash can't loop on it.
   await rm(sentinel, { force: true });
+
+  // A non-leaf child is a pinned, independently reviewed increment. Rebasing
+  // the worktree at this boundary would move its in-progress branch (and can
+  // strand its predecessor refs) before the region closes. The cursor is the
+  // sole authority for whether that stack state exists; an ordinary feature
+  // keeps the established play-forward path below.
+  const activeChild = await resolveActiveChild(opts.worktreePath, opts.slug ?? basename(opts.worktreePath));
+  if (activeChild.kind === 'active' && !activeChild.isLeaf) {
+    await opts.events.emit({
+      type: 'rebase_skipped_for_stack',
+      child: activeChild.child,
+      reason: 'active child is not the leaf',
+    });
+    opts.log?.(
+      `re-kick ${basename(opts.worktreePath)}: rebase skipped — active child ${activeChild.child} is not the leaf`,
+    );
+    // The sentinel was deliberately consumed: the child gate loop resumes at
+    // its existing overlay state, and retries the rebase only after the leaf
+    // becomes active.
+    return 'rebased';
+  }
 
   // Check and verify merged history BEFORE rebasing. Merge state alone is never
   // completion evidence: every refusal and unavailable dependency parks the
