@@ -135,14 +135,21 @@ narrow or broaden the requested outcome.
 ### DECIDE Artifact Amendment Ownership
 
 When a DECIDE pass falsifies an assertion in an accepted DECIDE artifact, DECIDE corrects that artifact
-in place on the spec branch before the first BUILD entry. Story artifacts under `.docs/stories/` are the
+in place on the spec branch before the first BUILD entry. An accepted DECIDE artifact absent from the base
+branch — including one this spec branch already committed or landed — is a draft: revise it in place,
+remove superseded text so it states only the current approved scope, and add no amendment note or revision
+log; git history and the spec PR carry provenance. Story artifacts under `.docs/stories/` are the
 exception: replace superseded assertions in place and leave no amendment record. For all other accepted
-DECIDE artifacts, add the correction beside the original assertion in this additive form; never rewrite
-or delete the original text and never create a separate amendment record:
+DECIDE artifacts — non-story artifacts already on the base branch — add the correction beside the original assertion in this
+additive form; never rewrite or delete the original text and never create a separate amendment record:
 
 ```markdown
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
 ```
+
+The in-place draft rule applies only to artifacts absent from the base branch. At land,
+`draft-amendment-note` refuses a dated amendment note in a draft so the correction is folded into the
+artifact's current text.
 
 BUILD never receives that mutation as a task. A plan task must not name another feature's artifact
 under `.docs/architecture/`, `.docs/decisions/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`; authoring checks
