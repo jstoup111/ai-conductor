@@ -3,9 +3,16 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
-import { haltRecordPath, recordHalt, type HaltRecordRemoteOptions } from '../../src/engine/halt-record.js';
+import {
+  haltRecordPath,
+  recordHalt,
+  supersedeHaltRecord,
+  type HaltRecordRemoteOptions,
+} from '../../src/engine/halt-record.js';
 import type { RemoteGitExecutionResult, RemoteGitOperationDependencies } from '../../src/engine/remote-git-operations.js';
 
+// Covers: task:1
+// Locks the lease argv and rejects bare force forms for halt-record publication.
 const scratchRoots: string[] = [];
 const input = {
   slug: 'operator-decision',
@@ -56,7 +63,23 @@ describe('recordHalt', () => {
 
     await expect(recordHalt(worktree, input, successfulRemote(pushes))).resolves.toEqual({ kind: 'written' });
 
-    expect(pushes).toEqual([['push', 'origin', `HEAD:refs/heads/${input.branch}`]]);
+    expect(pushes).toEqual([['push', 'origin', `HEAD:refs/heads/${input.branch}`, '--force-with-lease']]);
+    expect(pushes.flat()).not.toContain('--force');
+    expect(pushes.flat()).not.toContain('-f');
+    expect(pushes.flat().some((argument) => argument.startsWith('+'))).toBe(false);
+  });
+
+  it('sends a superseded record through the injected remote mutation boundary with a lease', async () => {
+    const worktree = await makeFeatureRepository();
+    const pushes: string[][] = [];
+
+    await expect(recordHalt(worktree, input, successfulRemote())).resolves.toEqual({ kind: 'written' });
+    await expect(supersedeHaltRecord(worktree, input.slug, 'operator', successfulRemote(pushes))).resolves.toEqual({ kind: 'written' });
+
+    expect(pushes).toEqual([['push', 'origin', `HEAD:refs/heads/${input.branch}`, '--force-with-lease']]);
+    expect(pushes.flat()).not.toContain('--force');
+    expect(pushes.flat()).not.toContain('-f');
+    expect(pushes.flat().some((argument) => argument.startsWith('+'))).toBe(false);
   });
 
   it('retains the local record commit when no remote is configured', async () => {
