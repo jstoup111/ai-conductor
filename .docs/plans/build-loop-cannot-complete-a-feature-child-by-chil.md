@@ -1189,3 +1189,48 @@ membership check, and halt and rebase guards. Features without children are unch
 
 Scope note: 40 tasks puts this plan in the 21–40 warning band. The operator chose full #2942 scope
 (one feature). The coherence check maps every task to a story.
+
+### Task rem-prd-audit-13-r1: daemon-observe-cli.ts renderPlanGrowthSection: read effectiveGrowthCap from the flat ledger (readKickbackLedger(featureRoot) with no child) even when a child is active; add a test with child 2 active and a raised flat growth cap asserting the PLAN GROWTH line shows the raised cap
+**Gate:** prd-audit
+**Rationale:** Verified (95%): daemon-observe-cli.ts:642-643 reads effectiveGrowthCap from the child ledger, but child ledgers can never carry that field, so with a child active the PLAN GROWTH cap ignores the flat ledger's raised cap. This is clear implementation drift inside task 13 (status shows the active child; whole-feature data stays flat). No architectural decision is needed.
+**Criterion:** S4.2
+**Parent task:** 13
+**Done when:**
+- [test] S4.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-13-r1 is complete.
+
+### Task rem-prd-audit-11-r1: conductor.ts routed-forward build/finish writeVerdict: pass this.activeRegionChild for region steps (build) so the verdict lands in .pipeline/children/<n>/gates/build.json; keep finish flat; add a test with child 2 active asserting no .pipeline/gates/build.json is created or modified
+**Gate:** prd-audit
+**Rationale:** Verified (95%): conductor.ts:14384 calls writeVerdict(this.projectRoot, step.name, verdict) with no child argument. A routed-forward build in an active child therefore writes the flat .pipeline/gates/build.json, which breaks task 11's doneWhen that region writes land in the active child and never create flat region gate files. child-region-access-audit misclassifies the site. Both fixes are BUILD work within task 11.
+**Criterion:** S4.5
+**Parent task:** 11
+**Done when:**
+- [test] S4.5 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-11-r1 is complete.
+
+### Task rem-prd-audit-11-r2: child-region-access-audit.test.ts: classify each conductor.ts writeVerdict call site individually (not file-wide) so a call that omits the child argument for a region step fails the audit
+**Gate:** prd-audit
+**Rationale:** Verified (95%): conductor.ts:14384 calls writeVerdict(this.projectRoot, step.name, verdict) with no child argument. A routed-forward build in an active child therefore writes the flat .pipeline/gates/build.json, which breaks task 11's doneWhen that region writes land in the active child and never create flat region gate files. child-region-access-audit misclassifies the site. Both fixes are BUILD work within task 11.
+**Criterion:** S4.5
+**Parent task:** 11
+**Done when:**
+- [test] S4.5 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-11-r2 is complete.
+
+### Task rem-prd-audit-11-r3: conductor.ts advanceTail kickback handling: pass the active child to bumpKickbackGateInLedger and countResolvedTasks only when the target is a region step; whole-feature targets (plan, coverage_binding) use the flat ledger and the ping-pong halt has no 'for child N' suffix; add a test with child 2 active asserting a manual_test kickback to plan changes no file under .pipeline/children/
+**Gate:** prd-audit
+**Rationale:** Verified (95%): conductor.ts:14209 passes this.activeRegionChild to bumpKickbackGateInLedger for every kickback target, including the whole-feature steps plan and coverage_binding. That violates task 11's doneWhen that kickbacks to plan or coverage_binding change only flat state and leave .pipeline/children/ untouched. This is a code fix inside task 11.
+**Criterion:** S4.7
+**Parent task:** 11
+**Done when:**
+- [test] S4.7 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-11-r3 is complete.
+
+### Task rem-prd-audit-1-r1: n1-golden-state.test.ts: commit the .docs/stories and .docs/complexity setup files before the run so the protected-artifact seal is not tripped, then re-record the flag-on-single-slice fixtures under test/fixtures/n1-golden/ and assert they equal the flag-on-unsliced outputs except the slice-membership and story-ownership envelope fields
+**Gate:** prd-audit
+**Rationale:** Verified (90%): the committed flag-on-single-slice goldens record build 'refused' and a 'Protected artifact added' halt. The cause is the n1-golden-state.test.ts setup writing .docs/stories and .docs/complexity after the init commit, so the cell does not match the flag-on-unsliced cell as task 1 requires. This is test-fixture work owned by task 1.
+**Criterion:** S17.4
+**Parent task:** 1
+**Done when:**
+- [test] S17.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-1-r1 is complete.
