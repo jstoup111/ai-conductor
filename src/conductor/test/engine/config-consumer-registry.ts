@@ -223,8 +223,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'stacked_prs.enabled': consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',
     STEP_RUNNERS,
-    'src/conductor/src/engine/daemon-dashboard.ts',
-    'src/conductor/src/engine/daemon-observe-cli.ts',
+    'src/conductor/src/engine/child-cursor.ts',
   ]),
   'stacked_prs.max_slices': consumer([
     'src/conductor/src/engine/engineer/land-spec.ts',

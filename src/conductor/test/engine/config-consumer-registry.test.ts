@@ -97,6 +97,17 @@ describe('config consumer registry', () => {
     });
   });
 
+  it('registers the BUILD child cursor as a direct stacked-PR enablement consumer', () => {
+    const childCursorSource = readFileSync(new URL('../../src/engine/child-cursor.ts', import.meta.url), 'utf8');
+
+    expect(childCursorSource).toContain('config.config.stacked_prs?.enabled === true');
+    expect(configConsumerRegistry['stacked_prs.enabled'].consumer).toEqual([
+      'src/conductor/src/engine/engineer/land-spec.ts',
+      'src/conductor/src/engine/step-runners.ts',
+      'src/conductor/src/engine/child-cursor.ts',
+    ]);
+  });
+
   it('derives nested command-entry validation and registry coverage from one key set', () => {
     expect(CONFIG_CONSUMER_KEY_SETS['test_suite.commands[]']).toEqual([
       'command', 'working_directory', 'timeout_seconds',
