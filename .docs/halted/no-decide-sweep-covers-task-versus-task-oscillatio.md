@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-10T10:14:44.727Z
 Slug: no-decide-sweep-covers-task-versus-task-oscillatio
 Class: needs-human
 Halting step: unknown
