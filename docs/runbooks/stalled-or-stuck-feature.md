@@ -1469,6 +1469,12 @@ rm -f .pipeline/HALT .pipeline/HALT.class
 
 `ai-conductor build-review record-reduced-coverage` does not apply to this halt.
 
+Each malformed-marker kickback also counts toward `build_review`'s cumulative convergence cap. When
+that cap is spent first, `.pipeline/HALT` begins `build_review cumulative kickback cap exceeded:`
+instead, with the malformed markers on its `Latest reason:` line. Correct and commit those tokens as
+above, but do not remove the halt files; recover the budget through
+[`kickback-budget`](#kickback-loops).
+
 ### build_review has a scope-incomplete candidate
 
 **Symptom:** `build_review` reports a mechanical fault whose cause is `scope-incomplete`; after the
