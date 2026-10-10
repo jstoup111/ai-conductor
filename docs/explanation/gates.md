@@ -455,6 +455,19 @@ requirements as context for intent when a PRD exists (FR-7). Each finding carrie
 | `PLAN_GAP` | The criterion is unmet and no plan task owns the repair. | Halts for the operator when the unmet criterion is a happy-path scenario; for a negative-path or edge scenario it is recorded in the verdict and the shipped record and the feature may ship, unless operator configuration requires a halt (FR-14). |
 | `OVER_SCOPE` | Shipped behavior goes beyond the planned implementation, judged against intent — the PRD's Goals/Non-Goals and In/Out Scope when a PRD exists, otherwise the stories plus the plan's stated outcome (FR-9). | A widening within intent is self-accepted and recorded. A widening outside intent with no user-visible effect is recorded in the verdict and the shipped record and the feature ships. Every outside-visible finding is presented in one decision block. An explicit accept applies only through its immutable original source/case reference and a fresh relationship. A refusal remains blocking. When every blocking outside-visible finding is refused and no projection defect exists, a daemon run with `prd_audit` lap allowance left routes the refusals to `/remediate`, which must return removal/rework-only tasks bound to each decision (`rem-prd-audit-refusal-<decisionId>`); the tasks append to the plan and the feature kicks back to `build`, charged to the same `prd_audit` lap and growth caps as `FIXABLE`. Otherwise — a pending finding alongside the refusals, a non-daemon run, a spent lap, a malformed ledger, or an unusable or unbound plan — it halts as “refused — rework required”; a spent growth allowance at dispatch halts as `kickback-cap`. The refused decision block offers an explicit revision linked to that refusal, never an implicit acceptance. Legacy attributed evidence remains available for reconciliation, while malformed or unsupported legacy history stays visible and halts with recovery rather than being treated as absent. |
 
+#### Waived PRD requirements
+
+A PRD requirement with no traced story criterion normally needs `PLAN_GAP` evidence. A requirement the
+feature's [coherence waiver](#waivers) discharges needs none: the audit neither grades it nor requires a
+criterion association. The projection reads `.docs/coherence-waivers/<plan-stem>.md` for the audited plan
+and lists each waived `FR-N` id, with the waiver's rationale, under the PRD's `waivedRequirements`.
+Discharge fails closed:
+
+- A missing waiver file, or one without a `Waives:` id list and a non-empty `Rationale:`, waives nothing.
+- A non-`FR` id, or an `FR` id that resolves to zero or several PRD sources, waives nothing; that
+  requirement still needs coverage.
+- A waiver file that exists but cannot be read fails the projection with a `coherence-waiver` fault.
+
 No SHIP-phase gate — `prd_audit`, the as-built review, or `manual_test` — can send work back to `build`
 that the approved plan does not authorize; every off-plan need is a halt or a recorded, non-blocking
 finding (FR-17). At this feature's ship, FR-17 is delivered for `prd_audit` and the as-built review only;
@@ -717,6 +730,9 @@ Three rules apply to both, and they are what makes a waiver a record rather than
   gap, and no waiver clears it. An undeterminable change set cannot be waived either — the gate does not
   know what it would be waiving. And a change that genuinely alters CLI, hook, or schema behavior needs a
   real migration block, not a waiver.
+
+`prd_audit` also reads a feature's coherence waiver, to exempt waived PRD requirements from audit
+coverage — see [waived PRD requirements](#waived-prd-requirements).
 
 ## What a gate is not
 
