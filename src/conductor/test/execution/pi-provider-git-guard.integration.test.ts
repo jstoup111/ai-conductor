@@ -1,5 +1,5 @@
-// Covers: task:2
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+// Covers: task:2, task:5
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa, type Options as ExecaOptions } from 'execa';
@@ -21,7 +21,7 @@ function fakePiEnvironment(): PiEnvironment {
       error.code = 'ENOENT';
       throw error;
     },
-    env: { PATH: process.env.PATH ?? '' },
+    env: { PATH: '/usr/local/bin:/usr/bin' },
     homeDir: () => '/test-home',
     cwd: () => '/test-project',
   };
@@ -73,5 +73,48 @@ describe('PiProvider prepared-worktree git guard integration', () => {
     expect(clean?.stderr).toContain('ai-conductor git guard: refused');
     await expect(readFile(untracked, 'utf8')).resolves.toBe('keep me\n');
     expect(result.gitGuardInstalled).toBe(true);
+  });
+
+  it('launches unguarded outside an engine-prepared worktree', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'pi-provider-git-guard-unprepared-'));
+    roots.push(fixture);
+    const repository = join(fixture, 'repository');
+    const linked = join(fixture, 'linked');
+    await mkdir(repository);
+    await initTestRepo(repository);
+    await execa('git', ['-C', repository, 'worktree', 'add', '-q', '-b', 'linked', linked]);
+
+    const cases = [
+      ['a non-repository directory', fixture],
+      ['an unprepared repository', repository],
+      ['a linked worktree without worktreeConfig', linked],
+    ] as const;
+
+    for (const [name, cwd] of cases) {
+      const spawns: Array<{ env?: Record<string, string | undefined> }> = [];
+      const subprocessFactory: PiSubprocessFactory = async (_file, _args, options: ExecaOptions) => {
+        spawns.push({ env: options.env });
+        return {
+          stdout: JSON.stringify({
+            type: 'message_end',
+            message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+          }),
+          stderr: '',
+          exitCode: 0,
+        };
+      };
+
+      const result = await new PiProvider('pi', subprocessFactory, fakePiEnvironment()).invoke({
+        prompt: 'Run the requested command.',
+        sessionId: `pi-git-guard-unprepared-${name}`,
+        resume: false,
+        cwd,
+      });
+
+      expect(spawns, name).toHaveLength(1);
+      expect(spawns[0]?.env?.PATH?.split(':').some((entry) => entry.includes('.pipeline/bin')) ?? false, name).toBe(false);
+      await expect(access(join(cwd, '.pipeline', 'bin', 'git')), name).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(result, name).toMatchObject({ success: true, gitGuardInstalled: false });
+    }
   });
 });
