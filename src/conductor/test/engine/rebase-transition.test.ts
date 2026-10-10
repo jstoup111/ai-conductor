@@ -12,6 +12,7 @@ import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { classifyRebaseOperation, rebaseOperationPublicationBlocker } from '../../src/engine/gate-code-validity.js';
 import { earliestUnsatisfiedGateIndex } from '../../src/engine/selector.js';
 import { readAllVerdicts } from '../../src/engine/gate-verdicts.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 
 function preservedCandidate(gate: 'build_review' | 'prd_audit' | 'test_suite', checkedAt = 2) {
   const original = { satisfied: true, checkedAt, reason: 'approved' };
@@ -237,7 +238,7 @@ describe('applyRebaseTransition', () => {
       satisfied: false,
       checkedAt: 1,
       kickback: { from: 'rebase', evidence: 'changed replay' },
-    }, 2);
+    }, parseChildId(2)!);
 
     const result = await applyRebaseTransition({
       projectRoot: dir,
@@ -247,11 +248,11 @@ describe('applyRebaseTransition', () => {
       invalidated: ['build_review'],
       preserved: [],
       preservedCandidates: [],
-      child: 2,
+      child: parseChildId(2)!,
     });
 
     expect(result.stateResult).toBe('applied');
-    expect(await readVerdict(dir, 'build_review', 2)).toMatchObject({
+    expect(await readVerdict(dir, 'build_review', parseChildId(2)!)).toMatchObject({
       satisfied: false,
       kickback: { from: 'rebase' },
     });

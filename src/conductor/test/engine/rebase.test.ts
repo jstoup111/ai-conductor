@@ -30,6 +30,7 @@ import {
 } from '../../src/engine/rebase.js';
 import { classifyGateInvalidation } from '../../src/engine/gate-invalidation.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -937,13 +938,13 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
   it('writes BUILD-region rebase invalidations to the active child while retaining feature gates', async () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
 
-    await applyRebaseVerdicts(dir, outcome, true, undefined, undefined, undefined, 2);
+    await applyRebaseVerdicts(dir, outcome, true, undefined, undefined, undefined, parseChildId(2)!);
 
-    expect(await readVerdict(dir, 'build', 2)).toMatchObject({
+    expect(await readVerdict(dir, 'build', parseChildId(2)!)).toMatchObject({
       satisfied: false,
       kickback: { from: 'rebase' },
     });
-    expect(await readVerdict(dir, 'build_review', 2)).toMatchObject({
+    expect(await readVerdict(dir, 'build_review', parseChildId(2)!)).toMatchObject({
       satisfied: false,
       kickback: { from: 'rebase' },
     });

@@ -120,7 +120,7 @@ describe('resumeRebaseFirst stacked-region guard', () => {
     await writeSentinel();
     const events = new ConductorEventEmitter();
     const skipped: unknown[] = [];
-    events.on('rebase_skipped_for_stack', (event) => skipped.push(event));
+    events.on('rebase_skipped_for_stack', (event) => { skipped.push(event); });
 
     await expect(resumeRebaseFirst({
       worktreePath: repository,
@@ -147,7 +147,7 @@ describe('resumeRebaseFirst stacked-region guard', () => {
     await writeSentinel();
     const events = new ConductorEventEmitter();
     const skipped: unknown[] = [];
-    events.on('rebase_skipped_for_stack', (event) => skipped.push(event));
+    events.on('rebase_skipped_for_stack', (event) => { skipped.push(event); });
     let rebaseCalls = 0;
 
     await expect(resumeRebaseFirst({

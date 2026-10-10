@@ -77,9 +77,9 @@ async function commitConfig(): Promise<void> {
 function events(): { emitter: ConductorEventEmitter; emitted: unknown[] } {
   const emitter = new ConductorEventEmitter();
   const emitted: unknown[] = [];
-  emitter.on('child_started', (event) => emitted.push(event));
-  emitter.on('child_closed', (event) => emitted.push(event));
-  emitter.on('child_switched', (event) => emitted.push(event));
+  emitter.on('child_started', (event) => { emitted.push(event); });
+  emitter.on('child_closed', (event) => { emitted.push(event); });
+  emitter.on('child_switched', (event) => { emitted.push(event); });
   return { emitter, emitted };
 }
 
@@ -289,7 +289,7 @@ describe('closeChild and moveLeaf', () => {
     await expect(startChild(repository, 'demo', secondChild.child, lifecycle.emitter)).resolves.toEqual({ kind: 'started' });
     await expect(switchToChild(repository, secondChild, lifecycle.emitter, firstChild)).resolves.toEqual({ kind: 'completed' });
 
-    expect(lifecycle.emitted.map((event) => event.type)).toEqual([
+    expect(lifecycle.emitted.map((event) => (event as { type: string }).type)).toEqual([
       'child_closed', 'child_switched', 'child_started',
     ]);
     expect(lifecycle.emitted).toMatchObject([

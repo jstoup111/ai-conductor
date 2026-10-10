@@ -56,7 +56,7 @@ describe('stacked BUILD region loop', () => {
     const dispatched: string[] = [];
     const events = new ConductorEventEmitter();
     const lifecycle: unknown[] = [];
-    events.on('child_started', (event) => lifecycle.push(event));
+    events.on('child_started', (event) => { lifecycle.push(event); });
     const conductor = new Conductor({
       projectRoot: root,
       stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
