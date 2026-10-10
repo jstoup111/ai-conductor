@@ -612,10 +612,11 @@ describe('integration/gate-loop', () => {
       // next (no navigateBack jump). The gate-driven tail's own selector
       // — independently of the front-half detection — later re-opens
       // architecture_review because its verdict is still unsatisfied on
-      // disk, exactly once, and the loop still converges.
+      // disk. As a gating step it retries through the configured auto-mode
+      // retry path before the loop converges.
       const conflictIdx = ran.indexOf('conflict_check');
       expect(ran[conflictIdx + 1]).toBe('plan');
-      expect(ran.filter((s) => s === 'architecture_review')).toHaveLength(1);
+      expect(ran.filter((s) => s === 'architecture_review')).toHaveLength(5);
       expect(completed).toBe(true);
 
       const finalState = JSON.parse(await readFile(statePath, 'utf-8'));

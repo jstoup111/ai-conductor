@@ -780,7 +780,7 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
     );
     await writeFile(
       join(dir, '.docs', 'decisions', 'adr-2026-09-08-streaming.md'),
-      `# ADR-001\n\n**Status:** ${opts.adrStatus ?? 'APPROVED'}\n\n## Decision\n\n1. **Use streaming.**\n`,
+      `# ADR-001\n\n**Status:** ${opts.adrStatus ?? 'APPROVED'}\n\n## Decision\n\n1. **Use streaming.**\n\n## Assumptions\n\nNo load-bearing assumptions.\n`,
     );
   }
 

@@ -116,6 +116,10 @@ const APPROVED_CITABLE_ADR = [
   '',
   '1. **Keep the decision citable.**',
   '',
+  '## Assumptions',
+  '',
+  'No load-bearing assumptions.',
+  '',
 ].join('\n');
 
 const APPROVED_UNCITABLE_ADR = [
@@ -144,6 +148,10 @@ const APPROVED_ATX_NUMBERED_ADR = [
   '',
   '### 3. Third',
   'Third body.',
+  '',
+  '## Assumptions',
+  '',
+  'No load-bearing assumptions.',
   '',
 ].join('\n');
 
