@@ -7,7 +7,7 @@ import {
   type CoverageBindingEnvelopeFilesystem,
 } from './coverage-binding-envelope.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
-import { makeGitRunner, type GitRunner } from './rebase.js';
+import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
 export type StartChildGitRunner = GitRunner;
@@ -197,7 +197,19 @@ export async function moveLeaf(
   const old = await runGit(git, ['rev-parse', '--verify', `refs/heads/${branch}`]);
   const oldTip = old?.stdout.trim();
   if (!old || old.exitCode !== 0 || !oldTip) return refused(`cannot resolve leaf branch ${branch}`);
-  const stray = await runGit(git, ['rev-list', `refs/heads/${branch}`, `^${tip}`]);
+  let defaultBranch: string | null;
+  try {
+    defaultBranch = await originDefaultBranch(git);
+  } catch {
+    return refused(`cannot determine origin default branch while moving leaf ${branch}`);
+  }
+  if (!defaultBranch) return refused(`cannot determine origin default branch while moving leaf ${branch}`);
+  const stray = await runGit(git, [
+    'rev-list',
+    `refs/heads/${branch}`,
+    `^${tip}`,
+    `^origin/${defaultBranch}`,
+  ]);
   if (!stray || stray.exitCode !== 0) return refused(`cannot inspect leaf branch ${branch}`);
   const strayTip = stray.stdout.split('\n').find(Boolean);
   if (strayTip) return refused(`cannot move leaf branch ${branch}; unrelated commit ${strayTip}`);

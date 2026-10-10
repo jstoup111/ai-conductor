@@ -5,7 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { startChild, switchToChild, type StartChildGitRunner } from '../../src/engine/child-lifecycle.js';
+import {
+  closeChild,
+  moveLeaf,
+  startChild,
+  switchToChild,
+  type StartChildGitRunner,
+} from '../../src/engine/child-lifecycle.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import {
   writeCoverageBindingEnvelope,
@@ -56,6 +62,16 @@ async function configure(maxSlices: number): Promise<void> {
     `  max_slices: ${maxSlices}`,
     '',
   ].join('\n'));
+}
+
+async function installOriginMainAt(tip: string): Promise<void> {
+  await git(['update-ref', 'refs/remotes/origin/main', tip]);
+  await git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+}
+
+async function commitConfig(): Promise<void> {
+  await git(['add', '.ai-conductor/config.yml']);
+  await git(['commit', '-qm', 'configure stack']);
 }
 
 function events(): { emitter: ConductorEventEmitter; emitted: unknown[] } {
@@ -227,5 +243,116 @@ describe('switchToChild', () => {
     expect(calls).toContainEqual(['switch', 'feat/c1/demo']);
     expect(calls.flat()).not.toContain('stash');
     expect(calls.flat()).not.toContain('--autostash');
+  });
+});
+
+describe('closeChild and moveLeaf', () => {
+  const firstChild = { child: parseChildId(1)!, position: parseChildId(1)!, branch: 'feat/c1/demo' };
+  const secondChild = { child: parseChildId(2)!, position: parseChildId(2)!, branch: 'feat/c2/demo' };
+
+  async function startFirstChild(): Promise<void> {
+    await configure(2);
+    await seal([1, 2]);
+    await commitConfig();
+    await startChild(repository, 'demo', firstChild.child, events().emitter);
+    await switchToChild(repository, firstChild, events().emitter);
+  }
+
+  it('closes child 1 at its tip and moves the two-child leaf without creating a child 2 ref', async () => {
+    const base = (await git(['rev-parse', 'HEAD'])).trim();
+    await installOriginMainAt(base);
+    await startFirstChild();
+    const childTip = await commit('C1');
+    const closed = events();
+
+    await expect(closeChild(repository, 'demo', firstChild, closed.emitter)).resolves.toEqual({ kind: 'completed' });
+    await expect(moveLeaf(repository, 'demo', childTip)).resolves.toEqual({ kind: 'completed' });
+
+    await expect(git(['rev-parse', 'refs/conductor/demo/closed/c1'])).resolves.toBe(`${childTip}\n`);
+    await expect(git(['rev-parse', 'feat/daemon-demo'])).resolves.toBe(`${childTip}\n`);
+    await expect(git(['show-ref', '--verify', '--quiet', 'refs/heads/feat/c2/demo'])).rejects.toMatchObject({ code: 1 });
+    expect(closed.emitted).toEqual([
+      { type: 'child_closed', child: 1, position: 1, branch: 'feat/c1/demo', tip: childTip },
+    ]);
+  });
+
+  it('persists child close, switch, and start in order before work begins on the next child', async () => {
+    await configure(3);
+    await seal([1, 2, 3]);
+    await commitConfig();
+    await startChild(repository, 'demo', firstChild.child, events().emitter);
+    await switchToChild(repository, firstChild, events().emitter);
+    await commit('C1');
+    const lifecycle = events();
+
+    await expect(closeChild(repository, 'demo', firstChild, lifecycle.emitter)).resolves.toEqual({ kind: 'completed' });
+    await expect(startChild(repository, 'demo', secondChild.child, lifecycle.emitter)).resolves.toEqual({ kind: 'started' });
+    await expect(switchToChild(repository, secondChild, lifecycle.emitter, firstChild)).resolves.toEqual({ kind: 'completed' });
+
+    expect(lifecycle.emitted.map((event) => event.type)).toEqual([
+      'child_closed', 'child_switched', 'child_started',
+    ]);
+    expect(lifecycle.emitted).toMatchObject([
+      { child: 1, position: 1, branch: 'feat/c1/demo' },
+      { from: 1, to: 2, position: 2, branch: 'feat/c2/demo' },
+      { child: 2, position: 2, branch: 'feat/c2/demo' },
+    ]);
+  });
+
+  it('refuses to move a leaf carrying a commit outside the child and origin main', async () => {
+    const base = (await git(['rev-parse', 'HEAD'])).trim();
+    await installOriginMainAt(base);
+    await startFirstChild();
+    const childTip = await commit('C1');
+    await git(['switch', 'feat/daemon-demo']);
+    const strayTip = await commit('stray leaf work');
+
+    await expect(moveLeaf(repository, 'demo', childTip)).resolves.toMatchObject({
+      kind: 'refused', reason: expect.stringContaining(strayTip),
+    });
+    await expect(git(['rev-parse', 'feat/daemon-demo'])).resolves.toBe(`${strayTip}\n`);
+  });
+
+  it('refuses a leaf compare-and-swap race and retains the concurrently written tip', async () => {
+    const base = (await git(['rev-parse', 'HEAD'])).trim();
+    await installOriginMainAt(base);
+    await startFirstChild();
+    const childTip = await commit('C1');
+    await git(['switch', 'feat/daemon-demo']);
+    const concurrentTip = await commit('concurrent leaf work');
+    await git(['reset', '--hard', base]);
+    const leafRef = 'refs/heads/feat/daemon-demo';
+    const gitRunner: StartChildGitRunner = async (args) => {
+      if (args[0] === 'update-ref' && args[1] === leafRef) {
+        await git(['update-ref', leafRef, concurrentTip]);
+        return { exitCode: 1, stdout: '', stderr: 'cannot lock ref' };
+      }
+      try {
+        return { exitCode: 0, stdout: await git(args), stderr: '' };
+      } catch (error: unknown) {
+        return { exitCode: (error as { code?: number }).code ?? 1, stdout: '', stderr: '' };
+      }
+    };
+
+    await expect(moveLeaf(repository, 'demo', childTip, { git: gitRunner })).resolves.toMatchObject({
+      kind: 'refused', reason: expect.stringContaining('concurrent update'),
+    });
+    await expect(git(['rev-parse', 'feat/daemon-demo'])).resolves.toBe(`${concurrentTip}\n`);
+  });
+
+  it('moves from a pre-region halt-record tip once the child closes', async () => {
+    await configure(2);
+    await seal([1, 2]);
+    await commitConfig();
+    const base = (await git(['rev-parse', 'HEAD'])).trim();
+    await installOriginMainAt(base);
+    const haltTip = await commit('H');
+    await startChild(repository, 'demo', firstChild.child, events().emitter);
+    await switchToChild(repository, firstChild, events().emitter);
+    const childTip = await commit('C1');
+
+    await expect(moveLeaf(repository, 'demo', childTip)).resolves.toEqual({ kind: 'completed' });
+    expect(haltTip).not.toBe(childTip);
+    await expect(git(['rev-parse', 'feat/daemon-demo'])).resolves.toBe(`${childTip}\n`);
   });
 });
