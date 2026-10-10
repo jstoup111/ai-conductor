@@ -146,9 +146,18 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const unavailable = unreadableKickbackGates(ledger).filter((gate) => GATES.has(gate));
     const readable = [...GATES].filter((gate) => !unavailable.includes(gate));
     const liveHaltGeneration = await readKickbackHaltGeneration(worktree);
-    const views = readable.map((gate) => kickbackBudgetView(ledger.gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration));
+    const pendingLaps = (gate: string) =>
+      gate === 'prd_audit' || gate === 'architecture_review_as_built'
+        ? ledger.pendingRepair?.charges[gate]?.laps ?? 0
+        : 0;
+    const views = readable.map((gate) => kickbackBudgetView(
+      ledger.gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration, pendingLaps(gate),
+    ));
     const human = [
-        ...views.map((view) => renderKickbackBudgetView(ledger.gates[view.gate], view.gate, defaults[view.gate], planGrowth, liveHaltGeneration)),
+        ...views.map((view) => renderKickbackBudgetView(
+          ledger.gates[view.gate], view.gate, defaults[view.gate], planGrowth, liveHaltGeneration,
+          undefined, pendingLaps(view.gate),
+        )),
         ...unavailable.map((gate) => `${gate}: budget unavailable (durable entry failed validation)`),
       ].join('\n\n');
     print(command.format === 'json'
