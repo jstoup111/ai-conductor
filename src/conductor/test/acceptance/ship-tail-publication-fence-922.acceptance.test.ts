@@ -27,7 +27,7 @@ describe('SHIP-tail publication fence (#922)', () => {
 
   async function writeAsBuiltApproval(dir: string, options?: StepRunOptions): Promise<void> {
     await persistAsBuiltVerdict(dir, {
-      version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+      version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
     }, {
       attemptId: options?.runId ?? 'test-run',
       codeStamp: null,

@@ -3,10 +3,12 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import {
-  AS_BUILT_VERDICT_CONTRACT_VERSION,
+  isAsBuiltGoverningReference,
+  stampAsBuiltFindingIds,
   validateAsBuiltVerdict,
   type AsBuiltFinding,
   type AsBuiltGoverningReference,
+  type AsBuiltProviderVerdict,
   type AsBuiltVerdict,
 } from './as-built-contract.js';
 import { AS_BUILT_CHECKS, type AsBuiltPolicy } from './as-built-policy.js';
@@ -33,6 +35,8 @@ export interface PersistedAsBuiltVerdict {
 
 export type ReadAsBuiltVerdictResult =
   | { readonly kind: 'absent' }
+  /** A valid v1 envelope is stale authority, not a malformed v2 verdict. */
+  | { readonly kind: 'prior-version'; readonly version: 'v1' }
   | { readonly kind: 'unreadable'; readonly reason: string }
   | { readonly kind: 'present'; readonly value: PersistedAsBuiltVerdict };
 
@@ -50,14 +54,48 @@ function validPolicy(value: unknown): value is AsBuiltPolicy {
 function validRecordedFinding(value: unknown): value is RecordedAsBuiltFinding {
   if (!isRecord(value) || typeof value.id !== 'string' || typeof value.summary !== 'string' ||
     typeof value.outcome !== 'string' || (value.class !== 'REMEDIABLE' && value.class !== 'DESIGN')) return false;
-  if (value.reference === undefined) return true;
-  const probe = validateAsBuiltVerdict({
-    version: AS_BUILT_VERDICT_CONTRACT_VERSION,
-    verdict: 'BLOCKED', reachability: [], driftNotes: [],
-    findings: [{ id: value.id, class: value.class, reference: value.reference, summary: value.summary }],
-    violations: 'recorded finding validation', resolution: 'recorded finding validation',
+  if (value.class === 'REMEDIABLE') return value.reference !== undefined && isAsBuiltGoverningReference(value.reference);
+  return value.reference === undefined || isAsBuiltGoverningReference(value.reference);
+}
+
+function isPriorAsBuiltVerdict(value: unknown): value is { readonly version: 'v1' } {
+  return isRecord(value) && value.version === 'v1';
+}
+
+type PersistedVerdictValidation =
+  | { readonly ok: true; readonly verdict: AsBuiltVerdict }
+  | { readonly ok: false; readonly field: string; readonly requirement: string };
+
+/** Persisted v2 findings must be the exact engine stamp of the provider contract result. */
+function validatePersistedAsBuiltVerdict(value: unknown, attemptId: string): PersistedVerdictValidation {
+  if (!isRecord(value)) return { ok: false, field: '', requirement: 'a verdict object is required' };
+  const rawFindings = value.verdict === 'BLOCKED' && Array.isArray(value.findings) ? value.findings : undefined;
+  if (value.verdict === 'BLOCKED' && rawFindings === undefined) {
+    return { ok: false, field: 'findings', requirement: 'an array of blocking findings is required' };
+  }
+  const providerFindings = rawFindings?.map((finding: unknown, index: number) => {
+    if (!isRecord(finding) || typeof finding.id !== 'string' || finding.id.length === 0) {
+      return { error: { ok: false as const, field: `findings[${index}].id`, requirement: 'an engine-stamped finding id is required' } };
+    }
+    const { id: _id, ...providerFinding } = finding;
+    return { providerFinding };
   });
-  return probe.ok;
+  const badFinding = providerFindings?.find((entry) => 'error' in entry);
+  if (badFinding !== undefined && 'error' in badFinding) return badFinding.error!;
+  const providerValue = rawFindings === undefined
+    ? value
+    : { ...value, findings: providerFindings!.map((entry) => ('providerFinding' in entry ? entry.providerFinding : undefined)) };
+  const checked = validateAsBuiltVerdict(providerValue);
+  if (!checked.ok) return checked;
+  const stamped = stampAsBuiltFindingIds(checked.verdict, attemptId);
+  if (stamped.verdict === 'BLOCKED' && rawFindings !== undefined) {
+    for (const [index, finding] of stamped.findings.entries()) {
+      if ((rawFindings[index] as Record<string, unknown>).id !== finding.id) {
+        return { ok: false, field: `findings[${index}].id`, requirement: 'the engine-stamped id must match the persisted attempt and ordinal' };
+      }
+    }
+  }
+  return { ok: true, verdict: stamped };
 }
 
 function renderReference(reference: AsBuiltGoverningReference | undefined): string {
@@ -115,13 +153,17 @@ async function atomicWrite(path: string, contents: string): Promise<void> {
 
 export async function persistAsBuiltVerdict(
   worktree: string,
-  verdict: AsBuiltVerdict,
+  verdict: AsBuiltProviderVerdict | AsBuiltVerdict,
   input: { readonly attemptId: string; readonly codeStamp: string | null; readonly policy: AsBuiltPolicy; readonly recordedFindings?: readonly RecordedAsBuiltFinding[] },
 ): Promise<PersistedAsBuiltVerdict> {
+  // Persistence is the final authority boundary. Stamp here as well as at
+  // dispatch validation so every writer, including recovery paths, records
+  // only attempt-qualified identities.
+  const stampedVerdict = stampAsBuiltFindingIds(verdict, input.attemptId);
   const value: PersistedAsBuiltVerdict = {
     attemptId: input.attemptId,
     codeStamp: input.codeStamp,
-    verdict,
+    verdict: stampedVerdict,
     policy: input.policy,
     recordedFindings: input.recordedFindings ?? [],
   };
@@ -146,7 +188,10 @@ export async function readAsBuiltVerdict(worktree: string): Promise<ReadAsBuiltV
     (raw.codeStamp !== null && typeof raw.codeStamp !== 'string') || !validPolicy(raw.policy) || !Array.isArray(raw.recordedFindings)) {
     return { kind: 'unreadable', reason: `${AS_BUILT_VERDICT_PATH} has an invalid persisted envelope` };
   }
-  const checked = validateAsBuiltVerdict(raw.verdict);
+  // D1.2: a prior contract is stale evidence. Reading it must be side-effect
+  // free so only the next reviewer dispatch can author the replacement v2 verdict.
+  if (isPriorAsBuiltVerdict(raw.verdict)) return { kind: 'prior-version', version: 'v1' };
+  const checked = validatePersistedAsBuiltVerdict(raw.verdict, raw.attemptId);
   if (!checked.ok) return { kind: 'unreadable', reason: `${AS_BUILT_VERDICT_PATH} has invalid verdict field ${checked.field}: ${checked.requirement}` };
   if (!raw.recordedFindings.every(validRecordedFinding)) {
     return { kind: 'unreadable', reason: `${AS_BUILT_VERDICT_PATH} has invalid recorded findings` };

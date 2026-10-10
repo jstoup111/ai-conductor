@@ -9,6 +9,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { CUSTOM_COMPLETION_PREDICATES, STEP_ARTIFACT_GLOBS } from '../../src/engine/artifacts.js';
 import type { ConductState, StepDefinition, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { persistFixtureTestRemediationPlan } from './remediation-plan-fixtures.js';
 
 let projectRoot: string;
 const originalPlanCompletion = CUSTOM_COMPLETION_PREDICATES.plan;
@@ -35,19 +36,15 @@ afterEach(async () => {
 });
 
 async function planRemediation(
-  dispositions: unknown[],
+  dispositions: Parameters<typeof persistFixtureTestRemediationPlan>[2],
   steps: StepDefinition[] = ALL_STEPS,
   state: ConductState = { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
 ) {
   const dispatched: StepName[] = [];
   const runner: StepRunner = {
-    run: async (step) => {
+    run: async (step, _state, options) => {
       dispatched.push(step);
-      await writeFile(
-        join(projectRoot, '.pipeline/remediation.json'),
-        JSON.stringify({ dispositions }),
-        'utf8',
-      );
+      await persistFixtureTestRemediationPlan(projectRoot, options, dispositions);
       return { success: true };
     },
   };
@@ -61,6 +58,11 @@ async function planRemediation(
     verifyArtifacts: false,
     maxRetries: 1,
   });
+  // planRemediation is exercised directly below, rather than through run(),
+  // whose initialization establishes the state-transition baseline before a
+  // validator fault persists its terminal state.
+  await writeFile(join(projectRoot, '.pipeline/conduct-state.json'), JSON.stringify(state), 'utf8');
+  (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...state };
 
   const outcome = await (conductor as unknown as {
     planRemediation: (
@@ -72,8 +74,8 @@ async function planRemediation(
   }).planRemediation(
     state,
     steps,
-    'prd audit blocked',
-    { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
+    'finish verification blocked',
+    { source: 'finish-verification', evidenceFile: '.pipeline/finish-verification.md' },
   );
 
   return { dispatched, outcome };
@@ -101,16 +103,16 @@ const planGap = {
   }],
 };
 
-const unresolvableDisposition = 'acceptance_specs';
-const stepsWithoutAcceptanceSpecs = ALL_STEPS.filter(
+const unresolvableDisposition = 'build';
+const stepsWithoutBuild = ALL_STEPS.filter(
   (step) => step.name !== unresolvableDisposition,
 ) as typeof ALL_STEPS;
 
 describe('planRemediation unresolvable disposition handling', () => {
   it('halts naming a disposition that does not resolve to a step', async () => {
     const { outcome } = await planRemediation(
-      [{ ...buildGap, disposition: unresolvableDisposition }],
-      stepsWithoutAcceptanceSpecs,
+      [buildGap],
+      stepsWithoutBuild,
     );
 
     expect(outcome).toMatchObject({
@@ -127,8 +129,8 @@ describe('planRemediation unresolvable disposition handling', () => {
 
   it('halts a mixed ledger instead of routing its resolvable BUILD subset', async () => {
     const { outcome } = await planRemediation(
-      [buildGap, { ...buildGap, id: 'unknown-gap', disposition: unresolvableDisposition }],
-      stepsWithoutAcceptanceSpecs,
+      [buildGap, { ...buildGap, id: 'unknown-gap' }],
+      stepsWithoutBuild,
     );
 
     expect(outcome).toMatchObject({

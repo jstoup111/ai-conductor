@@ -9,6 +9,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
+import { persistFixtureRemediationPlan } from '../engine/remediation-plan-fixtures.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for `.docs/stories/daemon-mode-route-halt-user-input-
@@ -124,6 +125,26 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
     await writeFile(join(dir, '.pipeline/halt-user-input-required'), question);
   }
 
+  async function persistStallPlan(
+    dir: string,
+    options: Parameters<StepRunner['run']>[2],
+    disposition: 'build' | 'plan' | 'halt',
+    rationale: string,
+    category: string | null = null,
+  ): Promise<void> {
+    await persistFixtureRemediationPlan(dir, options, {
+      version: 'v1',
+      dispositions: [{
+        reference: { kind: 'stall', id: 'stall:daemon-stall-fixture' },
+        disposition,
+        category,
+        rationale,
+        tasks: [],
+        boundTaskIds: [],
+      }],
+    });
+  }
+
   async function readHaltFile(dir: string): Promise<string | null> {
     try {
       return await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
@@ -159,7 +180,7 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
 
       const calls: Array<{ step: StepName; retryReason?: string }> = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts) => {
           calls.push({ step, retryReason: opts?.retryReason });
           if (step === 'build') {
             const buildCalls = calls.filter((c) => c.step === 'build').length;
@@ -172,20 +193,7 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
               await writeTaskStatus(dir, 5, 5);
             }
           } else if (step === 'remediate') {
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: 'stall:auth-provider',
-                    disposition: 'build',
-                    category: null,
-                    rationale: 'Use Auth0 — matches the existing SSO integration.',
-                    tasks: [],
-                  },
-                ],
-              }),
-            );
+            await persistStallPlan(dir, opts, 'build', 'Use Auth0 — matches the existing SSO integration.');
           } else if (step === 'manual_test') {
             await writeFile(
               join(dir, '.pipeline/manual-test-results.md'),
@@ -245,25 +253,12 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
       await seedRepo(dir, statePath);
 
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, opts) => {
           if (step === 'build') {
             await writeTaskStatus(dir, 2, 5);
             await writeHaltMarker(dir, QUESTION_1);
           } else if (step === 'remediate') {
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: 'stall:auth-provider',
-                    disposition: 'plan',
-                    category: null,
-                    rationale: 'Needs a re-plan, not a build answer.',
-                    tasks: [],
-                  },
-                ],
-              }),
-            );
+            await persistStallPlan(dir, opts, 'plan', 'Needs a re-plan, not a build answer.');
           }
           return { success: true } as StepRunResult;
         }),
@@ -301,24 +296,17 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
       await seedRepo(dir, statePath);
 
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, opts) => {
           if (step === 'build') {
             await writeTaskStatus(dir, 2, 5);
             await writeHaltMarker(dir, QUESTION_1);
           } else if (step === 'remediate') {
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: 'stall:auth-provider',
-                    disposition: 'halt',
-                    category: 'product-scope',
-                    rationale: 'Choice of auth provider is a product decision.',
-                    tasks: [],
-                  },
-                ],
-              }),
+            await persistStallPlan(
+              dir,
+              opts,
+              'halt',
+              'Choice of auth provider is a product decision.',
+              'product-scope',
             );
           }
           return { success: true } as StepRunResult;
@@ -471,6 +459,91 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
     }
   });
 
+  // Covers: task:25
+  // Planner exhaustion keeps the last engine-owned fault
+  // rather than replacing it with the pre-typed-plan "missing or invalid"
+  // wording. Stub only the planner boundary: this test owns the real daemon
+  // build-stall routing, marker writer, and terminal observation.
+  it('keeps the build-stall question first and the final planner fault on exhaustion', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'stall-planner-exhaustion-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedRepo(dir, statePath);
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            await writeTaskStatus(dir, 2, 5);
+            await writeHaltMarker(dir, QUESTION_1);
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+      const conductor = makeConductor(dir, statePath, runner, new ConductorEventEmitter());
+      const sources: string[] = [];
+      (conductor as unknown as {
+        planRemediation: (
+          state: ConductState,
+          steps: unknown,
+          context: string,
+          hint: { source: string },
+        ) => Promise<{ kind: 'none'; reason: string }>;
+      }).planRemediation = vi.fn(async (_state, _steps, _context, hint) => {
+        sources.push(hint.source);
+        return { kind: 'none' as const, reason: 'last planner fault: structured result missing' };
+      });
+
+      await conductor.run();
+
+      expect(sources).toEqual(['build_stall']);
+      const halt = await readHaltFile(dir);
+      expect(halt).not.toBeNull();
+      expect((halt as string).split('\n').find((line) => line.trim())).toBe(QUESTION_1);
+      expect(halt).toContain('Remediation planner fault: last planner fault: structured result missing');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:25
+  // The zero-work branch deliberately retains its retry and
+  // auto-park semantics. It must nevertheless carry the exhausted planner
+  // fault through the existing terminal stall HALT.
+  it('keeps the final planner fault on the zero-work build-stall terminal path', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'zero-work-planner-exhaustion-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedRepo(dir, statePath);
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') await writeTaskStatus(dir, 2, 5);
+          return { success: true } as StepRunResult;
+        }),
+      };
+      const conductor = makeConductor(dir, statePath, runner, new ConductorEventEmitter());
+      const sources: string[] = [];
+      (conductor as unknown as {
+        planRemediation: (
+          state: ConductState,
+          steps: unknown,
+          context: string,
+          hint: { source: string },
+        ) => Promise<{ kind: 'none'; reason: string }>;
+      }).planRemediation = vi.fn(async (_state, _steps, _context, hint) => {
+        sources.push(hint.source);
+        return { kind: 'none' as const, reason: 'last planner fault: attempt allowance exhausted' };
+      });
+
+      await conductor.run();
+
+      expect(sources).toEqual(['build_stall_zero_work', 'build_stall_zero_work']);
+      const halt = await readHaltFile(dir);
+      expect(halt).toContain('build stalled: no task progress');
+      expect(halt).toContain('Remediation planner fault: last planner fault: attempt allowance exhausted');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // ── E. third stall in one run has no budget left ──
   it('exhausts the shared remediation budget on the third stall and fail-safe HALTs with the third question', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'stall-budget-exhausted-'));
@@ -490,23 +563,6 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
             } else {
               await writeTaskStatus(dir, 5, 5);
             }
-          } else if (step === 'remediate') {
-            // Answer every dispatched round (rounds 1 and 2 only — round 3 is
-            // never dispatched because the budget is exhausted).
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: `stall:round-${stallIndex}`,
-                    disposition: 'build',
-                    category: null,
-                    rationale: `answered round ${stallIndex}`,
-                    tasks: [],
-                  },
-                ],
-              }),
-            );
           }
           return { success: true } as StepRunResult;
         }),
@@ -519,12 +575,17 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
       });
 
       const conductor = makeConductor(dir, statePath, runner, events);
+      const planRemediation = vi.fn(async () => ({
+        kind: 'route' as const,
+        target: 'build' as const,
+        hint: 'answer the current stall question',
+        evidence: 'fixture stall answer',
+      }));
+      (conductor as unknown as { planRemediation: typeof planRemediation }).planRemediation = planRemediation;
       await conductor.run();
 
-      const runnerMock = vi.mocked(runner.run);
-      const remediateCalls = runnerMock.mock.calls.filter((c) => c[0] === 'remediate');
       // Cap is 2 — only the first two stalls got a remediation round.
-      expect(remediateCalls).toHaveLength(MAX_KICKBACKS_PER_GATE);
+      expect(planRemediation).toHaveBeenCalledTimes(MAX_KICKBACKS_PER_GATE);
 
       expect(halted).toBe(true);
       const halt = await readHaltFile(dir);
@@ -557,21 +618,6 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
             } else {
               await writeTaskStatus(dir, 5, 5);
             }
-          } else if (step === 'remediate') {
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: `stall:round-${stallIndex}`,
-                    disposition: 'build',
-                    category: null,
-                    rationale: `answered round ${stallIndex}`,
-                    tasks: [],
-                  },
-                ],
-              }),
-            );
           } else if (step === 'manual_test') {
             await writeFile(
               join(dir, '.pipeline/manual-test-results.md'),
@@ -593,14 +639,19 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
 
       const events = new ConductorEventEmitter();
       const conductor = makeConductor(dir, statePath, runner, events);
+      const planRemediation = vi.fn(async () => ({
+        kind: 'route' as const,
+        target: 'build' as const,
+        hint: 'answer the current stall question',
+        evidence: 'fixture stall answer',
+      }));
+      (conductor as unknown as { planRemediation: typeof planRemediation }).planRemediation = planRemediation;
       await conductor.run();
 
-      const runnerMock = vi.mocked(runner.run);
-      const remediateCalls = runnerMock.mock.calls.filter((c) => c[0] === 'remediate');
       // Exactly 2 remediation dispatches total (both from the build stalls) —
       // the prd_audit gate never got a third round, proving the counter is
       // shared across trigger types rather than reset per-gate.
-      expect(remediateCalls).toHaveLength(MAX_KICKBACKS_PER_GATE);
+      expect(planRemediation).toHaveBeenCalledTimes(MAX_KICKBACKS_PER_GATE);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

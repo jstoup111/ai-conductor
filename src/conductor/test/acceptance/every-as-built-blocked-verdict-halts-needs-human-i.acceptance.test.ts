@@ -27,6 +27,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { persistFixtureProjectedRemediationPlan } from '../engine/remediation-plan-fixtures.js';
 
 const roots: string[] = [];
 const SLUG = 'as-built-remediable-acceptance';
@@ -78,7 +79,7 @@ async function writePrdAuditVerdict(
 
 async function writeRemediableAsBuiltVerdict(root: string, runId: string | undefined): Promise<void> {
   await persistAsBuiltVerdict(root, {
-    version: 'v1',
+    version: 'v2',
     verdict: 'BLOCKED',
     reachability: [],
     driftNotes: [],
@@ -99,7 +100,7 @@ async function writeRemediableAsBuiltVerdict(root: string, runId: string | undef
 
 async function writeMixedDesignAsBuiltVerdict(root: string, runId: string | undefined): Promise<void> {
   await persistAsBuiltVerdict(root, {
-    version: 'v1',
+    version: 'v2',
     verdict: 'BLOCKED',
     reachability: [],
     driftNotes: [],
@@ -216,20 +217,13 @@ describe('acceptance: an all-REMEDIABLE as-built verdict returns the daemon to B
         } else if (step === 'architecture_review_as_built') {
           await writeRemediableAsBuiltVerdict(root, options?.runId);
         } else if (step === 'remediate') {
-          await writeFile(
-            join(root, '.pipeline', 'remediation.json'),
-            JSON.stringify({
-              dispositions: [
-                {
-                  id: 'AB-1',
-                  disposition: 'build',
-                  category: null,
-                  rationale: 'Implement the behavior already required by Task 1.',
-                  tasks: [{ id: 'wire-live-gate', title: 'Wire the approved behavior into the live gate' }],
-                },
-              ],
-            }),
-          );
+          await persistFixtureProjectedRemediationPlan(root, options, [{
+            id: 'AB-1',
+            disposition: 'build',
+            category: null,
+            rationale: 'Implement the behavior already required by Task 1.',
+            tasks: [{ id: 'wire-live-gate', title: 'Wire the approved behavior into the live gate' }],
+          }]);
         } else if (step === 'build') {
           await writeFile(
             join(root, '.pipeline', 'HALT'),
@@ -354,7 +348,7 @@ describe('acceptance: a serial as-built kickback-to-build no-op is a capped term
     expect(halt).toContain('as-built architecture review kickback-to-build no-op');
     expect(haltClass.trim()).toBe('kickback-cap');
     expect(halt).toContain('Blocking findings:');
-    expect(halt).toContain('AB-1 (REMEDIABLE; plan task 1): The approved task is not wired into the live gate.');
+    expect(halt).toContain('(REMEDIABLE; plan task 1): The approved task is not wired into the live gate.');
   });
 });
 
@@ -377,27 +371,13 @@ describe('acceptance: a mixed DESIGN as-built report appends no as-built work', 
         } else if (step === 'architecture_review_as_built') {
           await writeMixedDesignAsBuiltVerdict(root, options?.runId);
         } else if (step === 'remediate') {
-          await writeFile(
-            join(root, '.pipeline', 'remediation.json'),
-            JSON.stringify({
-              dispositions: [
-                {
-                  id: 'S3.1',
-                  disposition: 'build',
-                  category: null,
-                  rationale: 'Satisfy the criterion.',
-                  tasks: [{ id: 'prd-fix', title: 'Satisfy S3.1' }],
-                },
-                {
-                  id: 'AB-1',
-                  disposition: 'build',
-                  category: null,
-                  rationale: 'Implement the behavior already required by Task 1.',
-                  tasks: [{ id: 'wire-live-gate', title: 'Wire the approved behavior' }],
-                },
-              ],
-            }),
-          );
+          await persistFixtureProjectedRemediationPlan(root, options, [{
+            id: 'S3.1',
+            disposition: 'build',
+            category: null,
+            rationale: 'Satisfy the criterion.',
+            tasks: [{ id: 'prd-fix', title: 'Satisfy S3.1' }],
+          }]);
         }
         return { success: true };
       }),
@@ -420,12 +400,12 @@ describe('acceptance: a mixed DESIGN as-built report appends no as-built work', 
     await conductor.run();
 
     const plan = await readFile(join(root, '.docs', 'plans', `${SLUG}.md`), 'utf8');
+    // Covers: task:rem-prd-audit-rem-prd-audit-s7-1-2
     // The DESIGN row withholds as-built remediation authority entirely, so no
     // as-built gap is admitted and no rem-as-built task is appended...
     expect(plan).not.toContain('rem-as-built-');
-    // ...while PRD-owned work, which has its own evidence and authority, still
-    // proceeds. Before this fix the terminal as-built evidence poisoned the
-    // whole mixed admission and NEITHER gate's work was appended.
+    // Terminal DESIGN evidence is withheld from the projection, but it cannot
+    // erase the independent PRD-audit repair admitted in this joined round.
     expect(plan).toContain('rem-prd-audit-');
     // The whole report still halts needs-human for the DESIGN row.
     const haltClass = await readFile(join(root, '.pipeline', 'HALT.class'), 'utf8').catch(() => '');

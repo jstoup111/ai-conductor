@@ -127,9 +127,9 @@ describe('acceptance: stale judged-gate pre-dispatch preservation (#2639)', () =
       }, { attemptId: 'seeded-run', codeStamp: stamp ? baseline : null });
     } else if (gate === 'architecture_review_as_built') {
       await persistAsBuiltVerdict(root, clean
-        ? { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] }
+        ? { version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] }
         : {
-          version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+          version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
           findings: [{ id: 'ARCH-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'unclean' }],
           violations: 'unclean', resolution: 'repair it',
         }, {

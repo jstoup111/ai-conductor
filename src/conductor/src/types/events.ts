@@ -1194,12 +1194,12 @@ type ConductorEventBody =
       directingSource?: 'task title' | 'rationale';
     }
   | {
-      /** A remediation planner disposition was not recognized by the engine. */
+      /** A remediation planner disposition field was rejected by the engine. */
       type: 'remediation_disposition_rejected';
       gapId: string;
       disposition: string;
       accepted: string[];
-      field?: 'disposition' | 'category';
+      field?: 'disposition' | 'category' | 'boundTaskIds';
     }
   | ({
       /**

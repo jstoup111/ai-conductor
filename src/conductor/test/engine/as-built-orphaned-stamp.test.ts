@@ -35,7 +35,7 @@ async function repoWithApprovedVerdict(): Promise<{ repo: string; git: ReturnTyp
   await git(['add', '.']);
   await git(['commit', '-q', '-m', 'init']);
   const stamp = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-  await persistAsBuiltVerdict(repo, { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] },
+  await persistAsBuiltVerdict(repo, { version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] },
     { attemptId: 'attempt-1', codeStamp: stamp, policy });
   return { repo, git, stamp };
 }

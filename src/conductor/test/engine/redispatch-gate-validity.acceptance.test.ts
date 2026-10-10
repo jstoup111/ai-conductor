@@ -232,7 +232,7 @@ async function writeAsBuiltApprovedVerdict(
   attemptId = 'fixture-run',
 ): Promise<void> {
   await persistAsBuiltVerdict(repo, {
-    version: 'v1',
+    version: 'v2',
     verdict: 'APPROVED',
     reachability: [],
     driftNotes: [],

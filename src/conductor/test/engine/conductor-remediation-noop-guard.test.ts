@@ -26,11 +26,13 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { readKickbackLedger, settlePendingRepair } from '../../src/engine/kickback-ledger.js';
 import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { persistFixtureRemediationPlan } from './remediation-plan-fixtures.js';
 
 const execFile = promisify(execFileCb);
 
 let dir: string;
 let planPath: string;
+let nextRemediationPlan: unknown;
 
 async function git(...args: string[]): Promise<string> {
   const { stdout } = await execFile(
@@ -42,26 +44,29 @@ async function git(...args: string[]): Promise<string> {
 }
 
 async function writeRemediationJson(disposition: 'build' | 'acceptance_specs'): Promise<void> {
-  await writeFile(
-    join(dir, '.pipeline/remediation.json'),
-    JSON.stringify({
-      dispositions: [
-        {
-          id: 'test:gap-1',
-          disposition,
-          category: null,
-          rationale: 'residual gap',
-          tasks: [{ id: 'rem-1', title: 'fix the missing behavior' }],
-        },
-      ],
-    }),
-  );
+  // `test` is the typed, engine-projected reference for this
+  // finish-verification-shaped survivor.  The fake runner persists it only
+  // through the production validator/store seam below.
+  nextRemediationPlan = {
+    version: 'v1',
+    dispositions: [{
+      reference: { kind: 'test', id: 'test:gap-1' },
+      disposition,
+      category: null,
+      rationale: 'residual gap',
+      tasks: [{ id: 'rem-1', title: 'fix the missing behavior' }],
+      boundTaskIds: [],
+    }],
+  };
 }
 
 function makeRunner(onRun?: (step: StepName) => Promise<void>): StepRunner {
   return {
-    run: async (step, _state) => {
+    run: async (step, _state, options) => {
       if (onRun) await onRun(step);
+      if (step === 'remediate' && nextRemediationPlan !== undefined) {
+        await persistFixtureRemediationPlan(dir, options, nextRemediationPlan);
+      }
       return { success: true };
     },
   };
@@ -85,6 +90,7 @@ const sessionStartedAt = Date.now() - 1000;
 const baseState: ConductState = { session_started_at: sessionStartedAt } as unknown as ConductState;
 
 beforeEach(async () => {
+  nextRemediationPlan = undefined;
   dir = await mkdtemp(join(tmpdir(), 'remediation-noop-guard-'));
   await mkdir(join(dir, '.pipeline'), { recursive: true });
   await mkdir(join(dir, '.docs/plans'), { recursive: true });
@@ -152,14 +158,16 @@ describe('planRemediation D1: route-into-no-op guard (plan Task 2)', () => {
     });
 
     const conductor = makeConductor({
-      run: async (step) => {
+      run: async (step, _state, options) => {
         expect(step).toBe('remediate');
-        await writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify({
+        await persistFixtureRemediationPlan(dir, options, {
+          version: 'v1',
           dispositions: [{
-            id: 'S1.1', disposition: 'build', category: null, rationale: 'repair it',
-            tasks: [{ id: taskId, title: 'already completed repair' }],
+            reference: { kind: 'prd-criterion', id: 'S1.1' },
+            disposition: 'build', category: null, rationale: 'repair it',
+            tasks: [{ id: taskId, title: 'already completed repair' }], boundTaskIds: [],
           }],
-        }));
+        });
         return { success: true };
       },
     }, { prd_audit: { max_remediation_laps: 2, max_appended_tasks: 5, max_appended_ratio: 1 } });
@@ -198,30 +206,20 @@ describe('planRemediation D1: route-into-no-op guard (plan Task 2)', () => {
     });
   });
 
-  it('empty-tasks build disposition (nothing to append) with all-complete task-status → halt, not route', async () => {
-    // No active plan / task-status: nothing appended, but the underlying
-    // build predicate falls back to trusting task-status.json which shows
-    // everything already complete — no dispatchable work either way.
-    await writeFile(
-      join(dir, '.pipeline/task-status.json'),
-      JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
-    );
-    await writeFile(
-      join(dir, '.pipeline/remediation.json'),
-      JSON.stringify({
-        dispositions: [
-          {
-            id: 'test:gap-1',
-            disposition: 'build',
-            category: null,
-            rationale: 'residual gap',
-            tasks: [],
-          },
-        ],
-      }),
-    );
-
-    const conductor = makeConductor(makeRunner());
+  it('retries a taskless BUILD answer as a typed-plan rejection and never admits it', async () => {
+    // A taskless `build` entry was tolerated by the removed Markdown reader.
+    // It is invalid under the engine-owned schema, so model the real runner's
+    // validated rejection rather than manufacturing a sidecar plan.
+    let calls = 0;
+    const conductor = makeConductor({
+      run: async () => {
+        calls++;
+        return {
+          success: false,
+          output: 'structured-result-rejected: dispositions[0].tasks requires at least one task for build',
+        };
+      },
+    }, { steps: { remediate: { max_retries: 2 } } });
     const result = await (conductor as unknown as {
       planRemediation: (
         state: ConductState,
@@ -231,8 +229,11 @@ describe('planRemediation D1: route-into-no-op guard (plan Task 2)', () => {
       ) => Promise<{ kind: string; detail?: string; target?: string }>;
     }).planRemediation(baseState, ALL_STEPS, 'test', { source: 'test', evidenceFile: 'x' });
 
-    expect(result.kind).toBe('halt');
-    expect(result.detail).toMatch(/no dispatchable build work|already evidence-complete/i);
+    expect(calls).toBe(2);
+    expect(result).toMatchObject({
+      kind: 'none',
+      reason: expect.stringContaining('tasks requires at least one task for build'),
+    });
   });
 
   it('idempotent-upsert build disposition whose rem-* id is already evidence-complete → halt, not route', async () => {

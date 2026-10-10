@@ -378,6 +378,38 @@ describe('kickback-ledger', () => {
     });
   });
 
+  // Covers: task:15
+  it('retains duplicate provider-minted pending findings from before v2 as historical records', async () => {
+    const legacyFindings = [{
+      gate: 'architecture_review_as_built',
+      finding: 'ARCH-1',
+      class: 'REMEDIABLE',
+      governingClause: 'adr-2026-08-25 decision 7',
+      reference: { kind: 'plan-task', taskId: '7' },
+      summary: 'first legacy repair',
+      outcome: 'remediated',
+    }, {
+      gate: 'architecture_review_as_built',
+      finding: 'ARCH-1',
+      class: 'REMEDIABLE',
+      governingClause: 'adr-2026-08-25 decision 7',
+      reference: { kind: 'plan-task', taskId: '7' },
+      summary: 'second legacy repair with the same provider id',
+      outcome: 'remediated',
+    }];
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {},
+      pendingAsBuiltRemediationFindings: legacyFindings,
+    }));
+
+    await expect(readPendingAsBuiltRemediationFindings(dir)).resolves.toEqual({
+      kind: 'ok',
+      findings: legacyFindings,
+    });
+  });
+
   it('fails closed with the ledger path when pending findings are unreadable', async () => {
     const ledgerPath = join(dir, '.pipeline', 'kickback-ledger.json');
     await mkdir(join(dir, '.pipeline'), { recursive: true });

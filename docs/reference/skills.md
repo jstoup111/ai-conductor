@@ -713,37 +713,50 @@ the aggregate gate. Scoped success alone never satisfies that gate.
 
 ### remediate
 
-> Use when a SHIP gate blocks — a prd-audit FIXABLE finding, an all-`REMEDIABLE` as-built architecture-review BLOCKED verdict, or finish verification — or on a build stall. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human.
+> Use when a SHIP gate blocks — a prd-audit FIXABLE finding, an all-`REMEDIABLE` as-built architecture-review BLOCKED verdict, or finish verification — or on a build stall. Guides remediation toward the owning step and HALTs only for gaps that need a human.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
 - **Engine step** — `remediate` (out-of-band, SHIP, prerequisite `prd_audit`). Engine enforcement is
   `advisory`. Deliberately outside the sequential list so the loop never dispatches it unconditionally.
-- **Inputs** — `.pipeline/prd-audit.md`, `.pipeline/architecture-review-as-built.md`,
-  `.pipeline/test-failures.md`, and `.pipeline/build-stall-question.md`. A `build_review` FAIL no
-  longer dispatches `/remediate`: it routes straight back to `build` with its own best-effort
-  `plan contract:` and `prior attempts:` pointer lines (see
+- **Inputs** — in gap-plan mode, one bounded, versioned engine projection. It carries the typed
+  `FIXABLE` criteria from `.pipeline/prd-audit.json`, the `REMEDIABLE` findings from
+  `.pipeline/architecture-review-as-built.json`, and any refusal decisions as required references. It
+  adds bounded excerpts of `.pipeline/build-stall-question.md` or `.pipeline/test-failures.md`, the
+  owning active-plan tasks, the pending as-built findings and prior laps from the kickback ledger, and
+  the accepted vocabulary. An unreadable source or an oversized dimension halts `mechanical` with
+  `remediation projection input fault:`, naming the source, the dimension, and the actual size
+  against the limit. A `build_review` FAIL no longer dispatches `/remediate`: it routes straight
+  back to `build` with its own best-effort `plan contract:` and `prior attempts:` pointer lines (see
   [gates](../explanation/gates.md#where-a-build_review-fail-goes)).
-- **Outputs** — `.pipeline/remediation.json`, overwritten each run and the only write in gap-plan
-  mode. The SHIP verdict inputs are read-only: a finding judged resolved is recorded in
-  `remediation.json`, never by editing, deleting, or recreating a verdict artifact. The engine then appends each task
-  into the feature's plan. For a `prd_audit` finding without a PRD, its disposition ID is the report
-  criterion `S<story>.<ordinal>` (for example, `S5.1`); the engine admits criterion IDs
-  case-insensitively. An `existing-task` disposition binds the gap to task id(s) already in the
-  active plan instead: the engine re-stages those rows and kicks back to `build` without appending or
-  spending plan-growth allowance (see
-  [gates](../explanation/gates.md#kickback-and-remediation-routing)). For an all-refused `prd_audit`
-  `OVER_SCOPE` report, the engine supplies refusal evidence in the dispatch context; each refusal needs
-  a `build` disposition with id `refusal-<decisionId>` and at least one removal/rework task, or the
-  engine writes the refused over-scope HALT. No completion glob — the
-  engine reads the JSON directly to route.
+- **Outputs** — in gap-plan mode, a native structured result in contract `version: 'v1'`. Each
+  disposition answers one `reference` (`prd-criterion`, `as-built-finding`, `refusal`, `stall`, or
+  `test`). The engine validates it against the projection. A valid result is persisted to
+  `.pipeline/remediation-plan.json` for that attempt, and the provider writes no file. Every projected
+  required reference must be answered exactly once. Then the engine appends each task to the
+  feature's plan. A `prd_audit` reference id is the engine-resolved criterion id, matched
+  case-insensitively. An `existing-task` disposition binds its gap through `boundTaskIds` to the
+  owning task already in the active plan. Then the engine re-stages those rows and kicks back to
+  `build` without appending or spending plan-growth allowance (see
+  [gates](../explanation/gates.md#kickback-and-remediation-routing)). For an all-refused
+  `prd_audit` `OVER_SCOPE` report, each projected refusal needs a `build` disposition referencing
+  its decision id with at least one removal/rework task. Otherwise the engine writes the refused
+  over-scope HALT. The SHIP verdict inputs are read-only. `build_review` case modes still write
+  `.pipeline/remediation.json`.
 - **Gate role** — advisory; it is the unblocker rather than a blocker. HALT is reserved for exactly
   three categories: architectural clarity, product scope, and unanswerable. Every other gap must route
-  to `build`, `acceptance_specs`, `architecture_review`, or `plan`. On absent, stale, or malformed
-  input the engine falls back to deterministic gap classification. The engine also HALTs, independent
-  of category, when a `build` gap carries no concrete task outside a build-stall question — a taskless
-  `build` disposition is not dispatchable work.
-- **Dispatches** — `agents/remediation-planner.md`.
+  to `build`, `acceptance_specs`, `architecture_review`, `plan`, or `existing-task`. A `build`
+  disposition with no task is rejected outside a build-stall source. A rejected result, a missing
+  structured result, or a persistence failure is a planner fault. Each rejected disposition, category,
+  or `boundTaskIds` field emits `remediation_disposition_rejected`. The engine retries up to
+  `remediate`'s `max_retries`, using a fresh attempt id each time. When the retries are exhausted, it
+  carries the final fault into the terminal HALT as `Remediation planner fault: <fault>`. For
+  `prd_audit`, the deterministic gap classification still applies when no plan routes.
+- **Dispatches** — one provider-native, schema-constrained one-shot in gap-plan mode. A candidate
+  provider must declare `nativeSchemaCapability.nativeOutputSchema`. Otherwise the engine halts
+  `mechanical` without retrying and names the recovery action. `agents/remediation-planner.md`
+  carries the judgment guidance only. It holds no output format, field rules, or vocabulary
+  tables, and `test/test_provider_skill_contracts.sh` audits that boundary.
 
 ### rebase
 
@@ -919,7 +932,7 @@ subagent facility, not by the engine — the engine dispatches skills, and skill
 | `evaluator.md` | Fresh-context quality evaluator over a scoped batch diff, with no shared state with the generator | `pipeline` at batch boundaries, `code-review` |
 | `domain-reviewer.md` | Domain integrity reviewer with veto authority over tests and implementations | `tdd` at both DOMAIN phases, `code-review` |
 | `prd-auditor.md` | Audits one `FR-N` against shipped code; finding authority, never fixes | `prd-audit` |
-| `remediation-planner.md` | Emits per-gap dispositions and concrete tasks; planning authority, never edits code | `remediate` |
+| `remediation-planner.md` | Judgment guidance for remediation dispositions: routing, HALT categories, and file-scoped work; planning authority, never edits code. The engine owns the output contract | `remediate` |
 | `worktree-manager.md` | Git worktree lifecycle: creation, environment setup, merge-back, conflict resolution, proof-gated cleanup | `pipeline` |
 | `cto-security.md` | Authn/authz, input validation, OWASP top 10, vulnerability surface | `assess` |
 | `cto-data-integrity.md` | Transactions, event sourcing, race conditions, migrations | `assess` |

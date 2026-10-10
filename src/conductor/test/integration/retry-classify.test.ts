@@ -61,7 +61,7 @@ async function persistDesignBlockedAsBuiltVerdict(
   options?: StepRunOptions,
 ): Promise<void> {
   await persistAsBuiltVerdict(dir, {
-    version: 'v1',
+    version: 'v2',
     verdict: 'BLOCKED',
     reachability: [],
     driftNotes: [],
@@ -80,7 +80,7 @@ async function persistApprovedAsBuiltVerdict(
   options?: StepRunOptions,
 ): Promise<void> {
   await persistAsBuiltVerdict(dir, {
-    version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+    version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
   }, {
     attemptId: options?.runId ?? 'test-run',
     codeStamp: null,

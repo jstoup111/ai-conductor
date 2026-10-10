@@ -1,4 +1,4 @@
-import type { RemediationPlan } from './artifacts.js';
+import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 import {
   PRD_AUDIT_REMEDIATION_GATE_SOURCE,
   type CriterionBoundRemediationGap,
@@ -40,25 +40,30 @@ const REFUSAL_REWORK_DISPOSITION = 'build';
  * the presentation key of every refusal that did not bind.
  */
 export function admitRefusalReworkPlan(
-  plan: RemediationPlan,
+  dispositions: readonly AcceptedRemediationPlanDisposition[],
   refusals: readonly RefusalReworkEvidence[],
 ): RefusalReworkAdmission {
   const gaps: CriterionBoundRemediationGap[] = [];
   const unboundKeys: string[] = [];
 
   for (const refusal of refusals) {
-    const requiredId = refusalReworkGapId(refusal.decisionId);
-    const gap = plan.gaps.find((candidate) => candidate.id === requiredId);
-    const bound =
-      gap !== undefined &&
-      gap.disposition === REFUSAL_REWORK_DISPOSITION &&
-      gap.tasks.length > 0;
-    if (!bound) {
+    const disposition = dispositions.find((candidate) =>
+      candidate.reference.kind === 'refusal' && candidate.reference.id === refusal.decisionId,
+    );
+    if (
+      disposition === undefined ||
+      disposition.disposition !== REFUSAL_REWORK_DISPOSITION ||
+      disposition.tasks.length === 0
+    ) {
       unboundKeys.push(refusal.key);
       continue;
     }
     gaps.push({
-      ...gap,
+      id: refusalReworkGapId(refusal.decisionId),
+      disposition: disposition.disposition,
+      category: disposition.category,
+      rationale: disposition.rationale,
+      tasks: disposition.tasks.map((task) => ({ ...task })),
       gateSource: PRD_AUDIT_REMEDIATION_GATE_SOURCE,
       criterion: refusal.key,
       governingClause: `Refused ${refusal.key} (decision ${refusal.decisionId} r${refusal.revision})`,

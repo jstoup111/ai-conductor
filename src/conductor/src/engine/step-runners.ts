@@ -35,6 +35,8 @@ import { BuildReviewScopeSource } from './build-review-scope-source.js';
 import type { HarnessConfig, EffortLevel, BuildReviewRubricId } from '../types/config.js';
 import { remediationLapCapForGate } from './remediation-caps.js';
 import { prdAuditScopeProjection } from './prd-audit-routing.js';
+import { REMEDIATION_PLAN_SCHEMA, renderRemediationPlanShape, validateRemediationPlan } from './remediation-plan-contract.js';
+import { persistRemediationPlan, type RemediationPlanStoreFilesystem } from './remediation-plan-store.js';
 import type {
   ComplexityAssessment,
   StepRunner,
@@ -279,6 +281,7 @@ import {
   AS_BUILT_VERDICT_SCHEMA,
   renderAsBuiltVerdictShape,
   resolveAsBuiltReferences,
+  stampAsBuiltFindingIds,
   validateAsBuiltVerdict,
 } from './as-built-contract.js';
 import {
@@ -694,6 +697,8 @@ export interface StepRunnerOptions {
   events?: ConductorEventEmitter;
   /** Test-only envelope filesystem seam for coverage-binding checkpoints. */
   coverageBindingFilesystem?: CoverageBindingEnvelopeFilesystem;
+  /** Test-only atomic filesystem seam for gap-plan authority persistence. */
+  remediationPlanStoreFilesystem?: RemediationPlanStoreFilesystem;
   /** Provider-aware session authority. Omitted by legacy scalar callers. */
   sessionStore?: ProviderSessionStore;
   /** Registry key for the captured provider when sessionStore is present. */
@@ -994,6 +999,7 @@ export class DefaultStepRunner implements StepRunner {
   private buildReviewPolicyCapture: typeof captureInstalledReviewPolicyBundle;
   private events?: ConductorEventEmitter;
   private coverageBindingFilesystem?: CoverageBindingEnvelopeFilesystem;
+  private remediationPlanStoreFilesystem?: RemediationPlanStoreFilesystem;
   private sessionStore?: ProviderSessionStore;
   private readonly runId: string;
   private providerKey: string;
@@ -1066,6 +1072,7 @@ export class DefaultStepRunner implements StepRunner {
     this.buildReviewPolicyCapture = options?.buildReviewPolicyCapture ?? captureInstalledReviewPolicyBundle;
     this.events = options?.events;
     this.coverageBindingFilesystem = options?.coverageBindingFilesystem;
+    this.remediationPlanStoreFilesystem = options?.remediationPlanStoreFilesystem;
     this.sessionStore =
       options?.sessionStore ?? options?.providerExecution?.sessions;
     this.providerRuntimes =
@@ -1482,8 +1489,9 @@ export class DefaultStepRunner implements StepRunner {
           }
           const head = await this.gitRunner(['rev-parse', 'HEAD']);
           const codeStamp = head.exitCode === 0 && head.stdout.trim().length > 0 ? head.stdout.trim() : null;
-          await persistAsBuiltVerdict(this.projectDir, references.verdict, {
-            attemptId: opts?.runId ?? this.runId,
+          const attemptId = opts?.runId ?? this.runId;
+          await persistAsBuiltVerdict(this.projectDir, stampAsBuiltFindingIds(references.verdict, attemptId), {
+            attemptId,
             codeStamp,
             policy: projection.projection.policy,
           });
@@ -1504,23 +1512,45 @@ export class DefaultStepRunner implements StepRunner {
       if (this.providerRuntimes && branchSessionId === undefined) {
         if (step === 'remediate') {
           try {
-            const reconciliation = opts?.remediationRequest;
+            const remediationRequest = opts?.remediationRequest;
+            const reconciliation = remediationRequest?.mode === 'prd-widening-reconciliation'
+              ? remediationRequest
+              : undefined;
+            const gapPlan = remediationRequest?.mode === 'gap-plan'
+              ? remediationRequest
+              : undefined;
+            if (gapPlan) {
+              const schemaCandidates = this.configuredProviders.filter(
+                (provider) => this.providerRuntimes!.nativeSchemaCapabilityFor(provider)?.nativeOutputSchema === true,
+              );
+              if (schemaCandidates.length === 0) {
+                return {
+                  success: false,
+                  output: `remediate gap-plan cannot enforce its native output schema: candidate set [${this.configuredProviders.join(', ')}] has no provider declaring nativeSchemaCapability.nativeOutputSchema. Recovery action: select or update a candidate that declares nativeSchemaCapability.nativeOutputSchema.`,
+                };
+              }
+            }
             const reconciliationInput = reconciliation === undefined
               ? undefined
               : `PRD WIDENING RECONCILIATION INPUT (engine-owned):\n${reconciliation.projection}`;
+            const gapPlanInput = gapPlan === undefined
+              ? undefined
+              : `REMEDIATION GAP-PLAN INPUT (engine-owned):\n${JSON.stringify(gapPlan.projection)}\n\nTerminal remediation-plan shape (engine-owned): ${renderRemediationPlanShape()}`;
             const result = await this.executeProviderAwareSkillOneShot(
               step,
               {
                 // executeProviderAwareSkillOneShot prepends the selected
                 // provider's skill invocation for a schema request. Keep the
                 // supplied projection separate so that command appears once.
-                prompt: reconciliationInput ?? prompt,
+                prompt: reconciliationInput ?? gapPlanInput ?? prompt,
                 systemPrompt: reconciliation
                   ? `${systemPrompt}\n\nJudge only semantic same/different/uncertain relations. Do not grant authority or create BUILD work.`
                   : systemPrompt,
                 cwd: this.projectDir,
                 dangerouslySkipPermissions: true,
-                ...(reconciliation ? { nativeSchema: reconciliation.nativeSchema } : {}),
+                ...(reconciliation
+                  ? { nativeSchema: reconciliation.nativeSchema }
+                  : gapPlan ? { nativeSchema: REMEDIATION_PLAN_SCHEMA } : {}),
               },
               state.complexity_tier,
               opts,
@@ -1529,6 +1559,39 @@ export class DefaultStepRunner implements StepRunner {
               this.callCount++;
               if (reconciliation && result.success && result.finalStructuredResult === undefined) {
                 return { success: false, output: 'PRD widening reconciliation returned no native structured result.' };
+              }
+              if (gapPlan && result.success && result.finalStructuredResult === undefined) {
+                return { ...this.toStepRunResult(step, result), success: false, output: 'structured-result-missing' };
+              }
+              if (gapPlan && result.success) {
+                const validated = validateRemediationPlan(result.finalStructuredResult, gapPlan.projection);
+                if (validated.kind === 'rejected') {
+                  const rejections = validated.rejected === undefined
+                    ? ''
+                    : `; rejections: ${JSON.stringify(validated.rejected)}`;
+                  return {
+                    ...this.toStepRunResult(step, result),
+                    success: false,
+                    output: `structured-result-rejected: ${validated.diagnostics.join('; ')}${rejections}`,
+                    finalStructuredResult: undefined,
+                  };
+                }
+                const persisted = await persistRemediationPlan(this.projectDir, {
+                  attemptId: opts?.runId ?? this.runId,
+                  source: gapPlan.projection.source,
+                  requiredReferences: gapPlan.projection.requiredReferences,
+                  dispositions: validated.dispositions,
+                }, this.remediationPlanStoreFilesystem === undefined
+                  ? undefined
+                  : { filesystem: this.remediationPlanStoreFilesystem });
+                if (persisted.kind === 'persistence-fault') {
+                  return {
+                    ...this.toStepRunResult(step, result),
+                    success: false,
+                    output: `persistence-fault: ${persisted.reason}`,
+                    finalStructuredResult: undefined,
+                  };
+                }
               }
               return this.toStepRunResult(step, result);
             }

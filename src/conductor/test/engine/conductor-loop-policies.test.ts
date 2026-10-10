@@ -74,6 +74,7 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
 import type {
   ExecuteProviderCandidatesInput,
   ProviderExecutionResult,
@@ -1176,21 +1177,16 @@ describe('build-step stall circuit breaker', () => {
       });
       let remediationCalls = 0;
       const noMovementRunner: StepRunner = {
-        run: vi.fn(async (step) => {
+        run: vi.fn(async (step, _state, options) => {
           if (step === 'remediate') {
             remediationCalls += 1;
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [{
-                  id: 'stall:dirty-tree',
-                  disposition: 'halt',
-                  category: 'product-scope',
-                  rationale: 'The uncommitted repair needs a human decision.',
-                  tasks: [],
-                }],
-              }),
-            );
+            await persistFixtureProjectedRemediationPlan(dir, options, [{
+              id: 'stall:dirty-tree',
+              disposition: 'halt',
+              category: 'product-scope',
+              rationale: 'The uncommitted repair needs a human decision.',
+              tasks: [],
+            }]);
           }
           return { success: true };
         }),
@@ -2602,7 +2598,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
     let buildAttemptCount = 0;
     const remediateCallCount: number[] = [];
     const runner: StepRunner = {
-      run: vi.fn(async (step: StepName) => {
+      run: vi.fn(async (step: StepName, _state, options) => {
         if (step === 'build') {
           buildAttemptCount++;
           // Resolved task count never advances -> persistent
@@ -2624,20 +2620,13 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
           remediateCallCount.push(buildAttemptCount);
           // Route back to build every time — the stall never actually
           // resolves, forcing the shared budget to exhaust.
-          await writeFile(
-            join(dir, '.pipeline/remediation.json'),
-            JSON.stringify({
-              dispositions: [
-                {
-                  id: `stall:${buildAttemptCount}`,
-                  disposition: 'build',
-                  category: null,
-                  rationale: `Answer ${buildAttemptCount}`,
-                  tasks: [],
-                },
-              ],
-            }),
-          );
+          await persistFixtureProjectedRemediationPlan(dir, options, [{
+            id: `stall:${buildAttemptCount}`,
+            disposition: 'build',
+            category: null,
+            rationale: `Answer ${buildAttemptCount}`,
+            tasks: [],
+          }]);
         }
         return { success: true } as StepRunResult;
       }),
@@ -2708,7 +2697,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
     [
       'none',
       async (dirPath: string) => {
-        // Malformed JSON -> readRemediationPlanResult returns a null plan -> outcome 'none'.
+        // No typed result leaves planRemediation with outcome 'none'.
         await writeFile(join(dirPath, '.pipeline/remediation.json'), '{not valid json');
       },
     ],

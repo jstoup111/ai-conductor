@@ -86,6 +86,7 @@ import {
   AS_BUILT_REPORT_PATH,
   AS_BUILT_VERDICT_PATH,
 } from './as-built-verdict-store.js';
+import { AS_BUILT_VERDICT_CONTRACT_VERSION } from './as-built-contract.js';
 import {
   PRD_AUDIT_REPORT_PATH,
   PRD_AUDIT_VERDICT_PATH,
@@ -3443,6 +3444,13 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (stored.kind === 'unreadable') {
       return { done: false, reason: stored.reason, routeClass: 'absent' };
     }
+    if (stored.kind === 'prior-version') {
+      return {
+        done: false,
+        reason: `${AS_BUILT_VERDICT_PATH} has prior contract version ${stored.version}; a fresh ${AS_BUILT_VERDICT_CONTRACT_VERSION} verdict is required`,
+        routeClass: 'absent',
+      };
+    }
     const artifact = join(dir, AS_BUILT_VERDICT_PATH);
     let codeStampStillValid = false;
     if (stored.value.codeStamp !== null) {
@@ -4671,7 +4679,7 @@ export function remediationDispositionAppendsToPlan(
 }
 export type RemediationHaltCategory = 'architectural-clarity' | 'product-scope' | 'unanswerable';
 
-const REMEDIATION_HALT_CATEGORIES: readonly RemediationHaltCategory[] = [
+export const REMEDIATION_HALT_CATEGORIES: readonly RemediationHaltCategory[] = [
   'architectural-clarity',
   'product-scope',
   'unanswerable',
@@ -4687,166 +4695,11 @@ export interface RemediationGap {
   tasks: { id: string; title: string }[];
 }
 
-export interface RemediationPlan {
-  gaps: RemediationGap[];
-  /** Planner dispositions outside the engine's accepted vocabulary. */
-  rejected: RemediationDispositionRejection[];
-  /** Ordinary BUILD dispositions rejected for lacking concrete work. */
-  invalidTasklessBuild: boolean;
-}
-
 export interface RemediationDispositionRejection {
   gapId: string;
   disposition: string;
   accepted: readonly string[];
-  field: 'disposition' | 'category';
-}
-
-/** Why the remediation planner did not produce a readable plan. */
-export type RemediationPlanAbsenceCause =
-  | 'absent'
-  | 'stale'
-  | 'unparseable'
-  | 'non-array-dispositions'
-  | 'no-routable-dispositions';
-
-export type RemediationPlanReadResult =
-  | { plan: RemediationPlan }
-  | { plan: null; cause: RemediationPlanAbsenceCause };
-
-/** Render a no-plan cause for a halt which needs operator-facing diagnosis. */
-export function renderRemediationPlanAbsence(cause: RemediationPlanAbsenceCause): string {
-  switch (cause) {
-    case 'absent':
-      return 'the planner wrote no remediation plan';
-    case 'stale':
-      return "the planner's remediation plan is stale (predates this session)";
-    case 'unparseable':
-      return "the planner's remediation plan is not valid JSON";
-    case 'non-array-dispositions':
-      return "the planner's remediation plan has no dispositions array";
-    case 'no-routable-dispositions':
-      return "the planner's remediation plan contains no routable dispositions";
-  }
-}
-
-/**
- * Read + validate `.pipeline/remediation.json` (the /remediate skill's output),
- * retaining why no usable plan was available. `plan` is null when the file is
- * absent, stale (predates this session), malformed, or contains no recognizable
- * gap or rejected disposition — the caller then falls back to the deterministic
- * `classifyPrdAuditGaps` routing. Tolerant of junk: unknown dispositions and
- * non-object gaps are dropped rather than failing the whole plan.
- */
-export async function readRemediationPlanResult(
-  dir: string,
-  sessionStartedAt: number | undefined,
-  source?: string,
-): Promise<RemediationPlanReadResult> {
-  const path = join(dir, '.pipeline/remediation.json');
-  let planStat;
-  try {
-    planStat = await stat(path);
-  } catch {
-    return { plan: null, cause: 'absent' };
-  }
-  if (sessionStartedAt !== undefined && planStat.mtimeMs < sessionStartedAt) {
-    return { plan: null, cause: 'stale' };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(path, 'utf-8'));
-  } catch {
-    return { plan: null, cause: 'unparseable' };
-  }
-  const rawGaps = (parsed as { dispositions?: unknown })?.dispositions;
-  if (!Array.isArray(rawGaps)) return { plan: null, cause: 'non-array-dispositions' };
-
-  const valid: RemediationDisposition[] = [
-    ...REMEDIATION_TARGET_STEPS,
-    REMEDIATION_PUBLICATION_DISPOSITION,
-    REMEDIATION_EXISTING_TASK_DISPOSITION,
-    'halt',
-  ];
-  const gaps: RemediationGap[] = [];
-  const rejected: RemediationDispositionRejection[] = [];
-  let invalidTasklessBuild = false;
-  for (const [index, g] of rawGaps.entries()) {
-    if (!g || typeof g !== 'object') continue;
-    const o = g as Record<string, unknown>;
-    const gapId = typeof o.id === 'string' ? o.id : `#${index + 1}`;
-    const dispositionValue = o.disposition;
-    const renderedDisposition = dispositionValue === undefined
-      ? '<missing>'
-      : typeof dispositionValue === 'string'
-        ? dispositionValue
-        : JSON.stringify(dispositionValue);
-    if (typeof dispositionValue !== 'string' || !valid.includes(dispositionValue as RemediationDisposition)) {
-      rejected.push({ gapId, disposition: renderedDisposition, accepted: valid, field: 'disposition' });
-      continue;
-    }
-    const disposition = dispositionValue as RemediationDisposition;
-    // Accepted halt categories: architectural-clarity, product-scope, unanswerable.
-    const category = REMEDIATION_HALT_CATEGORIES.includes(o.category as RemediationHaltCategory)
-      ? (o.category as RemediationHaltCategory)
-      : null;
-    // A 'halt' must name a category; an autonomous disposition must not be halt.
-    if (disposition === 'halt' && category === null) {
-      const categoryValue = o.category;
-      const renderedCategory = categoryValue === undefined
-        ? '<missing>'
-        : typeof categoryValue === 'string'
-          ? categoryValue
-          : JSON.stringify(categoryValue);
-      rejected.push({
-        gapId,
-        disposition: renderedCategory,
-        accepted: REMEDIATION_HALT_CATEGORIES,
-        field: 'category',
-      });
-      continue;
-    }
-    const tasks = Array.isArray(o.tasks)
-      ? o.tasks
-          .filter(
-            (t): t is { title: string } =>
-              !!t && typeof t === 'object' && typeof (t as { title?: unknown }).title === 'string',
-          )
-          .map((t) => ({
-            id: String((t as { id?: unknown }).id ?? ''),
-            title: String((t as { title: unknown }).title),
-          }))
-      : [];
-    // A taskless BUILD disposition is only a usable answer to a build-stall
-    // question. Every ordinary autonomous BUILD disposition must carry the
-    // concrete work that makes the route dispatchable.
-    if (
-      disposition === 'build' &&
-      tasks.length === 0 &&
-      source !== 'build_stall' &&
-      source !== 'build-stall' &&
-      source !== 'build_stall_zero_work'
-    ) {
-      invalidTasklessBuild = true;
-      continue;
-    }
-    if (
-      disposition === REMEDIATION_EXISTING_TASK_DISPOSITION &&
-      (tasks.length === 0 || tasks.some((task) => task.id.trim() === ''))
-    ) {
-      continue;
-    }
-    gaps.push({
-      id: gapId,
-      disposition,
-      category,
-      rationale: typeof o.rationale === 'string' ? o.rationale : '',
-      tasks,
-    });
-  }
-  return gaps.length > 0 || invalidTasklessBuild || rejected.length > 0
-    ? { plan: { gaps, rejected, invalidTasklessBuild } }
-    : { plan: null, cause: 'no-routable-dispositions' };
+  field: 'disposition' | 'category' | 'boundTaskIds';
 }
 
 // --- Story / plan structure parsing (shared by stories + plan predicates) ---

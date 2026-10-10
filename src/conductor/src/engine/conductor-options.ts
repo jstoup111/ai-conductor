@@ -23,6 +23,7 @@ import type { ShipmentEvidenceInput, ShipmentEvidenceResult } from './shipment-e
 import type { RateLimitEpisode } from './rate-limit-episode.js';
 import type { ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import type { performRebase } from './rebase.js';
+import type { RemediationProjectionLimits } from './remediation-projection.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -106,6 +107,8 @@ export interface ConductorOptions {
   buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   /** Test seam for an adjudicated action-effect charge failure. */
   buildReviewChargeEffect?: typeof chargeBuildReviewEffectInLedger;
+  /** Test-only bound override for deterministic remediation projection faults. */
+  remediationProjectionLimitOverrides?: Partial<RemediationProjectionLimits>;
   /** Test seam; production resolves fresh committed feature evidence. */
   resolveFeatureCreationMutation?: typeof resolveFeatureRemoteMutation;
   /** Test seam; production resolves fresh guarded publication dependencies. */

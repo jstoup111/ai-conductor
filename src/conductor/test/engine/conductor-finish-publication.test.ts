@@ -132,7 +132,7 @@ async function writeGreenShipValidatorEvidence(dir: string, attemptId?: string):
   );
   await writePrdAuditFixture(dir, attemptId);
   await persistAsBuiltVerdict(dir, {
-    version: 'v1',
+    version: 'v2',
     verdict: 'APPROVED',
     reachability: [],
     driftNotes: [],
@@ -480,7 +480,7 @@ describe('Conductor FINISH publication routing', () => {
       name: 'as-built evidence',
       write: async () => {
         await persistAsBuiltVerdict(dir, {
-          version: 'v1',
+          version: 'v2',
           verdict: 'APPROVED',
           reachability: [],
           driftNotes: [],
@@ -883,7 +883,7 @@ describe('Conductor FINISH publication routing', () => {
       manual_test: 'stale', prd_audit: 'stale', architecture_review_as_built: 'done',
     });
     await persistAsBuiltVerdict(dir, {
-      version: 'v1',
+      version: 'v2',
       verdict: 'APPROVED',
       reachability: [],
       driftNotes: [],

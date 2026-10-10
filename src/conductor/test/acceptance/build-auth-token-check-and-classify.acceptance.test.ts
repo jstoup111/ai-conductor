@@ -209,7 +209,7 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
           }
           if (step === 'architecture_review_as_built') {
             await persistAsBuiltVerdict(dir,
-              { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] },
+              { version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] },
               { attemptId: runOptions?.runId ?? 'test-run', codeStamp: null, policy: AS_BUILT_TEST_POLICY },
             );
             return { success: true };

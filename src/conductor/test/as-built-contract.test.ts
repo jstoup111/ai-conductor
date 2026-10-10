@@ -11,7 +11,7 @@ import {
   resolveAsBuiltReferences,
   validateAsBuiltVerdict,
 } from '../src/engine/as-built-contract.js';
-import type { AsBuiltVerdict } from '../src/engine/as-built-contract.js';
+import type { AsBuiltProviderVerdict } from '../src/engine/as-built-contract.js';
 
 const dirs: string[] = [];
 
@@ -133,6 +133,7 @@ describe('as-built verdict contract', () => {
     expect(rendered).not.toContain('notInTheSchema');
   });
 
+  // Covers: task:12
   it('publishes a frozen, closed schema with only the accepted verdict and finding-reference vocabularies', () => {
     const schema = object(AS_BUILT_VERDICT_SCHEMA);
     const verdict = object(object(schema.properties).verdict);
@@ -166,6 +167,10 @@ describe('as-built verdict contract', () => {
         decision: { type: 'integer' },
       },
       planTask: ['kind', 'taskId'],
+    });
+    expect({ version: AS_BUILT_VERDICT_CONTRACT_VERSION, findingProperties: Object.keys(object(finding.properties)) }).toEqual({
+      version: 'v2',
+      findingProperties: ['class', 'reference', 'summary'],
     });
   });
 
@@ -222,14 +227,31 @@ describe('as-built verdict contract', () => {
       verdict: 'BLOCKED',
       reachability: [],
       driftNotes: [],
-      findings: [{ id: 'AB-1', class: 'DESIGN', summary: 'The approved design cannot deliver the outcome.' }],
+      findings: [{ class: 'DESIGN', summary: 'The approved design cannot deliver the outcome.' }],
       violations: 'The approved design conflicts with the sealed outcome.',
       resolution: 'A human must approve a superseding design.',
     };
 
     expect(validateAsBuiltVerdict(verdict)).toMatchObject({
       ok: true,
-      verdict: { verdict: 'BLOCKED', findings: [{ id: 'AB-1', class: 'DESIGN' }] },
+      verdict: { verdict: 'BLOCKED', findings: [{ class: 'DESIGN' }] },
+    });
+  });
+
+  // Covers: task:12
+  it('rejects a provider-supplied finding id as an unsupported schema field', () => {
+    expect(validateAsBuiltVerdict({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [],
+      driftNotes: [],
+      findings: [{ id: 'provider-minted', class: 'DESIGN', summary: 'The engine owns persisted finding ids.' }],
+      violations: 'The provider attempted to author engine-owned identity.',
+      resolution: 'Return the finding judgment without an id.',
+    })).toEqual({
+      ok: false,
+      field: 'findings[0].id',
+      requirement: 'provider finding ids are not permitted; the engine stamps persisted ids',
     });
   });
 
@@ -244,7 +266,7 @@ describe('as-built verdict contract', () => {
         { primitive: 'createGithubTrackerClient().addIssueDependency', callerChain: [] },
       ],
       driftNotes: [],
-      findings: [{ id: 'as-built-unreachable-add-issue-dependency', class: 'DESIGN', summary: 'Every invocation is test-only.' }],
+      findings: [{ class: 'DESIGN', summary: 'Every invocation is test-only.' }],
       violations: 'One unreachable production rung.',
       resolution: 'Wire or remove the method.',
     };
@@ -264,7 +286,7 @@ describe('as-built verdict contract', () => {
         { primitive: 'unwired', callerChain: [''] },
       ],
       driftNotes: [],
-      findings: [{ id: 'AB-1', class: 'DESIGN', summary: 'unwired has no production caller.' }],
+      findings: [{ class: 'DESIGN', summary: 'unwired has no production caller.' }],
       violations: 'One unreachable production rung.',
       resolution: 'Wire it.',
     })).toMatchObject({
@@ -301,7 +323,7 @@ describe('as-built verdict contract', () => {
       verdict: 'BLOCKED',
       reachability: [{ primitive: 'addIssueDependency', callerChain: ['bin/conduct:1', 7] }],
       driftNotes: [],
-      findings: [{ id: 'AB-1', class: 'DESIGN', summary: 'x' }],
+      findings: [{ class: 'DESIGN', summary: 'x' }],
       violations: 'v',
       resolution: 'r',
     })).toEqual({
@@ -312,10 +334,10 @@ describe('as-built verdict contract', () => {
   });
 
   it('exports a verdict-discriminated union with arm-specific fields', () => {
-    expectTypeOf<Extract<AsBuiltVerdict, { verdict: 'PLAN_GAP' }>>().toHaveProperty('outcomeDelivered');
-    expectTypeOf<Extract<Exclude<AsBuiltVerdict, { verdict: 'PLAN_GAP' }>, Record<'outcomeDelivered', unknown>>>().toEqualTypeOf<never>();
-    expectTypeOf<Extract<AsBuiltVerdict, { verdict: 'BLOCKED' }>>().toHaveProperty('findings');
-    expectTypeOf<Extract<Exclude<AsBuiltVerdict, { verdict: 'BLOCKED' }>, Record<'findings', unknown>>>().toEqualTypeOf<never>();
+    expectTypeOf<Extract<AsBuiltProviderVerdict, { verdict: 'PLAN_GAP' }>>().toHaveProperty('outcomeDelivered');
+    expectTypeOf<Extract<Exclude<AsBuiltProviderVerdict, { verdict: 'PLAN_GAP' }>, Record<'outcomeDelivered', unknown>>>().toEqualTypeOf<never>();
+    expectTypeOf<Extract<AsBuiltProviderVerdict, { verdict: 'BLOCKED' }>>().toHaveProperty('findings');
+    expectTypeOf<Extract<Exclude<AsBuiltProviderVerdict, { verdict: 'BLOCKED' }>, Record<'findings', unknown>>>().toEqualTypeOf<never>();
   });
 
   it('rejects a PLAN_GAP without its boolean outcomeDelivered flag', () => {
@@ -334,7 +356,7 @@ describe('as-built verdict contract', () => {
       verdict: 'APPROVED',
       reachability: [],
       driftNotes: [],
-      findings: [{ id: 'AB-1', class: 'DESIGN', summary: 'An approval that still lists a finding.' }],
+      findings: [{ class: 'DESIGN', summary: 'An approval that still lists a finding.' }],
     })).toEqual({
       ok: false,
       field: 'findings',
@@ -348,7 +370,7 @@ describe('as-built verdict contract', () => {
       verdict: 'BLOCKED',
       reachability: [],
       driftNotes: [],
-      findings: [{ id: 'AB-1', class: 'REMEDIABLE', summary: 'The fix must follow an approved decision.' }],
+      findings: [{ class: 'REMEDIABLE', summary: 'The fix must follow an approved decision.' }],
       violations: 'The delivery violates an approved decision.',
       resolution: 'Apply the governing remediation.',
     })).toEqual({
@@ -365,7 +387,6 @@ describe('as-built verdict contract', () => {
       reachability: [],
       driftNotes: [],
       findings: [{
-        id: 'AB-1',
         class: 'REMEDIABLE',
         reference: { kind: 'adr-decision', stem: 'approved-design', decision: '5.2' },
         summary: 'The fix must follow an approved decision.',
@@ -398,7 +419,7 @@ describe('as-built verdict contract', () => {
       verdict: 'BLOCKED',
       reachability: [],
       driftNotes: [],
-      findings: [{ id: 'AB-1', class: 'UNSUPPORTED', summary: 'The declared class is not part of the contract.' }],
+      findings: [{ class: 'UNSUPPORTED', summary: 'The declared class is not part of the contract.' }],
       violations: 'The delivery violates an approved decision.',
       resolution: 'Apply the governing remediation.',
     })).toEqual({
@@ -409,7 +430,7 @@ describe('as-built verdict contract', () => {
   });
 
   it('drops PLAN_GAP outcome fields a provider filled on a BLOCKED verdict', () => {
-    const finding = { id: 'AB-1', class: 'DESIGN', summary: 'Abort is not wired.' };
+    const finding = { class: 'DESIGN', summary: 'Abort is not wired.' };
     expect(validateAsBuiltVerdict({
       version: AS_BUILT_VERDICT_CONTRACT_VERSION,
       verdict: 'BLOCKED',
@@ -455,7 +476,7 @@ describe('as-built verdict contract', () => {
     expect(validateAsBuiltVerdict({ ...planGap, violations: 'Something is wrong.', resolution: 'Fix it.' })).toEqual({ ok: true, verdict: planGap });
     expect(validateAsBuiltVerdict({
       ...planGap,
-      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Wire it.' }],
+      findings: [{ class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Wire it.' }],
     })).toMatchObject({ ok: false, field: 'findings' });
   });
 
@@ -484,14 +505,14 @@ describe('as-built verdict contract', () => {
 
   it('resolves REMEDIABLE ADR and active-plan task references', async () => {
     const root = await governingReferenceFixture();
-    const verdict: AsBuiltVerdict = {
+    const verdict: AsBuiltProviderVerdict = {
       version: AS_BUILT_VERDICT_CONTRACT_VERSION,
       verdict: 'BLOCKED',
       reachability: [],
       driftNotes: [],
       findings: [
-        { id: 'AB-ADR', class: 'REMEDIABLE', reference: { kind: 'adr-decision', stem: 'adr-approved', decision: 4 }, summary: 'Apply the approved fourth decision.' },
-        { id: 'AB-TASK', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Complete the active second task.' },
+        { class: 'REMEDIABLE', reference: { kind: 'adr-decision', stem: 'adr-approved', decision: 4 }, summary: 'Apply the approved fourth decision.' },
+        { class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Complete the active second task.' },
       ],
       violations: 'The implementation misses both governing obligations.',
       resolution: 'Apply the approved ADR and active-plan task.',
@@ -502,11 +523,11 @@ describe('as-built verdict contract', () => {
 
   it('rejects a reference to a SUPERSEDED ADR', async () => {
     const root = await governingReferenceFixture();
-    const verdict: AsBuiltVerdict = {
+    const verdict: AsBuiltProviderVerdict = {
       version: AS_BUILT_VERDICT_CONTRACT_VERSION,
       verdict: 'BLOCKED',
       reachability: [], driftNotes: [],
-      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'adr-decision', stem: 'adr-superseded', decision: 1 }, summary: 'Follow superseded work.' }],
+      findings: [{ class: 'REMEDIABLE', reference: { kind: 'adr-decision', stem: 'adr-superseded', decision: 1 }, summary: 'Follow superseded work.' }],
       violations: 'The implementation is governed by a superseded ADR.',
       resolution: 'Use a current ADR.',
     };
@@ -520,11 +541,11 @@ describe('as-built verdict contract', () => {
 
   it('rejects an undeclared ADR decision with the declared decision ids', async () => {
     const root = await governingReferenceFixture();
-    const verdict: AsBuiltVerdict = {
+    const verdict: AsBuiltProviderVerdict = {
       version: AS_BUILT_VERDICT_CONTRACT_VERSION,
       verdict: 'BLOCKED',
       reachability: [], driftNotes: [],
-      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'adr-decision', stem: 'adr-approved', decision: 9 }, summary: 'Follow a missing decision.' }],
+      findings: [{ class: 'REMEDIABLE', reference: { kind: 'adr-decision', stem: 'adr-approved', decision: 9 }, summary: 'Follow a missing decision.' }],
       violations: 'The implementation cites no declared decision.',
       resolution: 'Use a declared decision.',
     };
@@ -539,11 +560,11 @@ describe('as-built verdict contract', () => {
   it('resolves task references against the named feature plan when the repository holds several plans', async () => {
     const root = await governingReferenceFixture();
     await writeFile(join(root, '.docs', 'plans', 'other-feature.md'), '### Task 9: Elsewhere\n');
-    const verdict: AsBuiltVerdict = {
+    const verdict: AsBuiltProviderVerdict = {
       version: AS_BUILT_VERDICT_CONTRACT_VERSION,
       verdict: 'BLOCKED',
       reachability: [], driftNotes: [],
-      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Complete the second task.' }],
+      findings: [{ class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Complete the second task.' }],
       violations: 'The second task is unreached.',
       resolution: 'Wire the second task.',
     };
@@ -554,11 +575,11 @@ describe('as-built verdict contract', () => {
 
   it('resolves a task- prefixed reference and returns the canonical task id', async () => {
     const root = await governingReferenceFixture();
-    const verdict: AsBuiltVerdict = {
+    const verdict: AsBuiltProviderVerdict = {
       version: AS_BUILT_VERDICT_CONTRACT_VERSION,
       verdict: 'BLOCKED',
       reachability: [], driftNotes: [],
-      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: 'task-2' }, summary: 'Complete the second task.' }],
+      findings: [{ class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: 'task-2' }, summary: 'Complete the second task.' }],
       violations: 'The second task is unreached.',
       resolution: 'Wire the second task.',
     };
@@ -571,11 +592,11 @@ describe('as-built verdict contract', () => {
 
   it('rejects a task- prefixed reference absent from the active plan, naming the bare id', async () => {
     const root = await governingReferenceFixture();
-    const verdict: AsBuiltVerdict = {
+    const verdict: AsBuiltProviderVerdict = {
       version: AS_BUILT_VERDICT_CONTRACT_VERSION,
       verdict: 'BLOCKED',
       reachability: [], driftNotes: [],
-      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: 'task-7' }, summary: 'Complete an absent task.' }],
+      findings: [{ class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: 'task-7' }, summary: 'Complete an absent task.' }],
       violations: 'The implementation cites no active task.',
       resolution: 'Use an active task.',
     };
@@ -589,11 +610,11 @@ describe('as-built verdict contract', () => {
 
   it('rejects a task absent from the active plan', async () => {
     const root = await governingReferenceFixture();
-    const verdict: AsBuiltVerdict = {
+    const verdict: AsBuiltProviderVerdict = {
       version: AS_BUILT_VERDICT_CONTRACT_VERSION,
       verdict: 'BLOCKED',
       reachability: [], driftNotes: [],
-      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '7' }, summary: 'Complete an absent task.' }],
+      findings: [{ class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '7' }, summary: 'Complete an absent task.' }],
       violations: 'The implementation cites no active task.',
       resolution: 'Use an active task.',
     };

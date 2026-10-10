@@ -21,10 +21,12 @@ import {
 import {
   resolveAsBuiltReferences,
   validateAsBuiltVerdict,
+  type AsBuiltProviderVerdict,
   type AsBuiltVerdict,
 } from '../../src/engine/as-built-contract.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { persistFixtureProjectedRemediationPlan } from '../engine/remediation-plan-fixtures.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -55,7 +57,7 @@ async function writePrdAuditPass(root: string, attemptId = 'fixture-run'): Promi
   await persistPrdAuditVerdict(root, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'fixture.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId, codeStamp: 'fixture-head' });
 }
 
-async function persist(root: string, verdict: AsBuiltVerdict, runId: string | undefined): Promise<void> {
+async function persist(root: string, verdict: AsBuiltProviderVerdict | AsBuiltVerdict, runId: string | undefined): Promise<void> {
   await persistAsBuiltVerdict(root, verdict, {
     attemptId: runId ?? 'test-run',
     codeStamp: null,
@@ -202,12 +204,11 @@ describe('S4.5: a D5.2 sub-decision is cited as whole-number decision 5 and ente
     const { root, statePath } = await seedFixture();
     await writeAdr(root);
     const raw = {
-      version: 'v1',
+      version: 'v2',
       verdict: 'BLOCKED',
       reachability: [],
       driftNotes: [],
       findings: [{
-        id: 'AB-1',
         class: 'REMEDIABLE',
         reference: { kind: 'adr-decision', stem: ADR_STEM, decision: 5 },
         summary: 'The gate accepts a stale stamp, contrary to D5.2.',
@@ -239,15 +240,13 @@ describe('S4.5: a D5.2 sub-decision is cited as whole-number decision 5 and ente
         } else if (step === 'architecture_review_as_built') {
           await persist(root, resolved.verdict, options?.runId);
         } else if (step === 'remediate') {
-          await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
-            dispositions: [{
-              id: 'AB-1',
-              disposition: 'build',
-              category: null,
-              rationale: 'Refuse the stale stamp as decision 5 requires.',
-              tasks: [{ id: 'refuse-stale-stamp', title: 'Refuse the stale stamp' }],
-            }],
-          }));
+          await persistFixtureProjectedRemediationPlan(root, options, [{
+            id: 'AB-1',
+            disposition: 'build',
+            category: null,
+            rationale: 'Refuse the stale stamp as decision 5 requires.',
+            tasks: [{ id: 'refuse-stale-stamp', title: 'Refuse the stale stamp' }],
+          }]);
         } else if (step === 'build') {
           await writeFile(join(root, '.pipeline', 'HALT'), 'sentinel: BUILD reached\n');
           await writeFile(join(root, '.pipeline', 'HALT.class'), 'needs-human');
@@ -305,7 +304,7 @@ describe('S1/S2: typed as-built verdicts drive conditional review', () => {
       run: vi.fn(async (step: StepName, _state, options?: StepRunOptions): Promise<StepRunResult> => {
         if (step === 'architecture_review_as_built') {
           await persist(root, {
-            version: 'v1',
+            version: 'v2',
             verdict: 'APPROVED WITH DRIFT NOTES',
             reachability: [],
             driftNotes: [{
@@ -342,7 +341,7 @@ describe('S1/S2: typed as-built verdicts drive conditional review', () => {
       run: vi.fn(async (step: StepName, _state, options?: StepRunOptions): Promise<StepRunResult> => {
         if (step === 'architecture_review_as_built') {
           await persist(root, {
-            version: 'v1',
+            version: 'v2',
             verdict: 'PLAN_GAP',
             reachability: [],
             driftNotes: [],
@@ -375,7 +374,7 @@ describe('S1/S2: typed as-built verdicts drive conditional review', () => {
       run: vi.fn(async (step: StepName, _state, options?: StepRunOptions): Promise<StepRunResult> => {
         if (step === 'architecture_review_as_built') {
           await persist(root, {
-            version: 'v1',
+            version: 'v2',
             verdict: 'APPROVED',
             reachability: [],
             driftNotes: [],
@@ -408,7 +407,7 @@ describe('S1/S2: typed as-built verdicts drive conditional review', () => {
       run: vi.fn(async (step: StepName, _state, options?: StepRunOptions): Promise<StepRunResult> => {
         if (step === 'architecture_review_as_built') {
           await persist(root, {
-            version: 'v1',
+            version: 'v2',
             verdict: 'APPROVED WITH DRIFT NOTES',
             reachability: [],
             driftNotes: [{
@@ -443,7 +442,7 @@ describe('S6.7: an undelivered PLAN_GAP halts plan-gap naming the outcome', () =
       run: vi.fn(async (step: StepName, _state, options?: StepRunOptions): Promise<StepRunResult> => {
         if (step === 'architecture_review_as_built') {
           await persist(root, {
-            version: 'v1',
+            version: 'v2',
             verdict: 'PLAN_GAP',
             reachability: [],
             driftNotes: [],

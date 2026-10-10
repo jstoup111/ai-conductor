@@ -353,7 +353,7 @@ Every pattern declares one lifecycle scope:
 | `architecture_review_as_built` | `.pipeline/architecture-review-as-built.md` | run |
 | `rebase` | *(none — verdict computed from git state)* | — |
 | `finish` | *(none)* | — |
-| `remediate` | *(none — the engine reads `.pipeline/remediation.json` directly)* | — |
+| `remediate` | *(none — the engine persists and reads `.pipeline/remediation-plan.json` directly)* | — |
 | `attribution_verify` | *(none — computed, not a file)* | — |
 
 Totals: 8 steps write into `.docs/`, 7 write into `.pipeline/`, `acceptance_specs` matches project test
@@ -496,6 +496,7 @@ Agent-authored, engine-validated. Alphabetized.
 | File | Shape | Writer |
 | --- | --- | --- |
 | `acceptance-specs-red.json` | `{ command, targetSpecs[], executed, passed, failed, skipped, errors, failingTests[], ranAt, intentRationale, exception?, summary? }`. Validation hard-fails on `errors > 0`, `skipped > 0`, `executed < 1`, or `failed < 1` unless a recorded `exception` (`{ kind: 'remediation', reason, attribution }`) waives separate RED proof — a RED phase must actually fail, or the waiver must be attributable | `acceptance-red-runner.ts` |
+| `architecture-review-as-built.json` | Gate authority: `{ attemptId, codeStamp, verdict, policy, recordedFindings[] }`. `verdict` is the validated reviewer result, contract `version: 'v2'`. The engine stamps each `BLOCKED` finding id as `as-built:<URI-encoded attemptId>:<one-based ordinal>`; a reviewer-supplied finding id is rejected. A valid `v1` envelope reads as prior-version evidence, and the gate requires a fresh `v2` verdict. Written atomically. | engine (`architecture_review_as_built` step) |
 | `architecture-review-as-built.md` | Markdown with a `Verdict: <value>` line | as-built review step |
 | `architecture-review-as-built-code-stamp.json` | The HEAD sha the review was formed against, plus the engine-stamped `runId` for its latest dispatch | engine |
 | `assessment/` | Assessment outputs | `assess` skill |
@@ -521,7 +522,8 @@ Agent-authored, engine-validated. Alphabetized.
 | `protected-artifact-seal.json` | See above | `protected-artifact-seal.ts` |
 | `rebase-residue.json` | `[{ sha, citingTaskIds[], reason }]` — citations a rebase could not translate | `rebase-translate.ts` |
 | `rebase-rewrites.json` | Pre-to-post rebase sha map, merged transitively; atomic temp plus rename | `rebase-translate.ts` |
-| `remediation.json` | Legacy remediation output is per-gap dispositions and tasks. Post-join `build_review` adjudication writes the additive strict `{ mode: 'case-v1', domain: 'build_review', sourceOutcomes, cases }` form; the engine validates it before any case or effect state changes. Its source outcomes include `refuted`; a `refute` case binds an existing attempted action case, has high confidence, and carries a claim plus assertion verdicts with path/excerpt evidence. | `remediate` skill |
+| `remediation.json` | Post-join `build_review` adjudication output only, in the strict `{ mode: 'case-v1', domain: 'build_review', sourceOutcomes, cases }` form; the engine validates it before any case or effect state changes. Gap plans use `remediation-plan.json`. Its source outcomes include `refuted`; a `refute` case binds an existing attempted action case, has high confidence, and carries a claim plus assertion verdicts with path/excerpt evidence. | `remediate` skill |
+| `remediation-plan.json` | Gap-plan authority: `{ version: 'v1', attemptId, source, requiredReferenceDigest, dispositions[] }`. The engine checks the planner's native structured result against its bounded input projection, then writes it. Each disposition answers one `reference` with `disposition`, `targetStep`, a halt `category` or `null`, `rationale`, new `tasks[]`, and active-plan `boundTaskIds[]`. Every projected PRD criterion, as-built finding, and refusal must be answered exactly once. `source` is `validation-group`, `prd-audit`, `as-built`, `build-stall`, or `finish-verification`. A plan from another attempt reads as absent, and a malformed envelope reads as invalid. Written atomically. | engine (`remediate` step) |
 | `remediation-cases.json` | Version 2 feature-local case state. It retains the version-one `build_review` cases, effects, and suppressions, and adds a distinct `prd_widening` collection with engine-stamped case IDs, immutable original source snapshots, current source links, and validated relationships. PRD records carry no autonomous action/effect or operator authority. A resolved build-review `refute` case retains its refutation record and any residual deferral effect. Reads and writes validate the feature identity and replace atomically under the conductor lease; malformed or unsupported history remains intact and halts with named recovery. | build-review adjudication coordinator |
 | `summary.json` | At least `{ tasks_completed: number }`; read tolerantly — missing or corrupt reads as 0 | `pipeline` skill |
 | `test-failures.md` | Failure detail consumed by the remediation flow | remediate flow |

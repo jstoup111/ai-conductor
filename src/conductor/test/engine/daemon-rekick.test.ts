@@ -39,6 +39,7 @@ import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact
 import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
 
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
@@ -380,16 +381,14 @@ describe('consumeResumeAuthorizations', () => {
     const conductor = new Conductor({
       stateFilePath: join(worktree, '.pipeline', 'conduct-state.json'),
       stepRunner: {
-        run: async () => {
-          await writeFile(join(worktree, '.pipeline', 'remediation.json'), JSON.stringify({
-            dispositions: criteria.map((criterion) => ({
+        run: async (_step, _state, options) => {
+          await persistFixtureProjectedRemediationPlan(worktree, options, criteria.map((criterion) => ({
               id: criterion,
               disposition: 'build',
               category: null,
               rationale: `Repair ${criterion}.`,
               tasks: [{ id: `rem-${criterion.toLowerCase()}`, title: `Repair ${criterion}` }],
-            })),
-          }));
+          })));
           return { success: true };
         },
       },

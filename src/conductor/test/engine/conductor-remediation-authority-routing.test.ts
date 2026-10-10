@@ -21,33 +21,14 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
-import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { writeState } from '../../src/engine/state.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { PrdAuditJudgment } from '../../src/engine/prd-audit-contract.js';
-
-const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
-  reachability: { enabled: true, reason: 'test fixture' },
-  planGap: { enabled: true, reason: 'test fixture' },
-  adrCompliance: { enabled: false, reason: 'test fixture' },
-  diagramDrift: { enabled: false, reason: 'test fixture' },
-};
-
-async function writeBlockedAsBuiltFixture(projectRoot: string, id = 'ARCH-1'): Promise<void> {
-  await persistAsBuiltVerdict(projectRoot, {
-    version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
-    findings: [{
-      id, class: 'REMEDIABLE',
-      reference: { kind: 'plan-task', taskId: '1' },
-      summary: 'The approved task needs repair.',
-    }],
-    violations: 'The approved task is incomplete.',
-    resolution: 'Repair task 1.',
-  }, {
-    attemptId: 'fixture-run', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY,
-  });
-}
+import {
+  persistFixtureProjectedRemediationPlan,
+  persistFixtureRemediationPlan,
+  persistFixtureTestRemediationPlan,
+} from './remediation-plan-fixtures.js';
 
 async function persistFixturePrdAuditVerdict(
   projectRoot: string,
@@ -135,34 +116,16 @@ describe('planRemediation implementation-only authority routing', () => {
     expect({ outcome: outcome.kind, remediationDispatches }).toEqual({ outcome: 'none', remediationDispatches: 0 });
   });
 
-  it('rejects an ADR-keyed remediation task from a gate without a growth allowance', async () => {
+  it('rejects an unprovenanced remediation task without a growth allowance', async () => {
     const dispatched: StepName[] = [];
     const runner: StepRunner = {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         dispatched.push(step);
-        await writeFile(
-          join(projectRoot, '.pipeline/remediation.json'),
-          JSON.stringify({
-            dispositions: [
-              {
-                id: 'adr-2026-07-27-provider-lifecycle',
-                disposition: 'build',
-                category: null,
-                rationale:
-                  'Approved architecture remains authoritative; implementation drift is confined to src/provider-home.ts:42 and its tests.',
-                tasks: [
-                  {
-                    id: 'rem-adr-1250-1',
-                    title:
-                      'src/provider-home.ts:42 — align implementation and tests with the approved provider lifecycle',
-                    status: 'pending',
-                  },
-                ],
-              },
-            ],
-          }),
-          'utf8',
-        );
+        await persistFixtureTestRemediationPlan(projectRoot, options, [{
+          id: 'ARCH-1', disposition: 'build', category: null,
+          rationale: 'Approved architecture remains authoritative; implementation drift is confined to src/provider-home.ts:42 and its tests.',
+          tasks: [{ id: 'rem-adr-1250-1', title: 'src/provider-home.ts:42 — align implementation and tests with the approved provider lifecycle' }],
+        }]);
         return { success: true };
       },
     };
@@ -182,7 +145,7 @@ describe('planRemediation implementation-only authority routing', () => {
         state: ConductState,
         steps: typeof ALL_STEPS,
         dispatchContext: string,
-        hintSource: { source: string; evidenceFile: string },
+        hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
       ) => Promise<{ kind: string; target?: string }>;
     }).planRemediation(
       {
@@ -190,10 +153,10 @@ describe('planRemediation implementation-only authority routing', () => {
         feature_desc: 'feature',
       } as ConductState,
       ALL_STEPS,
-      'as-built architecture review blocked',
+      'finish verification reported an unprovenanced remediation',
       {
-        source: 'architecture-review-as-built',
-        evidenceFile: '.pipeline/architecture-review-as-built.md',
+        source: 'finish-verification',
+        evidence: [{ gate: 'finish' as StepName, evidenceFile: '.pipeline/finish-verification.md' }],
       },
     );
 
@@ -216,24 +179,9 @@ describe('planRemediation implementation-only authority routing', () => {
     });
   });
 
-  it('does not route an ordinary taskless BUILD disposition', async () => {
+  it('does not route when an ordinary taskless BUILD response yields no typed plan', async () => {
     const runner: StepRunner = {
       run: async () => {
-        await writeFile(
-          join(projectRoot, '.pipeline/remediation.json'),
-          JSON.stringify({
-            dispositions: [
-              {
-                id: 'adr-2026-07-27-provider-lifecycle',
-                disposition: 'build',
-                category: null,
-                rationale: 'Implementation drift needs a concrete correction.',
-                tasks: [],
-              },
-            ],
-          }),
-          'utf8',
-        );
         return { success: true };
       },
     };
@@ -253,7 +201,7 @@ describe('planRemediation implementation-only authority routing', () => {
         state: ConductState,
         steps: typeof ALL_STEPS,
         dispatchContext: string,
-        hintSource: { source: string; evidenceFile: string },
+        hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
       ) => Promise<{ kind: string; target?: string; detail?: string }>;
     }).planRemediation(
       {
@@ -261,17 +209,14 @@ describe('planRemediation implementation-only authority routing', () => {
         feature_desc: 'feature',
       } as ConductState,
       ALL_STEPS,
-      'as-built architecture review blocked',
+      'finish verification returned no remediation plan',
       {
-        source: 'architecture-review-as-built',
-        evidenceFile: '.pipeline/architecture-review-as-built.md',
+        source: 'finish-verification',
+        evidence: [{ gate: 'finish' as StepName, evidenceFile: '.pipeline/finish-verification.md' }],
       },
     );
 
-    expect(outcome).toMatchObject({
-      kind: 'halt',
-      detail: expect.stringContaining('ordinary BUILD disposition with no concrete task'),
-    });
+    expect(outcome).toMatchObject({ kind: 'none' });
   });
 
   it('sends BUILD only the criterion-bound prd_audit remediation gaps', async () => {
@@ -292,21 +237,14 @@ describe('planRemediation implementation-only authority routing', () => {
       evidenceTaskIds: ['1'], ownerTaskId: '1',
     }]);
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
-          dispositions: [
-            {
-              id: 'S1.1', disposition: 'build', category: null,
-              rationale: 'Repair the authorized criterion.',
-              tasks: [{ id: 'rem-authorized', title: 'Implement the authorized repair' }],
-            },
-            {
-              id: 'FR-42', disposition: 'build', category: null,
-              rationale: 'Invented unmatched work.',
-              tasks: [{ id: 'rem-unmatched', title: 'Implement the unmatched repair' }],
-            },
-          ],
-        }), 'utf8');
+      run: async (_step, _state, options) => {
+        // The foreign FR-42 entry was a legacy-reader behavior.  A typed
+        // plan may contain only the engine-projected S1.1 reference.
+        await persistFixtureProjectedRemediationPlan(projectRoot, options, [{
+          id: 'S1.1', disposition: 'build', category: null,
+          rationale: 'Repair the authorized criterion.',
+          tasks: [{ id: 'rem-authorized', title: 'Implement the authorized repair' }],
+        }]);
         return { success: true };
       },
     };
@@ -354,14 +292,12 @@ describe('planRemediation implementation-only authority routing', () => {
       requirementAssociations: [], evidenceTaskIds: ['1'], ownerTaskId: '1',
     }]);
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
-          dispositions: [{
-            id: gapId, disposition: 'build', category: null,
-            rationale: 'Repair the criterion-bound implementation.',
-            tasks: [{ id: `rem-case-${gapId}`, title: 'Implement the criterion repair' }],
-          }],
-        }), 'utf8');
+      run: async (_step, _state, options) => {
+        await persistFixtureProjectedRemediationPlan(projectRoot, options, [{
+          id: gapId, disposition: 'build', category: null,
+          rationale: 'Repair the criterion-bound implementation.',
+          tasks: [{ id: `rem-case-${gapId}`, title: 'Implement the criterion repair' }],
+        }]);
         return { success: true };
       },
     };
@@ -382,11 +318,13 @@ describe('planRemediation implementation-only authority routing', () => {
     );
 
     expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
-    expect(outcome.hint).toContain(gapId);
+    // The validated projection keeps the canonical criterion spelling; a
+    // case-variant provider reference never becomes a second gap identity.
+    expect(outcome.hint).toContain(criterion);
     expect(await readFile(planPath, 'utf8')).toContain(`rem-case-${gapId}`);
   });
 
-  it('halts the FR-S5.1 non-match without prefix admission and names available criterion keys', async () => {
+  it('does not route a foreign PRD reference that produces no typed plan', async () => {
     await mkdir(join(projectRoot, '.docs/stories'), { recursive: true });
     await writeFile(join(projectRoot, '.docs/stories/feature.md'), [
       '# Stories', '', '## Story 5: remediation', '', '#### Happy Path',
@@ -399,16 +337,7 @@ describe('planRemediation implementation-only authority routing', () => {
       evidenceTaskIds: ['1'], ownerTaskId: '1',
     }]);
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
-          dispositions: [{
-            id: 'FR-S5.1', disposition: 'build', category: null,
-            rationale: 'Off-plan telemetry work.',
-            tasks: [{ id: 'rem-invented', title: 'Build off-plan telemetry' }],
-          }],
-        }), 'utf8');
-        return { success: true };
-      },
+      run: async () => ({ success: true }),
     };
     const conductor = new Conductor({
       stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'), stepRunner: runner,
@@ -425,18 +354,12 @@ describe('planRemediation implementation-only authority routing', () => {
       { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
     );
 
-    expect(outcome).toMatchObject({
-      kind: 'halt',
-      haltClass: 'kickback-cap',
-      detail: expect.stringContaining('no admitted remediation gap'),
-    });
-    expect(outcome.detail).toContain('Rejected append-disposition gap IDs: FR-S5.1.');
-    expect(outcome.detail).toContain('Available admission keys: S5.1.');
+    expect(outcome).toMatchObject({ kind: 'none' });
     expect(await readFile(planPath, 'utf8')).not.toContain('rem-invented');
   });
 
   it.each(['NC.1', 'nc.1'])(
-    'halts the owner-less PLAN_GAP-style append disposition for gap id %s',
+    'does not route an owner-less PLAN_GAP-style append response for gap id %s',
     async (id) => {
       await mkdir(join(projectRoot, '.docs/stories'), { recursive: true });
       await writeFile(join(projectRoot, '.docs/stories/feature.md'), [
@@ -449,16 +372,7 @@ describe('planRemediation implementation-only authority routing', () => {
         requirementAssociations: [], evidenceTaskIds: [],
       }]);
       const runner: StepRunner = {
-        run: async () => {
-          await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
-            dispositions: [{
-              id, disposition: 'plan', category: null,
-              rationale: 'Attempted plan growth without an admitting criterion.',
-              tasks: [{ id: `rem-ownerless-${id}`, title: 'Append unowned plan work' }],
-            }],
-          }), 'utf8');
-          return { success: true };
-        },
+        run: async () => ({ success: true }),
       };
       const conductor = new Conductor({
         stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'), stepRunner: runner,
@@ -475,16 +389,12 @@ describe('planRemediation implementation-only authority routing', () => {
         { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
       );
 
-      expect(outcome).toMatchObject({
-        kind: 'halt',
-        haltClass: 'kickback-cap',
-        detail: expect.stringContaining('no admitted remediation gap'),
-      });
+      expect(outcome).toMatchObject({ kind: 'none' });
       expect(await readFile(planPath, 'utf8')).not.toContain(`rem-ownerless-${id}`);
     },
   );
 
-  it('reports when a validated prd_audit report has no admission keys', async () => {
+  it('does not route an unprojected answer when prd_audit has no admission keys', async () => {
     await mkdir(join(projectRoot, '.docs/stories'), { recursive: true });
     await writeFile(join(projectRoot, '.docs/stories/feature.md'), [
       '# Stories', '', '## Story 5: remediation', '', '#### Happy Path',
@@ -497,16 +407,7 @@ describe('planRemediation implementation-only authority routing', () => {
       evidenceTaskIds: [],
     }]);
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
-          dispositions: [{
-            id: 'FR-S5.1', disposition: 'build', category: null,
-            rationale: 'Attempted repair despite no FIXABLE finding.',
-            tasks: [{ id: 'rem-unadmitted', title: 'Build an unadmitted repair' }],
-          }],
-        }), 'utf8');
-        return { success: true };
-      },
+      run: async () => ({ success: true }),
     };
     const conductor = new Conductor({
       stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'), stepRunner: runner,
@@ -523,25 +424,17 @@ describe('planRemediation implementation-only authority routing', () => {
       { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
     );
 
-    expect(outcome).toMatchObject({
-      kind: 'halt',
-      detail: expect.stringContaining('no admitted remediation gap'),
-    });
-    expect(outcome.detail).toContain('Rejected append-disposition gap IDs: FR-S5.1.');
-    expect(outcome.detail).toContain('No admission keys were available.');
+    expect(outcome).toMatchObject({ kind: 'none' });
     expect(await readFile(planPath, 'utf8')).not.toContain('rem-unadmitted');
   });
 
-  it('halts a taskless unbound as-built remediation instead of routing its target', async () => {
-    await writeBlockedAsBuiltFixture(projectRoot, 'INVENTED-9');
+  it('halts a taskless unprovenanced remediation instead of routing its target', async () => {
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
-          dispositions: [{
-            id: 'INVENTED-9', disposition: 'architecture_review', category: null,
-            rationale: 'Off-plan publication work.', tasks: [],
-          }],
-        }), 'utf8');
+      run: async (_step, _state, options) => {
+        await persistFixtureTestRemediationPlan(projectRoot, options, [{
+          id: 'INVENTED-9', disposition: 'architecture_review', category: null,
+          rationale: 'Off-plan publication work.', tasks: [],
+        }]);
         return { success: true };
       },
     };
@@ -556,19 +449,16 @@ describe('planRemediation implementation-only authority routing', () => {
     }).planRemediation(
       { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
       ALL_STEPS,
-      'as-built architecture review blocked',
+      'finish verification rejected an unprovenanced remediation',
       {
-        source: 'architecture-review-as-built',
-        evidence: [{
-          gate: 'architecture_review_as_built',
-          evidenceFile: '.pipeline/architecture-review-as-built.json',
-        }],
+        source: 'finish-verification',
+        evidence: [{ gate: 'finish' as StepName, evidenceFile: '.pipeline/finish-verification.md' }],
       },
     );
 
     expect(outcome).toMatchObject({
       kind: 'halt',
-      detail: expect.stringContaining('planner findings do not exactly match'),
+      detail: expect.stringContaining('no admitted remediation gap'),
     });
   });
 
@@ -583,22 +473,16 @@ describe('planRemediation implementation-only authority routing', () => {
     },
   ])('preserves a taskless BUILD answer to an admitted $source build-stall question', async ({ source, evidenceFile }) => {
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(
-          join(projectRoot, '.pipeline/remediation.json'),
-          JSON.stringify({
-            dispositions: [
-              {
-                id: 'stall:validation-layer',
-                disposition: 'build',
-                category: null,
-                rationale: 'The committed boundary contract answers the stall question.',
-                tasks: [],
-              },
-            ],
-          }),
-          'utf8',
-        );
+      run: async (_step, _state, options) => {
+        await persistFixtureRemediationPlan(projectRoot, options, {
+          version: 'v1',
+          dispositions: [{
+            reference: { kind: 'stall', id: 'stall:validation-layer' },
+            disposition: 'build', category: null,
+            rationale: 'The committed boundary contract answers the stall question.',
+            tasks: [], boundTaskIds: [],
+          }],
+        });
         return { success: true };
       },
     };
@@ -641,22 +525,16 @@ describe('planRemediation implementation-only authority routing', () => {
 
   it('halts an unadmitted taskless build_stall_zero_work remediation instead of routing raw fixes', async () => {
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(
-          join(projectRoot, '.pipeline/remediation.json'),
-          JSON.stringify({
-            dispositions: [
-              {
-                id: 'stall:validation-layer',
-                disposition: 'build',
-                category: null,
-                rationale: 'The committed boundary contract answers the stall question.',
-                tasks: [],
-              },
-            ],
-          }),
-          'utf8',
-        );
+      run: async (_step, _state, options) => {
+        await persistFixtureRemediationPlan(projectRoot, options, {
+          version: 'v1',
+          dispositions: [{
+            reference: { kind: 'stall', id: 'stall:validation-layer' },
+            disposition: 'build', category: null,
+            rationale: 'The committed boundary contract answers the stall question.',
+            tasks: [], boundTaskIds: [],
+          }],
+        });
         return { success: true };
       },
     };
@@ -735,22 +613,16 @@ describe('planRemediation implementation-only authority routing', () => {
     },
   ])('halts an unadmitted taskless build-stall remediation $caseName', async ({ hintSource }) => {
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(
-          join(projectRoot, '.pipeline/remediation.json'),
-          JSON.stringify({
-            dispositions: [
-              {
-                id: 'stall:validation-layer',
-                disposition: 'build',
-                category: null,
-                rationale: 'The committed boundary contract answers the stall question.',
-                tasks: [],
-              },
-            ],
-          }),
-          'utf8',
-        );
+      run: async (_step, _state, options) => {
+        await persistFixtureRemediationPlan(projectRoot, options, {
+          version: 'v1',
+          dispositions: [{
+            reference: { kind: 'stall', id: 'stall:validation-layer' },
+            disposition: 'build', category: null,
+            rationale: 'The committed boundary contract answers the stall question.',
+            tasks: [], boundTaskIds: [],
+          }],
+        });
         return { success: true };
       },
     };
@@ -765,6 +637,11 @@ describe('planRemediation implementation-only authority routing', () => {
       maxRetries: 1,
     });
 
+    const remediationState = {
+      session_started_at: Date.now() - 1_000,
+      feature_desc: 'feature',
+    } as ConductState;
+    (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...remediationState };
     const outcome = await (conductor as unknown as {
       planRemediation: (
         state: ConductState,
@@ -773,10 +650,7 @@ describe('planRemediation implementation-only authority routing', () => {
         hintSource: unknown,
       ) => Promise<{ kind: string; detail?: string }>;
     }).planRemediation(
-      {
-        session_started_at: Date.now() - 1_000,
-        feature_desc: 'feature',
-      } as ConductState,
+      remediationState,
       ALL_STEPS,
       'Remediate build stall: which validation boundary applies?',
       hintSource,
@@ -784,7 +658,11 @@ describe('planRemediation implementation-only authority routing', () => {
 
     expect(outcome).toMatchObject({
       kind: 'halt',
-      detail: expect.stringContaining('no admitted remediation gap'),
+      detail: expect.stringContaining(
+        hintSource.evidence?.some((provenance) => provenance.gate === 'architecture_review_as_built')
+          ? 'remediation projection input fault: source as-built verdict'
+          : 'no admitted remediation gap',
+      ),
     });
   });
 
@@ -806,23 +684,15 @@ describe('planRemediation implementation-only authority routing', () => {
     async ({ id, target, rationale }) => {
       const dispatched: StepName[] = [];
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           dispatched.push(step);
-          await writeFile(
-            join(projectRoot, '.pipeline/remediation.json'),
-            JSON.stringify({
-              dispositions: [
-                {
-                  id,
-                  disposition: target,
-                  category: null,
-                  rationale,
-                  tasks: [],
-                },
-              ],
-            }),
-            'utf8',
-          );
+          await persistFixtureTestRemediationPlan(projectRoot, options, [{
+            id,
+            disposition: target,
+            category: null,
+            rationale,
+            tasks: [],
+          }]);
           return { success: true };
         },
       };
@@ -842,7 +712,7 @@ describe('planRemediation implementation-only authority routing', () => {
           state: ConductState,
           steps: typeof ALL_STEPS,
           dispatchContext: string,
-          hintSource: { source: string; evidenceFile: string },
+          hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
         ) => Promise<{ kind: string; detail?: string }>;
       }).planRemediation(
         {
@@ -852,8 +722,8 @@ describe('planRemediation implementation-only authority routing', () => {
         ALL_STEPS,
         'as-built architecture review blocked',
         {
-          source: 'architecture-review-as-built',
-          evidenceFile: '.pipeline/architecture-review-as-built.md',
+          source: 'finish-verification',
+          evidence: [{ gate: 'finish' as StepName, evidenceFile: '.pipeline/finish-verification.md' }],
         },
       );
 

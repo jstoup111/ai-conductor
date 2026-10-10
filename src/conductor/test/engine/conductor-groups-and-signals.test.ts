@@ -94,6 +94,7 @@ import { ModelAvailability } from '../../src/engine/model-availability.js';
 import type { EscalateBuildFailureOpts } from '../../src/engine/build-failure-escalation.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
+import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
 
 import type {
   InvokeOptions,
@@ -209,22 +210,38 @@ async function writePrdAuditFixableFixture(
 
 function asBuiltApprovedFixture() {
   return {
-    version: 'v1' as const,
+    version: 'v2' as const,
     verdict: 'APPROVED' as const,
     reachability: [],
     driftNotes: [],
   };
 }
 
-function asBuiltBlockedDesignFixture(id = 'ADR-1', summary = 'ADR-1 violated.') {
+function asBuiltBlockedDesignFixture(summary = 'ADR-1 violated.') {
   return {
-    version: 'v1' as const,
+    version: 'v2' as const,
     verdict: 'BLOCKED' as const,
     reachability: [],
     driftNotes: [],
-    findings: [{ id, class: 'DESIGN' as const, summary }],
+    findings: [{ class: 'DESIGN' as const, summary }],
     violations: summary,
     resolution: 'A human decision is required.',
+  };
+}
+
+function asBuiltBlockedRemediableFixture(summary = 'ADR-1 needs a guard.') {
+  return {
+    version: 'v2' as const,
+    verdict: 'BLOCKED' as const,
+    reachability: [],
+    driftNotes: [],
+    findings: [{
+      class: 'REMEDIABLE' as const,
+      reference: { kind: 'plan-task' as const, taskId: '1' },
+      summary,
+    }],
+    violations: summary,
+    resolution: 'Implement the missing guard.',
   };
 }
 
@@ -1503,6 +1520,7 @@ describe('engine/conductor', () => {
 
   describe('Mixed failure — single remediate dispatch over the gap union (Task 21)', () => {
     const VALIDATION_GROUP_PREREQS = {
+      feature_desc: 'validation-remediation',
       worktree: 'done',
       memory: 'done',
       explore: 'done',
@@ -1522,6 +1540,10 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+    beforeEach(async () => {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'validation-remediation.md'), '### Task 1: Fixture task\n\nDone when: the fixture is complete.\n');
+    });
     function mixedFailingRunner(): {
       runner: StepRunner;
       remediateCalls: Array<{ retryReason?: string }>;
@@ -1544,37 +1566,23 @@ describe('engine/conductor', () => {
               { criterionId: 'S1.2', ownerTaskId: '1' },
             ]);
           } else if (step === 'architecture_review_as_built') {
-            await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
+            await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedRemediableFixture());
           } else if (step === 'remediate') {
             remediateCalls.push({ retryReason: opts?.retryReason });
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: 'S1.1',
-                    disposition: 'build',
-                    category: null,
-                    rationale: 'Implement FR-1',
-                    tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
-                  },
-                  {
-                    id: 'S1.2',
-                    disposition: 'build',
-                    category: null,
-                    rationale: 'Implement FR-2',
-                    tasks: [{ id: 'rem-fr-2', title: 'Implement FR-2' }],
-                  },
-                  {
-                    id: 'ADR-1',
-                    disposition: 'build',
-                    category: null,
-                    rationale: 'Fix ADR-1 violation',
-                    tasks: [{ id: 'rem-adr-1', title: 'Fix ADR-1 violation' }],
-                  },
-                ],
-              }),
-            );
+            await persistFixtureProjectedRemediationPlan(dir, opts, [
+              {
+                id: 'S1.1', disposition: 'build', category: null,
+                rationale: 'Implement FR-1', tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
+              },
+              {
+                id: 'S1.2', disposition: 'build', category: null,
+                rationale: 'Implement FR-2', tasks: [{ id: 'rem-fr-2', title: 'Implement FR-2' }],
+              },
+              {
+                id: 'as-built', referenceKind: 'as-built-finding', disposition: 'build', category: null,
+                rationale: 'Implement the missing guard', tasks: [{ id: 'rem-adr-1', title: 'Implement guard' }],
+              },
+            ]);
           }
           return { success: true };
         }),
@@ -1613,13 +1621,12 @@ describe('engine/conductor', () => {
       // Exactly one /remediate dispatch for the whole mixed-failure join.
       expect(remediateCalls).toHaveLength(1);
 
-      // prd_audit is the routable branch; the as-built BLOCKED sibling is
-      // terminal and is not remediated through the former join contract.
+      // Both typed verdict sources are admitted as one engine-owned projection.
       expect(remediateCalls[0].retryReason).toContain('.pipeline/prd-audit.md');
       // ...and NOT the manual-test results path (manual_test passed cleanly).
       expect(remediateCalls[0].retryReason).not.toContain('manual-test-results.md');
 
-      expect(kickbacks.some((k) => k.to === 'build')).toBe(false);
+      expect(kickbacks.some((k) => k.to === 'build')).toBe(true);
     });
 
     it('halts a mixed as-built group report with every finding listed and re-runs the refused gate after HALT clears', async () => {
@@ -1645,13 +1652,13 @@ describe('engine/conductor', () => {
           } else if (step === 'architecture_review_as_built') {
             asBuiltCalls++;
             await writeAsBuiltFixture(dir, opts?.runId, {
-              version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+              version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
               findings: [
                 {
-                  id: 'ARCH-REMEDIABLE', class: 'REMEDIABLE',
+                  class: 'REMEDIABLE',
                   reference: { kind: 'plan-task', taskId: '1' }, summary: 'Add the missing guard',
                 },
-                { id: 'ARCH-DESIGN', class: 'DESIGN', summary: 'Choose the incompatible boundary' },
+                { class: 'DESIGN', summary: 'Choose the incompatible boundary' },
               ],
               violations: 'The boundary is incompatible.', resolution: 'Choose the boundary.',
             });
@@ -1677,9 +1684,9 @@ describe('engine/conductor', () => {
 
       await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
       const firstHalt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
-      expect(firstHalt).toContain('ARCH-REMEDIABLE (REMEDIABLE; plan task 1): Add the missing guard');
+      expect(firstHalt).toMatch(/as-built:[^:]+:1 \(REMEDIABLE; plan task 1\): Add the missing guard/);
       expect(firstHalt).toContain(
-        'ARCH-DESIGN (DESIGN; none): Choose the incompatible boundary',
+        'DESIGN; none): Choose the incompatible boundary',
       );
       expect(remediateCalls).toBe(0);
       await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
@@ -1746,20 +1753,8 @@ describe('engine/conductor', () => {
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
             remediateCalls.push({ retryReason: opts?.retryReason });
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: 'ADR-1',
-                    disposition: 'acceptance_specs',
-                    category: null,
-                    rationale: 'Fix ADR-1 violation',
-                    tasks: [{ id: 'rem-adr-1', title: 'Fix ADR-1 violation' }],
-                  },
-                ],
-              }),
-            );
+            // A DESIGN verdict is terminal, so this branch is never admitted
+            // to the typed remediation projection.
           }
           return { success: true };
         }),
@@ -1827,8 +1822,10 @@ describe('engine/conductor', () => {
     });
   });
 
+  // Covers: task:23
   describe('Halt dispositions and partial plans (Task 23)', () => {
     const VALIDATION_GROUP_PREREQS = {
+      feature_desc: 'validation-remediation',
       worktree: 'done',
       memory: 'done',
       explore: 'done',
@@ -1848,6 +1845,10 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+    beforeEach(async () => {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'validation-remediation.md'), '### Task 1: Fixture task\n\nDone when: the fixture is complete.\n');
+    });
     it('a halt disposition halts the group even when other gaps in the SAME plan are routable fixes', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -1871,30 +1872,16 @@ describe('engine/conductor', () => {
           } else if (step === 'prd_audit') {
             await writePrdAuditFixableFixture(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
-            await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
+            await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedRemediableFixture());
           } else if (step === 'remediate') {
             remediateCalls.push({ retryReason: opts?.retryReason });
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: 'S1.1',
-                    disposition: 'build',
-                    category: null,
-                    rationale: 'Implement FR-1',
-                    tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
-                  },
-                  {
-                    id: 'ADR-1',
-                    disposition: 'halt',
-                    category: 'architectural-clarity',
-                    rationale: 'ADR-1 requires a human architectural decision',
-                    tasks: [],
-                  },
-                ],
-              }),
-            );
+            await persistFixtureProjectedRemediationPlan(dir, opts, [{
+              id: 'S1.1', disposition: 'build', category: null,
+              rationale: 'Implement FR-1', tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
+            }, {
+              id: 'as-built', referenceKind: 'as-built-finding', disposition: 'halt', category: 'architectural-clarity',
+              rationale: 'The missing guard requires an architectural decision', tasks: [],
+            }]);
           }
           return { success: true };
         }),
@@ -1926,7 +1913,8 @@ describe('engine/conductor', () => {
       expect(remediateCalls).toHaveLength(1);
       expect(kickbacks).toHaveLength(0);
       expect(haltEvents).toHaveLength(1);
-      expect(haltEvents[0]?.reason).toContain('as-built review verdict is BLOCKED');
+      expect(haltEvents[0]?.reason).toContain('needs human DECIDE');
+      expect(haltEvents[0]?.reason).toContain('(architectural-clarity: The missing guard requires an architectural decision)');
     });
 
     it('a plan covering only a subset of the failing gaps never green-lights the unaddressed gap on the next tail pass', async () => {
@@ -1957,26 +1945,16 @@ describe('engine/conductor', () => {
             // standing between this test and a false "gate satisfied".
             await writePrdAuditFixableFixture(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
-            await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
+            await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedRemediableFixture());
           } else if (step === 'remediate') {
             remediateCalls.push({ retryReason: opts?.retryReason });
             // Subset plan: only ever addresses prd_audit's FR-1 — the
-            // architecture_review_as_built ADR-1 gap is never named by any
+            // architecture_review_as_built finding is never named by any
             // disposition, in any round.
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: 'S1.1',
-                    disposition: 'build',
-                    category: null,
-                    rationale: 'Implement FR-1',
-                    tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
-                  },
-                ],
-              }),
-            );
+            await persistFixtureProjectedRemediationPlan(dir, opts, [{
+              id: 'S1.1', disposition: 'build', category: null,
+              rationale: 'Implement FR-1', tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
+            }]);
           }
           return { success: true };
         }),
@@ -2002,8 +1980,8 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // The PRD finding remains routable; the as-built BLOCKED sibling is
-      // terminal rather than part of the remediation-plan input.
+      // The incomplete typed plan is rejected rather than admitting only its
+      // PRD subset.
       expect(remediateCalls).toHaveLength(1);
       expect(remediateCalls[0].retryReason).toContain('.pipeline/prd-audit.md');
 
@@ -2012,21 +1990,20 @@ describe('engine/conductor', () => {
       // plan only covering prd_audit's gap.
       expect(doneEvents).toHaveLength(0);
 
-      // The unaddressed member is recorded 'refused' — the halt ended its
-      // attempt on a human-judgement boundary, not on its own work failing
-      // (adr-2026-08-24 D4). 'refused' does not satisfy a prerequisite, so the
-      // NEXT tail pass still re-verifies it from disk rather than trusting the
-      // stale pre-remediation verdict.
+      // The rejection halts the join before it can record a completed
+      // architecture-review member. An absent member cannot satisfy the next
+      // tail pass, so stale evidence never green-lights the missing finding.
       const persisted = await readState(statePath);
       expect(persisted.ok).toBe(true);
       const persistedState = (persisted as { ok: true; value: ConductState }).value;
       expect(persistedState.architecture_review_as_built).not.toBe('done');
-      expect(persistedState.architecture_review_as_built).toBe('refused');
+      expect(persistedState.architecture_review_as_built).toBeUndefined();
     });
   });
 
   describe('Remediation fallback + budget parity (Task 24)', () => {
     const VALIDATION_GROUP_PREREQS = {
+      feature_desc: 'validation-remediation',
       worktree: 'done',
       memory: 'done',
       explore: 'done',
@@ -2046,7 +2023,11 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
-    it('readRemediationPlanResult → null plan (unreadable /remediate plan) still lets the deterministic manual_test kickback proceed — LLM stream independence', async () => {
+    beforeEach(async () => {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'validation-remediation.md'), '### Task 1: Fixture task\n\nDone when: the fixture is complete.\n');
+    });
+    it('an unusable typed remediation result still lets the deterministic manual_test kickback proceed — LLM stream independence', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
@@ -2075,9 +2056,8 @@ describe('engine/conductor', () => {
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltApprovedFixture());
           } else if (step === 'remediate') {
             remediateCalls.push({ retryReason: opts?.retryReason });
-            // Deliberately write no (or unreadable) remediation.json — the
-            // planner produced no usable plan. readRemediationPlanResult returns
-            // a null plan → planRemediation resolves 'none'.
+            // Deliberately write no typed result: the planner produced no
+            // usable plan, so planRemediation resolves 'none'.
           }
           return { success: true };
         }),
@@ -2103,7 +2083,7 @@ describe('engine/conductor', () => {
       await conductor.run();
 
       // /remediate was dispatched for the non-MT gap, but never produced a
-      // usable plan (no remediation.json written) — bounded by the shared
+      // usable typed plan — bounded by the shared
       // remediation budget.
       expect(remediateCalls.length).toBeGreaterThanOrEqual(1);
       expect(remediateCalls.length).toBeLessThanOrEqual(2);
@@ -2123,7 +2103,6 @@ describe('engine/conductor', () => {
         JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
       );
 
-      let remediateRound = 0;
       const remediateCalls: Array<{ retryReason?: string }> = [];
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
@@ -2140,22 +2119,10 @@ describe('engine/conductor', () => {
             // Perpetually BLOCKED — build's mock never actually fixes it.
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
-            remediateRound++;
             remediateCalls.push({ retryReason: opts?.retryReason });
-            await writeFile(
-              join(dir, '.pipeline/remediation.json'),
-              JSON.stringify({
-                dispositions: [
-                  {
-                    id: `ADR-1-round-${remediateRound}`,
-                    disposition: 'build',
-                    category: null,
-                    rationale: 'Fix ADR-1 violation',
-                    tasks: [{ id: `rem-adr-1-${remediateRound}`, title: 'Fix ADR-1 violation' }],
-                  },
-                ],
-              }),
-            );
+            // A DESIGN verdict is terminal and never contributes a typed
+            // remediation reference; retaining the dispatch count verifies
+            // that no legacy sidecar can make it routable.
           }
           return { success: true };
         }),

@@ -570,6 +570,183 @@ for pin_index in 0 1 2; do
 done
 rm -f "$as_built_fixture"
 
+remediate_gap_plan_section() {
+  local file=$1
+
+  awk '
+    /^## Gap-plan judgment guidance$/ { active = 1; next }
+    active && /^## / { exit }
+    active { print }
+  ' "$file"
+}
+
+# The engine owns the gap-plan carrier: the planner and skill retain only
+# judgment guidance. Keep this audit scoped to the legacy gap-plan section so
+# its case-v1/v2 engine-mode contract remains outside this boundary.
+# Covers: task:34
+remediate_gap_plan_contract_audit() {
+  local file=$1
+  local source=$2
+  local body
+  local violations=0
+
+  case "$source" in
+    skill)
+      body=$(remediate_gap_plan_section "$file")
+      if [ -z "$body" ]; then
+        printf 'remediate gap-plan contract rejected: %s is missing gap-plan judgment guidance\n' "$file"
+        return 1
+      fi
+      ;;
+    planner)
+      body=$(<"$file")
+      ;;
+    *)
+      printf 'remediate gap-plan contract rejected: %s has unknown source %s\n' "$file" "$source"
+      return 1
+      ;;
+  esac
+
+  if printf '%s\n' "$body" | grep -qiE '^#+[[:space:]]+.*(output|result)[-[:space:]]*(format|contract)'; then
+    printf 'remediate gap-plan contract rejected: %s reintroduces an output-format block\n' "$file"
+    violations=1
+  fi
+
+  if printf '%s\n' "$body" | grep -qiE '[`](id|disposition|category|rationale|tasks|status)[`][[:space:]]+(field[[:space:]]+)?(must|is[[:space:]]+(set|required|non-empty|empty)|starts|contains)'; then
+    printf 'remediate gap-plan contract rejected: %s reintroduces a field rule\n' "$file"
+    violations=1
+  fi
+
+  if printf '%s\n' "$body" | awk '
+    /^\|/ && tolower($0) ~ /disposition/ { header = 1; next }
+    header && /^\|[[:space:]]*:?-{3,}/ { found = 1; exit }
+    $0 !~ /^\|/ { header = 0 }
+    END { exit !found }
+  '; then
+    printf 'remediate gap-plan contract rejected: %s reintroduces a disposition vocabulary table\n' "$file"
+    violations=1
+  fi
+
+  if printf '%s\n' "$body" | awk '
+    /^#+[[:space:]]+.*([Ii]nput|[Ee]vidence).*(recipe|instructions?|reading)/ { recipe = 1; next }
+    recipe && /^[[:space:]]*([0-9]+\.|[-*])[[:space:]]+(Read|Inspect|Collect|Open|Assemble|Parse)[[:space:]]/ { found = 1; exit }
+    END { exit !found }
+  '; then
+    printf 'remediate gap-plan contract rejected: %s reintroduces an input-reading recipe\n' "$file"
+    violations=1
+  fi
+
+  [ "$violations" -eq 0 ]
+}
+
+expect_remediate_gap_plan_fixture_failure() {
+  local description=$1
+  local fixture=$2
+  local source=$3
+  local expected_violation=$4
+  local output
+  local status
+
+  set +e
+  output=$(remediate_gap_plan_contract_audit "$fixture" "$source" 2>&1)
+  status=$?
+  set -e
+
+  if [ "$status" -ne 0 ] \
+    && [[ "$output" == *"$fixture"* ]] \
+    && [[ "$output" == *"$expected_violation"* ]]; then
+    pass "$description"
+  else
+    fail "$description"
+  fi
+}
+
+write_remediate_gap_plan_fixture() {
+  local fixture=$1
+  local source=$2
+
+  case "$source" in
+    skill)
+      cat > "$fixture" <<'EOF'
+## Gap-plan judgment guidance
+
+Use `existing-task` judgment when approved work already admits the repair.
+EOF
+      ;;
+    planner)
+      cat > "$fixture" <<'EOF'
+# Remediation Planner Agent
+
+Use `existing-task` judgment when approved work already admits the repair.
+EOF
+      ;;
+  esac
+}
+
+remediate_skill="$HARNESS_DIR/skills/remediate/SKILL.md"
+remediation_planner="$HARNESS_DIR/agents/remediation-planner.md"
+for remediate_source in skill planner; do
+  case "$remediate_source" in
+    skill) remediate_file="$remediate_skill" ;;
+    planner) remediate_file="$remediation_planner" ;;
+  esac
+  if remediate_gap_plan_contract_audit "$remediate_file" "$remediate_source"; then
+    pass "remediate gap-plan audit accepts shipped $remediate_source guidance"
+  else
+    fail "remediate gap-plan audit accepts shipped $remediate_source guidance"
+  fi
+done
+
+remediate_gap_plan_fixture=$(mktemp)
+for remediate_source in skill planner; do
+  write_remediate_gap_plan_fixture "$remediate_gap_plan_fixture" "$remediate_source"
+  if remediate_gap_plan_contract_audit "$remediate_gap_plan_fixture" "$remediate_source"; then
+    pass "remediate gap-plan audit permits existing-task judgment prose in $remediate_source"
+  else
+    fail "remediate gap-plan audit permits existing-task judgment prose in $remediate_source"
+  fi
+
+  write_remediate_gap_plan_fixture "$remediate_gap_plan_fixture" "$remediate_source"
+  cat >> "$remediate_gap_plan_fixture" <<'EOF'
+
+### Output format
+
+Return one JSON object for every gap.
+EOF
+  expect_remediate_gap_plan_fixture_failure \
+    "remediate gap-plan audit rejects output-format block in $remediate_source" \
+    "$remediate_gap_plan_fixture" "$remediate_source" 'output-format block'
+
+  write_remediate_gap_plan_fixture "$remediate_gap_plan_fixture" "$remediate_source"
+  printf '%s\n' 'The `category` field must be set only for a halt.' >> "$remediate_gap_plan_fixture"
+  expect_remediate_gap_plan_fixture_failure \
+    "remediate gap-plan audit rejects field rule in $remediate_source" \
+    "$remediate_gap_plan_fixture" "$remediate_source" 'field rule'
+
+  write_remediate_gap_plan_fixture "$remediate_gap_plan_fixture" "$remediate_source"
+  cat >> "$remediate_gap_plan_fixture" <<'EOF'
+
+| Disposition | Routes to |
+| --- | --- |
+| build | BUILD |
+EOF
+  expect_remediate_gap_plan_fixture_failure \
+    "remediate gap-plan audit rejects vocabulary table in $remediate_source" \
+    "$remediate_gap_plan_fixture" "$remediate_source" 'disposition vocabulary table'
+
+  write_remediate_gap_plan_fixture "$remediate_gap_plan_fixture" "$remediate_source"
+  cat >> "$remediate_gap_plan_fixture" <<'EOF'
+
+### Input recipe
+
+1. Read every finding before choosing a route.
+EOF
+  expect_remediate_gap_plan_fixture_failure \
+    "remediate gap-plan audit rejects input-reading recipe in $remediate_source" \
+    "$remediate_gap_plan_fixture" "$remediate_source" 'input-reading recipe'
+done
+rm -f "$remediate_gap_plan_fixture"
+
 build_review_skill_prose_audit() {
   local file=$1
   local pattern

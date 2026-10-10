@@ -157,7 +157,7 @@ describe('acceptance: a build_review PASS does not clear convergence (#1694 Stor
         }
         if (step === 'architecture_review_as_built') {
           await persistAsBuiltVerdict(dir, {
-            version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+            version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
           }, {
             attemptId: options?.runId ?? 'test-run',
             codeStamp: null,

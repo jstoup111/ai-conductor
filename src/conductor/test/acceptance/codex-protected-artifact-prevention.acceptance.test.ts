@@ -33,6 +33,8 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { persistFixtureProjectedRemediationPlan } from '../engine/remediation-plan-fixtures.js';
 
 const execFile = promisify(execFileCb);
 const roots: string[] = [];
@@ -239,30 +241,59 @@ describe('Story 6: remediation cannot route a foreign protected artifact back to
     roots.push(root);
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await mkdir(join(root, '.pipeline'), { recursive: true });
+    await mkdir(join(root, '.docs', 'stories'), { recursive: true });
     const planPath = join(root, '.docs', 'plans', 'feature-a.md');
-    await writeFile(planPath, '# Implementation Plan\n', 'utf8');
+    await writeFile(planPath, '# Implementation Plan\n\n### Task 1: Worker behavior\n\n**Files:** src/engine/worker.ts\n', 'utf8');
+    await writeFile(
+      join(root, '.docs', 'stories', 'feature-a.md'),
+      '## Story 1: Worker behavior\n\n### Happy Path\n- Given the plan, when built, then the worker behaves.\n',
+      'utf8',
+    );
     await writeFile(
       join(root, '.pipeline', 'engine-state.json'),
       JSON.stringify({ activePlanPath: planPath }),
       'utf8',
     );
+    await writeFile(
+      join(root, '.pipeline', 'prd-audit.md'),
+      '**PRD:** none\n\n## Verdict Table\n| Criterion | Grade | Plan task | Evidence | Intent relation |\n' +
+        '| --- | --- | --- | --- | --- |\n| S1.1 | FIXABLE | 1 | Worker behavior is missing. | within |\n',
+      'utf8',
+    );
+    await persistPrdAuditVerdict(root, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '1', ordinal: 1 },
+          criterionId: 'S1.1',
+          grade: 'FIXABLE',
+          evidence: 'Worker behavior is missing.',
+          rationale: 'Fixture judgment.',
+          requirementAssociations: [],
+          evidenceTaskIds: ['1'],
+          ownerTaskId: '1',
+        }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'fixture-run', codeStamp: null });
+    let remediateRuns = 0;
     const runner: StepRunner = {
-      run: async () => {
-        await writeFile(
-          join(root, '.pipeline', 'remediation.json'),
-          JSON.stringify({
-            dispositions: [
-              {
-                id: 'protected-rationale',
-                disposition: 'build',
-                category: null,
-                rationale: 'Amend .docs/specs/other-feature.md to resolve the gap.',
-                tasks: [{ id: 'repair-source', title: 'Update src/engine/worker.ts' }],
-              },
-            ],
-          }),
-          'utf8',
-        );
+      run: async (step, _state, options) => {
+        if (step === 'remediate') {
+          remediateRuns++;
+          await persistFixtureProjectedRemediationPlan(root, options, [
+            {
+              id: 'S1.1',
+              disposition: 'build',
+              category: null,
+              rationale: 'Amend .docs/specs/other-feature.md to resolve the gap.',
+              tasks: [{ id: 'repair-source', title: 'Update src/engine/worker.ts' }],
+            },
+          ]);
+        }
         return { success: true };
       },
     };
@@ -277,21 +308,28 @@ describe('Story 6: remediation cannot route a foreign protected artifact back to
       maxRetries: 1,
     });
 
+    const remediationState = { session_started_at: Date.now() - 1_000, feature_desc: 'feature-a' } as ConductState;
+    (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...remediationState };
     const outcome = await (conductor as unknown as {
       planRemediation: (
         state: ConductState,
         steps: typeof ALL_STEPS,
         context: string,
-        source: { source: string; evidenceFile: string },
+        source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
       ) => Promise<{ kind: string; target?: string; detail?: string }>;
     }).planRemediation(
-      { session_started_at: Date.now() - 1_000, feature_desc: 'feature-a' } as ConductState,
+      remediationState,
       ALL_STEPS,
       'acceptance fixture',
-      { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
+      {
+        source: 'prd-audit',
+        evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
+      },
     );
 
+    expect(remediateRuns).toBe(1);
     expect(outcome.kind).toBe('halt');
+    expect(outcome.detail).toMatch(/protected|DECIDE/i);
     expect(outcome.target).not.toBe('build');
     expect(await readFile(planPath, 'utf8')).not.toContain('repair-source');
   });

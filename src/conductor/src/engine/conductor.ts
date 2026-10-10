@@ -63,6 +63,11 @@ import {
   admitRefusalReworkPlan,
 } from './prd-widening-refusal-rework.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
+import {
+  buildRemediationProjection,
+  type RemediationProjectionLimits,
+} from './remediation-projection.js';
+import { readTypedRemediationPlan } from './remediation-plan-store.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { executeGithubOperation } from './github-operations.js';
@@ -203,8 +208,6 @@ import {
   readCurrentPrdAuditVerdict,
   prdAuditTypedRouteReport,
   classifyRetryDecision,
-  readRemediationPlanResult,
-  renderRemediationPlanAbsence,
   REMEDIATION_EXISTING_TASK_DISPOSITION,
   REMEDIATION_PUBLICATION_DISPOSITION,
   remediationDispositionAppendsToPlan,
@@ -248,6 +251,7 @@ import {
   type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
 import { parsePlanTaskBodies } from './plan-task-parse.js';
+import { AS_BUILT_VERDICT_CONTRACT_VERSION } from './as-built-contract.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
 import {
   PRD_AUDIT_REMEDIATION_GATE_SOURCE,
@@ -566,7 +570,9 @@ import {
   buildRemediationHint,
   buildRetryHint,
   earliestRemediationTarget,
-  formatRejectedDispositions,
+  remediationDispositionRejectionsFromDispatchOutput,
+  remediationGapsFromTypedPlan,
+  remediationProjectionSource,
   remediationGapTargetsAnotherFeatureSealedArtifact,
   resolveExistingTaskBindingsForAdmission,
 } from './remediation-hints.js';
@@ -637,6 +643,7 @@ export class Conductor {
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
+  private readonly remediationProjectionLimitOverrides: Partial<RemediationProjectionLimits> | undefined;
   private readonly executionLifecycle: ExecutionLifecycle;
   /** Route every conductor-owned marker failure through the existing event spine. */
   private async writeHaltMarker(
@@ -1497,11 +1504,16 @@ export class Conductor {
         }
         const stored = await readAsBuiltVerdict(this.projectRoot);
         if (stored.kind !== 'present') {
+          const absence = stored.kind === 'absent'
+            ? 'artifact is missing'
+            : stored.kind === 'prior-version'
+              ? `artifact has prior contract version ${stored.version}; a fresh ${AS_BUILT_VERDICT_CONTRACT_VERSION} verdict is required`
+              : stored.reason;
           return {
             done: false,
             routeClass: 'absent',
             retrySignal: 'structured-result-missing',
-            reason: `${absentReason}: ${stored.kind === 'absent' ? 'artifact is missing' : stored.reason}`,
+            reason: `${absentReason}: ${absence}`,
           };
         }
         if (expectedRunId !== undefined && stored.value.attemptId !== expectedRunId) {
@@ -2175,6 +2187,7 @@ export class Conductor {
     );
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
+    this.remediationProjectionLimitOverrides = opts.remediationProjectionLimitOverrides;
     this.executionLifecycle = new ExecutionLifecycle({
       events: this.events,
       onTerminal: async ({ event }) => {
@@ -3317,11 +3330,19 @@ export class Conductor {
   private async writeRefusalReworkHalt(
     detail: string,
     refused: readonly OverScopeRenderableFinding[],
+    plannerFault?: string,
   ): Promise<string> {
-    const reason = renderPrdAuditScopeHalt(
+    const refusedReason = renderPrdAuditScopeHalt(
       detail,
       renderOverScopeDecisionBlock(refused, refused, []),
     );
+    // The refusal decision remains the terminal authority for this round,
+    // but an exhausted typed planner must not disappear behind that stable
+    // decision block.  Keep the existing bytes exactly when no dispatch was
+    // attempted (for example a spent allowance).
+    const reason = plannerFault === undefined
+      ? refusedReason
+      : `${refusedReason}\n\nRemediation planner fault: ${plannerFault}`;
     await this.writeHaltMarker(reason + '\n', OVER_SCOPE_HALT_CLASS);
     return reason;
   }
@@ -3341,6 +3362,10 @@ export class Conductor {
     }
     | { kind: 'none'; reason: string }
   > {
+    // All production callers supply the provenance array. Keep this private
+    // routing seam tolerant of legacy direct callers while the older fixture
+    // shape is still in use; absent provenance is simply not prd_audit work.
+    const remediationEvidenceSources = hintSource.evidence ?? [];
     // Refusals stay on the normal event spine. This is intentionally the
     // existing gate_blocked member: remediation has no independent telemetry
     // file or side channel, and the existing persistence subscriber already
@@ -3349,7 +3374,7 @@ export class Conductor {
       try {
         await this.events.emit({
           type: 'gate_blocked',
-          step: hintSource.evidence?.[0]?.gate ?? 'remediate',
+          step: remediationEvidenceSources[0]?.gate ?? 'remediate',
           reason,
         });
       } catch {
@@ -3365,7 +3390,7 @@ export class Conductor {
     // fresh over-scope route, not from the (stale) caller hint. Keep the route
     // hoisted so admission and rejection can render the same decision block.
     let prdAuditOverScopeRoute: PrdAuditOverScopeRoute | undefined;
-    if (hintSource.evidence?.some((provenance) => provenance.gate === 'prd_audit')) {
+    if (remediationEvidenceSources.some((provenance) => provenance.gate === 'prd_audit')) {
       // The rendered Markdown report is deliberately not a remediation input.
       // A legacy or corrupt report cannot invent a repair route after the
       // typed-verdict migration; normal lifecycle handling will request a
@@ -3398,7 +3423,7 @@ export class Conductor {
       // group round (S5.3). Those retain their independent remediation route.
       if (
         overScopeRoute.kind === 'record' &&
-        hintSource.evidence.every((provenance) => provenance.gate === 'prd_audit') &&
+        remediationEvidenceSources.every((provenance) => provenance.gate === 'prd_audit') &&
         !(await this.prdAuditHasNonScopeBlockingFindings(this.currentRunId))
       ) {
         return { kind: 'none', reason: 'the recorded prd-audit scope acceptance closes the only blocking finding' };
@@ -3417,31 +3442,106 @@ export class Conductor {
         };
       }
     }
-    await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
-    const planResult = await readRemediationPlanResult(
-      this.projectRoot,
-      state.session_started_at,
-      hintSource.source,
-    );
-    if (!planResult.plan) {
-      return { kind: 'none', reason: renderRemediationPlanAbsence(planResult.cause) };
+    const projectionResult = await buildRemediationProjection(this.projectRoot, {
+      source: remediationProjectionSource(hintSource.source),
+      activePlanPath: await this.getActivePlanPath() ?? undefined,
+      featureDesc: state.feature_desc,
+      attemptRunId: this.currentRunId,
+      config: this.config,
+      git: this.prdAuditGit(),
+      includedGates: remediationEvidenceSources.map((evidence) => evidence.gate),
+      ...(prdAuditOverScopeRoute?.kind === 'refusal-rework'
+        ? { refusals: prdAuditOverScopeRoute.refusals }
+        : {}),
+    }, this.remediationProjectionLimitOverrides);
+    if (!projectionResult.ok) {
+      const { source, dimension, actual, limit, detail } = projectionResult.fault;
+      const bounds = actual === undefined || limit === undefined
+        ? ''
+        : ` (actual ${actual}, limit ${limit})`;
+      return this.haltForRemediationValidatorFault(
+        state,
+        hintSource,
+        `remediation projection input fault: source ${source}` +
+          `${dimension === undefined ? '' : `, dimension ${dimension}`}${bounds}: ${detail}`,
+      );
     }
-    const plan = planResult.plan;
-    for (const rejection of plan.rejected) {
-      try {
-        await this.events.emit({
-          type: 'remediation_disposition_rejected',
-          gapId: rejection.gapId,
-          disposition: rejection.disposition,
-          accepted: [...rejection.accepted],
-          field: rejection.field,
-        });
-      } catch {
-        // Rejection reporting is observability, not a dependency of its halt.
+    const remediateModelPolicy = this.modelPolicyForStep('remediate');
+    const maxAttempts = resolveStepConfig(
+      'remediate',
+      phaseForStep('remediate'),
+      remediateModelPolicy,
+      this.config,
+      { tier: state.complexity_tier },
+    ).max_retries;
+    let typedPlan: Awaited<ReturnType<typeof readTypedRemediationPlan>> | undefined;
+    let lastFault = 'remediation planner produced no current typed plan';
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const attemptId = randomUUID();
+      const dispatch = await this.stepRunner.run('remediate', state, {
+        runId: attemptId,
+        retryReason: dispatchContext,
+        remediationRequest: { mode: 'gap-plan', projection: projectionResult.projection },
+      });
+
+      // The native-schema preflight is a deterministic engine capability
+      // check. It cannot become true on a provider retry, so preserve its
+      // provider/capability diagnostic and halt before retry accounting.
+      if (
+        dispatch.output !== undefined &&
+        dispatch.output.startsWith('remediate gap-plan cannot enforce its native output schema')
+      ) {
+        return this.haltForRemediationValidatorFault(state, hintSource, dispatch.output);
       }
+
+      // These are already classified at the provider boundary. They are not
+      // malformed or absent plans, so do not turn a credential, throttle, or
+      // exhausted provider set into a structured-output diagnostic.
+      const providerUnavailable = dispatch.attempts !== undefined &&
+        dispatch.attempts.length > 0 &&
+        dispatch.attempts.every((providerAttempt) => providerAttempt.outcome === 'unavailable');
+      if (dispatch.authFailure || dispatch.rateLimited || providerUnavailable) {
+        return {
+          kind: 'none',
+          reason: dispatch.output ?? 'remediation provider is unavailable',
+        };
+      }
+
+      if (!dispatch.success) {
+        lastFault = dispatch.output ?? 'remediation planner dispatch failed';
+        const rejections = remediationDispositionRejectionsFromDispatchOutput(dispatch.output);
+        if (rejections.length > 0) {
+          for (const rejection of rejections) {
+            await this.events.emit({
+              type: 'remediation_disposition_rejected',
+              ...rejection,
+              accepted: [...rejection.accepted],
+            });
+          }
+          continue;
+        }
+        await reportRefusal(lastFault);
+        continue;
+      }
+
+      typedPlan = await readTypedRemediationPlan(this.projectRoot, { attemptId });
+      if (typedPlan.kind === 'present') break;
+
+      lastFault = typedPlan.kind === 'invalid'
+        ? typedPlan.reason
+        : 'remediation planner produced no current typed plan';
+      await reportRefusal(lastFault);
     }
-    const droppedDispositionDetail = formatRejectedDispositions(plan.rejected);
-    const droppedSuffix = droppedDispositionDetail ? `; dropped: ${droppedDispositionDetail}` : '';
+    if (typedPlan?.kind !== 'present') {
+      return { kind: 'none', reason: lastFault };
+    }
+    const plan = {
+      gaps: remediationGapsFromTypedPlan(typedPlan.value.dispositions),
+      rejected: [],
+      invalidTasklessBuild: false,
+    };
+    const droppedDispositionDetail = '';
+    const droppedSuffix = '';
     if (plan.gaps.length === 0 && !plan.invalidTasklessBuild) {
       const detail = `remediation planner returned no recognized disposition: ${droppedDispositionDetail}`;
       await reportRefusal(detail);
@@ -3535,10 +3635,6 @@ export class Conductor {
     // plan work, and appending it would amend `.docs/plans/<slug>.md` — a
     // protected artifact — producing self-amendment warnings for a change that
     // never belonged in the plan.
-    // All production callers supply the provenance array. Keep the private
-    // routing seam tolerant of legacy direct callers while the older fixture
-    // shape is still in use; absent provenance is simply not prd_audit work.
-    const remediationEvidenceSources = hintSource.evidence ?? [];
     const prdAuditEvidenceFile = remediationEvidenceSources.find(
       (provenance) => provenance.gate === 'prd_audit',
     )?.evidenceFile;
@@ -3685,7 +3781,7 @@ export class Conductor {
     const admittedRefusalGapIds = new Set<string>();
     const refusalCriteriaByGapId = new Map<string, string>();
     if (refusalReworkRoute !== undefined) {
-      const admission = admitRefusalReworkPlan(plan, refusalReworkRoute.refusals);
+      const admission = admitRefusalReworkPlan(typedPlan.value.dispositions, refusalReworkRoute.refusals);
       if (admission.kind === 'rejected') {
         // The refused block is the operator-facing authority for this round:
         // the caller writes it under the over-scope class, never a generic
@@ -3889,9 +3985,8 @@ export class Conductor {
         // case — misses that credit and lands here instead. This exit then
         // reported set arithmetic alone, and the architectural decision the
         // planner escalated never reached the operator: the halt named an id
-        // bookkeeping failure while `.pipeline/remediation.json` held the only
-        // copy of the reason, and the re-dispatch that clears the halt sweeps
-        // that file. Report both.
+        // bookkeeping failure while the planner held the only copy of the
+        // reason. Report both.
         //
         // Deliberately NOT matched back to a finding. The correspondence
         // between gap ids and finding ids is exactly what this branch has just
@@ -4749,6 +4844,35 @@ export class Conductor {
     await this.writeHaltMarker(reason + '\n', 'mechanical');
     await this.persistPendingStateChanges(state, 'persist conductor transition');
     await this.emitLoopHalt(reason);
+  }
+
+  /**
+   * Planner input and native-schema faults are deterministic validator
+   * preconditions too. Preserve a build-stall's operator question in the
+   * marker, then stop before a retry can re-dispatch an incapable provider.
+   */
+  private async haltForRemediationValidatorFault(
+    state: ConductState,
+    hintSource: RemediationHintSource,
+    detail: string,
+  ): Promise<{
+    kind: 'halt';
+    detail: string;
+    haltClass: 'mechanical';
+  }> {
+    const stallEvidence = hintSource.source === 'build-stall' ||
+      hintSource.source === 'build_stall' ||
+      hintSource.source === 'build_stall_zero_work'
+      ? hintSource.evidence?.find((entry) => entry.gate === 'build')
+      : undefined;
+    const stallQuestion = stallEvidence === undefined
+      ? undefined
+      : await this.readTextOrNull(join(this.projectRoot, stallEvidence.evidenceFile));
+    const reason = stallQuestion === null || stallQuestion === undefined || stallQuestion === ''
+      ? detail
+      : `${stallQuestion}\n\n${detail}`;
+    await this.haltForValidatorFault(state, reason);
+    return { kind: 'halt', detail: reason, haltClass: 'mechanical' };
   }
 
   /** Resolve the strict merged-history verdict for the recorded implementation PR. */
@@ -7812,6 +7936,14 @@ export class Conductor {
                   : undefined,
               );
 
+            // Keep the terminal planner fault until the group reaches its
+            // single generic halt. The manual-test merge consumes a `none`
+            // independently (its deterministic BUILD kickback still wins),
+            // but an otherwise un-routable validation round must name the
+            // final mechanical planner fault rather than silently flatten it
+            // into an unsatisfied-gate message.
+            let remediationNoPlanReason: string | undefined;
+
             // `planRemediation` can reject, return no usable plan, or report
             // a cap.  For an all-refused PRD row those are all the same
             // operator-facing outcome as the serial tail: preserve the exact
@@ -7906,7 +8038,6 @@ export class Conductor {
               const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
                 architecture_review_as_built?: { remediation?: { enabled?: boolean } };
               }).architecture_review_as_built?.remediation?.enabled ?? true;
-              let remediableNoPlanReason: string | undefined;
               // AB-R13 / APPROVED decision 4: the as-built gate's lap budget is
               // the configured, durable `gates.architecture_review_as_built`
               // record that `planRemediation` enforces. `remediationRounds` is a
@@ -7987,8 +8118,7 @@ export class Conductor {
                 });
                 const dispatchContext = withGroupRefusalReworkContext(
                   `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
-                  'Plan remediation per the /remediate skill and write ' +
-                  '.pipeline/remediation.json.',
+                  'Plan remediation per the /remediate skill; the engine validates and persists its typed result.',
                 );
                 if (
                   prdAuditRoute?.kind === 'over-scope-refusal-rework' &&
@@ -8072,7 +8202,7 @@ export class Conductor {
                   return;
                 }
                 if (remediationOutcome.kind === 'none') {
-                  remediableNoPlanReason = remediationOutcome.reason;
+                  remediationNoPlanReason = remediationOutcome.reason;
                 }
               } else if (
                 this.daemon &&
@@ -8108,7 +8238,7 @@ export class Conductor {
                     withGroupRefusalReworkContext(
                     'Blocking validation-group gaps at .pipeline/prd-audit.md and ' +
                     `${AS_BUILT_VERDICT_PATH}. Plan remediation per the ` +
-                    '/remediate skill and write .pipeline/remediation.json.',
+                    '/remediate skill; the engine validates and persists its typed result.',
                   ),
                     {
                     source: 'validation-group',
@@ -8153,7 +8283,7 @@ export class Conductor {
                     ? 'remediation is disabled by architecture_review_as_built.remediation.enabled'
                     : !this.daemon
                       ? 'remediation runs only in daemon mode'
-                      : remediableNoPlanReason
+                      : remediationNoPlanReason
                   : undefined;
                 const reason =
                   `Validation group "${step.name}" halted: ${asBuiltReason}` +
@@ -8284,8 +8414,7 @@ export class Conductor {
                 }
                 const dispatchContext = withGroupRefusalReworkContext(
                   `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
-                  'Plan remediation per the /remediate skill and write ' +
-                  '.pipeline/remediation.json.',
+                  'Plan remediation per the /remediate skill; the engine validates and persists its typed result.',
                 );
 
                 if (
@@ -8377,9 +8506,8 @@ export class Conductor {
                 }
 
                 // Task 24: remediationOutcome.kind === 'none' — the /remediate
-                // planner produced no usable plan for the non-MT gaps (an
-                // unreadable/malformed remediation.json, or a plan with no
-                // routable dispositions). The deterministic manual_test
+                // planner produced no usable typed plan for the non-MT gaps.
+                // The deterministic manual_test
                 // kickback stream is entirely independent of that LLM planner
                 // — it must still proceed rather than dead-ending in the
                 // generic "fail loudly" path below.
@@ -8469,8 +8597,7 @@ export class Conductor {
                 }
                 const dispatchContext = withGroupRefusalReworkContext(
                   `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
-                  'Plan remediation per the /remediate skill and write ' +
-                  '.pipeline/remediation.json.',
+                  'Plan remediation per the /remediate skill; the engine validates and persists its typed result.',
                 );
 
                 if (
@@ -8547,7 +8674,9 @@ export class Conductor {
                 }
 
                 // remediationOutcome.kind === 'none' — no usable plan; fall
-                // through to the generic "fail loudly" path below.
+                // through to the generic "fail loudly" path below, carrying
+                // the last named mechanical fault to its HALT text.
+                remediationNoPlanReason = remediationOutcome.reason;
               }
             } else if (
               !mtMergeHandled && this.daemon &&
@@ -8596,7 +8725,10 @@ export class Conductor {
                 : `Validation group "${step.name}" halted in auto mode: ` +
                   (failedMemberReasons.length > 0
                     ? failedMemberReasons.join('; ')
-                    : 'non-green branch outcome');
+                    : 'non-green branch outcome') +
+                  (remediationNoPlanReason
+                    ? ` — remediation did not route: ${remediationNoPlanReason}`
+                    : '');
             if (!existingGroupHalt || existingGroupHalt.trim().length === 0) {
               await this.writeHaltMarker(groupHaltReason + '\n', 'needs-human');
             }
@@ -10682,6 +10814,7 @@ export class Conductor {
               }
               if (prdAuditRoute.kind === 'over-scope-refusal-rework') {
                 const refusalRoute = prdAuditRoute.route;
+                let plannerFault: string | undefined;
                 // Durable admission is authoritative for refusal rework. A
                 // malformed or spent ledger must preserve the refused block,
                 // not be reclassified by the no-op escalation probe below.
@@ -10731,7 +10864,7 @@ export class Conductor {
                       steps,
                       withRefusalReworkContext(
                         'Blocking prd_audit gaps at .pipeline/prd-audit.md. ' +
-                          'Plan remediation per the /remediate skill and write .pipeline/remediation.json.' +
+                          'Plan remediation per the /remediate skill; the engine validates and persists its typed result.' +
                           (fixableCriteria.length === 0
                             ? ''
                             : `\n\nFIXABLE criteria in this audit: ${fixableCriteria.join(', ')}.`),
@@ -10787,6 +10920,7 @@ export class Conductor {
                     process.off('SIGTERM', sigterm);
                     return;
                   }
+                  if (outcome?.kind === 'none') plannerFault = outcome.reason;
                   // A `halt` or `none` (or an append-side throw) from
                   // planRemediation on a refusal round falls through to the
                   // refused over-scope block below: the operator must see the
@@ -10796,6 +10930,7 @@ export class Conductor {
                 const refusedReason = await this.writeRefusalReworkHalt(
                   refusalRoute.detail,
                   refusalRoute.refused,
+                  plannerFault,
                 );
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(refusedReason);
@@ -11411,16 +11546,16 @@ export class Conductor {
                       }
                     }
                     if (outcome.kind === 'none') {
-                      // Task 8: Degraded remediation exit (malformed/stale/dropped).
-                      // No valid dispositions from /remediate; halt with the question
-                      // so human can investigate why remediation failed.
+                      // A bounded typed-planner round is exhausted. Preserve
+                      // its final mechanical fault instead of flattening it
+                      // into the legacy malformed/stale diagnosis.
+                      const detail = `Remediation planner fault: ${outcome.reason}`;
                       // #569: a zero-work stall never terminal-HALTs from
                       // this block — it falls through to the existing
-                      // retry/auto-park path.
+                      // retry/auto-park path. Carry the question and fault to
+                      // that terminal path so an eventual HALT is equally
+                      // actionable without changing auto-park admission.
                       if (!isZeroWorkStall) {
-                        const detail =
-                          'remediation produced no valid dispositions ' +
-                          '(check .pipeline/remediation.json: malformed JSON, stale file, or all dispositions dropped by validation)';
                         const haltContent = effectiveQuestion + '\n\n' + detail;
                         await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
                           /* best-effort marker */
@@ -11432,6 +11567,7 @@ export class Conductor {
                         process.off('SIGTERM', sigterm);
                         return;
                       }
+                      lastBuildStallReason = `${effectiveQuestion}\n\n${detail}`;
                     }
                     }
                   }
@@ -12391,7 +12527,7 @@ export class Conductor {
                   steps,
                   'Build stall detected. Agent needs input to proceed. A question is at ' +
                     '.pipeline/halt-user-input-required. Plan remediation per the /remediate ' +
-                    'skill and write .pipeline/remediation.json.',
+                    'skill; the engine validates and persists its typed result.',
                   {
                     source: 'build-stall',
                     evidence: [{ gate: 'build', evidenceFile: '.pipeline/halt-user-input-required' }],
@@ -12434,9 +12570,10 @@ export class Conductor {
                   return;
                 }
 
-                // outcome.kind === 'none' (no valid dispositions after validation,
-                // malformed JSON, or stale file) — fall through to fail-safe HALT below.
-                const detail = 'Remediation plan missing or invalid (no routable dispositions found)';
+                // A bounded typed-planner round is exhausted. The original
+                // stall question remains the first line; retain the planner's
+                // final mechanical fault in the HALT detail.
+                const detail = `Remediation planner fault: ${outcome.reason}`;
                 await writeStallHalt(this.projectRoot, stallQuestion, detail, this.events);
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
@@ -12481,14 +12618,14 @@ export class Conductor {
               // re-surface on the next audit and HALT then. Falls back to the
               // deterministic classifyPrdAuditGaps routing when no usable plan is
               // produced or the remediation budget is exhausted.
+              let remediationPlannerFault: string | undefined;
               if (remediationRounds < prdAuditRemediationLapCap) {
                 const outcome = await this.planRemediation(
                   state,
                   steps,
                   'A blocking prd-audit is at .pipeline/prd-audit.md (an as-built ' +
                     `review may be at ${AS_BUILT_VERDICT_PATH}). Plan ` +
-                    'remediation per the /remediate skill and write ' +
-                    '.pipeline/remediation.json.',
+                    'remediation per the /remediate skill; the engine validates and persists its typed result.',
                   {
                     source: 'prd-audit',
                     evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
@@ -12534,6 +12671,7 @@ export class Conductor {
                   return;
                 }
                 // No usable remediation plan → fall through to the fallback below.
+                remediationPlannerFault = outcome.reason;
               }
 
               // Fallback (no /remediate plan, or remediation budget exhausted):
@@ -12567,7 +12705,10 @@ export class Conductor {
                     `for the per-FR gap-class and file:line evidence, then make the code ` +
                     `changes needed to close each gap and commit them — do NOT rely on ` +
                     `the task list being done. The as-built code is re-audited after ` +
-                    `this build; an unaddressed gap will re-block.`,
+                    `this build; an unaddressed gap will re-block.` +
+                    (remediationPlannerFault === undefined
+                      ? ''
+                      : `\n\nRemediation planner fault: ${remediationPlannerFault}`),
                 );
 
                 // Task 7: Merged-PR guard on prd_audit fallback kickback (TS-1).
@@ -12597,9 +12738,12 @@ export class Conductor {
               // Both terminal branches now require an operator: product/plan
               // gaps need DECIDE input, while an implementation gap reaches
               // this writer only after autonomous self-healing is exhausted.
-              await this.writeHaltMarker(reason + '\n', 'needs-human');
-              const prUrl = await this.surfaceRemediationPr(reason);
-              await this.emitLoopHalt(reason, prUrl);
+              const terminalReason = remediationPlannerFault === undefined
+                ? reason
+                : `${reason}\n\nRemediation planner fault: ${remediationPlannerFault}`;
+              await this.writeHaltMarker(terminalReason + '\n', 'needs-human');
+              const prUrl = await this.surfaceRemediationPr(terminalReason);
+              await this.emitLoopHalt(terminalReason, prUrl);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -12711,7 +12855,7 @@ export class Conductor {
                   steps,
                   'A blocking as-built architecture review is at ' +
                     `${AS_BUILT_VERDICT_PATH}. Plan remediation per the ` +
-                    '/remediate skill and write .pipeline/remediation.json.',
+                    '/remediate skill; the engine validates and persists its typed result.',
                   {
                     source: 'architecture-review-as-built',
                     evidence: [{
@@ -12786,6 +12930,12 @@ export class Conductor {
             // Finish remediation (daemon only): give the same /remediate
             // planner that routes a blocking prd_audit a shot at a failed finish
             // verification before the generic HALT.
+            // Retain an exhausted planner's final mechanical fault until that
+            // same generic terminal writes the FINISH lifecycle outcome.  A
+            // no-plan finish round deliberately keeps the established terminal
+            // (rather than inventing a remediation-specific halt), but it must
+            // not erase the diagnostic that explains why no route occurred.
+            let finishRemediationPlannerFault: string | undefined;
             if (
               this.daemon &&
               step.name === 'finish' &&
@@ -12815,10 +12965,10 @@ export class Conductor {
                   ? `The finish step's fresh verification failed: ${lastError}. ` +
                       'Failing-test evidence, when the finish skill recorded it, is at ' +
                       '.pipeline/test-failures.md. Plan remediation per the /remediate ' +
-                      'skill and write .pipeline/remediation.json.'
+                      'skill; the engine validates and persists its typed result.'
                   : 'A blocking as-built architecture review is at ' +
                     `${AS_BUILT_VERDICT_PATH}. Plan remediation per ` +
-                      'the /remediate skill and write .pipeline/remediation.json.',
+                    'the /remediate skill; the engine validates and persists its typed result.',
                 finishGate
                   ? {
                       source: 'finish-verification',
@@ -12896,7 +13046,9 @@ export class Conductor {
                 process.off('SIGTERM', sigterm);
                 return;
               }
-              // No usable remediation plan → fall through to the generic HALT below.
+              // No usable remediation plan → preserve its final named fault
+              // on the existing generic FINISH terminal below.
+              finishRemediationPlannerFault = outcome.reason;
             }
 
             // Unattended hard failure on a gating/structural step. Write a HALT
@@ -12946,9 +13098,12 @@ export class Conductor {
                           ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
                           : buildReviewSchemaFailureReason
                             ? buildReviewSchemaFailureReason
-                          : `step '${step.name}' failed in auto mode (retries exhausted)`;
+                            : `step '${step.name}' failed in auto mode (retries exhausted)`;
+            const terminalReason = finishRemediationPlannerFault === undefined
+              ? reason
+              : `${reason}\n\nRemediation planner fault: ${finishRemediationPlannerFault}`;
             if (!existingHalt || existingHalt.trim().length === 0) {
-              await this.writeHaltMarker(reason + '\n', 'needs-human');
+              await this.writeHaltMarker(terminalReason + '\n', 'needs-human');
             }
             // The HALT marker is written before escalation. All state transitions
             // have already crossed the state-store boundary.
@@ -12958,8 +13113,8 @@ export class Conductor {
             // hunting through daemon logs. surfaceRemediationPr is best-effort and
             // wraps escalation in try/catch — a throwing escalation must never
             // prevent the HALT path from returning cleanly (C1).
-            const prUrl = await this.surfaceRemediationPr(`${reason}\n${lastError}`);
-            await this.emitLoopHalt(reason, prUrl);
+            const prUrl = await this.surfaceRemediationPr(`${terminalReason}\n${lastError}`);
+            await this.emitLoopHalt(terminalReason, prUrl);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;

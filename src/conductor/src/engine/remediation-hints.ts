@@ -1,5 +1,6 @@
 import type { StepDefinition, StepName } from '../types/index.js';
 import {
+  REMEDIATION_EXISTING_TASK_DISPOSITION,
   REMEDIATION_PUBLICATION_DISPOSITION,
   remediationDispositionStep,
   type RemediationDispositionRejection,
@@ -7,6 +8,8 @@ import {
 } from './artifacts.js';
 import { resolvePlanTaskReference } from './plan-task-parse.js';
 import { scanPlanProtectedTargets } from './plan-protected-targets.js';
+import type { RemediationProjectionSource } from './remediation-projection.js';
+import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 
 /**
  * Identifies the gate evidence that authorized a remediation dispatch. A
@@ -44,6 +47,77 @@ export function formatRejectedDispositions(rejected: readonly RemediationDisposi
     return `${rejection.gapId} ${field} → "${rejection.disposition}"; ` +
       `accepted ${fieldPlural} are ${rejection.accepted.join(' | ')}`;
   }).join('; ');
+}
+
+// Covers: task:19
+export function remediationProjectionSource(source: string): RemediationProjectionSource {
+  switch (source) {
+    case 'validation-group': return 'validation-group';
+    case 'prd-audit': return 'prd-audit';
+    case 'prd_audit': return 'prd-audit';
+    case 'build-stall':
+    case 'build_stall':
+    case 'build_stall_zero_work': return 'build-stall';
+    case 'finish-verification': return 'finish-verification';
+    case 'architecture-review-as-built':
+    case 'architecture_review_as_built':
+    case 'as-built architecture review': return 'as-built';
+    default: return 'finish-verification';
+  }
+}
+
+/** Keep the established admission path on its legacy in-memory shape. */
+export function remediationGapsFromTypedPlan(
+  dispositions: readonly AcceptedRemediationPlanDisposition[],
+): RemediationGap[] {
+  return dispositions.map((disposition) => ({
+    id: disposition.reference.id,
+    disposition: disposition.disposition,
+    category: disposition.category,
+    rationale: disposition.rationale,
+    tasks: disposition.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
+      ? disposition.boundTaskIds.map((id) => ({ id, title: `Existing task ${id}` }))
+      : disposition.tasks.map((task) => ({ ...task })),
+  }));
+}
+
+/**
+ * The runner preserves field-specific rejections in its structured-result
+ * diagnostic because it must not persist a rejected typed plan. Recover only
+ * the validated event payload here; all other malformed-output diagnostics
+ * remain ordinary retryable planner faults.
+ */
+export function remediationDispositionRejectionsFromDispatchOutput(
+  output: string | undefined,
+): RemediationDispositionRejection[] {
+  const marker = '; rejections: ';
+  if (output === undefined || !output.startsWith('structured-result-rejected:')) return [];
+  const markerIndex = output.lastIndexOf(marker);
+  if (markerIndex === -1) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output.slice(markerIndex + marker.length));
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((candidate): RemediationDispositionRejection[] => {
+    if (candidate === null || typeof candidate !== 'object') return [];
+    const rejection = candidate as Partial<RemediationDispositionRejection>;
+    if (
+      typeof rejection.gapId !== 'string' ||
+      typeof rejection.disposition !== 'string' ||
+      !Array.isArray(rejection.accepted) ||
+      !rejection.accepted.every((value) => typeof value === 'string') ||
+      (rejection.field !== 'disposition' && rejection.field !== 'category' && rejection.field !== 'boundTaskIds')
+    ) return [];
+    return [{
+      gapId: rejection.gapId,
+      disposition: rejection.disposition,
+      accepted: [...rejection.accepted],
+      field: rejection.field,
+    }];
+  });
 }
 
 /**
@@ -213,7 +287,7 @@ export function buildRemediationHint(
   // gap turned into implementation work.
   if (fixes.length > 0 && fixes.every((g) => g.disposition === REMEDIATION_PUBLICATION_DISPOSITION)) {
     return (
-      `Remediating blocking ${source} gaps (see .pipeline/remediation.json and ` +
+      `Remediating blocking ${source} gaps (see the engine-owned typed remediation result and ` +
       `${evidenceFile}). These are PUBLICATION gaps: the implementation is complete and ` +
       'must not change. Fix only the pull request\'s published prose — rewrite the PR body ' +
       '(`## Why` / `## What Changed` / `## Testing`, plus the `Closes` reference) with a ' +
@@ -223,7 +297,7 @@ export function buildRemediationHint(
     );
   }
   return (
-    `Remediating blocking ${source} gaps (see .pipeline/remediation.json and ` +
+    `Remediating blocking ${source} gaps (see the engine-owned typed remediation result and ` +
     `${evidenceFile}). The task list may already show complete, but the ` +
     'following are NOT satisfied — make the code/spec changes and commit them; ' +
     'the as-built code is re-audited after this step:\n' +

@@ -5,7 +5,14 @@ import { adrApprovalStatus, parseAdrDecisions, readActivePlanText } from './arti
 import { parsePlanTaskBodies, resolveCitedPlanTaskIds } from './plan-task-parse.js';
 
 /** The versioned, engine-owned output contract for as-built review verdicts. */
-export const AS_BUILT_VERDICT_CONTRACT_VERSION = 'v1' as const;
+export const AS_BUILT_VERDICT_CONTRACT_VERSION = 'v2' as const;
+
+/**
+ * Persisted finding ids are rendered as `as-built:${encodeURIComponent(attemptId)}:${ordinal}`.
+ * The ordinal is one-based within the provider result; encoding makes the attempt component
+ * unambiguous, so identical findings remain distinct both within and across review attempts.
+ */
+export const AS_BUILT_FINDING_ID_RENDERING = 'as-built:${encodeURIComponent(attemptId)}:${ordinal}' as const;
 
 export interface AsBuiltReachability {
   readonly primitive: string;
@@ -22,15 +29,25 @@ export type AsBuiltGoverningReference =
   | { readonly kind: 'adr-decision'; readonly stem: string; readonly decision: number }
   | { readonly kind: 'plan-task'; readonly taskId: string };
 
+export type AsBuiltProviderFinding =
+  | { readonly class: 'REMEDIABLE'; readonly reference: AsBuiltGoverningReference; readonly summary: string }
+  | { readonly class: 'DESIGN'; readonly reference?: AsBuiltGoverningReference; readonly summary: string };
+
+/** A finding becomes durable only after the engine applies its attempt-qualified id. */
 export type AsBuiltFinding =
-  | { readonly id: string; readonly class: 'REMEDIABLE'; readonly reference: AsBuiltGoverningReference; readonly summary: string }
-  | { readonly id: string; readonly class: 'DESIGN'; readonly reference?: AsBuiltGoverningReference; readonly summary: string };
+  | (AsBuiltProviderFinding & { readonly id: string });
 
 interface AsBuiltVerdictBase {
   readonly version: typeof AS_BUILT_VERDICT_CONTRACT_VERSION;
   readonly reachability: readonly AsBuiltReachability[];
   readonly driftNotes: readonly AsBuiltDriftNote[];
 }
+
+export type AsBuiltProviderVerdict =
+  | (AsBuiltVerdictBase & { readonly verdict: 'APPROVED' })
+  | (AsBuiltVerdictBase & { readonly verdict: 'APPROVED WITH DRIFT NOTES' })
+  | (AsBuiltVerdictBase & { readonly verdict: 'PLAN_GAP'; readonly outcomeDelivered: boolean; readonly affectedOutcome: string })
+  | (AsBuiltVerdictBase & { readonly verdict: 'BLOCKED'; readonly findings: readonly AsBuiltProviderFinding[]; readonly violations: string; readonly resolution: string });
 
 export type AsBuiltVerdict =
   | (AsBuiltVerdictBase & { readonly verdict: 'APPROVED' })
@@ -39,7 +56,7 @@ export type AsBuiltVerdict =
   | (AsBuiltVerdictBase & { readonly verdict: 'BLOCKED'; readonly findings: readonly AsBuiltFinding[]; readonly violations: string; readonly resolution: string });
 
 export type ValidateAsBuiltVerdictResult =
-  | { readonly ok: true; readonly verdict: AsBuiltVerdict }
+  | { readonly ok: true; readonly verdict: AsBuiltProviderVerdict }
   | { readonly ok: false; readonly field: string; readonly requirement: string };
 
 type AsBuiltVerdictRejection = Extract<ValidateAsBuiltVerdictResult, { readonly ok: false }>;
@@ -104,9 +121,8 @@ export const AS_BUILT_VERDICT_SCHEMA = deepFreeze({
     findings: {
       type: 'array',
       items: {
-        type: 'object', additionalProperties: false, required: ['id', 'class', 'summary'],
+        type: 'object', additionalProperties: false, required: ['class', 'summary'],
         properties: {
-          id: { type: 'string' },
           class: { type: 'string', enum: AS_BUILT_FINDING_CLASSES },
           reference: referenceSchema,
           summary: { type: 'string' },
@@ -226,36 +242,50 @@ export function isAsBuiltGoverningReference(value: unknown): value is AsBuiltGov
   return parseReference(value, 'reference').ok;
 }
 
-function parseFindings(value: unknown): Parsed<readonly AsBuiltFinding[]> {
+function parseFindings(value: unknown): Parsed<readonly AsBuiltProviderFinding[]> {
   if (!Array.isArray(value)) return rejected('findings', 'an array of blocking findings is required');
-  const findings: AsBuiltFinding[] = [];
+  const findings: AsBuiltProviderFinding[] = [];
   for (const [index, item] of value.entries()) {
     const field = `findings[${index}]`;
-    if (!record(item) || !nonEmptyText(item.id) || !nonEmptyText(item.summary)) return rejected(field, 'id and summary must be non-empty prose');
+    if (!record(item)) return rejected(field, 'a finding object is required');
+    if (Object.hasOwn(item, 'id')) return rejected(`${field}.id`, 'provider finding ids are not permitted; the engine stamps persisted ids');
+    if (!nonEmptyText(item.summary)) return rejected(`${field}.summary`, 'summary must be non-empty prose');
     if (item.class === 'REMEDIABLE') {
       if (item.reference === undefined) return rejected(`${field}.reference`, 'a governing reference is required for a REMEDIABLE finding');
-      if (!exactKeys(item, ['id', 'class', 'reference', 'summary'])) return rejected(field, 'a REMEDIABLE finding requires exactly id, class, reference, and summary');
+      if (!exactKeys(item, ['class', 'reference', 'summary'])) return rejected(field, 'a REMEDIABLE finding requires exactly class, reference, and summary');
       const reference = parseReference(item.reference, `${field}.reference`);
       if (!reference.ok) return reference;
-      findings.push({ id: item.id, class: 'REMEDIABLE', reference: reference.value, summary: item.summary });
+      findings.push({ class: 'REMEDIABLE', reference: reference.value, summary: item.summary });
       continue;
     }
     if (item.class === 'DESIGN') {
-      if (!exactKeys(item, item.reference === undefined ? ['id', 'class', 'summary'] : ['id', 'class', 'reference', 'summary'])) {
-        return rejected(field, 'a DESIGN finding permits exactly id, class, summary, and an optional reference');
+      if (!exactKeys(item, item.reference === undefined ? ['class', 'summary'] : ['class', 'reference', 'summary'])) {
+        return rejected(field, 'a DESIGN finding permits exactly class, summary, and an optional reference');
       }
       if (item.reference === undefined) {
-        findings.push({ id: item.id, class: 'DESIGN', summary: item.summary });
+        findings.push({ class: 'DESIGN', summary: item.summary });
         continue;
       }
       const reference = parseReference(item.reference, `${field}.reference`);
       if (!reference.ok) return reference;
-      findings.push({ id: item.id, class: 'DESIGN', reference: reference.value, summary: item.summary });
+      findings.push({ class: 'DESIGN', reference: reference.value, summary: item.summary });
       continue;
     }
     return rejected(`${field}.class`, 'one of REMEDIABLE or DESIGN is required');
   }
   return { ok: true, value: findings };
+}
+
+/** Stamp provider-authored finding judgments at the only engine-owned persistence boundary. */
+export function stampAsBuiltFindingIds(verdict: AsBuiltProviderVerdict, attemptId: string): AsBuiltVerdict {
+  if (verdict.verdict !== 'BLOCKED') return verdict;
+  return {
+    ...verdict,
+    findings: verdict.findings.map((finding, index) => ({
+      ...finding,
+      id: `as-built:${encodeURIComponent(attemptId)}:${index + 1}`,
+    })),
+  };
 }
 
 const PLAN_GAP_ONLY_KEYS = ['outcomeDelivered', 'affectedOutcome'] as const;
@@ -334,7 +364,7 @@ export function validateAsBuiltVerdict(input: unknown): ValidateAsBuiltVerdictRe
 
 /** Resolve every typed governing reference against the worktree's approved ADRs and active plan. */
 export async function resolveAsBuiltReferences(
-  verdict: AsBuiltVerdict,
+  verdict: AsBuiltProviderVerdict,
   worktree: string,
   featurePlanPath?: string,
 ): Promise<ValidateAsBuiltVerdictResult> {

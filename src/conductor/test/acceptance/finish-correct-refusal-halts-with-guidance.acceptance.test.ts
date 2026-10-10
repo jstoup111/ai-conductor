@@ -55,7 +55,7 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
     ] satisfies StepName[]) state[step] = 'done';
     await writeState(stateFilePath, state as ConductState);
     await persistAsBuiltVerdict(projectRoot, {
-      version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+      version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
     }, {
       attemptId: 'fixture-run',
       codeStamp: null,

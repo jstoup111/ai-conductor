@@ -257,7 +257,7 @@ describe('architecture_review_as_built dispatch classification', () => {
       output: 'review complete',
       exitCode: 0,
       finalStructuredResult: {
-        version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+        version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
         findings: [{ id: 'AB-1', class: 'DESIGN', summary: 'A contradictory blocking finding.' }],
       },
     }));
