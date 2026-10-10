@@ -1,4 +1,4 @@
-// Covers: task:5, task:13, task:14, task:15
+// Covers: task:5, task:6, task:13, task:14, task:15
 import { execFile } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -166,6 +166,56 @@ describe('PRD audit typed provider dispatch', () => {
     const persisted = JSON.parse(await readFile(join(root, PRD_AUDIT_VERDICT_PATH), 'utf8'));
     expect(persisted).toMatchObject({ complete: true, diagnostics: [] });
     expect(persisted.judgment.criterionJudgments).not.toContainEqual(expect.objectContaining({ grade: 'PLAN_GAP' }));
+  });
+
+  it('rejects an uncovered FR when only a foreign-stem coherence waiver exists', async () => {
+    const root = await fixture({ waivedRequirement: true });
+    const waiverPath = join(root, '.docs', 'coherence-waivers', 'feature.md');
+    await rm(waiverPath);
+    await writeFile(join(root, '.docs', 'coherence-waivers', 'other-feature.md'), 'Waives: FR-17\n\nRationale: Foreign waiver.\n');
+    const { invoke, runner: subject } = runner(root, { success: true, output: 'done', finalStructuredResult: passingJudgment } as InvokeResult);
+
+    await expect(subject.run('prd_audit', { complexity_tier: 'S' })).resolves.toMatchObject({
+      success: false,
+      output: expect.stringContaining('structured-result-rejected: requirement .docs/specs/feature.md:FR-17 lacks a criterion association or valid PLAN_GAP evidence'),
+    });
+
+    expect(dispatchedProjection(invoke).prd.waivedRequirements).toEqual([]);
+    await expect(readFile(join(root, PRD_AUDIT_VERDICT_PATH), 'utf8')).resolves.toContain('"complete": false');
+  });
+
+  it.each([
+    ['an empty Rationale line', 'Waives: FR-17\n\nRationale: \n'],
+    ['a missing Rationale line', 'Waives: FR-17\n'],
+    ['a missing Waives line', 'Rationale: Missing waiver declaration.\n'],
+  ])('rejects an uncovered FR when the active coherence waiver has %s', async (_caseName, waiver) => {
+    const root = await fixture({ waivedRequirement: true });
+    await writeFile(join(root, '.docs', 'coherence-waivers', 'feature.md'), waiver);
+    const { invoke, runner: subject } = runner(root, { success: true, output: 'done', finalStructuredResult: passingJudgment } as InvokeResult);
+
+    await expect(subject.run('prd_audit', { complexity_tier: 'S' })).resolves.toMatchObject({
+      success: false,
+      output: expect.stringContaining('structured-result-rejected: requirement .docs/specs/feature.md:FR-17 lacks a criterion association or valid PLAN_GAP evidence'),
+    });
+
+    expect(dispatchedProjection(invoke).prd.waivedRequirements).toEqual([]);
+    await expect(readFile(join(root, PRD_AUDIT_VERDICT_PATH), 'utf8')).resolves.toContain('"complete": false');
+  });
+
+  it('stops before provider invocation when the active coherence waiver is unreadable', async () => {
+    const root = await fixture({ waivedRequirement: true });
+    const waiverPath = join(root, '.docs', 'coherence-waivers', 'feature.md');
+    await rm(waiverPath);
+    await mkdir(waiverPath);
+    const { invoke, runner: subject } = runner(root, { success: true, output: 'unreachable' } as InvokeResult);
+
+    await expect(subject.run('prd_audit', { complexity_tier: 'S' })).resolves.toMatchObject({
+      success: false,
+      output: expect.stringContaining('prd-audit input projection fault: coherence-waiver'),
+    });
+
+    expect(invoke).not.toHaveBeenCalled();
+    await expectNoVerdict(root);
   });
 
   it('projects each fixture criterion and task, then renders its validated terminal judgment', async () => {
