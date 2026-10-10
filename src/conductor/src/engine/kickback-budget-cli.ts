@@ -17,7 +17,7 @@ import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import { readKickbackHaltGeneration } from './daemon-rekick.js';
 import { loadConfig } from './config.js';
 import { prdAuditAppendCap } from './remediation-caps.js';
-import { childStateExists, parseChildId } from './child-context.js';
+import { childStateExists, parseChildId, type ChildId } from './child-context.js';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
@@ -86,8 +86,8 @@ async function appendAuthorizationEvent(
   persister.stop();
 }
 
-async function reconcilePendingAdjustments(worktree: string): Promise<void> {
-  const ledger = await readKickbackLedger(worktree);
+async function reconcilePendingAdjustments(worktree: string, child?: ChildId): Promise<void> {
+  const ledger = await readKickbackLedger(worktree, child);
   // An unreadable ledger is reported by each caller's own unreadable branch, in
   // its own words; reconciliation simply has nothing it may safely act on.
   if (isUnreadableKickbackLedger(ledger)) return;
@@ -103,8 +103,8 @@ async function reconcilePendingAdjustments(worktree: string): Promise<void> {
       catch { throw new Error('authorization event ledger is unreadable'); }
     });
     const recorded = records.some((event) => event.adjustmentId === pending.id);
-    if (!recorded) await discardPendingKickbackBudgetAdjustment(worktree, gate, pending.id);
-    else await applyKickbackBudgetAdjustment(worktree, gate, pending, defaults[gate] ?? 1);
+    if (!recorded) await discardPendingKickbackBudgetAdjustment(worktree, gate, pending.id, child);
+    else await applyKickbackBudgetAdjustment(worktree, gate, pending, defaults[gate] ?? 1, child);
   }
 }
 
@@ -115,8 +115,8 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   // D3: one shared named-worktree resolution, not a per-command copy.
   const worktree = await resolveCliFeatureWorktree(command.feature, { cwd: deps.cwd, resolveMainRoot: deps.resolveMainRoot });
   if (!worktree) { print(`kickback-budget: feature '${command.feature}' is unavailable.`); return 1; }
-  const reconcile = async (): Promise<number | undefined> => {
-    try { await reconcilePendingAdjustments(worktree); return undefined; }
+  const reconcile = async (child?: ChildId): Promise<number | undefined> => {
+    try { await reconcilePendingAdjustments(worktree, child); return undefined; }
     catch (error) { print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1; }
   };
   if (command.action === 'inspect') {
@@ -167,9 +167,18 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     print('kickback-budget: mutations require an interactive local operator terminal.'); return 2;
   }
   if (!command.gate || !GATES.has(command.gate) || !command.rationale?.trim() || !isAcceptableOperatorRationale(command.rationale)) { print('kickback-budget: invalid gate or rationale.'); return 2; }
+  const child = command.child === undefined ? undefined : parseChildId(command.child);
+  if (command.child !== undefined && child === undefined) {
+    print(`kickback-budget: invalid child id "${command.child}".`);
+    return 1;
+  }
+  if (child !== undefined && !(await childStateExists(worktree, child))) {
+    print(`kickback-budget: child ${child} has no child state.`);
+    return 1;
+  }
   // Mutations reconcile only after D3's argument/authority refusals, which must
   // leave the park and the ledger untouched.
-  const refused = await reconcile();
+  const refused = await reconcile(child);
   if (refused !== undefined) return refused;
   const gate = command.gate;
   const action: KickbackBudgetAdjustment['kind'] = command.action === 'raise' ? 'raise' : 'reset';
@@ -183,7 +192,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   // This is deliberately outside the shared staging refusal: the same durable
   // evidence authorizes raise, and it must be rejected before taking a park.
   if (command.action === 'reset') {
-    const ledger = await readKickbackLedger(worktree);
+    const ledger = await readKickbackLedger(worktree, child);
     if (!isUnreadableKickbackLedger(ledger) && ledger.gates[gate]?.capEvidence?.allowance === 'growth') {
       print('kickback-budget: refused — plan-growth evidence requires `raise` recovery.');
       return 1;
@@ -227,12 +236,12 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       try { haltBody = await readFile(join(worktree, '.pipeline', 'HALT'), 'utf8'); } catch { throw new Error('feature is not currently halted'); }
       const liveHaltClass = (await readFile(join(worktree, HALT_CLASS_MARKER), 'utf8')).trim();
       if (liveHaltClass !== RECOVERABLE_CAP_HALT_CLASS_BY_GATE[gate]) throw new Error('live halt is not eligible for recovery');
-      const current = await readKickbackLedger(worktree);
+      const current = await readKickbackLedger(worktree, child);
       liveHaltGeneration = current.gates[gate]?.capEvidence?.haltGeneration ?? '';
       if (!liveHaltGeneration || !haltBody.includes(`Kickback halt generation: ${liveHaltGeneration}`)) {
         throw new Error('live halt no longer matches current cap evidence');
       }
-    });
+    }, child);
     staged = true;
     const event: Extract<ConductorEvent, { type: 'kickback_budget_adjustment_authorized' }> = {
       type: 'kickback_budget_adjustment_authorized', adjustmentId: adjustment.id, gate, kind: adjustment.kind,
@@ -242,9 +251,9 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       allowance: adjustment.allowance,
     };
     await appendAuthorizationEvent(worktree, event, deps.appendEvent);
-    const applied = await applyKickbackBudgetAdjustment(worktree, gate, adjustment, defaults[gate]);
+    const applied = await applyKickbackBudgetAdjustment(worktree, gate, adjustment, defaults[gate], child);
     committed = true;
-    const adjustedLedger = await readKickbackLedger(worktree);
+    const adjustedLedger = await readKickbackLedger(worktree, child);
     const planGrowth = await planGrowthViewFor(worktree, adjustedLedger);
     print(`${renderKickbackBudgetView(applied, gate, defaults[gate], planGrowth)}${parked ? '\nFeature remains parked; unpark it when ready.' : ''}`);
     return 0;

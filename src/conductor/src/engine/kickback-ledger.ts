@@ -1468,16 +1468,17 @@ export async function consumeKickbackResumeAuthorization(
   projectRoot: string,
   gate: string,
   adjustmentId: string,
+  child?: ChildId,
 ): Promise<boolean> {
   return withKickbackLedgerLease(projectRoot, async () => {
-    const ledger = await readKickbackLedger(projectRoot);
+    const ledger = await readKickbackLedger(projectRoot, child);
     requireReadableGate(ledger, gate);
     const entry = ledger.gates[gate];
     if (!entry?.resumeAuthorization || entry.resumeAuthorization.adjustmentId !== adjustmentId || entry.resumeAuthorization.consumed) return false;
     const next = { ...entry, resumeAuthorization: { ...entry.resumeAuthorization, consumed: true } };
-    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, gates: { ...ledger.gates, [gate]: next } });
+    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, gates: { ...ledger.gates, [gate]: next } }, child);
     return true;
-  });
+  }, child);
 }
 
 /** Durably stage an operator adjustment before its external authorization event. */
@@ -1486,10 +1487,11 @@ export async function stageKickbackBudgetAdjustment(
   gate: string,
   createAdjustment: (entry: KickbackGateEntry, ledger: KickbackLedger) => KickbackBudgetAdjustment,
   verifyLiveHalt?: () => Promise<void>,
+  child?: ChildId,
 ): Promise<KickbackBudgetAdjustment> {
   return withKickbackLedgerLease(projectRoot, async () => {
     await verifyLiveHalt?.();
-    const ledger = await readKickbackLedger(projectRoot);
+    const ledger = await readKickbackLedger(projectRoot, child);
     requireReadableGate(ledger, gate);
     const entry = ledger.gates[gate];
     if (!entry) throw new Error('current cap evidence is missing or no longer matches the live halt');
@@ -1503,9 +1505,9 @@ export async function stageKickbackBudgetAdjustment(
     await writeKickbackLedgerUnsafe(projectRoot, {
       ...ledger,
       gates: { ...ledger.gates, [gate]: { ...entry, pendingAdjustment: adjustment } },
-    });
+    }, child);
     return adjustment;
-  });
+  }, child);
 }
 
 /** Remove an eventless interrupted stage without changing the active budget. */
@@ -1513,18 +1515,19 @@ export async function discardPendingKickbackBudgetAdjustment(
   projectRoot: string,
   gate: string,
   adjustmentId: string,
+  child?: ChildId,
 ): Promise<boolean> {
   return withKickbackLedgerLease(projectRoot, async () => {
-    const ledger = await readKickbackLedger(projectRoot);
+    const ledger = await readKickbackLedger(projectRoot, child);
     requireReadableGate(ledger, gate);
     const entry = ledger.gates[gate];
     if (!entry?.pendingAdjustment || entry.pendingAdjustment.id !== adjustmentId) return false;
     await writeKickbackLedgerUnsafe(projectRoot, {
       ...ledger,
       gates: { ...ledger.gates, [gate]: { ...entry, pendingAdjustment: undefined } },
-    });
+    }, child);
     return true;
-  });
+  }, child);
 }
 
 export async function applyKickbackBudgetAdjustment(
@@ -1532,9 +1535,10 @@ export async function applyKickbackBudgetAdjustment(
   gate: string,
   adjustment: KickbackBudgetAdjustment,
   defaultLimit: number,
+  child?: ChildId,
 ): Promise<KickbackGateEntry> {
   return withKickbackLedgerLease(projectRoot, async () => {
-    const ledger = await readKickbackLedger(projectRoot);
+    const ledger = await readKickbackLedger(projectRoot, child);
     requireReadableGate(ledger, gate);
     const entry = ledger.gates[gate];
     if (!entry || !capEvidenceAgreesWithAdjustment(entry, ledger, gate, adjustment, defaultLimit)) {
@@ -1569,9 +1573,9 @@ export async function applyKickbackBudgetAdjustment(
       ...ledger,
       ...(growth ? { effectiveGrowthCap: raised } : {}),
       gates: { ...ledger.gates, [gate]: next },
-    });
+    }, child);
     return next;
-  });
+  }, child);
 }
 
 /**
