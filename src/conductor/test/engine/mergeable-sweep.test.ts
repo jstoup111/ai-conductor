@@ -421,7 +421,7 @@ describe('sweepMergeableLabels — Task 5 readiness routes', () => {
 
     expect(addLabelCalls).toContainEqual({ prUrl: urls.ready, label: 'mergeable' });
     expect(removeLabelCalls).toContainEqual({ prUrl: urls.pending, label: 'mergeable' });
-    expect(addLabelCalls.filter(({ label }) => label === 'needs-remediation')).toEqual([]);
+    expect(addLabelCalls).toContainEqual({ prUrl: urls.draft, label: 'needs-remediation' });
     expect(autoresolveEligible.mock.calls.map(([candidate]) => candidate.prUrl)).toEqual([
       urls.conflicting,
       urls.rereadConflict,
@@ -447,6 +447,128 @@ describe('sweepMergeableLabels — Task 5 readiness routes', () => {
       tracker: { readPullRequestMergeState: reads },
     });
     expect(reads.mock.calls.filter(([url]) => url === urls.indeterminate)).toHaveLength(3);
+  });
+});
+
+// ── Task 6: readiness escalation labels ───────────────────────────────────
+
+describe('sweepMergeableLabels — Task 6: no-checks and draft remediation labels', () => {
+  const now = () => new Date('2026-10-10T12:31:00.000Z');
+  const oldHead = '2026-10-10T12:00:00.000Z';
+
+  // Covers: task:6
+  it('adds and attributes needs-remediation once for no-checks and draft PRs', async () => {
+    const noChecksUrl = 'https://github.com/foo/bar/pull/65';
+    const draftUrl = 'https://github.com/foo/bar/pull/66';
+    const { gh, addLabelCalls, removeLabelCalls, allArgs } = makeFakeGh();
+    const reads = vi.fn(async (url: string): Promise<PrMergeState> => {
+      if (url === noChecksUrl) {
+        return readinessState({
+          headRefOid: 'A',
+          checksOutcome: 'none',
+          labels: ['mergeable'],
+        });
+      }
+      return readinessState({ isDraft: true });
+    });
+    await enrollWatch(tmpDir, { ...entry(noChecksUrl, 'no-checks'), headSha: 'A', headFirstSeenAt: oldHead });
+    await enrollWatch(tmpDir, entry(draftUrl, 'draft'));
+
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, tracker: { readPullRequestMergeState: reads }, now });
+
+    expect(addLabelCalls).toEqual([
+      { prUrl: noChecksUrl, label: 'needs-remediation' },
+      { prUrl: draftUrl, label: 'needs-remediation' },
+    ]);
+    expect(removeLabelCalls).toEqual([{ prUrl: noChecksUrl, label: 'mergeable' }]);
+    expect(allArgs).toHaveLength(3);
+    expect(allArgs.every((args) =>
+      args[0] === 'api' && (args[2] === 'POST' || args[2] === 'DELETE') && /\/labels(?:\/mergeable)?$/.test(args[3] ?? ''),
+    )).toBe(true);
+    expect(await readWatch(tmpDir)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ prUrl: noChecksUrl, escalationCause: 'shipped-readiness' }),
+      expect.objectContaining({ prUrl: draftUrl, escalationCause: 'shipped-readiness' }),
+    ]));
+  });
+
+  // Covers: task:6
+  it('does not mutate or attribute already-labelled no-checks and draft PRs', async () => {
+    const noChecksUrl = 'https://github.com/foo/bar/pull/67';
+    const draftUrl = 'https://github.com/foo/bar/pull/68';
+    const { gh, addLabelCalls, removeLabelCalls } = makeFakeGh();
+    const reads = vi.fn(async (url: string): Promise<PrMergeState> =>
+      url === noChecksUrl
+        ? readinessState({ headRefOid: 'A', checksOutcome: 'none', labels: ['needs-remediation'] })
+        : readinessState({ isDraft: true, labels: ['needs-remediation'] }),
+    );
+    await enrollWatch(tmpDir, { ...entry(noChecksUrl, 'no-checks'), headSha: 'A', headFirstSeenAt: oldHead });
+    await enrollWatch(tmpDir, entry(draftUrl, 'draft'));
+
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, tracker: { readPullRequestMergeState: reads }, now });
+
+    expect({ addLabelCalls, removeLabelCalls }).toEqual({ addLabelCalls: [], removeLabelCalls: [] });
+    expect((await readWatch(tmpDir)).find((watched) => watched.prUrl === draftUrl)?.escalationCause).toBeUndefined();
+  });
+
+  // Covers: task:6
+  it('keeps an unattributed entry after a failed add and retries it next tick', async () => {
+    const failingOperations: GithubOperationRunner = {
+      run: async () => { throw new Error('write unavailable'); },
+    };
+    const failingGh = makeFakeGh().gh;
+    const good = makeFakeGh();
+    const logs: string[] = [];
+    const state = readinessState({ headRefOid: 'A', checksOutcome: 'none' });
+    await enrollWatch(tmpDir, { ...entry(), headSha: 'A', headFirstSeenAt: oldHead });
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: failingGh,
+      operations: failingOperations,
+      tracker: { readPullRequestMergeState: async () => state },
+      now,
+      log: (message) => logs.push(message),
+    });
+
+    expect(logs.join('\n')).toContain('write unavailable');
+    expect((await readWatch(tmpDir))[0]?.escalationCause).toBeUndefined();
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: good.gh,
+      tracker: { readPullRequestMergeState: async () => state },
+      now,
+    });
+
+    expect(good.addLabelCalls).toEqual([{ prUrl: PR_URL, label: 'needs-remediation' }]);
+    expect((await readWatch(tmpDir))[0]?.escalationCause).toBe('shipped-readiness');
+  });
+
+  // Covers: task:6
+  it('uses only label mutation operations and never escalates during a grace reset', async () => {
+    const resetHeadUrl = 'https://github.com/foo/bar/pull/69';
+    const legacyUrl = 'https://github.com/foo/bar/pull/70';
+    const { gh, addLabelCalls, removeLabelCalls, allArgs } = makeFakeGh();
+    const reads = vi.fn(async (url: string): Promise<PrMergeState> =>
+      url === resetHeadUrl
+        ? readinessState({ headRefOid: 'B', checksOutcome: 'none', labels: ['mergeable'] })
+        : readinessState({ headRefOid: undefined, checksOutcome: 'none' }),
+    );
+    await enrollWatch(tmpDir, { ...entry(resetHeadUrl, 'reset-head'), headSha: 'A', headFirstSeenAt: oldHead });
+    await enrollWatch(tmpDir, entry(legacyUrl, 'legacy'));
+
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, tracker: { readPullRequestMergeState: reads }, now });
+
+    expect(addLabelCalls.filter((call) => call.label === 'needs-remediation')).toEqual([]);
+    expect(removeLabelCalls).toEqual([]);
+    expect(allArgs.filter((args) => args[0] === 'api').every((args) =>
+      args[2] === 'POST' && /\/labels$/.test(args[3] ?? '') && args[5] === 'labels[]=mergeable',
+    )).toBe(true);
+    expect(await readWatch(tmpDir)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ prUrl: resetHeadUrl, headSha: 'B', headFirstSeenAt: now().toISOString() }),
+      expect.objectContaining({ prUrl: legacyUrl }),
+    ]));
+    expect((await readWatch(tmpDir)).find((watched) => watched.prUrl === legacyUrl)).not.toHaveProperty('escalationCause');
   });
 });
 
@@ -2205,7 +2327,7 @@ describe('sweepMergeableLabels — draft PRs are observed but never resolved', (
     expect(survivors[0]?.resolveAttempts).toBe(0);
   });
 
-  it('still adds the mergeable label to a green draft PR', async () => {
+  it('adds needs-remediation instead of mergeable to a green draft PR', async () => {
     const { gh, addLabelCalls } = makeFakeGh({
       [PR_URL]: prViewJson(
         'OPEN',
@@ -2217,7 +2339,8 @@ describe('sweepMergeableLabels — draft PRs are observed but never resolved', (
     });
     await enrollWatch(tmpDir, entry());
     await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
-    expect(addLabelCalls).toContainEqual({ prUrl: PR_URL, label: 'mergeable' });
+    expect(addLabelCalls).toContainEqual({ prUrl: PR_URL, label: 'needs-remediation' });
+    expect(addLabelCalls.filter((call) => call.label === 'mergeable')).toHaveLength(0);
   });
 
   it('dispatches ciFix for a non-draft PR with failing checks (control)', async () => {
