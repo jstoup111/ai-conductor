@@ -572,6 +572,7 @@ describe('integration/gate-loop', () => {
       return kicks;
     }
 
+    // Covers: rem-prd-audit-9-R2
     it('emits a kickback event when conflict_check re-opens architecture_review, without invoking navigateBack', async () => {
       await seedStoriesAndPlan();
       await seedApprovedAdr();
