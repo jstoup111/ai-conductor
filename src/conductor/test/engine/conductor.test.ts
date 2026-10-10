@@ -367,7 +367,7 @@ describe('engine/conductor', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  // Covers: task:9, rem-prd-audit-9-R1, S4.4
+  // Covers: task:9, task:rem-prd-audit-9-R1, S4.4
   it('halts an auto-mode architecture review when a real feature worktree adds an unledgered ADR', async () => {
     const repository = join(dir, 'repository');
     const featureWorktree = join(dir, 'feature-worktree');
@@ -417,7 +417,7 @@ describe('engine/conductor', () => {
     expect(finalState.ok && finalState.value.architecture_review).not.toBe('skipped');
   });
 
-  // Covers: task:9, rem-prd-audit-9-R3, S4.5
+  // Covers: task:9, task:rem-prd-audit-9-R3, S4.5
   it('does not complete an interactive architecture review with an unapproved load-bearing A3', async () => {
     const repository = join(dir, 'interactive-repository');
     await mkdir(join(repository, '.docs', 'decisions'), { recursive: true });

@@ -1,4 +1,4 @@
-// Covers: task:5, rem-as-built-5-R1, rem-as-built-5-R2, S3.3, S3.4, S4.2, S4.3, S4.4
+// Covers: task:5, task:rem-as-built-5-R1, task:rem-as-built-5-R2, S3.3, S3.4, S4.2, S4.3, S4.4
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
