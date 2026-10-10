@@ -45,12 +45,17 @@ export interface RepairObligation {
   tasks: Record<string, { status: 'open' | 'resolved'; evidence?: RepairClosureEvidence }>;
 }
 
-interface RepairObligationSection {
+export interface RepairObligationSection {
   version: 1;
   records: Record<string, RepairObligation>;
   currentByPlan: Record<string, Record<string, string>>;
   admissionsByPlan: Record<string, Record<string, string>>;
 }
+
+export type TaskObligationStanding =
+  | { kind: 'none' }
+  | { kind: 'current-less'; reason: string }
+  | { kind: 'live'; current?: RepairObligation; live: RepairObligation[]; superseded: RepairObligation[] };
 
 type RepairResult<T> =
   | { ok: true; value: T }
@@ -87,6 +92,40 @@ function isStringArray(value: unknown): value is string[] {
 
 function uniqueCanonicalTaskIds(taskIds: readonly string[]): string[] {
   return [...new Set(taskIds.map((taskId) => canonicalTaskId(taskId.trim())).filter(Boolean))];
+}
+
+export function taskObligationStanding(
+  section: Pick<RepairObligationSection, 'records' | 'currentByPlan'>,
+  planIdentity: string,
+  taskId: string,
+): TaskObligationStanding {
+  const requestedTaskId = taskId.trim();
+  const canonicalTaskIdValue = canonicalTaskId(requestedTaskId);
+  const bound = Object.values(section.records).filter((obligation) =>
+    obligation.planIdentity === planIdentity && obligation.taskIds.some((id) => canonicalTaskId(id.trim()) === canonicalTaskIdValue),
+  );
+  if (bound.length === 0) return { kind: 'none' };
+
+  const currentId = section.currentByPlan[planIdentity]?.[canonicalTaskIdValue];
+  const current = currentId === undefined ? undefined : section.records[currentId];
+  const usableCurrent = current !== undefined && current.planIdentity === planIdentity &&
+    current.taskIds.some((id) => canonicalTaskId(id.trim()) === canonicalTaskIdValue);
+  if (!usableCurrent && bound.some((obligation) => obligation.tasks[canonicalTaskIdValue]?.status === 'open')) {
+    return {
+      kind: 'current-less',
+      reason: `repair state is unavailable: task ${requestedTaskId} has an open repair obligation but no current obligation is recorded for it`,
+    };
+  }
+
+  const superseded = usableCurrent
+    ? bound.filter((obligation) => obligation.id !== current.id && obligation.source.authority === current.source.authority)
+    : [];
+  return {
+    kind: 'live',
+    current: usableCurrent ? current : undefined,
+    live: bound.filter((obligation) => !superseded.includes(obligation)),
+    superseded,
+  };
 }
 
 /** Normalizes a plan path without deriving identity from mutable plan bytes. */
@@ -307,17 +346,14 @@ export function createRepairObligationStore(
           result = { ok: false, kind: 'stale', message: 'Repair obligation belongs to a different plan' };
           return current as EngineState;
         }
-        const currentId = section.currentByPlan[planIdentity]?.[taskId];
-        // A later finding from a different authority shares the task's row
-        // but does not supersede this repair: both obligations need their
-        // own closure evidence. Only a newer admission from the same
-        // authority makes the old record stale (notably plan amendments).
-        if (currentId !== input.obligationId) {
-          const currentRecord = currentId === undefined ? undefined : section.records[currentId];
-          if (!currentRecord || currentRecord.source.authority === obligation.source.authority) {
-            result = { ok: false, kind: 'stale', message: 'Repair obligation has been superseded for this task' };
-            return current as EngineState;
-          }
+        const standing = taskObligationStanding(section, planIdentity, taskId);
+        if (standing.kind === 'current-less') {
+          result = { ok: false, kind: 'incompatible', message: standing.reason };
+          return current as EngineState;
+        }
+        if (standing.kind === 'live' && standing.superseded.some(({ id }) => id === input.obligationId)) {
+          result = { ok: false, kind: 'stale', message: 'Repair obligation has been superseded for this task' };
+          return current as EngineState;
         }
         if (obligation.tasks[taskId].status === 'open') {
           obligation.tasks[taskId] = { status: 'resolved', evidence: clone(input.evidence) };
