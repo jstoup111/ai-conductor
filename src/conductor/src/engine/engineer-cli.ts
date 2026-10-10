@@ -1642,17 +1642,63 @@ export async function dispatchEngineer(
         ?? createTerminalGithubOperationConfirmation({ isTerminal: () => attached });
       const engDir = engineerDir ?? resolveEngineerDir({});
       const ledger = createLedger(join(engDir, 'ledger.json'));
+      const resolveIssue = async (
+        parsedForget: NonNullable<ReturnType<typeof parseSourceRef>>,
+        resolvedBy: string,
+      ): Promise<boolean> => {
+        const tracker = createGithubTrackerClient(gh, {
+          intake: createGithubIntakeAuthorization({
+            gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor, confirmation,
+          }),
+          events: opts.events,
+        });
+        try {
+          await tracker.commentOnIntakeIssue(
+            parsedForget.repo,
+            Number(parsedForget.issue),
+            `Resolved by ${resolvedBy}`,
+            process.cwd(),
+          );
+        } catch (err: unknown) {
+          printErr(
+            `engineer forget: failed to comment on ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
+            `ledger entry retained.${forgetAuthorizationRefusalExplanation(err, attached)}`,
+          );
+          return false;
+        }
+        try {
+          await tracker.closeIntakeIssue(parsedForget.repo, String(parsedForget.issue), process.cwd());
+        } catch (err: unknown) {
+          printErr(
+            `engineer forget: failed to close ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
+            `close the issue by hand, then rerun \`engineer forget ${sourceRef}\` without --resolved-by.` +
+            forgetAuthorizationRefusalExplanation(err, attached),
+          );
+          return false;
+        }
+        return true;
+      };
 
       const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
       if (!entry) {
-        if (dispatch.resolvedBy) {
+        if (!dispatch.resolvedBy) {
+          print(JSON.stringify({ kind: 'forget', sourceRef, found: false }));
+          return 0;
+        }
+
+        const parsedForget = parseSourceRef(sourceRef);
+        if (!parsedForget) {
           printErr(
-            `engineer forget: cannot record resolution for ${sourceRef}: no intake ledger entry; ` +
+            `engineer forget: cannot record resolution for ${sourceRef}: it is not a GitHub issue reference; ` +
             'rerun without --resolved-by to remove only the source label.',
           );
           return 1;
         }
-        print(JSON.stringify({ kind: 'forget', sourceRef, found: false }));
+
+        if (!await resolveIssue(parsedForget, dispatch.resolvedBy)) return 1;
+        print(JSON.stringify({
+          kind: 'forget', sourceRef, found: false, removed: false, closed: true, resolvedBy: dispatch.resolvedBy,
+        }));
         return 0;
       }
 
@@ -1666,36 +1712,7 @@ export async function dispatchEngineer(
         return 1;
       }
       if (dispatch.resolvedBy && parsedForget) {
-        const tracker = createGithubTrackerClient(gh, {
-          intake: createGithubIntakeAuthorization({
-            gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor, confirmation,
-          }),
-          events: opts.events,
-        });
-        try {
-          await tracker.commentOnIntakeIssue(
-            parsedForget.repo,
-            Number(parsedForget.issue),
-            `Resolved by ${dispatch.resolvedBy}`,
-            process.cwd(),
-          );
-        } catch (err: unknown) {
-          printErr(
-            `engineer forget: failed to comment on ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
-            `ledger entry retained.${forgetAuthorizationRefusalExplanation(err, attached)}`,
-          );
-          return 1;
-        }
-        try {
-          await tracker.closeIntakeIssue(parsedForget.repo, String(parsedForget.issue), process.cwd());
-        } catch (err: unknown) {
-          printErr(
-            `engineer forget: failed to close ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
-            `close the issue by hand, then rerun \`engineer forget ${sourceRef}\` without --resolved-by.` +
-            forgetAuthorizationRefusalExplanation(err, attached),
-          );
-          return 1;
-        }
+        if (!await resolveIssue(parsedForget, dispatch.resolvedBy)) return 1;
       }
 
       await ledger.forget(GITHUB_ISSUES_SOURCE, sourceRef);

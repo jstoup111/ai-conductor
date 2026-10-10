@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:4
 // `conduct-ts engineer poll` + `engineer forget` CLI primitives (Phase 9.3b, T22/T23).
 // FR-32 (poll-on-launch primitive) + FR-40 (manual forget). gh is injected — no network.
 
@@ -636,23 +636,91 @@ describe('engineer forget (T23, FR-40)', () => {
     expect(await readFile(ledgerPath, 'utf-8')).toBe(before);
   });
 
-  it('refuses an absent ledger entry with the flag before calling the tracker or changing the ledger', async () => {
+  // Covers: task:4
+  it('comments and closes a sole-assigned absent ledger entry without changing its ledger or stripping its label', async () => {
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
     const ledgerPath = join(engineerDir, 'ledger.json');
     const before = await readFile(ledgerPath, 'utf-8');
 
     const { gh, calls } = makeGh({});
-    const { opts } = captureOut();
+    const { out, opts } = captureOut();
     const code = await dispatchEngineer(
       { kind: 'forget', sourceRef: 'o/a#9', resolvedBy: 'o/a#2' },
       opts({ gh }),
     );
 
-    expect(code).not.toBe(0);
-    expect(calls).toHaveLength(0);
+    expect(code).toBe(0);
+    expect(calls).toEqual([
+      ['issue', 'view', '9', '-R', 'o/a', '--json', 'assignees'],
+      ['issue', 'comment', '9', '-R', 'o/a', '--body', expect.stringContaining('o/a#2')],
+      ['issue', 'view', '9', '-R', 'o/a', '--json', 'assignees'],
+      ['issue', 'close', '9', '-R', 'o/a'],
+    ]);
     expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
     expect(await readFile(ledgerPath, 'utf-8')).toBe(before);
+    expect(JSON.parse(out[0])).toMatchObject({
+      kind: 'forget', sourceRef: 'o/a#9', found: false, removed: false, closed: true, resolvedBy: 'o/a#2',
+    });
+  });
+
+  // Covers: task:4
+  it('authorizes then comments and closes an unassigned absent ledger entry without changing its ledger or stripping its label', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    const ledgerPath = join(engineerDir, 'ledger.json');
+    const before = await readFile(ledgerPath, 'utf-8');
+    const { gh, calls } = makeGh({}, undefined, []);
+    const confirmations: string[] = [];
+    const githubOperationConfirmation: InteractiveGithubOperationConfirmation = {
+      mode: 'interactive',
+      confirm: async (prompt) => {
+        confirmations.push(prompt.operation);
+        return true;
+      },
+    };
+    const { out, opts } = captureOut();
+
+    const code = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'o/a#9', resolvedBy: 'o/a#2' },
+      opts({ gh, githubOperationConfirmation, isAttachedTerminal: () => true }),
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([
+      ['issue', 'view', '9', '-R', 'o/a', '--json', 'assignees'],
+      ['issue', 'comment', '9', '-R', 'o/a', '--body', expect.stringContaining('o/a#2')],
+      ['issue', 'view', '9', '-R', 'o/a', '--json', 'assignees'],
+      ['issue', 'close', '9', '-R', 'o/a'],
+    ]);
+    expect(confirmations).toEqual(['intake.issue.comment.create', 'intake.issue.close']);
+    expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
+    expect(await readFile(ledgerPath, 'utf-8')).toBe(before);
+    expect(JSON.parse(out[0])).toMatchObject({
+      kind: 'forget', sourceRef: 'o/a#9', found: false, removed: false, closed: true, resolvedBy: 'o/a#2',
+    });
+  });
+
+  // Covers: task:4
+  it('refuses an unassigned absent ledger entry outside an interactive terminal without changing its ledger', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    const ledgerPath = join(engineerDir, 'ledger.json');
+    const before = await readFile(ledgerPath, 'utf-8');
+    const { gh, calls } = makeGh({}, undefined, []);
+    const { err, opts } = captureOut();
+
+    const code = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'o/a#9', resolvedBy: 'o/a#2' },
+      opts({ gh, isAttachedTerminal: () => false }),
+    );
+
+    expect(code).not.toBe(0);
+    expect(calls).toEqual([['issue', 'view', '9', '-R', 'o/a', '--json', 'assignees']]);
+    expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
+    expect(await readFile(ledgerPath, 'utf-8')).toBe(before);
+    expect(err.join('\n')).toContain('sole assignee');
+    expect(err.join('\n')).toContain('interactive terminal');
   });
 
   it('reports found:false for an absent ref without crashing or calling gh', async () => {
