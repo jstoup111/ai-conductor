@@ -1034,7 +1034,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     };
     const fakeAdapter = { poll: async () => [] };
     const fakeBuildIntake = () => ({
-      reader: {} as any,
+      reader: { listProjects: async () => [] } as any,
       ledger: fakeLedger as any,
       queue: fakeQueue as any,
       adapter: fakeAdapter as any,
