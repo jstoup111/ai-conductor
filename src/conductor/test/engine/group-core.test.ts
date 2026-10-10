@@ -1,4 +1,4 @@
-// Covers: task:8, task:11, task:21
+// Covers: task:1, task:8, task:11, task:21
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   makeVerdictOutcome,
@@ -406,6 +406,131 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
   }
 
   const fakeState = {} as ConductState;
+
+  describe("post-success verification", () => {
+    function verificationMember(): GroupMember {
+      return {
+        name: "manual_test",
+        skill: "manual-test",
+        outcome: makeSkippedOutcome(),
+      };
+    }
+
+    function successfulRunner() {
+      const calls: StepName[] = [];
+      return {
+        calls,
+        run: async (step: StepName): Promise<StepRunResult> => {
+          calls.push(step);
+          return { success: true };
+        },
+      };
+    }
+
+    it("retries a successful dispatch whose verification fails, then passes", async () => {
+      const runner = successfulRunner();
+      const retries: GroupBranchRetry[] = [];
+      const verifyDispatch = vi
+        .fn<NonNullable<BranchExecutorDeps["verifyDispatch"]>>()
+        .mockResolvedValueOnce("no current verdict")
+        .mockResolvedValueOnce(undefined);
+
+      const outcome = await runGroupBranch(
+        verificationMember(),
+        fakeState,
+        {
+          stepRunner: runner,
+          verifyDispatch,
+          lifecycleObserver: {
+            ...TEST_LIFECYCLE_OBSERVER,
+            onRetry: (observation) => { retries.push(observation); },
+          },
+        },
+        3,
+      );
+
+      expect({ outcome, runnerCalls: runner.calls.length, retries: retries.length }).toEqual({
+        outcome: { kind: "verdict", verdict: "pass" },
+        runnerCalls: 2,
+        retries: 1,
+      });
+    });
+
+    it("returns the final verification failure when verification exhausts retries", async () => {
+      const runner = successfulRunner();
+      const verifyDispatch = vi
+        .fn<NonNullable<BranchExecutorDeps["verifyDispatch"]>>()
+        .mockResolvedValue("no current verdict");
+
+      const outcome = await runGroupBranch(
+        verificationMember(),
+        fakeState,
+        { stepRunner: runner, verifyDispatch },
+        2,
+      );
+
+      expect({ outcome, runnerCalls: runner.calls.length }).toEqual({
+        outcome: { kind: "no-verdict", reason: "no current verdict" },
+        runnerCalls: 2,
+      });
+    });
+
+    it("shares one retry budget between runner and verification failures", async () => {
+      const runner = spyRunner([
+        { success: false, output: "runner failed" },
+        { success: true },
+        { success: true },
+      ]);
+      const verifyDispatch = vi
+        .fn<NonNullable<BranchExecutorDeps["verifyDispatch"]>>()
+        .mockResolvedValue("no current verdict");
+
+      const outcome = await runGroupBranch(
+        verificationMember(),
+        fakeState,
+        { stepRunner: runner, verifyDispatch },
+        2,
+      );
+
+      expect({ outcome, runnerCalls: runner.calls.length, verificationCalls: verifyDispatch.mock.calls.length }).toEqual({
+        outcome: { kind: "no-verdict", reason: "no current verdict" },
+        runnerCalls: 2,
+        verificationCalls: 1,
+      });
+    });
+
+    it("captures a thrown verifier as a no-verdict outcome", async () => {
+      const runner = successfulRunner();
+      const verifyDispatch = vi
+        .fn<NonNullable<BranchExecutorDeps["verifyDispatch"]>>()
+        .mockRejectedValue(new Error("verify crashed"));
+
+      const outcome = await runGroupBranch(
+        verificationMember(),
+        fakeState,
+        { stepRunner: runner, verifyDispatch },
+        1,
+      );
+
+      expect(outcome).toEqual({ kind: "no-verdict", reason: "verify crashed" });
+    });
+
+    it("keeps successful dispatches unchanged when no verifier is supplied", async () => {
+      const runner = successfulRunner();
+
+      const outcome = await runGroupBranch(
+        verificationMember(),
+        fakeState,
+        { stepRunner: runner },
+        1,
+      );
+
+      expect({ outcome, runnerCalls: runner.calls.length }).toEqual({
+        outcome: { kind: "verdict", verdict: "pass" },
+        runnerCalls: 1,
+      });
+    });
+  });
 
   it("cold-starts a provider-session branch retry without changing the serial session", async () => {
     const providerExecutor = vi.fn(executeProviderCandidates);
