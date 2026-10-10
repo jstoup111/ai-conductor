@@ -24,7 +24,43 @@ const ROTATE_SIZE_BYTES = 1_000_000;
 const FEATURE_TAG_DISPLAY_LENGTH = 24;
 const featureOwnership = new AsyncLocalStorage<string>();
 
-type DaemonActivityLogger = (message: string, featureOwned?: boolean) => void;
+/** The visual nesting column assigned by the daemon event presenter. */
+export type DaemonLogDepth = 0 | 1 | 2;
+
+/** One logical daemon log message before its daemon and feature prefixes are composed. */
+export interface DaemonLogEntry {
+  depth: DaemonLogDepth;
+  text: string;
+  moreAt?: string;
+}
+
+/** What an operator should do after a warning or halt. */
+export type NextAction =
+  | { kind: 'operator'; action: string }
+  | { kind: 'none'; why: string };
+
+type DaemonLogMessage = string | DaemonLogEntry;
+type DaemonActivityLogger = (message: DaemonLogMessage, featureOwned?: boolean) => void;
+type StringDaemonLogger = (message: string, featureOwned?: boolean) => void;
+
+/** Render the body of a daemon line at its declared visual depth. */
+export function composeDaemonLineBody({ depth, text }: DaemonLogEntry): string {
+  if (depth === 1) return `· ${text}`;
+  if (depth === 2) return `·   ${text}`;
+  return text;
+}
+
+/** Render the action suffix used by warnings and halts. */
+export function formatNextAction(next: NextAction): string {
+  return next.kind === 'operator'
+    ? ` — next: ${next.action}`
+    : ` — no action needed: ${next.why}`;
+}
+
+function normalizeDaemonLogMessage(message: DaemonLogMessage): DaemonLogEntry {
+  if (typeof message === 'string') return { depth: 0, text: message.trimStart() };
+  return message;
+}
 
 /** Render a feature slug for a daemon log tag, bounded for readable live output. */
 export function formatDaemonFeatureTag(featureSlug: string): string {
@@ -94,29 +130,37 @@ export function createDaemonModeLogger(sinks: {
   writeLive: (line: string) => void;
   writePersisted: (line: string) => void;
   formatActivityLine?: (message: string, featureOwned: boolean) => string;
-}): (msg: string, featureOwned?: boolean) => void {
+}): DaemonActivityLogger {
   const lastStatus = new Map<string, string>();
   const formatActivityLine = sinks.formatActivityLine ?? formatDaemonActivityLine;
 
-  return (msg: string, featureOwned = false) => {
+  return (message: DaemonLogMessage, featureOwned = false) => {
+    const entry = normalizeDaemonLogMessage(message);
     // Subprocess output is commonly a single captured string containing many
     // lines. Attribute and persist each physical line independently: otherwise
     // only the first one receives the daemon/feature prefix and timestamp.
-    const lines = msg.split(/\r?\n/);
+    const lines = entry.text.split(/\r?\n/);
     if (lines.at(-1) === '') lines.pop();
     for (const lineMessage of lines) {
-      writeDaemonMessage(lineMessage, featureOwned, lastStatus, formatActivityLine, sinks);
+      writeDaemonMessage(
+        { ...entry, text: lineMessage },
+        featureOwned,
+        lastStatus,
+        formatActivityLine,
+        sinks,
+      );
     }
   };
 }
 
 function writeDaemonMessage(
-  msg: string,
+  entry: DaemonLogEntry,
   featureOwned: boolean,
   lastStatus: Map<string, string>,
   formatActivityLine: (message: string, featureOwned: boolean) => string,
   sinks: Pick<Parameters<typeof createDaemonModeLogger>[0], 'writeLive' | 'writePersisted'>,
 ): void {
+    const { text: msg } = entry;
     // Lifecycle transition suppression (start/resume/done) tracks repository-global
     // status per feature slug. A genuine lifecycle line always opens with the glyph
     // (optionally behind a bracketed tag and/or ANSI color codes) — real emitters
@@ -139,7 +183,10 @@ function writeDaemonMessage(
       const oldStatus = lastStatus.get(slug);
       lastStatus.set(slug, 'resume');
       const resumed = oldStatus ? `${msg} (was: ${oldStatus})` : msg;
-      const line = formatActivityLine(resumed, featureOwned);
+      const line = formatActivityLine(
+        composeDaemonLineBody({ ...entry, text: resumed }),
+        featureOwned,
+      );
       sinks.writeLive(line);
       sinks.writePersisted(line);
       return;
@@ -152,7 +199,7 @@ function writeDaemonMessage(
       lastStatus.set(slug, outcomeStatus);
     }
 
-    const line = formatActivityLine(msg, featureOwned);
+    const line = formatActivityLine(composeDaemonLineBody(entry), featureOwned);
     sinks.writeLive(line);
     sinks.writePersisted(line);
 }
@@ -161,15 +208,37 @@ function writeDaemonMessage(
  * Derive an immutable feature-owned logger from a daemon logger. The base logger
  * remains responsible for adding its `[daemon]` prefix and choosing live/file sinks.
  */
+export function createFeatureDaemonLogger<T extends DaemonActivityLogger | StringDaemonLogger>(
+  featureSlug: string,
+  baseLog: T,
+  featureTag?: string,
+): T extends DaemonActivityLogger ? (message: DaemonLogMessage) => void : StringDaemonLogger;
 export function createFeatureDaemonLogger(
   featureSlug: string,
-  baseLog: (message: string, featureOwned?: boolean) => void,
+  baseLog: DaemonActivityLogger | StringDaemonLogger,
   featureTag = formatDaemonFeatureTag(featureSlug),
-): (message: string) => void {
+): (message: DaemonLogMessage) => void {
+  const entryLog = baseLog as DaemonActivityLogger;
   return (message) => {
-    const lines = message.split(/\r?\n/);
+    if (typeof message === 'string') {
+      const text = message.trimStart();
+      const lines = text.split(/\r?\n/);
+      if (lines.at(-1) === '') lines.pop();
+      for (const line of lines) {
+        baseLog(`${featureTag} ${line}`, true);
+      }
+      return;
+    }
+
+    const entry = normalizeDaemonLogMessage(message);
+    const lines = entry.text.split(/\r?\n/);
     if (lines.at(-1) === '') lines.pop();
-    for (const line of lines) baseLog(`${featureTag} ${line}`, true);
+    for (const line of lines) {
+      entryLog(
+        { ...entry, depth: 0, text: `${featureTag} ${composeDaemonLineBody({ ...entry, text: line })}` },
+        true,
+      );
+    }
   };
 }
 
