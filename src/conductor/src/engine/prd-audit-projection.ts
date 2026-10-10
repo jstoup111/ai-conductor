@@ -35,7 +35,7 @@ export const PRD_AUDIT_PROJECTION_CORPUS_MAXIMA_BYTES = {
   planTasksBytes: 146_186,
   criteriaBytes: 43_226,
   prdIntentBytes: 17_991,
-  coherenceBytes: 54_616,
+  coherenceBytes: 54_846,
   historyBytes: 0,
 } as const;
 
