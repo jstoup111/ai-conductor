@@ -96,18 +96,20 @@ function createFixtureAgentFake(
         lapId: string;
         snapshotDigest: string;
       };
+      const judgedPass = {
+        kind: 'judged',
+        rubric: projection.rubric,
+        lapId: projection.lapId,
+        snapshotDigest: projection.snapshotDigest,
+        contractVersion: 'v3',
+        findings: [],
+        verdict: 'PASS',
+      };
       return {
         success: true,
-        output: JSON.stringify({
-          kind: 'judged',
-          rubric: projection.rubric,
-          lapId: projection.lapId,
-          snapshotDigest: projection.snapshotDigest,
-          contractVersion: 'v3',
-          findings: [],
-          verdict: 'PASS',
-        }),
+        output: JSON.stringify(judgedPass),
         exitCode: 0,
+        finalStructuredResult: judgedPass,
       };
     }
 
@@ -361,7 +363,10 @@ describe('daemon E2E fixture', () => {
           sessionStore: new ProviderSessionStore(),
           // The fixture supplies current aggregate evidence, so it can exercise
           // the sole supported build-review branch without running a command.
-          config: { build_review: { maxParallel: 1, rubrics: { testQuality: { enabled: true } } } },
+          config: {
+            llm_provider: 'codex',
+            build_review: { maxParallel: 1, rubrics: { testQuality: { enabled: true } } },
+          },
           buildReviewInputOptions: {
             inspectTestSuite: async () => ({
               status: 'CURRENT', evidence: { provenanceHeadSha: (await execa('git', ['rev-parse', 'HEAD'], { cwd: worktreeDir })).stdout.trim(), outcome: 'PASS' },
@@ -397,6 +402,7 @@ describe('daemon E2E fixture', () => {
               daemon: true,
               verifyArtifacts: false,
               config: {
+                llm_provider: 'codex',
                 build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
               },
               buildReviewEffectiveResolver,
@@ -448,7 +454,7 @@ describe('daemon E2E fixture', () => {
       }).toEqual({
         claimed: true,
         processed: [slug],
-        providerCalls: 4,
+        providerCalls: 5,
         build: 'done',
         buildReview: 'done',
         prdAudit: 'done',
