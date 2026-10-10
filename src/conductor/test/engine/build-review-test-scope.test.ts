@@ -1,6 +1,10 @@
-// Covers: task:5, task:6
+// Covers: task:1, task:5, task:6
 import { describe, expect, it } from 'vitest';
-import { analyzeBuildReviewTestScope } from '../../src/engine/build-review-test-scope.js';
+import {
+  analyzeBuildReviewTestScope,
+  findMalformedCoversMarkers,
+  type BuildReviewTestScopeInput,
+} from '../../src/engine/build-review-test-scope.js';
 
 const storiesText = `
 ## Story 2: Binding
@@ -25,6 +29,122 @@ function scope(
 }
 
 describe('build-review test scope association evidence', () => {
+  it('finds an introduced malformed Covers token on a newly added unbound test', () => {
+    const input: BuildReviewTestScopeInput = {
+      base: {
+        source: {
+          fileName: 'test/example.test.ts',
+          bytes: Buffer.from("import { it } from 'vitest';\nconst existing = true;\nit('existing', () => { expect(existing).toBe(true); });\n"),
+        },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 2: Second\n\n### Task 3: Third\n',
+      },
+      head: {
+        source: {
+          fileName: 'test/example.test.ts',
+          bytes: Buffer.from("import { it } from 'vitest';\nconst existing = true;\nit('existing', () => { expect(existing).toBe(true); });\n\n// Covers: Task: 32\nit('new unbound test', () => { expect(true).toBe(true); });\n"),
+        },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 2: Second\n\n### Task 3: Third\n',
+      },
+    };
+
+    expect(findMalformedCoversMarkers(input)).toEqual([
+      { path: 'test/example.test.ts', line: 5, token: 'Task: 32' },
+    ]);
+  });
+
+  it('ignores an introduced well-formed Covers task reference that is absent from the plan', () => {
+    const input: BuildReviewTestScopeInput = {
+      base: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("import { it } from 'vitest';\n") },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 2: Second\n\n### Task 3: Third\n',
+      },
+      head: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("import { it } from 'vitest';\n// Covers: task:99\nit('absent task', () => { expect(true).toBe(true); });\n") },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 2: Second\n\n### Task 3: Third\n',
+      },
+    };
+
+    expect(findMalformedCoversMarkers(input)).toEqual([]);
+  });
+
+  it('ignores a malformed sibling when the same marker resolves a plan task', () => {
+    const input: BuildReviewTestScopeInput = {
+      base: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("import { it } from 'vitest';\n") },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 2: Second\n\n### Task 3: Third\n',
+      },
+      head: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("import { it } from 'vitest';\n// Covers: task:1, Task: 32\nit('resolved sibling', () => { expect(true).toBe(true); });\n") },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 2: Second\n\n### Task 3: Third\n',
+      },
+    };
+
+    expect(findMalformedCoversMarkers(input)).toEqual([]);
+  });
+
+  it('ignores a malformed Covers marker already present at base when only its test body changes', () => {
+    const input: BuildReviewTestScopeInput = {
+      base: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("import { it } from 'vitest';\n// Covers: Task: 32\nit('existing', () => { expect('base').toBe('base'); });\n") },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 2: Second\n\n### Task 3: Third\n',
+      },
+      head: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("import { it } from 'vitest';\n// Covers: Task: 32\nit('existing', () => { expect('head').toBe('head'); });\n") },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 2: Second\n\n### Task 3: Third\n',
+      },
+    };
+
+    expect(findMalformedCoversMarkers(input)).toEqual([]);
+  });
+
+  it('ignores an introduced Covers marker with only empty tokens', () => {
+    const input: BuildReviewTestScopeInput = {
+      base: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("import { it } from 'vitest';\n") },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 2: Second\n\n### Task 3: Third\n',
+      },
+      head: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("import { it } from 'vitest';\n// Covers: ,\nit('empty marker', () => { expect(true).toBe(true); });\n") },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 2: Second\n\n### Task 3: Third\n',
+      },
+    };
+
+    expect(findMalformedCoversMarkers(input)).toEqual([]);
+  });
+
+  it('sorts two introduced malformed Covers markers by their source lines', () => {
+    const input: BuildReviewTestScopeInput = {
+      base: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("import { it } from 'vitest';\n") },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 2: Second\n\n### Task 3: Third\n',
+      },
+      head: {
+        source: {
+          fileName: 'test/example.test.ts',
+          bytes: Buffer.from("import { it } from 'vitest';\nconst first = true;\n\n// Covers: Task: 32\nit('first malformed', () => { expect(first).toBe(true); });\n\nconst second = true;\n\n// Covers: Task: 64\nit('second malformed', () => { expect(second).toBe(true); });\n"),
+        },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 2: Second\n\n### Task 3: Third\n',
+      },
+    };
+
+    expect(findMalformedCoversMarkers(input)).toEqual([
+      { path: 'test/example.test.ts', line: 4, token: 'Task: 32' },
+      { path: 'test/example.test.ts', line: 9, token: 'Task: 64' },
+    ]);
+  });
+
   it('groups a changed suite hook with opted-in unchanged descendants without marking their bodies directly changed', () => {
     const result = scope(
       `// Covers: S2.1\ndescribe('accounts', () => {\n  beforeEach(() => { seed('base'); });\n  it('creates an account', () => { expect(true).toBe(true); });\n  it('deletes an account', () => { expect(true).toBe(true); });\n});\n// Covers: S2.1\ndescribe('billing', () => {\n  it('keeps an unrelated sibling', () => { expect(true).toBe(true); });\n});`,
