@@ -293,8 +293,6 @@ directory, such as test fixtures, pass through untouched.
 - Interactive and inline runs, and any dispatch whose working directory is not an engine-prepared worktree.
 - `build_review` dispatches, which run without the guard by design.
 - Custom providers, which build their own child environment.
-- Pi `build_review` dispatches, which run without the guard by design.
-- Pi dispatches whose working directory is not an engine-prepared worktree.
 - An overridden worktree `core.hooksPath`, which bypasses the git-side ref-hook backstop.
 - `git push --no-verify`, which bypasses `pre-push`.
 - Git run from the root checkout, which has no worktree-scoped `core.hooksPath`.

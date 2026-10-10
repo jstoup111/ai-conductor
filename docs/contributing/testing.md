@@ -197,9 +197,9 @@ failing in groups but passing in isolation.
 
 ## Test tiers
 
-1205 `*.test.ts` files live under `src/conductor/test/`. Vitest includes `test/**/*.test.ts` and
+1350 `*.test.ts` files live under `src/conductor/test/`. Vitest includes `test/**/*.test.ts` and
 excludes `test/smoke/**`, `**/*.smoke.test.ts` and `**/*.e2e.test.ts` (`src/conductor/vitest.config.ts:17-20`),
-so a bare `npm test` discovers 1185 files and excludes the 16 opt-in smoke files and 4 e2e files.
+so a bare `npm test` discovers 1328 files and excludes the 18 opt-in smoke files and 4 e2e files.
 
 | Directory | Files | Covers | Run just this tier |
 | --- | --- | --- | --- |
@@ -445,16 +445,16 @@ glob-discovered smoke tier from `src/conductor`:
 npm run smoke
 ```
 
-The smoke config includes `test/smoke/**` and every `*.smoke.test.ts` file. It currently discovers sixteen
+The smoke config includes `test/smoke/**` and every `*.smoke.test.ts` file. It currently discovers eighteen
 files. Each declares exactly one required capability beside the test:
 
 | Capability | Current files | Requirement |
 | --- | --- | --- |
 | `hermetic` | `finish-record`, `surgical-finish-retry` | No external binary or credential. |
-| `toolchain` | `publish-interrupted`, `backlog-priority`, `gh-version-floor`, `github-bot-credential`, `codex-provider`, `daemon-tmux` | A local toolchain or network-backed setup. |
+| `toolchain` | `publish-interrupted`, `backlog-priority`, `gh-version-floor`, `github-bot-credential`, `codex-provider`, `codex-read-only-review-policy`, `daemon-tmux` | A local toolchain or network-backed setup. |
 | `credentialed:claude` | `claude-provider`, `claude-subagent-stream`, `build-token-auth`, `daemon-e2e-live-claude`, `git-guard-claude` | `CLAUDE_CODE_OAUTH_TOKEN` and the `claude` binary. |
 | `credentialed:codex` | `daemon-e2e-live-codex`, `git-guard-codex` | `CODEX_API_KEY` and the `codex` binary. |
-| `credentialed:pi` | `daemon-e2e-live-pi` | `PI_API_KEY` and the `pi` binary. |
+| `credentialed:pi` | `daemon-e2e-live-pi`, `git-guard-pi` | `PI_API_KEY` and the `pi` binary. |
 
 `publish-interrupted.smoke.test.ts` is `toolchain`, not hermetic: it creates a worktree and runs the
 real `bin/setup`, which may install dependencies. Select one production smoke file with
