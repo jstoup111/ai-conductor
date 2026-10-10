@@ -1,4 +1,4 @@
-// Covers: task:25
+// Covers: task:25, task:rem-as-built-rem-asbuilt-b00b54a4-4-r1
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

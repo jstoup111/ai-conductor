@@ -177,7 +177,6 @@ import { createRoutedConductStateStore, readConductStateOverlay } from './conduc
 import {
   isRegionStep,
   CHILD_REGION_STEPS,
-  listExistingChildren,
   pipelinePathFor,
   type ChildId,
 } from './child-context.js';
@@ -6777,9 +6776,10 @@ export class Conductor {
           // preserves the N=1 path for callers that intentionally provide no
           // Git adapter. Durable child state remains sufficient to re-enter a
           // stack even if its current config has since disabled creation.
-          const durableChildState = await hasDurableChildState(this.projectRoot, slug);
-          const childCursorRelevant = this.config.stacked_prs?.enabled === true || durableChildState !== false;
-          if (slug && childCursorRelevant) {
+          if (slug) {
+            const durableChildState = await hasDurableChildState(this.projectRoot, slug);
+            const childCursorRelevant = this.config.stacked_prs?.enabled === true || durableChildState !== false;
+            if (childCursorRelevant) {
             const cursor = await this.resolveActiveChild(this.projectRoot, slug);
             if (cursor.kind === 'active') {
               const target: ActiveChildLifecycleTarget = cursor;
@@ -6799,6 +6799,7 @@ export class Conductor {
             } else if (cursor.kind !== 'no-child') {
               await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
               return;
+            }
             }
           }
         }

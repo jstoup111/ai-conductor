@@ -1,3 +1,4 @@
+// Covers: task:23, task:rem-prd-audit-rem-prd-audit-S7.3-r1, task:rem-as-built-rem-asbuilt-b00b54a4-3-r1
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

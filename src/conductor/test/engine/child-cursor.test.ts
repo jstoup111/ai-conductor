@@ -1,4 +1,4 @@
-// Covers: task:4, task:5
+// Covers: task:4, task:5, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

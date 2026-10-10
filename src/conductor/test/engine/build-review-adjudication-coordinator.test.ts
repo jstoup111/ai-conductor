@@ -1,4 +1,4 @@
-// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4
+// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,7 @@ import { persistBuildReviewSuppressions } from '../../src/engine/build-review-su
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
@@ -313,6 +314,35 @@ function input(root: string, judge: (context: unknown) => Promise<RemediationCas
 }
 
 describe('coordinateBuildReviewAdjudication', () => {
+  it('keeps child cases local while writing suppression history to the flat store', async () => {
+    const root = await projectRoot();
+    const child = parseChildId(2)!;
+    const suppression = {
+      findingId: findingId,
+      rubric: 'testQuality',
+      summary: 'The changed test is insensitive.',
+      confidence: 40,
+      floor: 70,
+      lastSeenLap: 'lap-1',
+    };
+
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => securityActionJudgement()),
+      aggregate: securityAggregate,
+      child,
+      suppressions: [suppression],
+    })).resolves.toMatchObject({ ok: true, route: 'build' });
+
+    await expect(new RemediationCaseStore(root, feature).read()).resolves.toMatchObject({
+      ok: true,
+      state: { cases: [], suppressions: [suppression] },
+    });
+    await expect(new RemediationCaseStore(root, feature, { child }).read()).resolves.toMatchObject({
+      ok: true,
+      state: { cases: [expect.any(Object)], suppressions: [] },
+    });
+  });
+
   it('routes a security act through BUILD with a bounded work order and leaves the plan unchanged', async () => {
     const root = await projectRoot();
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
