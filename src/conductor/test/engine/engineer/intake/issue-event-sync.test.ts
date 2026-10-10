@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:4
 
 import { describe, expect, it } from 'vitest';
 import type { GithubOperationRequest, GithubOperationRunner } from '../../../../src/engine/github-operations.js';
@@ -117,5 +117,39 @@ describe('applyIssueEventSync', () => {
     const related = makeDeps();
     await applyIssueEventSync(opened('blocked by #10 and related to #11'), related.deps);
     expect(dependencyTargets(related.requests)).toEqual(['acme/app#10']);
+  });
+
+  it.each([
+    'related to #10',
+    'see #10',
+    'blocks #10',
+    'blocker for #10',
+    'blocked by other-owner/other-repo#10',
+    'blocked by',
+  ])('issues zero blocked_by writes for ambiguous, reverse, or cross-repo prose: %s', async (body) => {
+    const { deps, requests } = makeDeps();
+
+    await applyIssueEventSync(opened(body), deps);
+
+    expect(dependencyTargets(requests)).toEqual([]);
+  });
+
+  it('never reverses blocked_by writes for reverse-direction prose', async () => {
+    for (const body of ['blocks #10', 'blocker for #10']) {
+      const { deps, requests } = makeDeps();
+
+      await applyIssueEventSync(opened(body), deps);
+
+      expect(dependencyTargets(requests)).not.toContain('acme/app#10');
+      expect(requests.filter((request) => request.operation === 'intake.issue.dependency.add')).toEqual([]);
+    }
+  });
+
+  it('makes no tracker write attempt for a self-referential opened issue', async () => {
+    const { deps, requests } = makeDeps();
+
+    await applyIssueEventSync(opened('blocked by #20'), deps);
+
+    expect(requests).toEqual([]);
   });
 });
