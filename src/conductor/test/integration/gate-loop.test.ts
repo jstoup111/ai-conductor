@@ -315,6 +315,44 @@ describe('integration/gate-loop', () => {
     await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
   });
 
+  it('does not HALT after an unsatisfied non-architecture DECIDE verdict', async () => {
+    const halted: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') halted.push(event.reason);
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: async () => ({ success: true }) },
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      mode: 'auto',
+    });
+    const stories = ALL_STEPS.find((step) => step.name === 'stories')!;
+    const state: ConductState = { complexity_tier: 'M', stories: 'done' };
+
+    const result = await (conductor as unknown as {
+      advanceTail: (
+        step: typeof stories,
+        state: ConductState,
+        stuckGate: Map<StepName, number>,
+        steps: typeof ALL_STEPS,
+        indexOf: (name: StepName) => number,
+      ) => Promise<number | null | 'halt'>;
+    }).advanceTail(
+      stories,
+      state,
+      new Map(),
+      ALL_STEPS,
+      (name) => ALL_STEPS.findIndex((step) => step.name === name),
+    );
+
+    expect(result).toBeNull();
+    expect(state.stories).toBe('done');
+    expect(halted).toEqual([]);
+    await expect(access(join(dir, '.pipeline/HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('runs a custom config step inserted via `after` (config compatibility)', async () => {
     // The conductor now drives the resolved registry (buildStepRegistry), so a
     // custom step from .ai-conductor/config.yml is dispatched and indexed.

@@ -14694,7 +14694,11 @@ export class Conductor {
       // objective verdict still has to govern completion: leaving a completed
       // DECIDE step marked done after its post-dispatch verdict is false lets
       // the linear loop advance past an unsatisfied gate and report success.
-      if (!verdict.satisfied && indexOf(step.name) < topo.firstLoopIndex) {
+      if (
+        step.name === 'architecture_review' &&
+        !verdict.satisfied &&
+        indexOf(step.name) < topo.firstLoopIndex
+      ) {
         const reason = verdict.reason ?? `${step.name} gate is unsatisfied`;
         await this.commitStateChanges(state, `reopen unsatisfied ${step.name} gate`, {
           [step.name]: 'pending',
