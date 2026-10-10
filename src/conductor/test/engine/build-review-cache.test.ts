@@ -605,30 +605,43 @@ describe("build-review semantic cache", () => {
 
   it.each([
     ['a changed build-review-implementation-quality SKILL.md digest',
-      (identity: BuildReviewCacheSemanticIdentity) => ({ ...identity, effectiveBundleDigest: 'sha256:implementation-quality-skill-edited' }),
       { engineStamp: '8e7daae72ad7', skillDigest: 'sha256:implementation-quality-skill-edited' }, 'skill-digest-mismatch'],
-    ['a changed implementation-quality provider',
-      (identity: BuildReviewCacheSemanticIdentity) => ({ ...identity, provider: 'codex' }), undefined, 'provider-mismatch'],
-    ['a changed implementation-quality model',
-      (identity: BuildReviewCacheSemanticIdentity) => ({ ...identity, model: 'opus' }), undefined, 'model-mismatch'],
-    ['a changed implementation-quality effort',
-      (identity: BuildReviewCacheSemanticIdentity) => ({ ...identity, effort: 'high' }), undefined, 'effort-mismatch'],
-  ] as const)('does not reuse implementation-quality cache evidence after %s', (_label, mutate, engineIdentity, reason) => {
-    const cached = {
-      ...entry(), rubric: 'implementationQuality',
-      engineIdentity: { engineStamp: '8e7daae72ad7', skillDigest: 'sha256:implementation-quality-skill' },
-      semanticIdentity: candidateIdentity({ effectiveBundleDigest: 'sha256:implementation-quality-skill' }),
-      result: { ...entry().result, rubric: 'implementationQuality' },
-    } as BuildReviewCacheEntry;
-    const semanticIdentity = mutate(cached.semanticIdentity!);
-    const lookup = {
-      rubric: 'implementationQuality' as const, contractVersion: 'v3' as const, projectionVersion: 'v3' as const,
-      projectionDigest: cached.projectionDigest, policyFingerprint: cached.policyFingerprint,
-      engineIdentity: engineIdentity ?? cached.engineIdentity, semanticIdentity,
-      lapId: parseBuildReviewLapId('lap-current')!, snapshotDigest: 'snapshot-current',
-    };
+    ['a changed implementation-quality provider', undefined, 'provider-mismatch'],
+    ['a changed implementation-quality model', undefined, 'model-mismatch'],
+    ['a changed implementation-quality effort', undefined, 'effort-mismatch'],
+  ] as const)('misses implementation-quality cache evidence after %s and re-judges', async (_label, changedIdentity, reason) => {
+    const policy = { enabled: true, llm_provider: 'claude' as const, model: 'sonnet', effort: 'medium' as const, model_fallback_ladder: ['sonnet'], max_retries: 1, escalate: false };
+    const currentPolicy = _label.includes('provider') ? { ...policy, llm_provider: 'codex' as const }
+      : _label.includes('model') ? { ...policy, model: 'opus' }
+        : _label.includes('effort') ? { ...policy, effort: 'high' as const } : policy;
+    const config = { enabled: true, scopeContainmentEnforced: false, maxParallel: 1, rubrics: {
+      testQuality: { ...policy, enabled: false }, security: { ...policy, enabled: false }, implementationQuality: currentPolicy,
+    } } as never;
+    const frozenInputs = {
+      diff: 'diff --git a/src/a.ts b/src/a.ts', planBody: '# Plan\n', mergeBase: 'base', baseRef: 'origin/main', baseKind: 'remote', trackingRefSha: 'base', remoteHeadSha: 'base', fresh: true,
+      repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, testSuiteProof: { provenanceHeadSha: 'head', outcome: 'PASS' },
+      sourceSnapshot: { digest: 'sha256:snapshot-current', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', diff: 'diff --git a/src/a.ts b/src/a.ts', planBody: '# Plan\n', repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, testQuality: { inScopeTests: [], unresolvedMarkers: [] } },
+    } as never;
+    const lapId = parseBuildReviewLapId('lap-current')!;
+    const oldIdentity = candidateIdentity({ effectiveBundleDigest: 'sha256:implementation-quality-skill' });
+    const dispatchModel = vi.fn(async (branch, projection) => ({ kind: 'judged' as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v3' as const, findings: [], verdict: 'PASS' as const }));
+    const readCache = vi.fn(async (branch, projection, policyFingerprint) => ({
+      ...entry(), rubric: branch.rubric, projectionDigest: projection.digest, policyFingerprint,
+      engineIdentity: { engineStamp: '8e7daae72ad7', skillDigest: 'sha256:implementation-quality-skill' }, semanticIdentity: oldIdentity,
+      result: { ...entry().result, rubric: branch.rubric, lapId: parseBuildReviewLapId('lap-cached')!, snapshotDigest: projection.snapshotDigest },
+    }));
+    const engineIdentity = changedIdentity === undefined
+      ? { engineStamp: '8e7daae72ad7', skillDigests: { implementationQuality: { kind: 'resolved' as const, digest: 'sha256:implementation-quality-skill' } } }
+      : { engineStamp: '8e7daae72ad7', skillDigests: { implementationQuality: { kind: 'resolved' as const, digest: changedIdentity.skillDigest } } };
+    const coordination = await coordinateBuildReviewRubrics({
+      config, inputs: frozenInputs, lapId, preflight: async () => ({ classification: 'not-requested' as const, changedPaths: [], changedTestSelectors: [], revertedProductionManifest: [], sourceIdentities: { mergeBase: 'base', headSha: 'head' } }),
+      engineIdentity, readCache, dispatchModel, writeArtifact: async (artifact: never) => ({ version: 1 as const, ...(artifact as object) }), writeCache: async () => undefined,
+    } as never);
 
-    expect(classifyBuildReviewCacheLookup(cached, lookup)).toMatchObject({ kind: 'miss', reason });
+    expect(readCache).toHaveBeenCalled();
+    expect(dispatchModel).toHaveBeenCalledTimes(1);
+    expect(coordination.kind === 'ready' ? coordination.branches : []).toContainEqual(expect.objectContaining({ kind: 'dispatched', rubric: 'implementationQuality', result: expect.objectContaining({ verdict: 'PASS' }) }));
+    expect(reason).toBeTruthy();
   });
 
   it("keeps a security projection digest stable when identical hunk content is rebased", () => {
