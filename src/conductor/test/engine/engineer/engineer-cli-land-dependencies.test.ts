@@ -1,4 +1,4 @@
-// Covers: task:11, task:12
+// Covers: task:11, task:12, task:18
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -32,6 +32,23 @@ async function seed(idea = 'dependency gate'): Promise<string> {
   await writeFile(join(wt.worktreePath, `.docs/stories/${stem}.md`), stories);
   await writeFile(join(wt.worktreePath, `.docs/plans/${stem}.md`), plan.replaceAll('dependency-gate', stem));
   return wt.worktreePath;
+}
+
+async function seedOutputFixture(): Promise<string> {
+  const worktree = await seed();
+  await writeFile(join(worktree, '.docs/plans/dependency-gate.md'), `# Implementation Plan: dependency gate
+
+**Stories:** .docs/stories/dependency-gate.md
+
+### Task 1: change
+**Files likely touched:**
+- src/example.ts
+
+**Done when:**
+- [test] The change is covered.
+- [test] The negative path is covered.
+`);
+  return worktree;
 }
 
 function dispatch(args: string[], gh: GhRunner, gitRunner: GitRunner): { out: string[]; err: string[]; run: () => Promise<number> } {
@@ -86,6 +103,22 @@ function dependencyGh({ body = 'Depends on #520 / #600.', writeFails = false }: 
 }
 
 const quietGit: GitRunner = async () => ({ stdout: '' });
+
+function overlapGit({ marker = true }: { marker?: boolean } = {}): GitRunner {
+  return async (args) => {
+    if (args[0] === 'for-each-ref') return { exitCode: 0, stdout: 'feat/daemon-feature\nfeat/daemon-markerless\n', stderr: '' };
+    if (args[0] === 'rev-list') return { exitCode: 0, stdout: '1\n', stderr: '' };
+    if (args[0] === 'cat-file') throw new Error('missing shipped marker');
+    if (args[0] === 'log') return { exitCode: 0, stdout: '10\n', stderr: '' };
+    if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base\n', stderr: '' };
+    if (args[0] === 'diff') return { exitCode: 0, stdout: 'src/example.ts\n', stderr: '' };
+    if (args[0] === 'show') {
+      if (marker && args[1]?.startsWith('feat/daemon-feature:')) return { exitCode: 0, stdout: 'Source-Ref: owner/repo#610\n', stderr: '' };
+      throw new Error('missing intake marker');
+    }
+    throw new Error(`unexpected git invocation: ${args.join(' ')}`);
+  };
+}
 
 async function events(): Promise<Array<{ type: string; gate?: string; reason?: string }>> {
   return (await readFile(join(repo, '.pipeline/composer-events.jsonl'), 'utf8'))
@@ -230,5 +263,71 @@ describe('compose land dependency post-commit integration', () => {
     expect((await events()).at(-1)).toEqual(expect.objectContaining({
       type: 'land_dependency_decided', writes: [expect.objectContaining({ target: 'owner/repo#520', status: 'failed' })],
     }));
+  });
+});
+
+describe('compose land dependency decision output', () => {
+  it('renders declared and overlap proposals with their source labels', async () => {
+    const worktree = await seedOutputFixture();
+    const recording = dependencyGh({ body: 'Depends on #520.' });
+    const gh: GhRunner = async (args, opts) => {
+      const text = args.join(' ');
+      if (text.includes('issue list')) return { stdout: JSON.stringify([{ number: 600, body: 'Touches src/example.ts.' }]) };
+      return recording.gh(args, opts);
+    };
+    const cli = dispatch([
+      '--project', 'target', '--idea', 'dependency gate', '--worktree', worktree,
+      '--source-ref', 'owner/repo#536', '--depends-on', 'owner/repo#520',
+      '--decline-dependency', 'owner/repo#600', '--decline-dependency', 'owner/repo#610',
+    ], gh, overlapGit());
+
+    const code = await cli.run();
+    expect(code, cli.err.join('\n')).toBe(0);
+    expect(cli.out.join('\n')).toContain('proposal owner/repo#520 (declared)');
+    expect(cli.out.join('\n')).toContain('proposal owner/repo#600 (overlap)');
+    expect(cli.out.join('\n')).toContain('proposal owner/repo#610 (overlap)');
+  });
+
+  it('renders an already-linked declaration as satisfied without writing it', async () => {
+    const worktree = await seed();
+    const recording = dependencyGh({ body: 'Depends on #520.' });
+    const gh: GhRunner = async (args, opts) => {
+      if (args.join(' ').includes('dependencies/blocked_by') && !args.includes('--method')) {
+        return { stdout: JSON.stringify([{ number: 520, repository_url: 'https://api.github.com/repos/owner/repo' }]) };
+      }
+      return recording.gh(args, opts);
+    };
+    const cli = dispatch([
+      '--project', 'target', '--idea', 'dependency gate', '--worktree', worktree,
+      '--source-ref', 'owner/repo#536',
+    ], gh, quietGit);
+
+    expect(await cli.run()).toBe(0);
+    expect(cli.out.join('\n')).toContain('satisfied owner/repo#520');
+    expect(recording.calls.map((call) => call.join(' ')).filter((call) => call.includes('--method POST'))).toEqual([]);
+  });
+
+  it('renders a marker-less in-flight branch as advisory and still commits', async () => {
+    const worktree = await seedOutputFixture();
+    const recording = dependencyGh({ body: '' });
+    const cli = dispatch([
+      '--project', 'target', '--idea', 'dependency gate', '--worktree', worktree,
+      '--source-ref', 'owner/repo#536',
+    ], recording.gh, overlapGit({ marker: false }));
+
+    expect(await cli.run()).toBe(0);
+    expect(cli.out.join('\n')).toContain('advisory markerless branch feat/daemon-feature');
+  });
+
+  it('prints the unused skip note when computed proposals remain undecided', async () => {
+    const worktree = await seed();
+    const { gh } = recordingGh();
+    const cli = dispatch([
+      '--project', 'target', '--idea', 'dependency gate', '--worktree', worktree,
+      '--source-ref', 'owner/repo#536', '--skip-dependency-check', 'unused',
+    ], gh, quietGit);
+
+    expect(await cli.run()).toBe(1);
+    expect(cli.err.join('\n')).toContain('--skip-dependency-check "unused" was unused because proposals were computed');
   });
 });
