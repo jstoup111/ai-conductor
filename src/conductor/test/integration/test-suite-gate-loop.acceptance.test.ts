@@ -313,6 +313,7 @@ describe('test_suite native gate loop', () => {
     });
   });
 
+  // Covers: task:5
   it.each<{
     label: string;
     reason: FullSuiteFailureReason;
@@ -363,10 +364,20 @@ describe('test_suite native gate loop', () => {
       };
       const events = new ConductorEventEmitter();
       const kickbacks: Array<{ evidence?: string; count: number }> = [];
+      const retries: Array<{ step: StepName }> = [];
+      const unsatisfiedVerdicts: Array<{ step: StepName }> = [];
       let haltReason = '';
       events.on('kickback', (event) => {
         if (event.type === 'kickback' && event.from === 'test_suite') {
           kickbacks.push({ evidence: event.evidence, count: event.count });
+        }
+      });
+      events.on('step_retry', (event) => {
+        if (event.type === 'step_retry') retries.push({ step: event.step });
+      });
+      events.on('gate_verdict', (event) => {
+        if (event.type === 'gate_verdict' && !event.satisfied) {
+          unsatisfiedVerdicts.push({ step: event.step });
         }
       });
       events.on('loop_halt', (event) => {
@@ -405,6 +416,8 @@ describe('test_suite native gate loop', () => {
           ['manual_test', 'prd_audit', 'architecture_review_as_built'].includes(step),
         ),
         kickbacks,
+        retries,
+        unsatisfiedVerdicts,
         buildRetryReasons,
         haltReason,
         haltMarker,
@@ -416,6 +429,8 @@ describe('test_suite native gate loop', () => {
         relevantTimeline: ['test_suite', 'test_suite', 'test_suite'],
         shipDispatches: [],
         kickbacks: [],
+        retries: [{ step: 'test_suite' }, { step: 'test_suite' }],
+        unsatisfiedVerdicts: [],
         buildRetryReasons: [],
         haltReason: infrastructureFailure,
         haltMarker: `${infrastructureFailure}\n`,
