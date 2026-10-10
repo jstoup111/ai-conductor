@@ -7,7 +7,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState } from '../../src/types/index.js';
 import { parseChildId } from '../../src/engine/child-context.js';
-import type { ActiveChildResolution } from '../../src/engine/child-cursor.js';
+import { resolveActiveChild, type ActiveChildResolution } from '../../src/engine/child-cursor.js';
 
 let root: string;
 let statePath: string;
@@ -54,6 +54,7 @@ describe('stacked BUILD-region refusals', () => {
       fromStep: 'acceptance_specs',
       events: new ConductorEventEmitter(),
       stepRunner: { run },
+      config: { stacked_prs: { enabled: true } } as never,
       childRegionLifecycle: { resolveActiveChild: async () => cursor },
     });
 
@@ -79,6 +80,7 @@ describe('stacked BUILD-region refusals', () => {
       fromStep: 'acceptance_specs',
       events: new ConductorEventEmitter(),
       stepRunner: { run },
+      config: { stacked_prs: { enabled: true } } as never,
       childRegionLifecycle: {
         resolveActiveChild: async () => activeChild1,
         enterChildRegion: async () => ({ kind: 'refused', reason }),
@@ -92,6 +94,10 @@ describe('stacked BUILD-region refusals', () => {
       body: `child BUILD region refused: child 1 region entry refused: ${reason}\n`,
       haltClass: 'needs-human',
     });
+  });
+
+  it('treats an unconfigured non-Git N=1 workspace as having no child', async () => {
+    await expect(resolveActiveChild(root, 'demo')).resolves.toEqual({ kind: 'no-child' });
   });
 
   it.each([

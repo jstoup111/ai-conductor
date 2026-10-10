@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseChildId, type ChildId } from './child-context.js';
@@ -68,6 +69,11 @@ async function runGit(git: GitRunner, args: string[]) {
 }
 
 async function childArtifactsExist(worktree: string, slug: string, git: GitRunner): Promise<boolean | 'git-error'> {
+  try {
+    if ((await readdir(join(worktree, '.pipeline', 'children'))).length > 0) return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return 'git-error';
+  }
   const refs = await runGit(git, ['for-each-ref', '--format=%(refname)', 'refs/heads/feat']);
   if (!refs || refs.exitCode !== 0) return 'git-error';
   if (refs.stdout.split('\n').some((ref) => {
@@ -77,11 +83,7 @@ async function childArtifactsExist(worktree: string, slug: string, git: GitRunne
   const closures = await runGit(git, ['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/closed/`]);
   if (!closures || closures.exitCode !== 0) return 'git-error';
   if (closures.stdout.trim() !== '') return true;
-  try {
-    return (await readdir(join(worktree, '.pipeline', 'children'))).length > 0;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? false : 'git-error';
-  }
+  return false;
 }
 
 async function closedChildren(slug: string, positions: readonly ChildId[], git: GitRunner): Promise<ClosedChild[] | 'git-error'> {
@@ -183,6 +185,19 @@ export async function resolveActiveChild(
   dependencies: ActiveChildDependencies = {},
 ): Promise<ActiveChildResolution> {
   const git = dependencies.git ?? makeGitRunner(worktree);
+  // Unit fixtures and legacy N=1 callers may not be Git worktrees. With no
+  // child directory, they cannot contain child refs either, so retain the flat
+  // path without treating the deliberately absent Git boundary as corruption.
+  if (!existsSync(join(worktree, '.git'))) {
+    try {
+      if ((await readdir(join(worktree, '.pipeline', 'children'))).length === 0) {
+        return { kind: 'no-child' };
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'no-child' };
+      return { kind: 'git-error' };
+    }
+  }
   const artifacts = await childArtifactsExist(worktree, slug, git);
   if (artifacts === 'git-error') return { kind: 'git-error' };
 
