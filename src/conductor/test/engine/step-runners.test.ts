@@ -4742,6 +4742,17 @@ TIER: M`,
         providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('codex', invoke)]),
         sessionStore: new ProviderSessionStore(),
         configuredProviders: ['codex'],
+        buildReviewPolicyCatalog: async () => [{
+          semanticName: 'build-review-implementation-quality', source: 'project', installationOrigin: '/fixture/project',
+          canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
+          declaredDependencies: [], availability: 'available',
+        }],
+        buildReviewPolicyCapture: async (policy) => ({
+          policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+          manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Build review implementation quality\n') }],
+          metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+          digest: `sha256-v1:${'a'.repeat(64)}`,
+        }),
         ...currentBuildReviewProof(),
         buildReviewEffectiveResolver: async () => ({
           ok: true as const,
@@ -4763,7 +4774,7 @@ TIER: M`,
       expect(result.success, result.output).toBe(true);
 
       expect(invoke).toHaveBeenCalledOnce();
-      expect(invoke.mock.calls[0]![0].prompt).toContain('name: build-review-implementation-quality');
+      expect(invoke.mock.calls[0]![0].prompt).toContain('# Build review implementation quality');
     });
 
     it('persists the exact dispatched rubric prompt beside the lap artifact for offline replay', async () => {

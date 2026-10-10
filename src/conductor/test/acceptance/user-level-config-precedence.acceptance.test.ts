@@ -88,6 +88,7 @@ const AFFECTED_CASES: AffectedCase[] = [
       maxParallel: 4,
       adjudication: { enabled: true },
       rubrics: {
+        implementationQuality: { enabled: false },
         security: { enabled: false },
         testQuality: { enabled: false, effort: 'high' },
       },
@@ -97,6 +98,7 @@ const AFFECTED_CASES: AffectedCase[] = [
       maxParallel: 4,
       adjudication: { enabled: true },
       rubrics: {
+        implementationQuality: { enabled: false },
         security: { enabled: false },
         testQuality: { enabled: true, effort: 'low' },
       },
@@ -106,6 +108,7 @@ const AFFECTED_CASES: AffectedCase[] = [
       maxParallel: 4,
       adjudication: { enabled: true },
       rubrics: {
+        implementationQuality: { enabled: false },
         security: { enabled: false },
         testQuality: { enabled: false },
       },
