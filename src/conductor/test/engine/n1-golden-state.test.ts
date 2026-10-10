@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:rem-prd-audit-1-r1
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // The engine mints `executionContext.executionId` via `node:crypto.randomUUID`
@@ -7,12 +7,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // normalizing execution ids away. Distinct values per call preserve any
 // uniqueness assumptions in the run; the counter is deterministic because the
 // bounded run is serial.
+const uuidState = vi.hoisted(() => ({ counter: 0 }));
+
 vi.mock('node:crypto', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:crypto')>();
-  let counter = 0;
   return {
     ...actual,
-    randomUUID: () => `00000000-0000-4000-8000-${String(counter++).padStart(12, '0')}`,
+    randomUUID: () => `00000000-0000-4000-8000-${String(uuidState.counter++).padStart(12, '0')}`,
   };
 });
 
@@ -70,14 +71,39 @@ describe('N=1 golden state', () => {
   });
 
   it.each(CELLS)('matches golden for $name', async (cell) => {
+    // The corrected single-slice path dispatches additional steps. Preserve
+    // the ineligible cell's own byte fixture rather than renumbering it for
+    // an unrelated earlier cell's behavior change.
+    if (cell.name === 'flag-on-ineligible') uuidState.counter = 57;
     const root = await mkdtemp(join(tmpdir(), `n1-golden-${cell.name}-`));
     roots.push(root);
+    const expectSingleSliceMatchesUnsliced = async (suffix: string, actual: string) => {
+      if (cell.name !== 'flag-on-single-slice') return;
+      const unsliced = await readFile(join(import.meta.dirname, '..', 'fixtures', 'n1-golden', `flag-on-unsliced-${suffix}.golden`), 'utf8');
+      // Each cell has its own initial tree and deterministic UUID sequence.
+      // The raw fixture checks stay byte-exact; this cross-cell comparison
+      // projects those fixture-local identities away. The single-slice
+      // coverage envelope is deliberately not compared here: its
+      // sliceMembership and storyOwnership are the permitted distinctions.
+      const comparable = (value: string) => value
+        .replaceAll(/00000000-0000-4000-8000-\d{12}/g, '<EXECUTION_ID>')
+        .replaceAll(/"tree(?:Before|After)":"[a-f0-9]+"/g, '"tree":"<TREE>"');
+      expect(comparable(actual)).toBe(comparable(unsliced.replace(/^<!-- Recorded from [a-f0-9]+ -->\n/, '')));
+    };
 
     // Setup fixture root
     await mkdir(join(root, '.ai-conductor'), { recursive: true });
     await writeFile(join(root, '.ai-conductor', 'config.yml'), cell.configYaml);
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await writeFile(join(root, '.docs', 'plans', 'n1-golden.md'), cell.planMd);
+    if (cell.name === 'flag-on-single-slice') {
+      await mkdir(join(root, '.docs', 'stories'), { recursive: true });
+      await mkdir(join(root, '.docs', 'complexity'), { recursive: true });
+      await mkdir(join(root, 'skills', 'tdd'), { recursive: true });
+      await writeFile(join(root, '.docs', 'stories', 'n1-golden.md'), cell.storiesFixture === 'two' ? TWO_STORIES : ONE_STORY);
+      await writeFile(join(root, '.docs', 'complexity', 'n1-golden.md'), cell.complexityMd!);
+      await writeFile(join(root, 'skills', 'tdd', 'SKILL.md'), '# tdd\n');
+    }
 
     // Git init with pinned identity and dates
     await execFile('git', ['init', '-b', 'main', '-q'], { cwd: root });
@@ -85,7 +111,16 @@ describe('N=1 golden state', () => {
     await execFile('git', ['config', 'user.name', 'Test User'], { cwd: root });
     await writeFile(join(root, 'README.md'), '# n1-golden\n');
     await writeFile(join(root, '.gitignore'), '.pipeline/\n');
-    await execFile('git', ['add', 'README.md', '.gitignore', '.docs/plans/n1-golden.md', '.ai-conductor/config.yml'], { cwd: root });
+    await execFile('git', [
+      'add',
+      'README.md',
+      '.gitignore',
+      '.docs/plans/n1-golden.md',
+      '.ai-conductor/config.yml',
+      ...(cell.name === 'flag-on-single-slice'
+        ? ['.docs/stories/n1-golden.md', '.docs/complexity/n1-golden.md', 'skills/tdd/SKILL.md']
+        : []),
+    ], { cwd: root });
     const env = {
       ...process.env,
       GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z',
@@ -95,12 +130,14 @@ describe('N=1 golden state', () => {
     await execFile('git', ['commit', '-m', 'init'], { cwd: root, env });
 
     if (cell.coverageBinding) {
-      await mkdir(join(root, '.docs', 'stories'), { recursive: true });
-      await mkdir(join(root, '.docs', 'complexity'), { recursive: true });
-      await mkdir(join(root, 'skills', 'tdd'), { recursive: true });
-      await writeFile(join(root, '.docs', 'stories', 'n1-golden.md'), cell.storiesFixture === 'two' ? TWO_STORIES : ONE_STORY);
-      await writeFile(join(root, '.docs', 'complexity', 'n1-golden.md'), cell.complexityMd!);
-      await writeFile(join(root, 'skills', 'tdd', 'SKILL.md'), '# tdd\n');
+      if (cell.name !== 'flag-on-single-slice') {
+        await mkdir(join(root, '.docs', 'stories'), { recursive: true });
+        await mkdir(join(root, '.docs', 'complexity'), { recursive: true });
+        await mkdir(join(root, 'skills', 'tdd'), { recursive: true });
+        await writeFile(join(root, '.docs', 'stories', 'n1-golden.md'), cell.storiesFixture === 'two' ? TWO_STORIES : ONE_STORY);
+        await writeFile(join(root, '.docs', 'complexity', 'n1-golden.md'), cell.complexityMd!);
+        await writeFile(join(root, 'skills', 'tdd', 'SKILL.md'), '# tdd\n');
+      }
 
       const coverageRunner = new DefaultStepRunner(
         { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: vi.fn() } as LLMProvider,
@@ -207,14 +244,17 @@ describe('N=1 golden state', () => {
     // Compare state files
     const stateContent = await readAndNormalize(statePath, root);
     await expectGolden(`${cell.name}-conduct-state`, stateContent);
+    await expectSingleSliceMatchesUnsliced('conduct-state', stateContent);
 
     const taskStatusPath = join(pipeline, 'task-status.json');
     const taskStatusContent = await readAndNormalize(taskStatusPath, root);
     await expectGolden(`${cell.name}-task-status`, taskStatusContent);
+    await expectSingleSliceMatchesUnsliced('task-status', taskStatusContent);
 
     const currentTaskPath = join(pipeline, 'current-task');
     const currentTaskContent = await readFile(currentTaskPath, 'utf8');
     await expectGolden(`${cell.name}-current-task`, currentTaskContent);
+    await expectSingleSliceMatchesUnsliced('current-task', currentTaskContent);
 
     // Gate verdicts
     const gateDir = join(pipeline, 'gates');
@@ -232,16 +272,20 @@ describe('N=1 golden state', () => {
       }),
     );
     await expectGolden(`${cell.name}-gate-paths`, gatePaths.join('\n'));
+    await expectSingleSliceMatchesUnsliced('gate-paths', gatePaths.join('\n'));
     for (let i = 0; i < gatePaths.length; i++) {
       await expectGolden(`${cell.name}-gate-${gatePaths[i].replace('.json', '')}`, gateContents[i]);
+      await expectSingleSliceMatchesUnsliced(`gate-${gatePaths[i].replace('.json', '')}`, gateContents[i]);
     }
 
     const eventsContent = await readAndNormalize(ledgerPath, root);
     await expectGolden(`${cell.name}-events`, eventsContent);
+    await expectSingleSliceMatchesUnsliced('events', eventsContent);
 
     const kickbackPath = join(pipeline, 'kickback-ledger.json');
     const kickbackContent = await readAndNormalize(kickbackPath, root);
     await expectGolden(`${cell.name}-kickback-ledger`, kickbackContent);
+    await expectSingleSliceMatchesUnsliced('kickback-ledger', kickbackContent);
 
     // Assert no children directory and no "child" in events
     const pipelineEntries = await readdir(pipeline);

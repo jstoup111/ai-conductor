@@ -14,10 +14,10 @@
   "prd": "done",
   "prd_audit": "done",
   "acceptance_specs": "skipped",
-  "build": "refused",
-  "test_suite": "pending",
-  "build_review": "pending",
-  "manual_test": "pending",
+  "build": "done",
+  "test_suite": "done",
+  "build_review": "done",
+  "manual_test": "skipped",
   "architecture_review_as_built": "pending",
   "finish": "pending",
   "complexity_tier": "S",
@@ -25,5 +25,5 @@
   "feature_desc": "n1-golden",
   "session_started_at": "<TIMESTAMP>",
   "run_started_at": "<TIMESTAMP>",
-  "last_step": "build"
+  "last_step": "manual_test"
 }
