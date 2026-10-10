@@ -100,6 +100,12 @@ export interface PlanGrowth extends PlanGrowthRecord {
   remaining: number;
 }
 
+/** Growth accounting together with the source of its authored-task denominator. */
+export interface PlanGrowthAccounting {
+  growth: PlanGrowth;
+  authoredSource: 'plan' | 'ledger' | 'unresolved';
+}
+
 /** Durable pending state for a remediable as-built finding appended to the plan. */
 export interface PendingAsBuiltRemediationFinding {
   gate: 'architecture_review_as_built';
@@ -922,7 +928,11 @@ async function deriveGrowthFromActivePlan(
  * the feature's resolved plan. Existing rem-* headers are intentionally
  * included in that denominator: they predate this feature's growth record.
  */
-export async function readGrowth(projectRoot: string, cap: number): Promise<PlanGrowth> {
+export async function readGrowthAccounting(
+  projectRoot: string,
+  cap: number,
+  options: { persist: boolean },
+): Promise<PlanGrowthAccounting> {
   return withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
     requireReadableLedger(ledger);
@@ -934,8 +944,9 @@ export async function readGrowth(projectRoot: string, cap: number): Promise<Plan
       pendingGrowth ? new Set(ledger.pendingRepair?.taskIds ?? []) : new Set(),
     );
     const stored = ledger.growth;
+    const authoredSource = derived.resolved ? 'plan' : stored ? 'ledger' : 'unresolved';
 
-    if (!stored) return withRemaining(derived.growth, cap);
+    if (!stored) return { growth: withRemaining(derived.growth, cap), authoredSource };
 
     // A pending append is already present in the plan but deliberately has
     // not consumed `growth.added` until BUILD dispatch. Its task ids are
@@ -946,7 +957,9 @@ export async function readGrowth(projectRoot: string, cap: number): Promise<Plan
     const matchesPlan = !derived.resolved || (pendingGrowth
       ? stored.authored === derived.growth.authored
       : stored.authored + stored.added === derived.growth.authored);
-    if (growthTotalsAgree(stored) && matchesPlan) return withRemaining(stored, cap);
+    if (growthTotalsAgree(stored) && matchesPlan) {
+      return { growth: withRemaining(stored, cap), authoredSource };
+    }
 
     // A plan can contain an old unrecorded foreign append from before append
     // authorization was centralized. Preserve every recorded addition rather
@@ -958,14 +971,22 @@ export async function readGrowth(projectRoot: string, cap: number): Promise<Plan
         byGate: { ...stored.byGate },
       };
       console.warn('[kickback-ledger] plan count diverged; preserving recorded growth allowance');
-      await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: reconciled });
-      return withRemaining(reconciled, cap);
+      if (options.persist) {
+        await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: reconciled });
+      }
+      return { growth: withRemaining(reconciled, cap), authoredSource };
     }
 
     console.warn('[kickback-ledger] impossible growth record; recomputing from the active plan');
-    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: derived.growth });
-    return withRemaining(derived.growth, cap);
+    if (options.persist) {
+      await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: derived.growth });
+    }
+    return { growth: withRemaining(derived.growth, cap), authoredSource };
   });
+}
+
+export async function readGrowth(projectRoot: string, cap: number): Promise<PlanGrowth> {
+  return (await readGrowthAccounting(projectRoot, cap, { persist: true })).growth;
 }
 
 /** Persist a growth update and publish the resulting cap state on the event spine. */
