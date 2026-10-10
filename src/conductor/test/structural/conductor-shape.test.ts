@@ -20,6 +20,10 @@ const inventory = JSON.parse(
   await readFile(new URL('./conductor-exports.json', import.meta.url), 'utf8'),
 ) as ConductorInventory;
 
+// The pre-decomposition commit conductor-exports.json was derived from. A
+// merge-base against origin/main stops naming it once the facade has landed.
+const INVENTORY_BASE = 'd5ca612e4a5603e3583e0d2e7a8de2814307034a';
+
 const ALLOWED_TUNABLES = [
   'MAX_RECOVERY_RETRIES',
   'MAX_RATE_LIMIT_DEADLINE_MS',
@@ -101,10 +105,9 @@ function inventoryName(name: string): string {
 
 describe('structural: conductor shape guard', () => {
   it('preserves the base declaration inventory in the real decomposed facade', async () => {
-    const { stdout: base } = await execa('git', ['merge-base', 'HEAD', 'origin/main'], { cwd: CONDUCTOR_ROOT });
     const { stdout: baseConductor } = await execa(
       'git',
-      ['show', `${base}:src/conductor/src/engine/conductor.ts`],
+      ['show', `${INVENTORY_BASE}:src/conductor/src/engine/conductor.ts`],
       { cwd: CONDUCTOR_ROOT },
     );
     expect(inventory.moduleLevelAtBase).toEqual(
