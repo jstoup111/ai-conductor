@@ -1,4 +1,4 @@
-// Covers: task:2, task:10.3
+// Covers: task:2, task:10.3, task:rem-prd-audit-11-r2
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
@@ -12,6 +12,7 @@ const CONDUCT_STATE_MUTATORS = new Set(['apply', 'applyBatch', 'applyCorrection'
 
 type Classification = 'child-aware' | 'whole-feature-only';
 type AllowlistEntry = { readonly site: string; readonly classification: Classification; readonly reason?: string };
+type CallSite = { readonly site: string; readonly arguments: readonly string[] };
 
 /** A source-level manifest: a new reader/writer changes this count and must be reviewed. */
 const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
@@ -28,7 +29,7 @@ const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
   'engine/coverage-binding-void.ts:ConductStateStore.apply': 1,
   'engine/coverage-binding-void.ts:readVerdict': 1,
   'engine/coverage-binding-void.ts:writeVerdict': 1,
-  'engine/daemon-observe-cli.ts:readKickbackLedger': 1,
+  'engine/daemon-observe-cli.ts:readKickbackLedger': 2,
   'engine/daemon-rekick.ts:readKickbackLedger': 1,
   'engine/finish-publication-production.ts:readAllVerdicts': 1,
   'engine/finish-publication-production.ts:readVerdict': 2,
@@ -66,6 +67,17 @@ const WHOLE_FEATURE_ONLY_SITES = new Set([
   'engine/kickback-ledger.ts:1086:bumpKickbackGate',
 ]);
 
+/**
+ * `conductor.ts` owns both a whole-feature `prd_audit` reconciliation write
+ * and a region-sensitive completion write.  Keep their classifications at
+ * call-site granularity: adding a second write must be an explicit decision,
+ * and the region-sensitive one must carry the cursor-selected child.
+ */
+const CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS: Readonly<Record<string, Classification>> = {
+  'engine/conductor.ts:8041:writeVerdict': 'whole-feature-only',
+  'engine/conductor.ts:14384:writeVerdict': 'child-aware',
+};
+
 const PENDING_CHILD_WIRING: readonly string[] = [];
 
 async function sourceFiles(root: string, relative = ''): Promise<Map<string, string>> {
@@ -92,8 +104,8 @@ function callSiteName(expression: ts.Expression): string | undefined {
   return undefined;
 }
 
-function collectCallSites(files: ReadonlyMap<string, string>): string[] {
-  const sites: string[] = [];
+function collectCallSites(files: ReadonlyMap<string, string>): CallSite[] {
+  const sites: CallSite[] = [];
   for (const [path, contents] of files) {
     const source = ts.createSourceFile(path, contents, ts.ScriptTarget.Latest, true);
     const visit = (node: ts.Node): void => {
@@ -101,14 +113,17 @@ function collectCallSites(files: ReadonlyMap<string, string>): string[] {
         const name = callSiteName(node.expression);
         if (name) {
           const location = source.getLineAndCharacterOfPosition(node.expression.getStart(source));
-          sites.push(`${path}:${location.line + 1}:${name}`);
+          sites.push({
+            site: `${path}:${location.line + 1}:${name}`,
+            arguments: node.arguments.map((argument) => argument.getText(source)),
+          });
         }
       }
       ts.forEachChild(node, visit);
     };
     visit(source);
   }
-  return sites.sort();
+  return sites.sort(({ site: left }, { site: right }) => left.localeCompare(right));
 }
 
 function accessKey(site: string): string {
@@ -117,7 +132,8 @@ function accessKey(site: string): string {
 }
 
 function audit(files: ReadonlyMap<string, string>): readonly AllowlistEntry[] {
-  const sites = collectCallSites(files);
+  const calls = collectCallSites(files);
+  const sites = calls.map(({ site }) => site);
   const counts = Object.fromEntries(Object.entries(EXPECTED_ACCESS_COUNTS).map(([key]) => [key, 0])) as Record<string, number>;
   const unexpected: string[] = [];
   for (const site of sites) {
@@ -130,6 +146,29 @@ function audit(files: ReadonlyMap<string, string>): readonly AllowlistEntry[] {
     .map(([key, expected]) => `${key} expected ${expected}, got ${counts[key] ?? 0}`);
   if (unexpected.length > 0 || drift.length > 0) {
     throw new Error(`unallowlisted flat-region access sites: ${unexpected.join(', ') || 'none'}\naccess manifest drift: ${drift.join(', ') || 'none'}`);
+  }
+  const conductorWriteVerdicts = calls.filter(({ site }) => site.startsWith('engine/conductor.ts:') && site.endsWith(':writeVerdict'));
+  const unclassifiedConductorWrites = conductorWriteVerdicts
+    .map(({ site }) => site)
+    .filter((site) => CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS[site] === undefined);
+  const staleConductorWriteClassifications = Object.keys(CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS)
+    .filter((site) => !conductorWriteVerdicts.some((call) => call.site === site));
+  const activeRegionWritesMissingChild = conductorWriteVerdicts
+    .filter(({ site, arguments: args }) =>
+      CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS[site] === 'child-aware' &&
+      (args.length < 4 || !args[3]?.includes('this.activeRegionChild')),
+    )
+    .map(({ site }) => site);
+  if (
+    unclassifiedConductorWrites.length > 0 ||
+    staleConductorWriteClassifications.length > 0 ||
+    activeRegionWritesMissingChild.length > 0
+  ) {
+    throw new Error([
+      `unclassified conductor writeVerdict sites: ${unclassifiedConductorWrites.join(', ') || 'none'}`,
+      `stale conductor writeVerdict classifications: ${staleConductorWriteClassifications.join(', ') || 'none'}`,
+      `active-region conductor writeVerdict sites missing child: ${activeRegionWritesMissingChild.join(', ') || 'none'}`,
+    ].join('\n'));
   }
   return sites.map((site) => WHOLE_FEATURE_ONLY_SITES.has(site)
     ? { site, classification: 'whole-feature-only' as const, reason: 'The rebase and coverage-binding gates remain feature-wide.' }
