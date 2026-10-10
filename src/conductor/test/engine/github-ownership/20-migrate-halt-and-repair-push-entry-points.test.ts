@@ -50,7 +50,7 @@ describe('engine remote Git publication callers', () => {
       mutation: haltMutation,
     }, 'feature');
     expect(haltMutation.dependencies.resolveMachineOwner).toHaveBeenCalledOnce();
-    expect(haltPushes).toEqual([['push', 'origin', 'HEAD:refs/heads/feature/halted']]);
+    expect(haltPushes).toEqual([['push', 'origin', 'HEAD:refs/heads/feature/halted', '--force-with-lease']]);
 
     const repairPushes: string[][] = [];
     const repairMutation = mutationContext('refs/heads/feature/repaired');
