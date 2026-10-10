@@ -12,7 +12,7 @@ const CONDUCT_STATE_MUTATORS = new Set(['apply', 'applyBatch', 'applyCorrection'
 
 type Classification = 'child-aware' | 'whole-feature-only';
 type AllowlistEntry = { readonly site: string; readonly classification: Classification; readonly reason?: string };
-type CallSite = { readonly site: string; readonly arguments: readonly string[] };
+type CallSite = { readonly site: string; readonly arguments: readonly string[]; readonly source: string };
 
 /** A source-level manifest: a new reader/writer changes this count and must be reviewed. */
 const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
@@ -74,8 +74,8 @@ const WHOLE_FEATURE_ONLY_SITES = new Set([
  * and the region-sensitive one must carry the cursor-selected child.
  */
 const CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS: Readonly<Record<string, Classification>> = {
-  'engine/conductor.ts:8041:writeVerdict': 'whole-feature-only',
-  'engine/conductor.ts:14384:writeVerdict': 'child-aware',
+  prd_audit: 'whole-feature-only',
+  'current-step': 'child-aware',
 };
 
 const PENDING_CHILD_WIRING: readonly string[] = [];
@@ -116,6 +116,7 @@ function collectCallSites(files: ReadonlyMap<string, string>): CallSite[] {
           sites.push({
             site: `${path}:${location.line + 1}:${name}`,
             arguments: node.arguments.map((argument) => argument.getText(source)),
+            source: contents,
           });
         }
       }
@@ -129,6 +130,22 @@ function collectCallSites(files: ReadonlyMap<string, string>): CallSite[] {
 function accessKey(site: string): string {
   const [path, _line, accessor] = site.split(':');
   return `${path}:${accessor}`;
+}
+
+function conductorWriteVerdictIdentity(args: readonly string[]): string | undefined {
+  const step = args[1]?.replace(/\s+/g, '');
+  if (step === "'prd_audit'" || step === '"prd_audit"') return 'prd_audit';
+  if (step === 'step.name') return 'current-step';
+  return undefined;
+}
+
+function childArgumentCarriesActiveRegionChild({ arguments: args, source }: CallSite): boolean {
+  const childArgument = args[3];
+  if (childArgument === undefined) return false;
+  if (childArgument.includes('this.activeRegionChild')) return true;
+  if (!/^[A-Za-z_$][\w$]*$/.test(childArgument)) return false;
+  const binding = new RegExp(`\\b(?:const|let)\\s+${childArgument}\\s*=\\s*([\\s\\S]*?);`).exec(source);
+  return binding?.[1]?.includes('this.activeRegionChild') === true;
 }
 
 function audit(files: ReadonlyMap<string, string>): readonly AllowlistEntry[] {
@@ -147,26 +164,30 @@ function audit(files: ReadonlyMap<string, string>): readonly AllowlistEntry[] {
   if (unexpected.length > 0 || drift.length > 0) {
     throw new Error(`unallowlisted flat-region access sites: ${unexpected.join(', ') || 'none'}\naccess manifest drift: ${drift.join(', ') || 'none'}`);
   }
-  const conductorWriteVerdicts = calls.filter(({ site }) => site.startsWith('engine/conductor.ts:') && site.endsWith(':writeVerdict'));
+  const conductorWriteVerdicts = calls
+    .filter(({ site }) => site.startsWith('engine/conductor.ts:') && site.endsWith(':writeVerdict'))
+    .map((call) => ({ ...call, identity: conductorWriteVerdictIdentity(call.arguments) }));
   const unclassifiedConductorWrites = conductorWriteVerdicts
-    .map(({ site }) => site)
-    .filter((site) => CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS[site] === undefined);
-  const staleConductorWriteClassifications = Object.keys(CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS)
-    .filter((site) => !conductorWriteVerdicts.some((call) => call.site === site));
+    .filter(({ identity }) => identity === undefined || CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS[identity] === undefined)
+    .map(({ site }) => site);
+  const conductorWriteClassificationCountDrift = Object.keys(CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS)
+    .map((identity) => ({ identity, count: conductorWriteVerdicts.filter((call) => call.identity === identity).length }))
+    .filter(({ count }) => count !== 1)
+    .map(({ identity, count }) => `${identity} expected 1, got ${count}`);
   const activeRegionWritesMissingChild = conductorWriteVerdicts
-    .filter(({ site, arguments: args }) =>
-      CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS[site] === 'child-aware' &&
-      (args.length < 4 || !args[3]?.includes('this.activeRegionChild')),
+    .filter(({ identity, ...call }) =>
+      CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS[identity ?? ''] === 'child-aware' &&
+      !childArgumentCarriesActiveRegionChild(call),
     )
     .map(({ site }) => site);
   if (
     unclassifiedConductorWrites.length > 0 ||
-    staleConductorWriteClassifications.length > 0 ||
+    conductorWriteClassificationCountDrift.length > 0 ||
     activeRegionWritesMissingChild.length > 0
   ) {
     throw new Error([
       `unclassified conductor writeVerdict sites: ${unclassifiedConductorWrites.join(', ') || 'none'}`,
-      `stale conductor writeVerdict classifications: ${staleConductorWriteClassifications.join(', ') || 'none'}`,
+      `conductor writeVerdict classification count drift: ${conductorWriteClassificationCountDrift.join(', ') || 'none'}`,
       `active-region conductor writeVerdict sites missing child: ${activeRegionWritesMissingChild.join(', ') || 'none'}`,
     ].join('\n'));
   }
