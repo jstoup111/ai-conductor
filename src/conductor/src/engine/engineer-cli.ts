@@ -77,7 +77,7 @@ import { reconcileStrandedClaims } from './engineer/intake/reconcile-strands.js'
 import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
-import { runMigration } from './engineer/issue-dep-migration.js';
+import { createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 import { createGithubTrackerClient, createGuardedGithubOperationRunner, GithubTrackerOperationRefusalError, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead, type GhRunner } from './tracker-client.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
 import { bindMutationToPullRequest } from './ship-draft-pr.js';
@@ -1374,6 +1374,77 @@ export async function dispatchEngineer(
         // Keep the operator-facing proposal record on stdout; Task 12 consumes
         // the same returned data for post-commit writes and spine emission.
         print(JSON.stringify({ kind: 'land-dependency-proposals', ...result.dependency }));
+      }
+
+      // The dependency decision is deliberately post-commit.  A failed or
+      // refused GitHub write must leave the landed spec intact, be reported in
+      // the decision event, and never be mistaken for a pre-commit land gate.
+      if (sourceRef && result.dependency) {
+        const { proposals, decision } = result.dependency;
+        const writes: Array<{ target: string; status: string; reason?: string }> = [];
+        try {
+          if (decision.kind === 'proceed') {
+            const operations = createGuardedGithubOperationRunner(gh, {
+              cwd: target.canonicalPath,
+              intake: createGithubIntakeAuthorization({
+                gh,
+                cwd: target.canonicalPath,
+                resolveActor: async () => identity,
+              }),
+            });
+            for (const dependency of decision.accepted) {
+              try {
+                const [write] = await createDependencyLinks([{
+                  source: sourceRef,
+                  target: dependency,
+                  kind: 'depends-on',
+                  blocked_by: true,
+                }], {
+                  gh,
+                  operations,
+                  actor: identity.id,
+                  cwd: target.canonicalPath,
+                });
+                if (write) writes.push({ target: dependency, status: write.status });
+                else writes.push({ target: dependency, status: 'failed', reason: 'dependency link produced no result' });
+              } catch (error) {
+                const reason = error instanceof Error ? error.message : String(error);
+                writes.push({ target: dependency, status: 'failed', reason });
+                printErr(`engineer land: dependency write failed for ${dependency}: ${reason}`);
+              }
+            }
+          }
+        } catch (error) {
+          // Keep a durable decision record even if construction of the guarded
+          // write seam itself fails unexpectedly.
+          const reason = error instanceof Error ? error.message : String(error);
+          printErr(`engineer land: dependency write setup failed: ${reason}`);
+          for (const dependency of decision.kind === 'proceed' ? decision.accepted : []) {
+            writes.push({ target: dependency, status: 'failed', reason });
+          }
+        }
+
+        try {
+          const events = new ConductorEventEmitter();
+          const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+          persister.start();
+          try {
+            await events.emitOrThrow({
+              type: 'land_dependency_decided',
+              repository: sourceRef.split('#', 1)[0],
+              sourceRef,
+              proposals: proposals.kind === 'computed' ? proposals.proposals.map((proposal) => proposal.target) : [],
+              accepted: decision.kind === 'proceed' ? decision.accepted : [],
+              declined: decision.kind === 'proceed' ? decision.declined : [],
+              skipped: decision.kind === 'proceed' ? decision.skipped : null,
+              writes,
+            });
+          } finally {
+            persister.stop();
+          }
+        } catch (error) {
+          printErr(`engineer land: could not record dependency decision event: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
       print(JSON.stringify(result));
       return 0;
