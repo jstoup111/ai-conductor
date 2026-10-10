@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
-  parseBuildReviewFindingAnchor,
-  parseBuildReviewFindingConcernKind,
+  describeBuildReviewJudgedResultRejection,
+  parseBuildReviewJudgedResult,
 } from '../../src/engine/build-review-domain.js';
 
 const testQualitySkillPath = fileURLToPath(
@@ -117,13 +117,36 @@ describe('build-review Security skill contract', () => {
       evidenceLocations: ['src/legacy-request.ts:42'],
       anchor: { rubric: 'security', locus },
     };
-
-    expect(parseBuildReviewFindingConcernKind(finding.concernKind, 'security')).toBe('injection');
-    expect(parseBuildReviewFindingAnchor(finding.anchor, {
+    const references = {
       changedTests: [], changedContentRegions: [locus], changedPaths: [locus.path], planTasks: [],
-    })).toEqual(finding.anchor);
-    expect(finding.anchor.locus.path).toBe('src/request.ts');
-    expect(finding.evidenceLocations).toEqual(['src/legacy-request.ts:42']);
+    };
+    const payload = {
+      kind: 'judged', rubric: 'security', lapId: 'lap-unchanged-sink', snapshotDigest: 'sha256:unchanged-sink', contractVersion: 'v3', findings: [finding],
+    };
+
+    expect(parseBuildReviewJudgedResult(payload, references)).toEqual({
+      ...payload,
+      findings: [finding],
+      verdict: 'FAIL',
+    });
+
+    const unchangedSinkLocus = {
+      path: 'src/legacy-request.ts',
+      contentHash: `sha256:${'b'.repeat(64)}`,
+      display: 'existing execution sink',
+    };
+    const sinkAnchoredPayload = {
+      ...payload,
+      findings: [{ ...finding, anchor: { rubric: 'security', locus: unchangedSinkLocus } }],
+    };
+
+    expect(parseBuildReviewJudgedResult(sinkAnchoredPayload, references)).toBeUndefined();
+    expect(describeBuildReviewJudgedResultRejection(
+      sinkAnchoredPayload,
+      'security',
+      { lapId: 'lap-unchanged-sink', snapshotDigest: 'sha256:unchanged-sink' },
+      references,
+    )).toContain('findings[0].anchor.locus must reference a projected changed content region');
   });
 });
 
