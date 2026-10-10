@@ -2769,6 +2769,9 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
     });
     expect(backlog.map((b) => b.slug)).toEqual(['halted-mid-publication']);
     expect(logs.join('\n')).not.toMatch(/awaiting the human merge/i);
+    // Discovery queues the resume; it never claims FINISH is already running.
+    expect(logs.join('\n')).toMatch(/halted-mid-publication eligible to resume its unfinished FINISH publication.*queued until a dispatch slot is free/);
+    expect(logs.join('\n')).not.toMatch(/resuming the unfinished publication/);
   });
 
   it('still skips a shipped feature that recorded its finish outcome', async () => {
