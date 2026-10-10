@@ -147,7 +147,10 @@ export type LandGateIdentifier =
   | 'mermaid-tool-missing'
   | 'artifact-empty'
   | 'artifact-draft-status'
-  | 'artifact-stub';
+  | 'artifact-stub'
+  | 'dependency-proposals-undecided'
+  | 'dependency-check-unavailable'
+  | 'dependency-decisions-invalid';
 
 export class LandGateError extends Error {
   constructor(public readonly gate: LandGateIdentifier, message: string) {
