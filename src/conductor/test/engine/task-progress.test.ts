@@ -394,16 +394,16 @@ describe('task-progress', () => {
 
     it('resolves past a superseded obligation after both baseline heads are rewritten', async () => {
       const repairs = await prepareResolverRepairState();
-      await admitResolverObligation(repairs, 'older', 'build_review', 'orphaned-boundary');
+      const older = await admitResolverObligation(repairs, 'older', 'build_review', 'orphaned-boundary');
       const current = await admitResolverObligation(repairs, 'current', 'build_review', 'current-boundary');
       await repairs.close({
         planPath: '.docs/plans/feature.md', taskId: '2', obligationId: current.id,
         evidence: { kind: 'task-done', value: 'current' },
       });
-      await repairs.rewriteBaselines(new Map([
-        ['orphaned-boundary', 'translated-older'],
-        ['current-boundary', 'translated-current'],
-      ]));
+      await expect(repairs.rewriteBaselines(new Map([
+        [older.id, 'translated-older'],
+        [current.id, 'translated-current'],
+      ]))).resolves.toEqual({ ok: true, value: { rewritten: [older.id, current.id] } });
 
       await expect(resolveTaskIdsWithDiagnostics(dir, ['2'])).resolves.toEqual({
         resolved: new Set(['2']), unavailableReasons: new Map(),
