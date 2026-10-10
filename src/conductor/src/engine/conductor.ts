@@ -14202,28 +14202,35 @@ export class Conductor {
     let result: 'halt' | 'kicked' | null = null;
     for (const [target, v] of Object.entries(verdicts) as Array<[StepName, GateObjectiveVerdict]>) {
       if (v && v.satisfied === false && v.kickback?.from === stepName) {
+        // Only BUILD-region targets own child-local task progress, budget, and
+        // telemetry. A feature-wide target can be re-opened while a child is
+        // active, but it must remain in the flat feature ledger and state.
+        const kickbackChild = isRegionStep(target) ? this.activeRegionChild : undefined;
         const [treeHash, resolvedCount] = await Promise.all([
           currentTreeHash(this.projectRoot),
-          countResolvedTasks(this.projectRoot, this.activeRegionChild),
+          countResolvedTasks(this.projectRoot, kickbackChild),
         ]);
         const kickback = await bumpKickbackGateInLedger(this.projectRoot, target, {
           treeHash,
           resolvedCount,
           reason: v.kickback?.evidence ?? '',
-        }, this.activeRegionChild);
+        }, kickbackChild);
         const count = kickback.entry.count;
-        await this.events.emit(this.withActiveRegionChild({
+        await this.events.emit({
           type: 'kickback',
           from: stepName,
           to: target,
           evidence: v.kickback?.evidence,
           count,
-        }));
+          ...(kickbackChild === undefined ? {} : { child: kickbackChild }),
+        });
         if (kickback.exhausted) {
-          const reason = this.withActiveChild(
+          const pingPongReason =
             `kickback ping-pong: ${target} re-opened ${count + 1} times ` +
-            `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`,
-          );
+            `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
+          const reason = kickbackChild === undefined
+            ? pingPongReason
+            : this.withActiveChild(pingPongReason);
           await this.writeHaltMarker(reason + '\n', 'needs-human');
           const prUrl = await this.surfaceRemediationPr(reason);
           await this.emitLoopHalt(reason, prUrl);
