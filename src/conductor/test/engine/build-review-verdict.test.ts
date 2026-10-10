@@ -58,6 +58,7 @@ describe('engine/build-review verdict wiring contract', () => {
       rubric: {
         testQuality: false,
         security: false,
+        implementationQuality: false,
       },
     });
   });
@@ -75,6 +76,7 @@ describe('engine/build-review verdict wiring contract', () => {
       rubric: {
         testQuality: true,
         security: false,
+        implementationQuality: false,
       },
     });
   });
@@ -142,7 +144,7 @@ describe('engine/build-review verdict wiring contract', () => {
     const dir = await writeVerdict(verdict);
 
     const validated = validateBuildReviewVerdict(verdict);
-    expect(validated).toEqual({ ok: true, ...verdict, rubric: { testQuality: false, security: false } });
+    expect(validated).toEqual({ ok: true, ...verdict, rubric: { testQuality: false, security: false, implementationQuality: false } });
     expect(validated).toMatchObject({
       rubric: { testQuality: false },
       findings: {},
@@ -258,7 +260,7 @@ describe('engine/build-review verdict wiring contract', () => {
       buildReviewEffectiveResolver: resolver,
     })).resolves.toMatchObject({ done: true });
     expect(resolver).toHaveBeenCalledWith(dir, aggregate, {
-      minConfidence: { testQuality: 0, security: 0 },
+      minConfidence: { testQuality: 0, security: 0, implementationQuality: 0 },
     });
   });
 
@@ -372,7 +374,7 @@ describe('engine/build-review verdict wiring contract', () => {
     };
     const dir = await writeVerdict(verdict);
 
-    expect(validateBuildReviewVerdict(verdict)).toEqual({ ok: true, ...verdict, rubric: { testQuality: true, security: false } });
+    expect(validateBuildReviewVerdict(verdict)).toEqual({ ok: true, ...verdict, rubric: { testQuality: true, security: false, implementationQuality: false } });
     await expect(checkGateCompletion(dir, 'build_review')).resolves.toMatchObject({
       done: false,
       reason: expect.stringContaining('[testQuality] The changed test does not observe the behavior it claims to cover.'),

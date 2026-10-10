@@ -4726,8 +4726,12 @@ TIER: M`,
 
     it('dispatches implementation quality as the only default rubric', async () => {
       await scopedPlan();
-      const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => {
-        const result = { findings: [] };
+      const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+        const result = {
+          kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [],
+        };
         return { success: true, output: JSON.stringify(result), exitCode: 0, finalStructuredResult: result };
       });
       const runner = new DefaultStepRunner({ invoke }, 'session-1', dir, {
