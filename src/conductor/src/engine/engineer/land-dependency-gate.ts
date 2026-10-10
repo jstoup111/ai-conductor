@@ -40,6 +40,30 @@ export interface ComputeLandDependencyProposalsInput {
   baseRef?: string;
 }
 
+export interface DecideLandDependenciesInput {
+  sourceRef?: string;
+  proposalResult: LandDependencyProposalResult;
+  accepted: string[];
+  declined: string[];
+  skipReason?: string;
+}
+
+export type LandDependencyDecision =
+  | {
+    kind: 'proceed';
+    accepted: string[];
+    declined: string[];
+    skipped: { reason: string } | null;
+  }
+  | {
+    kind: 'refused-undecided';
+    undecided: string[];
+    message: string;
+    skipUnused?: string;
+  }
+  | { kind: 'refused-unavailable'; cause: string; message: string }
+  | { kind: 'invalid'; message: string };
+
 interface RawBlockedByEntry {
   number: number;
   repository_url?: string;
@@ -76,6 +100,62 @@ function unavailable(stage: string, error: unknown): LandDependencyProposalResul
 
 function planPaths(planText: string): string[] {
   return [...parsePlanTaskPaths(planText).values()].flatMap((paths) => [...paths]);
+}
+
+/**
+ * Decide whether land may continue after the proposal calculation. This stays
+ * pure so the CLI can render or reject the returned outcome before commit.
+ */
+export function decideLandDependencies({
+  sourceRef,
+  proposalResult,
+  accepted,
+  declined,
+  skipReason,
+}: DecideLandDependenciesInput): LandDependencyDecision {
+  const hasDecision = accepted.length > 0 || declined.length > 0;
+  if (hasDecision && !sourceRef) {
+    return { kind: 'invalid', message: 'dependency decisions require an intake source-ref' };
+  }
+  if (skipReason !== undefined && skipReason.trim() === '') {
+    return { kind: 'invalid', message: 'a dependency-check skip requires a reason' };
+  }
+
+  switch (proposalResult.kind) {
+    case 'unavailable':
+      if (skipReason !== undefined) {
+        return { kind: 'proceed', accepted: [], declined: [], skipped: { reason: skipReason } };
+      }
+      return {
+        kind: 'refused-unavailable',
+        cause: proposalResult.cause,
+        message: `${proposalResult.cause}; retry or acknowledge with --skip-dependency-check "<reason>"`,
+      };
+    case 'computed': {
+      const proposed = new Set(proposalResult.proposals.map((proposal) => proposal.target));
+      const contradictory = accepted.find((target) => declined.includes(target));
+      if (contradictory) {
+        return { kind: 'invalid', message: `dependency ${contradictory} was both accepted and declined` };
+      }
+      const invalidDecline = declined.find((target) => !proposed.has(target));
+      if (invalidDecline) {
+        return { kind: 'invalid', message: `cannot decline dependency ${invalidDecline}: it was never proposed` };
+      }
+      const decided = new Set([...accepted, ...declined]);
+      const undecided = proposalResult.proposals
+        .map((proposal) => proposal.target)
+        .filter((target) => !decided.has(target));
+      if (undecided.length > 0) {
+        return {
+          kind: 'refused-undecided',
+          undecided,
+          message: `undecided dependencies: ${undecided.join(', ')}. Decide each with --depends-on <owner/repo#N> or --decline-dependency <owner/repo#N>.`,
+          ...(skipReason === undefined ? {} : { skipUnused: `--skip-dependency-check "${skipReason}" was unused because proposals were computed` }),
+        };
+      }
+      return { kind: 'proceed', accepted, declined, skipped: null };
+    }
+  }
 }
 
 /**
