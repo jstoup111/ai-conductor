@@ -208,6 +208,10 @@ import {
   runScopeCheck,
 } from './engine/scope-check-cli.js';
 import {
+  detectTaskMembershipCheckCommand,
+  runTaskMembershipCheck,
+} from './engine/task-membership-check-cli.js';
+import {
   detectTestSuiteCommand,
   dispatchTestSuiteCommand,
 } from './engine/test-suite-cli.js';
@@ -1155,6 +1159,15 @@ async function dispatchCliCommand(): Promise<void> {
       enforce: await loadScopeCheckEnforcement(projectRoot),
     });
     process.exit(code);
+  }
+
+  const taskMembershipCheckCmd = detectTaskMembershipCheckCommand(process.argv);
+  if (taskMembershipCheckCmd) {
+    const projectRoot = process.env.CONDUCT_TASK_MEMBERSHIP_PROJECT_ROOT ?? process.cwd();
+    process.exit(await runTaskMembershipCheck({
+      projectRoot,
+      commitMessagePath: taskMembershipCheckCmd.commitMessagePath,
+    }));
   }
 
   // Evidence subcommand (`evidence judge <slug>`, Task 19) runs NON-INTERACTIVELY and exits —
