@@ -82,6 +82,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - When merge-conflict autoresolve escalates on a failing test suite, the daemon log and the escalation comment now name the failing tests instead of only "exit code 1". ([implementation PR #3118](https://github.com/jstoup111/ai-conductor/pull/3118)).
 - Build review includes changed test files outside conventional test paths when they contain Covers markers. ([implementation PR #3092](https://github.com/jstoup111/ai-conductor/pull/3092)).
 - Operators receive the correct halt-clear recovery command when a BUILD plan gap cannot be rewound. ([implementation PR #3120](https://github.com/jstoup111/ai-conductor/pull/3120)).
+- build_review adjudication no longer halts when a blocked consistency verdict names only the implicated findings. ([implementation PR #3139](https://github.com/jstoup111/ai-conductor/pull/3139)).
 
 ## Migration
 
