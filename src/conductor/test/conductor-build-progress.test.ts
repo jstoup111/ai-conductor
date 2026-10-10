@@ -1,3 +1,4 @@
+// Covers: task:3
 /**
  * Task 9: conductor wires BuildProgressWatcher around the build-step await.
  *
