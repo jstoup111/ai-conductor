@@ -260,3 +260,11 @@ overlap.
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-5: In daemon-dashboard.ts, make inFlightSteps pair starts and terminals by executionContext.executionId when the event has one, and fall back to step-name pairing only for context-free events. A late terminal from an older execution must not close a newer execution of the same step. Add RED tests to daemon-dashboard.test.ts: (a) two executions of one step, where the terminal for the first leaves the second open; (b) legacy context-free events still pair by name. Keep the existing Task 5 fold and scan assertions unchanged.
+**Gate:** as-built
+**Rationale:** Verified (95%): inFlightSteps at src/conductor/src/engine/daemon-dashboard.ts:597-614 keys its Map by event.step alone. ADR adr-2026-09-10-shared-step-lifecycle-telemetry Decision 2 already says how to fix this: pair by executionContext.executionId (ExecutionContext is in src/types/events.ts:249), scoped to the feature's ledger, and keep step-name pairing only for context-free legacy events. This is conforming implementation drift, and the architecture stays authoritative, so no architectural decision or human input is needed. Plan Task 5 (in-flight fold over a feature's merged events) owns inFlightSteps and its tests in daemon-dashboard.test.ts, so it admits the repair. The Task 5 coverage that must survive: closing on completed/failed/interrupted/refused, keeping the open entry and its original startedAtMs across step_retry, start-order rendering, and scanInheritedState population. Sibling consumers outside daemon-dashboard.ts are not admitted by Task 5 and are excluded.
+**Governing clause:** adr-2026-09-10-shared-step-lifecycle-telemetry decision 2
+**Done when:**
+- adr-2026-09-10-shared-step-lifecycle-telemetry decision 2 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-5 is complete.

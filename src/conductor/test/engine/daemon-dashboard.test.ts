@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 
 import {
   classifyRunningWork,
+  inFlightSteps,
   scanInheritedState,
   renderDashboard,
   type InheritedState,
@@ -20,6 +21,60 @@ import { writeFullSuiteEvidence, type FullSuiteEvidence } from '../../src/engine
 function item(slug: string, tier?: ComplexityTier): BacklogItem {
   return tier ? { slug, tier } : { slug };
 }
+
+describe('engine/daemon-dashboard — inFlightSteps (Task 5)', () => {
+  const event = (type: string, step: string, ts: number) => ({ type, step, ts });
+  const executionEvent = (type: string, step: string, ts: number, executionId: string) => ({
+    type,
+    step,
+    ts,
+    executionContext: {
+      executionId,
+      subject: { kind: 'lifecycle-step', step },
+    },
+  });
+
+  it('keeps only the latest unterminated starts, in start order', () => {
+    expect(inFlightSteps([
+      event('step_started', 'build', 1),
+      event('step_completed', 'build', 2),
+      event('step_started', 'test_suite', 3),
+      event('step_started', 'manual_test', 4),
+      event('step_started', 'prd_audit', 5),
+    ])).toEqual([
+      { step: 'test_suite', startedAtMs: 3 },
+      { step: 'manual_test', startedAtMs: 4 },
+      { step: 'prd_audit', startedAtMs: 5 },
+    ]);
+  });
+
+  it.each(['step_completed', 'step_failed', 'step_interrupted', 'step_refused'])('%s closes a started step', (terminal) => {
+    expect(inFlightSteps([event('step_started', 'test_suite', 10), event(terminal, 'test_suite', 11)])).toEqual([]);
+  });
+
+  it('keeps a retried step open from its original start time', () => {
+    expect(inFlightSteps([
+      event('step_started', 'test_suite', 10),
+      event('step_retry', 'test_suite', 11),
+      event('step_retry', 'test_suite', 12),
+    ])).toEqual([{ step: 'test_suite', startedAtMs: 10 }]);
+  });
+
+  it('keeps a newer execution open when an older execution terminal arrives late', () => {
+    expect(inFlightSteps([
+      executionEvent('step_started', 'test_suite', 10, 'first-execution'),
+      executionEvent('step_started', 'test_suite', 20, 'second-execution'),
+      executionEvent('step_completed', 'test_suite', 30, 'first-execution'),
+    ])).toEqual([{ step: 'test_suite', startedAtMs: 20 }]);
+  });
+
+  it('pairs context-free legacy events by step name', () => {
+    expect(inFlightSteps([
+      event('step_started', 'test_suite', 10),
+      event('step_completed', 'test_suite', 20),
+    ])).toEqual([]);
+  });
+});
 
 describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
   let root: string;
@@ -1776,6 +1831,44 @@ describe('engine/daemon-dashboard — band annotations and fallback marker (Task
     expect(out).not.toContain('[high]');
     expect(out).not.toContain('[medium]');
     expect(out).not.toContain('[low]');
+  });
+});
+
+describe('engine/daemon-dashboard — in-flight scan (Task 5)', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'dashboard-in-flight-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('attaches in-flight steps and isolates a malformed sibling ledger', async () => {
+    const worktreeBase = join(root, '.worktrees');
+    const active = join(worktreeBase, 'active', '.pipeline');
+    const malformed = join(worktreeBase, 'malformed', '.pipeline');
+    await mkdir(active, { recursive: true });
+    await mkdir(malformed, { recursive: true });
+    await Promise.all([
+      writeFile(join(active, 'conduct-state.json'), JSON.stringify({ test_suite: 'in_progress' }), 'utf8'),
+      writeFile(join(active, 'events.jsonl'), JSON.stringify({ type: 'step_started', step: 'test_suite', ts: '2026-10-10T12:00:00.000Z' }) + '\n', 'utf8'),
+      writeFile(join(malformed, 'conduct-state.json'), JSON.stringify({ test_suite: 'in_progress' }), 'utf8'),
+      writeFile(join(malformed, 'events.jsonl'), '{not json}\n', 'utf8'),
+    ]);
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir: join(root, '.daemon', 'processed'),
+      discover: async () => [],
+    });
+
+    expect(state.inProgress.find((entry) => entry.slug === 'active')?.inFlight).toEqual([
+      { step: 'test_suite', startedAtMs: Date.parse('2026-10-10T12:00:00.000Z') },
+    ]);
+    expect(state.inProgress.find((entry) => entry.slug === 'malformed')?.inFlight).toBeUndefined();
+    expect(state.inProgress).toHaveLength(2);
   });
 });
 

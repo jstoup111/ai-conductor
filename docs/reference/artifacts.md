@@ -788,7 +788,7 @@ it. `EventPersister` writes the event types marked
 `protected_artifact_rebaseline_refused`, `auto_heal`, `remediation_sealed_artifact_redirect`,
 `remediation_disposition_rejected`,
 `verdict_freshness`, `build_review_repair_context`, `mode_skip`, `build_done_when_unverified`, `build_stall`, `build_progress`,
-`build_no_progress`, `build_active_stall`, `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`,
+`step_in_flight`, `build_no_progress`, `build_active_stall`, `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`,
 `parallel_failure`, `gate_verdict`, `test_suite_verification`, `build_member_evidence_reused`,
 `build_member_evidence_recomputed`, `kickback`, `loop_halt`, `over_scope_decision`,
 `halt_marker_write_failed`, `halt_record_written`, `halt_record_write_failed`, `halt_record_push_failed`,
@@ -947,6 +947,9 @@ reached `build_progress.active_stall_minutes` without task or HEAD movement: `mi
 `resolved`, `total`, optional `lastCommitAt`/`lastActivityAt`, and the configured `action`
 (`warn` | `end_attempt`). A `build_stall` event with reason `active_stall` records an attempt the
 `end_attempt` policy ended. See [`build_progress`](configuration.md#build_progress).
+
+`step_in_flight` records a running non-build step: `step`, `elapsedMs` since the step started, and
+optional `featureSlug`. Its cadence is `build_progress.heartbeat_minutes`.
 
 The `pipeline_closeout` event type is declared on `ConductorEvent` but is never written here —
 `EVENT_SINKS.pipeline_closeout` sets `persist: false`, so it stays a single-writer event confined

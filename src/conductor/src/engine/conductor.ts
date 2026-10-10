@@ -137,6 +137,7 @@ import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { ExecutionLifecycle } from './execution-lifecycle.js';
 import { BuildProgressWatcher, isNoTaskProgressBuildStall } from './build-progress-watcher.js';
+import { StepInFlightTicker } from './step-in-flight-ticker.js';
 import {
   resolveBuildProgressConfig,
   resolveGateCodeValidityConfig,
@@ -7318,7 +7319,12 @@ export class Conductor {
                     subject: { kind: 'lifecycle-step', step: member.name as StepName },
                   };
                   memberExecutionContexts.set(member.name, executionContext);
-                  return runGroupBranch(member, state, {
+                  // The lifecycle callbacks assign this asynchronously. Keep the
+                  // mutable value in a holder so both callback and finally
+                  // cleanup retain its declared union type.
+                  const stepInFlightTicker: { current: StepInFlightTicker | null } = { current: null };
+                  try {
+                    return await runGroupBranch(member, state, {
                       stepRunner: this.stepRunner,
                       providerAvailability: this.providerExecution?.providerAvailability,
                       onProviderSuppressed: this.providerExecution?.onProviderSuppressed,
@@ -7334,6 +7340,14 @@ export class Conductor {
                             index: indexOf(observation.member as StepName),
                             executionContext,
                           });
+                          stepInFlightTicker.current = new StepInFlightTicker({
+                            events: this.events,
+                            step: member.name as StepName,
+                            startedAtMs: Date.now(),
+                            featureSlug: state.feature_desc,
+                            config: this.config,
+                          });
+                          stepInFlightTicker.current.start();
                         },
                         onAttempt: async (observation) => {
                           if (observation.result !== undefined) {
@@ -7362,6 +7376,7 @@ export class Conductor {
                           });
                         },
                         onSettled: async (observation) => {
+                          stepInFlightTicker.current?.stop();
                           await emitTracked({
                             type: 'group_member_step',
                             member: observation.member,
@@ -7424,6 +7439,9 @@ export class Conductor {
                         }
                       },
                     }, memberAttemptBudgets.get(member.name)!);
+                  } finally {
+                    stepInFlightTicker.current?.stop();
+                  }
                 }),
                 cap,
               );
@@ -9028,6 +9046,7 @@ export class Conductor {
                 subject: { kind: 'lifecycle-step', step: step.name },
               }
             : undefined;
+        const stepStartedAtMs = Date.now();
         await emitTracked({
           type: 'step_started',
           step: step.name,
@@ -9506,7 +9525,18 @@ export class Conductor {
                   },
                 })
               : null;
+          const stepInFlightTicker: StepInFlightTicker | null =
+            step.name !== 'build' && resolveBuildProgressConfig(this.config).enabled
+              ? new StepInFlightTicker({
+                  events: this.events,
+                  step: step.name,
+                  startedAtMs: stepStartedAtMs,
+                  featureSlug: state.feature_desc,
+                  config: this.config,
+                })
+              : null;
           buildWatcher?.start();
+          stepInFlightTicker?.start();
           // Approved DECIDE artifacts are a durable BUILD/SHIP boundary. Verify
           // every attempt before writing phase markers or starting dispatch; a
           // resume therefore cannot accept a dirty workspace as a new baseline.
@@ -9568,6 +9598,7 @@ export class Conductor {
           if (protectedArtifactIssue) {
             buildAttemptSettled = true;
             buildWatcher?.stop();
+            stepInFlightTicker?.stop();
             const dispatchIssue = protectedArtifactIssue;
             result = {
               success: false,
@@ -9773,6 +9804,7 @@ export class Conductor {
           } finally {
             buildAttemptSettled = true;
             buildWatcher?.stop();
+            stepInFlightTicker?.stop();
             // Task 4 (#788): the phase-active marker is written for any
             // BUILD/SHIP step, not gated on step.name === 'build'.
             removePhaseMarker(this.projectRoot);

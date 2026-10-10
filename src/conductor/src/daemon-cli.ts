@@ -3694,6 +3694,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot} ${chalk.cyan('▶')} ${event.step} ${position}/${event.total}${task}${slug}${commit}`);
       break;
     }
+    case 'step_in_flight': {
+      const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
+      log(`${dot} ${chalk.cyan('▶')} ${event.step} running ${formatHeartbeatAge(event.elapsedMs)}${slug}`);
+      break;
+    }
     case 'unattributed_progress': {
       const headBefore = event.headBefore?.slice(0, 12) ?? '(none)';
       const headAfter = event.headAfter?.slice(0, 12) ?? '(none)';

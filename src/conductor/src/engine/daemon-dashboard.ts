@@ -98,6 +98,13 @@ export interface InProgressEntry {
   lifecycle?: ProviderLifecycleDiagnostic;
   /** Feature-declared skips, distinct from tier/config skips. */
   inapplicable?: Array<{ step: string; reason: string }>;
+  /** Steps that have started but have no terminal event in the merged ledger. */
+  inFlight?: InFlightStep[];
+}
+
+export interface InFlightStep {
+  step: string;
+  startedAtMs: number;
 }
 
 /** A dashboard observation needs only a short current-activity window. */
@@ -583,6 +590,40 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Fold a feature's timestamp-ordered event ledger into its currently running
+ * steps. Retries keep the original attempt open; every terminal step event
+ * closes it. The map's insertion order preserves start order for rendering.
+ */
+export function inFlightSteps(events: readonly Record<string, unknown>[]): InFlightStep[] {
+  const inFlight = new Map<string, InFlightStep>();
+  for (const event of events) {
+    if (typeof event.step !== 'string') continue;
+    const executionId = isRecord(event.executionContext)
+      && typeof event.executionContext.executionId === 'string'
+      ? event.executionContext.executionId
+      : undefined;
+    // Context-aware events identify a logical execution. Older ledgers have
+    // no context, so retain their historical step-name pairing.
+    const key = executionId === undefined
+      ? `legacy:${event.step}`
+      : `execution:${executionId}`;
+    if (event.type === 'step_started' && typeof event.ts === 'number' && Number.isFinite(event.ts)) {
+      inFlight.set(key, { step: event.step, startedAtMs: event.ts });
+      continue;
+    }
+    if (
+      event.type === 'step_completed'
+      || event.type === 'step_failed'
+      || event.type === 'step_interrupted'
+      || event.type === 'step_refused'
+    ) {
+      inFlight.delete(key);
+    }
+  }
+  return [...inFlight.values()];
+}
+
+/**
  * Scan inherited persisted state into the four dashboard groups. Pure of the
  * render — `renderDashboard` formats the returned struct. Injected `discover`
  * keeps eligibility in lockstep with the live `discoverBacklog`.
@@ -605,6 +646,7 @@ export async function scanInheritedState(
       return undefined;
     }
   }));
+  const featureEventsBySlug = new Map(slugs.map((slug, index) => [slug, featureEvents[index]]));
   const mergedFeatureEvents = featureEvents.flatMap((events) => events ?? []);
   const buildReviewMetrics = mergedFeatureEvents.some((event) =>
     typeof event.type === 'string' && event.type.startsWith('build_review_'),
@@ -716,6 +758,11 @@ export async function scanInheritedState(
         if (prUrl) entry.prUrl = prUrl;
         const inapplicable = inapplicableEntries(state);
         if (inapplicable) entry.inapplicable = inapplicable;
+      }
+      const liveSteps = featureEventsBySlug.get(slug);
+      if (liveSteps !== undefined) {
+        const steps = inFlightSteps(liveSteps);
+        if (steps.length > 0) entry.inFlight = steps;
       }
       // Best-effort: a missing/malformed heartbeat file is "no heartbeat yet",
       // never a scan failure — same tolerance as every other worktree read here.

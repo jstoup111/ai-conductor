@@ -417,6 +417,119 @@ describe('engine/conductor', () => {
       expect(parallelStarted[0].branches).toContain('prd_audit');
     });
 
+    it('emits one in-flight heartbeat per concurrently blocked manual_test and prd_audit member, never a group heartbeat, then stops at the join', async () => {
+      await writeState(statePath, {
+        ...VALIDATION_GROUP_PREREQS,
+        complexity_tier: 'M',
+        track: 'technical',
+        rebase: 'done',
+        finish: 'done',
+      } as ConductState);
+      vi.useFakeTimers();
+      const heartbeats: StepName[] = [];
+      const admitted = new Set<StepName>();
+      let admitBoth!: () => void;
+      const bothAdmitted = new Promise<void>((resolve) => { admitBoth = resolve; });
+      events.on('step_in_flight', (event) => {
+        if (event.type === 'step_in_flight') heartbeats.push(event.step);
+      });
+      events.on('step_started', (event) => {
+        if (event.type !== 'step_started') return;
+        admitted.add(event.step);
+        if (admitted.has('manual_test') && admitted.has('prd_audit')) admitBoth();
+      });
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test' || step === 'prd_audit') {
+            await new Promise<void>((resolve) => setTimeout(resolve, 6 * 60_000));
+          }
+          return { success: true };
+        }),
+      };
+      const run = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        fromStep: 'manual_test', mode: 'auto', verifyArtifacts: false,
+        config: {
+          build_progress: { enabled: true, heartbeat_minutes: 5 },
+          steps: { architecture_review_as_built: { disable: true } },
+        } as HarnessConfig,
+      }).run();
+
+      try {
+        await bothAdmitted;
+        await vi.advanceTimersByTimeAsync(6 * 60_000);
+        await run;
+        expect(heartbeats).toEqual(['manual_test', 'prd_audit']);
+
+        await vi.advanceTimersByTimeAsync(20 * 60_000);
+        expect(heartbeats).toEqual(['manual_test', 'prd_audit']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps a blocked manual_test heartbeat alive when prd_audit throws early, without heartbeating the failed member', async () => {
+      await writeState(statePath, {
+        ...VALIDATION_GROUP_PREREQS,
+        complexity_tier: 'M',
+        track: 'technical',
+        rebase: 'done',
+        finish: 'done',
+      } as ConductState);
+      vi.useFakeTimers();
+      const heartbeats: StepName[] = [];
+      let prdAuditRejected = false;
+      const admitted = new Set<StepName>();
+      let admitBoth!: () => void;
+      const bothAdmitted = new Promise<void>((resolve) => { admitBoth = resolve; });
+      events.on('step_in_flight', (event) => {
+        if (event.type === 'step_in_flight') heartbeats.push(event.step);
+      });
+      events.on('step_started', (event) => {
+        if (event.type !== 'step_started') return;
+        admitted.add(event.step);
+        if (admitted.has('manual_test') && admitted.has('prd_audit')) admitBoth();
+      });
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') {
+            await new Promise<void>((resolve) => setTimeout(resolve, 6 * 60_000));
+          }
+          if (step === 'prd_audit') {
+            await new Promise<void>((_, reject) => setTimeout(() => {
+              prdAuditRejected = true;
+              reject(new Error('fixture prd failure'));
+            }, 60_000));
+          }
+          return { success: true };
+        }),
+      };
+      const run = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        fromStep: 'manual_test', mode: 'auto', maxRetries: 1, verifyArtifacts: false,
+        config: {
+          build_progress: { enabled: true, heartbeat_minutes: 5 },
+          steps: { architecture_review_as_built: { disable: true } },
+        } as HarnessConfig,
+      }).run();
+
+      try {
+        await bothAdmitted;
+        await vi.advanceTimersByTimeAsync(6 * 60_000);
+        await run;
+        expect(heartbeats).toEqual(['manual_test']);
+        expect({
+          prdAuditRejected,
+          dispatched: vi.mocked(runner.run).mock.calls.map(([step]) => step),
+        }).toEqual({
+          prdAuditRejected: true,
+          dispatched: expect.arrayContaining(['manual_test', 'prd_audit']),
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('interactive mode runs the validation group members via the pre-existing serial walk, event-stream equivalent to baseline', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
 

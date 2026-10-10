@@ -1,4 +1,4 @@
-// Covers: task:11
+// Covers: task:6, task:11
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -1023,6 +1023,73 @@ describe('engine/daemon-observe-cli', () => {
           '  PLAN GROWTH [legacy-feature]: authored 19; added 0; remaining 4/4',
         );
       });
+    });
+
+    it('prints persisted in-flight steps only for a running daemon', async () => {
+      const repo = join(root, 'repo-in-flight');
+      await writePidfile(repo, { pid: 42 });
+      const writeFeature = async (slug: string, events: unknown[]) => {
+        const pipeline = join(repo, '.worktrees', slug, '.pipeline');
+        await mkdir(pipeline, { recursive: true });
+        await writeFile(join(pipeline, 'conduct-state.json'), JSON.stringify({ test_suite: 'in_progress' }), 'utf8');
+        await writeFile(join(pipeline, 'events.jsonl'), events.map((event) => JSON.stringify(event)).join('\n') + '\n', 'utf8');
+      };
+      const startedAt = '2026-10-10T12:00:00.000Z';
+      await Promise.all([
+        writeFeature('A', [
+          { type: 'step_started', step: 'build', ts: '2026-10-10T11:59:00.000Z' },
+          { type: 'step_completed', step: 'build', ts: '2026-10-10T11:59:30.000Z' },
+          { type: 'step_started', step: 'test_suite', ts: startedAt },
+        ]),
+        writeFeature('B', [
+          { type: 'step_started', step: 'manual_test', ts: startedAt },
+          { type: 'step_started', step: 'prd_audit', ts: '2026-10-10T12:01:00.000Z' },
+        ]),
+        writeFeature('closed', [
+          { type: 'step_started', step: 'test_suite', ts: startedAt },
+          { type: 'step_refused', step: 'test_suite', ts: '2026-10-10T12:01:00.000Z' },
+        ]),
+        writeFeature('retry', [
+          { type: 'step_started', step: 'test_suite', ts: startedAt },
+          { type: 'step_retry', step: 'test_suite', ts: '2026-10-10T12:01:00.000Z' },
+        ]),
+        writeFeature('malformed', ['not json']),
+      ]);
+      const clock = () => new Date('2026-10-10T12:06:33.000Z');
+      const out: string[] = [];
+
+      const result = await runDaemonStatus({
+        registryPath: await registry([record('repo-in-flight', repo)]),
+        kill: ALIVE,
+        clock,
+        out: (line) => out.push(line),
+      });
+
+      expect(result.code).toBe(0);
+      expect(out).toContain('  IN FLIGHT [A]: test_suite running 6m33s');
+      expect(out).toContain('  IN FLIGHT [B]: manual_test running 6m33s');
+      expect(out).toContain('  IN FLIGHT [B]: prd_audit running 5m33s');
+      expect(out).toContain('  IN FLIGHT [retry]: test_suite running 6m33s');
+      expect(out.join('\n')).not.toContain('IN FLIGHT [A]: build');
+      expect(out.join('\n')).not.toMatch(/IN FLIGHT \[(?:closed|malformed)\]:/);
+
+      const staleOut: string[] = [];
+      await runDaemonStatus({
+        registryPath: await registry([record('repo-in-flight', repo)]),
+        kill: DEAD,
+        clock,
+        out: (line) => staleOut.push(line),
+      });
+      expect(staleOut.join('\n')).not.toContain('IN FLIGHT');
+
+      await rm(join(repo, '.daemon', 'daemon.pid'));
+      const stoppedOut: string[] = [];
+      await runDaemonStatus({
+        registryPath: await registry([record('repo-in-flight', repo)]),
+        clock,
+        out: (line) => stoppedOut.push(line),
+      });
+      expect(stoppedOut.join('\n')).not.toContain('IN FLIGHT');
     });
   });
 
