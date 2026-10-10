@@ -1,4 +1,3 @@
-import { withPinnedGitConfig } from '../git-pinned-config.js';
 import type { GitRunner } from '../rebase.js';
 import type { CommitSha, ChildRange } from './restack-types.js';
 import { parseCommitSha } from './restack-types.js';
@@ -60,19 +59,12 @@ async function commitsAreSigned(git: GitRunner): Promise<boolean> {
   return result.exitCode === 0 && result.stdout.trim() === 'true';
 }
 
-/**
- * `GitRunner` predates the plumbing replay and deliberately has a minimal
- * options surface.  It captures process.env synchronously when it launches
- * its child, so scope identity/config just around that launch and restore it
- * before another replay command can run.
- */
-async function withCommitEnvironment<T>(
+/** Construct identity for exactly one replayed commit. */
+function commitEnvironment(
   author: AuthorIdentity,
   stamp: CommitterStamp,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const environment = {
-    ...withPinnedGitConfig(process.env),
+): NodeJS.ProcessEnv {
+  return {
     GIT_AUTHOR_NAME: author.name,
     GIT_AUTHOR_EMAIL: author.email,
     GIT_AUTHOR_DATE: author.date,
@@ -80,19 +72,6 @@ async function withCommitEnvironment<T>(
     GIT_COMMITTER_EMAIL: stamp.email,
     GIT_COMMITTER_DATE: stamp.date,
   };
-  const prior = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(environment)) {
-    prior.set(key, process.env[key]);
-    process.env[key] = value;
-  }
-  try {
-    return await operation();
-  } finally {
-    for (const [key, value] of prior) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
 }
 
 /**
@@ -125,16 +104,14 @@ export async function replayChildRange(
     // remain meaningful history and must retain their exact correspondence.
     if (mergedTree === accumulatorTree && originalTree !== originalParentTree) continue;
 
-    const rewritten = await withCommitEnvironment(author, stamp, async () => {
-      const result = await git([
-        'commit-tree',
-        ...(sign ? ['-S'] : []),
-        mergedTree,
-        '-p', accumulator,
-      ], { input: message });
-      if (result.exitCode !== 0) throw new Error(`commit-tree failed for ${commit}: ${result.stderr}`);
-      return requiredSha(result.stdout, `commit-tree for ${commit}`);
-    });
+    const result = await git([
+      'commit-tree',
+      ...(sign ? ['-S'] : []),
+      mergedTree,
+      '-p', accumulator,
+    ], { input: message, env: commitEnvironment(author, stamp) });
+    if (result.exitCode !== 0) throw new Error(`commit-tree failed for ${commit}: ${result.stderr}`);
+    const rewritten = requiredSha(result.stdout, `commit-tree for ${commit}`);
     rewrites.set(commit, rewritten);
     accumulator = rewritten;
   }

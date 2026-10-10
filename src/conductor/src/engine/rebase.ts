@@ -69,7 +69,13 @@ import type { ConductorEvent } from '../types/events.js';
 
 /** Minimal git runner — injected so the helpers are unit-testable without a repo. */
 export interface GitRunner {
-  (args: string[], opts?: { input?: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' }): Promise<GitResult>;
+  (args: string[], opts?: {
+    input?: string;
+    credential?: 'operator' | 'write';
+    endpoint?: 'https' | 'ssh';
+    /** Per-invocation environment, merged over the ambient process environment. */
+    env?: NodeJS.ProcessEnv;
+  }): Promise<GitResult>;
 }
 
 export interface GitResult {
@@ -103,14 +109,22 @@ async function classifyProspectiveMerge(
 
 /** A real git runner rooted at `cwd`, never throwing on non-zero exit. */
 export function makeGitRunner(cwd: string): GitRunner {
-  return async (args: string[], opts?: { input?: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' }): Promise<GitResult> => {
+  return async (args: string[], opts?: {
+    input?: string;
+    credential?: 'operator' | 'write';
+    endpoint?: 'https' | 'ssh';
+    env?: NodeJS.ProcessEnv;
+  }): Promise<GitResult> => {
     try {
       // Engine bookkeeping marker (#505 Task 8): any `git commit` this runner
       // spawns is engine-authored (rebase mechanics, quarantine, etc.), never
       // dispatched implementation work — mark it so the commit-msg gate
       // exempts it from the Task: trailer requirement.
       const isCommit = args[0] === 'commit';
-      let env: NodeJS.ProcessEnv | undefined;
+      // Callers can safely provide per-command identity without mutating
+      // process.env.  Merge it before credentials and pins so both compose
+      // into the same environment handed to this git child.
+      let env: NodeJS.ProcessEnv | undefined = opts?.env ? { ...process.env, ...opts.env } : undefined;
       let botToken: string | undefined;
       if (opts?.credential === 'write') {
         const credential = await readGithubBotCredential();
@@ -119,7 +133,7 @@ export function makeGitRunner(cwd: string): GitRunner {
           const token = await readGithubBotToken(credential.tokenFile);
           if (token.kind === 'unavailable') throw new GithubBotAuthRefusalError('token-unavailable');
           botToken = token.token;
-          env = { ...process.env, GH_TOKEN: botToken, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' };
+          env = { ...(env ?? process.env), GH_TOKEN: botToken, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' };
         }
       }
       if (isPinnedEngineGitCommand(args)) {

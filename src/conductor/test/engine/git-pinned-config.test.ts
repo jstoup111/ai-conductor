@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:6
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ execa: vi.fn() }));
@@ -94,6 +94,26 @@ describe('engine git pinned config', () => {
     expect(mocks.execa).toHaveBeenCalledWith('git', ['rev-parse', 'HEAD'], {
       cwd: '/fixture',
       reject: false,
+    });
+  });
+
+  it('merges invocation-local environment before pinning a replay command', async () => {
+    await makeGitRunner('/fixture')(['commit-tree', 'deadbeef'], {
+      env: {
+        GIT_AUTHOR_NAME: 'Replay Author',
+        GIT_COMMITTER_NAME: 'Replay Committer',
+      },
+    });
+
+    expect(mocks.execa).toHaveBeenCalledWith('git', ['commit-tree', 'deadbeef'], {
+      cwd: '/fixture',
+      reject: false,
+      env: expect.objectContaining({
+        GIT_AUTHOR_NAME: 'Replay Author',
+        GIT_COMMITTER_NAME: 'Replay Committer',
+        GIT_CONFIG_COUNT: String(pinnedEntries.length),
+        ...pinnedEnvironment({}),
+      }),
     });
   });
 
