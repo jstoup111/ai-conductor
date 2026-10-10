@@ -44,6 +44,18 @@ async function governingReferenceFixture(): Promise<string> {
     '',
     '1. Superseded decision.',
   ].join('\n'));
+  await writeFile(join(root, '.docs', 'decisions', 'adr-atx.md'), [
+    '# ADR: ATX-numbered architecture',
+    '',
+    'Status: APPROVED',
+    '',
+    '## Decision',
+    '',
+    '### 1. One.',
+    '### 2. Two.',
+    '### 3. Three.',
+    '### 4. Four.',
+  ].join('\n'));
   await writeFile(join(root, '.docs', 'plans', 'feature.md'), [
     '### Task 1: First',
     '',
@@ -519,6 +531,30 @@ describe('as-built verdict contract', () => {
     };
 
     await expect(resolveAsBuiltReferences(verdict, root)).resolves.toEqual({ ok: true, verdict });
+  });
+
+  // Covers: task:3
+  it('resolves ATX-numbered ADR decisions and rejects undeclared ones', async () => {
+    const root = await governingReferenceFixture();
+    const verdict: AsBuiltProviderVerdict = {
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [],
+      driftNotes: [],
+      findings: [{ class: 'REMEDIABLE', reference: { kind: 'adr-decision', stem: 'adr-atx', decision: 4 }, summary: 'Apply the fourth ATX decision.' }],
+      violations: 'The implementation misses its governing decision.',
+      resolution: 'Apply the approved decision.',
+    };
+
+    await expect(resolveAsBuiltReferences(verdict, root)).resolves.toEqual({ ok: true, verdict });
+    await expect(resolveAsBuiltReferences({
+      ...verdict,
+      findings: [{ ...verdict.findings[0]!, reference: { kind: 'adr-decision', stem: 'adr-atx', decision: 9 } }],
+    }, root)).resolves.toEqual({
+      ok: false,
+      field: 'findings[0].reference.decision',
+      requirement: 'one of ADR adr-atx declared decision ids 1, 2, 3, 4 is required',
+    });
   });
 
   it('rejects a reference to a SUPERSEDED ADR', async () => {

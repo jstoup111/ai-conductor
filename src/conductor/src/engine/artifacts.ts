@@ -4407,8 +4407,9 @@ const ADR_SECTION_HEADING_RE = /^\s{0,3}##\s+/;
  *
  * The accepted forms preserve the AB-R12 compatibility contract: numbered
  * list items with the emphasis either after the number (`4. **Termination.**`)
- * or wrapping it (`**4. Termination.**`), bolded D-headings, and ATX
- * D-headings with optional emphasis.
+ * or wrapping it (`**4. Termination.**`), ATX-numbered headings
+ * (`### 4. Termination`), bolded D-headings, and ATX D-headings with optional
+ * emphasis.
  *
  * The bold-wrapped number is not a stylistic nicety: seven APPROVED ADRs on the
  * default branch number their decisions that way, including
@@ -4440,7 +4441,7 @@ export function parseAdrDecisions(content: string): AdrDecisionParseResult {
     const decisionLine = line.replace(/^\s{0,3}>\s?/, '');
     // `\*{0,2}` before the digit, never after it: `**1.` must match while
     // `**12.` must not answer for decision 1, so the `.` stays required.
-    const numberedItem = decisionLine.match(/^\s*\*{0,2}(\d+)\.\s+\S/);
+    const numberedItem = decisionLine.match(/^\s*(?:#{1,6}\s+)?\*{0,2}(\d+)\.\s+\S/);
     const dHeading = decisionLine.match(/^\s*#{0,6}\s*\*{0,2}D(\d+)\b/);
     const id = numberedItem?.[1] ?? dHeading?.[1];
     if (id !== undefined) decisionStarts.push({ id, line: sectionLines.length - 1 });

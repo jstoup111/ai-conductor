@@ -1,4 +1,5 @@
-// Covers: task:1, S1.1, S1.2, S1.3, task:2, task:3, task:6, task:10
+// Covers: task:1
+// Covers: S1.1, S1.2, S1.3, task:2, task:3, task:6, task:10
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, readdir, symlink } from 'fs/promises';
 import { join, dirname, relative } from 'path';
@@ -4327,6 +4328,8 @@ describe('engine/artifacts', () => {
 
     it.each([
       ['numbered decision item', '4. **Termination.**'],
+      ['ATX-numbered heading', '### 4. Termination'],
+      ['emphasized ATX-numbered heading', '### **4. Termination.**'],
       // Seven APPROVED ADRs number this way — the bold wraps the number rather
       // than following it — and every one of their decisions was uncitable.
       ['bold-wrapped numbered item', '**4. Termination.** Prose follows.'],
@@ -4354,6 +4357,41 @@ describe('engine/artifacts', () => {
       }
     });
 
+    it('parses ATX-numbered headings and retains their passages', () => {
+      const parsed = parseAdrDecisions(
+        '# ADR\n\n## Decision\n\n' +
+          '### 1. First\nFirst body.\n\n' +
+          '### 2. Second\nSecond body.\n\n' +
+          '### 3. Third\nThird body.\n',
+      );
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toEqual(new Set(['1', '2', '3']));
+        expect(parsed.passages.get('2')?.[0]).toMatch(/^### 2\. Second/);
+      }
+    });
+
+    it('does not split an ATX-numbered heading into shorter ids', () => {
+      const parsed = parseAdrDecisions('# ADR\n\n## Decision\n\n### 12. Twelfth\n');
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toEqual(new Set(['12']));
+      }
+    });
+
+    it('does not treat decimal sub-points or prose headings as decision ids', () => {
+      const parsed = parseAdrDecisions(
+        '# ADR\n\n## Decision\n\n### 2.1 Sub-point\n\n### Step 1. Prepare\n',
+      );
+
+      expect(parsed).toMatchObject({ kind: 'decisions' });
+      if (parsed.kind === 'decisions') {
+        expect(parsed.ids).toEqual(new Set());
+      }
+    });
+
     it('excludes decision-looking lines inside fenced code blocks', () => {
       const parsed = parseAdrDecisions(
         '# ADR\n\n## Decision\n\n```markdown\n4. **Termination.**\n### D4 — Termination\n```\n',
@@ -4362,6 +4400,22 @@ describe('engine/artifacts', () => {
       expect(parsed).toMatchObject({ kind: 'decisions' });
       if (parsed.kind === 'decisions') {
         expect(parsed.ids).toEqual(new Set());
+      }
+    });
+
+    it('excludes ATX-numbered headings in code fences and later sections', () => {
+      const fenced = parseAdrDecisions(
+        '# ADR\n\n## Decision\n\n```markdown\n### 5. Fifth\n```\n',
+      );
+      const consequence = parseAdrDecisions(
+        '# ADR\n\n## Decision\n\nNo numbered decisions.\n\n## Consequences\n\n### 5. Fifth\n',
+      );
+
+      for (const parsed of [fenced, consequence]) {
+        expect(parsed).toMatchObject({ kind: 'decisions' });
+        if (parsed.kind === 'decisions') {
+          expect(parsed.ids).not.toContain('5');
+        }
       }
     });
 
