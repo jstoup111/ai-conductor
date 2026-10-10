@@ -83,7 +83,10 @@ export interface WatchEntry {
   ciFailureDetected?: boolean;
   headSha?: string;
   headFirstSeenAt?: string;
-  readinessEmitted?: boolean;
+  readinessEmitted?: {
+    verdict: ShippedReadinessVerdict;
+    headSha: string;
+  };
   escalationCause?: 'conflict-resolution' | 'shipped-readiness';
   labelClearAttempts?: number;
 }
@@ -250,9 +253,15 @@ export async function readWatch(projectRoot: string): Promise<WatchEntry[]> {
               ...(typeof raw.headFirstSeenAt === 'string' && {
                 headFirstSeenAt: raw.headFirstSeenAt,
               }),
-              ...(typeof raw.readinessEmitted === 'boolean' && {
-                readinessEmitted: raw.readinessEmitted,
-              }),
+              ...(raw.readinessEmitted !== null &&
+                typeof raw.readinessEmitted === 'object' &&
+                typeof (raw.readinessEmitted as Record<string, unknown>).verdict === 'string' &&
+                typeof (raw.readinessEmitted as Record<string, unknown>).headSha === 'string' && {
+                  readinessEmitted: {
+                    verdict: (raw.readinessEmitted as Record<string, unknown>).verdict as ShippedReadinessVerdict,
+                    headSha: (raw.readinessEmitted as Record<string, unknown>).headSha as string,
+                  },
+                }),
               ...((raw.escalationCause === 'conflict-resolution' ||
                 raw.escalationCause === 'shipped-readiness') && {
                 escalationCause: raw.escalationCause,
@@ -430,6 +439,13 @@ export async function sweepMergeableLabels({
         ...(await git(args, opts)),
         stderr: '',
       })));
+  const emitEvent = (event: ConductorEvent): void => {
+    try {
+      onEvent?.(event);
+    } catch (error) {
+      log?.(`[mergeable-sweep] event listener error: ${error}`);
+    }
+  };
   try {
     const entries = await readWatch(projectRoot);
     const survivors: WatchEntry[] = [];
@@ -579,6 +595,30 @@ export async function sweepMergeableLabels({
           now().getTime(),
         );
 
+        if (
+          entry.headSha !== undefined &&
+          (entry.readinessEmitted?.verdict !== readiness ||
+            entry.readinessEmitted.headSha !== entry.headSha)
+        ) {
+          const headSha = entry.headSha;
+          entry = {
+            ...entry,
+            readinessEmitted: { verdict: readiness, headSha },
+          };
+          emitEvent({
+            type: 'shipped_pr_readiness',
+            prUrl: entry.prUrl,
+            slug: entry.slug,
+            verdict: readiness,
+            headSha,
+            mergeable: state.mergeable,
+            ...(state.mergeStateStatus === undefined ? {} : { mergeStateStatus: state.mergeStateStatus }),
+            checksOutcome: state.checksOutcome,
+            isDraft: state.isDraft === true,
+            ...(state.baseRefName === undefined ? {} : { baseRefName: state.baseRefName }),
+          });
+        }
+
         // Entry is live — keep it in the registry.
         recordDisposition(log, entry, `live:${state.state}`);
         survivors.push(entry);
@@ -714,7 +754,7 @@ export async function sweepMergeableLabels({
           } catch (err) {
             log?.(`[mergeable-sweep] exhaustion comment error for ${entry.prUrl}: ${err}`);
           }
-          onEvent?.({
+          emitEvent({
             type: 'ci_failed',
             prUrl: entry.prUrl,
             slug: entry.slug,
@@ -751,7 +791,7 @@ export async function sweepMergeableLabels({
         // Keep edge-triggered failure events independent of GitHub label state.
         if (state.checksOutcome === 'failed') {
           if (!entry.ciFailureDetected) {
-            onEvent?.({
+            emitEvent({
               type: 'ci_failed',
               prUrl: entry.prUrl,
               slug: entry.slug,

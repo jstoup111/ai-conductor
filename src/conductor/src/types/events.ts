@@ -1893,6 +1893,19 @@ type ConductorEventBody =
       phase: 'detected' | 'dispatched' | 'exhausted';
     }
   | {
+      /** Current readiness verdict for a watched shipped PR. */
+      type: 'shipped_pr_readiness';
+      prUrl: string;
+      slug: string;
+      verdict: 'ready' | 'conflicting' | 'ci-failing' | 'ci-pending' | 'no-checks' | 'draft' | 'indeterminate';
+      headSha: string;
+      mergeable: string;
+      mergeStateStatus?: string;
+      checksOutcome: 'failed' | 'pending' | 'green' | 'none';
+      isDraft: boolean;
+      baseRefName?: string;
+    }
+  | {
       /** Bounded, credential-safe observation from CI-repair preparation or publication. */
       type: 'ci_repair_diagnostic';
       prUrl: string;
