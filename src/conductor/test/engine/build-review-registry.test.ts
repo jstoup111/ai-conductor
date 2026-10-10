@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:rem-as-built-1
 // Covers: task:10
 import { describe, expect, it } from 'vitest';
 
