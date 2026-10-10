@@ -1,4 +1,5 @@
 // Covers: task:1, task:2, task:3, task:4
+// Covers: task:1
 // Covers: task:2
 // land-spec.test.ts — Story 2 (Slice B): landSpec fails CLOSED on unresolved
 // identity (adr-2026-07-01-machine-scoped-operator-identity, D3).
@@ -17,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { landSpec, resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
+import { findDraftAmendmentNoteLines, landSpec, resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
 
@@ -1769,6 +1770,93 @@ describe('Task 6: legacy-only plans dir yields missing-plan rejection (#488)', (
     await expect(
       landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
     ).rejects.toThrow(/\bplan\b/);
+  });
+});
+
+describe('Task 1: draft amendment note land gate', () => {
+  const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+  const datedNote = '> **Amended 2026-10-10 by #123:** correction\n';
+
+  it('detects only bold dated amendment-note lines', () => {
+    expect(findDraftAmendmentNoteLines([
+      '**Amended 2026-10-10 by operator:** correction',
+      '> **Amended 2026-10-10 by #123:** correction',
+      '  >> **Amended 2026-10-10 by operator:** nested correction',
+      '**Amended YYYY-MM-DD by #NNN:** template',
+      'This prose mentions amended 2026-10-10 without the bold form.',
+    ].join('\n'))).toEqual([
+      '**Amended 2026-10-10 by operator:** correction',
+      '> **Amended 2026-10-10 by #123:** correction',
+      '  >> **Amended 2026-10-10 by operator:** nested correction',
+    ]);
+  });
+
+  it('lands clean drafts', async () => {
+    const dir = await seedValidWorktree();
+    await expect(landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh })).resolves.toBeDefined();
+  });
+
+  it('lands a placeholder-only amendment form', async () => {
+    const dir = await seedValidWorktree();
+    await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'),
+      '# PRD: dep bump\n\n**Amended YYYY-MM-DD by #NNN:** template\n');
+    await expect(landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh })).resolves.toBeDefined();
+  });
+
+  it('allows a dated note added to an artifact already on the base branch', async () => {
+    await mkdir(join(repoPath, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'decisions', 'legacy.md'), '# Legacy\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'add legacy artifact']);
+
+    const dir = await seedValidWorktree();
+    await writeFile(join(dir, '.docs', 'decisions', 'legacy.md'), `# Legacy\n\n${datedNote}`);
+    await git(['add', '.docs/decisions/legacy.md'], dir);
+    await git(['commit', '-m', 'amend legacy artifact'], dir);
+
+    await expect(landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh })).resolves.toBeDefined();
+  });
+
+  it('refuses an untracked draft note before creating a landing commit', async () => {
+    const dir = await seedValidWorktree();
+    const path = '.docs/decisions/draft-note.md';
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(dir, path), '# Draft\n\n**Amended 2026-10-10 by operator:** correction\n');
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    const error = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }).catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ gate: 'draft-amendment-note' });
+    expect((error as Error).message).toMatch(new RegExp(`${path}.*fold the correction into the artifact text`, 'is'));
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+  });
+
+  it('refuses a draft note committed on the spec branch before land', async () => {
+    const dir = await seedValidWorktree();
+    const path = '.docs/decisions/committed-draft-note.md';
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(dir, path), `# Draft\n\n${datedNote}`);
+    await git(['add', '.docs'], dir);
+    await git(['commit', '-m', 'author draft artifacts'], dir);
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    const error = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }).catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ gate: 'draft-amendment-note' });
+    expect((error as Error).message).toContain(path);
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+  });
+
+  it('reports every offending draft path in one refusal', async () => {
+    const dir = await seedValidWorktree();
+    const paths = ['.docs/decisions/first.md', '.docs/decisions/second.md'];
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await Promise.all(paths.map((path) => writeFile(join(dir, path), `# Draft\n\n${datedNote}`)));
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    const error = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }).catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ gate: 'draft-amendment-note' });
+    expect((error as Error).message).toContain(paths[0]);
+    expect((error as Error).message).toContain(paths[1]);
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
   });
 });
 
