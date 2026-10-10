@@ -3244,6 +3244,7 @@ steps:
           rubrics: {
             testQuality: { enabled: false },
             security: { enabled: false },
+            implementationQuality: { enabled: false },
           },
         },
         configured: {
@@ -3261,6 +3262,7 @@ steps:
               escalate: true,
             },
             security: { enabled: false },
+            implementationQuality: { enabled: false },
           },
         },
       });
@@ -3277,6 +3279,16 @@ steps:
       ],
     ])('rejects invalid security rubric policy %#', (security, message) => {
       expect(validateConfig({ build_review: { rubrics: { security } } })).toEqual({
+        ok: false,
+        error: { type: 'validation_error', message },
+      });
+    });
+
+    it.each([
+      [{ enabled: 'yes' }, 'build_review.rubrics.implementationQuality.enabled must be a boolean'],
+      [{ effort: 'extreme' }, 'build_review.rubrics.implementationQuality.effort must be low|medium|high|xhigh|max'],
+    ])('rejects invalid implementation-quality rubric policy %#', (implementationQuality, message) => {
+      expect(validateConfig({ build_review: { rubrics: { implementationQuality } } })).toEqual({
         ok: false,
         error: { type: 'validation_error', message },
       });
@@ -3394,6 +3406,7 @@ steps:
           rubrics: {
             testQuality: { enabled: false },
             security: { enabled: false },
+            implementationQuality: { enabled: false },
           },
         },
         warnings: ['build_review.perTaskFloor is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).'],
