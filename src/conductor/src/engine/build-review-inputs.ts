@@ -13,7 +13,11 @@ import {
   isEngineAppendedRemediationAmendment,
   readRecordedAppendedRemediationTaskIds,
 } from './protected-artifact-seal.js';
-import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
+import {
+  FullSuiteVerifier,
+  type FullSuiteActiveChild,
+  type FullSuiteInspectionResult,
+} from './full-suite-verifier.js';
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
@@ -110,6 +114,8 @@ export interface BuildReviewInputs {
 export interface BuildReviewFrozenInputs extends BuildReviewInputs {
   readonly testSuiteProof: FullSuitePassEvidence;
   readonly sourceSnapshot: BuildReviewSourceSnapshot;
+  /** Whole-feature source for the leaf-only security rubric. */
+  readonly securitySourceSnapshot?: BuildReviewSourceSnapshot;
   /** Present only for a lap that includes an enabled custom policy member. */
   readonly sourceMaterialization?: BuildReviewLapMaterialization;
 }
@@ -228,7 +234,7 @@ export interface BuildReviewPatchEquivalentExclusion {
 
 /** Process-free proof inspection seam; it must never launch the aggregate suite. */
 export interface BuildReviewInputOptions {
-  readonly inspectTestSuite?: () => Promise<FullSuiteInspectionResult>;
+  readonly inspectTestSuite?: (activeChild?: FullSuiteActiveChild) => Promise<FullSuiteInspectionResult>;
   /** Test seam for a parser/analyzer failure; consumer source is never loaded. */
   readonly analyzeTestScope?: (input: BuildReviewTestScopeInput) => BuildReviewTestScope;
   /** Enabled members for the lap being prepared; omitted preserves legacy built-in preparation. */
@@ -237,6 +243,10 @@ export interface BuildReviewInputOptions {
   readonly materialization?: BuildReviewMaterializationOptions;
   /** Active child identity for a child-local review; omitted preserves flat review behavior. */
   readonly childBase?: { readonly slug: string; readonly child: ChildId };
+  /** Stacked security runs only at the leaf; absent preserves flat behavior. */
+  readonly securityScope?: 'leaf' | 'non-leaf';
+  /** Child-local suite evidence that must prove the review's test-suite gate. */
+  readonly activeChild?: FullSuiteActiveChild;
 }
 
 /** The three distinguishable grading-provenance cases (Task 24). */
@@ -763,7 +773,11 @@ export async function assembleBuildReviewInputs(
   options: BuildReviewInputOptions = {},
 ): Promise<BuildReviewFrozenInputs> {
   const inspection = await (
-    options.inspectTestSuite?.() ?? new FullSuiteVerifier({ projectRoot: projectRootForPlan(planPath) }).inspect()
+    options.inspectTestSuite?.(options.activeChild) ??
+    new FullSuiteVerifier({
+      projectRoot: projectRootForPlan(planPath),
+      ...(options.activeChild === undefined ? {} : { activeChild: options.activeChild }),
+    }).inspect()
   );
   if (inspection.status !== 'CURRENT') throw new TestSuiteProofError(inspection);
 
@@ -954,7 +968,7 @@ export async function assembleBuildReviewInputs(
         options.materialization ?? { projectRoot },
       );
 
-  return {
+  const assembled: BuildReviewFrozenInputs = {
     diff: diffResult.stdout,
     planBody,
     mergeBase: mergeBaseSha,
@@ -971,4 +985,18 @@ export async function assembleBuildReviewInputs(
     ...(sourceMaterialization === undefined ? {} : { sourceMaterialization }),
     patchEquivalentExclusion: equivalentExclusion,
   };
+  if (options.securityScope === 'leaf') {
+    // Keep the child's ordinary snapshot authoritative for test-quality, but
+    // derive a second, default-branch snapshot for the leaf security review.
+    const wholeFeature = await assembleBuildReviewInputs(git, planPath, {
+      ...options,
+      childBase: undefined,
+      securityScope: undefined,
+      lapMembers: undefined,
+      materialization: undefined,
+      inspectTestSuite: async () => inspection,
+    });
+    return { ...assembled, securitySourceSnapshot: wholeFeature.sourceSnapshot };
+  }
+  return assembled;
 }

@@ -132,6 +132,25 @@ function coordinationInput(
 }
 
 describe("build-review coordinator: registered dispatch", () => {
+  it('skips enabled security at a non-leaf child without dispatching it', async () => {
+    const dispatchModel = vi.fn(async () => ({ findings: [] }));
+
+    const result = await coordinateBuildReviewRubrics(coordinationInput(false, {
+      config: config(false, true),
+      securityLeafOnly: true,
+      dispatchModel,
+    }));
+
+    expect(dispatchModel).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: 'ready',
+      branches: [
+        { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+        { kind: 'skipped', rubric: 'security', reason: 'leaf-only' },
+      ],
+    });
+  });
+
   it('keeps setup-only provider exhaustion as infrastructure without accepting findings or retrying', async () => {
     const dispatchModel = vi.fn(async () => makeBuildReviewDispatchFailure('redacted setup diagnostic', {
       candidates: [{ provider: 'codex', reason: 'redacted', recoveryAction: 'recover' }],

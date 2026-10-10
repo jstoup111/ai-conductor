@@ -3226,6 +3226,7 @@ export class DefaultStepRunner implements StepRunner {
             config: lapGate === undefined ? config : { ...config, maxParallel: Math.max(config.maxParallel, config.catalog.length) },
             inputs,
             lapId,
+            securityLeafOnly: child !== undefined && inputs.securitySourceSnapshot === undefined,
             engineIdentity,
             useCandidateCache: true,
             ...(customPolicyLap ? { joinsCustomPolicyLap: true } : {}),
@@ -3365,7 +3366,7 @@ export class DefaultStepRunner implements StepRunner {
           this.projectDir,
           branch.rubric,
           lapId,
-          inputs.sourceSnapshot.digest,
+          branch.result.snapshotDigest,
           {
             readFile: async (path) => readFile(path, 'utf-8'),
             mkdir: async (path) => { await mkdir(path, { recursive: true }); },
@@ -5611,6 +5612,8 @@ export class DefaultStepRunner implements StepRunner {
 
     let containmentReport: ContainmentFloorReport | undefined;
     let activeChild: import('./child-context.js').ChildId | undefined;
+    let activeChildIsLeaf = true;
+    let activeSuiteChild: import('./full-suite-verifier.js').FullSuiteActiveChild | undefined;
     let inputs;
     try {
       let activeChildBase = this.buildReviewInputOptions?.childBase;
@@ -5618,9 +5621,16 @@ export class DefaultStepRunner implements StepRunner {
         const active = await resolveActiveChild(this.projectDir, this.featureDesc, { git: this.gitRunner });
         if (active.kind === 'active') {
           activeChildBase = { slug: this.featureDesc, child: active.child };
+          activeChildIsLeaf = active.isLeaf;
+          activeSuiteChild = { child: active.child, isLeaf: active.isLeaf };
         }
       }
       activeChild = activeChildBase?.child;
+      if (activeSuiteChild === undefined && activeChildBase !== undefined) {
+        // An injected child base is a focused test/embedding seam. Its leaf
+        // status is unknown, but its evidence must still remain child-local.
+        activeSuiteChild = { child: activeChildBase.child, isLeaf: true };
+      }
       // A custom member changes the lap's source authority from by-reference
       // to a detached, immutable view shared by every member in the lap.
       const lapMembers = this.usesInjectedBuildReviewGit && this.buildReviewInputOptions?.materialization === undefined
@@ -5635,6 +5645,8 @@ export class DefaultStepRunner implements StepRunner {
         ...await assembleBuildReviewInputs(this.gitRunner, planPath, {
           ...this.buildReviewInputOptions,
           ...(activeChildBase === undefined ? {} : { childBase: activeChildBase }),
+          ...(activeChildBase === undefined ? {} : { securityScope: activeChildIsLeaf ? 'leaf' as const : 'non-leaf' as const }),
+          ...(activeSuiteChild === undefined ? {} : { activeChild: activeSuiteChild }),
           lapMembers,
           materialization: this.buildReviewInputOptions?.materialization ?? { projectRoot: this.projectDir },
         }),

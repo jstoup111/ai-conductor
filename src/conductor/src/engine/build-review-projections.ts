@@ -49,6 +49,8 @@ export interface BuildReviewProjectionSource {
   readonly lapId: BuildReviewLapId;
   readonly inputs: BuildReviewFrozenInputs;
   readonly testQuality: BuildReviewTestQualityProjectionInput;
+  /** Security's whole-feature source at a stacked leaf; otherwise shared. */
+  readonly securitySnapshot?: BuildReviewSourceSnapshot;
 }
 
 /** One hunk's line-range header from a unified diff (`@@ -old +new @@`). */
@@ -451,7 +453,9 @@ export function deriveChangedFileReferences(diff: string): readonly ChangedFileR
 
 function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectionSource, rubric: Rubric): Omit<CommonProjection<Rubric>, 'digest'> {
   const descriptor = getBuildReviewRubricDescriptor(rubric);
-  const snapshot = source.inputs.sourceSnapshot;
+  const snapshot = rubric === 'security'
+    ? source.securitySnapshot ?? source.inputs.sourceSnapshot
+    : source.inputs.sourceSnapshot;
   return {
     rubric,
     contractVersion: descriptor.contract.output.version as 'v3',
