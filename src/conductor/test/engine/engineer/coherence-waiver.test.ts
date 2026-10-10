@@ -1,3 +1,4 @@
+// Covers: task:1
 // Tests for the coherence waiver parser/evaluator (Task 13).
 //
 // Mirrors src/engine/self-host/release-gate.ts's parseWaiver/findWaiverInDiff
