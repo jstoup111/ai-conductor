@@ -84,6 +84,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators receive the correct halt-clear recovery command when a BUILD plan gap cannot be rewound. ([implementation PR #3120](https://github.com/jstoup111/ai-conductor/pull/3120)).
 - build_review adjudication no longer halts when a blocked consistency verdict names only the implicated findings. ([implementation PR #3139](https://github.com/jstoup111/ai-conductor/pull/3139)).
 - The daemon no longer reports freshly landed, owned specs as un-owned; the owner gate reads ownership at the same base commit the backlog scan uses. ([implementation PR #3140](https://github.com/jstoup111/ai-conductor/pull/3140)).
+- A rejected custom build_review rubric result now names only the cited source regions that failed frozen-source admission, instead of reporting every cited region as mismatched. ([implementation PR #3155](https://github.com/jstoup111/ai-conductor/pull/3155)).
 
 ## Migration
 
