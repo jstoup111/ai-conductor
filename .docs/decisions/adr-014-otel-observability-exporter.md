@@ -477,6 +477,30 @@ Relevant existing facts (evidence):
 >
 > Existing terminal ownership remains: `feature_complete` or `loop_halt` records `conductor.run.outcomes` with its own event tier through `closeFeature`; the later `feature_dispatch_ended` retains its current duplicate suppression and records its own halt metric. Dispatch-end still records an outcome when no preceding terminal event did. Interactive runs retain terminal outcome reporting without a daemon dispatch-end. No listener cache, inference, new event type, or policy-default tier is introduced. A production-order regression must prove exactly one tier-bearing outcome for completion and halt, plus tierless and interactive cases; an isolated dispatch-end fixture alone is insufficient. The nine-instrument boundary and documented re-tier series split remain mandatory, including a `max by (feature, tier)` last-value query and its historical-tier double-count caveat in the configuration reference.
 
+> **Amended 2026-10-09 by #2790 (gate verdicts and kickbacks by complexity tier):** D14 left
+> `conductor.gate.verdicts` and `conductor.gate.kickbacks` without `tier`, so a gate's pass and
+> rejection counts cannot be read per S/M/L tier from exported telemetry. D14 now also admits the
+> optional raw `tier` label on those two counters. Per D11 and D14, the label travels as an optional
+> `tier?: ComplexityTier` field on the existing `gate_verdict` and `kickback` events. The conductor
+> stamps it from `haltState.complexity_tier`, the same source `emitLoopHalt` uses for `loop_halt`, so
+> gate and halt series for one run never disagree. It stamps through one helper applied where the
+> conductor emits these two event types. Unresolved is absent: the key is omitted, never defaulted.
+> A `kickback` whose `from` is `rebase` is a rebase invalidation, not a gate rejection, and carries
+> no `tier`. That includes the ones the shared rebase helper emits for both the conductor and the
+> daemon re-kick. No new event type, instrument, listener cache, or listener-side inference is
+> introduced. Growth bound: `tier` is the closed three-value set. Both counters are already keyed
+> by `feature`, so the label partitions existing series. A query that aggregates `tier` away
+> (`sum without (tier)`) reproduces the prior totals.
+>
+> These two counters count only evaluated gate outcomes. An infrastructure failure never emits
+> `gate_verdict` or `kickback`. That covers a grader that could not be dispatched, a failed or
+> rate-limited provider session, a `test_suite` infrastructure retry, and a `build_review` rubric
+> fault absorbed by the mechanical-fault lane. Such a failure surfaces as `step_retry`/`step_failed`
+> (`conductor.step.retries`, `conductor.step.outcomes`) or the kickback ledger's mechanical-fault
+> count. A `conductor.gate.verdicts{outcome="fail"}` or `conductor.gate.kickbacks{from="<gate>"}`
+> point is therefore a substantive rejection. An exported per-rubric `build_review`
+> infrastructure-failure count is not part of this amendment; #1835 owns it.
+
 > **Amended 2026-09-28 by operator hotfix (released harness version on the metric Resource):** the
 > metric Resource now also carries `service.version`, the released harness version, resolved once
 > when the daemon-lifetime meter and the interactive meter start. This supersedes the "unchanged
