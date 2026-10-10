@@ -59,6 +59,7 @@ async function writeFakeVitest(path: string, binary: string) {
     '  nodeOptions: process.env.NODE_OPTIONS,',
     '  managedGhObserverBypass: process.env.CONDUCT_GH_REAL_EXECUTABLE,',
     '}), \'utf8\');',
+    "if (process.env.FAKE_VITEST_SIGNAL) process.kill(process.pid, process.env.FAKE_VITEST_SIGNAL);",
     'process.exitCode = Number(process.env.FAKE_VITEST_EXIT_CODE ?? 0);',
     '',
   ].join('\n'), 'utf8');
@@ -187,10 +188,25 @@ describe('run-vitest startup', () => {
   });
 
   it('forwards a nonzero child status and reclaims its owned root', async () => {
-    const result = await launch({ FAKE_VITEST_EXIT_CODE: '23' });
+    const result = await launch({ FAKE_VITEST_EXIT_CODE: '3' });
     const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
 
-    expect(result.exitCode).toBe(23);
+    expect(result.exitCode).toBe(3);
+    expect(result.stderr).toContain('[run-vitest] vitest exited with code 3');
     expect(existsSync(observation.root)).toBe(false);
+  });
+
+  it('reports a child termination signal before ending by that signal', async () => {
+    const result = await launch({ FAKE_VITEST_SIGNAL: 'SIGKILL' });
+
+    expect(result.signal).toBe('SIGKILL');
+    expect(result.stderr).toContain('[run-vitest] vitest terminated by signal SIGKILL');
+  });
+
+  it('keeps stderr quiet when the child exits successfully', async () => {
+    const result = await launch();
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain('[run-vitest]');
   });
 });

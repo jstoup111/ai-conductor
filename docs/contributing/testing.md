@@ -552,7 +552,10 @@ For where `test_suite` sits in the flow and what happens when it fails, see
    engine's rule set.
 5. `typecheck` — `npm ci`, `npm run typecheck`, and `npm run typecheck:test` in `src/conductor`, then
    `npm ci` and `npm run typecheck` in each `plugins/*/`.
-6. `conductor` — `npm ci`, `npm run build`, `npm test` in `src/conductor`.
+6. `conductor` — `npm ci`, `npm run build`, then `npm test` in `src/conductor`, split by file across
+   four shards (`--shard=N/4`) with a 15-minute job timeout. Each shard adds
+   `--reporter=./test/reporters/ci-progress-reporter.ts`; see
+   [Reading a conductor shard log](#reading-a-conductor-shard-log).
 7. `links` — **never skipped.** Checks documentation links via `lycheeverse/lychee-action`.
 8. `ci-gate` — `if: always()`; fails when any of the above is `failure` or `cancelled`. This is the
    required-status aggregator.
@@ -563,6 +566,23 @@ changed path is under `.docs/` (the internal spec-artifact tree) — see
 checker carrying the same gate would inherit that hole. Leaving it ungated also means the guarantee
 survives any future widening of the predicate, and it costs about six seconds with no npm install and
 no network.
+
+### Reading a conductor shard log
+
+A shard that dies before Vitest prints its summary still names the files involved. The progress
+reporter writes these `[ci-progress]` lines:
+
+| Line | Meaning |
+|---|---|
+| `start <file>` | Vitest queued or started the test file. |
+| `done <file> passed\|failed <seconds>s` | The file finished. A failed file is followed by one `failed test: <full name>` line per failed test. |
+| `stalled <file> no progress for <seconds>s` | No collection, test, or hook event for 90 seconds. Repeats at most once per 90 seconds per file. |
+| `still running at run end: <file>` | The run ended `failed` or `interrupted` with this file unfinished. |
+| `process exiting before Vitest reported run end; in-flight: <files>` | The Vitest process exited without a run end (`none` when nothing was in flight). Written synchronously to stderr. |
+
+`scripts/run-vitest.mjs` then states how Vitest ended, on stderr: `[run-vitest] vitest exited with
+code <n>` or `[run-vitest] vitest terminated by signal <signal>`. A successful run prints neither.
+Start diagnosis with the last `stalled` or in-flight file.
 
 Node comes from `src/conductor/.tool-versions` (`nodejs 26.7.0`) and the npm cache keys on
 `src/conductor/package-lock.json`.
