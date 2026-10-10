@@ -245,6 +245,10 @@ reject number-named ADRs is tracked in intake #705.)
 ADRs are append-only — supersede, don't delete. Every claim about external dependency behavior
 must cite specific evidence (documentation, tested behavior, or source code).
 
+The template's `## Assumptions` ledger table is required in every new ADR. This requirement is
+enforced at land and by the `architecture_review` gate. For each load-bearing assumption whose
+Basis is not `verified`, record the approval exactly as `APPROVED by operator YYYY-MM-DD`.
+
 **Lightweight mode (Medium tier):** Apply the same structural prerequisite and reuse check. Do not
 skip an ADR merely because the feature is medium-sized, but do not create one merely because a
 category label, feature size, or importance is present.

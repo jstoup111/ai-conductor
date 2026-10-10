@@ -438,3 +438,46 @@ Task 1 ─┬─ Task 2 ─┐
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-9-R1: Add an auto-mode run to src/conductor/test/engine/conductor.test.ts whose real temp-git worktree adds an ADR with no `## Assumptions` section. Assert that the architecture_review gate verdict is unsatisfied with a reason naming the ADR path and `missing-section`, that the run halts, and that the step status is not `skipped`. If it fails RED, wire computeAndWriteVerdict for architecture_review at the DECIDE completion site in src/conductor/src/engine/conductor.ts.
+**Gate:** prd-audit
+**Rationale:** Verified at about 95% confidence. Plan Task 9 step 1 requires an auto-mode conductor.test.ts run whose worktree adds an unledgered ADR. No such test exists: 'missing-section' appears only in the parser, scope, predicate and land tests. The gate-loop.test.ts expectation (architecture_review runs 5 times, yet completed===true and the step is 'done' with execa mocked to stdout '') also contradicts a gate that cannot be satisfied. This is clear test and implementation work under the approved Task 9 contract, and no architecture decision is needed.
+**Criterion:** S4.4
+**Parent task:** 9
+**Done when:**
+- [test] S4.4 is satisfied by this task.
+- The repair for task rem-prd-audit-9-R1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-9-R2: Fix src/conductor/test/engine/gate-loop.test.ts (around lines 567-623) so its fixture gives architecture_review a resolvable merge base and a ledger-valid or empty ADR set. Restore a consistent expectation: either the gate is satisfied and the step reaches done, or the gate stays unsatisfied and the run does not report completed. Do not keep the 5-run plus completed===true combination.
+**Gate:** prd-audit
+**Rationale:** Verified at about 95% confidence. Plan Task 9 step 1 requires an auto-mode conductor.test.ts run whose worktree adds an unledgered ADR. No such test exists: 'missing-section' appears only in the parser, scope, predicate and land tests. The gate-loop.test.ts expectation (architecture_review runs 5 times, yet completed===true and the step is 'done' with execa mocked to stdout '') also contradicts a gate that cannot be satisfied. This is clear test and implementation work under the approved Task 9 contract, and no architecture decision is needed.
+**Criterion:** S4.4
+**Parent task:** 9
+**Done when:**
+- [test] S4.4 is satisfied by this task.
+- The repair for task rem-prd-audit-9-R2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-9-R3: Add an interactive-mode run to src/conductor/test/engine/conductor.test.ts with an added ADR whose ledger row `A3` is load-bearing, non-verified and has no approval marker. Assert that architecture_review is not marked `done` and that the recorded failure reason names the ADR path and `A3`. Also add the tier-S run asserting architecture_review is still skipped for the tier.
+**Gate:** prd-audit
+**Rationale:** Verified at about 95% confidence. Task 9 requires an interactive-mode conductor.test.ts run with an added ADR whose row A3 lacks approval, and no such test exists. The predicate's reason format, `${path}: ${rule} (${entryId})`, already names both the ADR and A3, so what is missing is conductor-level proof that the step stays not-done. This is BUILD test work, with conductor wiring only if RED shows the gap.
+**Criterion:** S4.5
+**Parent task:** 9
+**Done when:**
+- [test] S4.5 is satisfied by this task.
+- The repair for task rem-prd-audit-9-R3 is committed and its targeted tests pass.
+
+### Task rem-as-built-5-R1: In src/conductor/src/engine/adr-assumption-ledger-scope.ts resolveMergeBase, fall back to the local branch named by originDefaultBranch (e.g. `trunk`) when origin/<default> is absent, and use `baseRef ?? 'main'` only when no default branch name resolves. Add a git-backed test to src/conductor/test/engine/adr-assumption-ledger-scope.test.ts: origin HEAD names `trunk`, origin/trunk is absent, local `trunk` exists, and the merge base resolves against local trunk rather than main.
+**Gate:** as-built
+**Rationale:** Verified by reading the code, 99% confidence. resolveMergeBase in adr-assumption-ledger-scope.ts falls back to `baseRef ?? 'main'` even when originDefaultBranch resolved a different default such as trunk. Approved D6 and the Task 5 Technical Approach both say to fall back to the local default branch. That makes this conforming implementation drift within Task 5, and no architecture change is needed.
+**Governing clause:** adr-2026-10-10-adr-assumption-ledger-contract decision 6
+**Done when:**
+- adr-2026-10-10-adr-assumption-ledger-contract decision 6 is satisfied by this task.
+- The repair for task rem-as-built-5-R1 is committed and its targeted tests pass.
+
+### Task rem-as-built-5-R2: In src/conductor/src/engine/adr-assumption-ledger-scope.ts, strip fenced code blocks before testing a changed ADR for the `## Assumptions` heading. Reuse the parser's fence-stripping helper from artifacts.ts by exporting it, and do not duplicate the regex. Add a scope test where a changed pre-existing ADR whose only `## Assumptions` heading is inside a fenced example yields `failures: []`.
+**Gate:** as-built
+**Rationale:** Verified by reading the code, 97% confidence. The ASSUMPTIONS_HEADING test in adr-assumption-ledger-scope.ts runs on raw content, so a fenced example heading opts a changed legacy ADR into parsing. The parser then strips the fence and reports missing-section, which breaks the D3 legacy exemption and the D1 fenced-heading exclusion. This is a conforming fix within Task 5's scope-selection contract. The land and gate callers share this one evaluator, so fixing it closes both sites.
+**Governing clause:** adr-2026-10-10-adr-assumption-ledger-contract decision 3
+**Done when:**
+- adr-2026-10-10-adr-assumption-ledger-contract decision 3 is satisfied by this task.
+- The repair for task rem-as-built-5-R2 is committed and its targeted tests pass.

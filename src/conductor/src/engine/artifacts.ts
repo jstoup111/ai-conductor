@@ -95,6 +95,7 @@ import {
   readPrdAuditVerdict,
   type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
+import { evaluateAdrAssumptionLedgers } from './adr-assumption-ledger-scope.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
 import {
@@ -4201,6 +4202,22 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
 export const GATE_ONLY_PREDICATES: Partial<
   Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
 > = {
+  architecture_review: async (dir): Promise<CompletionResult> => {
+    const result = await evaluateAdrAssumptionLedgers({ worktreePath: dir });
+    if (result.kind === 'merge-base-unresolved') {
+      return { done: false, reason: result.detail };
+    }
+    if (result.failures.length === 0) return { done: true };
+
+    const diagnostics = result.failures.flatMap(({ path, diagnostics: failures }) =>
+      failures.map(({ rule, entryId }) => `${path}: ${rule}${entryId ? ` (${entryId})` : ''}`),
+    );
+    return {
+      done: false,
+      reason: `ADR assumption ledger requirements failed: ${diagnostics.join('; ')}`,
+    };
+  },
+
   // Stories pass when every story is readable under the shared accepted-story
   // predicate and the file has no DRAFT status. The predicate keeps the
   // heading/criterion convention in one place for this gate and land.
@@ -4399,8 +4416,171 @@ export type AdrDecisionParseResult =
   | { kind: 'decisions'; ids: Set<string>; passages: Map<string, string[]>; section: string }
   | { kind: 'diagnostic'; reason: 'missing-decision-heading'; detail: string };
 
+export const ADR_ASSUMPTION_LEDGER_HEADER =
+  '| # | Assumption | Basis | Confidence | Load-bearing | Impact if wrong | Approval |';
+
+/** Remove fenced examples before interpreting an ADR's Markdown structure. */
+export function stripFencedCodeBlocks(content: string): string {
+  return content.replace(
+    /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r?\n|\r)[\s\S]*?^ {0,3}\1[^\r\n]*(?:\r?\n|\r|$)/gm,
+    '',
+  );
+}
+
+export type AdrLedgerDiagnostic = {
+  rule:
+    | 'missing-section'
+    | 'empty-section'
+    | 'malformed-header'
+    | 'malformed-entry'
+    | 'missing-approval'
+    | 'contradictory-empty-statement';
+  entryId?: string;
+  detail: string;
+};
+
+export type AdrAssumptionLedgerParseResult =
+  | { kind: 'ok' }
+  | { kind: 'diagnostics'; diagnostics: AdrLedgerDiagnostic[] };
+
 const ADR_DECISION_HEADING_RE = /^\s{0,3}##\s+Decision\s*$/i;
 const ADR_SECTION_HEADING_RE = /^\s{0,3}##\s+/;
+const ADR_ASSUMPTION_LEDGER_HEADING_RE = /^\s{0,3}##\s+Assumptions\s*$/i;
+
+/**
+ * Parse an ADR's assumptions section. Section and row validation is added
+ * incrementally alongside the ledger contract; this establishes the shared
+ * fenced-code-safe section boundary used by every later rule.
+ */
+export function parseAdrAssumptionLedger(content: string): AdrAssumptionLedgerParseResult {
+  const withoutFencedCodeBlocks = stripFencedCodeBlocks(content);
+  const lines = withoutFencedCodeBlocks.split(/\r?\n/);
+  const sectionStarts = lines
+    .map((line, index) => (ADR_ASSUMPTION_LEDGER_HEADING_RE.test(line) ? index : -1))
+    .filter((index) => index !== -1);
+  if (sectionStarts.length === 0) {
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'missing-section', detail: 'ADR is missing a ## Assumptions heading.' }],
+    };
+  }
+  if (sectionStarts.length > 1) {
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'malformed-header', detail: 'ADR has a duplicate ## Assumptions heading.' }],
+    };
+  }
+
+  const sectionStart = sectionStarts[0];
+
+  const sectionLines: string[] = [];
+  for (const line of lines.slice(sectionStart + 1)) {
+    if (ADR_SECTION_HEADING_RE.test(line)) break;
+    sectionLines.push(line);
+  }
+
+  if (sectionLines.join('\n').trim() === '') {
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'empty-section', detail: 'ADR has an empty ## Assumptions section.' }],
+    };
+  }
+
+  const nonBlankSectionLines = sectionLines.filter((line) => line.trim() !== '');
+  const hasEmptyStatement = nonBlankSectionLines.includes('No load-bearing assumptions.');
+  const headerIndex = nonBlankSectionLines.findIndex((line) => line.trim() === ADR_ASSUMPTION_LEDGER_HEADER);
+  if (headerIndex === -1) {
+    if (hasEmptyStatement && nonBlankSectionLines.length === 1) return { kind: 'ok' };
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'malformed-header', detail: 'ADR assumptions ledger has an invalid table header.' }],
+    };
+  }
+
+  const dataRows = nonBlankSectionLines
+    .slice(headerIndex + 1)
+    .filter((line) => /^\s*\|/.test(line))
+    .filter((line) => !/^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line));
+  if (dataRows.length === 0) {
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'empty-section', detail: 'ADR assumptions ledger has no data rows.' }],
+    };
+  }
+
+  const diagnostics: AdrLedgerDiagnostic[] = [];
+  const entryIds = new Set<string>();
+  for (const row of dataRows) {
+    const cells = row.split('|').slice(1, -1).map((cell) => cell.trim());
+    const [id = '', assumption = '', basis = '', confidence = '', loadBearing = '', impact = '', approval = ''] = cells;
+    const entryId = id === '' ? undefined : id;
+    const normalizedBasis = basis.toLowerCase();
+    const normalizedLoadBearing = loadBearing.toLowerCase();
+    const isDuplicateId = entryIds.has(id);
+    entryIds.add(id);
+    const validConfidence = /^(?:0|[1-9]\d?|100)%$/.test(confidence);
+
+    if (
+      cells.length !== 7 ||
+      !/^A\d+$/.test(id) ||
+      isDuplicateId ||
+      assumption === '' ||
+      !['verified', 'inferred', 'unverified'].includes(normalizedBasis) ||
+      !validConfidence ||
+      !['yes', 'no'].includes(normalizedLoadBearing) ||
+      impact === ''
+    ) {
+      diagnostics.push({
+        rule: 'malformed-entry',
+        ...(entryId === undefined ? {} : { entryId }),
+        detail: `ADR assumptions ledger row ${entryId ?? '(missing id)'} is malformed.`,
+      });
+    }
+
+    if (
+      normalizedLoadBearing === 'yes'
+      && ['inferred', 'unverified'].includes(normalizedBasis)
+      && !hasValidAdrAssumptionApproval(approval)
+    ) {
+      diagnostics.push({
+        rule: 'missing-approval',
+        ...(entryId === undefined ? {} : { entryId }),
+        detail: `ADR assumptions ledger row ${entryId ?? '(missing id)'} requires an APPROVED by operator YYYY-MM-DD marker.`,
+      });
+    }
+  }
+
+  if (hasEmptyStatement && dataRows.some((row) => row.split('|')[5]?.trim().toLowerCase() === 'yes')) {
+    diagnostics.push({
+      rule: 'contradictory-empty-statement',
+      detail: 'No load-bearing assumptions conflicts with a yes row.',
+    });
+  }
+
+  if (diagnostics.length > 0) {
+    return {
+      kind: 'diagnostics',
+      diagnostics,
+    };
+  }
+
+  return { kind: 'ok' };
+}
+
+function hasValidAdrAssumptionApproval(approval: string): boolean {
+  const match = /^APPROVED by operator (\d{4})-(\d{2})-(\d{2})$/.exec(approval);
+  if (!match) return false;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+}
 
 /**
  * Extract citable decision ids from an ADR's `## Decision` section.

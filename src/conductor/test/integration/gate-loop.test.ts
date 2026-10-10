@@ -5,7 +5,15 @@ import { tmpdir } from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-vi.mock('execa', () => ({ execa: vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '' })) }));
+vi.mock('execa', () => ({
+  execa: vi.fn(async (_file: string, args?: string[]) => ({
+    exitCode: 0,
+    // The ADR-ledger gate needs a usable merge base when a fixture exercises
+    // architecture_review but is otherwise intentionally Git-free.
+    stdout: args?.[0] === 'merge-base' ? 'fixture-base\n' : '',
+    stderr: '',
+  })),
+}));
 
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -520,7 +528,7 @@ describe('integration/gate-loop', () => {
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });
       await writeFile(
         join(dir, '.docs/decisions/adr-1.md'),
-        '# ADR 1\n\nStatus: APPROVED\n',
+        '# ADR 1\n\nStatus: APPROVED\n\n## Assumptions\n\nNo load-bearing assumptions.\n',
       );
     }
 
@@ -564,6 +572,7 @@ describe('integration/gate-loop', () => {
       return kicks;
     }
 
+    // Covers: task:rem-prd-audit-9-R2
     it('emits a kickback event when conflict_check re-opens architecture_review, without invoking navigateBack', async () => {
       await seedStoriesAndPlan();
       await seedApprovedAdr();
@@ -610,9 +619,9 @@ describe('integration/gate-loop', () => {
       ]);
       // Linear advance unaffected at detection time: plan ran immediately
       // next (no navigateBack jump). The gate-driven tail's own selector
-      // — independently of the front-half detection — later re-opens
-      // architecture_review because its verdict is still unsatisfied on
-      // disk, exactly once, and the loop still converges.
+      // — independently of the front-half detection — later re-runs
+      // architecture_review and records its satisfied objective verdict
+      // before the loop converges.
       const conflictIdx = ran.indexOf('conflict_check');
       expect(ran[conflictIdx + 1]).toBe('plan');
       expect(ran.filter((s) => s === 'architecture_review')).toHaveLength(1);

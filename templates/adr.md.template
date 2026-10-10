@@ -30,6 +30,18 @@ Record each citable decision using an accepted form. Preferred form: a numbered 
 creates a stable citation id: `1. **Decision summary.** Rationale.` Accepted alternatives are a
 bold D-heading (`**D1 — Decision summary.**`) or an ATX D-heading (`### D1 — Decision summary`).
 
+## Assumptions
+
+Keep either this ledger table or `No load-bearing assumptions.`, never that statement together with
+a load-bearing `yes` row. For a load-bearing assumption whose Basis is not `verified`, Approval must
+be `APPROVED by operator YYYY-MM-DD`.
+
+| # | Assumption | Basis | Confidence | Load-bearing | Impact if wrong | Approval |
+|---|---|---|---|---|---|---|
+| A1 | {{assumption}} | {{basis}} | {{confidence}} | {{load-bearing}} | {{impact if wrong}} | {{approval}} |
+
+No load-bearing assumptions.
+
 ## Consequences
 
 ### Positive

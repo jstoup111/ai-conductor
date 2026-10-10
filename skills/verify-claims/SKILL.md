@@ -132,6 +132,9 @@ Write it to `.pipeline/verify-claims-<step>.md` when invoked inside a pipeline/e
 inline in the artifact/response otherwise. Overwrite on re-run — it reflects the current state;
 git holds history.
 
+For an ADR, record its ledger in the template's `## Assumptions` table form. A load-bearing row
+whose Basis is not `verified` records approval as `APPROVED by operator YYYY-MM-DD`.
+
 ### 6. Verdict
 
 Emit one verdict so the calling skill knows whether it may proceed:

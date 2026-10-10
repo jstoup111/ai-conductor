@@ -104,6 +104,7 @@ import {
   MeterProvider,
   PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics';
+import { commitAll, initTestRepo } from '../fixtures/git-repo.js';
 
 describe('protected artifact rebaseline logging', () => {
   // Covers: task:9
@@ -295,6 +296,35 @@ function createMockStepRunner(result: StepRunResult = { success: true }): StepRu
   };
 }
 
+function decisionGateState(tier: 'M' | 'S'): ConductState {
+  const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'skipped'])) as ConductState;
+  for (const step of ALL_STEPS) {
+    if (step.name === 'architecture_review') break;
+    state[step.name] = 'done';
+  }
+  state.complexity_tier = tier;
+  state.architecture_review = 'pending';
+  return state;
+}
+
+function useRealGitExeca(): () => void {
+  const execaMock = vi.mocked(execa);
+  const originalImplementation = execaMock.getMockImplementation();
+  execaMock.mockImplementation(async (file, args, options) => {
+    try {
+      const result = await execFile(String(file), (args ?? []).map(String), { cwd: options?.cwd });
+      return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 } as never;
+    } catch (error) {
+      const result = error as { stdout?: string; stderr?: string; code?: number };
+      return {
+        stdout: result.stdout ?? '', stderr: result.stderr ?? '',
+        exitCode: typeof result.code === 'number' ? result.code : 1,
+      } as never;
+    }
+  });
+  return () => execaMock.mockImplementation(originalImplementation!);
+}
+
 function buildBoundaryState(featureDesc = 'feature'): ConductState {
   return {
     ...Object.fromEntries(
@@ -335,6 +365,127 @@ describe('engine/conductor', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  // Covers: task:9, task:rem-prd-audit-9-R1, S4.4
+  it('halts an auto-mode architecture review when a real feature worktree adds an unledgered ADR', async () => {
+    const repository = join(dir, 'repository');
+    const featureWorktree = join(dir, 'feature-worktree');
+    await mkdir(repository, { recursive: true });
+    await initTestRepo(repository);
+    await writeFile(join(repository, 'README.md'), 'base\n');
+    await commitAll(repository, 'seed main');
+    await execFile('git', ['worktree', 'add', '-b', 'feature', featureWorktree, 'main'], { cwd: repository });
+    await mkdir(join(featureWorktree, '.docs', 'decisions'), { recursive: true });
+    const adrPath = '.docs/decisions/adr-2026-10-10-unledgered.md';
+    await writeFile(join(featureWorktree, adrPath), '# ADR: Unledgered\n\n**Status:** APPROVED\n');
+    const featureState = join(featureWorktree, 'conduct-state.json');
+    await writeState(featureState, decisionGateState('M'));
+
+    const restoreExeca = useRealGitExeca();
+
+    const verdicts: Array<{ satisfied: boolean; reason?: string }> = [];
+    let halted = false;
+    events.on('gate_verdict', (event) => {
+      if (event.type === 'gate_verdict' && event.step === 'architecture_review') {
+        verdicts.push({ satisfied: event.satisfied, reason: event.reason });
+      }
+    });
+    events.on('loop_halt', () => { halted = true; });
+
+    try {
+      await new Conductor({
+        projectRoot: featureWorktree,
+        stateFilePath: featureState,
+        stepRunner: createMockStepRunner(),
+        events,
+        mode: 'auto',
+        fromStep: 'architecture_review',
+        maxRetries: 1,
+        verifyArtifacts: true,
+      }).run();
+    } finally {
+      restoreExeca();
+    }
+
+    expect(verdicts).toContainEqual(expect.objectContaining({
+      satisfied: false,
+      reason: expect.stringContaining(`${adrPath}: missing-section`),
+    }));
+    expect(halted).toBe(true);
+    const finalState = await readState(featureState);
+    expect(finalState.ok && finalState.value.architecture_review).not.toBe('skipped');
+  });
+
+  // Covers: task:9, task:rem-prd-audit-9-R3, S4.5
+  it('does not complete an interactive architecture review with an unapproved load-bearing A3', async () => {
+    const repository = join(dir, 'interactive-repository');
+    await mkdir(join(repository, '.docs', 'decisions'), { recursive: true });
+    await initTestRepo(repository);
+    await writeFile(join(repository, 'README.md'), 'base\n');
+    await commitAll(repository, 'seed main');
+    const adrPath = '.docs/decisions/adr-2026-10-10-unapproved.md';
+    await writeFile(join(repository, adrPath), [
+      '# ADR: Unapproved assumption',
+      '',
+      '## Assumptions',
+      '',
+      '| # | Assumption | Basis | Confidence | Load-bearing | Impact if wrong | Approval |',
+      '|---|---|---|---|---|---|---|',
+      '| A3 | The input is stable | unverified | 50% | yes | The gate may reject valid work | — |',
+      '',
+    ].join('\n'));
+    await writeState(join(repository, 'conduct-state.json'), decisionGateState('M'));
+
+    const restoreExeca = useRealGitExeca();
+    const verdicts: Array<{ satisfied: boolean; reason?: string }> = [];
+    events.on('gate_verdict', (event) => {
+      if (event.type === 'gate_verdict' && event.step === 'architecture_review') {
+        verdicts.push({ satisfied: event.satisfied, reason: event.reason });
+      }
+    });
+
+    try {
+      await new Conductor({
+        projectRoot: repository,
+        stateFilePath: join(repository, 'conduct-state.json'),
+        stepRunner: createMockStepRunner(),
+        events,
+        mode: 'interactive',
+        fromStep: 'architecture_review',
+        maxRetries: 1,
+        verifyArtifacts: true,
+      }).run();
+    } finally {
+      restoreExeca();
+    }
+
+    expect(verdicts).toContainEqual(expect.objectContaining({
+      satisfied: false,
+      reason: expect.stringContaining(`${adrPath}: missing-approval (A3)`),
+    }));
+    const finalState = await readState(join(repository, 'conduct-state.json'));
+    expect(finalState.ok && finalState.value.architecture_review).not.toBe('done');
+  });
+
+  // Covers: task:9, S4.5
+  it('skips architecture_review for the S tier', async () => {
+    await writeState(statePath, decisionGateState('S'));
+    const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+
+    await new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'interactive',
+      fromStep: 'architecture_review',
+      verifyArtifacts: false,
+    }).run();
+
+    const finalState = await readState(statePath);
+    expect(finalState.ok && finalState.value.architecture_review).toBe('skipped');
+    expect(runner.run).not.toHaveBeenCalledWith('architecture_review', expect.anything(), expect.anything());
   });
 
   // Covers: rem-prd-audit-rem-prd-audit-t8-restart-prompt
