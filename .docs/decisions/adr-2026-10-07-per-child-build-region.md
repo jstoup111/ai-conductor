@@ -161,6 +161,8 @@ The decisions below incorporate the fixes.
      (`rev-list <leaf> ^<tip pN-1> ^origin/<default>` is empty). Otherwise the engine halts
      needs-human.
 
+> **Amended 2026-10-10 by #2943:** The leaf also moves inside a restack move transaction: when it is the active child, or when it is unentered and its tip lies inside a moved child's own range (for example a pre-region halt record), it moves to that commit's rewrite so the later leaf move sees no stray commit (decision 2) (`adr-2026-10-10-stacked-restack-journaled-replay`).
+
 4. **Region state is read through an overlay and written through a routed port.**
    - Region step status, verdicts, test-suite evidence, acceptance evidence (the RED marker, run
      contract and disposition record), kickback-ledger gate entries and `build_review` remediation

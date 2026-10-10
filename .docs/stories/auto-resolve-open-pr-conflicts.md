@@ -295,15 +295,21 @@ I want any concurrent push to win over the daemon, never the reverse.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given guards and suite passed, when the flow pushes with `git push --force-with-lease`
-  (never bare `--force`), then the PR branch is updated, a follow-up merge-state read shows
+- Given guards and suite passed for a PR of a feature without children, when the flow fetches the
+  PR branch and pushes with
+  `git push --force-with-lease=refs/heads/<branch>:<expected-sha>` (never bare `--force` or a
+  bare `--force-with-lease`), then the PR branch is updated, a follow-up merge-state read shows
   the PR mergeable, the `mergeable` label is restored, attempts reset, and the worktree is
   removed — the push is the ONLY externally visible mutation of the branch.
 
 #### Negative Paths
+- Given a conflicted PR whose feature has children (a stacked leaf PR), when the sweep reaches it,
+  then no replay or push runs, the flow escalates to a human, and `restack_refused` with reason
+  `published-stack` is persisted.
 - Given someone pushed to the PR branch after resolution began, when the lease push runs, then
-  it is rejected, the local result is discarded, the PR branch on the remote is untouched, and
-  the flow escalates with the lease rejection as the reason (no retry with force).
+  the push is refused (by the engine's lease check or by git), the local result is discarded,
+  the PR branch on the remote is untouched, and the flow escalates with the refusal as the
+  reason (no retry with force).
 - Given any earlier stage failed (Tier 2 gave up, a guard failed, the suite was red), when the
   attempt ends, then a diff of the remote PR branch before/after the attempt is empty —
   asserted with real git state, not inferred.
@@ -314,7 +320,8 @@ I want any concurrent push to win over the daemon, never the reverse.
 ### Done When
 - [ ] A real-binary smoke against a scratch origin: successful lease push refreshes the
       branch; a simulated concurrent push causes lease rejection with remote intact.
-- [ ] Argv-level test asserts `--force-with-lease` and the absence of bare `--force`.
+- [ ] Argv-level test asserts `--force-with-lease=refs/heads/<branch>:<expected-sha>` and the
+      absence of bare `--force` and bare `--force-with-lease`.
 
 ---
 

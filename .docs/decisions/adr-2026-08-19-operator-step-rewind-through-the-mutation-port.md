@@ -103,6 +103,8 @@ backward.
 
 > **Amended 2026-10-07 by #2942:** For a feature with children the target child defaults to the active child, and a target child that is closed is refused naming #2943 (re-running it needs a restack) (`adr-2026-10-07-per-child-build-region` decision 11).
 
+> **Amended 2026-10-10 by #2943:** A closed target child is still refused, but the refusal now names #2944, which owns re-validating closed children; #2943 delivers the restack without re-opening them (decision 9) (`adr-2026-10-10-stacked-restack-journaled-replay`).
+
 ### D2 — Every state change is an authorized port mutation, never a file write
 
 Each demotion is submitted to `ConductStateStore` with the current value as the expected value and an
@@ -124,6 +126,8 @@ Steps already `skipped` by tier, track, or bootstrap mode keep that status — a
 re-decision of what applies to the feature.
 
 > **Amended 2026-10-07 by #2942:** In a stacked feature the demotion set excludes closed children; demoting a closed child's region requires #2943 (`adr-2026-10-07-per-child-build-region` decision 11).
+
+> **Amended 2026-10-10 by #2943:** Demoting a closed child's region now requires #2944, not #2943 (decision 9) (`adr-2026-10-10-stacked-restack-journaled-replay`).
 
 ### D4 — Derived records that would contradict the new position are cleared in the same operation
 

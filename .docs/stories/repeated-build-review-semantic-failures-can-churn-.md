@@ -86,8 +86,8 @@ and a rebase does not charge the feature for obsolete review work.
 #### Happy Path
 - Given a `build_review` ledger entry with `cumulative: 4`, when `build_review` returns a PASS
   verdict without a qualifying rebase invalidation, then the entry's `cumulative` remains 4.
-- Given that feature's approved `build_review` verdict is later invalidated by a qualifying rebase,
-  when the gate re-opens, then its convergence laps are credited to their empty state exactly once.
+- Given that feature's approved `build_review` verdict is later invalidated by a qualifying rebase
+  (a file-changing rebase, or a `base-refresh` restack of a stacked feature), when the gate re-opens, then its convergence laps are credited to their empty state exactly once.
 - Given that credited feature then FAILs `build_review`, when the kickback is consumed, then the new
   cumulative count is 1 rather than 5.
 
@@ -100,6 +100,8 @@ and a rebase does not charge the feature for obsolete review work.
   convergence credit is issued.
 - Given one qualifying rebase credit was already applied, when later semantic failures occur, then
   the same rebase does not credit the feature again.
+- Given a stacked feature's `feature-repair` restack invalidates `build_review`, when the gate
+  re-opens, then no convergence credit is issued.
 
 ### Done When
 - [ ] A `build_review` PASS without qualifying invalidation leaves `cumulative: 4` unchanged.

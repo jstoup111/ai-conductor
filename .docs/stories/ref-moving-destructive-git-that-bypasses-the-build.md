@@ -118,12 +118,12 @@ As the harness operator, I want every ref operation the engine performs to succe
 
 - Given a prepared feature worktree, when the setup-triage quarantine moves `wip/setup-quarantine-«slug»` with `git branch -f` there, then the quarantine ref points at the new commit.
 - Given a prepared feature worktree, when the engine runs `git update-ref HEAD «recovery-head» «current-head»` there, then the branch moves to the recovery head.
-- Given a prepared feature worktree that has fetched its remote branch and rewritten its history, when the engine's lease publication runs `git push origin HEAD:refs/heads/«branch» --force-with-lease`, then the remote branch moves to the local tip.
+- Given a prepared feature worktree that has fetched its remote branch and rewritten its history, when the engine's lease publication fetches that one branch and runs `git push origin HEAD:refs/heads/«branch» --force-with-lease=refs/heads/«branch»:«expected-sha»`, then the remote branch moves to the local tip.
 - Given a prepared feature worktree and its feature branch with a unique tip, when the engine's worktree cleanup runs `git branch -D «branch»` with the root checkout as its working directory, then the branch is deleted.
 
 ### Negative Paths
 
-- Given a prepared feature worktree whose remote branch has advanced since its last fetch, when the engine's lease publication runs its bare `--force-with-lease` push, then git rejects it as stale and the hook's refusal text does not appear.
+- Given a prepared feature worktree whose remote branch has advanced to a tip the engine has not seen, when the engine's lease publication runs, then the push is refused by the engine before git runs (or by git against the explicit expected SHA), the remote branch tip is unchanged, no bare `--force-with-lease` push is issued, and the hook's refusal text does not appear.
 - Given a prepared feature worktree, when the engine runs `git branch -D «branch»` for a unique-tip branch with the feature worktree as its working directory, then the command exits non-zero and the branch still exists at the same tip.
 
 ### Done When

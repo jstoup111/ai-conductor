@@ -26,8 +26,9 @@ rebase completes, no `.pipeline/HALT` is written, and the result is `rebased`.
 **Given** the same conflict but a resolver that never completes the rebase within the cap,
 **When** `resumeRebaseFirst` runs,
 **Then** after the bounded attempts a human `.pipeline/HALT` is written and the result is
-`halted` — the rebase left paused (identical to today's terminal outcome, only reached after
-the attempts, not before them).
+`halted`. For a feature without children the rebase is left paused (identical to today's terminal
+outcome, only reached after the attempts, not before them). For a stacked feature the conflict halt
+leaves every ref unmoved, with the restack journal aborted and no paused rebase.
 
 ### Negative path 1b — no resolver / cap 0 wired (backward compatible)
 **Given** a conflict but `resolveAttempts` unset (or 0) or no resolver passed,

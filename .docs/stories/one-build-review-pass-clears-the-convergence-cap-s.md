@@ -64,7 +64,7 @@ property `adr-2026-08-12` D2 was written to protect.
 
 #### Happy Path
 - Given a feature whose `build_review` gate has consumed four kickbacks and then passed, when a
-  file-changing rebase invalidates that gate and re-opens it, then the gate's convergence counters
+  file-changing rebase, or a `base-refresh` restack, invalidates that gate and re-opens it, then the gate's convergence counters
   are credited back to their empty state before it is re-dispatched.
 - Given that feature then FAILs `build_review` twice after the rebase, when the second kickback is
   consumed, then the cumulative count reads 2 and no cap halt is produced.
@@ -80,6 +80,8 @@ property `adr-2026-08-12` D2 was written to protect.
   accumulate normally.
 - Given a `build_review` PASS with no rebase involved, when the step completes, then no credit is
   issued — a PASS is not a refund trigger.
+- Given a stacked feature whose `feature-repair` restack invalidates `build_review` and re-opens it,
+  when the re-open loop runs, then no credit is issued and the accumulated laps stand.
 - Given the rebase path cannot compute its delta or feature surface and falls back to invalidating
   every gate, when `build_review` is re-opened by that fallback, then the credit is issued — the
   budget fails open, never toward a spurious halt.

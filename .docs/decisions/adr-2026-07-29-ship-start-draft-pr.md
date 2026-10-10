@@ -99,6 +99,9 @@ because the changelog-token cycling this ADR fixes is a self-host problem.
 > **D1** — Option B, hardcoded timing: the engine opens one draft PR for the feature branch at the first SHIP step that will actually execute, after every skip has been evaluated, and `finish` flips it ready for review (above: "Option B. The engine opens one **draft** PR")
 > **D2** — A new module `src/engine/ship-draft-pr.ts` (`openShipDraftPr`) sits behind the existing injected `GhRunner`/`GitRunner` seam, plain-pushes, and calls the existing `findOrCreatePr({ draft: true })`; no raw `execFile`, no second gh implementation (above: "New module `src/engine/ship-draft-pr.ts`")
 > **D3** — It never force-pushes; a non-fast-forward rejection is reported, not forced (above: "Never force-pushes.")
+>
+> > **Amended 2026-10-10 by #2943:** D3 scopes the ship-start draft push only. The separate post-rebase draft refresh (`adr-2026-07-03-post-rebase-force-with-lease`) is a force push, and it now uses an explicit expected-SHA lease (`adr-2026-10-10-stacked-restack-journaled-replay` decision 11).
+>
 > **D4** — It is lazy: `git rev-list --count <base>..HEAD` (falling back to `origin/<base>`) must be non-zero (above: "Lazy:")
 > **D5** — It is advisory: every failure logs one loud `[ship-draft-pr]` line and returns an outcome, and nothing throws into the conductor loop (above: "Advisory:")
 > **D6** — It is idempotent: `findOrCreatePr` returns an already-OPEN PR untouched, and a per-run latch keeps the SHIP phase to a single push + lookup (above: "Idempotent:")

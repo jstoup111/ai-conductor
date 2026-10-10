@@ -101,6 +101,8 @@ pass a gate."
 >    default `true`), with the same semantics as `reconcile_parked_auto_cleanup`: it changes who
 >    initiates, never what is checked.
 >
+> > **Amended 2026-10-10 by #2943:** The single-slug helper also deletes, by explicit name, the refs `adr-2026-10-10-stacked-restack-journaled-replay` adds under `refs/conductor/<slug>/` (pushed tips and intent, `cascades`, `leaf-moved`, journal and staging) when it reclaims a slug (decision 11).
+>
 > 9. **Every enumerated candidate that is not reclaimed is retained with a named reason on the
 >    event spine.** In-flight (the sweep context's `isFeatureInFlight`), `engineer-*` and
 >    `resolve-*` prefixes, nested or otherwise invalid slugs, a live `.pipeline/HALT`, and every

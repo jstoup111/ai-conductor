@@ -104,6 +104,8 @@ set. Carrying both is deliberate defence in depth: the companion ADR fixes the c
 filtered set would also have covered this incident, and the unfiltered field ensures attribution
 survives a future classifier error rather than silently regressing to today's behavior.
 
+> **Amended 2026-10-10 by #2943:** A stacked `base-refresh` restack is a base advance: it persists `rebase_changed` with the unfiltered whole-stack delta. A `feature-repair` restack does not (decision 12) (`adr-2026-10-10-stacked-restack-journaled-replay`).
+
 ### D2 — Attribution is a join over the record, requiring path overlap
 
 `wasInvalidatedByRebase` is removed. A gate failure is attributed to a base advance when **both**
