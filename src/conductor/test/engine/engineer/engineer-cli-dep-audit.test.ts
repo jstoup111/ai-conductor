@@ -64,7 +64,7 @@ function run(gh: GhRunner, project = 'alpha') {
     registryPath,
     print: (line) => out.push(line),
     printErr: (line) => err.push(line),
-    probeGhVersion: async () => ({ kind: 'ok' }),
+    probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
     gh,
   };
   return { out, err, code: dispatchEngineer(command!, opts) };
@@ -125,7 +125,7 @@ describe('compose dep-audit', () => {
       registryPath,
       print: (line) => out.push(line),
       printErr: (line) => err.push(line),
-      probeGhVersion: async () => ({ kind: 'ok' }),
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
       gh,
     });
 

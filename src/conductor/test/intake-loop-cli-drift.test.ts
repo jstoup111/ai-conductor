@@ -82,7 +82,7 @@ describe('intake-loop dependency drift sweep', () => {
     let sweeps = 0;
     await runTicks(['00:00', '00:10', '01:01'].map((time) => new Date(`2026-10-10T${time}:00.000Z`)), {
       buildIntake: fakeBuild([REPOSITORY], effects) as any, createNotifier: () => ({ notify: async () => undefined }) as any,
-      reconcileClosedIssues: async () => undefined, createDependencyDriftTracker: () => tracker,
+      reconcileClosedIssues: async () => ({ scanned: 0, forgotten: 0, errors: 0 }), createDependencyDriftTracker: () => tracker,
       sweepDependencyDrift: async () => { sweeps++; return swept(); }, events: { emit: async (event: unknown) => void events.push(event) } as any,
       engineerDir: '/tmp/intake-loop-drift', log: () => {}, printErr: () => {},
     });
@@ -121,7 +121,7 @@ describe('intake-loop dependency drift sweep', () => {
     };
     await runTicks([new Date('2026-10-10T00:00:00.000Z')], {
       buildIntake: fakeBuild([REPOSITORY, 'acme/clean'], effects) as any, createNotifier: () => ({ notify: async () => undefined }) as any,
-      reconcileClosedIssues: async () => undefined,
+      reconcileClosedIssues: async () => ({ scanned: 0, forgotten: 0, errors: 0 }),
       createDependencyDriftTracker: () => tracker,
       events: { emit: async (event: unknown) => void events.push(event) } as any,
       engineerDir: '/tmp/intake-loop-drift', log: () => {}, printErr: () => {},

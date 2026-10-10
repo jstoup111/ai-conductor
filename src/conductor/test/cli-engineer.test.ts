@@ -99,6 +99,7 @@ describe('legacy engineer CLI alias — process dispatch boundary', () => {
 describe('detectEngineerCommand — argv detection', () => {
   const subcommandArgs = {
     projects: [],
+    'dep-audit': ['--project', 'project'],
     worktree: ['--project', 'project', '--idea', 'idea'],
     land: ['--project', 'project', '--idea', 'idea', '--worktree', '/tmp/worktree'],
     handoff: ['--project', 'project', '--branch', 'spec/idea', '--worktree', '/tmp/worktree'],

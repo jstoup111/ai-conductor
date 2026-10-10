@@ -274,6 +274,7 @@ describe('landSpec intake marker (FR-1)', () => {
 
     const result = await landSpec(target(), 'dep bump', wt.worktreePath, 'acme/app#7', {
       ownerConfig: { spec_owner: 'alice' },
+      skipDependencyCheck: 'marker coverage does not exercise dependency proposals',
     });
 
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
@@ -299,6 +300,7 @@ describe('landSpec owner stamp (FR-4 — every land path, incl. no-remote/local-
     const worktree = await seedWorktree();
     const result = await landSpec(target(), 'dep bump', worktree, 'acme/app#7', {
       ownerConfig: { spec_owner: 'Alice' },
+      skipDependencyCheck: 'owner marker coverage does not exercise dependency proposals',
     });
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
     expect(marker).toContain('Owner: alice'); // normalized
@@ -318,7 +320,10 @@ describe('landSpec owner stamp (FR-4 — every land path, incl. no-remote/local-
   it('resolves via gh login when spec_owner is unconfigured', async () => {
     const worktree = await seedWorktree();
     const gh: GhRunner = async () => ({ stdout: 'bob\n' });
-    const result = await landSpec(target(), 'dep bump', worktree, 'acme/app#7', { gh });
+    const result = await landSpec(target(), 'dep bump', worktree, 'acme/app#7', {
+      gh,
+      skipDependencyCheck: 'owner marker coverage does not exercise dependency proposals',
+    });
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
     expect(marker).toContain('Owner: bob');
   });

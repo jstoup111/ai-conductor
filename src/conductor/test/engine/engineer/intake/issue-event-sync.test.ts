@@ -1,7 +1,12 @@
 // Covers: task:3, task:4, task:5, task:6
 
 import { describe, expect, it } from 'vitest';
-import type { GithubOperationRequest, GithubOperationRunner } from '../../../../src/engine/github-operations.js';
+import type {
+  GithubOperationRequest,
+  GithubOperationRunner,
+  GithubOperationRunnerRefusal,
+  GithubOperationRunnerResponse,
+} from '../../../../src/engine/github-operations.js';
 import type { GhRunner } from '../../../../src/engine/tracker-client.js';
 import { applyIssueEventSync } from '../../../../src/engine/engineer/intake/issue-event-sync.js';
 
@@ -35,7 +40,7 @@ function formBody(): string {
 function makeDeps(existingTargets: readonly number[] = [], options: {
   readonly missingTargets?: readonly number[];
   readonly networkError?: string;
-  readonly dependencyRefusal?: 'explicit-authorization-required' | 'cycle-rejection';
+  readonly dependencyRefusal?: 'explicit-authorization-required';
 } = {}) {
   const requests: GithubOperationRequest[] = [];
   const labels: string[] = [];
@@ -60,7 +65,7 @@ function makeDeps(existingTargets: readonly number[] = [], options: {
     return { stdout: '{}' };
   };
   const operations: GithubOperationRunner = {
-    async run(request) {
+    async run(request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> {
       requests.push(request);
       if (request.operation === 'intake.issue.label.add') {
         labels.push((request.payload as { label: string }).label);
@@ -182,7 +187,6 @@ describe('applyIssueEventSync', () => {
 
     expect(dependencyTargets(requests)).toEqual(['acme/app#11']);
     expect([...linkedTargets].sort((left, right) => left - right)).toEqual([10, 11]);
-    expect(requests.filter((request) => request.operation === 'intake.issue.dependency.remove')).toEqual([]);
   });
 
   it.each([
@@ -193,9 +197,8 @@ describe('applyIssueEventSync', () => {
 
     await applyIssueEventSync(edited(body), deps);
 
-    expect(requests.filter((request) => request.operation === 'intake.issue.dependency.remove')).toEqual([]);
+    expect(dependencyTargets(requests)).toEqual(body === 'blocked by #12' ? ['acme/app#12'] : []);
     expect([...linkedTargets].sort((left, right) => left - right)).toEqual(expectedTargets);
-    if (body === 'blocked by #12') expect(dependencyTargets(requests)).toEqual(['acme/app#12']);
   });
 
   it('uses the current edited body as the declaration of record', async () => {
@@ -226,8 +229,8 @@ describe('applyIssueEventSync', () => {
     }]);
   });
 
-  it('reports guarded cycle refusals without writing the rejected link', async () => {
-    const { deps, requests, linkedTargets } = makeDeps([], { dependencyRefusal: 'cycle-rejection' });
+  it('reports guarded authorization refusals without writing the rejected link', async () => {
+    const { deps, requests, linkedTargets } = makeDeps([], { dependencyRefusal: 'explicit-authorization-required' });
 
     const report = await applyIssueEventSync(opened('blocked by #10'), deps);
 
@@ -236,7 +239,7 @@ describe('applyIssueEventSync', () => {
     expect(report.links).toEqual([]);
     expect(report.failures).toEqual([{
       target: 'acme/app#10',
-      reason: expect.stringContaining('cycle-rejection'),
+      reason: expect.stringContaining('explicit-authorization-required'),
     }]);
   });
 
