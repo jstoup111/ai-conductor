@@ -80,6 +80,52 @@ describe('reduceBuildReviewAdjudication', () => {
     expect(result).toMatchObject({ route: 'build', remainingMechanical: false, reason: 'applied action effect' });
   });
 
+  it('routes an acted implementation-quality source with an admitted work order to BUILD and preserves the source charge', () => {
+    const sourceId = 'implementationQuality:sha256:primitive-obsession';
+    const result = reduceBuildReviewAdjudication({
+      currentSourceIds: [sourceId], mechanical: 'healthy',
+      cases: [{ ...action(), sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-10T00:00:00.000Z' }] }],
+    });
+
+    expect(result).toMatchObject({ route: 'build', remainingMechanical: false, reason: 'applied action effect' });
+  });
+
+  it.each([
+    'duplication', 'excess-complexity', 'obscured-intent', 'primitive-obsession',
+    'representable-invalid-state', 'non-exhaustive-domain-match', 'non-semantic-name',
+  ] as const)('never turns an unadmitted implementation-quality %s act into a plan route', (kind) => {
+    const sourceId = `implementationQuality:${kind}`;
+    const result = reduceBuildReviewAdjudication({
+      currentSourceIds: [sourceId], mechanical: 'healthy',
+      cases: [{ ...reject(), sources: [{ sourceId, outcome: 'rejected', recordedAt: '2026-10-10T00:00:00.000Z' }] }],
+    });
+
+    expect(result).toMatchObject({ route: 'pass' });
+    expect(result).not.toHaveProperty('plan');
+    expect(result).not.toHaveProperty('appendedTask');
+  });
+
+  it.each([
+    'duplication', 'excess-complexity', 'obscured-intent', 'primitive-obsession',
+    'representable-invalid-state', 'non-exhaustive-domain-match', 'non-semantic-name',
+  ] as const)('keeps every implementation-quality %s disposition within adjudication (never a plan route)', (kind) => {
+    const sourceId = `implementationQuality:${kind}`;
+    const cases = [
+      { label: 'act-admitted', record: { ...action(), sources: [{ sourceId, outcome: 'acted' as const, recordedAt: '2026-10-10T00:00:00.000Z' }] }, route: 'build' },
+      { label: 'act-unadmitted', record: { ...reject(), sources: [{ sourceId, outcome: 'rejected' as const, recordedAt: '2026-10-10T00:00:00.000Z' }] }, route: 'pass' },
+      { label: 'defer', record: { ...reject(), sources: [{ sourceId, outcome: 'deferred' as const, recordedAt: '2026-10-10T00:00:00.000Z' }] }, route: 'pass' },
+      { label: 'refute', record: { ...refute(), sources: [{ sourceId, outcome: 'refuted' as const, recordedAt: '2026-10-10T00:00:00.000Z' }] }, route: 'pass' },
+      { label: 'escalate', record: { ...decisionStop(), sources: [{ sourceId, outcome: 'escalate' as const, recordedAt: '2026-10-10T00:00:00.000Z' }] }, route: 'halt' },
+    ] as const;
+
+    for (const { label, record, route } of cases) {
+      const result = reduceBuildReviewAdjudication({ currentSourceIds: [sourceId], cases: [record], mechanical: 'healthy' });
+      expect(result, `${kind}/${label}`).toMatchObject({ route });
+      expect(result).not.toHaveProperty('plan');
+      expect(result).not.toHaveProperty('appendedTask');
+    }
+  });
+
   it.each([
     ['retry', 'mechanical-retry', 'build-review coverage retry is pending'],
     ['halt', 'halt', 'uncovered build-review coverage failure'],

@@ -34,7 +34,8 @@ import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { CapturingSpanExporter } from '../fixtures/capturing-span-exporter.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
-import { projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { deriveEffectiveBuildReviewVerdict, joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { scopedRunFailure } from '../../src/engine/build-review-test-quality-preflight.js';
 import type { BuildReviewScopedLauncher } from '../../src/engine/build-review-scoped-run.js';
 import { renderBuildReviewUnresolvedSkillRemedy } from '../../src/engine/build-review-domain.js';
@@ -91,6 +92,50 @@ function createMockProvider(): LLMProvider {
     }),
   };
 }
+
+describe('build_review declared replication suppressions', () => {
+  const lapId = 'lap-replication' as never;
+  const snapshotDigest = 'sha256:replication-snapshot';
+  const sourcePath = 'src/source-widget.ts';
+  const targetPath = 'src/target-widget.ts';
+  const duplication = (path = targetPath, evidence = `${sourcePath}:8`) => ({
+    concernKind: 'duplication' as const, summary: 'The declared copy repeats the source implementation.',
+    evidenceLocations: [evidence],
+    anchor: { rubric: 'implementationQuality' as const, locus: { path, contentHash: `sha256:${'a'.repeat(64)}`, display: 'declared target copy' } },
+  });
+  const aggregate = (finding = duplication(), declaredReplicationSuppressions: readonly { findingId: string; sourcePath: string; targetPath: string }[] = []) =>
+    joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest,
+      results: {
+        testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+        security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+        implementationQuality: { kind: 'judged', rubric: 'implementationQuality', lapId, snapshotDigest, contractVersion: 'v3', findings: [finding], verdict: 'FAIL' },
+      },
+      declaredReplicationSuppressions,
+    });
+
+  it('persists a target-anchored source-only-evidence duplication from the active plan as a declaredReplicationSuppression', () => {
+    const finding = duplication();
+    const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v3', concernKind: finding.concernKind, anchor: finding.anchor })!;
+    const result = aggregate(finding, [{ findingId: identity.id, sourcePath, targetPath }]);
+
+    expect(result).toMatchObject({ verdict: 'FAIL', declaredReplicationSuppressions: [{ findingId: identity.id, sourcePath, targetPath }] });
+    expect(deriveEffectiveBuildReviewVerdict(result)).toMatchObject({ verdict: 'PASS', suppressedFindingIds: [identity.id] });
+  });
+
+  it.each([
+    ['an off-target anchor', duplication('src/other-widget.ts')],
+    ['evidence naming another file', duplication(targetPath, 'src/other-widget.ts:8')],
+  ])('does not suppress declared replication with %s', (_label, finding) => {
+    const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v3', concernKind: finding.concernKind, anchor: finding.anchor })!;
+    expect(aggregate(finding, [])).toMatchObject({ verdict: 'FAIL', declaredReplicationSuppressions: [] });
+    expect(deriveEffectiveBuildReviewVerdict(aggregate(finding, []))).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [identity.id] });
+  });
+
+  it('keeps a plan without Pattern-source at an empty declaredReplicationSuppressions list', () => {
+    expect(aggregate()).toMatchObject({ verdict: 'FAIL', declaredReplicationSuppressions: [] });
+  });
+});
 
 function interactiveRuntime(
   key: 'claude' | 'codex',

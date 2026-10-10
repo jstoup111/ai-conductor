@@ -365,6 +365,39 @@ describe("build-review coordinator: registered dispatch", () => {
   });
 
   it.each([
+    ['missing', { kind: 'unavailable', path: 'skills/build-review-implementation-quality/SKILL.md' }],
+    ['unreadable', { kind: 'unavailable', path: 'skills/build-review-implementation-quality/SKILL.md' }],
+  ] as const)('keeps implementation-quality %s SKILL.md unavailable as infrastructure and never records PASS', async (_case, skillDigest) => {
+    const dispatchModel = vi.fn(async () => ({ findings: [] }));
+    const result = await coordinateBuildReviewRubrics(coordinationInput(false, {
+      config: implementationQualityConfig(),
+      engineIdentity: { engineStamp: '8e7daae72ad7', skillDigests: { implementationQuality: skillDigest } } as never,
+      dispatchModel,
+    }));
+
+    expect(implementationQualityBranch(result)).toMatchObject({
+      kind: 'infrastructure-failure', rubric: 'implementationQuality',
+      detail: expect.stringContaining('skills/build-review-implementation-quality/SKILL.md'),
+    });
+    expect(dispatchModel).not.toHaveBeenCalled();
+    expect(result).not.toMatchObject({ kind: 'passed', verdict: 'PASS' });
+  });
+
+  it('settles a double-invalid implementation-quality payload in the mechanical-fault lane without a content finding', async () => {
+    const result = await coordinateBuildReviewRubrics(coordinationInput(false, {
+      config: implementationQualityConfig(),
+      engineIdentity: { engineStamp: '8e7daae72ad7', skillDigests: { implementationQuality: { kind: 'resolved', digest: 'sha256:iq' } } },
+      dispatchModel: vi.fn(async () => ({ findings: [{ concernKind: 'not-an-implementation-quality-kind' }] })),
+    }));
+
+    expect(implementationQualityBranch(result)).toMatchObject({
+      kind: 'infrastructure-failure', rubric: 'implementationQuality', reason: 'invalid-structured-result',
+    });
+    expect(implementationQualityBranch(result)).not.toHaveProperty('findings');
+    expect(result).not.toMatchObject({ kind: 'passed', verdict: 'PASS' });
+  });
+
+  it.each([
     ['a production-only refactor'],
     ['a pure test relocation'],
     ['a plan without test paths'],
@@ -647,6 +680,21 @@ function testQualityBranch(result: Awaited<ReturnType<typeof coordinateBuildRevi
 
 function securityBranch(result: Awaited<ReturnType<typeof coordinateBuildReviewRubrics>>) {
   return result.kind === "ready" ? result.branches.find((branch) => branch.rubric === "security") : undefined;
+}
+
+function implementationQualityBranch(result: Awaited<ReturnType<typeof coordinateBuildReviewRubrics>>) {
+  return result.kind === 'ready' ? result.branches.find((branch) => branch.rubric === 'implementationQuality') : undefined;
+}
+
+function implementationQualityConfig(): ResolvedBuildReviewConfig {
+  const resolved = config(false);
+  return {
+    ...resolved,
+    rubrics: {
+      ...resolved.rubrics,
+      implementationQuality: { ...policy, enabled: true },
+    },
+  } as ResolvedBuildReviewConfig;
 }
 
 describe("build-review coordinator: security envelope", () => {

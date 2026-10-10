@@ -511,6 +511,34 @@ describe('build-review dispositions', () => {
     expect(matchesBuildReviewDisposition(feature, reReported, [accepted])).toBe(true);
   });
 
+  it.each(['accepted', 'refuted'] as const)('leaves a recurring %s implementation-quality identity on unchanged code at effective PASS', (outcome) => {
+    const iqFinding = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'implementationQuality', contractVersion: 'v3', concernKind: 'primitive-obsession',
+      anchor: { rubric: 'implementationQuality', locus: { path: 'src/state.ts', contentHash: testContentHash, display: 'changed state model' } },
+    })!;
+    const record: BuildReviewDispositionRecord = {
+      version: 'v1', feature, finding: iqFinding, sourceLapId: parseBuildReviewLapId('lap-before')!,
+      summary: `${outcome} implementation-quality finding`, rationale: 'reviewed outcome', operator: 'james', acceptedAt: '2026-10-10T00:00:00.000Z',
+    };
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId: parseBuildReviewLapId('lap-current')!, snapshotDigest: 'sha256:snapshot',
+      results: {
+        testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+        security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+        implementationQuality: {
+          kind: 'judged', rubric: 'implementationQuality', lapId: parseBuildReviewLapId('lap-current')!, snapshotDigest: 'sha256:snapshot',
+          contractVersion: 'v3', verdict: 'FAIL', findings: [{
+            concernKind: 'primitive-obsession', summary: 'Reworded recurring report.', evidenceLocations: ['src/state.ts:8'],
+            anchor: { rubric: 'implementationQuality', locus: { path: 'src/state.ts', contentHash: testContentHash, display: 'changed state model' } },
+          }],
+        },
+      },
+    });
+
+    expect(deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, [record]))
+      .toMatchObject({ verdict: 'PASS', acceptedFindingIds: [iqFinding.id], unresolvedFindingIds: [] });
+  });
+
   it('preserves a pre-migration v3 testQuality disposition when post-migration summary wording changes', () => {
     const preMigrationIdentity = canonicalizeBuildReviewFindingIdentity(currentContractFindings[0][1])!;
     const postMigrationFinding = {

@@ -603,6 +603,34 @@ describe("build-review semantic cache", () => {
     }));
   });
 
+  it.each([
+    ['a changed build-review-implementation-quality SKILL.md digest',
+      (identity: BuildReviewCacheSemanticIdentity) => ({ ...identity, effectiveBundleDigest: 'sha256:implementation-quality-skill-edited' }),
+      { engineStamp: '8e7daae72ad7', skillDigest: 'sha256:implementation-quality-skill-edited' }, 'skill-digest-mismatch'],
+    ['a changed implementation-quality provider',
+      (identity: BuildReviewCacheSemanticIdentity) => ({ ...identity, provider: 'codex' }), undefined, 'provider-mismatch'],
+    ['a changed implementation-quality model',
+      (identity: BuildReviewCacheSemanticIdentity) => ({ ...identity, model: 'opus' }), undefined, 'model-mismatch'],
+    ['a changed implementation-quality effort',
+      (identity: BuildReviewCacheSemanticIdentity) => ({ ...identity, effort: 'high' }), undefined, 'effort-mismatch'],
+  ] as const)('does not reuse implementation-quality cache evidence after %s', (_label, mutate, engineIdentity, reason) => {
+    const cached = {
+      ...entry(), rubric: 'implementationQuality',
+      engineIdentity: { engineStamp: '8e7daae72ad7', skillDigest: 'sha256:implementation-quality-skill' },
+      semanticIdentity: candidateIdentity({ effectiveBundleDigest: 'sha256:implementation-quality-skill' }),
+      result: { ...entry().result, rubric: 'implementationQuality' },
+    } as BuildReviewCacheEntry;
+    const semanticIdentity = mutate(cached.semanticIdentity!);
+    const lookup = {
+      rubric: 'implementationQuality' as const, contractVersion: 'v3' as const, projectionVersion: 'v3' as const,
+      projectionDigest: cached.projectionDigest, policyFingerprint: cached.policyFingerprint,
+      engineIdentity: engineIdentity ?? cached.engineIdentity, semanticIdentity,
+      lapId: parseBuildReviewLapId('lap-current')!, snapshotDigest: 'snapshot-current',
+    };
+
+    expect(classifyBuildReviewCacheLookup(cached, lookup)).toMatchObject({ kind: 'miss', reason });
+  });
+
   it("keeps a security projection digest stable when identical hunk content is rebased", () => {
     const frozenInputs = {
       diff: "diff --git a/src/auth.ts b/src/auth.ts\n@@ -1 +1 @@\n-const enabled = false;\n+const enabled = true;\n",

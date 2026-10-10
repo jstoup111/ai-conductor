@@ -201,7 +201,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     });
   });
 
-  async function settleBuildReview(verdict: 'PASS' | 'FAIL'): Promise<void> {
+  async function settleBuildReview(verdict: 'PASS' | 'FAIL', rubric: 'testQuality' | 'implementationQuality' = 'testQuality'): Promise<void> {
     await rm(join(dir, '.pipeline/build-review.json'), { force: true });
     await writeState(statePath, {
       run_started_at: 1,
@@ -218,8 +218,8 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         if (step === 'build_review') {
           await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
             verdict,
-            rubric: { testQuality: verdict === 'FAIL', implementationQuality: false },
-            findings: verdict === 'FAIL' ? { testQuality: ['test-insensitive'] } : {},
+            rubric: { testQuality: verdict === 'FAIL' && rubric === 'testQuality', implementationQuality: verdict === 'FAIL' && rubric === 'implementationQuality' },
+            findings: verdict === 'FAIL' ? { [rubric]: [rubric === 'implementationQuality' ? 'primitive-obsession' : 'test-insensitive'] } : {},
           }));
           return { success: true };
         }
@@ -238,7 +238,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       projectRoot: dir, verifyArtifacts: true, mode: 'auto', daemon: true,
       fromStep: 'build_review', maxRetries: 1,
       config: {
-        build_review: { enabled: true, rubrics: { implementationQuality: { enabled: false } } },
+        build_review: { enabled: true, rubrics: { implementationQuality: { enabled: rubric === 'implementationQuality' } } },
         kickback_escalation: { enabled: false },
       },
       fullSuiteVerifier: {
@@ -796,6 +796,21 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     expect((await readKickbackLedger(dir)).gates.build_review?.cumulative).toBe(
       MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW + 1,
     );
+  });
+
+  it('halts an implementationQuality FAIL at the cumulative build_review cap instead of scheduling another kickback', async () => {
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: { build_review: { count: 1, cumulative: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW, treeHash: '0123456789abcdef0123456789abcdef01234567', lastReason: 'prior IQ failure', priorVerdict: false, resolvedBefore: 0 } },
+    });
+
+    await settleBuildReview('FAIL', 'implementationQuality');
+
+    expect((await readKickbackLedger(dir)).gates.build_review).toMatchObject({
+      cumulative: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW + 1,
+      lastReason: expect.stringContaining('implementationQuality'),
+    });
+    expect(await readHaltClass(dir)).toBe('needs-human');
   });
 
   describe('Task 5: rebase credit is limited to an actually-invalidated build_review', () => {

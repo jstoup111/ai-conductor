@@ -425,6 +425,22 @@ cp "$HARNESS_DIR/test/fixtures/build-review-skill-vocab/extra-skill-kind.md" \
 run_vocabulary_drift_fixture \
   'a skill-side extra security vocabulary member' "$fixture_domain" "$fixture_skill_extra_harness" security unknown-security-kind
 
+# The default-on implementation-quality rubric must be held to the same
+# bidirectional vocabulary contract as the optional security rubric.
+fixture_iq_skill_extra_harness="$fixture_dir/harness-iq-skill-extra"
+cp -R "$fixture_harness" "$fixture_iq_skill_extra_harness"
+cp "$HARNESS_DIR/test/fixtures/build-review-skill-vocab/extra-implementation-quality-kind.md" \
+  "$fixture_iq_skill_extra_harness/skills/build-review-implementation-quality/SKILL.md"
+run_vocabulary_drift_fixture \
+  'a skill-side extra implementationQuality vocabulary member' "$fixture_domain" "$fixture_iq_skill_extra_harness" implementationQuality unknown-implementation-quality-kind
+
+fixture_iq_skill_missing_harness="$fixture_dir/harness-iq-skill-missing"
+cp -R "$fixture_harness" "$fixture_iq_skill_missing_harness"
+cp "$HARNESS_DIR/test/fixtures/build-review-skill-vocab/missing-implementation-quality-kind.md" \
+  "$fixture_iq_skill_missing_harness/skills/build-review-implementation-quality/SKILL.md"
+run_vocabulary_drift_fixture \
+  'a skill-side missing implementationQuality vocabulary member' "$fixture_domain" "$fixture_iq_skill_missing_harness" implementationQuality primitive-obsession
+
 if fixture_output=$(BUILD_REVIEW_RUBRIC_VOCAB_TEST_MODE=1 BUILD_REVIEW_RUBRIC_VOCAB_TEST_OVERRIDE='security:unknown-security-kind' \
   check_vocabulary_drift "$fixture_domain" "$fixture_harness" 2>&1); then
   echo 'known gap: vocabulary guard accepts a descriptor enum extra member' >&2
