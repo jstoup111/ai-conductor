@@ -4,6 +4,19 @@ spec_hash: 49cbe9d6094886a4717bb34ec3137a462775e02a75bf7bd80cafa0923ba2ec26
 pr: https://github.com/jstoup111/ai-conductor/pull/3087
 shipped: 2026-10-10
 engine_version: 20261010T132818Z-14d7967cd432
+findings:
+  - gate: architecture_review_as_built
+    finding: "as-built:931f17d3-fffe-41ee-8c6f-135cc5c47b0c:1"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-08-12-cumulative-build-review-convergence-bound decision 3"
+    outcome: remediated
+    summary: "Verified, 99% confidence: conductor.ts:11993–12016 consumes the build_review budget but checks only exhausted, ignoring cumulativeExhausted. Tree-changing repair laps reset the per-tree count and can continue past the effective cumulative cap. Apply the existing configured cumulative-cap halt handling before routing to BUILD."
+  - gate: architecture_review_as_built
+    finding: "as-built:931f17d3-fffe-41ee-8c6f-135cc5c47b0c:2"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-08-12-cumulative-build-review-convergence-bound decision 5"
+    outcome: remediated
+    summary: "Verified, 99% confidence: conductor.ts:11995–12001 emits the new build_review kickback without cumulativeCount, although the consumed budget increments it. Include kickback.entry.cumulative in the existing event as required by D5."
 ---
 
 ## Cost
