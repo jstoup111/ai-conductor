@@ -49,7 +49,12 @@ export interface AppliedRebaseTransition {
  * Credit a rebase invalidation once, using the durable operation id as receipt.
  * Returns the credit only for the call that actually mutated the ledger.
  */
-async function creditBuildReviewConvergence(projectRoot: string, operationId: string, invalidated: readonly StepName[]): Promise<{ gate: 'build_review' } | undefined> {
+async function creditBuildReviewConvergence(
+  projectRoot: string,
+  operationId: string,
+  invalidated: readonly StepName[],
+  child?: ChildId,
+): Promise<{ gate: 'build_review' } | undefined> {
   if (!invalidated.includes('build_review')) return undefined;
   return updateKickbackLedger(projectRoot, (ledger) => {
     // A receipt means the refund already happened. Claiming it again would
@@ -68,7 +73,7 @@ async function creditBuildReviewConvergence(projectRoot: string, operationId: st
       },
       result: { gate: 'build_review' } as const,
     };
-  }, 'build_review');
+  }, 'build_review', child);
 }
 
 /**
@@ -241,7 +246,7 @@ export async function applyRebaseTransition(
     const complete = await Promise.all(options.preserved.map(async (gate) =>
       (await readVerdict(options.projectRoot, gate, childForGate(gate, options.child)))?.preservation?.operationId === operation.id));
     if (complete.every(Boolean)) {
-      const convergenceCredit = await creditBuildReviewConvergence(options.projectRoot, operation.id, options.invalidated);
+      const convergenceCredit = await creditBuildReviewConvergence(options.projectRoot, operation.id, options.invalidated, options.child);
       return { operation: priorRebase.rebaseOperation, invalidated: options.invalidated, preserved: options.preserved, stateResult: 'already-applied', ...(convergenceCredit ? { convergenceCredit } : {}) };
     }
     // A prior process exposed an applied descriptor before writing every
@@ -354,7 +359,7 @@ export async function applyRebaseTransition(
   // restart can safely distinguish a completed operation from an interrupted
   // one without publishing a half-written pair.
   const applied: RebaseOperationRecord = { ...operation, status: 'applied', appliedAt: Date.now() };
-  const convergenceCredit = await creditBuildReviewConvergence(options.projectRoot, operation.id, options.invalidated);
+  const convergenceCredit = await creditBuildReviewConvergence(options.projectRoot, operation.id, options.invalidated, options.child);
   await writeVerdict(options.projectRoot, 'rebase', {
     satisfied: true,
     checkedAt: Date.now(),

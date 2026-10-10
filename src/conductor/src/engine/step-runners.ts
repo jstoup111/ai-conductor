@@ -3465,7 +3465,7 @@ export class DefaultStepRunner implements StepRunner {
         reason: scopeIncompleteFault.reason,
         detail: scopeIncompleteFault.detail,
         lapId,
-      });
+      }, child);
       if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
         return {
           success: false,
@@ -3492,7 +3492,7 @@ export class DefaultStepRunner implements StepRunner {
           reason: infrastructureFailure.reason,
           detail: infrastructureFailure.detail,
           lapId,
-        });
+        }, child);
         if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
           return {
             success: false,
@@ -4172,7 +4172,7 @@ export class DefaultStepRunner implements StepRunner {
         reason: infrastructureFailure.reason,
         detail: infrastructureFailure.detail,
         lapId: input.lapId,
-      });
+      }, input.child);
       if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
         return {
           success: false,

@@ -6430,7 +6430,7 @@ export class Conductor {
         treeHash,
         resolvedCount,
         reason,
-      });
+      }, this.activeRegionChild);
     };
 
     /**
@@ -6467,7 +6467,7 @@ export class Conductor {
           },
           result: undefined,
         };
-      }, sourceGate);
+      }, sourceGate, this.activeRegionChild);
       // This producer/consumer hand-off is only for the immediately following
       // existing-task BUILD rewind; every other capture samples afresh. Each
       // participating gate consumes its own entry, so the other gates on a
@@ -6497,7 +6497,7 @@ export class Conductor {
           },
           result: entry,
         };
-      }, sourceGate);
+      }, sourceGate, this.activeRegionChild);
       if (!ctx) return { halt: false };
       const [treeAfter, resolvedAfter] = await Promise.all([
         currentTreeHash(this.projectRoot),
@@ -10756,7 +10756,7 @@ export class Conductor {
                 typeof retries === 'number' &&
                 retries < MAX_SUITE_INFRASTRUCTURE_RETRIES
               ) {
-                const entry = await bumpSuiteInfrastructureRetriesInLedger(this.projectRoot);
+                const entry = await bumpSuiteInfrastructureRetriesInLedger(this.projectRoot, this.activeRegionChild);
                 const infrastructureAttempt = entry.suiteInfrastructureRetries ?? retries + 1;
                 await emitTracked({
                   type: 'step_retry',
@@ -10893,7 +10893,7 @@ export class Conductor {
             // configured with fewer generic retries; its final attempt
             // materializes the aggregate needed for the operator recovery.
             if (step.name === 'build_review') {
-              const ledger = await readKickbackLedger(this.projectRoot);
+              const ledger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
               if (isUnreadableKickbackLedger(ledger)) {
                 const reason = 'build_review halted: kickback ledger is unreadable; budget enforcement requires human recovery.';
                 state[step.name] = 'failed';
@@ -12604,7 +12604,7 @@ export class Conductor {
                       'by operator disposition at exit time; re-running build_review.',
                   );
                   if (buildReviewKickbackCharged) {
-                    await refundBuildReviewKickback(this.projectRoot, buildReviewBeforeConsumption);
+                    await refundBuildReviewKickback(this.projectRoot, buildReviewBeforeConsumption, this.activeRegionChild);
                   }
                   await this.saveConductorStepStatus(state, step.name, 'failed');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
@@ -12731,7 +12731,7 @@ export class Conductor {
                     consumed: kickback.entry.cumulative,
                     limit: kickback.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
                     latestReason: kickback.entry.lastReason,
-                  });
+                  }, this.activeRegionChild);
                   const markerResult = await this.writeHaltMarker(
                     `${reason}\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}\n`,
                     'needs-human',
@@ -14156,7 +14156,7 @@ export class Conductor {
           treeHash,
           resolvedCount,
           reason: v.kickback?.evidence ?? '',
-        });
+        }, this.activeRegionChild);
         const count = kickback.entry.count;
         await this.events.emit(this.withActiveRegionChild({
           type: 'kickback',
@@ -14289,7 +14289,7 @@ export class Conductor {
                 },
                 result: true,
               };
-            }, 'build_review');
+            }, 'build_review', this.activeRegionChild);
             if (credited) convergenceCredit = { gate: target };
           }
           await this.events.emit(this.withActiveRegionChild({

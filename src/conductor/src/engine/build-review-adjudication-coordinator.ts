@@ -739,6 +739,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     );
     const action = await applyBuildReviewActionEffects({
       projectRoot: input.projectRoot, feature: input.feature, store, tasksByCaseId, chargeInput: input.chargeInput,
+      ...(input.child === undefined ? {} : { child: input.child }),
       ...(input.chargeEffect === undefined ? {} : { chargeEffect: input.chargeEffect }),
     });
     if (!action.ok) {
