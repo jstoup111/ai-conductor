@@ -1,3 +1,5 @@
+// Covers: task:7
+
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Issue-form captures are born with priority + size +
 // linking" (Story 1, FR-1; #695 intake-only-enforcement).
@@ -56,10 +58,28 @@
 // lands. That is correct pre-implementation RED.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { describe, it, expect } from 'vitest';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { execa } from 'execa';
+import { load as loadYaml } from 'js-yaml';
+import { afterEach, describe, it, expect } from 'vitest';
 import type { GithubOperationRequest } from '../../src/engine/github-operations.js';
 
 const LABEL_SYNC_MOD = '../../src/engine/engineer/intake/label-sync.js';
+const CONDUCTOR_ROOT = fileURLToPath(new URL('../../', import.meta.url));
+const APPLY_SCRIPT = join(CONDUCTOR_ROOT, 'scripts', 'intake-label-sync-apply.mts');
+const TSX = join(CONDUCTOR_ROOT, 'node_modules', '.bin', 'tsx');
+const WORKFLOW = join(CONDUCTOR_ROOT, '..', '..', '.github', 'workflows', 'intake-label-sync.yml');
+const CHILD_TMPDIR = process.platform === 'linux' ? '/proc/self/cwd' : undefined;
+
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 async function loadLabelSyncModule(): Promise<Record<string, unknown>> {
   return (await import(LABEL_SYNC_MOD)) as Record<string, unknown>;
@@ -394,5 +414,132 @@ describe('label-sync only defaults for issue-form submissions', () => {
       expect(result.priorityDefaulted).toBe(true);
       expect(result.sizeDefaulted).toBe(true);
     });
+  });
+});
+
+type ActionFixture = {
+  readonly body: string;
+  readonly action: 'opened' | 'edited';
+  readonly failLinks?: boolean;
+};
+
+async function makeActionFixture(fixture: ActionFixture): Promise<{
+  readonly root: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly callsPath: string;
+}> {
+  const root = await mkdtemp(join(tmpdir(), 'intake-label-sync-action-'));
+  roots.push(root);
+  const bin = join(root, 'bin');
+  const eventPath = join(root, 'event.json');
+  const callsPath = join(root, 'gh-calls.jsonl');
+  const configDir = join(root, 'config');
+  await mkdir(bin, { recursive: true });
+  await mkdir(configDir, { recursive: true });
+  await writeFile(join(configDir, 'config.yml'), 'spec_owner: intake-bot\n', 'utf8');
+  await writeFile(eventPath, JSON.stringify({
+    action: fixture.action,
+    repository: { full_name: 'acme/app' },
+    issue: { number: 20, body: fixture.body },
+    sender: { login: 'intake-bot' },
+  }), 'utf8');
+  await writeFile(join(bin, 'gh-stub.mjs'), `
+import { appendFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+appendFileSync(process.env.GH_CALLS, JSON.stringify(args) + '\\n');
+const joined = args.join(' ');
+if (joined.includes('/dependencies/blocked_by') && !joined.includes('--method POST')) {
+  process.stdout.write('[]\\n');
+} else if (/^repos\\/acme\\/app\\/issues\\/\\d+$/.test(args[1] ?? '')) {
+  const number = Number((args[1] ?? '').split('/').at(-1));
+  process.stdout.write(JSON.stringify({ id: 1000000 + number, number }) + '\\n');
+} else if (args[0] === 'issue' && args[1] === 'view') {
+  process.stdout.write(JSON.stringify({ assignees: [{ login: 'intake-bot' }] }) + '\\n');
+} else if (${fixture.failLinks === true} && joined.includes('/dependencies/blocked_by') && joined.includes('--method POST')) {
+  process.stderr.write('simulated link outage\\n');
+  process.exitCode = 1;
+} else {
+  process.stdout.write('{}\\n');
+}
+`, 'utf8');
+  await writeFile(join(bin, 'gh'), '#!/bin/sh\nexec node "$(dirname "$0")/gh-stub.mjs" "$@"\n', 'utf8');
+  await chmod(join(bin, 'gh'), 0o755);
+
+  const {
+    AI_CONDUCTOR_NO_REAL_EXEC: _testExecGuard,
+    CONDUCT_GH_REAL_EXECUTABLE: _managedGhBypass,
+    ...environment
+  } = process.env;
+  return {
+    root,
+    callsPath,
+    env: {
+      ...environment,
+      AI_CONDUCTOR_USER_CONFIG_DIR: configDir,
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_REPOSITORY: 'acme/app',
+      GITHUB_TOKEN: 'fixture-token',
+      GH_CALLS: callsPath,
+      PATH: `${bin}:${process.env.PATH ?? ''}`,
+      TMPDIR: CHILD_TMPDIR ?? root,
+      TMP: CHILD_TMPDIR ?? root,
+      TEMP: CHILD_TMPDIR ?? root,
+    },
+  };
+}
+
+async function runActionFixture(fixture: ActionFixture) {
+  const action = await makeActionFixture(fixture);
+  const result = await execa(TSX, [APPLY_SCRIPT], {
+    cwd: action.root,
+    env: action.env,
+    extendEnv: false,
+    reject: false,
+  });
+  const rawCalls = await readFile(action.callsPath, 'utf8').catch(() => '');
+  return {
+    ...result,
+    calls: rawCalls.split('\n').filter(Boolean).map((line) => JSON.parse(line) as string[]),
+  };
+}
+
+function dependencyPosts(calls: readonly string[][]): readonly string[][] {
+  return calls.filter((args) => args.join(' ').includes('/dependencies/blocked_by')
+    && args.includes('--method') && args.includes('POST'));
+}
+
+describe('intake label-sync Action dependency entry point', () => {
+  it('links prose declarations from a non-form opened event and exits successfully', async () => {
+    const result = await runActionFixture({ action: 'opened', body: 'This issue is blocked by #10.' });
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(dependencyPosts(result.calls).join(' ')).toContain('repos/acme/app/issues/20/dependencies/blocked_by');
+    expect(dependencyPosts(result.calls).join(' ')).toContain('issue_id=1000010');
+  });
+
+  it('links a dependency added by an edited event', async () => {
+    const result = await runActionFixture({ action: 'edited', body: 'Depends on #11.' });
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(dependencyPosts(result.calls).join(' ')).toContain('issue_id=1000011');
+  });
+
+  it('keeps the Action successful when only link writes fail, reporting every target and reason', async () => {
+    const result = await runActionFixture({
+      action: 'opened',
+      body: 'Blocked by #10 and depends on #11.',
+      failLinks: true,
+    });
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stderr).toContain('acme/app#10');
+    expect(result.stderr).toContain('acme/app#11');
+    expect(result.stderr).toContain('simulated link outage');
+  });
+
+  it('triggers for both opened and edited issue events', async () => {
+    const workflow = loadYaml(await readFile(WORKFLOW, 'utf8')) as { on?: { issues?: { types?: unknown } } };
+
+    expect(workflow.on?.issues?.types).toEqual(expect.arrayContaining(['opened', 'edited']));
   });
 });
