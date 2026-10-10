@@ -16,7 +16,9 @@ describe('StepInFlightTicker', () => {
     nowMs = startedAtMs;
     events = [];
     emitter = new ConductorEventEmitter();
-    emitter.on('step_in_flight', (event) => events.push(event));
+    emitter.on('step_in_flight', (event) => {
+      events.push(event);
+    });
     vi.useFakeTimers();
   });
 

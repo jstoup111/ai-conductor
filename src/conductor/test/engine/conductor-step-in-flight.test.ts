@@ -41,7 +41,7 @@ const PASS_EVIDENCE: FullSuitePassEvidence = {
 
 const PASS: FullSuiteVerifierResult = {
   status: 'EXECUTED',
-  freshness: { status: 'STALE', reason: 'fixture' },
+  freshness: { status: 'STALE', reason: 'missing' },
   evidence: PASS_EVIDENCE,
 };
 
@@ -65,7 +65,9 @@ describe('conductor serial step-in-flight ticker', () => {
     events = new ConductorEventEmitter();
     recorded = [];
     for (const type of ['step_started', 'step_completed', 'step_in_flight', 'build_progress'] as const) {
-      events.on(type, (event) => recorded.push(event));
+      events.on(type, (event) => {
+        recorded.push(event);
+      });
     }
   });
 
