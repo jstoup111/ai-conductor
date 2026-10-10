@@ -35,7 +35,7 @@ describe('withGateTier', () => {
 
   it('preserves an existing gate tier and leaves non-gate events unchanged', () => {
     const tiered: ConductorEvent = { type: 'gate_verdict', step: 'build_review', satisfied: true, tier: 'L' };
-    const other: ConductorEvent = { type: 'step_started', step: 'build' };
+    const other: ConductorEvent = { type: 'step_started', step: 'build', index: 0 };
 
     expect(withGateTier(tiered, 'S')).toBe(tiered);
     expect(withGateTier(tiered, 'S')).toMatchObject({ tier: 'L' });
