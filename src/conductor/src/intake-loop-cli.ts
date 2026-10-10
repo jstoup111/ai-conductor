@@ -35,6 +35,7 @@ import {
 import { buildIntake, makeProductionGh } from './engine/engineer-cli.js';
 import type { IntakeEventEmitter } from './engine/intake-backend-composite.js';
 import { runTrackerRepositoryRead } from './engine/tracker-client.js';
+import { resolveTrackerSelection } from './engine/tracker-selection.js';
 import { resolveEngineerDir } from './engine/engineer-store.js';
 import { sendNotification } from './ui/notifications.js';
 import type { EventHandler } from './ui/events.js';
@@ -261,10 +262,12 @@ export async function dispatchIntakeLoop(
   };
   const lastDriftSweepAt = new Map<string, number>();
   const reconcile = async () => {
-    await reconcileClosed({ ledger, queue, getIssueState }, { dryRun: false });
+    const summary = await reconcileClosed({ ledger, queue, getIssueState }, { dryRun: false });
     const tickAt = now().getTime();
     const projects = await reader.listProjects();
     for (const project of projects) {
+      const selection = await resolveTrackerSelection(project.path);
+      if (!selection.ok || selection.selection.backend !== 'github') continue;
       const repository = repositoryForDrift(project);
       const lastRun = lastDriftSweepAt.get(repository);
       if (lastRun !== undefined && tickAt - lastRun < DRIFT_SWEEP_INTERVAL_MS) continue;
@@ -277,6 +280,7 @@ export async function dispatchIntakeLoop(
         log(`intake loop: dependency drift sweep failed for ${repository}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    return summary;
   };
 
   const statusPath = join(engineerDir, 'intake-status.json');
