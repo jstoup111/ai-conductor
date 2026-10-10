@@ -298,6 +298,12 @@ export type PrCheckContextFailure =
 export interface PrMergeState {
   state: string;
   mergeable: string;
+  /** GitHub's detailed merge-state classification when present. */
+  mergeStateStatus?: string;
+  /** The target branch name when present. */
+  baseRefName?: string;
+  /** The current head commit SHA when present. */
+  headRefOid?: string;
   hasFailingOrPendingChecks: boolean;
   /** Whether the PR body contains the needs-remediation halt marker. */
   hasHaltBodyMarker?: boolean;
@@ -466,6 +472,9 @@ export function classifyChecksOutcome(
 interface GhPrViewJson {
   state?: string;
   mergeable?: string;
+  mergeStateStatus?: string;
+  baseRefName?: string;
+  headRefOid?: string;
   body?: string | null;
   statusCheckRollup?: Array<{ status?: string | null; conclusion?: string | null }> | null;
   labels?: Array<{ name?: string }> | null;
@@ -559,7 +568,7 @@ export async function prMergeState(
   log?: (msg: string) => void,
 ): Promise<PrMergeState> {
   try {
-    const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'state,mergeable,statusCheckRollup,labels,isDraft,body']);
+    const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'state,mergeable,statusCheckRollup,labels,isDraft,body,mergeStateStatus,baseRefName,headRefOid']);
     let parsed: unknown;
     try {
       parsed = JSON.parse(stdout);
@@ -590,6 +599,9 @@ export async function prMergeState(
     return {
       state,
       mergeable,
+      mergeStateStatus: data.mergeStateStatus,
+      baseRefName: data.baseRefName,
+      headRefOid: data.headRefOid,
       hasFailingOrPendingChecks,
       hasHaltBodyMarker: typeof data.body === 'string' && maskProjectOwnedRegions(data.body).includes(NEEDS_REMEDIATION_BODY_MARKER),
       labels,

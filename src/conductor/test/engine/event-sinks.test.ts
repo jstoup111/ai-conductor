@@ -239,6 +239,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'prd_widening_reconciled',
   'build_review_scope_summary',
   'build_review_scope_incomplete',
+  'shipped_pr_readiness',
   'ci_repair_diagnostic',
   'worktree_reclaim_reclaimed',
   'worktree_reclaim_retained',

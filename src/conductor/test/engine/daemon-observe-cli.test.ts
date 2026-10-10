@@ -657,9 +657,9 @@ describe('engine/daemon-observe-cli', () => {
       });
       expect(code).toBe(0);
       expect(rows.map((r) => r.liveness)).toEqual(['running', 'stale', 'path-missing']);
-      // One status line plus capability, GATED, and BLOCKED section lines per repo
+      // One status line plus capability, GATED, BLOCKED, and SHIPPED PRS section lines per repo
       // repo whose path exists (path-missing repos skip snapshot reads entirely).
-      expect(out.length).toBe(9);
+      expect(out.length).toBe(11);
     });
 
     it('prints a friendly message for an empty registry', async () => {
@@ -873,6 +873,104 @@ describe('engine/daemon-observe-cli', () => {
         expect({ code: result.code, output: out.join('\n') }).toEqual({
           code: 0,
           output: expect.stringContaining('BLOCKED: blocked state unknown — snapshot unreadable'),
+        });
+      });
+    });
+
+    describe('SHIPPED PRS section (Task 10, Story 6)', () => {
+      async function writeShippedPrFixtures(repo: string, events: unknown[], watchUrls: string[]): Promise<void> {
+        const daemonDir = join(repo, '.daemon');
+        await mkdir(daemonDir, { recursive: true });
+        await writeFile(
+          join(daemonDir, 'events.jsonl'),
+          events.map((event) => (typeof event === 'string' ? event : JSON.stringify(event))).join('\n') + '\n',
+          'utf8',
+        );
+        await writeFile(
+          join(daemonDir, 'mergeable-watch.jsonl'),
+          watchUrls.map((prUrl, index) => JSON.stringify({ prUrl, slug: `feature-${index}`, repoCwd: repo })).join('\n') + '\n',
+          'utf8',
+        );
+      }
+
+      function readiness(prUrl: string, verdict: string) {
+        return {
+          type: 'shipped_pr_readiness',
+          prUrl,
+          slug: prUrl.split('/').at(-1),
+          verdict,
+          headSha: 'abc123',
+          mergeable: 'MERGEABLE',
+          checksOutcome: 'none',
+          isDraft: verdict === 'draft',
+        };
+      }
+
+      // Covers: task:10
+      it('lists only active watched PRs whose latest readiness verdict needs attention, without spawning gh', async () => {
+        const repo = join(root, 'repo-shipped-prs');
+        const urls = {
+          noChecks: 'https://github.test/acme/repo/pull/1',
+          ready: 'https://github.test/acme/repo/pull/2',
+          draft: 'https://github.test/acme/repo/pull/3',
+          removed: 'https://github.test/acme/repo/pull/4',
+        };
+        await writeShippedPrFixtures(repo, [
+          readiness(urls.noChecks, 'no-checks'),
+          readiness(urls.ready, 'no-checks'),
+          readiness(urls.draft, 'draft'),
+          readiness(urls.ready, 'ready'),
+          readiness(urls.removed, 'no-checks'),
+        ], [urls.noChecks, urls.ready, urls.draft]);
+        const execFileSpy = vi.spyOn(cp, 'execFile');
+        const execSpy = vi.spyOn(cp, 'exec');
+        const out: string[] = [];
+
+        try {
+          const result = await runDaemonStatus({
+            registryPath: await registry([record('repo-shipped-prs', repo)]),
+            out: (line) => out.push(line),
+          });
+
+          expect({ code: result.code, output: out.join('\n'), execFileCalls: execFileSpy.mock.calls, execCalls: execSpy.mock.calls }).toEqual({
+            code: 0,
+            output: expect.stringContaining('SHIPPED PRS:'),
+            execFileCalls: [],
+            execCalls: [],
+          });
+          expect(out.join('\n')).toContain('pull/1 — no-checks');
+          expect(out.join('\n')).toContain('pull/3 — draft');
+          expect(out.join('\n')).not.toContain('pull/2');
+          expect(out.join('\n')).not.toContain('pull/4');
+        } finally {
+          execFileSpy.mockRestore();
+          execSpy.mockRestore();
+        }
+      });
+
+      // Covers: task:10
+      it('renders no-attention, unknown, and malformed-ledger states without failing status', async () => {
+        const allReady = join(root, 'repo-all-ready');
+        const malformed = join(root, 'repo-malformed-readiness');
+        const unknown = join(root, 'repo-unknown-readiness');
+        const url = 'https://github.test/acme/repo/pull/5';
+        await writeShippedPrFixtures(allReady, [readiness(url, 'no-checks'), readiness(url, 'ready')], [url]);
+        await writeShippedPrFixtures(malformed, ['{not json', readiness(url, 'no-checks')], [url]);
+        await mkdir(unknown, { recursive: true });
+        const out: string[] = [];
+
+        const result = await runDaemonStatus({
+          registryPath: await registry([
+            record('repo-all-ready', allReady),
+            record('repo-malformed-readiness', malformed),
+            record('repo-unknown-readiness', unknown),
+          ]),
+          out: (line) => out.push(line),
+        });
+
+        expect({ code: result.code, output: out.join('\n') }).toEqual({
+          code: 0,
+          output: expect.stringMatching(/no shipped PRs need attention[\s\S]*SHIPPED PRS:[\s\S]*pull\/5.*no-checks[\s\S]*shipped-PR readiness unknown/),
         });
       });
     });

@@ -37,6 +37,11 @@ import type { FeatureWorktree } from './daemon-runner.js';
 import { shippedRecordOnMain } from './shipped-record-on-main.js';
 import { leafBranchFor } from './feature-branch-identity.js';
 import type { CiFixOutcome } from './ci-fix.js';
+import {
+  classifyShippedReadiness,
+  routeShippedReadiness,
+  type ShippedReadinessVerdict,
+} from './shipped-readiness.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
 
@@ -76,7 +81,13 @@ export interface WatchEntry {
   ciFixAttempts?: number;
   lastCiFixAt?: string;
   ciFailureDetected?: boolean;
-  escalationCause?: 'conflict-resolution';
+  headSha?: string;
+  headFirstSeenAt?: string;
+  readinessEmitted?: {
+    verdict: ShippedReadinessVerdict;
+    headSha: string;
+  };
+  escalationCause?: 'conflict-resolution' | 'shipped-readiness';
   labelClearAttempts?: number;
 }
 
@@ -100,6 +111,41 @@ export async function maybeClearConflictLabel(
   if (state.mergeable !== 'MERGEABLE' || state.hasHaltBodyMarker || state.readFailure) return entry;
   if ((entry.labelClearAttempts ?? 0) >= 3) {
     log?.(`[mergeable-sweep] label clear retry cap reached for ${entry.prUrl}`);
+    return clear();
+  }
+  await removeLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+  return { ...entry, labelClearAttempts: (entry.labelClearAttempts ?? 0) + 1 };
+}
+
+/**
+ * Retire only the remediation label the shipped-readiness path applied. A
+ * human, CI-exhaustion, or conflict-resolution label has no equivalent
+ * provenance and must remain sticky. Read uncertainty and transient readiness
+ * states deliberately preserve the label to avoid flapping.
+ */
+export async function maybeClearReadinessLabel(
+  entry: WatchEntry,
+  state: PrMergeState,
+  verdict: ShippedReadinessVerdict,
+  gh: PrRunner,
+  log?: (message: string) => void,
+): Promise<WatchEntry> {
+  if (entry.escalationCause !== 'shipped-readiness') return entry;
+  const clear = (): WatchEntry => {
+    const { escalationCause: _cause, labelClearAttempts: _attempts, ...cleared } = entry;
+    return cleared;
+  };
+  if (!state.labels.includes('needs-remediation')) return clear();
+  if (
+    state.hasHaltBodyMarker ||
+    state.readFailure ||
+    verdict === 'no-checks' ||
+    verdict === 'draft' ||
+    verdict === 'ci-pending' ||
+    verdict === 'indeterminate'
+  ) return entry;
+  if ((entry.labelClearAttempts ?? 0) >= 3) {
+    log?.(`[mergeable-sweep] readiness label clear retry cap reached for ${entry.prUrl}`);
     return clear();
   }
   await removeLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
@@ -203,7 +249,23 @@ export async function readWatch(projectRoot: string): Promise<WatchEntry[]> {
               ...(typeof raw.ciFailureDetected === 'boolean' && {
                 ciFailureDetected: raw.ciFailureDetected,
               }),
-              ...(raw.escalationCause === 'conflict-resolution' && { escalationCause: 'conflict-resolution' as const }),
+              ...(typeof raw.headSha === 'string' && { headSha: raw.headSha }),
+              ...(typeof raw.headFirstSeenAt === 'string' && {
+                headFirstSeenAt: raw.headFirstSeenAt,
+              }),
+              ...(raw.readinessEmitted !== null &&
+                typeof raw.readinessEmitted === 'object' &&
+                typeof (raw.readinessEmitted as Record<string, unknown>).verdict === 'string' &&
+                typeof (raw.readinessEmitted as Record<string, unknown>).headSha === 'string' && {
+                  readinessEmitted: {
+                    verdict: (raw.readinessEmitted as Record<string, unknown>).verdict as ShippedReadinessVerdict,
+                    headSha: (raw.readinessEmitted as Record<string, unknown>).headSha as string,
+                  },
+                }),
+              ...((raw.escalationCause === 'conflict-resolution' ||
+                raw.escalationCause === 'shipped-readiness') && {
+                escalationCause: raw.escalationCause,
+              }),
               ...(typeof raw.labelClearAttempts === 'number' && { labelClearAttempts: raw.labelClearAttempts }),
             };
             return [entry];
@@ -307,6 +369,8 @@ export interface CiFixDispatchOpts {
 export interface SweepOpts {
   projectRoot: string;
   log?: (msg: string) => void;
+  /** Clock override for persisted watch observations; defaults to `new Date()`. */
+  now?: () => Date;
   runGh?: GhRunner;
   /** Typed PR-state reader; raw gh remains scoped to legacy label mutations. */
   tracker?: Pick<TrackerClient, 'readPullRequestMergeState'>;
@@ -363,6 +427,7 @@ export async function sweepMergeableLabels({
   shippedRecordProbe,
   canRemoveWorktree,
   onEvent,
+  now = () => new Date(),
 }: SweepOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
   const prStateTracker = tracker ?? createGithubTrackerClient(gh);
@@ -374,6 +439,13 @@ export async function sweepMergeableLabels({
         ...(await git(args, opts)),
         stderr: '',
       })));
+  const emitEvent = (event: ConductorEvent): void => {
+    try {
+      onEvent?.(event);
+    } catch (error) {
+      log?.(`[mergeable-sweep] event listener error: ${error}`);
+    }
+  };
   try {
     const entries = await readWatch(projectRoot);
     const survivors: WatchEntry[] = [];
@@ -386,14 +458,16 @@ export async function sweepMergeableLabels({
     // PR state. Only populated/consulted when ciFix is configured.
     const failedCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
 
-    for (const entry of entries) {
+    for (let entry of entries) {
       try {
         const entryGh = runnerForEntry(gh, entry, operations);
-        const state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
+        let state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
 
-        // GitHub checks are authoritative for CI state. Retire the redundant
-        // custom label whenever a reconciliation read finds it on a PR.
-        if (state.labels.includes('ci-failed')) {
+        // Preserve lifecycle reconciliation: closed, merged, and not-found
+        // states retain their existing stale CI-label cleanup before taking
+        // their dedicated lifecycle path. Open states wait for readiness
+        // classification so indeterminate observations stay read-only.
+        if (state.state !== 'OPEN' && state.labels.includes('ci-failed')) {
           await removeLabel(entryGh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
         }
 
@@ -461,6 +535,24 @@ export async function sweepMergeableLabels({
           continue; // not added to survivors
         }
 
+        // GitHub can initially return UNKNOWN while it calculates mergeability
+        // for an otherwise readable OPEN PR. Give that lazy result exactly one
+        // more read; a second failure stays explicit on the state so the
+        // readiness classifier can safely call it indeterminate.
+        let mergeabilityReread: 'not-needed' | 'completed' | 'failed' = 'not-needed';
+        if (state.state === 'OPEN' && state.mergeable === 'UNKNOWN') {
+          try {
+            state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
+            mergeabilityReread = 'completed';
+          } catch (error) {
+            mergeabilityReread = 'failed';
+            state = {
+              ...state,
+              readFailure: { kind: 'runner', error },
+            };
+          }
+        }
+
         // FR-15: UNKNOWN state (transient read/fetch error) → log + skip this
         // iteration; keep the entry so it is retried on the next sweep cycle.
         if (state.state === 'UNKNOWN') {
@@ -478,20 +570,108 @@ export async function sweepMergeableLabels({
           continue;
         }
 
+        // The timestamp begins with the first observation of a head and is
+        // reset only when that SHA changes. Do this before classification so
+        // the first tick for a new head receives a full grace period.
+        if (state.headRefOid && state.headRefOid !== entry.headSha) {
+          entry = {
+            ...entry,
+            headSha: state.headRefOid,
+            headFirstSeenAt: now().toISOString(),
+          };
+        }
+
+        // Missing head data leaves legacy bookkeeping intact until GitHub
+        // supplies an OID.
+        const headFirstSeenAt = entry.headFirstSeenAt
+          ? Date.parse(entry.headFirstSeenAt)
+          : undefined;
+        const readiness = classifyShippedReadiness(
+          state,
+          {
+            mergeabilityReread,
+            ...(Number.isFinite(headFirstSeenAt) ? { headFirstSeenAt } : {}),
+          },
+          now().getTime(),
+        );
+
+        if (
+          entry.headSha !== undefined &&
+          (entry.readinessEmitted?.verdict !== readiness ||
+            entry.readinessEmitted.headSha !== entry.headSha)
+        ) {
+          const headSha = entry.headSha;
+          entry = {
+            ...entry,
+            readinessEmitted: { verdict: readiness, headSha },
+          };
+          emitEvent({
+            type: 'shipped_pr_readiness',
+            prUrl: entry.prUrl,
+            slug: entry.slug,
+            verdict: readiness,
+            headSha,
+            mergeable: state.mergeable,
+            ...(state.mergeStateStatus === undefined ? {} : { mergeStateStatus: state.mergeStateStatus }),
+            checksOutcome: state.checksOutcome,
+            isDraft: state.isDraft === true,
+            ...(state.baseRefName === undefined ? {} : { baseRefName: state.baseRefName }),
+          });
+        }
+
         // Entry is live — keep it in the registry.
         recordDisposition(log, entry, `live:${state.state}`);
         survivors.push(entry);
 
-        // Task 17 (AC1): track CONFLICTING PRs for the post-label-pass
-        // autoresolve dispatch below. Collected unconditionally (cheap) but
-        // only ever consulted when `autoresolve` is configured, so a disabled
-        // config leaves the sweep's observable behavior unchanged (AC4).
-        //
-        // Draft PRs are never resolution candidates (see `isDraft` note on
-        // PrMergeState): a draft is an in-flight build's own PR, so dispatching
-        // autoresolve/CI-fix against it fights the running build. The ordinary
-        // `mergeable` label reconciliation below is unaffected.
-        if (state.mergeable === 'CONFLICTING') {
+        let conflicting = false;
+        let ciFailing = false;
+        let needsReadinessRemediation = false;
+        const indeterminate = routeShippedReadiness(readiness, {
+          ready: () => false,
+          conflicting: () => {
+            conflicting = true;
+            return false;
+          },
+          'ci-failing': () => {
+            ciFailing = true;
+            return false;
+          },
+          'ci-pending': () => false,
+          'no-checks': () => {
+            needsReadinessRemediation = true;
+            return false;
+          },
+          draft: () => {
+            needsReadinessRemediation = true;
+            return false;
+          },
+          indeterminate: () => true,
+        });
+
+        // Retire only labels whose recorded cause says they are stale. This is
+        // deliberately before normal reconciliation and candidate collection.
+        const readinessClearAttempts = entry.labelClearAttempts ?? 0;
+        const clearingReadinessLabel =
+          entry.escalationCause === 'shipped-readiness' && state.labels.includes('needs-remediation');
+        entry = await maybeClearReadinessLabel(entry, state, readiness, entryGh, log);
+        const readinessEntryIdx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
+        if (readinessEntryIdx >= 0) survivors[readinessEntryIdx] = entry;
+        const readinessLabelRemoved =
+          clearingReadinessLabel && entry.labelClearAttempts === readinessClearAttempts + 1;
+
+        // GitHub checks are authoritative for CI state. Retire the redundant
+        // custom label whenever a readable reconciliation observation finds it.
+        if (state.labels.includes('ci-failed')) {
+          await removeLabel(entryGh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
+        }
+
+        // Shipped readiness owns only its own attribution. Conflict, CI, and
+        // human remediation labels stay sticky during readiness recovery.
+
+        // Task 17 (AC1): preserve the historical conflict candidate behavior,
+        // but collect after remediation recovery so later dispatch sees the
+        // entry's current bookkeeping.
+        if (conflicting) {
           if (state.isDraft) {
             log?.(`[mergeable-sweep] skipping resolve for ${entry.prUrl} (draft PR)`);
           } else {
@@ -499,13 +679,33 @@ export async function sweepMergeableLabels({
           }
         }
 
-        // A conflict-resolution label becomes stale once GitHub reports the PR
-        // mergeable again. Legacy/unattributed labels remain sticky.
-        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
-        if (idx >= 0) survivors[idx] = await maybeClearConflictLabel(entry, state, entryGh, log);
+        // An indeterminate GitHub observation is deliberately read-only. It
+        // remains watched for the next tick, but neither a stale label nor a
+        // repair/escalation action can turn uncertainty into a side effect.
+        if (indeterminate) continue;
 
         // FR-12: if the PR carries `needs-remediation`, ensure `mergeable` is absent.
-        let hasRemediation = state.labels.includes('needs-remediation');
+        let hasRemediation = state.labels.includes('needs-remediation') && !readinessLabelRemoved;
+
+        // A stale shipped PR with no checks, or a draft PR, needs human
+        // attention. Attribute only a confirmed absent→present label write:
+        // failed/refused writes deliberately retain no cause so the next tick
+        // retries the same bounded, label-only action.
+        if (needsReadinessRemediation && !hasRemediation) {
+          const labelResult = await addLabel(
+            entryGh,
+            entry.repoCwd,
+            entry.prUrl,
+            'needs-remediation',
+            log,
+          );
+          if (labelResult.kind === 'executed') {
+            entry = { ...entry, escalationCause: 'shipped-readiness' };
+            const entryIdx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
+            if (entryIdx >= 0) survivors[entryIdx] = entry;
+            hasRemediation = true;
+          }
+        }
 
         // Task 21: exhaustion — escalate exactly once. Gated on the
         // label-absent→present transition so a sweep that finds
@@ -556,7 +756,7 @@ export async function sweepMergeableLabels({
           } catch (err) {
             log?.(`[mergeable-sweep] exhaustion comment error for ${entry.prUrl}: ${err}`);
           }
-          onEvent?.({
+          emitEvent({
             type: 'ci_failed',
             prUrl: entry.prUrl,
             slug: entry.slug,
@@ -581,7 +781,7 @@ export async function sweepMergeableLabels({
           // Draft PRs are excluded here for the same reason as the
           // CONFLICTING collection above — resolution only ever runs against
           // non-draft (ready-for-review) PRs.
-          if (state.checksOutcome === 'failed') {
+          if (ciFailing) {
             if (state.isDraft) {
               log?.(`[mergeable-sweep] skipping ci-fix for ${entry.prUrl} (draft PR)`);
             } else {
@@ -593,7 +793,7 @@ export async function sweepMergeableLabels({
         // Keep edge-triggered failure events independent of GitHub label state.
         if (state.checksOutcome === 'failed') {
           if (!entry.ciFailureDetected) {
-            onEvent?.({
+            emitEvent({
               type: 'ci_failed',
               prUrl: entry.prUrl,
               slug: entry.slug,

@@ -28,6 +28,7 @@ import { prdAuditAppendCap } from './remediation-caps.js';
 import { loadConfig } from './config.js';
 import { readGrowth, readKickbackLedger } from './kickback-ledger.js';
 import { renderKickbackBudgetView } from './kickback-budget-view.js';
+import { readWatch } from './mergeable-sweep.js';
 import { resolveActiveChild } from './child-cursor.js';
 import { parseChildId, type ChildId } from './child-context.js';
 import {
@@ -491,13 +492,13 @@ function readOnlyReviewCapability(event: unknown): ReadOnlyReviewCapability | un
 /** Visit `.daemon/events.jsonl` newest-first until `visit` returns true.
  * Chunks may start mid-record, so only complete lines are parsed; a missing,
  * unreadable, or malformed ledger never makes status fail. */
-async function scanEventsNewestFirst(repoPath: string, visit: (event: unknown) => boolean): Promise<void> {
+async function scanEventsNewestFirst(repoPath: string, visit: (event: unknown) => boolean): Promise<boolean> {
   const path = join(repoPath, '.daemon', 'events.jsonl');
   let size: number;
   try {
     size = (await stat(path)).size;
   } catch {
-    return;
+    return false;
   }
 
   let end = size;
@@ -521,7 +522,7 @@ async function scanEventsNewestFirst(repoPath: string, visit: (event: unknown) =
             // A concurrent append or malformed unrelated event does not make status fail.
             continue;
           }
-          if (visit(event)) return;
+          if (visit(event)) return true;
         }
         end = start;
       }
@@ -529,8 +530,9 @@ async function scanEventsNewestFirst(repoPath: string, visit: (event: unknown) =
       await handle.close();
     }
   } catch {
-    return;
+    return false;
   }
+  return true;
 }
 
 /** Latest capability record per provider, scanning the whole ledger. */
@@ -577,6 +579,67 @@ async function renderReadOnlyReviewCapabilitySection(repoPath: string, out: (lin
     const reason = capability.reason === undefined ? '' : `: ${capability.reason}`;
     out(`  READ-ONLY REVIEW CAPABILITY: ${capability.provider} on ${capability.platform} — ${capability.status}${reason}`);
   }
+}
+
+type ShippedPrReadiness = {
+  prUrl: string;
+  slug: string;
+  verdict: 'ready' | 'conflicting' | 'ci-failing' | 'ci-pending' | 'no-checks' | 'draft' | 'indeterminate';
+};
+
+const SHIPPED_READINESS_VERDICTS = new Set<ShippedPrReadiness['verdict']>([
+  'ready', 'conflicting', 'ci-failing', 'ci-pending', 'no-checks', 'draft', 'indeterminate',
+]);
+
+function shippedPrReadiness(event: unknown): ShippedPrReadiness | undefined {
+  if (typeof event !== 'object' || event === null) return undefined;
+  const record = event as Record<string, unknown>;
+  if (
+    record.type !== 'shipped_pr_readiness' ||
+    typeof record.prUrl !== 'string' ||
+    typeof record.slug !== 'string' ||
+    typeof record.verdict !== 'string' ||
+    !SHIPPED_READINESS_VERDICTS.has(record.verdict as ShippedPrReadiness['verdict'])
+  ) return undefined;
+  return {
+    prUrl: record.prUrl,
+    slug: record.slug,
+    verdict: record.verdict as ShippedPrReadiness['verdict'],
+  };
+}
+
+/**
+ * Read newest readiness evidence only from the local daemon ledger. Entries
+ * are claimed on first sight during its backwards chunk scan, yielding the
+ * latest record per PR without invoking GitHub or any other external boundary.
+ */
+export async function readLatestShippedPrReadiness(
+  repoPath: string,
+): Promise<readonly ShippedPrReadiness[] | undefined> {
+  const latestByPrUrl = new Map<string, ShippedPrReadiness>();
+  const readable = await scanEventsNewestFirst(repoPath, (raw) => {
+    const event = shippedPrReadiness(raw);
+    if (event && !latestByPrUrl.has(event.prUrl)) latestByPrUrl.set(event.prUrl, event);
+    return false;
+  });
+  return readable ? [...latestByPrUrl.values()] : undefined;
+}
+
+/** Render local latest readiness only for PRs that remain actively watched. */
+async function renderShippedPrsSection(repoPath: string, out: (line: string) => void): Promise<void> {
+  const latest = await readLatestShippedPrReadiness(repoPath);
+  if (latest === undefined) {
+    out('  SHIPPED PRS: shipped-PR readiness unknown');
+    return;
+  }
+  const activePrUrls = new Set((await readWatch(repoPath)).map((entry) => entry.prUrl));
+  const needsAttention = latest.filter((event) => activePrUrls.has(event.prUrl) && event.verdict !== 'ready');
+  if (needsAttention.length === 0) {
+    out('  SHIPPED PRS: no shipped PRs need attention');
+    return;
+  }
+  out('  SHIPPED PRS:');
+  for (const event of needsAttention) out(`    • ${event.prUrl} — ${event.verdict} (${event.slug})`);
 }
 
 /**
@@ -778,6 +841,7 @@ export async function runDaemonStatus(
       await renderReadOnlyReviewCapabilitySection(record.path, out);
       await renderGatedSection(record.path, out, clock);
       await renderBlockedSection(record.path, out, clock);
+      await renderShippedPrsSection(record.path, out);
       await renderAgreementLine(record.path, out);
       await renderInapplicableSection(record.path, out);
       if (row.liveness === 'running') {
