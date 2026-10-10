@@ -256,3 +256,19 @@ Task 5 (independent)
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-as-built-1-cumulative-cap: src/conductor/src/engine/conductor.ts: in the malformed-Covers build_review branch, after consumeKickbackBudget, apply the existing cumulative-cap halt (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted -> renderKickbackBudgetView reason, recordKickbackCapEvidence, halt marker with haltGeneration, surfaceRemediationPr, emitLoopHalt) before routing to BUILD; add a conductor test proving a malformed-Covers lap past the effective cumulative cap halts instead of kicking back
+**Gate:** as-built
+**Rationale:** Verified (99%): src/conductor/src/engine/conductor.ts malformed-Covers branch (~11987-12025) calls consumeKickbackBudget('build_review', ...) but branches only on kickback.exhausted, never on cumulativeExhausted. The existing FAIL-verdict branch (~12471) already implements ADR D3 handling (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted -> recordKickbackCapEvidence + halt marker with haltGeneration + surfaceRemediationPr + emitLoopHalt). Approved architecture is authoritative and no decision is needed; this is conforming implementation drift admitted by plan Task 4 (route malformed markers to BUILD under the kickback cap).
+**Governing clause:** adr-2026-08-12-cumulative-build-review-convergence-bound decision 3
+**Done when:**
+- adr-2026-08-12-cumulative-build-review-convergence-bound decision 3 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-as-built-1-cumulative-cap is complete.
+
+### Task rem-as-built-as-built-2-cumulative-count: src/conductor/src/engine/conductor.ts: include cumulativeCount: kickback.entry.cumulative in the malformed-Covers build_review kickback event (matching the FAIL-verdict branch); assert it in the malformed-Covers conductor kickback test
+**Gate:** as-built
+**Rationale:** Verified (99%): the kickback event emitted in the malformed-Covers branch carries count but omits cumulativeCount, although consumeKickbackBudget increments the cumulative counter; ADR D5 requires the existing kickback event to carry it. Conforming one-field implementation fix within plan Task 4's kickback routing; extends the existing event, no new channel.
+**Governing clause:** adr-2026-08-12-cumulative-build-review-convergence-bound decision 5
+**Done when:**
+- adr-2026-08-12-cumulative-build-review-convergence-bound decision 5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-as-built-2-cumulative-count is complete.
