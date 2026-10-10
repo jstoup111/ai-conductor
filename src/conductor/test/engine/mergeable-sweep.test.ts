@@ -371,6 +371,44 @@ describe('readWatch', () => {
     expect(reread[0].ciFixAttempts).toBe(0);
     expect(reread[0].lastCiFixAt).toBeUndefined();
   });
+
+  it('round-trips readiness bookkeeping through rewriteWatch', async () => {
+    const readinessEntry: WatchEntry = {
+      prUrl: PR_URL,
+      slug: 'test-feature',
+      repoCwd: '/fake/repo',
+      headSha: 'abc123',
+      headFirstSeenAt: '2026-10-10T14:30:00.000Z',
+      readinessEmitted: true,
+      escalationCause: 'shipped-readiness',
+    };
+
+    await rewriteWatch(tmpDir, [readinessEntry]);
+
+    await expect(readWatch(tmpDir)).resolves.toEqual([
+      expect.objectContaining(readinessEntry),
+    ]);
+  });
+
+  it('keeps readiness bookkeeping undefined for a legacy watch line', async () => {
+    await mkdir(join(tmpDir, '.daemon'), { recursive: true });
+    await writeFile(
+      join(tmpDir, '.daemon', 'mergeable-watch.jsonl'),
+      JSON.stringify({ prUrl: PR_URL, slug: 'test-feature', repoCwd: '/fake/repo' }) + '\n',
+    );
+
+    const [result] = await readWatch(tmpDir);
+
+    expect(result).toEqual(expect.objectContaining({
+      prUrl: PR_URL,
+      slug: 'test-feature',
+      repoCwd: '/fake/repo',
+    }));
+    expect(result.headSha).toBeUndefined();
+    expect(result.headFirstSeenAt).toBeUndefined();
+    expect(result.readinessEmitted).toBeUndefined();
+    expect(result.escalationCause).toBeUndefined();
+  });
 });
 
 describe('rewriteWatch', () => {
