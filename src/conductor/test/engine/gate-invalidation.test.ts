@@ -1,3 +1,4 @@
+// Covers: task:1
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';

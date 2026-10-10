@@ -1,4 +1,4 @@
-// Covers: task:3, task:1
+// Covers: task:4, task:3, task:1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readFile } from 'fs/promises';
 import { join } from 'path';
@@ -53,6 +53,23 @@ describe('EventPersister', () => {
     persister.stop();
 
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(2);
+  });
+
+  it('persists excluded marker files on a build-review scope summary', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    await emitter.emit({
+      type: 'build_review_scope_summary', rubric: 'testQuality', lapId: 'lap-1',
+      establishedTargetCount: 0, candidateCount: 0, unresolvedReasons: [],
+      excludedMarkerFiles: [{ selector: 'tools/old_check.sh', reason: 'unsupported-source-language' }],
+    });
+    persister.stop();
+
+    expect(JSON.parse((await readFile(eventsPath, 'utf8')).trim())).toMatchObject({
+      type: 'build_review_scope_summary',
+      excludedMarkerFiles: [{ selector: 'tools/old_check.sh', reason: 'unsupported-source-language' }],
+    });
   });
 
   it('indexes persisted observation ids once and updates the index after each append', async () => {

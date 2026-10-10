@@ -1,4 +1,4 @@
-// Covers: task:5, task:7, task:15
+// Covers: task:4, task:5, task:7, task:15
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -260,6 +260,31 @@ describe("build-review coordinator: registered dispatch", () => {
     });
     expect(writeArtifact).not.toHaveBeenCalled();
     expect(writeCache).not.toHaveBeenCalled();
+  });
+
+  it('reports excluded marker files on an empty scope summary', async () => {
+    const frozenInputs = inputs();
+    const emit = vi.fn(async () => undefined);
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: {
+        ...frozenInputs,
+        sourceSnapshot: {
+          ...frozenInputs.sourceSnapshot,
+          testQuality: {
+            inScopeTests: [], counterfactualFileSelectors: [], unresolvedMarkers: [],
+            excludedMarkerFiles: [{ selector: 'tools/old_check.sh', reason: 'unsupported-source-language' }],
+          },
+          testScope: { targets: [], candidates: [], notes: [], changedDeclarations: [], affectedGroups: [], sharedSources: [] } as never,
+        },
+      },
+      emit,
+    }));
+
+    expect(result).toMatchObject({ reason: 'test_quality_empty_scope' });
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'build_review_scope_summary',
+      excludedMarkerFiles: [{ selector: 'tools/old_check.sh', reason: 'unsupported-source-language' }],
+    }));
   });
 
   it("keeps a disabled whole gate distinct from an empty enabled container", () => {

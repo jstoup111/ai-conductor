@@ -15,6 +15,8 @@ import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { parseCoversMarkers } from './covers-marker.js';
+import { isTestPath } from './test-path.js';
 import {
   analyzeBuildReviewTestScope,
   type BuildReviewTestScope,
@@ -22,7 +24,7 @@ import {
   type BuildReviewTestSourceReference,
   unavailableBuildReviewTestScope,
 } from './build-review-test-scope.js';
-import type { TestDeclarationSpan } from './build-review-test-declarations.js';
+import type { TestDeclarationSpan, TestDeclarationUncertaintyReason } from './build-review-test-declarations.js';
 import {
   buildReviewScopeCandidateIdentityKey,
   type BuildReviewScopeCandidateIdentityReference,
@@ -216,6 +218,17 @@ export interface BuildReviewTestQualityScope {
   readonly counterfactualFileSelectors: readonly string[];
   /** Changed-test markers that name no criterion, FR, or task in this feature. */
   readonly unresolvedMarkers: readonly BuildReviewUnresolvedMarker[];
+  /** Marker-bearing non-convention files that could not enter review scope. */
+  readonly excludedMarkerFiles: readonly BuildReviewExcludedMarkerFile[];
+}
+
+export type BuildReviewExcludedMarkerReason = TestDeclarationUncertaintyReason
+  | 'no-changed-test-declarations'
+  | 'no-current-feature-binding';
+
+export interface BuildReviewExcludedMarkerFile {
+  readonly selector: string;
+  readonly reason: BuildReviewExcludedMarkerReason;
 }
 
 /** Advisory provenance for paths excluded because Git found their patches upstream. */
@@ -448,12 +461,6 @@ function activeStoriesPath(planRepoPath: string, planBody: string): string | und
   return storiesRepoPath === null ? undefined : storiesRepoPath;
 }
 
-function isTestPath(path: string): boolean {
-  return /(?:^|\/)(?:test|tests)\//.test(path)
-    || /(?:^|\/)(?:__tests__|tests?|spec)\/.*\.(?:test|spec)\.[^/]+$|\.(?:test|spec)\.[^/]+$/i.test(path)
-    || /(?:^|\/)(?:__tests__|tests?|spec)\/.*(?:_test|_spec)\.[^/]+$/i.test(path);
-}
-
 function markerReferenceForScope(reference: { readonly kind: string; readonly id: string }): string {
   return reference.kind === 'task' ? `task:${reference.id}` : reference.id;
 }
@@ -632,13 +639,22 @@ async function snapshotTypedTestScope(
     : []));
   const changedPaths = new Set(changes.filter((change) => change.kind !== 'D').map((change) => change.path));
   const changeByPath = new Map(changes.filter((change) => change.kind !== 'D').map((change) => [change.path, change]));
-  const paths = new Set([
+  const conventionalPaths = new Set([
     ...changedPaths,
     // Directory hints describe task scope, not a blob to parse. Changed files
     // beneath them remain included independently through the Git inventory.
     ...[...parsePlanTaskPaths(planBody).values()].flatMap((taskPaths) =>
       [...taskPaths].filter((path) => !path.endsWith('/'))),
   ].filter(isTestPath));
+  const admittedMarkerPaths = new Set<string>();
+  for (const path of changedPaths) {
+    if (isTestPath(path)) continue;
+    const text = await source.readRequired(path);
+    if (parseCoversMarkers(text).some((reference) => reference.kind !== 'unresolved')) {
+      admittedMarkerPaths.add(path);
+    }
+  }
+  const paths = new Set([...conventionalPaths, ...admittedMarkerPaths]);
   const initial: ScopedTestFile[] = [];
   for (const path of paths) {
     const basePath = renamedFrom.get(path) ?? path;
@@ -701,6 +717,17 @@ async function snapshotTypedTestScope(
   const unresolvedMarkers = files.flatMap((file) => file.scope.notes.flatMap((note) => note.kind === 'unresolved-reference'
     ? [Object.freeze({ selector: file.path, reference: markerReferenceForScope(note.marker.reference) })]
     : []));
+  const excludedMarkerFiles = files.flatMap<BuildReviewExcludedMarkerFile>((file) => {
+    if (!admittedMarkerPaths.has(file.path) || file.scope.targets.length > 0 || file.scope.candidates.length > 0) return [];
+    const uncertainty = file.scope.notes.find((note) => note.kind === 'declaration-uncertainty');
+    return [Object.freeze({
+      selector: file.path,
+      reason: uncertainty?.diagnostic.reason
+        ?? (file.scope.changedDeclarations.length === 0
+          ? 'no-changed-test-declarations'
+          : 'no-current-feature-binding'),
+    })];
+  }).sort((left, right) => left.selector.localeCompare(right.selector));
   // Kept as a compatibility projection until no live consumer remains. Its
   // title regions must be the same established targets that v3 projects,
   // never every changed declaration in a file that happens to contain one.
@@ -735,6 +762,7 @@ async function snapshotTypedTestScope(
       unresolvedMarkers: Object.freeze(unresolvedMarkers.sort((left, right) =>
         `${left.selector}\u0000${left.reference}`.localeCompare(`${right.selector}\u0000${right.reference}`),
       )),
+      excludedMarkerFiles: Object.freeze(excludedMarkerFiles),
     }),
     changedTestTitles: Object.freeze(changedTestTitles),
   });

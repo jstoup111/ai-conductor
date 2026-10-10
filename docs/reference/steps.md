@@ -69,7 +69,7 @@ candidates from changed declarations, current-feature-owned `Covers` bindings in
 after the review base, and relevant shared setup or helper evidence. An unchanged bare marker remains
 owned by the feature that landed it; a coincidentally matching active-plan ordinal cannot make it
 current authority. Only a `Covers` marker in a real comment binds; `Covers:` text inside a string or
-template literal is test data, not a marker. The engine does not make every title in a changed marked file a review target. A candidate's
+template literal is test data, not a marker. Test paths use `.test.` or `.spec.` filenames and `test`, `tests`, `__tests__`, or `spec` trees; a changed file with a well-formed `Covers:` reference is also analyzed wherever it lives. The engine does not make every title in a changed marked file a review target. A candidate's
 file can be selected for conservative counterfactual execution without making unchanged sibling tests
 quality targets.
 
@@ -77,7 +77,7 @@ Enabled `testQuality` with no established targets or concrete candidates is a va
 not dispatch its reviewer or counterfactual preflight. An enabled `security` rubric still reviews the diff
 and participates in the joined verdict. This preserves production-only refactors and pure
 moves/renames as non-coverage work; the aggregate suite and CI remain responsible for broad regression
-execution. For each concrete candidate, the normal reviewer returns one source-bound scope resolution:
+execution. An admitted non-convention marker file that cannot be reviewed is named with its reason on the persisted `build_review_scope_summary` event. For each concrete candidate, the normal reviewer returns one source-bound scope resolution:
 `resolved`, `out-of-scope`, or `indeterminate`. An indeterminate candidate preserves any otherwise valid
 findings but creates a derived `scope-incomplete` fault. It follows the existing bounded mechanical-fault
 and explicit reduced-coverage recovery path rather than inventing a test-insensitive finding or silently

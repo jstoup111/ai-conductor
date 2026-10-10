@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:8, task:12
+// Covers: task:1, task:2, task:3, task:8, task:12
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -490,6 +490,31 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(inputs.sourceSnapshot.testQuality?.counterfactualFileSelectors).toEqual(['spec/example_spec.rb']);
       expect(inputs.sourceSnapshot.testScope?.candidates.some(({ source }) => source.fileName === 'spec/unchanged_spec.rb')).toBe(false);
       expect(inputs.sourceSnapshot.testScope?.targets.some(({ source }) => source.fileName === 'spec/unchanged_spec.rb')).toBe(false);
+    });
+
+    it('admits a marker-bearing file outside test conventions as an uncertainty candidate', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
+          'diff --git a/tools/test_widget.sh b/tools/test_widget.sh',
+          '--- a/tools/test_widget.sh', '+++ b/tools/test_widget.sh', '+# Covers: task:8',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
+        { match: ['show', 'head123:tools/test_widget.sh'], result: { stdout: '# Covers: task:8\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(inputs.sourceSnapshot.testQuality).toMatchObject({
+        inScopeTests: [],
+        counterfactualFileSelectors: ['tools/test_widget.sh'],
+        excludedMarkerFiles: [],
+      });
+      expect(inputs.sourceSnapshot.testScope?.candidates).toMatchObject([{
+        source: { fileName: 'tools/test_widget.sh', side: 'head' },
+        diagnostic: { reason: 'unsupported-source-language' },
+      }]);
     });
 
     it('selects a changed marked unsupported-language spec as one source-bound uncertainty candidate', async () => {
@@ -1539,6 +1564,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         inScopeTests: ['test/new name.test.ts'],
         counterfactualFileSelectors: ['test/new name.test.ts'],
         unresolvedMarkers: [],
+        excludedMarkerFiles: [],
       });
       expect(result.sourceSnapshot.changedTestTitles).toEqual([
         { selector: 'test/new name.test.ts', titleText: 'pinned test', staticExtractionFallback: false },
@@ -1624,6 +1650,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           { selector: 'test/malformed.test.ts', reference: 'task:' },
           { selector: 'test/unresolved.test.ts', reference: 'S9.1' },
         ],
+        excludedMarkerFiles: [{ selector: 'src/technical-coverage.ts', reason: 'no-changed-test-declarations' }],
       });
 
       // Another feature's test reaches the base before this feature is rebased.

@@ -222,6 +222,7 @@ async function emitScopeSummary(
 ): Promise<void> {
   const scope = input.inputs.sourceSnapshot.testScope;
   const unresolvedReasons = [...new Set(scope?.candidates.flatMap((candidate) => candidate.reasons) ?? [])].sort();
+  const excludedMarkerFiles = input.inputs.sourceSnapshot.testQuality?.excludedMarkerFiles;
   await emit?.({
     type: 'build_review_scope_summary',
     rubric: TEST_QUALITY_RUBRIC,
@@ -229,6 +230,7 @@ async function emitScopeSummary(
     establishedTargetCount: scope?.targets.length ?? input.inputs.sourceSnapshot.testQuality?.inScopeTests.length ?? 0,
     candidateCount: scope?.candidates.length ?? 0,
     unresolvedReasons,
+    ...(excludedMarkerFiles && excludedMarkerFiles.length > 0 ? { excludedMarkerFiles } : {}),
   });
 }
 

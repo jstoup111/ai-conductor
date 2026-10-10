@@ -1,3 +1,4 @@
+// Covers: task:3
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -342,6 +343,17 @@ describe('build-review test-quality preflight', () => {
         'test/fixtures/claude-envelopes/successful-command.json',
       ],
       production: ['src/engine/build-review.ts'],
+    });
+  });
+
+  it('keeps an admitted changed marker file at HEAD while reverting other production paths', () => {
+    expect(classifyTautologyPaths(
+      ['src/widget/widget.check.ts', 'src/widget/widget.ts'],
+      ['src/widget/widget.check.ts', 'test/unchanged.test.ts'],
+    )).toEqual({
+      tests: ['src/widget/widget.check.ts'],
+      testSupport: [],
+      production: ['src/widget/widget.ts'],
     });
   });
 
