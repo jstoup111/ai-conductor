@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Covers: task:4
 # BEGIN integrity failure reporting
 set -eEuo pipefail
 
