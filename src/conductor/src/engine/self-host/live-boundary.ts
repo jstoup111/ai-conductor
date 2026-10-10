@@ -177,6 +177,17 @@ const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'tmp',                   // scratch dir (e.g. `arg0`) written by the CLI at startup
   'packages/standalone',   // self-update installer bookkeeping (current release, install lock)
   'models_cache.json',     // cache of available models, refreshed periodically
+  'session_index.jsonl',   // append-only {id, thread_name, updated_at} index of every Codex thread on
+                           // the machine — a session log like history.jsonl, no config, hooks, or
+                           // credentials. Every Codex session appends on thread start/rename, so any
+                           // concurrent session (a sibling daemon feature or the operator) trips the
+                           // guard. Verified 2026-10-10 as the sole diff ("0 added, 0 removed,
+                           // 1 changed: changed session_index.jsonl") behind 12 false halts across
+                           // 10 features in one day (codex-cli 0.160.1).
+  'plugins/synced/**/.last-complete-round', // plugin-sync round marker, Codex counterpart of Claude's
+                           // `skills/synced/**/.last-complete-round`. Verified 2026-10-10 as the sole
+                           // diff behind the unretryable-input-routing-never-fires-outside-thre halt.
+                           // Only the marker is excluded: synced plugin content stays fingerprinted.
   // Codex's own SQLite stores at the provider-state ROOT — `goals_1`, `logs_2`,
   // `memories_1`, `state_5` today — plus their WAL sidecars, written continuously
   // by any running session. Matched by pattern rather than enumerated because the
@@ -254,7 +265,8 @@ function matchesRootPattern(path: string, pattern: string): boolean {
  * `basename` — the `<prefix>/**`+`/<basename>` exclusion form (any depth). It excludes ONE
  * named marker, never the subtree around it.
  *
- * Its only user is the `.last-complete-round` entry under `skills/synced`. Claude Code syncs
+ * Its users are the `.last-complete-round` entries under Claude's `skills/synced` and Codex's
+ * `plugins/synced`. Claude Code syncs
  * claude.ai skills into `skills/synced/<bucket-uuid>/` and writes, then deletes,
  * a `.last-complete-round` marker every sync round. Verified 2026-09-25 as the
  * sole diff (`1 added / 1 removed: skills/synced/<bucket-uuid>/.last-complete-round`)
