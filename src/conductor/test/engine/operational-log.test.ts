@@ -11,12 +11,13 @@ import { EVENT_SINKS } from '../../src/engine/event-sinks.js';
 import { createOperationalLogger } from '../../src/engine/operational-log.js';
 
 describe('operational logger', () => {
-  it('persists operational occurrences without rendering or exporting them yet', () => {
+  it('persists operational occurrences without rendering them and enables log projection', () => {
     expect((EVENT_SINKS as Record<string, unknown>).operational_log).toEqual({
       render: false,
       persist: true,
       audit: false,
       otel: false,
+      logs: true,
       otelTrace: false,
     });
   });

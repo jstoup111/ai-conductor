@@ -175,6 +175,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
 // This is deliberately an exact set rather than a volume count: a newly-persisted
 // non-halt event must update this contract explicitly.
 const PINNED_PERSISTED_EVENT_TYPES = [
+  'operational_log',
   'otel_spool_drop',
   'otel_spool_backlog',
   'daemon_backlog_snapshot',
