@@ -1,4 +1,4 @@
-// Covers: task:1, task:3
+// Covers: task:1, task:3, task:4
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -128,6 +128,27 @@ describe('PiProvider git guard dispatch environment', () => {
     expect(mockEnsureGitGuardForDispatch).toHaveBeenCalledWith('/prepared');
     expect(result).toEqual({ success: false, output: error, exitCode: 1 });
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('skips the guard and its PATH entry for a review dispatch', async () => {
+    const result = await provider.invoke({ ...baseOptions, reviewDispatch: true });
+    const [, , launch] = spawn.mock.calls[0] as [string, readonly string[], ExecaOptions];
+
+    expect(mockEnsureGitGuardForDispatch).not.toHaveBeenCalled();
+    expect((launch.env as NodeJS.ProcessEnv).PATH ?? '').not.toContain('.pipeline/bin');
+    expect(result.gitGuardInstalled).toBe(false);
+  });
+
+  it('launches a read-only review when a skipped guard would reject', async () => {
+    mockEnsureGitGuardForDispatch.mockRejectedValue(new Error('git guard repair failed'));
+    const reviewProvider = new PiProvider('pi', spawn, fakeEnvironment(), async () => '/engine/pi-review-extension.ts');
+
+    await reviewProvider.invoke({ ...baseOptions, reviewDispatch: true, readOnlyReview: true });
+
+    expect(mockEnsureGitGuardForDispatch).not.toHaveBeenCalled();
+    expect(spawn).toHaveBeenCalledOnce();
+    const args = spawn.mock.calls[0]![1];
+    expect(args[args.indexOf('--tools') + 1]).toBe('read,grep,find,ls,git_read');
   });
 
   it.each([
