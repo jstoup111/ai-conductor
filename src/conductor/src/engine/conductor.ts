@@ -321,7 +321,6 @@ import {
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   MAX_SUITE_INFRASTRUCTURE_RETRIES,
   bumpSuiteInfrastructureRetriesInLedger,
-  readGrowth,
   readKickbackLedger,
   isUnreadableKickbackLedger,
   refundBuildReviewKickback,
@@ -561,7 +560,7 @@ import {
   MAX_KICKBACKS_PER_GATE,
   kickbackEscalationEnabled,
   pendingRepairSettlementBudgets,
-  prdAuditAppendCap,
+  readPlanGrowthBudget,
   readRemediationGateAppendBudget,
   remediationLapCapForGate,
   validationJoinRemediationRoundCap,
@@ -6463,14 +6462,12 @@ export class Conductor {
         if ((entry?.laps ?? 0) >= lapCap) {
           return { kind: 'exhausted', allowance: 'laps', consumed: entry?.laps ?? 0, limit: lapCap, fallbackLapCap: prdAuditRemediationLapCap };
         }
-        const unboundedGrowth = await readGrowth(this.projectRoot, Number.MAX_SAFE_INTEGER);
-        const growthCap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(this.config, unboundedGrowth.authored);
-        const growth = await readGrowth(this.projectRoot, growthCap);
+        const { growth, cap: growthCap, capSource } = await readPlanGrowthBudget(this.projectRoot, this.config, { persist: true });
         if (growth.remaining > 0) return undefined;
         return {
           kind: 'exhausted', allowance: 'growth', consumed: growth.added, limit: growthCap,
           fallbackLapCap: prdAuditRemediationLapCap,
-          growth: { ...growth, cap: growthCap, capSource: ledger.effectiveGrowthCap === undefined ? 'config-derived' : 'raised' },
+          growth: { ...growth, cap: growthCap, capSource },
         };
       } catch {
         return { kind: 'unreadable' };
