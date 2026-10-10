@@ -92,6 +92,7 @@ import {
   parseConflictBatchPayload,
   conflictClaimDigest,
   issueJudgeClaimIds,
+  projectChildOwnership,
   readCoverageBindingEnvelope,
   writeCoverageBindingCodeStamp,
   writeCoverageBindingEnvelope,
@@ -102,6 +103,7 @@ import {
   type CoverageBindingConflictEnvelopeEntry,
   type CoverageBindingSliceMembership,
 } from './coverage-binding-envelope.js';
+import { resolveActiveChild } from './child-cursor.js';
 import {
   amendmentBlocks,
   assembleAmendmentClaims,
@@ -963,6 +965,13 @@ const FINISH_PROSE_DIFF_BUDGET =
   '`git log --oneline <base>..HEAD` and `git diff --stat <base>..HEAD` for this feature branch. ' +
   'Do not print the whole branch diff: read only targeted hunks (`git diff <base>..HEAD -- <path>`) ' +
   'for the few files whose behavior the prose must describe, and keep each read small. ';
+
+const productionCoverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
+  readFile: (path) => readFile(path, 'utf8'),
+  mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
+  writeFile,
+  rename,
+};
 
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
@@ -5730,6 +5739,45 @@ export class DefaultStepRunner implements StepRunner {
     }
   }
 
+  /** Render only the active child's sealed story blocks for acceptance authoring. */
+  private async acceptanceChildInput(): Promise<string> {
+    if (!this.featureDesc) return '';
+
+    const active = await resolveActiveChild(this.projectDir, this.featureDesc);
+    if (active.kind !== 'active') return '';
+
+    const envelope = await readCoverageBindingEnvelope(
+      this.projectDir,
+      this.coverageBindingFilesystem ?? productionCoverageBindingFilesystem,
+    );
+    if (envelope === null) {
+      throw new Error(`acceptance_specs cannot resolve child ${active.child} ownership: coverage-binding envelope is missing or invalid`);
+    }
+    const ownership = projectChildOwnership(envelope, active.position);
+    const decideSet = await resolveCoverageBindingDecideSet(this.projectDir, this.featureDesc);
+    if (decideSet?.storiesPath === null || decideSet?.storiesPath === undefined) {
+      throw new Error(`acceptance_specs cannot resolve child ${active.child} stories: the feature DECIDE set has no stories artifact`);
+    }
+
+    let storiesText: string;
+    try {
+      storiesText = await readFile(join(this.projectDir, decideSet.storiesPath), 'utf8');
+    } catch (error) {
+      throw new Error(`acceptance_specs cannot read child ${active.child} stories at ${decideSet.storiesPath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const ownedStories = new Set(ownership.storyIds);
+    const blocks = splitStoryBlocks(storiesText).filter((block) => block.id !== undefined && ownedStories.has(block.id));
+    if (blocks.length !== ownedStories.size) {
+      const present = new Set(blocks.flatMap((block) => block.id === undefined ? [] : [block.id]));
+      const missing = ownership.storyIds.filter((id) => !present.has(id));
+      throw new Error(`acceptance_specs cannot resolve child ${active.child} owned stories: missing ${missing.join(', ')}`);
+    }
+
+    return `\n\nCHILD-SCOPED ACCEPTANCE INPUT (engine-owned) — active child ${active.child}. ` +
+      `Write and run acceptance evidence only for these owned stories; do not use criteria from another child.\n` +
+      `${blocks.map((block) => block.text).join('\n\n')}`;
+  }
+
   private async buildSystemPrompt(
     step: StepName,
     autonomous: boolean,
@@ -5761,6 +5809,10 @@ export class DefaultStepRunner implements StepRunner {
 
     // Effort is now controlled via CLAUDE_CODE_EFFORT_LEVEL env var (Claude's
     // native reasoning knob) — no prose hint needed in the system prompt.
+
+    if (step === 'acceptance_specs') {
+      prompt += await this.acceptanceChildInput();
+    }
 
     if (step === 'architecture_review_as_built') {
       const policy = await resolveAsBuiltPolicy({

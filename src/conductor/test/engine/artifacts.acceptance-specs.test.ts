@@ -26,6 +26,7 @@ import {
   ACCEPTANCE_SPECS_RED_EVIDENCE,
   validateAcceptanceRedEvidence,
 } from '../../src/engine/artifacts.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 
 // Regression pin for #733's self-heal boundary: the acceptance_specs
 // completion predicate must remain a pure, synchronous-per-call READ of the
@@ -89,6 +90,22 @@ describe('engine/artifacts — acceptance_specs predicate purity', () => {
     expect(execSpy).not.toHaveBeenCalled();
     expect(execFileSpy).not.toHaveBeenCalled();
     expect(execSyncSpy).not.toHaveBeenCalled();
+  });
+
+  it('reads only the active child\'s RED evidence and run contract paths', async () => {
+    const child = parseChildId(1)!;
+    await createFile('test/acceptance/foo.spec.ts', 'spec content');
+    await createFile(
+      '.pipeline/children/1/acceptance-specs-red.json',
+      JSON.stringify(validEvidence),
+    );
+    await createFile('.pipeline/children/1/acceptance-specs-run.json', '{}');
+    await createFile('.pipeline/acceptance-specs-red.json', '{not child evidence');
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', { activeChild: child })).resolves.toEqual({
+      done: true,
+      viaException: false,
+    });
   });
 
   it('reports whether a valid marker satisfied the gate through a remediation exception', async () => {

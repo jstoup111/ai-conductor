@@ -100,6 +100,7 @@ import {
   coverageBindingEnvelopePath,
   parseCoverageBindingEnvelope,
 } from './coverage-binding-envelope.js';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -1241,6 +1242,11 @@ export async function recordPrBodyRegenAttempt(dir: string, prUrl: string): Prom
 
 /** Context threaded through completion predicates. Optional fields fail open. */
 export interface CompletionContext {
+  /**
+   * The active stacked BUILD child. Acceptance evidence is local to this
+   * region; absent preserves the legacy feature-root evidence paths.
+   */
+  activeChild?: ChildId;
   /**
    * Whether this BUILD lap has already spent its one retry for explicit
    * unverified Done-when closes. Task 9 persists and supplies this flag.
@@ -3040,7 +3046,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       'acceptance_specs',
       extraArtifactGlobs('acceptance_specs', ctx.config),
     );
-    const evidencePath = join(dir, ACCEPTANCE_SPECS_RED_EVIDENCE);
+    const evidencePath = pipelinePathFor(dir, basename(ACCEPTANCE_SPECS_RED_EVIDENCE), ctx.activeChild);
     let raw: string;
     try {
       raw = await readFile(evidencePath, 'utf-8');
@@ -3108,7 +3114,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         };
       }
       try {
-        await access(join(dir, '.pipeline/acceptance-specs-run.json'));
+        await access(pipelinePathFor(dir, 'acceptance-specs-run.json', ctx.activeChild));
         return {
           done: false,
           acceptanceRedRefusalClass: 'shape',

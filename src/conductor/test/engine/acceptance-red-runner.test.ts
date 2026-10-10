@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { selfHealAcceptanceRed } from "../../src/engine/acceptance-red-runner";
+import { parseChildId } from "../../src/engine/child-context";
 
 const RED_PROVENANCE = {
   failingTests: [
@@ -88,6 +89,31 @@ describe("selfHealAcceptanceRed", () => {
       ...RED_PROVENANCE,
     });
     expect(Date.parse(marker.ranAt)).not.toBeNaN();
+  });
+
+  it("keeps a stacked child's run contract and RED evidence under that child only", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    const childPipeline = join(worktreeRoot, ".pipeline", "children", "1");
+    mkdirSync(childPipeline, { recursive: true });
+    writeFileSync(
+      join(childPipeline, "acceptance-specs-run.json"),
+      JSON.stringify({ command: "npm test", cwd: ".", targetSpecs: ["a.test.ts"] }),
+      "utf8",
+    );
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      child: parseChildId(1)!,
+      specFiles: ["a.test.ts"],
+      exec: async () => ({
+        executed: 1, passed: 0, failed: 1, skipped: 0, errors: 0,
+        ...RED_PROVENANCE,
+      }),
+    });
+
+    expect(result).toEqual({ healed: true });
+    expect(existsSync(join(childPipeline, "acceptance-specs-red.json"))).toBe(true);
+    expect(existsSync(join(worktreeRoot, ".pipeline", "acceptance-specs-red.json"))).toBe(false);
   });
 
   it("returns healed:false without calling exec when targetSpecs cross-check fails", async () => {
