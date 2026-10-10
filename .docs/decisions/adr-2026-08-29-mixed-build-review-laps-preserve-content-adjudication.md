@@ -181,53 +181,6 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   A `refute` case whose deferral effect is `reserved` or `failed` does not satisfy the predicate,
 >   exactly as D5.2 prescribes for every other unfinished effect.
 
-> **Amended 2026-10-02 by #2464 (operator-approved):** the predecessor's Decision 5 store keeps
-> one case per source globally, and its Decision 7 halts a resolved case that reappears. A new
-> concern found at a source that a resolved action case already links therefore had no representable
-> outcome: an unbound proposal reused the source, the store rejected the next state, and the lap
-> halted as `case store malformed-state` although the persisted history was valid. This amendment
-> adds the decision below. Equivalence stays the judge's call (decision 8 of
-> adr-2026-09-10-portable-build-review-policy); the engine checks only exact ids, references, and state.
-
-> **D6 — A new concern at a resolved action case's source is declared, never inferred.**
->
-> **D6.1 Ownership is lifecycle-scoped.** In the `build_review` domain a source id may be linked
-> from more than one case over the feature's history, but at most one unresolved case links it at any
-> time, and a source appears at most once within one case. Resolved cases keep their links; history
-> is never deleted or rewritten. The store validates this fail-closed on read and on every next state.
->
-> **D6.2 Distinctness is an explicit judge declaration.** An unbound case row whose sources include a
-> source already linked from a resolved case is admitted as a new case only when it carries
-> `distinctFrom`: the list of exactly the resolved cases that link any of its sources. Each named case
-> must be a resolved `act` case whose link to that source is not finalized under D5.1. The engine
-> validates the references and the exact set; it never compares rationale or summaries. The new case
-> persists the declared lineage, and the findings surface renders it.
->
-> **D6.3 An undeclared reuse is a recurrence.** An unbound row that reuses such a source without a
-> valid declaration, in `case-v1` or `case-v2`, is a recurrence of each prior case that links the
-> source. It halts `needs-human` as a regression exactly as the predecessor's Decision 7 prescribes,
-> with one `remediation_semantic_repeat_halt` occurrence (`regressed`) per prior case.
->
-> **D6.4 Limits are preserved.** An admitted distinct case is a new `act` case: it reaches BUILD only
-> through the existing work order and charges the `build_review` kickback once per route under the
-> predecessor's Decision 7 and adr-2026-08-12-cumulative-build-review-convergence-bound. Once attempted,
-> it is subject to the same repeat and regression halts as any action case.
->
-> **D6.5 Readers use the current owner.** Source coverage, routing, decision stops, and the D5.1
-> settled predicate read a source's outcome from its unresolved owner when one exists. Resolved links
-> contribute history and D5.1 finalization only, and never contradict the current owner's outcome.
->
-> **D6.6 A rejected transition is not corrupt history.** The store distinguishes a rejected next
-> state from malformed persisted state. A rejected proposed transition, including a declaration that
-> fails D6.2, surfaces on the existing `remediation_adjudication_failed` occurrence with a typed reason
-> and the affected case and source ids as additive fields registered with every sink. The persisted
-> store, applied effects, and resolved-case evidence are unchanged, and recovery never requires clearing
-> history or accepting a finding.
->
-> **D6.7 No envelope version change.** The added record field is optional and every existing store
-> stays valid. An older engine reading a store with shared sources fails closed, as
-> adr-2026-09-07-durable-prd-widening-decision-reconciliation D2 already requires for a downgrade.
-
 ## Consequences
 
 - A mechanical failure cannot erase or postpone valid sibling content merely because reduced
