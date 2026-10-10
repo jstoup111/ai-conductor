@@ -108,6 +108,7 @@ import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
 import { HALT_MARKER_RELATIVE } from '../../src/engine/task-progress.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
@@ -2349,6 +2350,81 @@ describe('engine/artifacts', () => {
         for (const id of ['1', '2', '3', '4', '5', '6']) {
           expect(result.reason.indexOf(id)).toBeLessThan(result.reason.indexOf('"First task"'));
         }
+      });
+
+      it('does not hold a completed task open for a superseded same-authority repair obligation', async () => {
+        await writePlan([
+          '### Task 1: First task',
+          '### Task 2: Second task',
+        ].join('\n\n'));
+        await writeTasks([
+          { id: '1', name: 'First task', status: 'completed' },
+          { id: '2', name: 'Second task', status: 'completed' },
+        ]);
+
+        const planPath = join(dir, '.docs/plans/phase-1.md');
+        const repairs = createRepairObligationStore(dir, join(dir, '.pipeline/engine-state.json'));
+        const older = await repairs.admitOrReplay('older-build-review', {
+          id: 'older-build-review',
+          planPath: '.docs/plans/phase-1.md',
+          taskIds: ['2'],
+          source: { findingId: 'older', authority: 'build_review', instruction: 'Repair task 2.' },
+          baseline: { head: 'orphaned-boundary', tree: 'older-tree', resolvedTaskIds: [] },
+        });
+        const current = await repairs.admitOrReplay('current-build-review', {
+          id: 'current-build-review',
+          planPath: '.docs/plans/phase-1.md',
+          taskIds: ['2'],
+          source: { findingId: 'current', authority: 'build_review', instruction: 'Repair task 2 again.' },
+          baseline: { head: 'current-boundary', tree: 'current-tree', resolvedTaskIds: [] },
+        });
+        if (!older.ok || !current.ok) throw new Error('expected repair admissions to succeed');
+        const closed = await repairs.close({
+          planPath: '.docs/plans/phase-1.md',
+          taskId: '2',
+          obligationId: current.obligation.id,
+          evidence: { kind: 'current-done-when', value: 'accepted' },
+        });
+        if (!closed.ok) throw new Error(closed.message);
+
+        const result = await checkStepCompletion(dir, 'build', { projectRoot: dir, planPath });
+
+        expect(result.done).toBe(true);
+        expect(result.reason ?? '').not.toContain('tasks pending/not completed');
+      });
+
+      it('fails closed with the named reason when an open repair obligation has no current entry', async () => {
+        await writePlan([
+          '### Task 1: First task',
+          '### Task 2: Second task',
+        ].join('\n\n'));
+        await writeTasks([
+          { id: '1', name: 'First task', status: 'completed' },
+          { id: '2', name: 'Second task', status: 'completed' },
+        ]);
+
+        const planPath = join(dir, '.docs/plans/phase-1.md');
+        const repairs = createRepairObligationStore(dir, join(dir, '.pipeline/engine-state.json'));
+        const admitted = await repairs.admitOrReplay('current-less-build-review', {
+          id: 'current-less-build-review',
+          planPath: '.docs/plans/phase-1.md',
+          taskIds: ['2'],
+          source: { findingId: 'current-less', authority: 'build_review', instruction: 'Repair task 2.' },
+          baseline: { head: 'boundary', tree: 'tree', resolvedTaskIds: [] },
+        });
+        if (!admitted.ok) throw new Error(admitted.message);
+        const statePath = join(dir, '.pipeline/engine-state.json');
+        const state = JSON.parse(await readFile(statePath, 'utf8'));
+        delete state.repairObligations.currentByPlan['.docs/plans/phase-1.md']['2'];
+        await writeFile(statePath, JSON.stringify(state));
+
+        const result = await checkStepCompletion(dir, 'build', { projectRoot: dir, planPath });
+
+        expect(result).toMatchObject({ done: false });
+        expect(result.reason).toContain('2 "');
+        expect(result.reason).toContain(
+          'repair state is unavailable: task 2 has an open repair obligation but no current obligation is recorded for it',
+        );
       });
 
       it('keeps unresolved plan tasks in the reason when only an appended remediation task is resolved', async () => {
