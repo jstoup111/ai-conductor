@@ -83,6 +83,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Build review includes changed test files outside conventional test paths when they contain Covers markers. ([implementation PR #3092](https://github.com/jstoup111/ai-conductor/pull/3092)).
 - Operators receive the correct halt-clear recovery command when a BUILD plan gap cannot be rewound. ([implementation PR #3120](https://github.com/jstoup111/ai-conductor/pull/3120)).
 - build_review adjudication no longer halts when a blocked consistency verdict names only the implicated findings. ([implementation PR #3139](https://github.com/jstoup111/ai-conductor/pull/3139)).
+- The daemon no longer reports freshly landed, owned specs as un-owned; the owner gate reads ownership at the same base commit the backlog scan uses. ([implementation PR #3140](https://github.com/jstoup111/ai-conductor/pull/3140)).
 
 ## Migration
 
