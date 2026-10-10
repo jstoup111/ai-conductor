@@ -85,6 +85,10 @@ describe('Conductor.run acceptance_specs RED verdict lifecycle (Task 11)', () =>
     verdict: Record<string, unknown>,
   ): Promise<Array<Record<string, unknown>>> {
     checkStepCompletionMock
+      // The child-aware empty-scope probe precedes the ordinary RED preflight.
+      // Flat fixtures cannot produce this outcome, but still traverse the
+      // probe so its result must not consume the intended lifecycle verdict.
+      .mockResolvedValueOnce({ done: false })
       .mockResolvedValueOnce(preflight)
       .mockResolvedValueOnce(verdict);
     const observed: Array<Record<string, unknown>> = [];
@@ -136,6 +140,7 @@ describe('Conductor.run acceptance_specs RED verdict lifecycle (Task 11)', () =>
   it('keeps a rejected gate verdict when acceptance RED emission throws', async () => {
     const reason = 'first refusal remains authoritative';
     checkStepCompletionMock
+      .mockResolvedValueOnce({ done: false })
       .mockResolvedValueOnce({ done: true })
       .mockResolvedValueOnce({ done: false, reason });
     const originalEmit = events.emit.bind(events);
@@ -164,6 +169,7 @@ describe('Conductor.run acceptance_specs RED verdict lifecycle (Task 11)', () =>
     const firstReason = 'first distinct refusal';
     const secondReason = 'second distinct refusal';
     checkStepCompletionMock
+      .mockResolvedValueOnce({ done: false })
       .mockResolvedValueOnce({ done: true })
       .mockResolvedValueOnce({ done: false, reason: firstReason })
       .mockResolvedValueOnce({ done: false, reason: secondReason });

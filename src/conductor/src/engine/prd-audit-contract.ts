@@ -68,6 +68,8 @@ export interface PrdAuditJudgmentContext {
     | { readonly path: string; readonly id: string }
     | { readonly path: string; readonly requirements: readonly { readonly id: string }[] }
   )[];
+  /** Requirements discharged by the audited feature's committed coherence waiver. */
+  readonly waivedRequirements?: readonly PrdAuditRequirementAssociation[];
   /** Canonical active task ids. `tasks` is retained for projection-shaped callers. */
   readonly activeTaskIds?: ReadonlySet<string> | readonly string[];
   /** Compatibility alias for callers that already hold the active-id set. */
@@ -323,6 +325,8 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
     if (nonEmptyText(criterion.id)) criteria.set(criterion.id.toLowerCase(), criterion.id);
   }
   const requirements = requirementKeys(context);
+  const waivedRequirements = new Set((context.waivedRequirements ?? []).map((requirement) =>
+    `${requirement.path}\u0000${requirement.requirementId}`));
   const taskIds = activeTaskIds(context);
   const criterionJudgments: PrdAuditCriterionJudgment[] = [];
   const criterionJudgmentIndexes: number[] = [];
@@ -458,6 +462,7 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
     entry.requirementAssociations.map((association) => `${association.path}\u0000${association.requirementId}`),
   ));
   for (const requirement of requirements) {
+    if (waivedRequirements.has(requirement)) continue;
     // Compatibility callers that predate the projection have no story map;
     // the managed runner always supplies one and never takes this fallback.
     const coveredByStory = hasProjectedCoverage

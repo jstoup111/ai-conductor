@@ -169,7 +169,8 @@ jobs:
     # The aggregate Vitest suite normally completes in a few minutes, but its
     # filesystem-heavy local-Git fixtures can exceed the platform's short
     # default execution budget on a contended hosted runner. Keep a finite,
-    # explicit ceiling rather than losing the test summary to that timeout.
+    # explicit ceiling rather than losing the test summary to that timeout. The
+    # progress reporter names in-flight files when a shard dies before the summary.
     timeout-minutes: 15
     # Split the suite across runners by file. ci-gate reads needs.conductor.result,
     # which is failure when any shard fails. Workers per shard stay at the config's 2:
@@ -191,7 +192,7 @@ jobs:
         working-directory: src/conductor
       - run: npm run build
         working-directory: src/conductor
-      - run: npm test -- --shard=${{ matrix.shard }}/4
+      - run: npm test -- --shard=${{ matrix.shard }}/4 --reporter=./test/reporters/ci-progress-reporter.ts
         working-directory: src/conductor
 
   # End-to-end tier (vitest.e2e.config.ts): real tmux sockets and whole-daemon

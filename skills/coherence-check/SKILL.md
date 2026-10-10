@@ -234,9 +234,29 @@ Detection heuristic: for each pair of requirements touching the same behavior, e
 field, or gate, ask **"if I fully satisfy A, does B still hold?"** Then ask it in the
 other direction. Two "no" answers is an oscillation regardless of how reasonable each
 requirement reads alone. Pairs worth checking first are the ones sharing a subject
-across *different* layers — an outcome and a task, an FR and a story, an ADR and a story — because same-layer
-contradictions are what `/conflict-check` already sweeps for, and cross-layer ones are
+across *different* layers — an outcome and a task, an FR and a story, an ADR and a story — because
+`/conflict-check` already sweeps story↔story same-layer contradictions, and cross-layer ones are
 what nothing else sees.
+
+**Layer ownership.** Story↔story pairs belong to `/conflict-check`. Cross-layer pairs and
+task↔task pairs belong to `/coherence-check`. `/conflict-check` runs before `/plan`, so
+`/coherence-check` owns the task↔task sweep once plan tasks exist.
+
+**Task-versus-task oscillation.** For each pair of tasks sharing a behavior, entity, file or
+fixture, ask **"if I fully complete task A, does task B's `Done when` still hold?"** in both
+directions: A against B, then B against A. #1535's Task 3 and Task 9 are the worked example:
+compare their quoted `Done when` text, rather than assuming that an acyclic dependency graph
+makes their assertions compatible.
+
+When the quoted text establishes an invalidation, set the affected `task` row's verdict to
+`fail` and use Notes to quote the opposing text from both tasks. A pair that fails in both
+directions is an oscillation; one that fails in one direction is a contradiction. Record both as
+`fail`, because the dependency graph does not stop BUILD from completing the two tasks in either
+order. The row verdict is `fail`, never `oscillation` or `interference`.
+
+If an apparent interference cannot be grounded in quoted text from both tasks, raise it to the
+operator as an assumption and record no `fail`. Pairs with nothing shared need no row, section,
+or verdict; existing `task` rows keep their coverage verdicts.
 
 Ground every `fail` in the specific opposing text from both artifacts, per the
 verify-claims protocol in Section 5. "These feel like they might conflict" is not a
@@ -435,7 +455,9 @@ per row and must never assert "covered" that it has not actually confirmed.
       a correct citation that the acceptance criteria contradict is `fail`, not `covered`
 - [ ] Story-vs-story conflicts left to `/conflict-check`; this artifact reports story-vs-PRD only
 - [ ] Cross-layer pairs (outcome↔task, FR↔story, ADR↔story) checked in both directions for
-      oscillation — same-layer pairs are `/conflict-check`'s sweep, cross-layer are this skill's
+      oscillation; route story↔story same-layer pairs to `/conflict-check`
+- [ ] Task↔task pairs sharing a behavior, entity, file or fixture checked in both directions; any
+      invalidation recorded as `fail` on the `task` row.
 - [ ] Every `gap` row's Notes column restates its gap id in the canonical form (Section 4c)
 - [ ] Every `covered` verdict was confirmed against the real counterpart artifact file, not inferred
 - [ ] Ambiguous rows surfaced as assumptions (interactive: wait for confirmation; autonomous: mark `gap`, never silently pass)

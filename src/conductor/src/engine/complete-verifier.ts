@@ -3,13 +3,18 @@ import type { ConductState, StepName } from '../types/index.js';
 import { checkStepCompletion } from './artifacts.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { getStepStatus, readState } from './state.js';
+import { listExistingChildren, type ChildId } from './child-context.js';
+import { resolveActiveChild } from './child-cursor.js';
+import { readConductStateOverlay } from './conduct-state-store.js';
 
 /** Steps re-checked when a feature is marked complete on resume. */
 const SHIP_GATING_STEPS: StepName[] = ['test_suite', 'manual_test', 'finish'];
 
 export interface CompleteVerifierOptions {
   /** Process-free current-PASS inspection seam for test_suite. */
-  fullSuiteInspect?: () => Promise<FullSuiteInspectionResult>;
+  fullSuiteInspect?: (activeChild?: { readonly child: ChildId; readonly isLeaf: boolean }) => Promise<FullSuiteInspectionResult>;
+  /** Test seam for the cursor that identifies a stacked feature's leaf. */
+  resolveActiveChild?: typeof resolveActiveChild;
 }
 
 export interface CompleteStateOk {
@@ -47,14 +52,48 @@ export async function verifyCompleteState(
   options: CompleteVerifierOptions = {},
 ): Promise<CompleteStateVerification> {
   const stateRes = await readState(join(worktreePath, '.pipeline/conduct-state.json'));
-  const state: ConductState = stateRes.ok ? stateRes.value : {};
+  let state: ConductState = stateRes.ok ? stateRes.value : {};
+  let activeChild: { readonly child: ChildId; readonly isLeaf: boolean } | undefined;
+
+  // A completed stacked feature must be verified against its current leaf
+  // overlay.  Do not probe ordinary legacy worktrees: the presence of a child
+  // directory is the durable signal that this feature opted into child state.
+  const children = await listExistingChildren(worktreePath);
+  if (children.length > 0 && state.feature_desc) {
+    const cursor = await (options.resolveActiveChild ?? resolveActiveChild)(
+      worktreePath,
+      state.feature_desc,
+    );
+    if (cursor.kind !== 'active' || !cursor.isLeaf) {
+      return {
+        ok: false,
+        failedSteps: ['test_suite'],
+        reasons: [
+          cursor.kind === 'active'
+            ? `stacked feature completion requires leaf child evidence, but child ${cursor.child} is not the leaf`
+            : `stacked feature completion cannot resolve its leaf child: ${cursor.kind}`,
+        ],
+      };
+    }
+    const overlay = await readConductStateOverlay(worktreePath, cursor.child);
+    if (!overlay.ok) {
+      return {
+        ok: false,
+        failedSteps: ['test_suite'],
+        reasons: [`stacked feature completion cannot read leaf child ${cursor.child} state: ${overlay.error.message}`],
+      };
+    }
+    state = overlay.value;
+    activeChild = { child: cursor.child, isLeaf: true };
+  }
 
   const ctx = {
     sessionStartedAt: state.session_started_at,
     featureDesc: state.feature_desc,
     // SHIP-phase re-check: a changed-only lap PASS does not satisfy SHIP.
-    fullSuiteInspect: options.fullSuiteInspect ??
-      (() => new FullSuiteVerifier({ projectRoot: worktreePath }).inspect({ requireAggregate: true })),
+    fullSuiteInspect: () => options.fullSuiteInspect?.(activeChild) ??
+      new FullSuiteVerifier({ projectRoot: worktreePath, ...(activeChild === undefined ? {} : { activeChild }) })
+        .inspect({ requireAggregate: true }),
   };
 
   const failedSteps: StepName[] = [];

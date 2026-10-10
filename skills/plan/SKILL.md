@@ -469,6 +469,8 @@ decisions. Use the exact table contract from Section 7.]
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left
       without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
+- [ ] Tasks do not invalidate each other's fixtures or assertions; `/coherence-check` sweeps this
+      at Medium and Large tier, and Small tier gains no required step for it
 ```
 
 ### 5b. Task Header Format and ID Grammar
@@ -689,6 +691,8 @@ any code is written. The full flow from here is:
 - [ ] Every outcome in each mapped criterion's Then-clause, including absence/no-op outcomes, is
       explicitly required by a cited task's `Done when:` check at the criterion's precision (§3c)
 - [ ] Dependencies are declared and acyclic
+- [ ] Tasks do not invalidate each other's fixtures or assertions; `/coherence-check` sweeps this
+      at Medium and Large tier, and Small tier gains no required step for it
 - [ ] `ai-conductor plan-protected-targets .docs/plans/<feature>.md` passes with no task/path
       violations; no task targets another feature's sealed artifact
 - [ ] Plan saved to `.docs/plans/`

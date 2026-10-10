@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ACCEPTANCE_SPECS_RED_EVIDENCE, validateAcceptanceRedEvidence } from "./artifacts.js";
+import { pipelinePathFor, type ChildId } from "./child-context.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -11,7 +12,8 @@ const execFileAsync = promisify(execFile);
  * written by the acceptance_specs step, describing the command/cwd/target
  * specs the RED run must execute.
  */
-const ACCEPTANCE_RUN_CONTRACT_PATH = join(".pipeline", "acceptance-specs-run.json");
+const ACCEPTANCE_RUN_CONTRACT_PATH = "acceptance-specs-run.json";
+const ACCEPTANCE_RED_EVIDENCE_FILENAME = basename(ACCEPTANCE_SPECS_RED_EVIDENCE);
 
 export interface AcceptanceRunContract {
   command: string;
@@ -117,8 +119,9 @@ function checkContractCwd(
 function writeRedMarkerAtRoot(
   worktreeRoot: string,
   markerContent: unknown,
+  child?: ChildId,
 ): void {
-  const markerPath = join(resolve(worktreeRoot), ACCEPTANCE_SPECS_RED_EVIDENCE);
+  const markerPath = pipelinePathFor(resolve(worktreeRoot), ACCEPTANCE_RED_EVIDENCE_FILENAME, child);
   mkdirSync(dirname(markerPath), { recursive: true });
   writeFileSync(markerPath, JSON.stringify(markerContent), "utf8");
 }
@@ -131,8 +134,9 @@ function writeRedMarkerAtRoot(
  */
 function readRecordedException(
   worktreeRoot: string,
+  child?: ChildId,
 ): { hasException: boolean; exception?: unknown } {
-  const markerPath = join(resolve(worktreeRoot), ACCEPTANCE_SPECS_RED_EVIDENCE);
+  const markerPath = pipelinePathFor(resolve(worktreeRoot), ACCEPTANCE_RED_EVIDENCE_FILENAME, child);
   if (!existsSync(markerPath)) {
     return { hasException: false };
   }
@@ -191,11 +195,15 @@ function establishedRedCounters(marker: Record<string, unknown>): boolean {
  * contract.cwd points at a subdirectory (e.g. `src/conductor`) instead of the
  * worktree root.
  */
-const NESTED_RED_MARKER_RELATIVE_PATH = join(
-  "src",
-  "conductor",
-  ACCEPTANCE_SPECS_RED_EVIDENCE,
-);
+function nestedRedMarkerRelativePath(child?: ChildId): string {
+  return join(
+    "src",
+    "conductor",
+    ".pipeline",
+    ...(child === undefined ? [] : ["children", String(child)]),
+    ACCEPTANCE_RED_EVIDENCE_FILENAME,
+  );
+}
 
 /**
  * Relocates a stray RED marker found nested under `<worktreeRoot>/src/conductor/`
@@ -205,10 +213,10 @@ const NESTED_RED_MARKER_RELATIVE_PATH = join(
  * untouched and the nested marker is never read into it — a nested marker is
  * only ever promoted to root when no root marker exists yet.
  */
-function normalizeNestedRedMarker(worktreeRoot: string): void {
+function normalizeNestedRedMarker(worktreeRoot: string, child?: ChildId): void {
   const resolvedRoot = resolve(worktreeRoot);
-  const rootPath = join(resolvedRoot, ACCEPTANCE_SPECS_RED_EVIDENCE);
-  const nestedPath = join(resolvedRoot, NESTED_RED_MARKER_RELATIVE_PATH);
+  const rootPath = pipelinePathFor(resolvedRoot, ACCEPTANCE_RED_EVIDENCE_FILENAME, child);
+  const nestedPath = join(resolvedRoot, nestedRedMarkerRelativePath(child));
 
   if (!existsSync(nestedPath)) {
     return;
@@ -296,6 +304,8 @@ export function createProductionAcceptanceRedExec(
 
 export interface SelfHealAcceptanceRedParams {
   worktree: string;
+  /** Active stacked child; absent retains the legacy feature-root paths. */
+  child?: ChildId;
   specFiles: string[];
   exec: AcceptanceRedExec;
 }
@@ -319,10 +329,10 @@ export type SelfHealAcceptanceRedResult =
 export async function selfHealAcceptanceRed(
   params: SelfHealAcceptanceRedParams,
 ): Promise<SelfHealAcceptanceRedResult> {
-  const { worktree, specFiles, exec } = params;
+  const { worktree, child, specFiles, exec } = params;
   const resolvedRoot = resolve(worktree);
 
-  const contractPath = join(resolvedRoot, ACCEPTANCE_RUN_CONTRACT_PATH);
+  const contractPath = pipelinePathFor(resolvedRoot, ACCEPTANCE_RUN_CONTRACT_PATH, child);
 
   if (!existsSync(contractPath)) {
     // With no contract to validate against, we cannot safely promote a
@@ -331,8 +341,8 @@ export async function selfHealAcceptanceRed(
     // cross-checked. Surface a specific "not at the authoritative path"
     // diagnostic instead of silently promoting, and never touch the nested
     // file in this branch.
-    const rootMarkerPath = join(resolvedRoot, ACCEPTANCE_SPECS_RED_EVIDENCE);
-    const nestedMarkerPath = join(resolvedRoot, NESTED_RED_MARKER_RELATIVE_PATH);
+    const rootMarkerPath = pipelinePathFor(resolvedRoot, ACCEPTANCE_RED_EVIDENCE_FILENAME, child);
+    const nestedMarkerPath = join(resolvedRoot, nestedRedMarkerRelativePath(child));
     if (!existsSync(rootMarkerPath) && existsSync(nestedMarkerPath)) {
       return {
         healed: false,
@@ -349,7 +359,7 @@ export async function selfHealAcceptanceRed(
   // it only promotes a nested marker to root when no root marker already
   // exists, so it never clobbers a marker from this (or a prior) run. Only
   // reached once a contract exists, so promotion never happens blind.
-  normalizeNestedRedMarker(resolvedRoot);
+  normalizeNestedRedMarker(resolvedRoot, child);
 
   const raw = readFileSync(contractPath, "utf8");
   const parsed = parseAcceptanceRunContract(raw);
@@ -369,7 +379,7 @@ export async function selfHealAcceptanceRed(
 
   const { contract } = cwdChecked;
   const resolvedCwd = resolve(resolvedRoot, contract.cwd);
-  const recordedException = readRecordedException(resolvedRoot);
+  const recordedException = readRecordedException(resolvedRoot, child);
   const execResult = await exec(contract.command, { cwd: resolvedCwd });
 
   // `validateAcceptanceRedEvidence` requires `command` and `targetSpecs` on
@@ -399,7 +409,7 @@ export async function selfHealAcceptanceRed(
     // useful evidence and must replace stale data. Only malformed/incomplete
     // parser output is refused without disturbing the prior marker.
     if (validated.class === "outcome") {
-      writeRedMarkerAtRoot(resolvedRoot, markerContent);
+      writeRedMarkerAtRoot(resolvedRoot, markerContent, child);
       return { healed: false, reason: validated.reason };
     }
     if (
@@ -414,6 +424,6 @@ export async function selfHealAcceptanceRed(
     return { healed: false, reason: validated.reason };
   }
 
-  writeRedMarkerAtRoot(resolvedRoot, markerContent);
+  writeRedMarkerAtRoot(resolvedRoot, markerContent, child);
   return { healed: true };
 }

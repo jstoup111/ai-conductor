@@ -1,4 +1,4 @@
-// Covers: task:3, task:5, task:21, rem-ab5-1
+// Covers: task:3, task:5, task:21, task:37, rem-ab5-1
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CONFIG_CONSUMER_KEY_SETS } from '../../src/engine/config.js';
@@ -95,6 +95,17 @@ describe('config consumer registry', () => {
         consumer: 'src/conductor/src/engine/full-suite-verifier.ts',
       },
     });
+  });
+
+  it('registers the BUILD child cursor as a direct stacked-PR enablement consumer', () => {
+    const childCursorSource = readFileSync(new URL('../../src/engine/child-cursor.ts', import.meta.url), 'utf8');
+
+    expect(childCursorSource).toContain('config.config.stacked_prs?.enabled === true');
+    expect(configConsumerRegistry['stacked_prs.enabled'].consumer).toEqual([
+      'src/conductor/src/engine/engineer/land-spec.ts',
+      'src/conductor/src/engine/step-runners.ts',
+      'src/conductor/src/engine/child-cursor.ts',
+    ]);
   });
 
   it('derives nested command-entry validation and registry coverage from one key set', () => {

@@ -30,6 +30,7 @@ import {
 } from '../../src/engine/rebase.js';
 import { classifyGateInvalidation } from '../../src/engine/gate-invalidation.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -932,6 +933,27 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const build = await readVerdict(dir, 'build');
     expect(build?.satisfied).toBe(false);
     expect(build?.kickback?.from).toBe('rebase');
+  });
+
+  it('writes BUILD-region rebase invalidations to the active child while retaining feature gates', async () => {
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
+
+    await applyRebaseVerdicts(dir, outcome, true, undefined, undefined, undefined, parseChildId(2)!);
+
+    expect(await readVerdict(dir, 'build', parseChildId(2)!)).toMatchObject({
+      satisfied: false,
+      kickback: { from: 'rebase' },
+    });
+    expect(await readVerdict(dir, 'build_review', parseChildId(2)!)).toMatchObject({
+      satisfied: false,
+      kickback: { from: 'rebase' },
+    });
+    expect(await readVerdict(dir, 'build')).toBeNull();
+    expect(await readVerdict(dir, 'build_review')).toBeNull();
+    expect(await readVerdict(dir, 'coverage_binding')).toMatchObject({
+      satisfied: false,
+      kickback: { from: 'rebase' },
+    });
   });
 
   it('changed but manual_test did not run (featureSurface uncomputable) → build/deterministic group/build_review/audits kicked back, manual_test excluded', async () => {

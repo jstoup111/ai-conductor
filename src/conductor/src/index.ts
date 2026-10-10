@@ -25,7 +25,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdir, readFile } from 'node:fs/promises';
 import { realpathSync, writeSync } from 'node:fs';
-import { createInterface } from 'node:readline/promises';
 import { execa } from 'execa';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -197,16 +196,16 @@ import {
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
 import { detectGithubOperationCommand, dispatchGithubOperationCommand } from './engine/github-operations-cli.js';
 import { detectGithubBoundaryAuditCommand, dispatchGithubBoundaryAudit } from './engine/github-invocation-audit-cli.js';
-import {
-  formatGithubOperationTarget,
-  type GithubOperationTarget,
-} from './engine/github-operations.js';
-import type { GithubOperationApprovalPrompt } from './engine/github-operation-approval.js';
+import { createTerminalGithubOperationConfirmation } from './engine/github-operation-terminal-confirmation.js';
 import {
   detectScopeCheckCommand,
   loadScopeCheckEnforcement,
   runScopeCheck,
 } from './engine/scope-check-cli.js';
+import {
+  detectTaskMembershipCheckCommand,
+  runTaskMembershipCheck,
+} from './engine/task-membership-check-cli.js';
 import {
   detectTestSuiteCommand,
   dispatchTestSuiteCommand,
@@ -1117,22 +1116,7 @@ async function dispatchCliCommand(): Promise<void> {
     // The CLI is the interactive authority boundary. It displays the exact
     // decoded request and grants only this one confirmation; non-TTY callers
     // get the normal explicit-authorization refusal.
-    const confirmation = {
-      mode: 'interactive' as const,
-      confirm: async (prompt: GithubOperationApprovalPrompt): Promise<boolean> => {
-        if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
-        const target: GithubOperationTarget = prompt.target;
-        const readline = createInterface({ input: process.stdin, output: process.stdout });
-        try {
-          const answer = await readline.question(
-            `Authorize ${prompt.operation} on ${formatGithubOperationTarget(target)}? [y/N] `,
-          );
-          return answer.trim().toLowerCase() === 'y' || answer.trim().toLowerCase() === 'yes';
-        } finally {
-          readline.close();
-        }
-      },
-    };
+    const confirmation = createTerminalGithubOperationConfirmation();
     const spine = startOperatorEventSpine(process.cwd());
     try {
       process.exitCode = await dispatchGithubOperationCommand(githubOperationCmd, {
@@ -1155,6 +1139,15 @@ async function dispatchCliCommand(): Promise<void> {
       enforce: await loadScopeCheckEnforcement(projectRoot),
     });
     process.exit(code);
+  }
+
+  const taskMembershipCheckCmd = detectTaskMembershipCheckCommand(process.argv);
+  if (taskMembershipCheckCmd) {
+    const projectRoot = process.env.CONDUCT_TASK_MEMBERSHIP_PROJECT_ROOT ?? process.cwd();
+    process.exit(await runTaskMembershipCheck({
+      projectRoot,
+      commitMessagePath: taskMembershipCheckCmd.commitMessagePath,
+    }));
   }
 
   // Evidence subcommand (`evidence judge <slug>`, Task 19) runs NON-INTERACTIVELY and exits —

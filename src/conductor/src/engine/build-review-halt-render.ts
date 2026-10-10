@@ -2,6 +2,7 @@ import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, type KickbackGateEntry } from './kickback-ledger.js';
 import { resolveFeaturePlanPath } from './artifacts.js';
 import { seedTaskStatus } from './task-seed.js';
+import type { ChildId } from './child-context.js';
 
 /**
  * Render the operator-facing recovery for a terminal mechanical review fault.
@@ -49,13 +50,14 @@ export function renderReadOnlyReviewUnavailableBuildReviewHalt(detail: string): 
 export async function seedBuildTaskTelemetry(
   projectRoot: string,
   featureDesc: string,
+  childBase?: { readonly slug: string; readonly child: ChildId },
 ): Promise<void> {
   const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
   if (!planPath) {
     return;
   }
   try {
-    await seedTaskStatus(projectRoot, planPath, undefined, { dispatchBoundary: true });
+    await seedTaskStatus(projectRoot, planPath, undefined, { dispatchBoundary: true, childBase });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[task-telemetry] unable to seed task-status.json: ${message}`);

@@ -28,6 +28,13 @@ import { prdAuditAppendCap } from './remediation-caps.js';
 import { loadConfig } from './config.js';
 import { readGrowth, readKickbackLedger } from './kickback-ledger.js';
 import { renderKickbackBudgetView } from './kickback-budget-view.js';
+import { resolveActiveChild } from './child-cursor.js';
+import { parseChildId, type ChildId } from './child-context.js';
+import {
+  COVERAGE_BINDING_COMPLETION_STATUSES,
+  readCoverageBindingEnvelope,
+  type CoverageBindingEnvelopeFilesystem,
+} from './coverage-binding-envelope.js';
 import {
   readDaemonTimeline,
   type DaemonExitRecord,
@@ -41,6 +48,15 @@ const VERSION_UNKNOWN = 'version-unknown';
 /** Chunk size for reverse event-log scans.  Capability events are emitted at
  * startup and can be much older than ordinary daemon telemetry. */
 const CAPABILITY_EVENT_SCAN_CHUNK_BYTES = 64 * 1024;
+
+const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
+  readFile: (path) => readFile(path, 'utf8'),
+  // `daemon status` is an observation boundary. The envelope reader only uses
+  // readFile, and these fail loudly if that promise is ever broken.
+  mkdir: async () => { throw new Error('daemon status is read-only'); },
+  writeFile: async () => { throw new Error('daemon status is read-only'); },
+  rename: async () => { throw new Error('daemon status is read-only'); },
+};
 
 /**
  * Derive a version id label from a pidfile's `engineDir` (FR-14). Pure string
@@ -472,19 +488,18 @@ function readOnlyReviewCapability(event: unknown): ReadOnlyReviewCapability | un
   };
 }
 
-/** Scan the whole JSONL ledger backwards, stopping when every seen provider has
- * its latest capability record.  Chunks may start mid-record, so only complete
- * lines are parsed. */
-async function readLatestReadOnlyReviewCapabilities(repoPath: string): Promise<ReadOnlyReviewCapability[]> {
+/** Visit `.daemon/events.jsonl` newest-first until `visit` returns true.
+ * Chunks may start mid-record, so only complete lines are parsed; a missing,
+ * unreadable, or malformed ledger never makes status fail. */
+async function scanEventsNewestFirst(repoPath: string, visit: (event: unknown) => boolean): Promise<void> {
   const path = join(repoPath, '.daemon', 'events.jsonl');
   let size: number;
   try {
     size = (await stat(path)).size;
   } catch {
-    return [];
+    return;
   }
 
-  const latestByProvider = new Map<string, ReadOnlyReviewCapability>();
   let end = size;
   let suffix = '';
   try {
@@ -499,12 +514,14 @@ async function readLatestReadOnlyReviewCapabilities(repoPath: string): Promise<R
         suffix = start > 0 ? (lines.shift() ?? '') : '';
         for (const line of lines.reverse()) {
           if (line.trim() === '') continue;
+          let event: unknown;
           try {
-            const event = readOnlyReviewCapability(JSON.parse(line));
-            if (event && !latestByProvider.has(event.provider)) latestByProvider.set(event.provider, event);
+            event = JSON.parse(line);
           } catch {
             // A concurrent append or malformed unrelated event does not make status fail.
+            continue;
           }
+          if (visit(event)) return;
         }
         end = start;
       }
@@ -512,10 +529,42 @@ async function readLatestReadOnlyReviewCapabilities(repoPath: string): Promise<R
       await handle.close();
     }
   } catch {
-    return [];
+    return;
   }
+}
 
+/** Latest capability record per provider, scanning the whole ledger. */
+async function readLatestReadOnlyReviewCapabilities(repoPath: string): Promise<ReadOnlyReviewCapability[]> {
+  const latestByProvider = new Map<string, ReadOnlyReviewCapability>();
+  await scanEventsNewestFirst(repoPath, (raw) => {
+    const event = readOnlyReviewCapability(raw);
+    if (event && !latestByProvider.has(event.provider)) latestByProvider.set(event.provider, event);
+    return false;
+  });
   return [...latestByProvider.values()];
+}
+
+/**
+ * #2275: when the newest dispatcher tick shows a free slot while an origin
+ * refresh is still pending (held behind an open provider window), say so — so
+ * an operator can tell refresh-blocked from an empty backlog. Silent otherwise.
+ */
+export async function renderRootRefreshSection(repoPath: string, out: (line: string) => void): Promise<void> {
+  let latest: { busy: number; free: number; pending: boolean } | undefined;
+  await scanEventsNewestFirst(repoPath, (raw) => {
+    if (typeof raw !== 'object' || raw === null) return false;
+    const record = raw as Record<string, unknown>;
+    if (record.type !== 'daemon_backlog_snapshot') return false;
+    const slots = record.slots as { busy?: unknown; free?: unknown } | undefined;
+    if (typeof slots?.busy !== 'number' || typeof slots.free !== 'number') return false;
+    latest = { busy: slots.busy, free: slots.free, pending: record.rootRefreshPending === true };
+    return true;
+  });
+  if (!latest?.pending || latest.free === 0) return;
+  out(
+    `  ROOT REFRESH: pending — ${latest.free} slot(s) free, ${latest.busy} busy; ` +
+      'origin refresh waits for an open provider window, free slots still fill from local discovery',
+  );
 }
 
 async function renderReadOnlyReviewCapabilitySection(repoPath: string, out: (line: string) => void): Promise<void> {
@@ -575,6 +624,27 @@ async function renderAgreementLine(repoPath: string, out: (line: string) => void
   out(`  attribution agreement: ${pct}% (n=${summary.sampleCount})`);
 }
 
+type ActiveChildStatusLabel = { child: ChildId; total: number };
+
+/**
+ * Resolve the one child whose ledger/status is visible. The cursor remains the
+ * authority: envelope data supplies only the human-facing denominator.
+ */
+async function activeChildStatusLabel(
+  featureRoot: string,
+  slug: string,
+): Promise<ActiveChildStatusLabel | undefined> {
+  const cursor = await resolveActiveChild(featureRoot, slug);
+  if (cursor.kind !== 'active') return undefined;
+  const envelope = await readCoverageBindingEnvelope(featureRoot, coverageBindingFilesystem);
+  const positions = envelope?.sliceMembership && COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)
+    ? [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
+      .map((position) => parseChildId(position))
+      .filter((position): position is ChildId => position !== undefined)
+    : [];
+  return positions.length >= 2 ? { child: cursor.child, total: positions.length } : undefined;
+}
+
 /**
  * Render cap accounting for every feature the durable dashboard model classifies
  * as in progress. The counts themselves stay owned by the kickback ledger;
@@ -593,20 +663,24 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
     .filter((feature, index, features) => features.findIndex((item) => item.slug === feature.slug) === index);
   for (const feature of visibleFeatures) {
     const featureRoot = join(repoPath, '.worktrees', feature.slug);
+    const activeChild = await activeChildStatusLabel(featureRoot, feature.slug);
+    const child = activeChild?.child;
+    const childStatus = activeChild ? ` child ${activeChild.child}/${activeChild.total}` : '';
     const initial = await readGrowth(featureRoot, 0);
     const config = await loadConfig(featureRoot);
     const configCap = prdAuditAppendCap(
       config.ok ? config.config : ({} as HarnessConfig),
       initial.authored,
     );
-    const ledger = await readKickbackLedger(featureRoot);
-    const cap = ledger.effectiveGrowthCap ?? configCap;
+    const ledger = await readKickbackLedger(featureRoot, child);
+    const flatLedger = child === undefined ? ledger : await readKickbackLedger(featureRoot);
+    const cap = flatLedger.effectiveGrowthCap ?? configCap;
     const growth = await readGrowth(featureRoot, cap);
     const byGate = Object.entries(growth.byGate)
       .map(([gate, count]) => `${gate}: ${count}`)
       .join(', ');
     out(
-      `  PLAN GROWTH [${feature.slug}]: authored ${growth.authored}; ` +
+      `  PLAN GROWTH [${feature.slug}${childStatus}]: authored ${growth.authored}; ` +
       `added ${growth.added}${byGate ? ` (${byGate})` : ''}; ` +
       `remaining ${growth.remaining}/${cap}`,
     );
@@ -617,7 +691,7 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
         : gate === 'prd_audit'
           ? (config.ok ? (config.config as HarnessConfig & { prd_audit?: { max_remediation_laps?: number } }).prd_audit?.max_remediation_laps ?? 1 : 1)
           : (config.ok ? (config.config as HarnessConfig & { architecture_review_as_built?: { max_remediation_laps?: number } }).architecture_review_as_built?.max_remediation_laps ?? 1 : 1);
-      const view = renderKickbackBudgetView(entry, gate, limit).replace(/\n/g, ' | ');
+      const view = renderKickbackBudgetView(entry, gate, limit, undefined, undefined, child).replace(/\n/g, ' | ');
       const allowance = entry.capEvidence ? `Allowance: ${entry.capEvidence.allowance}; ` : '';
       out(`  KICKBACK BUDGET [${feature.slug}]: ${allowance}${view}`);
     }
@@ -706,7 +780,10 @@ export async function runDaemonStatus(
       await renderBlockedSection(record.path, out, clock);
       await renderAgreementLine(record.path, out);
       await renderInapplicableSection(record.path, out);
-      if (row.liveness === 'running') await renderInFlightSection(record.path, out, clock);
+      if (row.liveness === 'running') {
+        await renderRootRefreshSection(record.path, out);
+        await renderInFlightSection(record.path, out, clock);
+      }
       await renderPlanGrowthSection(record.path, out);
     }
   }

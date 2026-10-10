@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:18, task:rem-as-built-rem-ab4-1
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:18, task:30, task:rem-as-built-rem-ab4-1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
@@ -1967,6 +1967,39 @@ describe('kickback-ledger', () => {
       await expect(readKickbackLedgerResult(dir, child)).resolves.toEqual({ kind: 'absent' });
       await expect(readKickbackLedger(dir, child)).resolves.toEqual({ version: 1, gates: {} });
       await expect(readFile(childLedgerPath(), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('charges each child independently and leaves the feature ledger unchanged', async () => {
+      const firstChild = parseChildId('1')!;
+      const input = {
+        treeHash: '0123456789abcdef0123456789abcdef01234567',
+        resolvedCount: 0,
+        reason: 'build review requested a repair',
+      };
+      await bumpKickbackGateInLedger(dir, 'build_review', input, firstChild);
+      await bumpKickbackGateInLedger(dir, 'build_review', input, firstChild);
+      const second = await bumpKickbackGateInLedger(dir, 'build_review', input, child);
+
+      expect(second.entry.cumulative).toBe(1);
+      expect((await readKickbackLedger(dir, firstChild)).gates.build_review?.cumulative).toBe(2);
+      await expect(readKickbackLedgerResult(dir)).resolves.toEqual({ kind: 'absent' });
+    });
+
+    it('refuses feature-wide growth and pending-repair state in a child ledger', async () => {
+      await expect(updateKickbackLedger(dir, (ledger) => ({
+        ledger: {
+          ...ledger,
+          growth: { authored: 2, added: 0, byGate: {} },
+          effectiveGrowthCap: 1,
+          pendingRepair: {
+            receiptId: 'child-repair',
+            charges: {},
+            taskIds: [],
+          },
+        },
+        result: undefined,
+      }), undefined, child)).rejects.toThrow('child kickback ledgers cannot contain plan growth');
+      await expect(readKickbackLedgerResult(dir, child)).resolves.toEqual({ kind: 'absent' });
     });
   });
 

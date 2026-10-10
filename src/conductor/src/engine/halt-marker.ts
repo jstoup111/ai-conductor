@@ -17,6 +17,7 @@ import {
   type HaltRecordInput,
   type HaltRecordRemoteOptions,
 } from './halt-record.js';
+import { resolveActiveChild } from './child-cursor.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
 /** The park-for-human marker the daemon loop treats as a stop. */
@@ -155,10 +156,12 @@ async function haltRecordInput(
   haltBody: string,
   haltClass: HaltClass,
 ): Promise<HaltRecordInput> {
-  const [branch, headSha, phaseMarker] = await Promise.all([
+  const slug = basename(projectRoot);
+  const [branch, headSha, phaseMarker, activeChild] = await Promise.all([
     gitValue(projectRoot, ['rev-parse', '--abbrev-ref', 'HEAD']),
     gitValue(projectRoot, ['rev-parse', 'HEAD']),
     readFile(join(projectRoot, '.pipeline', 'phase-active'), 'utf8').catch(() => ''),
+    resolveActiveChild(projectRoot, slug).catch(() => ({ kind: 'no-child' } as const)),
   ]);
   const fields = new Map(
     phaseMarker.split('\n').flatMap((line) => {
@@ -168,7 +171,7 @@ async function haltRecordInput(
   );
 
   return {
-    slug: basename(projectRoot),
+    slug,
     haltClass,
     step: fields.get('step') ?? 'unknown',
     phase: fields.get('phase') ?? 'unknown',
@@ -176,6 +179,7 @@ async function haltRecordInput(
     headSha,
     haltedAt: new Date().toISOString(),
     haltBody,
+    ...(activeChild.kind === 'active' ? { child: activeChild.child } : {}),
   };
 }
 

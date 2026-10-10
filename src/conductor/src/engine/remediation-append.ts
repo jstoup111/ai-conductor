@@ -141,7 +141,14 @@ export function buildRemediationDoneWhenChecks(
     checks.push(`${normalizedClause} is satisfied by this task.`);
   }
 
-  checks.push(`Re-run ${collapseToOneLine(gateSource) ?? gateSource} and confirm task ${id} is complete.`);
+  // A Done-when check closes at task close, inside BUILD. It must therefore be
+  // provable there: the former "Re-run <gate> and confirm task <id> is
+  // complete." asked BUILD to evidence a future gate verdict, which an honest
+  // agent can only refuse as a plan gap — every appended remediation task then
+  // halted the feature plan-gap (or stayed in_progress forever). The owning gate
+  // re-runs after BUILD by engine routing regardless, so no check needs to name
+  // it; this present-tense check keeps the plan's minimum of two checks.
+  checks.push(`The repair for task ${id} is committed and its targeted tests pass.`);
   return checks;
 }
 

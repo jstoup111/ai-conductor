@@ -53,6 +53,8 @@ import {
   GITHUB_ISSUES_SOURCE,
   HANDLED_LABEL,
 } from './engineer/intake/github-issues.js';
+import { createTerminalGithubOperationConfirmation } from './github-operation-terminal-confirmation.js';
+import type { InteractiveGithubOperationConfirmation } from './github-operation-approval.js';
 import {
   createIntakeBackendComposite,
   type IntakeBackend,
@@ -76,7 +78,7 @@ import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { runMigration } from './engineer/issue-dep-migration.js';
-import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead, type GhRunner } from './tracker-client.js';
+import { createGithubTrackerClient, createGuardedGithubOperationRunner, GithubTrackerOperationRefusalError, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead, type GhRunner } from './tracker-client.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
 import { bindMutationToPullRequest } from './ship-draft-pr.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
@@ -520,6 +522,8 @@ export interface DispatchEngineerOpts {
   spawnHost?: (executable: string, argv: string[], cwd: string) => Promise<number>;
   /** Whether stdin and stdout are attached to an operator terminal. */
   isAttachedTerminal?: () => boolean;
+  /** Interactive approval boundary for guarded intake writes. */
+  githubOperationConfirmation?: InteractiveGithubOperationConfirmation;
   /** Environment used to form host-owned interactive argv. */
   env?: NodeJS.ProcessEnv;
   /**
@@ -550,6 +554,15 @@ export interface DispatchEngineerOpts {
    * that returns false when stdin is not a TTY (so non-interactive runs don't loop).
    */
   confirmAnother?: () => boolean | Promise<boolean>;
+}
+
+function forgetAuthorizationRefusalExplanation(error: unknown, attached: boolean): string {
+  if (!(error instanceof GithubTrackerOperationRefusalError)
+    || error.reason !== 'explicit-authorization-required') return '';
+
+  return attached
+    ? ' The operator declined the interactive approval.'
+    : ' The machine owner is not confirmed as this issue\'s sole assignee, and approval requires that you rerun the same command from an interactive terminal.';
 }
 
 /**
@@ -726,8 +739,9 @@ export const SUBCOMMAND_HELP = {
     'Loop fit: first step of the loop — claim → worktree → land → handoff → resolve/forget.',
   forget:
     'compose forget <sourceRef> [--resolved-by <reference>] — drop a ledger entry and strip its intake label.\n' +
-    'Flags: <sourceRef> positional (required, must not start with --), --resolved-by <reference> (optional — comments the reference on the originating GitHub issue, then closes it).\n' +
-    'Mutates: removes the entry from the ledger and strips the source label (e.g. on the GitHub issue); with --resolved-by, comments and closes the originating issue first. Without --resolved-by, it does not close the issue.\n' +
+    'Flags: <sourceRef> positional (required, must not start with a dash), --resolved-by <reference> (optional — comments the reference on the originating GitHub issue, then closes it).\n' +
+    'Mutates: removes the entry from the ledger and strips the source label (e.g. on the GitHub issue); --resolved-by comments and closes the originating issue and works without a ledger entry. Without --resolved-by the issue does not close.\n' +
+    'Authorization: when the machine owner is not the sole assignee, each write asks for approval at an interactive terminal; non-interactive invocations are refused.\n' +
     'Loop fit: terminal step — claim → worktree → land → handoff → resolve/forget (abandon path, alternative to resolve).',
   resolve:
     'compose resolve <sourceRef> --pr-url <url> [--branch <branch>] — mark a claimed ledger entry as delivered when the normal write-back failed.\n' +
@@ -1623,19 +1637,68 @@ export async function dispatchEngineer(
     // An absent ref is reported (found:false) and is NOT an error.
     case 'forget': {
       const { sourceRef } = dispatch;
+      const attached = (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))();
+      const confirmation = opts.githubOperationConfirmation
+        ?? createTerminalGithubOperationConfirmation({ isTerminal: () => attached });
       const engDir = engineerDir ?? resolveEngineerDir({});
       const ledger = createLedger(join(engDir, 'ledger.json'));
+      const resolveIssue = async (
+        parsedForget: NonNullable<ReturnType<typeof parseSourceRef>>,
+        resolvedBy: string,
+      ): Promise<boolean> => {
+        const tracker = createGithubTrackerClient(gh, {
+          intake: createGithubIntakeAuthorization({
+            gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor, confirmation,
+          }),
+          events: opts.events,
+        });
+        try {
+          await tracker.commentOnIntakeIssue(
+            parsedForget.repo,
+            Number(parsedForget.issue),
+            `Resolved by ${resolvedBy}`,
+            process.cwd(),
+          );
+        } catch (err: unknown) {
+          printErr(
+            `engineer forget: failed to comment on ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
+            `ledger entry retained.${forgetAuthorizationRefusalExplanation(err, attached)}`,
+          );
+          return false;
+        }
+        try {
+          await tracker.closeIntakeIssue(parsedForget.repo, String(parsedForget.issue), process.cwd());
+        } catch (err: unknown) {
+          printErr(
+            `engineer forget: failed to close ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
+            `close the issue by hand, then rerun \`engineer forget ${sourceRef}\` without --resolved-by.` +
+            forgetAuthorizationRefusalExplanation(err, attached),
+          );
+          return false;
+        }
+        return true;
+      };
 
       const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
       if (!entry) {
-        if (dispatch.resolvedBy) {
+        if (!dispatch.resolvedBy) {
+          print(JSON.stringify({ kind: 'forget', sourceRef, found: false }));
+          return 0;
+        }
+
+        const parsedForget = parseSourceRef(sourceRef);
+        if (!parsedForget) {
           printErr(
-            `engineer forget: cannot record resolution for ${sourceRef}: no intake ledger entry; ` +
+            `engineer forget: cannot record resolution for ${sourceRef}: it is not a GitHub issue reference; ` +
             'rerun without --resolved-by to remove only the source label.',
           );
           return 1;
         }
-        print(JSON.stringify({ kind: 'forget', sourceRef, found: false }));
+
+        if (!await resolveIssue(parsedForget, dispatch.resolvedBy)) return 1;
+        print(JSON.stringify({
+          kind: 'forget', sourceRef, found: false, removed: false, closed: true, resolvedBy: dispatch.resolvedBy,
+        }));
         return 0;
       }
 
@@ -1649,33 +1712,7 @@ export async function dispatchEngineer(
         return 1;
       }
       if (dispatch.resolvedBy && parsedForget) {
-        const tracker = createGithubTrackerClient(gh, {
-          intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor }),
-          events: opts.events,
-        });
-        try {
-          await tracker.commentOnIntakeIssue(
-            parsedForget.repo,
-            Number(parsedForget.issue),
-            `Resolved by ${dispatch.resolvedBy}`,
-            process.cwd(),
-          );
-        } catch (err: unknown) {
-          printErr(
-            `engineer forget: failed to comment on ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
-            'ledger entry retained.',
-          );
-          return 1;
-        }
-        try {
-          await tracker.closeIntakeIssue(parsedForget.repo, String(parsedForget.issue), process.cwd());
-        } catch (err: unknown) {
-          printErr(
-            `engineer forget: failed to close ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
-            `close the issue by hand, then rerun \`engineer forget ${sourceRef}\` without --resolved-by.`,
-          );
-          return 1;
-        }
+        if (!await resolveIssue(parsedForget, dispatch.resolvedBy)) return 1;
       }
 
       await ledger.forget(GITHUB_ISSUES_SOURCE, sourceRef);
@@ -1685,7 +1722,9 @@ export async function dispatchEngineer(
       if (parsedForget) {
         try {
           const tracker = createGithubTrackerClient(gh, {
-            intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor }),
+            intake: createGithubIntakeAuthorization({
+              gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor, confirmation,
+            }),
             events: opts.events,
           });
           await tracker.removeIntakeIssueLabel(
@@ -1695,7 +1734,10 @@ export async function dispatchEngineer(
             process.cwd(),
           );
         } catch (err: unknown) {
-          printErr(`engineer forget: label strip failed for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}`);
+          printErr(
+            `engineer forget: label strip failed for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}` +
+            forgetAuthorizationRefusalExplanation(err, attached),
+          );
         }
       }
 
