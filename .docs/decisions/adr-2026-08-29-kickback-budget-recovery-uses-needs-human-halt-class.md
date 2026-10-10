@@ -125,6 +125,38 @@ and the pure budget view remain authoritative; and mechanical-fault state remain
 
 > **Amended 2026-10-10 by #2943:** The allowances are `laps`, `growth` and `restacks`. `restacks` belongs to the `restack` pseudo-gate; it is not growth, so `reset` accepts it (`adr-2026-10-10-stacked-restack-journaled-replay` decision 10).
 
+### D6 — `coverage_binding` is a lap-allowance recovery gate
+
+> **Amended 2026-10-10 by #2846:** The coverage_binding existing-task reopen
+> (adr-2026-09-06-reopened-task-resolution decision 10) charges `gates.coverage_binding` laps but
+> wrote no typed evidence and was outside this command family, so its lap-cap halt had no supported
+> recovery. It joins the family as follows; D1-D5 are otherwise unchanged.
+>
+> 1. The carried-forward gate grammar (superseded ADR D3 as amended by #2190) gains
+>    `coverage_binding` for `inspect`, `raise`, and `reset`. An unknown gate is still refused before
+>    any park or ledger change.
+> 2. `coverage_binding` is budgeted like `prd_audit` and `architecture_review_as_built`: consumed
+>    `laps` against a feature-local `effectiveLapCap`, never `cumulative`/`effectiveLimit`. One shared
+>    engine predicate names the lap-budgeted gates and every stage, apply, view, and CLI computation
+>    uses it, so a gate cannot be admitted to the grammar while its arithmetic treats it as
+>    cumulative.
+> 3. Its cap halt keeps class `needs-human` (D1; no new class). Before that halt the step persists
+>    D2 typed evidence (gate `coverage_binding`, allowance `laps`, consumed laps, effective limit,
+>    latest reason, generation), and the halt body carries the generation line and the exact raise
+>    command (D5.4, diagnostic only). Its recoverable-class entry is `needs-human`.
+> 4. Settlement of a coverage_binding reopen honors the gate's feature-local `effectiveLapCap` in
+>    place of the engine default per-gate cap, read under the ledger lease. The default cap and the
+>    absence of a coverage_binding config key are unchanged (decision 10 of
+>    adr-2026-09-06-reopened-task-resolution); the raise is an operator-authorized, per-feature
+>    recovery exactly as D2-amended-by-#2190 is for the other lap gates.
+> 5. A cap-exceeded reopen preserves the reopen eligibility of the coverage_binding envelope it
+>    could not act on, so the re-dispatch after an authorized grant reopens the bound tasks rather
+>    than recording a run that silently skips them.
+> 6. `coverage_binding` is a feature-scoped gate: its laps, evidence, adjustments, and resume
+>    authorization live in the feature (root) ledger even when child state exists. `inspect`,
+>    `raise`, and `reset` resolve it there and refuse `--child` for it; the daemon sweep consults the
+>    feature ledger for it in addition to the active child's ledger.
+
 ## Amendment
 
 **Amended by:** DECIDE for `plan-growth-allowance-is-spent-on-work-existing-ta` (2026-09-01,
