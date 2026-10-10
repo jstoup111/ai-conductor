@@ -20,6 +20,7 @@ import { readRegionCaptures } from './pr-body-region-store.js';
 import { seedTaskStatus, TaskReopenError } from './task-seed.js';
 import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
+import { resolveChildBase } from './child-cursor.js';
 import {
   gateVerdictStillValid,
   rebaseOperationPublicationBlocker,
@@ -3110,27 +3111,82 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       // not refuse a legitimate disposition-only completion. Attribution
       // follows resolveArtifactFiles' feature association: a spec belongs
       // to the feature when it is among the feature's changed paths or its
-      // filename stem matches a feature identity. With no attribution
-      // context at all (legacy callers), fall back fail-closed to the
-      // whole corpus, exactly as before.
+      // filename stem matches a feature identity. A non-first child instead
+      // has a stronger association boundary: only changes since its parent's
+      // closure tip belong to it, even when an earlier child's filename has
+      // the feature's stem. With no attribution context at all (legacy
+      // callers), fall back fail-closed to the whole corpus, exactly as before.
+      let childChangedPaths: ReadonlySet<string> | undefined;
+      if (ctx.activeChild !== undefined) {
+        if (!ctx.featureDesc) {
+          return {
+            done: false,
+            acceptanceRedRefusalClass: 'shape',
+            reason: `disposition-only acceptance evidence cannot resolve child ${ctx.activeChild}'s base without the feature slug`,
+          };
+        }
+        const childBase = await resolveChildBase(
+          dir,
+          slugify(ctx.featureDesc),
+          ctx.activeChild,
+          { ...(ctx.git === undefined ? {} : { git: ctx.git }) },
+        );
+        if (childBase.kind === 'parent-missing') {
+          return {
+            done: false,
+            acceptanceRedRefusalClass: 'shape',
+            reason: `disposition-only acceptance evidence cannot resolve child ${ctx.activeChild}'s base: parent child ${childBase.parent} branch ${childBase.branch} is missing`,
+          };
+        }
+        if (childBase.kind === 'parent-not-ancestor') {
+          return {
+            done: false,
+            acceptanceRedRefusalClass: 'shape',
+            reason: `disposition-only acceptance evidence cannot resolve child ${ctx.activeChild}'s base: parent child ${childBase.parent} tip ${childBase.sha} is not an ancestor of HEAD`,
+          };
+        }
+        if (childBase.kind === 'parent') {
+          const git = ctx.git ?? makeGitRunner(dir);
+          let changed: Awaited<ReturnType<GitRunner>>;
+          try {
+            changed = await git(['diff', '--name-only', childBase.sha, 'HEAD']);
+          } catch {
+            return {
+              done: false,
+              acceptanceRedRefusalClass: 'shape',
+              reason: `disposition-only acceptance evidence cannot determine changes since parent child ${childBase.parent} (${childBase.sha})`,
+            };
+          }
+          if (changed.exitCode !== 0) {
+            return {
+              done: false,
+              acceptanceRedRefusalClass: 'shape',
+              reason: `disposition-only acceptance evidence cannot determine changes since parent child ${childBase.parent} (${childBase.sha})`,
+            };
+          }
+          childChangedPaths = new Set(
+            changed.stdout.split(/\r?\n/).map((path) => path.trim()).filter(Boolean),
+          );
+        }
+      }
       const featureIdentities = [
         ...(ctx.artifactResolution?.featureIdentities ?? []),
         ctx.planPath ? planStem(ctx.planPath) : undefined,
         ctx.featureDesc ? slugify(ctx.featureDesc) : undefined,
       ].filter((identity): identity is string => Boolean(identity));
-      const changedPaths = ctx.artifactResolution?.changedPaths ?? new Set<string>();
+      const changedPaths = childChangedPaths ?? ctx.artifactResolution?.changedPaths ?? new Set<string>();
       const hasAttributionContext = featureIdentities.length > 0 || changedPaths.size > 0;
       const featureSpecFiles = hasAttributionContext
         ? files.filter((file) => {
             const repoPath = relative(dir, file).replaceAll('\\', '/');
             return (
               changedPaths.has(repoPath) ||
-              featureIdentities.some((identity) =>
+              (childChangedPaths === undefined && featureIdentities.some((identity) =>
                 artifactMatchesFeatureIdentity(acceptanceSpecStem(file), identity, {
                   strategy: 'normalized-stem',
                   stripDatePrefix: true,
                 }),
-              )
+              ))
             );
           })
         : files;

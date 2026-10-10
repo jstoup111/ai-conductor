@@ -3,12 +3,13 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const { resolveActiveChild, resolveCoverageBindingDecideSet } = vi.hoisted(() => ({
+const { resolveActiveChild, resolveChildBase, resolveCoverageBindingDecideSet } = vi.hoisted(() => ({
   resolveActiveChild: vi.fn(),
+  resolveChildBase: vi.fn(),
   resolveCoverageBindingDecideSet: vi.fn(),
 }));
 
-vi.mock('../../src/engine/child-cursor.js', () => ({ resolveActiveChild }));
+vi.mock('../../src/engine/child-cursor.js', () => ({ resolveActiveChild, resolveChildBase }));
 vi.mock('../../src/engine/coverage-binding-decide-set.js', () => ({ resolveCoverageBindingDecideSet }));
 
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
@@ -128,6 +129,7 @@ describe('acceptance_specs child-scoped disposition grounding', () => {
       '.pipeline/children/2/acceptance-specs-red.json',
       JSON.stringify({ outcome: 'disposition-only', dispositions }),
     );
+    resolveChildBase.mockResolvedValue({ kind: 'none' });
     return root;
   }
 
@@ -168,6 +170,37 @@ describe('acceptance_specs child-scoped disposition grounding', () => {
       done: false,
       acceptanceRedRefusalClass: 'shape',
       reason: expect.stringContaining(`not owned by child 2: ${story1Happy}`),
+    });
+  });
+
+  it('does not attribute a parent child\'s acceptance specs to child 2', async () => {
+    const root = await seed([record(story2Happy), record(story2Negative)]);
+    await createFile(root, 'test/acceptance/feature.acceptance.test.ts', '// committed by child 1\n');
+    resolveChildBase.mockResolvedValue({ kind: 'parent', parent: 1, sha: 'child-1-tip' });
+    const git = vi.fn().mockResolvedValue({
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+
+    await expect(checkStepCompletion(root, 'acceptance_specs', {
+      ...context,
+      git,
+    })).resolves.toEqual({ done: true, viaException: false });
+    expect(resolveChildBase).toHaveBeenCalledWith(root, 'feature', child2, { git });
+    expect(git).toHaveBeenCalledWith(['diff', '--name-only', 'child-1-tip', 'HEAD']);
+  });
+
+  it('refuses disposition-only evidence when the parent child branch is missing', async () => {
+    const root = await seed([record(story2Happy), record(story2Negative)]);
+    resolveChildBase.mockResolvedValue({
+      kind: 'parent-missing', parent: 1, branch: 'feat/c1/feature',
+    });
+
+    await expect(checkStepCompletion(root, 'acceptance_specs', context)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: expect.stringContaining('feat/c1/feature'),
     });
   });
 });
