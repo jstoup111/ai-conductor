@@ -79,7 +79,10 @@ async function listeningEndpoint(onRequest: (path: string) => void): Promise<{ e
 }
 
 async function eventually(predicate: () => boolean | Promise<boolean>): Promise<void> {
-  for (let turn = 0; turn < 1_000; turn += 1) {
+  // Poll by wall-clock deadline, not a fixed turn count: the awaited state
+  // follows real loopback HTTP, which a loaded CI runner can delay past any
+  // fixed number of event-loop turns. The deadline only fails the test.
+  for (const deadline = Date.now() + 5_000; Date.now() < deadline;) {
     if (await predicate()) return;
     await new Promise<void>((resolve) => setImmediate(resolve));
   }

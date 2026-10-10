@@ -50,7 +50,10 @@ async function drainUntilEmpty(drainer: SpoolDrainer, store: SpoolStore): Promis
 }
 
 async function waitForEmpty(store: SpoolStore): Promise<void> {
-  for (let turn = 0; turn < 1_000; turn += 1) {
+  // Poll by wall-clock deadline, not a fixed turn count: the awaited state
+  // follows real loopback HTTP, which a loaded CI runner can delay past any
+  // fixed number of event-loop turns. The deadline only fails the test.
+  for (const deadline = Date.now() + 5_000; Date.now() < deadline;) {
     const [traces, metrics] = await Promise.all([store.list('traces'), store.list('metrics')]);
     if (traces.length === 0 && metrics.length === 0) {
       return;
@@ -348,9 +351,12 @@ describe('SpoolDrainer', () => {
 
     const crashingDrainer = new SpoolDrainer(crashBeforeDelete, { endpoint, headers: () => ({}) });
     const crashing = crashingDrainer.drainUntilStopped();
-    for (let turn = 0; turn < 1_000 && received.length === 0; turn += 1) {
+    // The crashing drainer's POST is real loopback I/O; wait for it by
+    // deadline rather than a fixed turn count, which flaked under CI load.
+    for (const deadline = Date.now() + 5_000; received.length === 0 && Date.now() < deadline;) {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
+    expect(received).toHaveLength(1);
     await crashingDrainer.stop();
     await crashing;
     await drainUntilEmpty(new SpoolDrainer(store, { endpoint, headers: () => ({}) }), store);
