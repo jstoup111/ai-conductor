@@ -1,4 +1,4 @@
-// Covers: task:2, task:3
+// Covers: task:2, task:3, task:4
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,6 +12,7 @@ import { readState, writeState } from '../../src/engine/state.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 
@@ -62,6 +63,22 @@ async function writePrdPass(dir: string, options?: StepRunOptions): Promise<void
   }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: 'fixture-head' });
 }
 
+async function writePrdFixable(dir: string, options?: StepRunOptions): Promise<void> {
+  await persistPrdAuditVerdict(dir, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'FIXABLE',
+        evidence: 'fixture: repair remains required', rationale: 'fixture current fixable verdict',
+        requirementAssociations: [], evidenceTaskIds: ['1'], ownerTaskId: '1',
+      }],
+      noOwnerObservations: [],
+    },
+    diagnostics: [], recordedDispositions: [],
+  }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: 'fixture-head' });
+}
+
 async function writeAsBuiltPass(dir: string, options?: StepRunOptions): Promise<void> {
   await persistAsBuiltVerdict(dir, {
     version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
@@ -74,7 +91,7 @@ describe('validation-group dispatch handshake retries', () => {
     const calls: StepName[] = [];
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
-    for (const type of ['step_retry', 'loop_halt', 'kickback'] as const) emitter.on(type, (event) => events.push(event));
+    for (const type of ['step_retry', 'loop_halt', 'kickback'] as const) emitter.on(type, (event) => { events.push(event); });
     let prdAttempts = 0;
     const runner: StepRunner = {
       run: vi.fn(async (step, _state, options) => {
@@ -119,7 +136,7 @@ describe('validation-group dispatch handshake retries', () => {
       const { dir, statePath } = await fixture();
       const retries: ConductorEvent[] = [];
       const emitter = new ConductorEventEmitter();
-      emitter.on('step_retry', (event) => retries.push(event));
+      emitter.on('step_retry', (event) => { retries.push(event); });
       const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events: emitter,
@@ -137,16 +154,59 @@ describe('validation-group dispatch handshake retries', () => {
     },
   );
 
-  it('keeps verification-off validation members dispatch-success-only', async () => {
+  it('dispatches a current complete but FIXABLE prd_audit verdict once before one remediation dispatch', async () => {
     const { dir, statePath } = await fixture();
     const calls: StepName[] = [];
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs', 'plans', 'validation-group-handshake-retry.md'),
+      '### Task 1: Fixture repair\n\nDone when: the fixture repair is complete.\n',
+    );
+    const runner: StepRunner = {
+      run: vi.fn(async (step, _state, options) => {
+        calls.push(step);
+        if (step === 'manual_test') {
+          await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
+        } else if (step === 'prd_audit') {
+          await writePrdFixable(dir, options);
+        } else if (step === 'architecture_review_as_built') {
+          await writeAsBuiltPass(dir, options);
+        } else if (step === 'remediate') {
+          await persistFixtureProjectedRemediationPlan(dir, options, [{
+            id: 'S1.1', disposition: 'build', category: null,
+            rationale: 'Repair the current PRD-audit gap.',
+            tasks: [{ id: 'rem-s1-1', title: 'Repair the fixture gap' }],
+          }]);
+        }
+        return { success: true };
+      }),
+    };
+
+    await new Conductor({
+      projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(),
+      fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: true,
+      config: { gate_code_validity: { enabled: false }, defaults: { max_retries: 1 } },
+    }).run();
+
+    expect(calls.filter((step) => step === 'manual_test')).toHaveLength(1);
+    expect(calls.filter((step) => step === 'prd_audit')).toHaveLength(1);
+    expect(calls.filter((step) => step === 'architecture_review_as_built')).toHaveLength(1);
+    expect(calls.filter((step) => step === 'remediate')).toHaveLength(1);
+  });
+
+  it('keeps a no-verdict PRD audit verification-off group dispatch-success-only and completes it', async () => {
+    const { dir, statePath } = await fixture();
+    const calls: StepName[] = [];
+    const events: ConductorEvent[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('parallel_completed', (event) => { events.push(event); });
     const conductor = new Conductor({
       projectRoot: dir, stateFilePath: statePath,
       stepRunner: { run: vi.fn(async (step) => {
         calls.push(step);
         return { success: true };
       }) },
-      events: new ConductorEventEmitter(), fromStep: 'manual_test', mode: 'auto', daemon: true,
+      events: emitter, fromStep: 'manual_test', mode: 'auto', daemon: true,
       verifyArtifacts: false, config: { defaults: { max_retries: 2 } },
     });
     const handshake = vi.spyOn(conductor as unknown as {
@@ -158,7 +218,12 @@ describe('validation-group dispatch handshake retries', () => {
     for (const member of ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const) {
       expect(calls.filter((step) => step === member)).toHaveLength(1);
     }
+    expect(calls.filter((step) => step === 'prd_audit')).toHaveLength(1);
     expect(handshake).toHaveBeenCalledTimes(3);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'parallel_completed', step: 'manual_test',
+      branches: ['manual_test', 'prd_audit', 'architecture_review_as_built'],
+    }));
     const result = await readState(statePath);
     expect(result.ok && result.value).toMatchObject({
       manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done',
@@ -189,7 +254,7 @@ describe('validation-group dispatch handshake retries', () => {
       const calls: StepName[] = [];
       const events: ConductorEvent[] = [];
       const emitter = new ConductorEventEmitter();
-      for (const type of ['kickback', 'loop_halt'] as const) emitter.on(type, (event) => events.push(event));
+      for (const type of ['kickback', 'loop_halt'] as const) emitter.on(type, (event) => { events.push(event); });
       const runner: StepRunner = {
         run: vi.fn(async (step, _state, options) => {
           calls.push(step);
