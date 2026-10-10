@@ -2714,6 +2714,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           tracker,
           teardownWorktree: deps.teardownWorktree,
           canRemoveWorktree,
+          // Keep readiness observations and ci-failure occurrences on the
+          // daemon's one global event spine, whose persister owns events.jsonl.
+          onEvent: (event) => { void events.emit(event); },
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING
           // PR after the label pass, gated on `mergeable_autoresolve.enabled`
           // so a disabled/absent config leaves the sweep unchanged (AC4).

@@ -1,3 +1,7 @@
+// Covers: task:9
+
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 
 /**
@@ -10,6 +14,17 @@ import { describe, it, expect } from 'vitest';
  */
 
 describe('daemon-cli — watchHaltCleared wiring', () => {
+  it('routes mergeable-sweep readiness and ci_failed events through the daemon-global event spine', () => {
+    const source = readFileSync(join(process.cwd(), 'src/daemon-cli.ts'), 'utf8');
+    const sweepStart = source.indexOf('sweepMergeableLabels: async () =>');
+    const sweepEnd = source.indexOf('// Task T28: check for pending restart marker', sweepStart);
+    const sweepBinding = source.slice(sweepStart, sweepEnd);
+
+    expect(sweepStart).toBeGreaterThanOrEqual(0);
+    expect(sweepEnd).toBeGreaterThan(sweepStart);
+    expect(sweepBinding).toContain('onEvent: (event) => { void events.emit(event); },');
+  });
+
   /**
    * Scenario (a): By default, watch is true and watchHaltCleared is wired
    *
