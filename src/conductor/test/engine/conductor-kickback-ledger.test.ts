@@ -1,4 +1,4 @@
-// Covers: task:7, task:18
+// Covers: task:7, task:18, task:rem-prd-audit-8-4
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

@@ -1,4 +1,4 @@
-// Covers: task:25, task:26, task:27
+// Covers: task:25, task:26, task:27, task:rem-prd-audit-7, task:rem-prd-audit-7-2
 import { describe, expect, it } from 'vitest';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';

@@ -1,4 +1,4 @@
-// Covers: task:2, task:4, task:5, task:7, task:15, task:29
+// Covers: task:2, task:4, task:5, task:7, task:15, task:29, task:rem-prd-audit-4-4, task:rem-prd-audit-5
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

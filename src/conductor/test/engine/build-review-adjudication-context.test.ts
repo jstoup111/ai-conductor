@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:28
+// Covers: task:3, task:4, task:28, task:rem-as-built-8
 import { describe, expect, it } from 'vitest';
 
 import {

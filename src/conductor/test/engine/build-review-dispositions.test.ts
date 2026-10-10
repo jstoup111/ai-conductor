@@ -1,4 +1,4 @@
-// Covers: task:26
+// Covers: task:26, task:rem-prd-audit-8-5
 import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';

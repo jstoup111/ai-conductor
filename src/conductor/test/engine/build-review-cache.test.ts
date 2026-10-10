@@ -1,3 +1,4 @@
+// Covers: task:rem-prd-audit-4, task:rem-prd-audit-4-2, task:rem-prd-audit-4-3
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {

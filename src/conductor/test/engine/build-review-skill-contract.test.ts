@@ -1,4 +1,4 @@
-// Covers: task:12
+// Covers: task:12, task:rem-prd-audit-10
 import { access, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
