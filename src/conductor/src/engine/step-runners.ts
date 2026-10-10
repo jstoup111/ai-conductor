@@ -4789,7 +4789,7 @@ export class DefaultStepRunner implements StepRunner {
 
   private async runTautologyPreflight(inputs: BuildReviewFrozenInputs) {
     const paths = [...inputs.diff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((match) => match[2]!);
-    const classified = classifyTautologyPaths(paths);
+    const classified = classifyTautologyPaths(paths, inputs.sourceSnapshot.testQuality?.counterfactualFileSelectors ?? []);
     // There is no empty selector fallback: a rubric still receives an
     // explicit, engine-authored exception projection and decides whether the
     // absence of changed tests is a concern.

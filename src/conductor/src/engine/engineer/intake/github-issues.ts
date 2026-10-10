@@ -34,6 +34,7 @@ import {
 } from '../../github-operation-approval.js';
 import { readMachineOwnerConfig } from '../../owner-gate/machine-identity.js';
 import { resolveDaemonOwner, type OwnerResolution } from '../../owner-gate/identity.js';
+import { DAEMON_SESSION_MARKER } from '../../../execution/daemon-session.js';
 export { type GhRunner };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -64,6 +65,8 @@ export interface GithubIssuesDeps {
   confirmation?: InteractiveGithubOperationConfirmation;
   /** Existing guarded intake seam; callers normally use the assignment-backed default below. */
   intakeAuthorization?: GithubIntakeMutationExecutionContext;
+  /** Operator-run CLI entry point: authorizes intake writes outside daemon sessions. */
+  operatorSession?: boolean;
   /** Existing event spine for bot credential fallback telemetry. */
   events?: GithubOperationEventEmitter;
 }
@@ -94,6 +97,13 @@ export function createGithubIntakeAuthorization(deps: {
   resolveActor?: () => Promise<OwnerResolution>;
   confirmation?: InteractiveGithubOperationConfirmation;
   cwd?: string;
+  /**
+   * Set only by operator-run CLI entry points. Outside an engine-dispatched
+   * session it is the operator's own authority for intake writes; the daemon
+   * process never sets it, and a dispatched session carries the session marker.
+   */
+  operatorSession?: boolean;
+  env?: NodeJS.ProcessEnv;
 }): GithubIntakeMutationExecutionContext {
   const resolveActor = deps.resolveActor ?? (async () =>
     resolveDaemonOwner(await readMachineOwnerConfig(), deps.gh, deps.cwd ?? homedir()));
@@ -134,6 +144,7 @@ export function createGithubIntakeAuthorization(deps: {
 
       const assignees = await currentAssignees(request, cwd);
       if (assignees?.size === 1 && assignees.has(identity.id)) return {};
+      if (deps.operatorSession && (deps.env ?? process.env)[DAEMON_SESSION_MARKER] !== '1') return {};
 
       // An assignment failure/ambiguity never reuses a prior decision. Exact
       // interactive approval is the sole alternate authority for THIS request.
@@ -232,6 +243,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
     gh,
     resolveActor: deps.resolveActor,
     confirmation: deps.confirmation,
+    operatorSession: deps.operatorSession,
   });
   const tracker: IntakeTrackerClient = createGithubTrackerClient(gh, { intake: intakeAuthorization, events: deps.events });
 

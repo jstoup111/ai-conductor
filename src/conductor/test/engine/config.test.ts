@@ -2660,11 +2660,12 @@ steps:
     });
   });
 
-  describe('conflict_check forward-compatibility', () => {
-    it('accepts a config that sets conflict_check ahead of the block validation landing', () => {
-      const result = validateConfig({ conflict_check: { adr_corpus: 'repo_wide' } });
-
-      expect(result.ok).toBe(true);
+  describe('conflict_check config block (retired)', () => {
+    it('rejects conflict_check as an unknown key; the ADR corpus is always repo_wide', () => {
+      expect(validateConfig({ conflict_check: { adr_corpus: 'repo_wide' } })).toEqual({
+        ok: false,
+        error: { type: 'validation_error', message: 'Unknown top-level key: "conflict_check"' },
+      });
     });
   });
 
@@ -3003,41 +3004,6 @@ steps:
       expect(result.config.auto_restart_on_stale_engine).toBe(true);
       expect(result.config.harness_version).toBe('>=1.0.0');
       expect(result.config.defaults?.model).toBe('sonnet');
-    });
-  });
-
-  describe('conflict_check config field', () => {
-    it('defaults an absent ADR corpus to change_set', () => {
-      const result = validateConfig({});
-
-      expect(result).toMatchObject({
-        ok: true,
-        config: { conflict_check: { adr_corpus: 'change_set' } },
-        warnings: [],
-      });
-    });
-
-    it.each(['change_set', 'repo_wide'] as const)(
-      'accepts adr_corpus: %s',
-      (adr_corpus) => {
-        const result = validateConfig({ conflict_check: { adr_corpus } });
-
-        expect(result).toMatchObject({
-          ok: true,
-          config: { conflict_check: { adr_corpus } },
-          warnings: [],
-        });
-      },
-    );
-
-    it('rejects an unrecognized ADR corpus', () => {
-      expect(validateConfig({ conflict_check: { adr_corpus: 'all_adrs' } })).toEqual({
-        ok: false,
-        error: {
-          type: 'validation_error',
-          message: 'conflict_check.adr_corpus must be change_set|repo_wide',
-        },
-      });
     });
   });
 

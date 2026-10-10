@@ -243,3 +243,102 @@ Task 1 ──▶ Task 2 ──▶ Task 4
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-2: Add assembleBuildReviewInputs test: src/widget/widget.check.ts with it(...) under `// Covers: task:8` yields inScopeTests and counterfactualFileSelectors equal to ['src/widget/widget.check.ts'] (build-review-inputs.test.ts)
+**Gate:** prd-audit
+**Rationale:** Admission is implemented in build-review-inputs.ts:650-657, but the Task 2 assembleBuildReviewInputs test for src/widget/widget.check.ts under `// Covers: task:8` is missing. Grep finds widget.check.ts only in the preflight unit test. This is missing coverage that Task 2's doneWhen already requires, so it is BUILD work.
+**Criterion:** S1.1
+**Parent task:** 2
+**Done when:**
+- [test] S1.1 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-2 is complete.
+
+### Task rem-prd-audit-2-2: In the same assembleBuildReviewInputs test, assert unmarked src/widget/widget.ts, scripts/test_a.sh, pkg/a_test.go are absent from inScopeTests, counterfactualFileSelectors and excludedMarkerFiles
+**Gate:** prd-audit
+**Rationale:** Unmarked files are already skipped at admission (build-review-inputs.ts:651-656). The Task 2 assertion that unmarked src/widget/widget.ts, scripts/test_a.sh and pkg/a_test.go are absent from both lists and from excludedMarkerFiles is missing. This is test-only BUILD work within Task 2.
+**Criterion:** S1.4
+**Parent task:** 2
+**Done when:**
+- [test] S1.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-2-2 is complete.
+
+### Task rem-prd-audit-2-3: Add assembleBuildReviewInputs assertion that src/spec-text.ts (malformed marker only) is absent from inScopeTests, counterfactualFileSelectors and excludedMarkerFiles
+**Gate:** prd-audit
+**Rationale:** A malformed marker resolves to 'unresolved' and is never admitted (covers-marker.ts, build-review-inputs.ts:653). The Task 2 test for src/spec-text.ts being absent from all three outputs is missing. This is test-only BUILD work.
+**Criterion:** S1.6
+**Parent task:** 2
+**Done when:**
+- [test] S1.6 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-2-3 is complete.
+
+### Task rem-prd-audit-2-4: Add assembleBuildReviewInputs test asserting excludedMarkerFiles equals exactly src/hints.ts/no-changed-test-declarations, src/widget/other.check.ts/no-current-feature-binding, tools/old_check.sh/unsupported-source-language
+**Gate:** prd-audit
+**Rationale:** Reason derivation is implemented at build-review-inputs.ts:722-729, but only two branches are tested. The three-record test and the nonliteral-declaration-title precedence test that Task 2's doneWhen requires are absent. This is BUILD test work.
+**Criterion:** S2.2
+**Parent task:** 2
+**Done when:**
+- [test] S2.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-2-4 is complete.
+
+### Task rem-prd-audit-2-5: Add assembleBuildReviewInputs precedence test: src/widget/multi.check.ts recorded as nonliteral-declaration-title; tools/old_check.sh recorded as unsupported-source-language rather than no-changed-test-declarations
+**Gate:** prd-audit
+**Rationale:** Reason derivation is implemented at build-review-inputs.ts:722-729, but only two branches are tested. The three-record test and the nonliteral-declaration-title precedence test that Task 2's doneWhen requires are absent. This is BUILD test work.
+**Criterion:** S2.2
+**Parent task:** 2
+**Done when:**
+- [test] S2.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-2-5 is complete.
+
+### Task rem-prd-audit-2-6: Add assembleBuildReviewInputs test: marker-bearing test/helpers.ts with no declarations yields empty excludedMarkerFiles
+**Gate:** prd-audit
+**Rationale:** Convention paths are skipped at admission (build-review-inputs.ts:652), so the behavior holds. The Task 2 test showing that a marker-bearing test/helpers.ts with no declarations yields an empty excludedMarkerFiles is missing. This is test-only BUILD work.
+**Criterion:** S2.5
+**Parent task:** 2
+**Done when:**
+- [test] S2.5 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-2-6 is complete.
+
+### Task rem-prd-audit-3: Add materializeTautologyPreflight test: admitted selector src/widget/widget.check.ts is in changedTestSelectors, absent from revertedProductionManifest, and never written with merge-base bytes
+**Gate:** prd-audit
+**Rationale:** Selector forwarding is implemented (preflight.ts:236-242, 341; step-runners.ts:4689, 4714). The Task 3 materializeTautologyPreflight test, the classifyTautologyPaths second-argument test and the DefaultStepRunner empty-test-set test are all absent. This is BUILD test work within Task 3.
+**Criterion:** S1.3
+**Parent task:** 3
+**Done when:**
+- [test] S1.3 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-3 is complete.
+
+### Task rem-prd-audit-3-2: Add classifyTautologyPaths test: an admitted path is classified tests only when it is among the changed paths; omitting the second argument matches the path-only result
+**Gate:** prd-audit
+**Rationale:** Selector forwarding is implemented (preflight.ts:236-242, 341; step-runners.ts:4689, 4714). The Task 3 materializeTautologyPreflight test, the classifyTautologyPaths second-argument test and the DefaultStepRunner empty-test-set test are all absent. This is BUILD test work within Task 3.
+**Criterion:** S1.3
+**Parent task:** 3
+**Done when:**
+- [test] S1.3 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-3-2 is complete.
+
+### Task rem-prd-audit-3-3: Add DefaultStepRunner build_review preflight test: a diff whose only test is admitted selector src/widget/widget.check.ts does not produce the empty-test-set approved exception
+**Gate:** prd-audit
+**Rationale:** Selector forwarding is implemented (preflight.ts:236-242, 341; step-runners.ts:4689, 4714). The Task 3 materializeTautologyPreflight test, the classifyTautologyPaths second-argument test and the DefaultStepRunner empty-test-set test are all absent. This is BUILD test work within Task 3.
+**Criterion:** S1.3
+**Parent task:** 3
+**Done when:**
+- [test] S1.3 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-3-3 is complete.
+
+### Task rem-prd-audit-3-4: In the materializeTautologyPreflight test, assert src/widget/widget.ts and marker-bearing non-selector src/hints.ts are in revertedProductionManifest and src/hints.ts is absent from changedTestSelectors
+**Gate:** prd-audit
+**Rationale:** A marker-bearing file with no declarations is not a selector, so the preflight treats it as production. The Task 3 assertion that src/hints.ts is in revertedProductionManifest and absent from changedTestSelectors is missing. This is test-only BUILD work.
+**Criterion:** S1.5
+**Parent task:** 3
+**Done when:**
+- [test] S1.5 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-3-4 is complete.
+
+### Task rem-prd-audit-1: Add gate-invalidation.test.ts assertions: partitionDelta places tests/unit/runner.spec.mts, src/a.spec.ts, Tests/Foo.cs in the test partition and isRuntimeSourcePath returns false for each
+**Gate:** prd-audit
+**Rationale:** gate-invalidation.ts already routes paths through the shared isTestPath. The planned partitionDelta and isRuntimeSourcePath assertions in gate-invalidation.test.ts are missing; the only change there is a Covers header. This is test-only BUILD work within Task 1.
+**Criterion:** S3.2
+**Parent task:** 1
+**Done when:**
+- [test] S3.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-1 is complete.

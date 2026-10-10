@@ -38,14 +38,6 @@ Every build-review consumer filters or exhaustively handles its own domain. Buil
 
 This is the first real second-domain implementation. Shared storage and projection primitives are reused; shared gate authority is not inferred. Cross-gate equivalence still belongs to #2441.
 
-> **Amended 2026-10-02 by #2464 (operator-approved):** within the `build_review` namespace, source
-> uniqueness means at most one unresolved case per source; resolved cases keep their links, as
-> adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication D6 decides. The `prd_widening`
-> namespace is unchanged.
->
-> **D2.1** Source uniqueness for `build_review` records is lifecycle-scoped per that D6; nothing else in
-> this decision changes.
-
 ### D3 — Capture original decisions before current-report reconciliation
 
 When presenting a new over-scope halt, persist an engine-stamped decision offer with the feature, original finding evidence, report snapshot, and offered case reference before rendering the editable block. Capture runs at PRD-audit entry before dispatch and remains idempotently callable from both existing over-scope routing paths. Explicit accept/refuse plus rationale and resolved operator identity is required; pending or a machine clear grants nothing.

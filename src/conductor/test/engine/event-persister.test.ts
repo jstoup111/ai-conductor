@@ -1,6 +1,6 @@
-// Covers: task:3, task:1
+// Covers: task:4, task:3, task:1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -12,9 +12,41 @@ import {
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
+import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
+import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
 import type { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import type { ChildId } from '../../src/engine/child-context.js';
+import type { GitRunner } from '../../src/engine/rebase.js';
 import type { ConductorEvent, ExecutionContext, ProviderAttemptEvent, RunPrDisposition } from '../../src/types/index.js';
+
+const CURRENT_TEST_SUITE_PROOF = {
+  status: 'CURRENT',
+  evidence: { provenanceHeadSha: 'head123', outcome: 'PASS' },
+} as Extract<FullSuiteInspectionResult, { status: 'CURRENT' }>;
+
+function fakeGitForExcludedMarkerFile(): GitRunner {
+  return async (args) => {
+    if (args[0] === 'remote') return { exitCode: 0, stdout: 'origin\n', stderr: '' };
+    if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+    if (args[0] === 'ls-remote') return { exitCode: 0, stdout: 'base-tip123\trefs/heads/main\n', stderr: '' };
+    if (args[0] === 'rev-parse' && args[1] === 'refs/remotes/origin/main') return { exitCode: 0, stdout: 'base-tip123\n', stderr: '' };
+    if (args[0] === 'rev-parse' && args[1] === 'origin/main') return { exitCode: 0, stdout: 'base-tip123\n', stderr: '' };
+    if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: 'head123\n', stderr: '' };
+    if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base123\n', stderr: '' };
+    if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: 'A\0tools/old_check.sh\0', stderr: '' };
+    if (args[0] === 'ls-tree' && args.includes('base123')) return { exitCode: 0, stdout: '', stderr: '' };
+    if (args[0] === 'show' && args.some((arg) => arg === 'head123:tools/old_check.sh')) return { exitCode: 0, stdout: '# Covers: task:99\n', stderr: '' };
+    if (args[0] === 'show' && args[1]?.endsWith('.md')) return { exitCode: 0, stdout: '### Task 1: reviewed task\n', stderr: '' };
+    if (args[0] === 'diff') return {
+      exitCode: 0,
+      stdout: 'diff --git a/tools/old_check.sh b/tools/old_check.sh\n--- /dev/null\n+++ b/tools/old_check.sh\n+# Covers: task:99\n',
+      stderr: '',
+    };
+    return { exitCode: 1, stdout: '', stderr: '' };
+  };
+}
 
 describe('EventPersister', () => {
   let tempDir: string;
@@ -36,7 +68,7 @@ describe('EventPersister', () => {
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'event-persister-test-'));
-    eventsPath = join(tempDir, 'events.jsonl');
+    eventsPath = join(tempDir, '.pipeline', 'events.jsonl');
     emitter = new ConductorEventEmitter();
   });
 
@@ -53,6 +85,48 @@ describe('EventPersister', () => {
     persister.stop();
 
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(2);
+  });
+
+  it('persists coordinator-derived excluded marker files on a build-review scope summary', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    const planPath = join(tempDir, '.docs', 'plans', 'feature.md');
+    await mkdir(join(tempDir, '.docs', 'plans'), { recursive: true });
+    await writeFile(planPath, '### Task 1: reviewed task\n');
+    const inputs = await assembleBuildReviewInputs(fakeGitForExcludedMarkerFile(), planPath, {
+      inspectTestSuite: async () => CURRENT_TEST_SUITE_PROOF,
+    });
+    await coordinateBuildReviewRubrics({
+      config: {
+        enabled: true, perTaskFloor: true, scopeContainmentEnforced: false, maxParallel: 1,
+        rubrics: {
+          testQuality: {
+            enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol',
+            effort: 'medium', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0,
+          },
+          security: { enabled: false },
+        },
+      } as never,
+      inputs,
+      lapId: parseBuildReviewLapId('lap-excluded-marker')!,
+      engineIdentity: { engineStamp: 'test', skillDigests: { testQuality: { kind: 'resolved', digest: 'sha256:test' } } },
+      preflight: async () => { throw new Error('an empty scope must not preflight'); },
+      readCache: async () => undefined,
+      dispatchModel: async () => { throw new Error('an empty scope must not dispatch'); },
+      writeArtifact: async () => { throw new Error('an empty scope must not persist an artifact'); },
+      writeCache: async () => { throw new Error('an empty scope must not cache'); },
+      emit: (event) => emitter.emit(event),
+    });
+    persister.stop();
+
+    const scopeSummary = (await readFile(eventsPath, 'utf8')).trim().split('\n')
+      .map((line) => JSON.parse(line))
+      .find((event) => event.type === 'build_review_scope_summary');
+    expect(scopeSummary).toMatchObject({
+      type: 'build_review_scope_summary',
+      excludedMarkerFiles: [{ selector: 'tools/old_check.sh', reason: 'unsupported-source-language' }],
+    });
   });
 
   it('indexes persisted observation ids once and updates the index after each append', async () => {

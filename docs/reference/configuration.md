@@ -240,7 +240,6 @@ deprecation warning and event; see [build_review](#build_review)). Everything el
 | `codex_doctor_timeout_seconds` | number | `10` | [codex_doctor_timeout_seconds](#codex_doctor_timeout_seconds) |
 | `mergeable_autoresolve` | object | disabled | [mergeable_autoresolve](#mergeable_autoresolve) |
 | `stacked_prs` | object | disabled | [stacked_prs](#stacked_prs) |
-| `conflict_check` | object | `{ adr_corpus: change_set }` | [conflict_check](#conflict_check) |
 | `build_review` | object | `{ enabled: true }` | [build_review](#build_review) |
 | `prd_audit` | object | see section | [prd_audit](#prd_audit) |
 | `architecture_review_as_built` | object | see section | [architecture_review_as_built](#architecture_review_as_built) |
@@ -1548,21 +1547,6 @@ child, in declared order:
 Per-child state is described in [per-child state](artifacts.md#per-child-state); operator commands
 select a child with [`--child`](cli.md#per-child-selection---child).
 
-
-## conflict_check
-
-Sets the ADR corpus used by the DECIDE `conflict_check` step. The block accepts only
-`adr_corpus`; any other nested key is a configuration error.
-
-| Key | Type | Allowed values | Default |
-| --- | --- | --- | --- |
-| `conflict_check.adr_corpus` | string | `change_set`, `repo_wide` | `change_set` |
-
-`change_set` compares stories with the approved ADRs in the current spec's change set. It does not
-narrow that corpus or parse ADR supersession status. `repo_wide` first considers all approved ADRs,
-then narrows them to subjects that overlap the current stories and records both the examined and
-narrowed-out ADRs in the conflict report. At that scope only, an unambiguously fully superseded ADR
-is excluded; partial or ambiguous supersession remains in scope.
 
 ## build_review
 

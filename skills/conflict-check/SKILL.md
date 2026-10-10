@@ -30,15 +30,11 @@ Load ALL stories and specs:
 - Approved ADRs from `.docs/decisions/` (as selected below)
 - Previous conflict reports from `.docs/conflicts/` (to check for recurring patterns)
 
-Read `conflict_check.adr_corpus`; if it is unset, use `change_set`.
-
-- `change_set` — load the approved ADRs in the current spec's change set. This is the default
-  corpus. Do not narrow it or parse supersession status.
-- `repo_wide` — load all approved ADRs, narrow the corpus to ADRs whose subject overlaps the
-  current spec's stories, and record both the examined and narrowed-out ADRs in the conflict
-  report. Apply supersession-status parsing only at this scope: exclude an ADR only when it is
-  unambiguously fully superseded; retain an ADR with a partial or ambiguous supersession because
-  its remaining decision may still conflict with a story.
+The ADR corpus is always repo-wide: load all approved ADRs, narrow the corpus to ADRs whose
+subject overlaps the current spec's stories, and record both the examined and narrowed-out ADRs in
+the conflict report. Exclude an ADR only when it is unambiguously fully superseded; retain an ADR
+with a partial or ambiguous supersession because its remaining decision may still conflict with a
+story.
 
 ### 1b. As-Built Story Handling
 
@@ -298,12 +294,11 @@ echo "blocking conflicts resolved: 2, degrading accepted: 1" > .pipeline/review-
 ## Verification
 
 - [ ] All stories in `.docs/stories/` scanned (not just new ones)
-- [ ] ADR corpus read from `conflict_check.adr_corpus`, with `change_set` used when it is unset
-- [ ] Selected approved ADRs from `.docs/decisions/` compared against relevant stories
-- [ ] `repo_wide` scans record examined and narrowed-out ADRs; only this scope narrows the corpus
-      or parses supersession status
-- [ ] `repo_wide` excludes only unambiguously fully superseded ADRs and retains partial or
-      ambiguous supersessions for comparison
+- [ ] All approved ADRs from `.docs/decisions/` considered, narrowed to the stories' subject, and
+      compared against relevant stories
+- [ ] Examined and narrowed-out ADRs recorded in the conflict report
+- [ ] Only unambiguously fully superseded ADRs excluded; partial or ambiguous supersessions retained
+      for comparison
 - [ ] All 6 conflict types checked (contradiction, overlap, state, resource, sequencing, oscillating)
 - [ ] Every pair sharing a behavior/entity/field/gate was tested in BOTH directions —
       "if A is fully satisfied, does B still hold?" — since one-directional checking

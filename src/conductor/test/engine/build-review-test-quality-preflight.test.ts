@@ -1,3 +1,4 @@
+// Covers: task:3
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -237,6 +238,40 @@ describe('build-review test-quality preflight', () => {
     expect(JSON.stringify(rootSnapshot)).toBe(featureSnapshot);
   });
 
+  it('keeps an admitted changed test at HEAD while reverting unadmitted marker files as production', async () => {
+    const writes = vi.fn(async () => {});
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: [
+        'diff --git a/src/widget/widget.check.ts b/src/widget/widget.check.ts',
+        'diff --git a/src/widget/widget.ts b/src/widget/widget.ts',
+        'diff --git a/src/hints.ts b/src/hints.ts',
+      ].join('\n'),
+      counterfactualFileSelectors: ['src/widget/widget.check.ts'],
+      createCheckout: async () => {},
+      readMergeBaseFile: async () => 'BASE',
+      writeFile: writes,
+      runScoped: async () => ({ kind: 'nonzero-exit' as const, exitCode: 1, stdout: 'RED', stderr: '' }),
+      removeCheckout: async () => {},
+    });
+
+    expect(result).toMatchObject({
+      classification: 'nonzero-exit',
+      changedTestSelectors: ['src/widget/widget.check.ts'],
+      revertedProductionManifest: [
+        { path: 'src/hints.ts' },
+        { path: 'src/widget/widget.ts' },
+      ],
+    });
+    if (result.classification === 'infrastructure-failure') throw new Error('expected completed preflight');
+    expect(result.changedTestSelectors).not.toContain('src/hints.ts');
+    expect(result.revertedProductionManifest.map(({ path }) => path)).not.toContain('src/widget/widget.check.ts');
+    expect(writes).not.toHaveBeenCalledWith(
+      '/feature/.pipeline/build-review-preflight/head/src/widget/widget.check.ts',
+      expect.any(String),
+    );
+  });
+
   it('executes an engine-selected conservative file union without changing diff-derived test evidence', async () => {
     const runScoped = vi.fn(async () => ({ exitCode: 0 as const, stdout: '', stderr: '' }));
     const result = await materializeTautologyPreflight({
@@ -342,6 +377,58 @@ describe('build-review test-quality preflight', () => {
         'test/fixtures/claude-envelopes/successful-command.json',
       ],
       production: ['src/engine/build-review.ts'],
+    });
+  });
+
+  it('keeps an admitted changed marker file at HEAD while reverting other production paths', () => {
+    expect(classifyTautologyPaths(
+      ['src/widget/widget.check.ts', 'src/widget/widget.ts'],
+      ['src/widget/widget.check.ts', 'test/unchanged.test.ts'],
+    )).toEqual({
+      tests: ['src/widget/widget.check.ts'],
+      testSupport: [],
+      production: ['src/widget/widget.ts'],
+    });
+  });
+
+  it('classifies admitted selectors only when changed and preserves the path-only default', () => {
+    const changedPaths = ['src/widget/widget.check.ts', 'src/a.ts'];
+
+    expect(classifyTautologyPaths(changedPaths, ['src/widget/widget.check.ts', 'test/unchanged.test.ts'])).toEqual({
+      tests: ['src/widget/widget.check.ts'], testSupport: [], production: ['src/a.ts'],
+    });
+    expect(classifyTautologyPaths(changedPaths)).toEqual({
+      tests: [], testSupport: [], production: ['src/a.ts', 'src/widget/widget.check.ts'],
+    });
+    expect(classifyTautologyPaths(changedPaths)).toEqual(classifyTautologyPaths(changedPaths, []));
+  });
+
+  it('does not approve empty test scope when the only changed test is engine-admitted', async () => {
+    const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'test', '/feature', {
+      config: { test_suite: { scoped_command: 'true' } } as never,
+      gitRunner: async () => ({ exitCode: 1, stdout: '', stderr: 'worktree unavailable' }),
+    });
+    const preflight = (runner as unknown as {
+      runTautologyPreflight(inputs: unknown): Promise<unknown>;
+    }).runTautologyPreflight({
+      diff: [
+        'diff --git a/src/widget/widget.check.ts b/src/widget/widget.check.ts',
+        'diff --git a/src/widget/widget.ts b/src/widget/widget.ts',
+      ].join('\n'),
+      testSuiteProof: { provenanceHeadSha: 'head', fingerprint: 'proof' },
+      sourceSnapshot: {
+        mergeBase: 'base', headSha: 'head',
+        removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+        testQuality: { counterfactualFileSelectors: ['src/widget/widget.check.ts'] },
+      },
+    });
+
+    await expect(preflight).resolves.toMatchObject({
+      classification: 'infrastructure-failure',
+      changedTestSelectors: ['src/widget/widget.check.ts'],
+    });
+    await expect(preflight).resolves.not.toMatchObject({
+      classification: 'approved-exception', exception: 'empty-test-set',
     });
   });
 

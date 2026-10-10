@@ -830,6 +830,8 @@ export function buildIntake(deps: {
   missingRegistrationEpisodes?: Set<string>;
   trackerExclusionEpisodes?: Set<string>;
   resolveActor?: () => Promise<OwnerResolution>;
+  /** Operator-run compose write-back; never set by the background intake loop. */
+  operatorSession?: boolean;
   /** Injectable only to observe lazy per-project backend resolution in tests. */
   resolveTrackerSelection?: typeof resolveTrackerSelection;
   events?: IntakeEventEmitter;
@@ -853,6 +855,7 @@ export function buildIntake(deps: {
     trackerExclusionEpisodes: deps.trackerExclusionEpisodes,
     resolveActor: deps.resolveActor,
     events: deps.events,
+    operatorSession: deps.operatorSession,
   });
   return { reader, ledger, queue, adapter };
 }
@@ -1311,6 +1314,7 @@ export async function dispatchEngineer(
         const engDir = engineerDir ?? resolveEngineerDir({});
         const { ledger, adapter } = buildIntake({
           engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor, events: opts.events,
+          operatorSession: true,
         });
         await reportRouted(
           { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
@@ -1436,6 +1440,7 @@ export async function dispatchEngineer(
           const engDir = engineerDir ?? resolveEngineerDir({});
           const { ledger, adapter } = buildIntake({
             engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor, events: opts.events,
+            operatorSession: true,
           });
           await reportDone(
             { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
@@ -1648,7 +1653,7 @@ export async function dispatchEngineer(
       ): Promise<boolean> => {
         const tracker = createGithubTrackerClient(gh, {
           intake: createGithubIntakeAuthorization({
-            gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor, confirmation,
+            gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor, confirmation, operatorSession: true,
           }),
           events: opts.events,
         });
@@ -1723,7 +1728,7 @@ export async function dispatchEngineer(
         try {
           const tracker = createGithubTrackerClient(gh, {
             intake: createGithubIntakeAuthorization({
-              gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor, confirmation,
+              gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor, confirmation, operatorSession: true,
             }),
             events: opts.events,
           });

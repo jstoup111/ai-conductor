@@ -7,17 +7,14 @@
 
 import { isCodeOrTestPath } from './rebase.js';
 import type { ReplayComparison } from './rebase-replay.js';
+import { isTestPath } from './test-path.js';
 
 /**
  * Test-path convention: a path is test-only if it matches
  * `.test.` anywhere in the file name, or lives under a `test/` or
  * `__tests__/` directory.
  */
-export function isTestPath(path: string): boolean {
-  if (path.includes('.test.')) return true;
-  const segments = path.split('/');
-  return segments.includes('test') || segments.includes('__tests__');
-}
+export { isTestPath };
 
 /**
  * True iff `path` is runtime/production source: a code-or-test path

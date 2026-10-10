@@ -115,11 +115,13 @@ operator approval, and only when the claim carries an originating GitHub issue, 
 `ai-conductor compose forget <owner/repo#N> --resolved-by <reference>`
 
 This comments the supplied resolving reference and closes the originating issue, whether or not the
-issue has a ledger entry. On an issue not solely assigned to the machine owner, each write asks for
-interactive terminal approval; an agent shell cannot give that approval. If the primitive refuses
-because it requires an interactive terminal, give the operator this exact command to run in their
-own terminal: `ai-conductor compose forget <owner/repo#N> --resolved-by <reference>`. Do not retry
-the command or close the issue another way. Without both preconditions, do not use `--resolved-by`
+issue has a ledger entry. A composer session is an operator session, so these writes, like the
+`land` and `handoff` write-back comments, are authorized without an assignment or terminal prompt.
+Only inside an engine-dispatched daemon session does a write on an issue not solely assigned to the
+machine owner still need interactive terminal approval. If the primitive refuses anyway, give the
+operator this exact command to run in their own terminal:
+`ai-conductor compose forget <owner/repo#N> --resolved-by <reference>`. Do not retry the command or
+close the issue another way. Without both preconditions, do not use `--resolved-by`
 and do not close anything. End the session after the successful resolved-by action; this path
 authors and lands nothing.
 

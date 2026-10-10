@@ -353,6 +353,19 @@ describe('engineer land tracker write-back (Task 11)', () => {
 
 // Covers: task:2
 describe('engineer forget (T23, FR-40)', () => {
+  // These cases cover the strict assignment-or-approval path, which applies
+  // inside an engine-dispatched daemon session. Operator sessions outside the
+  // daemon are covered in github-ownership/13.
+  let previousDaemonSession: string | undefined;
+  beforeEach(() => {
+    previousDaemonSession = process.env.CONDUCT_DAEMON_SESSION;
+    process.env.CONDUCT_DAEMON_SESSION = '1';
+  });
+  afterEach(() => {
+    if (previousDaemonSession === undefined) delete process.env.CONDUCT_DAEMON_SESSION;
+    else process.env.CONDUCT_DAEMON_SESSION = previousDaemonSession;
+  });
+
   it('comments the resolving ref, closes the issue, then drops its ledger entry and strips the label', async () => {
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
