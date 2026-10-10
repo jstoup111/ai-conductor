@@ -43,7 +43,9 @@ const { code, signal } = await new Promise((resolve, reject) => {
 });
 
 if (signal !== null) {
+  console.error(`[run-vitest] vitest terminated by signal ${signal}`);
   process.kill(process.pid, signal);
 } else {
+  if (code !== 0) console.error(`[run-vitest] vitest exited with code ${code ?? 1}`);
   process.exitCode = code ?? 1;
 }
