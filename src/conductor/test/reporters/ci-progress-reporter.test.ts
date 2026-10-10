@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 import type { TestCase, TestModule } from 'vitest/node';
 import { describe, expect, it } from 'vitest';
 import CiProgressReporter from './ci-progress-reporter.js';
@@ -28,7 +28,10 @@ function testModule(
 
 function reporterWithOutput(): { reporter: CiProgressReporter; output: string[] } {
   const output: string[] = [];
-  const reporter = new CiProgressReporter({ write: (line) => output.push(line) });
+  const reporter = new CiProgressReporter({
+    write: (line) => output.push(line),
+    onProcessExit: () => undefined,
+  });
   reporter.onInit({ config: { root: '/pkg' } } as never);
   return { reporter, output };
 }
@@ -148,6 +151,7 @@ describe('CiProgressReporter', () => {
       now: () => now,
       setInterval: timers.setInterval as never,
       clearInterval: timers.clearInterval as never,
+      onProcessExit: () => undefined,
     });
     reporter.onInit({ config: { root: '/pkg' } } as never);
     reporter.onTestRunStart([]);
@@ -176,6 +180,7 @@ describe('CiProgressReporter', () => {
       now: () => now,
       setInterval: timers.setInterval as never,
       clearInterval: timers.clearInterval as never,
+      onProcessExit: () => undefined,
     });
     reporter.onInit({ config: { root: '/pkg' } } as never);
     reporter.onTestRunStart([]);
@@ -199,6 +204,7 @@ describe('CiProgressReporter', () => {
       now: () => now,
       setInterval: timers.setInterval as never,
       clearInterval: timers.clearInterval as never,
+      onProcessExit: () => undefined,
     });
     reporter.onInit({ config: { root: '/pkg' } } as never);
     reporter.onTestRunStart([]);
@@ -222,5 +228,80 @@ describe('CiProgressReporter', () => {
       cleared: [handle],
       unrefCalls: 1,
     });
+  });
+
+  it('names in-flight modules when a run fails or is interrupted', () => {
+    for (const reason of ['failed', 'interrupted'] as const) {
+      const { reporter, output } = reporterWithOutput();
+      const done = testModule('/pkg/test/a.test.ts', 'passed', 0);
+      const inFlight = testModule('/pkg/test/b.test.ts', 'passed', 0);
+
+      reporter.onTestModuleStart(done);
+      reporter.onTestModuleEnd(done);
+      reporter.onTestModuleStart(inFlight);
+      reporter.onTestRunEnd([], [], reason);
+
+      expect(output).toContain('[ci-progress] still running at run end: test/b.test.ts\n');
+      expect(output).not.toContain('[ci-progress] still running at run end: test/a.test.ts\n');
+      expect(output.filter((line) => line.includes('still running at run end'))).toHaveLength(1);
+    }
+  });
+
+  it('does not name in-flight modules when a run passes', () => {
+    const { reporter, output } = reporterWithOutput();
+
+    reporter.onTestModuleStart(testModule('/pkg/test/b.test.ts', 'passed', 0));
+    reporter.onTestRunEnd([], [], 'passed');
+
+    expect(output).not.toContain('[ci-progress] still running at run end: test/b.test.ts\n');
+  });
+
+  it('reports in-flight modules synchronously when the process exits before run end', () => {
+    const syncOutput: string[] = [];
+    let exitHandler: (() => void) | undefined;
+    const reporter = new CiProgressReporter({
+      onProcessExit: (handler) => { exitHandler = handler; },
+      writeSync: (line) => syncOutput.push(line),
+    });
+    reporter.onInit({ config: { root: '/pkg' } } as never);
+    reporter.onTestModuleStart(testModule('/pkg/test/b.test.ts', 'passed', 0));
+
+    exitHandler?.();
+
+    expect(syncOutput).toEqual([
+      '[ci-progress] process exiting before Vitest reported run end; in-flight: test/b.test.ts\n',
+    ]);
+  });
+
+  it('reports none synchronously when the process exits with no modules in flight', () => {
+    const syncOutput: string[] = [];
+    let exitHandler: (() => void) | undefined;
+    const reporter = new CiProgressReporter({
+      onProcessExit: (handler) => { exitHandler = handler; },
+      writeSync: (line) => syncOutput.push(line),
+    });
+    reporter.onInit({ config: { root: '/pkg' } } as never);
+
+    exitHandler?.();
+
+    expect(syncOutput).toEqual([
+      '[ci-progress] process exiting before Vitest reported run end; in-flight: none\n',
+    ]);
+  });
+
+  it('does not report process exit after Vitest reports run end', () => {
+    const syncOutput: string[] = [];
+    let exitHandler: (() => void) | undefined;
+    const reporter = new CiProgressReporter({
+      onProcessExit: (handler) => { exitHandler = handler; },
+      writeSync: (line) => syncOutput.push(line),
+    });
+    reporter.onInit({ config: { root: '/pkg' } } as never);
+    reporter.onTestModuleStart(testModule('/pkg/test/b.test.ts', 'passed', 0));
+    reporter.onTestRunEnd([], [], 'failed');
+
+    exitHandler?.();
+
+    expect(syncOutput).toEqual([]);
   });
 });

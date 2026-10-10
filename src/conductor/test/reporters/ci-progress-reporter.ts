@@ -1,3 +1,4 @@
+import { writeSync } from 'node:fs';
 import { relative } from 'node:path';
 import type { Reporter } from 'vitest/reporters';
 import type { ReportedHookContext, TestCase, TestModule, Vitest } from 'vitest/node';
@@ -5,6 +6,7 @@ import type { ReportedHookContext, TestCase, TestModule, Vitest } from 'vitest/n
 export interface CiProgressReporterOptions {
   write?: (line: string) => unknown;
   writeSync?: (line: string) => unknown;
+  onProcessExit?: (handler: () => void) => unknown;
   now?: () => number;
   setInterval?: typeof setInterval;
   clearInterval?: typeof clearInterval;
@@ -20,6 +22,8 @@ interface InFlightModule {
 
 export default class CiProgressReporter implements Reporter {
   private readonly write: (line: string) => unknown;
+  private readonly writeSync: (line: string) => unknown;
+  private readonly onProcessExit: (handler: () => void) => unknown;
   private readonly now: () => number;
   private readonly setInterval: typeof setInterval;
   private readonly clearInterval: typeof clearInterval;
@@ -28,10 +32,13 @@ export default class CiProgressReporter implements Reporter {
   private readonly inFlight = new Map<string, InFlightModule>();
   private root = process.cwd();
   private inlineDirty = false;
+  private runEnded = false;
   private stallTimer?: ReturnType<typeof setInterval>;
 
   constructor(options: CiProgressReporterOptions = {}) {
     this.write = options.write ?? ((line) => process.stdout.write(line));
+    this.writeSync = options.writeSync ?? ((line) => writeSync(process.stderr.fd, line));
+    this.onProcessExit = options.onProcessExit ?? ((handler) => process.once('exit', handler));
     this.now = options.now ?? Date.now;
     this.setInterval = options.setInterval ?? setInterval;
     this.clearInterval = options.clearInterval ?? clearInterval;
@@ -41,9 +48,10 @@ export default class CiProgressReporter implements Reporter {
 
   onInit(ctx: Vitest): void {
     this.root = ctx.config.root;
+    this.onProcessExit(() => this.reportPrematureProcessExit());
   }
 
-  onTestRunStart(): void {
+  onTestRunStart(_specifications: ReadonlyArray<unknown> = []): void {
     this.stopWatchdog();
     const timer = this.setInterval(() => this.reportStalls(), this.tickMs);
     if (typeof (timer as { unref?: () => unknown }).unref === 'function') {
@@ -52,9 +60,15 @@ export default class CiProgressReporter implements Reporter {
     this.stallTimer = timer;
   }
 
-  onTestRunEnd(): void {
+  onTestRunEnd(_testModules: ReadonlyArray<TestModule>, _errors: ReadonlyArray<unknown>, reason: 'passed' | 'interrupted' | 'failed'): void {
     this.stopWatchdog();
+    if (reason !== 'passed') {
+      for (const path of this.inFlightPaths()) {
+        this.record(`[ci-progress] still running at run end: ${path}\n`);
+      }
+    }
     this.inFlight.clear();
+    this.runEnded = true;
   }
 
   onTestModuleQueued(testModule: TestModule): void {
@@ -149,6 +163,19 @@ export default class CiProgressReporter implements Reporter {
 
     this.clearInterval(this.stallTimer);
     this.stallTimer = undefined;
+  }
+
+  private inFlightPaths(): string[] {
+    return [...this.inFlight.values()].map((module) => module.path);
+  }
+
+  private reportPrematureProcessExit(): void {
+    if (this.runEnded) return;
+
+    const paths = this.inFlightPaths();
+    this.writeSync(
+      `[ci-progress] process exiting before Vitest reported run end; in-flight: ${paths.length === 0 ? 'none' : paths.join(', ')}\n`,
+    );
   }
 
   private record(line: string): void {
