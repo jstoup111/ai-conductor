@@ -3466,7 +3466,10 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
 
-    const declaredPlanSource = await resolvePlanPatternSource('.docs/plans/current.md', inputs.planBody, async (path) => this.fileExists(join(this.projectDir, path)));
+    // Unit-level runner callers need only provide the frozen fields relevant
+    // to their asserted branch. An omitted plan carries no declaration, so it
+    // cannot suppress a finding.
+    const declaredPlanSource = await resolvePlanPatternSource('.docs/plans/current.md', inputs.planBody ?? '', async (path) => this.fileExists(join(this.projectDir, path)));
     const implementationQualityResult = validResults.implementationQuality;
     const declaredReplicationSuppressions = declaredPlanSource.kind === 'resolved' && implementationQualityResult.kind === 'judged'
       ? implementationQualityResult.findings.flatMap((finding) => {
