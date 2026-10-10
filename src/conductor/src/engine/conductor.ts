@@ -4249,7 +4249,11 @@ export class Conductor {
           // Record the appended ids so the build completion predicate can
           // reject a later removal of their headings from the plan.
           try {
-            await recordAppendedRemediationTaskIds(this.projectRoot, appendResult.appendedIds);
+            await recordAppendedRemediationTaskIds(
+              this.projectRoot,
+              appendResult.appendedIds,
+              this.activeRegionChild,
+            );
           } catch (err) {
             this.log?.(
               `WARNING: failed to record appended remediation task ids (removal guard disarmed): ${err instanceof Error ? err.message : String(err)}`,

@@ -775,6 +775,7 @@ export async function resolveArtifactFiles(
 export async function recordAppendedRemediationTaskIds(
   projectRoot: string,
   ids: string[],
+  child?: ChildId,
 ): Promise<void> {
   if (ids.length === 0) return;
   const pipelineDir = join(projectRoot, '.pipeline');
@@ -784,9 +785,25 @@ export async function recordAppendedRemediationTaskIds(
     const prior = Array.isArray(state.appendedRemediationTaskIds)
       ? state.appendedRemediationTaskIds.filter((value): value is string => typeof value === 'string')
       : [];
+    const appendedRemediationTaskIds = Array.from(new Set([...prior, ...ids]));
+    if (child === undefined) {
+      return {
+        ...state,
+        appendedRemediationTaskIds,
+      };
+    }
+    const priorChildren = typeof state.appendedRemediationTaskChildren === 'object'
+      && state.appendedRemediationTaskChildren !== null
+      && !Array.isArray(state.appendedRemediationTaskChildren)
+      ? state.appendedRemediationTaskChildren
+      : {};
     return {
       ...state,
-      appendedRemediationTaskIds: Array.from(new Set([...prior, ...ids])),
+      appendedRemediationTaskIds,
+      appendedRemediationTaskChildren: {
+        ...priorChildren,
+        ...Object.fromEntries(ids.map((id) => [id, child])),
+      },
     };
   });
   if (!result.ok) {
