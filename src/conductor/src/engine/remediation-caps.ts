@@ -4,6 +4,7 @@ import {
   isUnreadableKickbackGrowth,
   isUnreadableKickbackLedger,
   readGrowth,
+  readGrowthAccounting,
   readKickbackLedger,
   type KickbackGateEntry,
   type PlanGrowth,
@@ -61,6 +62,27 @@ export function prdAuditAppendCap(config: HarnessConfig, authoredTaskCount: numb
   const maximum = prdAudit?.max_appended_tasks ?? 5;
   const ratio = prdAudit?.max_appended_ratio ?? 0.25;
   return Math.min(maximum, Math.floor(authoredTaskCount * ratio));
+}
+
+export interface PlanGrowthBudget {
+  growth: PlanGrowth;
+  cap: number;
+  capSource: 'raised' | 'config-derived';
+  authoredSource: 'plan' | 'ledger' | 'unresolved';
+}
+
+/** Resolve the one plan-growth allowance shared by every remediation consumer. */
+export async function readPlanGrowthBudget(
+  projectRoot: string,
+  config: HarnessConfig,
+  options: { persist: boolean },
+): Promise<PlanGrowthBudget> {
+  const ledger = await readKickbackLedger(projectRoot);
+  const unbounded = await readGrowthAccounting(projectRoot, Number.MAX_SAFE_INTEGER, options);
+  const capSource = ledger.effectiveGrowthCap === undefined ? 'config-derived' : 'raised';
+  const cap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(config, unbounded.growth.authored);
+  const accounting = await readGrowthAccounting(projectRoot, cap, options);
+  return { growth: accounting.growth, cap, capSource, authoredSource: accounting.authoredSource };
 }
 
 export type RemediationLedgerGate = 'prd_audit' | 'architecture_review_as_built';
