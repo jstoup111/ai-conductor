@@ -540,6 +540,68 @@ describe("build-review semantic cache", () => {
       .toMatchObject({ kind: "cache-hit", result: { lapId: "lap-current", snapshotDigest: "sha256:snapshot-current" } });
   });
 
+  it("reuses a matching implementation-quality judgement without a provider dispatch", async () => {
+    const policy = { enabled: true, llm_provider: "claude" as const, model: "sonnet", effort: "medium" as const, model_fallback_ladder: ["sonnet"], max_retries: 1, escalate: false };
+    const config = {
+      enabled: true,
+      scopeContainmentEnforced: false,
+      maxParallel: 5,
+      rubrics: {
+        testQuality: { ...policy, enabled: false },
+        security: { ...policy, enabled: false },
+        implementationQuality: policy,
+      },
+    } as never;
+    const frozenInputs = {
+      diff: "diff --git a/src/a.ts b/src/a.ts", planBody: "# Plan\n", mergeBase: "base", baseRef: "origin/main", baseKind: "remote", trackingRefSha: "base", remoteHeadSha: "base", fresh: true,
+      repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, testSuiteProof: { provenanceHeadSha: "head", outcome: "PASS" },
+      sourceSnapshot: { digest: "sha256:snapshot-current", contentDigest: "sha256:content", baseRef: "origin/main", mergeBase: "base", headSha: "head", diff: "diff --git a/src/a.ts b/src/a.ts", planBody: "# Plan\n", repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, testQuality: { inScopeTests: [], unresolvedMarkers: [] } },
+    } as never;
+    const lapId = parseBuildReviewLapId("lap-current")!;
+    const skillDigest = "sha256:implementation-quality-skill";
+    const dispatchModel = vi.fn(async () => {
+      throw new Error("implementation-quality cache hit must not dispatch a provider");
+    });
+    const readCache = vi.fn(async (branch, projection, policyFingerprint, semanticIdentity) => ({
+      ...entry(),
+      rubric: branch.rubric,
+      projectionDigest: projection.digest,
+      policyFingerprint,
+      engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest },
+      semanticIdentity,
+      result: {
+        kind: "judged" as const,
+        rubric: branch.rubric,
+        lapId: parseBuildReviewLapId("lap-cached")!,
+        snapshotDigest: projection.snapshotDigest,
+        contractVersion: "v3" as const,
+        findings: [],
+        verdict: "PASS" as const,
+      },
+    }));
+
+    const coordination = await coordinateBuildReviewRubrics({
+      config, inputs: frozenInputs, lapId,
+      preflight: async () => ({ classification: "not-requested" as const, changedPaths: [], changedTestSelectors: [], revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" } }),
+      engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { implementationQuality: { kind: "resolved" as const, digest: skillDigest } } },
+      readCache,
+      dispatchModel,
+      writeArtifact: async (artifact: never) => ({ version: 1 as const, ...(artifact as object) }),
+      writeCache: async () => undefined,
+    } as never);
+
+    expect(readCache).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric: "implementationQuality", skillName: "build-review-implementation-quality" }),
+      expect.objectContaining({ rubric: "implementationQuality" }),
+      expect.any(String),
+      expect.objectContaining({ effectiveBundleDigest: skillDigest, engineStamp: "8e7daae72ad7" }),
+    );
+    expect(dispatchModel).not.toHaveBeenCalled();
+    expect(coordination.kind === "ready" ? coordination.branches : []).toContainEqual(expect.objectContaining({
+      kind: "cache-hit", rubric: "implementationQuality", result: expect.objectContaining({ lapId }),
+    }));
+  });
+
   it("keeps a security projection digest stable when identical hunk content is rebased", () => {
     const frozenInputs = {
       diff: "diff --git a/src/auth.ts b/src/auth.ts\n@@ -1 +1 @@\n-const enabled = false;\n+const enabled = true;\n",
