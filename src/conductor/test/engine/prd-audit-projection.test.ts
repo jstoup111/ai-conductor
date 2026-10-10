@@ -1,4 +1,5 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:11
+// Covers: task:1, task:3, task:4, task:5, task:11
+// Covers: task:2
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -167,6 +168,50 @@ afterEach(async () => {
 });
 
 describe('PRD-audit feature projection', () => {
+  it('projects only the active feature waiver requirement with its rationale', async () => {
+    const root = await fixture();
+    const prdPath = '.docs/specs/audit-fixture.md';
+    await mkdir(join(root, '.docs', 'coherence-waivers'), { recursive: true });
+    await writeFile(join(root, prdPath), '# PRD\n\n## Functional Requirements\n- FR-1: The retained requirement.\n- FR-17: The documentation-only requirement.\n');
+    await writeFile(join(root, '.docs', 'coherence-waivers', 'audit-fixture.md'), 'Waives: FR-17\n\nRationale: FR-17 is documentation.\n');
+
+    const result = await buildPrdAuditProjection(root);
+
+    if (!result.ok || !('sources' in result.projection.prd)) throw new Error('projection unexpectedly failed');
+    expect(result.projection.version).toBe(6);
+    expect(result.projection.prd.waivedRequirements).toEqual([
+      { path: prdPath, requirementId: 'FR-17', rationale: 'FR-17 is documentation.' },
+    ]);
+    expect(result.projection.prd.waivedRequirements).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ requirementId: 'FR-1' }),
+    ]));
+  });
+
+  it('projects declared FR waiver ids while ignoring non-FR coherence ids', async () => {
+    const root = await fixture();
+    const prdPath = '.docs/specs/audit-fixture.md';
+    await mkdir(join(root, '.docs', 'coherence-waivers'), { recursive: true });
+    await writeFile(join(root, prdPath), '# PRD\n\n## Functional Requirements\n- FR-1: The retained requirement.\n- FR-17: The documentation-only requirement.\n');
+    await writeFile(join(root, '.docs', 'coherence-waivers', 'audit-fixture.md'), 'Waives: outcome-3, FR-17\n\nRationale: FR-17 is documentation.\n');
+
+    const result = await buildPrdAuditProjection(root);
+
+    if (!result.ok || !('sources' in result.projection.prd)) throw new Error('projection unexpectedly failed');
+    expect(result.projection.prd.waivedRequirements).toEqual([
+      { path: prdPath, requirementId: 'FR-17', rationale: 'FR-17 is documentation.' },
+    ]);
+    expect(result.projection.prd.waivedRequirements).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ requirementId: 'outcome-3' }),
+    ]));
+  });
+
+  it('represents a present PRD without an active waiver as having no waived requirements', async () => {
+    const result = await buildPrdAuditProjection(await fixture());
+
+    if (!result.ok || !('sources' in result.projection.prd)) throw new Error('projection unexpectedly failed');
+    expect(result.projection.prd.waivedRequirements).toEqual([]);
+  });
+
   it('rejects each malformed story criterion and task completion block before dispatch', async () => {
     const root = await fixture();
     const stories = join(root, '.docs', 'stories', 'audit-fixture.md');

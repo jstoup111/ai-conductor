@@ -153,7 +153,7 @@ describe('PRD audit typed provider dispatch', () => {
     expect(invoke.mock.calls[0]![0].interactive).toBe(false);
     expect(invoke.mock.calls[0]![0].nativeSchema).toBe(PRD_AUDIT_JUDGMENT_SCHEMA);
     expect(dispatchedProjection(invoke)).toMatchObject({
-      version: 5,
+      version: 6,
       plan: { intent: 'Bound the PRD audit.' },
       criteria: [
         { id: 'S1.1', kind: 'happy', requirementAssociations: [{ path: '.docs/specs/feature.md', requirementId: 'FR-1' }] },

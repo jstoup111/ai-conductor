@@ -15,6 +15,7 @@ import {
   type RemediationCaseStoreFailureReason,
 } from './remediation-case-store.js';
 import { parseCoherenceArtifact, type CoherenceRow } from './coherence-parse.js';
+import { parseCoherenceWaiverDeclaration } from './engineer/coherence-waiver.js';
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskStoryIds } from './plan-task-parse.js';
 import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
@@ -23,7 +24,7 @@ import { readSealedStoryCriteria, splitStoryBlocks } from './story-criteria.js';
 import type { PrdAuditRequirementAssociation } from './prd-audit-contract.js';
 
 /** Incremented only when the engine-rendered PRD-audit input contract changes. */
-export const PRD_AUDIT_PROJECTION_VERSION = 5;
+export const PRD_AUDIT_PROJECTION_VERSION = 6;
 
 const PRD_AUDIT_DIFF_EXCERPT_PER_FILE_BYTES = 256 * 1024;
 const PRD_AUDIT_DIFF_EXCERPT_TOTAL_BYTES = 512 * 1024;
@@ -120,6 +121,8 @@ export interface PrdAuditProjection {
         /** Compatibility view of the first deterministic source. */
         readonly path: string;
         readonly requirements: readonly { readonly id: string; readonly text: string }[];
+        /** Feature-scoped coherence-waived requirements that need no audit coverage. */
+        readonly waivedRequirements: readonly (PrdAuditRequirementAssociation & { readonly rationale: string })[];
       };
   readonly coherence: readonly CoherenceRow[] | { readonly kind: 'absent' };
   readonly changes: {
@@ -516,7 +519,28 @@ export async function buildPrdAuditProjection(
         };
       }));
       const first = sources[0]!;
-      prd = { sources, path: first.path, requirements: first.requirements };
+      let waivedRequirements: readonly (PrdAuditRequirementAssociation & { readonly rationale: string })[] = [];
+      try {
+        const waiver = parseCoherenceWaiverDeclaration(await readFile(
+          join(projectRoot, '.docs', 'coherence-waivers', `${basename(planPath, '.md')}.md`),
+          'utf-8',
+        ));
+        if (waiver) {
+          waivedRequirements = waiver.gapIds
+            .map((id) => id.toUpperCase())
+            .filter((id) => /^FR-\d+[A-Za-z]?$/.test(id))
+            .flatMap((requirementId) => {
+              const declarations = sources.filter((source) => source.requirements
+                .some((requirement) => requirement.id.toUpperCase() === requirementId));
+              return declarations.length === 1
+                ? [{ path: declarations[0]!.path, requirementId, rationale: waiver.rationale }]
+                : [];
+            });
+        }
+      } catch {
+        // Task 3 turns unreadable active waivers into a projection fault.
+      }
+      prd = { sources, path: first.path, requirements: first.requirements, waivedRequirements };
     } catch {
       return { ok: false, fault: { dimension: 'prd', detail: 'active PRD is unreadable' } };
     }
