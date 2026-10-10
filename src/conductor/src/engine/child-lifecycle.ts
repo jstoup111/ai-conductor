@@ -30,6 +30,8 @@ export interface ChildLifecycleTarget {
 /** The cursor-owned branch target needed to enter or advance a BUILD region. */
 export interface ActiveChildLifecycleTarget extends ChildLifecycleTarget {
   readonly isLeaf: boolean;
+  /** The cursor found a closed parent whose tip is not yet on the leaf. */
+  readonly leafMovePending?: boolean;
 }
 
 export type ChildLifecycleResult =
@@ -187,6 +189,21 @@ export async function enterChildRegion(
   dependencies: StartChildDependencies = {},
 ): Promise<ChildLifecycleResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
+  if (target.isLeaf && target.leafMovePending) {
+    const envelope = await readCoverageBindingEnvelope(worktree, envelopeFilesystem);
+    const positions = sealedPositions(envelope);
+    const positionIndex = positions.indexOf(target.position);
+    const parent = positionIndex > 0 ? positions[positionIndex - 1] : undefined;
+    if (parent === undefined) return refused(`cannot resolve declared parent for pending leaf ${target.branch}`);
+    const closureRef = `refs/conductor/${slug}/closed/c${parent}`;
+    const closure = await runGit(git, ['rev-parse', '--verify', closureRef]);
+    const tip = closure?.stdout.trim();
+    if (!closure || closure.exitCode !== 0 || !tip) {
+      return refused(`cannot resolve pending leaf closure ${closureRef}`);
+    }
+    const moved = await moveLeaf(worktree, slug, tip, { git });
+    if (moved.kind === 'refused') return moved;
+  }
   const exists = await runGit(git, ['show-ref', '--verify', '--quiet', `refs/heads/${target.branch}`]);
   if (!exists || (exists.exitCode !== 0 && exists.exitCode !== 1)) {
     return refused(`cannot inspect child branch ${target.branch}`);
