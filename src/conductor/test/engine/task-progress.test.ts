@@ -1,4 +1,4 @@
-// Covers: task:4, task:5, task:6
+// Covers: task:2, task:3, task:4, task:5, task:6, task:rem-prd-audit-2
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import {
   countResolvedTasks,
   resolveTaskIds,
   resolveTaskIdsWithDiagnostics,
+  openRepairForTask,
   completeTaskDoneWhen,
   haltMarkerExists,
   clearHaltMarker,
@@ -24,7 +25,7 @@ import {
   runTaskStart,
 } from '../../src/engine/task-cli.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
-import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
+import { createRepairObligationStore, taskObligationStanding } from '../../src/engine/repair-obligations.js';
 import { makeGitRunner, performRebase } from '../../src/engine/rebase.js';
 import { translateAfterRebase } from '../../src/engine/rebase-translate.js';
 
@@ -345,6 +346,174 @@ describe('task-progress', () => {
   });
 
   describe('current repair freshness', () => {
+    type MutableRepairState = {
+      repairObligations: { currentByPlan: Record<string, Record<string, string>> };
+    };
+
+    async function prepareResolverRepairState(taskRows: Array<{ id: string; status: string }> = [{ id: '2', status: 'completed' }]) {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'feature.md'), '# Plan\n');
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: taskRows }));
+      return createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+    }
+
+    async function admitResolverObligation(
+      repairs: ReturnType<typeof createRepairObligationStore>,
+      id: string,
+      authority: 'build_review' | 'prd_audit',
+      head: string,
+    ) {
+      const admitted = await repairs.admitOrReplay(id, {
+        id,
+        planPath: '.docs/plans/feature.md',
+        taskIds: ['2'],
+        source: { findingId: id, authority, instruction: 'repair it' },
+        baseline: { head, tree: `${id}-tree`, resolvedTaskIds: [] },
+      });
+      if (!admitted.ok) throw new Error(admitted.message);
+      return admitted.obligation;
+    }
+
+    it('resolves past an open same-authority obligation superseded by a resolved current obligation', async () => {
+      const repairs = await prepareResolverRepairState();
+      await admitResolverObligation(repairs, 'older', 'build_review', 'orphaned-boundary');
+      const current = await admitResolverObligation(repairs, 'current', 'build_review', 'current-boundary');
+      await repairs.close({
+        planPath: '.docs/plans/feature.md', taskId: '2', obligationId: current.id,
+        evidence: { kind: 'task-done', value: 'current' },
+      });
+
+      await expect(resolveTaskIdsWithDiagnostics(dir, ['2'])).resolves.toEqual({
+        resolved: new Set(['2']), unavailableReasons: new Map(),
+      });
+    });
+
+    it('resolves past a superseded obligation after both baseline heads are rewritten', async () => {
+      const repairs = await prepareResolverRepairState();
+      const older = await admitResolverObligation(repairs, 'older', 'build_review', 'orphaned-boundary');
+      const current = await admitResolverObligation(repairs, 'current', 'build_review', 'current-boundary');
+      await repairs.close({
+        planPath: '.docs/plans/feature.md', taskId: '2', obligationId: current.id,
+        evidence: { kind: 'task-done', value: 'current' },
+      });
+      const rewritten = await repairs.rewriteBaselines(new Map([
+        [older.id, 'translated-older'],
+        [current.id, 'translated-current'],
+      ]));
+      expect(rewritten).toEqual({ ok: true, value: { rewritten: [older.id, current.id] } });
+      const rewrittenState = await repairs.read();
+      if (!rewrittenState.ok) throw new Error(rewrittenState.message);
+      expect(taskObligationStanding(rewrittenState.value, current.planIdentity, '2')).toMatchObject({
+        kind: 'live',
+        current: { id: current.id },
+        superseded: [{ id: older.id }],
+      });
+
+      const result = await resolveTaskIdsWithDiagnostics(dir, ['2']);
+      expect(result.resolved).toEqual(new Set(['2']));
+      expect(result.unavailableReasons.has('2')).toBe(false);
+    });
+
+    it('keeps a task unresolved when its current same-authority obligation remains open', async () => {
+      const repairs = await prepareResolverRepairState();
+      await admitResolverObligation(repairs, 'older', 'build_review', 'orphaned-boundary');
+      await admitResolverObligation(repairs, 'current', 'build_review', 'current-boundary');
+
+      expect((await resolveTaskIdsWithDiagnostics(dir, ['2'])).resolved).toEqual(new Set());
+    });
+
+    it('keeps a task unresolved for an open cross-authority obligation', async () => {
+      const repairs = await prepareResolverRepairState();
+      await admitResolverObligation(repairs, 'audit', 'prd_audit', 'audit-boundary');
+      const current = await admitResolverObligation(repairs, 'current', 'build_review', 'current-boundary');
+      await repairs.close({
+        planPath: '.docs/plans/feature.md', taskId: '2', obligationId: current.id,
+        evidence: { kind: 'task-done', value: 'current' },
+      });
+
+      expect((await resolveTaskIdsWithDiagnostics(dir, ['2'])).resolved).toEqual(new Set());
+    });
+
+    it.each([
+      ['is missing', (state: MutableRepairState) => delete state.repairObligations.currentByPlan['.docs/plans/feature.md']['2']],
+      ['names a missing record', (state: MutableRepairState) => { state.repairObligations.currentByPlan['.docs/plans/feature.md']['2'] = 'missing'; }],
+    ])('keeps a task unresolved with the current-less reason when its current entry %s', async (_caseName, corrupt) => {
+      const repairs = await prepareResolverRepairState();
+      await admitResolverObligation(repairs, 'open', 'build_review', 'boundary');
+      const state = JSON.parse(await readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8')) as MutableRepairState;
+      corrupt(state);
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify(state));
+
+      await expect(resolveTaskIdsWithDiagnostics(dir, ['2'])).resolves.toEqual({
+        resolved: new Set(),
+        unavailableReasons: new Map([['2', 'repair state is unavailable: task 2 has an open repair obligation but no current obligation is recorded for it']]),
+      });
+    });
+
+    it('reports no open repair when task 2 only has an open superseded obligation', async () => {
+      const repairs = await prepareResolverRepairState();
+      await admitResolverObligation(repairs, 'older', 'build_review', 'orphaned-boundary');
+      const current = await admitResolverObligation(repairs, 'current', 'build_review', 'current-boundary');
+      await repairs.close({
+        planPath: '.docs/plans/feature.md', taskId: '2', obligationId: current.id,
+        evidence: { kind: 'task-done', value: 'current' },
+      });
+
+      await expect(openRepairForTask(dir, '2')).resolves.toEqual({ kind: 'none' });
+    });
+
+    it('reports the open current repair instead of its superseded predecessor', async () => {
+      const repairs = await prepareResolverRepairState();
+      await admitResolverObligation(repairs, 'older', 'build_review', 'orphaned-boundary');
+      const current = await admitResolverObligation(repairs, 'current', 'build_review', 'current-boundary');
+
+      await expect(openRepairForTask(dir, '2')).resolves.toEqual({ kind: 'open', obligationId: current.id });
+    });
+
+    it.each([
+      ['is missing', (state: MutableRepairState) => delete state.repairObligations.currentByPlan['.docs/plans/feature.md']['2']],
+      ['names a missing record', (state: MutableRepairState) => { state.repairObligations.currentByPlan['.docs/plans/feature.md']['2'] = 'missing'; }],
+    ])('reports a current-less repair as unavailable when its current entry %s', async (_caseName, corrupt) => {
+      const repairs = await prepareResolverRepairState();
+      await admitResolverObligation(repairs, 'open', 'build_review', 'boundary');
+      const state = JSON.parse(await readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8')) as MutableRepairState;
+      corrupt(state);
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify(state));
+
+      await expect(openRepairForTask(dir, '2')).resolves.toEqual({
+        kind: 'unavailable',
+        reason: 'repair state is unavailable: task 2 has an open repair obligation but no current obligation is recorded for it',
+      });
+    });
+
+    it('preserves legacy completion for unbound tasks and all-resolved obligations without a current entry', async () => {
+      const repairs = await prepareResolverRepairState([
+        { id: '3', status: 'completed' },
+        { id: '4', status: 'completed' },
+      ]);
+      const admitted = await repairs.admitOrReplay('resolved-4', {
+        id: 'resolved-4', planPath: '.docs/plans/feature.md', taskIds: ['4'],
+        source: { findingId: 'resolved-4', authority: 'build_review', instruction: 'repair it' },
+        baseline: { head: 'boundary', tree: 'tree', resolvedTaskIds: [] },
+      });
+      if (!admitted.ok) throw new Error(admitted.message);
+      await repairs.close({
+        planPath: '.docs/plans/feature.md', taskId: '4', obligationId: admitted.obligation.id,
+        evidence: { kind: 'task-done', value: 'resolved' },
+      });
+      const state = JSON.parse(await readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8')) as MutableRepairState;
+      delete state.repairObligations.currentByPlan['.docs/plans/feature.md']['4'];
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify(state));
+
+      await expect(resolveTaskIdsWithDiagnostics(dir, ['3', '4'])).resolves.toEqual({
+        resolved: new Set(['3', '4']), unavailableReasons: new Map(),
+      });
+    });
+
     it('resolves a plan_amendment obligation only from a Task trailer committed after its boundary', async () => {
       await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });

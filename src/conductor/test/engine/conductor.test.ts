@@ -4090,6 +4090,7 @@ describe('engine/conductor', () => {
     expect(stepsRun).not.toContain('complexity');
   });
 
+  // Covers: task:5
   it('#814: build_review grader-dispatch failure re-dispatches with backoff and a diagnosable reason', async () => {
     // Reproduces the collapse: the grader subprocess dies instantly with EMPTY
     // output (graderDispatchFailed). Pre-fix, all retries burned back-to-back in
@@ -4117,12 +4118,30 @@ describe('engine/conductor', () => {
 
     const sleeps: number[] = [];
     const retryReasons: string[] = [];
+    const buildReviewRetries: ConductorEvent[] = [];
     events.on('step_retry', (e) => {
-      if (e.type === 'step_retry' && e.step === 'build_review') retryReasons.push(e.reason);
+      if (e.type === 'step_retry' && e.step === 'build_review') {
+        retryReasons.push(e.reason);
+        buildReviewRetries.push(e);
+      }
     });
     const failedErrors: string[] = [];
+    const buildReviewFailures: ConductorEvent[] = [];
     events.on('step_failed', (e) => {
-      if (e.type === 'step_failed' && e.step === 'build_review') failedErrors.push(e.error);
+      if (e.type === 'step_failed' && e.step === 'build_review') {
+        failedErrors.push(e.error);
+        buildReviewFailures.push(e);
+      }
+    });
+    const unsatisfiedBuildReviewVerdicts: ConductorEvent[] = [];
+    events.on('gate_verdict', (e) => {
+      if (e.type === 'gate_verdict' && e.step === 'build_review' && !e.satisfied) {
+        unsatisfiedBuildReviewVerdicts.push(e);
+      }
+    });
+    const buildReviewKickbacks: ConductorEvent[] = [];
+    events.on('kickback', (e) => {
+      if (e.type === 'kickback' && e.from === 'build_review') buildReviewKickbacks.push(e);
     });
 
     const conductor = new Conductor({
@@ -4144,13 +4163,17 @@ describe('engine/conductor', () => {
     expect(sleeps.filter((ms) => ms > 0).length).toBeGreaterThanOrEqual(1);
     // Every retry reason is diagnosable — never empty / "no reason recorded".
     expect(retryReasons.length).toBeGreaterThanOrEqual(1);
+    expect(buildReviewRetries.length).toBeGreaterThanOrEqual(1);
     for (const r of retryReasons) {
       expect(r.trim().length).toBeGreaterThan(0);
       expect(r).not.toContain('no reason recorded');
     }
     // The terminal failure error is diagnosable too.
     expect(failedErrors.length).toBe(1);
+    expect(buildReviewFailures.length).toBeGreaterThanOrEqual(1);
     expect(failedErrors[0].trim().length).toBeGreaterThan(0);
+    expect(unsatisfiedBuildReviewVerdicts).toEqual([]);
+    expect(buildReviewKickbacks).toEqual([]);
   });
 
   it('routes a typed unretryable build_review runner failure on its first attempt', async () => {

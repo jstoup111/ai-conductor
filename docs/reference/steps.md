@@ -73,6 +73,12 @@ template literal is test data, not a marker. Test paths use `.test.` or `.spec.`
 file can be selected for conservative counterfactual execution without making unchanged sibling tests
 quality targets.
 
+When `testQuality` is enabled, a changed test declaration with no resolving `Covers` reference whose
+introduced marker carries a token matching none of `task:<id>`, `S<story>.<n>`, or `FR-<n>` is not
+reviewed. `build_review` fails before dispatch, and the conductor routes it to BUILD as a
+`build_review` kickback naming the file, line, and token. This route never charges the
+mechanical-fault allowance and halts `needs-human` once the kickback cap is spent.
+
 Enabled `testQuality` with no established targets or concrete candidates is a valid empty-scope PASS: it does
 not dispatch its reviewer or counterfactual preflight. An enabled `security` rubric still reviews the diff
 and participates in the joined verdict. This preserves production-only refactors and pure

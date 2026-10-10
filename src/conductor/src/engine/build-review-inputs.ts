@@ -25,9 +25,11 @@ import { parseCoversMarkers } from './covers-marker.js';
 import { isTestPath } from './test-path.js';
 import {
   analyzeBuildReviewTestScope,
+  findMalformedCoversMarkers,
   type BuildReviewTestScope,
   type BuildReviewTestScopeInput,
   type BuildReviewTestSourceReference,
+  type MalformedCoversMarker,
   unavailableBuildReviewTestScope,
 } from './build-review-test-scope.js';
 import type { TestDeclarationSpan, TestDeclarationUncertaintyReason } from './build-review-test-declarations.js';
@@ -116,6 +118,8 @@ export interface BuildReviewInputs {
 export interface BuildReviewFrozenInputs extends BuildReviewInputs {
   readonly testSuiteProof: FullSuitePassEvidence;
   readonly sourceSnapshot: BuildReviewSourceSnapshot;
+  /** Introduced malformed Covers tokens; deliberately excluded from review identity and projections. */
+  readonly malformedCoversMarkers: readonly MalformedCoversMarker[];
   /** Whole-feature source for the leaf-only security rubric. */
   readonly securitySourceSnapshot?: BuildReviewSourceSnapshot;
   /** Present only for a lap that includes an enabled custom policy member. */
@@ -647,6 +651,7 @@ async function snapshotTypedTestScope(
   readonly scopeEvidence: readonly BuildReviewPinnedScopeEvidence[];
   readonly testQuality: BuildReviewTestQualityScope;
   readonly changedTestTitles: readonly BuildReviewChangedTestTitle[];
+  readonly malformedCoversMarkers: readonly MalformedCoversMarker[];
 }> {
   const renamedFrom = new Map(changes.flatMap((change) => change.kind === 'R' || change.kind === 'C'
     ? [[change.path, change.oldPath] as const]
@@ -716,9 +721,17 @@ async function snapshotTypedTestScope(
       dependencyEffects: dependencies.effects,
     };
     try {
-      return { ...file, scope: analyzer(input) };
+      return {
+        ...file,
+        scope: analyzer(input),
+        malformedCoversMarkers: findMalformedCoversMarkers(input),
+      };
     } catch (error) {
-      return { ...file, scope: unavailableBuildReviewTestScope(input, error) };
+      return {
+        ...file,
+        scope: unavailableBuildReviewTestScope(input, error),
+        malformedCoversMarkers: Object.freeze([]),
+      };
     }
   });
   const scope = mergeTestScopes(files.map((file) => file.scope));
@@ -779,6 +792,12 @@ async function snapshotTypedTestScope(
       excludedMarkerFiles: Object.freeze(excludedMarkerFiles),
     }),
     changedTestTitles: Object.freeze(changedTestTitles),
+    malformedCoversMarkers: Object.freeze(files.flatMap((file) => file.malformedCoversMarkers).sort((left, right) => {
+      if (left.path !== right.path) return left.path < right.path ? -1 : 1;
+      if (left.line !== right.line) return left.line - right.line;
+      if (left.token !== right.token) return left.token < right.token ? -1 : 1;
+      return 0;
+    })),
   });
 }
 
@@ -1010,6 +1029,7 @@ export async function assembleBuildReviewInputs(
     repairProvenance,
     testSuiteProof: inspection.evidence,
     sourceSnapshot,
+    malformedCoversMarkers: typedTestScope.malformedCoversMarkers,
     ...(sourceMaterialization === undefined ? {} : { sourceMaterialization }),
     patchEquivalentExclusion: equivalentExclusion,
   };

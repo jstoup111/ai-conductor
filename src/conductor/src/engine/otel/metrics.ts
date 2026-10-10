@@ -243,8 +243,12 @@ export class MetricsRecorder {
     if (typeof wallMs === 'number' && Number.isFinite(wallMs)) this.instruments.featureWallHistogram.record(wallMs, this.withIdentity(attrs));
     if (typeof activeMs === 'number' && Number.isFinite(activeMs)) this.instruments.featureActiveHistogram.record(activeMs, this.withIdentity(attrs));
   }
-  onGateVerdict(step: string, outcome: 'pass' | 'fail'): void { this.instruments.gateVerdictsCounter.add(1, this.withIdentity({ step, outcome })); }
-  onKickback(from: string, to: string): void { this.instruments.gateKickbacksCounter.add(1, this.withIdentity({ from, to })); }
+  onGateVerdict(step: string, outcome: 'pass' | 'fail', tier?: string): void {
+    this.instruments.gateVerdictsCounter.add(1, this.withIdentity(tier === undefined ? { step, outcome } : { step, outcome, tier }));
+  }
+  onKickback(from: string, to: string, tier?: string): void {
+    this.instruments.gateKickbacksCounter.add(1, this.withIdentity(tier === undefined ? { from, to } : { from, to, tier }));
+  }
   /**
    * Applicability occurrences carry only bounded labels. Reason, decider and
    * commit text stay on the event spine and never become metric labels.

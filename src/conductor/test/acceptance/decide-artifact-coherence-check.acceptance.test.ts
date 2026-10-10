@@ -1,4 +1,5 @@
-// Covers: task:1, task:3, task:4
+// Covers: task:1, task:2, task:3, task:4
+// Covers: task:2
 // Acceptance specs for the DECIDE artifact coherence check
 // (jstoup111/ai-conductor#539, .docs/stories/decide-artifact-coherence-check.md,
 // PRD .docs/specs/2026-07-22-decide-artifact-coherence-check.md FR-1..14).
@@ -191,6 +192,19 @@ const APPROVED_ADR = [
   '',
 ].join('\n');
 
+const ATX_APPROVED_ADR = [
+  '# ADR: coherence placement',
+  '',
+  '**Status:** APPROVED',
+  '',
+  '## Decision',
+  '',
+  '### 1. Keep coherence validation at land time.',
+  '',
+  '### 2. Refuse uncovered decisions.',
+  '',
+].join('\n');
+
 let repoPath: string;
 
 async function git(args: string[], cwd = repoPath): Promise<string> {
@@ -213,6 +227,7 @@ interface SeedOverrides {
   stageOutcomes?: boolean; // write .pipeline/intake-outcomes.md
   intakeBody?: string; // stage through the real worktree-creation writer
   waiver?: string | null; // .docs/coherence-waivers/<stem>.md content
+  adr?: string; // default: APPROVED_ADR
   stampCoherenceSignal?: boolean; // default true; false simulates a pre-FR-14 legacy worktree
 }
 
@@ -235,6 +250,7 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
     stageOutcomes = true,
     intakeBody,
     waiver = null,
+    adr = APPROVED_ADR,
     stampCoherenceSignal = true,
   } = overrides;
 
@@ -275,7 +291,7 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
     await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
     await w(`conflicts/${stem}.md`, '# Conflicts\n\nClean.\n');
     await w('architecture/coherence-demo.md', '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n');
-    await w('decisions/adr-2026-09-08-coherence.md', APPROVED_ADR);
+    await w('decisions/adr-2026-09-08-coherence.md', adr);
   }
 
   // NOTE: the `.docs/coherence/.gitkeep` signal used to be hand-planted here.
@@ -421,6 +437,34 @@ describe('Story 2 / FR-1 — mapping artifact authored + cross-checked at land',
     await expect(
       landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
     ).rejects.toThrow(/adr-2026-09-08-coherence#D1 \(missing\)/i);
+  });
+
+  it('happy: an ATX-numbered ADR lands when every decision has an obligation row', async () => {
+    const plan = PLAN.replace(
+      '| adr-2026-09-08-coherence#D1 | task | task-1 | Given an unmapped outcome, when land validates, then it is rejected. |',
+      [
+        '| adr-2026-09-08-coherence#D1 | task | task-1 | Given an unmapped outcome, when land validates, then it is rejected. |',
+        '| adr-2026-09-08-coherence#D2 | task | task-1 | Given an unmapped outcome, when land validates, then it is rejected. |',
+      ].join('\n'),
+    );
+    const wt = await seedWorktree('coherence demo', { adr: ATX_APPROVED_ADR, plan });
+
+    await expect(landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts())).resolves.toBeDefined();
+  });
+
+  it('negative: an ATX-numbered ADR is refused when its second obligation row is missing', async () => {
+    const plan = PLAN.replace(
+      '| adr-2026-09-08-coherence#D1 | task | task-1 | Given an unmapped outcome, when land validates, then it is rejected. |',
+      [
+        '| adr-2026-09-08-coherence#D1 | task | task-1 | Given an unmapped outcome, when land validates, then it is rejected. |',
+        '| adr-2026-09-08-coherence#D2 | task | task-1 | Given an unmapped outcome, when land validates, then it is rejected. |',
+      ].join('\n'),
+    ).replace('| adr-2026-09-08-coherence#D2 | task | task-1 | Given an unmapped outcome, when land validates, then it is rejected. |\n', '');
+    const wt = await seedWorktree('coherence demo', { adr: ATX_APPROVED_ADR, plan });
+
+    await expect(
+      landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
+    ).rejects.toThrow(/adr-2026-09-08-coherence#D2 \(missing\)/i);
   });
 
   it('negative: a mapping row citing a nonexistent story id is refused (fabricated citation)', async () => {

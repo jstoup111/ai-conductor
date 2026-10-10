@@ -271,3 +271,12 @@ needs only Task 1's classifier. Task 5's entry-point test passes only once both 
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-2: Key the rewriteBaselines translations in task-progress.test.ts 'resolves past a superseded obligation after both baseline heads are rewritten' by obligation ids (older.id, current.id). Assert the result rewrote both ids, then assert task 2 still resolves with no unavailable reason.
+**Gate:** prd-audit
+**Rationale:** Verified (95%): repair-obligations.ts:287-288 keys rewriteBaselines translations by obligation id (section.records[id]). The test at task-progress.test.ts:395-411 keys the Map by baseline heads ('orphaned-boundary', 'current-boundary'), so no record is translated and the test never covers the post-rewrite Done-when of task 2. This is test drift inside task 2's existing RED/GREEN scope. Approved architecture is unchanged and needs no decision, so it routes to BUILD. Repair: capture the older admitted obligation, key the Map by older.id and current.id, and assert that rewriteBaselines returns ok with rewritten containing both ids, which proves the translation happened. Keep the existing resolve assertion. The other task 2 resolver tests and the repair-obligations.test.ts unit test are already keyed correctly and are unaffected.
+**Criterion:** S1.2
+**Parent task:** 2
+**Done when:**
+- [test] S1.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-2 is complete.

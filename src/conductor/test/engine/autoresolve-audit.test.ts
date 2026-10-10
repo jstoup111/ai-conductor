@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { resolveConflictingPr } from '../../src/engine/autoresolve.js';
+import { resolveConflictingPr, summarizeSuiteFailure } from '../../src/engine/autoresolve.js';
 import { startFeatureEventPersistence } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { buildPrFixture, skipReplay, type PrFixture } from './autoresolve-pr-fixture.js';
@@ -112,6 +112,40 @@ describe('resolveConflictingPr — judged publication audit (real git, stubbed g
       },
     );
 
+  // The suite gate used to discard all output, so escalations said only
+  // "suite exited with code 1" and the worktree was reaped before anyone could
+  // see which test failed (four PRs on 2026-10-10).
+  it('logs and escalates the failing suite summary, and publishes nothing', async () => {
+    const fx = await fixture();
+    try {
+      const summary = 'FAIL  test/engine/example.test.ts > example > fails\n Test Files  1 failed | 9 passed (10)';
+      const result = await resolveConflictingPr(
+        { prUrl: fx.prUrl, slug: 'feature', repoCwd: fx.repo },
+        'feature',
+        { enabled: true, suiteCommand, cooldownMinutes: 0, attemptCap: 2 },
+        {
+          ...fx.deps,
+          runSuite: async () => ({ exitCode: 1, durationMs: 5, configured: true, summary }),
+          resolver: async ({ projectRoot }) => {
+            await skipReplay(projectRoot);
+            return { resolved: true, verdict: { choice: 'superseded', rationale, superseded: [fx.shas[0]] } };
+          },
+          log: fx.log,
+          events: fx.events,
+        },
+      );
+      expect(result).toEqual({ kind: 'escalated' });
+      expect(fx.logs).toContain(`${fx.prUrl}: suite: FAIL  test/engine/example.test.ts > example > fails`);
+      expect(fx.logs).toContain(`${fx.prUrl}: suite:  Test Files  1 failed | 9 passed (10)`);
+      const escalation = fx.ghCalls.map((args) => args.join(' ')).find((call) => call.includes('suite-gate'));
+      expect(escalation).toContain('suite exited with code 1');
+      expect(escalation).toContain('FAIL  test/engine/example.test.ts > example > fails');
+      expect(await fx.pushes()).toBe(0);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
   it('S4.1: posts the audit after the suite, naming choice, rationale, superseded sha and the passing command', async () => {
     const fx = await fixture();
     try {
@@ -163,5 +197,31 @@ describe('resolveConflictingPr — judged publication audit (real git, stubbed g
     } finally {
       await fx.cleanup();
     }
+  });
+});
+
+describe('summarizeSuiteFailure', () => {
+  it('keeps failure and total lines, strips ANSI colour, and drops passing noise', () => {
+    const stdout = [
+      ' RUN  v4.1.11 /repo/src/conductor',
+      '·········',
+      '\u001b[41m\u001b[1m FAIL \u001b[22m\u001b[49m test/engine/a.test.ts > a > breaks',
+      '\u001b[31mAssertionError\u001b[39m: expected 1 to be 2',
+      ' Test Files  1 failed | 330 passed (331)',
+    ].join('\n');
+    expect(summarizeSuiteFailure(stdout, 'error during close Error: tmpdir-leak-guard: 1 temp entry leaked')).toBe([
+      ' FAIL  test/engine/a.test.ts > a > breaks',
+      'AssertionError: expected 1 to be 2',
+      ' Test Files  1 failed | 330 passed (331)',
+      'error during close Error: tmpdir-leak-guard: 1 temp entry leaked',
+    ].join('\n'));
+  });
+
+  it('falls back to the tail when no line names a failure, and bounds the result', () => {
+    const lines = Array.from({ length: 50 }, (_, index) => `line ${index}`).join('\n');
+    expect(summarizeSuiteFailure(lines, '', { maxLines: 3 })).toBe('line 47\nline 48\nline 49');
+    const long = summarizeSuiteFailure(`FAIL ${'x'.repeat(5_000)}`, '', { maxChars: 100 });
+    expect(long.length).toBeLessThanOrEqual(100 + '\n… (truncated)'.length);
+    expect(long.endsWith('… (truncated)')).toBe(true);
   });
 });
