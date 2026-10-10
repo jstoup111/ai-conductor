@@ -519,8 +519,18 @@ export async function sweepMergeableLabels({
         }
 
         // The timestamp begins with the first observation of a head and is
-        // reset only when that SHA changes. Missing head data leaves legacy
-        // bookkeeping intact until GitHub supplies an OID.
+        // reset only when that SHA changes. Do this before classification so
+        // the first tick for a new head receives a full grace period.
+        if (state.headRefOid && state.headRefOid !== entry.headSha) {
+          entry = {
+            ...entry,
+            headSha: state.headRefOid,
+            headFirstSeenAt: now().toISOString(),
+          };
+        }
+
+        // Missing head data leaves legacy bookkeeping intact until GitHub
+        // supplies an OID.
         const headFirstSeenAt = entry.headFirstSeenAt
           ? Date.parse(entry.headFirstSeenAt)
           : undefined;
@@ -533,23 +543,13 @@ export async function sweepMergeableLabels({
           now().getTime(),
         );
 
-        // The timestamp begins with the first observation of a head and is
-        // reset only when that SHA changes. Missing head data leaves legacy
-        // bookkeeping intact until GitHub supplies an OID.
-        if (state.headRefOid && state.headRefOid !== entry.headSha) {
-          entry = {
-            ...entry,
-            headSha: state.headRefOid,
-            headFirstSeenAt: now().toISOString(),
-          };
-        }
-
         // Entry is live — keep it in the registry.
         recordDisposition(log, entry, `live:${state.state}`);
         survivors.push(entry);
 
         let conflicting = false;
         let ciFailing = false;
+        let needsReadinessRemediation = false;
         const indeterminate = routeShippedReadiness(readiness, {
           ready: () => false,
           conflicting: () => {
@@ -561,8 +561,14 @@ export async function sweepMergeableLabels({
             return false;
           },
           'ci-pending': () => false,
-          'no-checks': () => false,
-          draft: () => false,
+          'no-checks': () => {
+            needsReadinessRemediation = true;
+            return false;
+          },
+          draft: () => {
+            needsReadinessRemediation = true;
+            return false;
+          },
           indeterminate: () => true,
         });
 
@@ -597,10 +603,33 @@ export async function sweepMergeableLabels({
         // A conflict-resolution label becomes stale once GitHub reports the PR
         // mergeable again. Legacy/unattributed labels remain sticky.
         const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
-        if (idx >= 0) survivors[idx] = await maybeClearConflictLabel(entry, state, entryGh, log);
+        if (idx >= 0) {
+          entry = await maybeClearConflictLabel(entry, state, entryGh, log);
+          survivors[idx] = entry;
+        }
 
         // FR-12: if the PR carries `needs-remediation`, ensure `mergeable` is absent.
         let hasRemediation = state.labels.includes('needs-remediation');
+
+        // A stale shipped PR with no checks, or a draft PR, needs human
+        // attention. Attribute only a confirmed absent→present label write:
+        // failed/refused writes deliberately retain no cause so the next tick
+        // retries the same bounded, label-only action.
+        if (needsReadinessRemediation && !hasRemediation) {
+          const labelResult = await addLabel(
+            entryGh,
+            entry.repoCwd,
+            entry.prUrl,
+            'needs-remediation',
+            log,
+          );
+          if (labelResult.kind === 'executed') {
+            entry = { ...entry, escalationCause: 'shipped-readiness' };
+            const entryIdx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
+            if (entryIdx >= 0) survivors[entryIdx] = entry;
+            hasRemediation = true;
+          }
+        }
 
         // Task 21: exhaustion — escalate exactly once. Gated on the
         // label-absent→present transition so a sweep that finds
