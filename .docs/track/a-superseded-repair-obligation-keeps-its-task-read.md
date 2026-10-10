@@ -1,0 +1,7 @@
+# Track: A superseded repair obligation keeps its task reading as open (#2598)
+
+Track: technical
+
+Scope boundary: Minimal, engine-internal. One shared definition of which repair obligations still bind a task, owned by `src/conductor/src/engine/repair-obligations.ts`. An obligation is superseded for a task when that task's current obligation (`currentByPlan[plan][task]`) is a different record with the same source authority. This is the rule `RepairObligationStore.close` already uses to refuse a stale closure. The shared definition is consumed by `close`, by the completion resolver and `openRepairForTask` in `task-progress.ts`, by `completeTaskDoneWhen`'s close-every-open-obligation loop, and by `task-seed.ts`'s open-repair restage. A task with an open obligation but no usable current entry fails closed with a named reason. No change to the persisted repair-state schema, to admission or write-time supersession (the `plan_amendment` rule stays as is), or to cross-authority coexistence: obligations from different authorities each still need their own closure. Excluded: conductor restart and first-attempt BUILD prompt hints (`conductor.ts`), which only enrich prompts and decide no completion; migrating or rewriting persisted records; any new event or telemetry.
+
+Engine repair-state semantics fix with no user-facing product requirement; acceptance criteria live in stories, so no PRD.
