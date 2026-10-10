@@ -100,7 +100,7 @@ never absent for long. Content the reader doesn't recognize still reads as `uncl
 | --- | --- | --- |
 | `needs-human` | Only an operator can resolve it. A detail naming a remediation-planner mismatch is a plan gap wearing this class; see [the remediation planner disagreed with the parsed findings](#the-remediation-planner-disagreed-with-the-parsed-findings). | No — except a matching, one-use `kickback-budget` authorization for a budget-cap halt. |
 | `kickback-cap` | A bounded `prd_audit` or as-built-review remediation allowance is exhausted. | No — except a matching, one-use `kickback-budget` authorization. |
-| `plan-gap` | `prd_audit` or the as-built review found an outcome no active plan task owns; see [the plan-gap recovery](#the-halt-is-a-plan-gap). | No — skipped on every sweep. |
+| `plan-gap` | A BUILD task reported a Done-when check the approved plan cannot satisfy, or `prd_audit` or the as-built review found an outcome no active plan task owns; see [the plan-gap recovery](#the-halt-is-a-plan-gap). | No — skipped on every sweep. |
 | `mechanical` | The daemon may safely retry it. | Yes, on a base-branch advance. |
 | `protected-artifact` | BUILD or SHIP found a genuine protected DECIDE-artifact violation. | No — skipped on every sweep until an operator resolves it. |
 | `legacy` | Predates total classification; stamped by the daemon's startup migration. | Yes, on a base-branch advance, same as `mechanical`. |
@@ -910,8 +910,11 @@ fix.
 
 ### The halt is a plan gap
 
-**Symptom:** `.pipeline/HALT.class` is `plan-gap`. `prd_audit` or the as-built architecture review
-found an outcome the shipped work does not deliver and no active plan task owns the repair. The
+**Symptom:** `.pipeline/HALT.class` is `plan-gap`. Either BUILD closed a task with `conduct task
+done <id> --plan-gap <n>` because a Done-when check cannot be met within the approved plan, or
+`prd_audit` or the as-built architecture review found an outcome the shipped work does not deliver
+and no active plan task owns the repair. `last_step` in `.pipeline/conduct-state.json` names the
+origin: `build`, `prd_audit`, or `architecture_review_as_built`. The
 approved design is the ceiling here: the daemon retains this halt on every sweep, and clearing the
 marker without amending an artifact just re-halts on the same criterion. A committed record of the
 halt is on the feature branch at `.docs/halted/<slug>.md`; clearing the halt flips its status to
@@ -920,9 +923,10 @@ resolved.
 **Blast radius:** the amendment rewrites committed DECIDE artifacts on the feature branch and
 re-runs BUILD and every later step. Nothing outside the feature moves.
 
-1. Read the gap. `.pipeline/prd-audit.md` (the rendered view of `.pipeline/prd-audit.json`) or
-   `.pipeline/architecture-review-as-built.md` (its `## Recorded Findings`) names each criterion and
-   why no active plan task owns the repair.
+1. Read the gap. For a BUILD-origin gap, `.pipeline/HALT` names the task, the Done-when check, and
+   the reason. Otherwise `.pipeline/prd-audit.md` (the rendered view of `.pipeline/prd-audit.json`)
+   or `.pipeline/architecture-review-as-built.md` (its `## Recorded Findings`) names each criterion
+   and why no active plan task owns the repair.
 2. Amend the artifact the gap actually indicts, in the feature worktree — usually the plan (add a
    task naming the omitted work), sometimes the story (when the criterion overpromises what the
    approved design can deliver). Update the feature's coherence table task and criterion rows in the
@@ -936,14 +940,22 @@ re-runs BUILD and every later step. Nothing outside the feature moves.
    [`ai-conductor reseal`](../reference/cli.md#ai-conductor-reseal) is TTY-only by design; run it
    interactively. See [the protected-artifact recovery](#the-halt-is-a-protected-artifact-violation)
    for what it checks.
-4. Rewind, from inside the feature worktree:
-   ```bash
-   cd .worktrees/<slug> && ai-conductor rewind --to build
-   ```
-   [`ai-conductor rewind`](../reference/cli.md#ai-conductor-rewind) marks `build` and every later
-   non-skipped step stale, clears their gate verdicts, and clears `HALT` and `HALT.class` atomically.
-   Clearing the markers by hand instead leaves `build`, `test_suite`, and `build_review` recorded as
-   done, so the amended plan task is never built.
+4. Resume BUILD. The command depends on the origin in `last_step`:
+   - **`build`:** BUILD is the halted step itself, so `rewind --to build` refuses: the target is not
+     earlier than `last_step`. Clear the halt in place, then unpark the feature, if parked, as a
+     separate step:
+     ```bash
+     ai-conductor halt clear --feature <slug> --rationale "<what you amended>"
+     ```
+     See [audited clear](#audited-clear).
+   - **`prd_audit` or `architecture_review_as_built`:** rewind, from inside the feature worktree:
+     ```bash
+     cd .worktrees/<slug> && ai-conductor rewind --to build
+     ```
+     [`ai-conductor rewind`](../reference/cli.md#ai-conductor-rewind) marks `build` and every later
+     non-skipped step stale, clears their gate verdicts, and clears `HALT` and `HALT.class`
+     atomically. Clearing the markers instead leaves `build`, `test_suite`, and `build_review`
+     recorded as done, so the amended plan task is never built.
 
 **Two plan gaps need no artifact amendment:**
 
