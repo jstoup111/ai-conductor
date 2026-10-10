@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-10T15:50:29.950Z
 Slug: build-loop-cannot-complete-a-feature-child-by-chil
 Class: plan-gap
 Halting step: build
