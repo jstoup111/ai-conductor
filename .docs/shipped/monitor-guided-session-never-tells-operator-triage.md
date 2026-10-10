@@ -4,6 +4,13 @@ spec_hash: 807ceedd00442ed31f5e3d4daf678998757e0746a36770c63c20389e7fbab6f7
 pr: https://github.com/jstoup111/ai-conductor/pull/3080
 shipped: 2026-10-10
 engine_version: 20261010T011143Z-f79d1fd8d7cd
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This test-fixture fix is not part of the planned quit-cue work. It appears aimed at the pre-existing bootstrap test failure that blocks the integrity-suite exit-0 check. It touches only test plumbing and changes no shipped behavior."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
