@@ -7487,6 +7487,7 @@ export class Conductor {
             );
             const branchDispatchStartedAt = new Map<string, number>();
             const branchHandshakeFailures = new Map<string, CompletionResult>();
+            const branchHandshakeRetryReasons = new Map<string, string>();
             const memberExecutionContexts = new Map<string, ExecutionContext>();
             const memberAttemptResults = new Map<string, StepRunResult>();
             const memberRetryCounts = new Map<string, number>();
@@ -7673,12 +7674,14 @@ export class Conductor {
                             (memberRetryCounts.get(observation.member) ?? 0) + 1,
                           );
                           const failedAttempt = memberAttemptResults.get(observation.member);
+                          const handshakeRetryReason = branchHandshakeRetryReasons.get(observation.member);
+                          branchHandshakeRetryReasons.delete(observation.member);
                           await emitTracked({
                             type: 'step_retry',
                             step: observation.member as StepName,
                             attempt: observation.attempt,
                             maxAttempts: memberAttemptBudgets.get(observation.member) ?? observation.attempt,
-                            reason: `group member ${observation.member} retry`,
+                            reason: handshakeRetryReason ?? `group member ${observation.member} retry`,
                             ...(failedAttempt?.model !== undefined ? { model: failedAttempt.model } : {}),
                             ...(failedAttempt?.effort !== undefined ? { effort: failedAttempt.effort } : {}),
                             ...(failedAttempt?.actualProvider !== undefined ? { actualProvider: failedAttempt.actualProvider, provider: failedAttempt.actualProvider } : {}),
@@ -7704,6 +7707,31 @@ export class Conductor {
                       },
                       ...(isVerdictRunIdentityStep(member.name as StepName)
                         ? { runId: branchRunIds.get(member.name) }
+                        : {}),
+                      ...(this.verifyArtifacts
+                        ? {
+                            verifyDispatch: async (result: StepRunResult) => {
+                              await this.stampVerdictRunIdentity(
+                                member.name as StepName,
+                                branchRunIds.get(member.name),
+                              );
+                              const handshake = await this.verdictDispatchHandshake(
+                                member.name as StepName,
+                                branchRunIds.get(member.name),
+                                branchDispatchStartedAt.get(member.name),
+                                result.output,
+                              );
+                              if (handshake) {
+                                const reason = handshake.reason ??
+                                  `post-dispatch verdict write handshake failed for ${member.name}`;
+                                branchHandshakeFailures.set(member.name, handshake);
+                                branchHandshakeRetryReasons.set(member.name, reason);
+                                return reason;
+                              }
+                              branchHandshakeFailures.delete(member.name);
+                              return undefined;
+                            },
+                          }
                         : {}),
                       config: this.config,
                       // Task 8 (#817): threaded so sweepStaleReviewArtifacts's
