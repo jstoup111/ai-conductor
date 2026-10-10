@@ -4399,8 +4399,63 @@ export type AdrDecisionParseResult =
   | { kind: 'decisions'; ids: Set<string>; passages: Map<string, string[]>; section: string }
   | { kind: 'diagnostic'; reason: 'missing-decision-heading'; detail: string };
 
+export const ADR_ASSUMPTION_LEDGER_HEADER =
+  '| # | Assumption | Basis | Confidence | Load-bearing | Impact if wrong | Approval |';
+
+export type AdrLedgerDiagnostic = {
+  rule:
+    | 'missing-section'
+    | 'empty-section'
+    | 'malformed-header'
+    | 'malformed-entry'
+    | 'missing-approval'
+    | 'contradictory-empty-statement';
+  entryId?: string;
+  detail: string;
+};
+
+export type AdrAssumptionLedgerParseResult =
+  | { kind: 'ok' }
+  | { kind: 'diagnostics'; diagnostics: AdrLedgerDiagnostic[] };
+
 const ADR_DECISION_HEADING_RE = /^\s{0,3}##\s+Decision\s*$/i;
 const ADR_SECTION_HEADING_RE = /^\s{0,3}##\s+/;
+const ADR_ASSUMPTION_LEDGER_HEADING_RE = /^\s{0,3}##\s+Assumptions\s*$/i;
+
+/**
+ * Parse an ADR's assumptions section. Section and row validation is added
+ * incrementally alongside the ledger contract; this establishes the shared
+ * fenced-code-safe section boundary used by every later rule.
+ */
+export function parseAdrAssumptionLedger(content: string): AdrAssumptionLedgerParseResult {
+  const withoutFencedCodeBlocks = content.replace(
+    /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r?\n|\r)[\s\S]*?^ {0,3}\1[^\r\n]*(?:\r?\n|\r|$)/gm,
+    '',
+  );
+  const lines = withoutFencedCodeBlocks.split(/\r?\n/);
+  const sectionStart = lines.findIndex((line) => ADR_ASSUMPTION_LEDGER_HEADING_RE.test(line));
+  if (sectionStart === -1) {
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'missing-section', detail: 'ADR is missing a ## Assumptions heading.' }],
+    };
+  }
+
+  const sectionLines: string[] = [];
+  for (const line of lines.slice(sectionStart + 1)) {
+    if (ADR_SECTION_HEADING_RE.test(line)) break;
+    sectionLines.push(line);
+  }
+
+  if (sectionLines.join('\n').trim() === '') {
+    return {
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'empty-section', detail: 'ADR has an empty ## Assumptions section.' }],
+    };
+  }
+
+  return { kind: 'ok' };
+}
 
 /**
  * Extract citable decision ids from an ADR's `## Decision` section.
