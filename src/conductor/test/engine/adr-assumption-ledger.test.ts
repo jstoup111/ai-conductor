@@ -1,4 +1,4 @@
-// Covers: task:1, S1.1, S1.2, S1.3
+// Covers: task:1, task:3, S1.1, S1.2, S1.3
 import { describe, expect, it } from 'vitest';
 import {
   ADR_ASSUMPTION_LEDGER_HEADER,

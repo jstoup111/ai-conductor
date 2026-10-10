@@ -1810,6 +1810,24 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     expect(result.blocked).toEqual([]);
   });
 
+  // Discovery does not re-grade merged ADRs for a ledger.
+  // Covers: task:7
+  it('allows a merged spec when an approved base ADR has no assumptions ledger', async () => {
+    await writeSpec('unledgered-adr');
+    await mkdir(join(dir, '.docs/decisions'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/decisions/adr-approved-without-ledger.md'),
+      '# ADR\n\n**Status:** APPROVED\n',
+    );
+    await git(['add', '.docs']);
+    await git(['commit', '-q', '-m', 'merge spec with approved unledgered ADR']);
+
+    const result = await discoverBacklog(dir, undefined, undefined, { baseBranch });
+
+    expect(result.items.map((item) => item.slug)).toEqual(['unledgered-adr']);
+    expect(result.blocked).toEqual([]);
+  });
+
   it('MERGED spec (committed on base branch) → build-ready', async () => {
     await writeSpec('csv-export');
     await git(['add', '.docs']);
