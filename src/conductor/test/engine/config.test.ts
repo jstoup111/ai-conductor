@@ -2661,10 +2661,21 @@ steps:
   });
 
   describe('conflict_check config block (retired)', () => {
-    it('rejects conflict_check as an unknown key; the ADR corpus is always repo_wide', () => {
-      expect(validateConfig({ conflict_check: { adr_corpus: 'repo_wide' } })).toEqual({
+    it('ignores conflict_check with a retirement warning so pre-retirement branches still validate', () => {
+      const result = validateConfig({ conflict_check: { adr_corpus: 'repo_wide' } });
+
+      expect(result).toMatchObject({
+        ok: true,
+        warnings: ['conflict_check is retired and ignored (adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag).'],
+        deprecatedKeys: [{ key: 'conflict_check', adr: 'adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag' }],
+      });
+      expect(result.ok && 'conflict_check' in result.config).toBe(false);
+    });
+
+    it('still rejects a genuinely unknown top-level key alongside the retired one', () => {
+      expect(validateConfig({ conflict_check: { adr_corpus: 'repo_wide' }, conflict_chek: {} })).toEqual({
         ok: false,
-        error: { type: 'validation_error', message: 'Unknown top-level key: "conflict_check"' },
+        error: { type: 'validation_error', message: 'Unknown top-level key: "conflict_chek"' },
       });
     });
   });

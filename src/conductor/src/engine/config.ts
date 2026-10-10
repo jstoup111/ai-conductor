@@ -180,6 +180,16 @@ const DEPRECATED_BUILD_REVIEW_ADR =
   'adr-2026-08-22-build-review-opt-in-rubric-container';
 const DEPRECATED_WIRING_ADR =
   'adr-2026-08-14-retire-build-review-wiring-rubric';
+/**
+ * Top-level blocks retired without a migration. Feature branches cut before the
+ * retirement still carry them in their own `.ai-conductor/config.yml`, and the
+ * daemon validates that file with the current engine, so rejecting them halts
+ * every in-flight feature at test_suite until it rebases. Warn and ignore instead.
+ */
+const RETIRED_TOP_LEVEL_KEYS: ReadonlyMap<string, string> = new Map([
+  // #3122: the ADR corpus is always repo-wide; the flag staged here is gone.
+  ['conflict_check', 'adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag'],
+]);
 
 /** Default hard floor for live provider-stream observation emission. */
 export const DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS = 5_000;
@@ -741,6 +751,13 @@ export function validateConfig(
 
   const knownTopLevelKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS.top);
   for (const key of Object.keys(obj)) {
+    const retiredAdr = RETIRED_TOP_LEVEL_KEYS.get(key);
+    if (retiredAdr !== undefined) {
+      warnings.push(`${key} is retired and ignored (${retiredAdr}).`);
+      deprecatedKeys.push({ key, adr: retiredAdr });
+      delete obj[key];
+      continue;
+    }
     if (!knownTopLevelKeys.has(key)) {
       return errVal(`Unknown top-level key: "${key}"`);
     }
