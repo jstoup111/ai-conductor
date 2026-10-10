@@ -115,6 +115,7 @@ BUILD phase consumes that declaration at two points.
    duplication flag at `SKILL.md:43`; simplify's extraction judgement is explicitly retained and
    it may still propose or perform extraction where genuinely warranted (operator decision,
    2026-08-09).
+   > **Amended 2026-10-09 by #475:** the build_review `implementationQuality` rubric is covered by this decision through engine suppression, not prompt context. Its projection carries no plan content. After judging, the engine suppresses and records any `duplication` finding anchored in a declared target whose evidence names only the declared source, so a declared replication never fails a lap or prompts a repair that would undo the copy. Duplication outside the declared pairs is graded as usual. `simplify`'s retained extraction judgement is unchanged.
 
 **Why D over the others.** Option A buys speed by degrading the one check that would catch a bad
 copy, in a system where that degradation is structurally invisible. Option C preserves everything

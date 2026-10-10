@@ -14,7 +14,7 @@ As an operator, I want the scope, completeness, and rootCause rubrics gone so th
 
 #### Happy Path
 - Given a config that still turns on every old rubric, when build_review runs, then no reviewer session is started for scope, completeness, or rootCause
-- Given the updated repository, when I list the rubrics that can actually run, then none of `scope`, `completeness`, or `rootCause` is among them and every runnable rubric is a registry member that is off by default (old rubric names are still accepted in config, but as no-ops — see Story 15)
+- Given the updated repository, when I list the rubrics that can actually run, then none of `scope`, `completeness`, or `rootCause` is among them and every runnable rubric is a registry member, and every member except `implementationQuality` is off by default (old rubric names are still accepted in config, but as no-ops — see Story 15)
 - Given the updated repository, when I look for the old rubric skills, then `build-review-scope`, `build-review-completeness`, `build-review-root-cause`, and `build-review-tautology` and their tests and fixtures are gone
 
 #### Negative Paths
@@ -35,7 +35,7 @@ As an operator, I want build_review to run only the rubrics I choose so that tur
 
 #### Happy Path
 - Given build_review is on but no rubric is on, when the step runs, then it passes, logs the reason "no rubrics enabled" to the event log, and starts no reviewer session
-- Given build_review is on with only `test-quality` on, when the step runs, then exactly one reviewer runs
+- Given build_review is on with only `test-quality` on and every other member disabled, when the step runs, then exactly one reviewer runs
 
 #### Negative Paths
 - Given build_review is on but no rubric is on, when the config is loaded, then it loads cleanly with no error about "at least one rubric"
