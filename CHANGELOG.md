@@ -25,6 +25,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Teams can safely opt into stacked delivery for eligible sliced plans. ([implementation PR #3039](https://github.com/jstoup111/ai-conductor/pull/3039)).
 - Daemon status shows each in-flight non-BUILD step while it runs. ([implementation PR #3085](https://github.com/jstoup111/ai-conductor/pull/3085)).
 - Guided monitor triage sessions now tell you when to quit and return to the queue. ([implementation PR #3080](https://github.com/jstoup111/ai-conductor/pull/3080)).
+- Stacked features now build each child in order while keeping task commits in their owning child. ([implementation PR #3053](https://github.com/jstoup111/ai-conductor/pull/3053)).
 
 ### Changed
 
@@ -64,11 +65,16 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - FINISH no longer halts as non-advancing after recording the outcome when a PR carries accepted build-review risk; the accepted-risk PR section is now updated in place. ([implementation PR #3101](https://github.com/jstoup111/ai-conductor/pull/3101)).
 - Self-host builds no longer halt when Claude Code rewrites its plugin-sync round marker. ([implementation PR #3103](https://github.com/jstoup111/ai-conductor/pull/3103)).
 - Remediation tasks no longer carry an unprovable "re-run the gate" Done-when check that halted BUILD as a plan gap. ([implementation PR #3109](https://github.com/jstoup111/ai-conductor/pull/3109)).
+- Contributors can identify the active Vitest file when a Conductor CI shard ends unexpectedly. ([implementation PR #3083](https://github.com/jstoup111/ai-conductor/pull/3083)).
 
 ## Migration
 
 ```bash migration
 "${HARNESS_DIR}/bin/install" --update
+```
+
+```bash migration
+bin/install --update
 ```
 
 ## [1.6.0] - 2026-10-06
