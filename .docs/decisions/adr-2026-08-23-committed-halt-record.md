@@ -53,6 +53,8 @@ to be a separate artifact.
 
 > **Amended 2026-10-07 by #2942:** When the checkout is a stacked child branch, the record is committed there with a `Child:` field and is never pushed; the leaf and non-stacked branches keep this decision (`adr-2026-10-07-per-child-build-region` decision 11).
 
+> **Amended 2026-10-09 by #2891:** The push publishes with `--force-with-lease`, leased on the branch's remote-tracking ref (the remote tip the daemon last observed), matching the SHIP draft-PR lease push (`ship-draft-pr.ts`). A non-fast-forward caused only by the daemon's own rebase is therefore published, not a failure. A remote moved by anyone else fails the lease (`stale info`), is never overwritten, and is reported as `halt_record_push_failed` exactly as before. A bare `--force` is never used.
+
 6. **Nothing in this path may throw.** The seam's existing contract ("a failed write must not
    crash the finish flow") extends unchanged over the record. Every arm returns a result;
    failures are reported as events, never propagated.
