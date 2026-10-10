@@ -103,7 +103,7 @@ import {
   type CoverageBindingConflictEnvelopeEntry,
   type CoverageBindingSliceMembership,
 } from './coverage-binding-envelope.js';
-import { resolveActiveChild } from './child-cursor.js';
+import { resolveActiveChild, resolveChildBase } from './child-cursor.js';
 import { parseFeatureRef } from './feature-branch-identity.js';
 import {
   amendmentBlocks,
@@ -3002,9 +3002,10 @@ export class DefaultStepRunner implements StepRunner {
     tier: ConductState['complexity_tier'],
     executionContext?: ExecutionContext,
     readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
+    child?: import('./child-context.js').ChildId,
   ): Promise<StepRunResult> {
     try {
-      return await this.runRubricBuildReviewInner(inputs, config, tier, executionContext, readOnlyReviewCapabilities);
+      return await this.runRubricBuildReviewInner(inputs, config, tier, executionContext, readOnlyReviewCapabilities, child);
     } finally {
       // A custom lap owns one source view for every catalog member. Some
       // built-in paths settle before dispatch (for example a deterministic
@@ -3024,6 +3025,7 @@ export class DefaultStepRunner implements StepRunner {
     tier: ConductState['complexity_tier'],
     executionContext?: ExecutionContext,
     readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
+    child?: import('./child-context.js').ChildId,
   ): Promise<StepRunResult> {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
@@ -3284,7 +3286,7 @@ export class DefaultStepRunner implements StepRunner {
             mutationMembersFromOutcomes(customSettled.status === 'fulfilled' ? customSettled.value : []), {}, changedInputs,
           ));
           await this.emitBuildReviewCustomMemberResults(lapId, customResults);
-          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
+          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config, child });
         }
       }
       if (customSettled.status === 'rejected') throw customSettled.reason;
@@ -3300,7 +3302,7 @@ export class DefaultStepRunner implements StepRunner {
         if (changedInputs.length > 0) {
           ({ customResults } = await settleLapInputMutation(mutationMembersFromOutcomes(outcomes), {}, changedInputs));
           await this.emitBuildReviewCustomMemberResults(lapId, customResults);
-          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
+          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config, child });
         }
         lapGate!.discardCacheWrites();
         return {
@@ -3314,7 +3316,7 @@ export class DefaultStepRunner implements StepRunner {
         if (changedInputs.length > 0) {
           ({ customResults } = await settleLapInputMutation(mutationMembersFromOutcomes(outcomes), {}, changedInputs));
           await this.emitBuildReviewCustomMemberResults(lapId, customResults);
-          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
+          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config, child });
         }
         lapGate!.discardCacheWrites();
         return { success: false, output: 'build_review custom policy produced no durable result' };
@@ -3341,6 +3343,7 @@ export class DefaultStepRunner implements StepRunner {
           customResults,
           currentCustomRubrics: customEntries.map((entry) => entry.id),
           config,
+          child,
         });
       }
     }
@@ -3549,6 +3552,7 @@ export class DefaultStepRunner implements StepRunner {
       projectRoot: this.projectDir,
       feature: effective.feature,
       suppressions: suppressionEntries,
+      ...(child === undefined ? {} : { child }),
     });
     if (!persistedSuppressions.ok) {
       return { success: false, output: `build_review suppression history persistence failed: ${persistedSuppressions.reason}` };
@@ -4144,6 +4148,7 @@ export class DefaultStepRunner implements StepRunner {
     readonly customResults: Readonly<Record<string, BuildReviewCustomArtifactMember>>;
     readonly currentCustomRubrics: readonly string[];
     readonly config: ReturnType<typeof resolveBuildReviewConfig>;
+    readonly child?: import('./child-context.js').ChildId;
   }): Promise<StepRunResult> {
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId: input.lapId,
@@ -4233,6 +4238,7 @@ export class DefaultStepRunner implements StepRunner {
       projectRoot: this.projectDir,
       feature: effective.feature,
       suppressions: suppressionEntries,
+      ...(input.child === undefined ? {} : { child: input.child }),
     });
     if (!persistedSuppressions.ok) {
       return { success: false, output: `build_review suppression history persistence failed: ${persistedSuppressions.reason}` };
@@ -5087,13 +5093,29 @@ export class DefaultStepRunner implements StepRunner {
             if (amendmentArtifacts.length === 0) {
               amendmentClaims = [];
             } else {
-              const originRef = await resolveOriginRef(this.projectDir).catch(() => null);
-              if (originRef === null) throw new Error('could not resolve the origin reference for DECIDE amendment inputs');
-              const mergeBase = await this.gitRunner(['merge-base', originRef, 'HEAD']);
-              const amendmentBase = mergeBase.exitCode === 0 && mergeBase.stdout.trim()
-                ? mergeBase.stdout.trim()
-                : (() => { throw new Error(`could not resolve merge base for DECIDE amendment inputs: ${mergeBase.stderr || mergeBase.stdout || originRef}`); })();
+              const active = this.featureDesc === ''
+                ? undefined
+                : await resolveActiveChild(this.projectDir, this.featureDesc, { git: this.gitRunner });
+              const childBase = active?.kind === 'active'
+                ? await resolveChildBase(this.projectDir, this.featureDesc, active.child, { git: this.gitRunner })
+                : { kind: 'none' as const };
+              // Without an authoritative parent closure, inherited-vs-new is
+              // unknowable.  Every amendment remains a claimed obligation.
+              const amendmentBase = childBase.kind === 'parent'
+                ? childBase.sha
+                : childBase.kind === 'parent-missing' || childBase.kind === 'parent-not-ancestor'
+                  ? undefined
+                  : await (async () => {
+                    const originRef = await resolveOriginRef(this.projectDir).catch(() => null);
+                    if (originRef === null) throw new Error('could not resolve the origin reference for DECIDE amendment inputs');
+                    const mergeBase = await this.gitRunner(['merge-base', originRef, 'HEAD']);
+                    if (mergeBase.exitCode !== 0 || !mergeBase.stdout.trim()) {
+                      throw new Error(`could not resolve merge base for DECIDE amendment inputs: ${mergeBase.stderr || mergeBase.stdout || originRef}`);
+                    }
+                    return mergeBase.stdout.trim();
+                  })();
               const decideArtifacts = await Promise.all(amendmentArtifacts.map(async ({ path, text }) => {
+                if (amendmentBase === undefined) return { path, text, baseText: undefined };
                 const basePath = `${amendmentBase}:${path}`;
                 const baseResult = await this.gitRunner(['show', basePath]);
                 let baseText: string | undefined;
@@ -5588,6 +5610,7 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     let containmentReport: ContainmentFloorReport | undefined;
+    let activeChild: import('./child-context.js').ChildId | undefined;
     let inputs;
     try {
       let activeChildBase = this.buildReviewInputOptions?.childBase;
@@ -5597,6 +5620,7 @@ export class DefaultStepRunner implements StepRunner {
           activeChildBase = { slug: this.featureDesc, child: active.child };
         }
       }
+      activeChild = activeChildBase?.child;
       // A custom member changes the lap's source authority from by-reference
       // to a detached, immutable view shared by every member in the lap.
       const lapMembers = this.usesInjectedBuildReviewGit && this.buildReviewInputOptions?.materialization === undefined
@@ -5751,7 +5775,14 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     return withBaseFreshness(withContainmentAdvisory(
-      await this.runRubricBuildReview(inputs, buildReviewConfig, tier, executionContext, readOnlyReviewCapabilities),
+      await this.runRubricBuildReview(
+        inputs,
+        buildReviewConfig,
+        tier,
+        executionContext,
+        readOnlyReviewCapabilities,
+        activeChild,
+      ),
     ));
   }
 

@@ -13,6 +13,8 @@ import {
   TASK_TRAILER_LINE_PATTERN,
   parsePlanTaskPaths,
 } from './plan-task-parse.js';
+import { resolveChildBase } from './child-cursor.js';
+import type { ChildId } from './child-context.js';
 
 // #405: near-miss derive diagnostics (path-corroboration miss, pinned-stamp
 // demotion prevention) repeat on EVERY build-gate evaluation — H7 deliberately
@@ -339,7 +341,26 @@ export async function listCommits(projectRoot: string): Promise<CommitInfo[]> {
 export async function listCommitsWithTrailers(
   projectRoot: string,
   anchor?: string,
+  childBase?: { readonly slug: string; readonly child: ChildId },
 ): Promise<CommitWithTrailers[]> {
+  if (childBase !== undefined) {
+    const base = await resolveChildBase(projectRoot, childBase.slug, childBase.child);
+    // A missing/non-ancestral closure cannot be replaced with an arbitrary
+    // history window.  It proves no child-local commit evidence.
+    if (base.kind === 'parent') {
+      const log = await execa('git', ['log', `--format=${COMMIT_RECORD_FORMAT}`, `${base.sha}..HEAD`], {
+        cwd: projectRoot,
+        reject: false,
+      });
+      return log.exitCode !== 0 || typeof log.stdout !== 'string' ? [] : log.stdout
+        .split('\x1e')
+        .map((record) => record.trim())
+        .filter(Boolean)
+        .map(parseCommitRecord)
+        .filter((item): item is CommitWithTrailers => item !== null);
+    }
+    if (base.kind !== 'none') return [];
+  }
   // If anchor is provided, use the evidence range (fail-closed)
   if (anchor) {
     const range = await getEvidenceRange(projectRoot, anchor);

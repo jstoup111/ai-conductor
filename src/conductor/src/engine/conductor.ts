@@ -290,6 +290,7 @@ import {
   projectExecutionSummaryEntries,
   testSuiteBudgetVerdict,
   type FullSuiteInspectionResult,
+  type FullSuiteVerifyOptions,
 } from './full-suite-verifier.js';
 import { sanitizeFullSuiteDiagnosticOutput } from './full-suite-evidence.js';
 import {
@@ -663,6 +664,19 @@ export class Conductor {
   private events: ConductorEventEmitter;
   /** Cursor-selected owner of the current stacked BUILD region. */
   private activeRegionChild: ChildId | undefined;
+
+  /** Child-local suite selection has the same authoritative base as review. */
+  private fullSuiteVerifyOptions(
+    options: Omit<FullSuiteVerifyOptions, 'childBase'> = {},
+  ): FullSuiteVerifyOptions {
+    const slug = this.featureSlug ?? this.featureDesc ?? '';
+    return {
+      ...options,
+      ...(this.activeRegionChild === undefined || slug === ''
+        ? {}
+        : { childBase: { slug, child: this.activeRegionChild } }),
+    };
+  }
   private readonly remediationProjectionLimitOverrides: Partial<RemediationProjectionLimits> | undefined;
   private readonly executionLifecycle: ExecutionLifecycle;
   /** Route every conductor-owned marker failure through the existing event spine. */
@@ -1389,7 +1403,7 @@ export class Conductor {
       fullSuiteInspect: async () => {
         const retained = this.retainedFullSuiteInspection;
         this.retainedFullSuiteInspection = undefined;
-        return retained ?? this.fullSuiteVerifier.inspect();
+        return retained ?? this.fullSuiteVerifier.inspect(this.fullSuiteVerifyOptions());
       },
       unverifiedDoneWhenNudgeSpent: await this.unverifiedDoneWhenNudgeSpent(state),
     };
@@ -1719,7 +1733,7 @@ export class Conductor {
     // lap PASS is STALE here, so the fence routes back to one full run.
     const ctx = {
       ...(await this.completionCtx(state)),
-      fullSuiteInspect: () => this.fullSuiteVerifier.inspect({ requireAggregate: true }),
+      fullSuiteInspect: () => this.fullSuiteVerifier.inspect(this.fullSuiteVerifyOptions({ requireAggregate: true })),
     };
     const nonGreen: Array<{ name: StepName; verdict: GateObjectiveVerdict; reason: string }> = [];
 
@@ -5878,7 +5892,7 @@ export class Conductor {
    */
   private async preVerifyRebaseGate(state: ConductState, step: StepName) {
     if (step === 'test_suite') {
-      const inspection = await this.fullSuiteVerifier.inspect();
+      const inspection = await this.fullSuiteVerifier.inspect(this.fullSuiteVerifyOptions());
       if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
         await this.recordFullSuitePreservation(inspection);
       }
@@ -12411,6 +12425,7 @@ export class Conductor {
                     adjudication: {
                     projectRoot: this.projectRoot,
                     feature: effective.feature,
+                    ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
                     operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
                     suppressedFindingIds: new Set(suppressedFindingIds),
                     suppressions,
