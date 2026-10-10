@@ -29,8 +29,23 @@ export interface GuidedSessionOptions {
   readonly launch?: GuidedSessionLauncher;
 }
 
+export const MONITOR_HOSTED_MARKER = 'Session host: conduct monitor queue.';
+
 function triageInvocation(provider: string): string {
   return `${findBuiltInProviderDescriptor(provider)?.invocationPrefix ?? '$'}daemon-triage`;
+}
+
+function monitorHostingBlock(provider: string): string[] {
+  const quitInstruction = findBuiltInProviderDescriptor(provider)?.interactiveLaunch?.quitInstruction;
+  if (quitInstruction === undefined) {
+    throw new Error(`Provider ${provider} has no interactive quit instruction.`);
+  }
+  return [
+    MONITOR_HOSTED_MARKER,
+    'Quitting this session returns the operator to the monitor queue.',
+    `Quit instruction: ${quitInstruction}`,
+    'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
+  ];
 }
 
 const HALT_DISPOSITIONS: Readonly<Record<HaltDisposition, true>> = {
@@ -88,6 +103,7 @@ function openingPrompt(request: GuidedSessionRequest): string {
     `Reason: ${halt.reason}`,
     `Classification: ${displayHaltClassification(haltClass)}`,
     `Recovery procedure: ${recoveryProcedure(haltClass ?? 'unclassified')}`,
+    ...monitorHostingBlock(request.provider),
   ].join('\n');
 }
 

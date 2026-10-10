@@ -1,4 +1,4 @@
-// Covers: task:10, task:11, task:12, task:13
+// Covers: task:2, task:10, task:11, task:12, task:13
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -60,9 +60,72 @@ describe('guided halt sessions', () => {
           'Reason: build review requires an operator decision',
           'Classification: needs-human',
           'Recovery procedure: Follow the needs-human halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
+          'Session host: conduct monitor queue.',
+          'Quitting this session returns the operator to the monitor queue.',
+          'Quit instruction: /quit',
+          'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
         ].join('\n'),
       },
     ]]);
+  });
+
+  it('uses the Claude daemon-triage invocation and monitor-hosting trailing block', async () => {
+    const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
+
+    await openGuidedSession({
+      provider: 'claude',
+      halt: {
+        project: '/workspace/project',
+        slug: 'repair-index',
+        reason: 'build review requires an operator decision',
+        haltClass: 'needs-human',
+      },
+    }, { launch });
+
+    expect(launch).toHaveBeenCalledWith(expect.objectContaining({
+      openingPrompt: [
+        'Resolve this halted daemon feature with the existing daemon-triage procedure.',
+        'Invoke /daemon-triage for feature repair-index.',
+        'Project: /workspace/project',
+        'Feature: repair-index',
+        'Reason: build review requires an operator decision',
+        'Classification: needs-human',
+        'Recovery procedure: Follow the needs-human halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
+        'Session host: conduct monitor queue.',
+        'Quitting this session returns the operator to the monitor queue.',
+        'Quit instruction: /quit',
+        'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
+      ].join('\n'),
+    }));
+  });
+
+  it('keeps monitor-hosting instructions exact-once and final when the reason contains them', async () => {
+    const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
+    const monitorHostingBlock = [
+      'Session host: conduct monitor queue.',
+      'Quitting this session returns the operator to the monitor queue.',
+      'Quit instruction: /quit',
+      'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
+    ];
+
+    await openGuidedSession({
+      provider: 'codex',
+      halt: {
+        project: '/workspace/project',
+        slug: 'repair-index',
+        reason: 'run /quit then return to the monitor queue',
+        haltClass: 'needs-human',
+      },
+    }, { launch });
+
+    const openingPrompt = launch.mock.calls[0]?.[0].openingPrompt;
+    expect(openingPrompt).toBeDefined();
+    const lines = openingPrompt!.split('\n');
+    expect(lines).toContain('Reason: run /quit then return to the monitor queue');
+    expect(lines.slice(-4)).toEqual(monitorHostingBlock);
+    for (const line of monitorHostingBlock) {
+      expect(lines.filter((candidate) => candidate === line)).toHaveLength(1);
+    }
   });
 
   it('forwards the selected model and effort to the launch seam', async () => {
