@@ -57,6 +57,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Remediation now preserves engine-owned dispositions when it creates follow-up work. ([implementation PR #3040](https://github.com/jstoup111/ai-conductor/pull/3040)).
 - Halt records now reach the remote branch after a daemon rebase. ([implementation PR #3079](https://github.com/jstoup111/ai-conductor/pull/3079)).
 - Draft PR bodies seeded from the PR template no longer halt the self-host release gate; commented template examples are ignored when parsing release metadata. ([implementation PR #3093](https://github.com/jstoup111/ai-conductor/pull/3093)).
+- build_review adjudication no longer halts on a plan's final task absorbing trailing plan sections, and adjudication-context halts now name the overflowing field and bound. ([implementation PR #3094](https://github.com/jstoup111/ai-conductor/pull/3094)).
 
 ## Migration
 
