@@ -14519,6 +14519,20 @@ export class Conductor {
         stuckGate.delete(this.childScopedStepKey(step.name, this.activeRegionChild));
       }
 
+      // DECIDE gates sit before the selector-driven BUILD tail.  Their
+      // objective verdict still has to govern completion: leaving a completed
+      // DECIDE step marked done after its post-dispatch verdict is false lets
+      // the linear loop advance past an unsatisfied gate and report success.
+      if (!verdict.satisfied && indexOf(step.name) < topo.firstLoopIndex) {
+        const reason = verdict.reason ?? `${step.name} gate is unsatisfied`;
+        await this.commitStateChanges(state, `reopen unsatisfied ${step.name} gate`, {
+          [step.name]: 'pending',
+        });
+        await this.writeHaltMarker(`${reason}\n`, 'needs-human');
+        await this.emitLoopHalt(reason);
+        return 'halt';
+      }
+
       // Task 15: Post-green spot-audit dispatch for semantic attribution verification.
       // Only dispatch after build gate is satisfied and sampling is enabled.
       if (step.name === 'build' && verdict.satisfied) {

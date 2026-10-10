@@ -4419,6 +4419,14 @@ export type AdrDecisionParseResult =
 export const ADR_ASSUMPTION_LEDGER_HEADER =
   '| # | Assumption | Basis | Confidence | Load-bearing | Impact if wrong | Approval |';
 
+/** Remove fenced examples before interpreting an ADR's Markdown structure. */
+export function stripFencedCodeBlocks(content: string): string {
+  return content.replace(
+    /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r?\n|\r)[\s\S]*?^ {0,3}\1[^\r\n]*(?:\r?\n|\r|$)/gm,
+    '',
+  );
+}
+
 export type AdrLedgerDiagnostic = {
   rule:
     | 'missing-section'
@@ -4445,10 +4453,7 @@ const ADR_ASSUMPTION_LEDGER_HEADING_RE = /^\s{0,3}##\s+Assumptions\s*$/i;
  * fenced-code-safe section boundary used by every later rule.
  */
 export function parseAdrAssumptionLedger(content: string): AdrAssumptionLedgerParseResult {
-  const withoutFencedCodeBlocks = content.replace(
-    /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r?\n|\r)[\s\S]*?^ {0,3}\1[^\r\n]*(?:\r?\n|\r|$)/gm,
-    '',
-  );
+  const withoutFencedCodeBlocks = stripFencedCodeBlocks(content);
   const lines = withoutFencedCodeBlocks.split(/\r?\n/);
   const sectionStarts = lines
     .map((line, index) => (ADR_ASSUMPTION_LEDGER_HEADING_RE.test(line) ? index : -1))
