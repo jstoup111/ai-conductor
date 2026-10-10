@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:6
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:31
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { join } from 'path';
@@ -62,6 +62,7 @@ import {
 } from '../../src/engine/halt-marker.js';
 import { gateSatisfied } from '../../src/engine/selector.js';
 import { writeFile, mkdir } from 'fs/promises';
+import { CHILD_REGION_STEPS, parseChildId } from '../../src/engine/child-context.js';
 
 function trackingRunner(projectRoot?: string): { runner: StepRunner; log: string[] } {
   const log: string[] = [];
@@ -1289,6 +1290,58 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
       expect(await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8'))
         .toMatch(/gate 'build' selected 7 times without satisfying/i);
+    });
+
+    it('keys repeated selections by child and names the child in its terminal halt', async () => {
+      const seed = seedDoneThrough('finish');
+      seed.build = 'failed';
+      await writeState(statePath, seed as ConductState);
+      const child1 = parseChildId(1)!;
+      const child2 = parseChildId(2)!;
+      for (const name of ALL_STEPS.filter((step) => step.loopGate).map((step) => step.name)) {
+        if (name !== 'build') await writeVerdict(dir, name, { satisfied: true, checkedAt: 1 });
+      }
+      for (const child of [child1, child2]) {
+        for (const name of CHILD_REGION_STEPS) {
+          if (name !== 'build') await writeVerdict(dir, name, { satisfied: true, checkedAt: 1 }, child);
+        }
+      }
+
+      const { runner } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        verifyArtifacts: true,
+      });
+      const advanceTail = (conductor as unknown as {
+        advanceTail: (
+          step: typeof ALL_STEPS[number],
+          state: ConductState,
+          stuckGate: Map<StepName, number>,
+          steps: typeof ALL_STEPS,
+          indexOf: (name: StepName) => number,
+        ) => Promise<number | null | 'halt'>;
+      }).advanceTail.bind(conductor);
+      const finish = ALL_STEPS.find((step) => step.name === 'finish')!;
+      const indexOf = (name: StepName) => ALL_STEPS.findIndex((step) => step.name === name);
+      const stuckGate = new Map<StepName, number>();
+      (conductor as unknown as { activeRegionChild: typeof child1 }).activeRegionChild = child1;
+      for (let selection = 1; selection <= 5; selection++) {
+        await expect(advanceTail(finish, seed as ConductState, stuckGate, ALL_STEPS, indexOf))
+          .resolves.toBe(indexOf('build'));
+      }
+
+      (conductor as unknown as { activeRegionChild: typeof child2 }).activeRegionChild = child2;
+      await expect(advanceTail(finish, seed as ConductState, stuckGate, ALL_STEPS, indexOf))
+        .resolves.toBe(indexOf('build'));
+      for (let selection = 2; selection <= 6; selection++) {
+        await expect(advanceTail(finish, seed as ConductState, stuckGate, ALL_STEPS, indexOf))
+          .resolves.toBe(indexOf('build'));
+      }
+      await expect(advanceTail(finish, seed as ConductState, stuckGate, ALL_STEPS, indexOf))
+        .resolves.toBe('halt');
+
+      expect(await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8'))
+        .toMatch(/gate 'build' selected 7 times without satisfying.*child 2/i);
     });
 
     it('uses only the existing selector and entry-gate predicates for a stale prerequisite', () => {

@@ -643,6 +643,11 @@ const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
 
+/** Session-local loop counters must not carry a prior child's failures forward. */
+function childScopedStepKey(step: StepName, child: ChildId | undefined): StepName {
+  return `${step}#${child === undefined ? 'feature' : child}` as StepName;
+}
+
 
 
 /**
@@ -698,6 +703,13 @@ export class Conductor {
       haltClass as Parameters<typeof writeHaltMarker>[2],
       this.events,
     );
+  }
+
+  /** Keep child-local terminal diagnostics actionable without changing N=1 text. */
+  private withActiveChild(reason: string): string {
+    return this.activeRegionChild === undefined
+      ? reason
+      : `${reason} for child ${this.activeRegionChild}`;
   }
 
   /**
@@ -9268,14 +9280,15 @@ export class Conductor {
               // still halt before BUILD. The marker remains actionable and a
               // subsequent valid cap halt receives its durable generation.
             }
-            const reason =
+            const reason = this.withActiveChild(
               `BUILD dispatch halted: ${gate} ${allowance} allowance exhausted.\n` +
               `${detail}\n${findings}${asBuiltFindingDetail}\n` +
               renderKickbackRecoveryHint({
                 slug: state.feature_desc,
                 gate,
                 allowance,
-              });
+              }),
+            );
             await this.writeHaltMarker(
               `${reason}\n${generation === undefined ? '' : `Kickback halt generation: ${generation}\n`}`,
               // A corrupt ledger cannot establish that an allowance was
@@ -9712,6 +9725,9 @@ export class Conductor {
             await seedBuildTaskTelemetry(
               this.projectRoot,
               state.feature_desc ?? this.featureDesc ?? '',
+              this.activeRegionChild === undefined
+                ? undefined
+                : { slug: state.feature_desc ?? this.featureSlug ?? this.featureDesc ?? '', child: this.activeRegionChild },
             );
             // `seedBuildTaskTelemetry` can admit a plan-amendment repair on
             // this very first BUILD attempt. The startup recovery above has
@@ -10666,9 +10682,11 @@ export class Conductor {
                 (mechanicalEntry?.mechanicalFaults ?? 0) >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW &&
                 aggregateRaw !== undefined
               ) {
-                const reason = renderExhaustedMechanicalBuildReviewHalt(
-                  mechanicalEntry ?? { mechanicalFaults: 0 },
-                  aggregateRaw,
+                const reason = this.withActiveChild(
+                  renderExhaustedMechanicalBuildReviewHalt(
+                    mechanicalEntry ?? { mechanicalFaults: 0 },
+                    aggregateRaw,
+                  ),
                 );
                 const aggregate = parseBuildReviewAggregate(aggregateRaw);
                 const failure = aggregate && Object.values(aggregate.results).find(
@@ -12720,13 +12738,14 @@ export class Conductor {
                 const count = kickback.entry.count;
                 if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted) {
                   if (await reenterBuildReviewIfEffectivePass()) continue;
-                  const reason =
+                  const reason = this.withActiveChild(
                     `build_review cumulative kickback cap exceeded:\n` +
                     renderKickbackBudgetView(
                       kickback.entry,
                       'build_review',
                       MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
-                    );
+                    ),
+                  );
                   const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'build_review', {
                     consumed: kickback.entry.cumulative,
                     limit: kickback.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
@@ -13433,8 +13452,10 @@ export class Conductor {
             // once retries are exhausted. Terminal-side prompt hosts should drop
             // `retry` from the menu when `retriesExhausted` is set; if a caller
             // ignores the context, this loop prevents an infinite retry storm.
+            const retryKey = childScopedStepKey(step.name, this.activeRegionChild);
+            let count = 0;
             while (true) {
-              const count = recoveryRetries.get(step.name) ?? 0;
+              count = recoveryRetries.get(retryKey) ?? 0;
               const retriesExhausted = count >= MAX_RECOVERY_RETRIES;
               action = await this.onRecovery(step.name, gating, {
                 recoveryCount: count,
@@ -13444,7 +13465,7 @@ export class Conductor {
               break;
             }
             if (action === 'retry') {
-              recoveryRetries.set(step.name, (recoveryRetries.get(step.name) ?? 0) + 1);
+              recoveryRetries.set(retryKey, count + 1);
               i--;
               continue;
             }
@@ -14166,9 +14187,10 @@ export class Conductor {
           count,
         }));
         if (kickback.exhausted) {
-          const reason =
+          const reason = this.withActiveChild(
             `kickback ping-pong: ${target} re-opened ${count + 1} times ` +
-            `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
+            `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`,
+          );
           await this.writeHaltMarker(reason + '\n', 'needs-human');
           const prUrl = await this.surfaceRemediationPr(reason);
           await this.emitLoopHalt(reason, prUrl);
@@ -14334,7 +14356,9 @@ export class Conductor {
         satisfied: verdict.satisfied,
         reason: verdict.reason,
       }));
-      if (verdict.satisfied) stuckGate.delete(step.name);
+      if (verdict.satisfied) {
+        stuckGate.delete(childScopedStepKey(step.name, this.activeRegionChild));
+      }
 
       // Task 15: Post-green spot-audit dispatch for semantic attribution verification.
       // Only dispatch after build gate is satisfied and sampling is enabled.
@@ -14537,10 +14561,13 @@ export class Conductor {
     // Oscillation / stuck guard: cap how many times any single gate may be
     // selected before it satisfies. Catches a gate whose verdict never improves
     // and a build↔plan kickback oscillation.
-    const sel = (stuckGate.get(selectedStep.name) ?? 0) + 1;
-    stuckGate.set(selectedStep.name, sel);
+    const selectedKey = childScopedStepKey(selectedStep.name, this.activeRegionChild);
+    const sel = (stuckGate.get(selectedKey) ?? 0) + 1;
+    stuckGate.set(selectedKey, sel);
     if (sel > MAX_GATE_SELECTIONS) {
-      const reason = `gate '${selectedStep.name}' selected ${sel} times without satisfying: ${decision.reason}`;
+      const reason = this.withActiveChild(
+        `gate '${selectedStep.name}' selected ${sel} times without satisfying: ${decision.reason}`,
+      );
       await this.writeHaltMarker(reason + '\n', 'needs-human');
       const prUrl = await this.surfaceRemediationPr(reason);
       await this.emitLoopHalt(reason, prUrl);
