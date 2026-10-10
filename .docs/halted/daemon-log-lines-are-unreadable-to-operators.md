@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-10T23:19:25.456Z
 Slug: daemon-log-lines-are-unreadable-to-operators
 Class: needs-human
 Halting step: unknown
