@@ -237,3 +237,11 @@ Task 1 ──┬──▶ Task 2 ──▶ Task 5
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-R1: docs/reference/settings-and-hooks.md: in the 'Engine git guard' intro, replace 'Pi dispatches are not guarded yet; Pi enforcement is tracked by #2895' with wording that the guard is put first on the child PATH of every Claude, Codex and Pi dispatch into an engine-prepared worktree. In 'What the guard does NOT cover', replace the 'Pi provider dispatches, which run unguarded until #2895 ships' bullet with the remaining Pi limits: Pi build_review dispatches are exempt, and Pi dispatches whose cwd is not an engine-prepared worktree launch unguarded. Keep the absolute-path, shell-startup-file and alias/function PATH-shadowing bullets unchanged. Check the edited section's links and keep the instructions consistent; no behavioral tests are needed for this prose-only change.
+**Gate:** as-built
+**Rationale:** Verified (100%, read docs/reference/settings-and-hooks.md): the Engine git guard section still says 'Pi dispatches are not guarded yet; Pi enforcement is tracked by #2895' (lines ~249-250) and the NOT-cover list still has 'Pi provider dispatches, which run unguarded until #2895 ships' (line ~297), while this feature (plan Tasks 1-5) ships Pi guarding. ADR D10 is approved and authoritative; no architectural or product decision is needed. This is conforming documentation drift, which belongs in BUILD. No approved plan task covers this reference doc, so the repair is a new, narrowly scoped documentation task. Completed behavior is preserved: the limits documented for build_review exemption, non-prepared/inline worktrees, and PATH-shadowing (absolute path, shell startup files, aliases/functions) stay, and Pi review dispatches and Pi dispatches outside a prepared worktree are named as unguarded, matching Tasks 4-5. Siblings checked: no other site in this doc mentions Pi; nothing else is in scope.
+**Governing clause:** adr-2026-09-23-engine-git-guard-on-agent-path decision 10
+**Done when:**
+- adr-2026-09-23-engine-git-guard-on-agent-path decision 10 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-R1 is complete.

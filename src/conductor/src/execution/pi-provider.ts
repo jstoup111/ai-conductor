@@ -17,7 +17,7 @@ import { providerDescriptor } from './provider-catalog.js';
 import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { piSubagentsArgs, piSubagentsPackageDir, seedPiSubagentsHome } from './pi-subagents.js';
-import { scrubTmuxEnvironment } from './child-environment.js';
+import { scrubTmuxEnvironment, withGitGuardPath } from './child-environment.js';
 import { materializePiHarnessExtension } from './pi-harness-extension.js';
 import { preparePiSelfHostAuth, type PiSelfHostAuthRunner } from './pi-self-host-auth.js';
 import { applyRateCard, loadRateCard, type RateCard, type RateCardLoader } from './rate-card.js';
@@ -25,6 +25,7 @@ import { withholdCost } from './token-usage.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
+import { ensureGitGuardForDispatch } from '../engine/git-guard.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -495,6 +496,10 @@ export class PiProvider implements LLMProvider {
     if (!permit.permitted) {
       throw new Error(`${piDisplayName()} process spawn denied: ${permit.reason}`);
     }
+    let guardDir: string | null;
+    try { guardDir = options.reviewDispatch ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
+      return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
+    }
 
     const harnessPath = join(this.environment.homeDir(), '.agents', 'skills', 'HARNESS.md');
     if (!await isFile(harnessPath, this.environment)) {
@@ -599,6 +604,15 @@ export class PiProvider implements LLMProvider {
       ...(options.selfHost?.env ?? {}),
       ...(subagentsTempRoot === undefined ? {} : { PI_SUBAGENTS_TEMP_ROOT: subagentsTempRoot }),
     }));
+    const managedEnvironment = options.managedSessionContext
+      ? composePreparedManagedSessionEnvironment(options.managedSessionContext, composeManagedSessionEnvironment(options.managedSessionContext, environment))
+      : environment;
+    // execa extends an overlay with the parent environment. Materialize PATH
+    // before adding the guard so an otherwise-empty self-host overlay retains
+    // the Pi environment's inherited executable search path.
+    const childEnvironment = guardDir
+      ? withGitGuardPath({ ...managedEnvironment, PATH: managedEnvironment.PATH ?? this.environment.env.PATH }, guardDir)
+      : managedEnvironment;
     const subprocess = this.subprocessFactory(this.executable, args, {
       reject: false,
       input: options.prompt,
@@ -606,9 +620,7 @@ export class PiProvider implements LLMProvider {
       stdout: 'pipe',
       stderr: 'pipe',
       cwd: options.cwd,
-      env: options.managedSessionContext
-        ? composePreparedManagedSessionEnvironment(options.managedSessionContext, composeManagedSessionEnvironment(options.managedSessionContext, environment))
-        : environment,
+      env: childEnvironment,
     });
     let aborted = false;
     const abort = () => {
@@ -632,7 +644,7 @@ export class PiProvider implements LLMProvider {
       ? parsed.tokenUsage
       : withholdCost(parsed.tokenUsage);
     const failedUsage = failedAttemptUsage === undefined ? {} : { tokenUsage: failedAttemptUsage };
-    if (aborted || abortSignal?.aborted) return { ...abortedInvocationResult(), ...failedUsage };
+    if (aborted || abortSignal?.aborted) return { ...abortedInvocationResult(), ...failedUsage, gitGuardInstalled: guardDir !== null };
     const exitFacts = deriveProviderExitFacts(result);
     const exitCode = result.exitCode ?? 1;
     const stderr = typeof result.stderr === 'string' ? result.stderr : '';
@@ -648,6 +660,7 @@ export class PiProvider implements LLMProvider {
         providerUnavailable: true,
         providerUnavailableScope: 'run',
         providerUnavailableReason: reason,
+        gitGuardInstalled: guardDir !== null,
       };
     }
 
@@ -657,10 +670,11 @@ export class PiProvider implements LLMProvider {
         output: `${piDisplayName()} provider parse failure: missing terminal assistant message.`,
         exitCode,
         ...failedUsage,
+        gitGuardInstalled: guardDir !== null,
       };
     }
     if (exitCode === 0 && options.nativeSchema !== undefined && parsed.finalStructuredResult === undefined) {
-      return { success: false, output: `${piDisplayName()} provider parse failure: missing structured result.`, exitCode: 1, ...failedUsage };
+      return { success: false, output: `${piDisplayName()} provider parse failure: missing structured result.`, exitCode: 1, ...failedUsage, gitGuardInstalled: guardDir !== null };
     }
 
     if (exitCode === 0 && parsed.terminalAssistantStopReason === 'error') {
@@ -669,6 +683,7 @@ export class PiProvider implements LLMProvider {
         output: parsed.terminalAssistantErrorMessage || `${piDisplayName()} reported an error stop with no message`,
         exitCode,
         ...failedUsage,
+        gitGuardInstalled: guardDir !== null,
       };
     }
 
@@ -691,6 +706,7 @@ export class PiProvider implements LLMProvider {
         : failedUsage),
       ...(exitCode === 0 && parsed.finalStructuredResult !== undefined ? { finalStructuredResult: parsed.finalStructuredResult } : {}),
       ...(genericUnclassifiedFailure ? { exitFacts } : {}),
+      gitGuardInstalled: guardDir !== null,
     };
   }
 

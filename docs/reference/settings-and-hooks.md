@@ -247,8 +247,7 @@ Trailer semantics — which trailers are gates and which are telemetry — are d
 ## Engine git guard
 
 The engine writes a `git` argv guard into every worktree it prepares and puts it first on the child
-`PATH` of every Claude and Codex dispatch into that worktree, in self-host and non-self-host runs. Pi
-dispatches are not guarded yet; Pi enforcement is tracked by #2895. It is
+`PATH` of every Claude, Codex and Pi dispatch into that worktree, in self-host and non-self-host runs. It is
 the enforcing control for destructive git; the operator hook above is Claude-only early feedback
 (adr-2026-09-23-engine-git-guard-on-agent-path).
 
@@ -295,7 +294,6 @@ directory, such as test fixtures, pass through untouched.
 - Interactive and inline runs, and any dispatch whose working directory is not an engine-prepared worktree.
 - `build_review` dispatches, which run without the guard by design.
 - Custom providers, which build their own child environment.
-- Pi provider dispatches, which run unguarded until #2895 ships.
 - An overridden worktree `core.hooksPath`, which bypasses the git-side ref-hook backstop.
 - `git push --no-verify`, which bypasses `pre-push`.
 - Git run from the root checkout, which has no worktree-scoped `core.hooksPath`.
