@@ -68,9 +68,11 @@ It gives the halt class, step, phase, branch, HEAD SHA, timestamp, and complete 
 cleared. `mechanical` halts deliberately create no record, so begin with the live marker when this
 file is absent for that class.
 
-The push is best-effort. If the daemon reports `halt_record_push_failed`, the record was still
-committed locally on the daemon host but may not be visible from the remote branch. Read it from
-that feature worktree instead:
+The push is best-effort and uses `--force-with-lease`, so a record committed after a daemon rebase
+still replaces the pre-rebase remote branch. If someone else moved the remote branch since the
+daemon last fetched it, the lease refuses the push instead of overwriting their commits. If the
+daemon reports `halt_record_push_failed`, the record was still committed locally on the daemon host
+but may not be visible from the remote branch. Read it from that feature worktree instead:
 
 ```bash
 git -C .worktrees/<slug> show HEAD:.docs/halted/<slug>.md
