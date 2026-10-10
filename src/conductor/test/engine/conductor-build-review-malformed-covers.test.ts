@@ -6,7 +6,10 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { StepRunner, StepRunOptions } from '../../src/engine/conductor.js';
-import { MAX_KICKBACKS_PER_GATE } from '../../src/engine/kickback-ledger.js';
+import {
+  MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+  MAX_KICKBACKS_PER_GATE,
+} from '../../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -28,7 +31,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function fixture(options: { readonly exhausted?: boolean } = {}) {
+async function fixture(options: { readonly exhausted?: boolean; readonly cumulativeExhausted?: boolean } = {}) {
   const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-build-review-malformed-covers-'));
   roots.push(projectRoot);
   await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
@@ -37,10 +40,13 @@ async function fixture(options: { readonly exhausted?: boolean } = {}) {
   Object.assign(state, { complexity_tier: 'M', run_started_at: 1, feature_desc: 'malformed-covers', worktree_branch: 'feature/malformed-covers' });
   await writeState(statePath, state as ConductState);
   const priorCount = options.exhausted ? MAX_KICKBACKS_PER_GATE : 0;
+  const priorCumulative = options.cumulativeExhausted
+    ? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW
+    : priorCount;
   await writeFile(join(projectRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
     version: 1,
     gates: { build_review: {
-      count: priorCount, cumulative: priorCount, mechanicalFaults: 1, lastMechanicalFault: priorMechanicalFault,
+      count: priorCount, cumulative: priorCumulative, mechanicalFaults: 1, lastMechanicalFault: priorMechanicalFault,
       treeHash: null, lastReason: 'prior', priorVerdict: true, resolvedBefore: 0,
     } },
   }), 'utf8');
@@ -57,7 +63,7 @@ async function fixture(options: { readonly exhausted?: boolean } = {}) {
     }),
   };
   const events = new ConductorEventEmitter();
-  const kickbacks: Array<{ from: string; to: string; evidence?: string }> = [];
+  const kickbacks: Array<{ from: string; to: string; evidence?: string; count?: number; cumulativeCount?: number }> = [];
   const retries: string[] = [];
   events.on('kickback', (event) => { if (event.type === 'kickback') kickbacks.push(event); });
   events.on('step_retry', (event) => { if (event.type === 'step_retry') retries.push(event.step); });
@@ -73,7 +79,7 @@ async function fixture(options: { readonly exhausted?: boolean } = {}) {
     dispatched, retryReasons, kickbacks, retries,
     runner,
     state: async () => JSON.parse(await readFile(statePath, 'utf8')) as ConductState,
-    ledger: async () => JSON.parse(await readFile(join(projectRoot, '.pipeline', 'kickback-ledger.json'), 'utf8')) as { gates: { build_review: { count: number; mechanicalFaults?: number; lastMechanicalFault?: unknown } } },
+    ledger: async () => JSON.parse(await readFile(join(projectRoot, '.pipeline', 'kickback-ledger.json'), 'utf8')) as { gates: { build_review: { count: number; cumulative: number; mechanicalFaults?: number; lastMechanicalFault?: unknown; capEvidence?: { consumed: number; limit: number } } } },
     halt: async () => readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8').catch(() => ''),
   };
 }
@@ -82,7 +88,7 @@ describe('engine/conductor — build_review malformed Covers markers', () => {
   it('routes malformed markers to BUILD without charging the mechanical lane', async () => {
     const run = await fixture();
 
-    expect(run.kickbacks).toEqual([expect.objectContaining({ from: 'build_review', to: 'build', evidence: expect.stringContaining('src/a.test.ts:5 token `Task: 32`') })]);
+    expect(run.kickbacks).toEqual([expect.objectContaining({ from: 'build_review', to: 'build', evidence: expect.stringContaining('src/a.test.ts:5 token `Task: 32`'), count: 1, cumulativeCount: 1 })]);
     expect(run.retryReasons.get('build')).toContain('src/a.test.ts:5 token `Task: 32`');
     expect(run.retryReasons.get('build')).toContain('Accepted forms: task:<id>, S<story>.<n>, FR-<n>.');
     expect((await run.state()).build_review).toBe('stale');
@@ -105,5 +111,23 @@ describe('engine/conductor — build_review malformed Covers markers', () => {
     expect((await run.ledger()).gates.build_review).toMatchObject({ count: MAX_KICKBACKS_PER_GATE });
     expect((await run.ledger()).gates.build_review.mechanicalFaults).toBe(1);
     expect((await run.ledger()).gates.build_review.lastMechanicalFault).toEqual(priorMechanicalFault);
+  });
+
+  it('halts at the cumulative build_review cap instead of kicking malformed markers to BUILD', async () => {
+    const run = await fixture({ cumulativeExhausted: true });
+
+    expect(run.kickbacks).toEqual([]);
+    expect(run.dispatched).not.toContain('build');
+    await expect(run.halt()).resolves.toContain('build_review cumulative kickback cap exceeded:');
+    const ledger = await run.ledger();
+    expect(ledger.gates.build_review).toMatchObject({
+      cumulative: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW + 1,
+      capEvidence: {
+        consumed: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW + 1,
+        limit: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+      },
+    });
+    expect(ledger.gates.build_review.mechanicalFaults).toBe(1);
+    expect(ledger.gates.build_review.lastMechanicalFault).toEqual(priorMechanicalFault);
   });
 });

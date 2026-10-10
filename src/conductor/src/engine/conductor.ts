@@ -12023,6 +12023,33 @@ export class Conductor {
             ) {
               const evidence = failedStepResult?.output ?? '';
               const kickback = await consumeKickbackBudget('build_review', evidence);
+              if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted) {
+                const reason =
+                  `build_review cumulative kickback cap exceeded:\n` +
+                  renderKickbackBudgetView(
+                    kickback.entry,
+                    'build_review',
+                    MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+                  );
+                const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'build_review', {
+                  consumed: kickback.entry.cumulative,
+                  limit: kickback.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+                  latestReason: kickback.entry.lastReason,
+                });
+                const markerResult = await this.writeHaltMarker(
+                  `${reason}\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}\n`,
+                  'needs-human',
+                );
+                if (markerResult.status === 'failed') {
+                  this.log?.(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`);
+                }
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.emitLoopHalt(reason, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
               if (!kickback.exhausted) {
                 await emitTracked({
                   type: 'kickback',
@@ -12030,6 +12057,7 @@ export class Conductor {
                   to: 'build',
                   evidence,
                   count: kickback.entry.count,
+                  cumulativeCount: kickback.entry.cumulative,
                 });
                 pendingRetryHints.set(
                   'build',
