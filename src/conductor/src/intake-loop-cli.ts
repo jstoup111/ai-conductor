@@ -10,7 +10,7 @@
 // push notification transport (sendNotification from ui/notifications.ts), a real
 // `sleep`, a real clock, and `console.log`/`console.error`. It never spawns
 // `claude` and never opens a PR — the loop stops at "routed + notified"
-// (FR-11); DECIDE/authoring still happens in an interactive `/engineer`
+// (FR-11); DECIDE/authoring still happens in an interactive `/composer`
 // session started separately (Task 18 wraps this in a tmux pane).
 //
 // Zero-token guard (FR-9): this module and its transitive production imports

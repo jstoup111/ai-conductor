@@ -63,19 +63,6 @@ matches_audit_pattern() {
   esac
 }
 
-require_max_lines() {
-  local description=$1
-  local maximum=$2
-  local file=$3
-  local lines
-  lines=$(wc -l < "$file" | tr -d ' ')
-  if [ "$lines" -le "$maximum" ]; then
-    pass "$description"
-  else
-    fail "$description"
-  fi
-}
-
 # The shared contract gives direct users semantic references, then maps only
 # the host-native invocation mechanics. Outcomes and gates remain common.
 require_pattern 'HARNESS defines provider-neutral or semantic skill references' \
@@ -265,7 +252,6 @@ require_pattern 'conduct describes build orchestration as provider-neutral' \
   'host agent orchestrates|selected provider orchestrates|provider-neutral.*orchestrat' \
   "$HARNESS_DIR/skills/conduct/SKILL.md"
 composer_skill="$HARNESS_DIR/skills/composer/SKILL.md"
-engineer_skill="$HARNESS_DIR/skills/engineer/SKILL.md"
 
 require_pattern 'composer declares its canonical skill name' \
   '^name: composer$' "$composer_skill"
@@ -312,38 +298,6 @@ for build_review_skill in build-review-test-quality build-review-security; do
   require_absent_pattern "${build_review_skill} forbids ^Return exactly one provider payload" \
     '^Return exactly one provider payload' "$build_review_skill_file"
 done
-
-require_pattern 'engineer remains a compatibility delegate to composer' \
-  '(canonical|delegate).{0,100}composer|composer.{0,100}(canonical|delegate)' \
-  "$engineer_skill"
-require_pattern 'engineer names both host-native compatibility entry points' \
-  'Claude Code.{0,100}/engineer.{0,100}Codex.{0,100}\$engineer|Codex.{0,100}\$engineer.{0,100}Claude Code.{0,100}/engineer' \
-  "$engineer_skill"
-require_pattern 'engineer keeps Claude compatibility invocation discoverable' \
-  'Claude Code retains `/engineer`.*compatibility entry point' \
-  "$engineer_skill"
-require_pattern 'engineer keeps Codex compatibility invocation discoverable' \
-  'Codex retains `\$engineer`' \
-  "$engineer_skill"
-require_pattern 'engineer keeps Claude canonical composer invocation discoverable' \
-  'Claude Code invokes `/composer`' \
-  "$engineer_skill"
-require_pattern 'engineer keeps Codex canonical composer invocation discoverable' \
-  'Codex invokes' \
-  "$engineer_skill"
-require_pattern 'engineer identifies the Codex canonical composer command' \
-  '^`\$composer`\.$' \
-  "$engineer_skill"
-require_pattern 'engineer transfers behavior and gates to canonical composer' \
-  'continue with the canonical composer.s behavior.*shared outcomes and gates' \
-  "$engineer_skill"
-require_absent_pattern 'engineer contains no second copy of the full loop instructions' \
-  '## The Loop|AuthoringGuard|Handle exactly ONE idea per session|### 1\. Capture the idea' \
-  "$engineer_skill"
-require_absent_pattern 'engineer contains none of the canonical compose workflow primitives' \
-  'ai-conductor compose (claim|projects|worktree|land|handoff)' \
-  "$engineer_skill"
-require_max_lines 'engineer remains a thin compatibility delegate' 30 "$engineer_skill"
 
 require_pattern 'composer makes the host-agent session model provider-neutral' \
   'live supported host-agent session|supported host-agent session|host-agent session' \
@@ -1025,7 +979,6 @@ for provider_contract_file in \
   "$HARNESS_DIR/skills/code-review/SKILL.md" \
   "$HARNESS_DIR/skills/conduct/SKILL.md" \
   "$HARNESS_DIR/skills/composer/SKILL.md" \
-  "$HARNESS_DIR/skills/engineer/SKILL.md" \
   "$HARNESS_DIR/skills/finish/SKILL.md" \
   "$HARNESS_DIR/skills/pipeline/SKILL.md" \
   "$HARNESS_DIR/skills/tdd/SKILL.md"; do

@@ -166,7 +166,7 @@ describe('detectEngineerCommand — argv detection', () => {
     const { detectEngineerCommand } = await import('../src/engine/engineer-cli.js');
     const result = detectEngineerCommand(['node', 'conduct', 'engineer']);
     expect(result).not.toBeNull();
-    // Bare 'engineer' with no subcommand → launch the interactive /engineer loop
+    // Bare 'engineer' with no subcommand → launch the interactive /composer loop
     expect(result?.kind).toBe('launch');
   });
 

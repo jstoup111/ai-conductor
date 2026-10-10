@@ -225,7 +225,7 @@ against. Skill pins themselves remain Claude-scoped — see [Skill pins](#skill-
 | `code-review` | opus | inherits Codex session/spawned-agent config |
 | `debugging` | opus | inherits Codex session/spawned-agent config |
 | `simplify` | sonnet | inherits Codex session/spawned-agent config |
-| `engineer` | opus | inherits Codex session/spawned-agent config |
+| `composer` | opus | inherits Codex session/spawned-agent config |
 | `intake` | inherits caller | inherits Codex session/spawned-agent config |
 | `conduct` | haiku | inherits Codex session/spawned-agent config |
 | `pr` | sonnet | inherits Codex session/spawned-agent config |
@@ -251,7 +251,7 @@ collide with the renamed engine row and trip `assertNoDuplicateRowNames`.
 A `SKILL.md` may pin `model:` in its frontmatter so an interactive session runs it on the intended model
 regardless of the session's own model. Seven skills currently carry a pin: `assess` (sonnet),
 `architecture-diagram` (sonnet), `prd-audit` (opus), `code-review` (opus), `debugging` (opus),
-`engineer` (opus), and `simplify` (sonnet). Skill frontmatter fields are documented in
+`composer` (opus), and `simplify` (sonnet). Skill frontmatter fields are documented in
 [skills](skills.md).
 
 `classifyPinnedSkill` (`src/conductor/src/tools/generate-model-table.ts:144-167`) sorts every skill into
@@ -277,8 +277,8 @@ one of four classes:
 | `rebase` | `rebase` |
 | `remediate` | `remediate` |
 
-`PIN_EXEMPT_SKILLS` (`model-table-metadata.ts:87-92`) has 4 entries: `code-review`, `debugging`,
-`engineer`, and `simplify`. Each runs standalone rather than as a numbered engine step, so there is no
+`PIN_EXEMPT_SKILLS` (`model-table-metadata.ts:87-92`) has 4 entries: `code-review`, `composer`,
+`debugging`, and `simplify`. Each runs standalone rather than as a numbered engine step, so there is no
 policy value to compare a pin against.
 
 ## Resolving a skill's model end to end

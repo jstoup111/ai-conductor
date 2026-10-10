@@ -6,7 +6,7 @@ nav_order: 7
 
 # Skills
 
-The catalog of all 37 skills: 32 under `skills/` and 5 repository-local ones under `.agents/skills/`.
+The catalog of all 38 skills: 33 under `skills/` and 5 repository-local ones under `.agents/skills/`.
 For each, the frontmatter, the engine step that invokes it, what it reads, what it writes, and whether
 it blocks.
 
@@ -58,8 +58,8 @@ activation boundary: the active lifecycle/caller state that qualifies, plus near
 not. A generic feature, change, plan, review, bug, or question is not sufficient by itself. Explicit
 operator invocation remains available regardless of these implicit-selection boundaries.
 
-The 19 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-security`, `build-review-test-quality`, `code-review`, `composer`, `conduct`,
-`daemon-triage`, `engineer`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
+The 18 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-security`, `build-review-test-quality`, `code-review`, `composer`, `conduct`,
+`daemon-triage`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
 `remediate`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
 explicit-only: `event-spine`, `maintain-documentation`, `release-disposition`, `scope-check`, and
 `write-tests`.
@@ -111,7 +111,6 @@ policy across both catalogs and both host metadata formats.
 | `coherence-check` | gating | decide | — | `coherence_check` (10) | Blocking |
 | `intake` | gating | decide | — | none — operator-invoked | Neither |
 | `composer` | advisory | decide | opus | none — operator-invoked | Neither as a step; the land gate blocks |
-| `engineer` | advisory | decide | opus | none — operator-invoked | Neither as a step; the land gate blocks |
 | `writing-system-tests` | gating | build | — | `acceptance_specs` (11) | Blocking |
 | `pipeline` | structural | build | — | `build` (12) | Blocking; cannot be disabled |
 | `tdd` | structural | build | — | none — runs inside `build` | Neither |
@@ -470,17 +469,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   marker committed at land; the spec PR.
 - **Gate role** — neither as an engine step, but the land gate is hard: no idea reaches a build without
   a merged spec PR, only the operator merges, no spec lands with a DRAFT ADR, and the tier must be
-  recorded. See [composer loop](../guides/engineer-loop.md). The deprecated `engineer` skill is a
-  thin compatibility delegate to this canonical composer skill.
-
-### engineer
-
-> Deprecated compatibility delegate to [composer](#composer). It preserves existing explicit
-> `/engineer` invocations while the canonical skill is `/composer`.
-
-- **Frontmatter** — `enforcement: advisory`, `phase: decide`, `standalone: true`, `requires: []`,
-  `model: opus`.
-- **Engine step** — none. Use `composer` for new work.
+  recorded. See [composer loop](../guides/engineer-loop.md).
 
 ## BUILD-phase skills
 

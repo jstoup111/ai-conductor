@@ -98,7 +98,6 @@ export const PIN_EXEMPT_SKILLS: readonly string[] = [
   'code-review', // dispatches an evaluator agent directly; not an engine step
   'composer', // interactive idea→spec authoring loop; orchestrates DECIDE skills, not an engine step
   'debugging', // standalone investigation skill; not an engine step
-  'engineer', // interactive idea→spec loop; orchestrates other skills/steps, isn't one itself
   'simplify', // batch-boundary gate dispatched directly; not an engine step
 ];
 
@@ -108,7 +107,7 @@ export const PIN_EXEMPT_SKILLS: readonly string[] = [
 // Rows for skills/agents that are NOT engine steps (no StepName / no entry in
 // CLAUDE_MODEL_POLICY.stepModels) but that ARCHITECTURE.md's model-selection table
 // still documents on the supported-host interactive path: domain-reviewer/evaluator
-// (dispatched sub-agents), code-review/composer/debugging/simplify/engineer (skills
+// (dispatched sub-agents), code-review/composer/debugging/simplify (skills
 // with their own model pin but no engine step), conduct/pr (orchestration
 // skills), tdd-red/tdd-green (TDD sub-phases), and the 10 cto-* assess
 // specialists.
@@ -278,13 +277,6 @@ const EXTRA_MODEL_TABLE_ROW_INPUTS: ExtraModelTableRowInput[] = [
     claudeEffort: '',
     why:
       `Canonical interactive idea→spec authoring loop: routes a raw idea through the full DECIDE phase and delivers a spec PR, so its high-stakes authoring judgement uses ${CLAUDE_DISPLAY_NAME} Opus.`,
-  },
-  {
-    name: 'engineer',
-    claudeModel: 'opus',
-    claudeEffort: '',
-    why:
-      'Deprecated compatibility delegate for existing engineer invocations. It contributes only low-cost routing mechanics and no independent authoring loop; composer owns the canonical DECIDE workflow.',
   },
   {
     name: 'intake',

@@ -427,7 +427,7 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
     expect(violations).toEqual([]);
   });
 
-  it('renders composer as the canonical Opus authoring loop and engineer as its compatibility delegate', () => {
+  it('renders composer as the canonical Opus authoring loop', () => {
     const rowsByName = new Map(buildExtraRows().map((row) => [row.name, row]));
 
     expect(rowsByName.get('composer')).toMatchObject({
@@ -441,14 +441,9 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
       },
       why: expect.stringMatching(/canonical.*authoring/i),
     });
-    expect(rowsByName.get('engineer')).toMatchObject({
-      executionPath: 'supported-host interactive',
-      why: expect.stringMatching(/compatibility delegate/i),
-    });
 
     const table = renderModelTable();
     expect(table).toContain('| composer | supported-host interactive | opus |');
-    expect(table).toContain('| engineer | supported-host interactive |');
   });
 
   it('rejects incomplete and cross-provider interactive metadata with row and field details', () => {
