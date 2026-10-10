@@ -4864,6 +4864,28 @@ describe('engine/artifacts', () => {
       expect(r).toEqual({ decision: 'route', signal: 'unretryable-inputs' });
     });
 
+    // Covers: task:1
+    it('routes finish from a typed unretryable input failure on attempt 1', () => {
+      const r = classifyRetryDecision({
+        step: 'finish',
+        completion: completion('absent'),
+        attempt: 1,
+        inputsUnchanged: false,
+        unretryableInputs: { retryAfterStep: 'test_suite' },
+      });
+      expect(r).toEqual({ decision: 'route', signal: 'unretryable-inputs' });
+    });
+
+    it('reruns finish when it only has a named route', () => {
+      const r = classifyRetryDecision({
+        step: 'finish',
+        completion: completion('named-route'),
+        attempt: 1,
+        inputsUnchanged: false,
+      });
+      expect(r).toEqual({ decision: 'rerun' });
+    });
+
     it('never classifies build from an unretryable input facet', () => {
       const r = classifyRetryDecision({
         step: 'build',

@@ -105,12 +105,16 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(code).toBe(0);
     });
 
-    it('does not reference src/conductor/dist and invokes scope-check through the canonical launcher', () => {
+    it('does not reference src/conductor/dist and invokes child membership before scope-check through the canonical launcher', () => {
       expect(COMMIT_MSG_HOOK).not.toMatch(/src\/conductor\/dist/);
       expect(COMMIT_MSG_HOOK).not.toMatch(/tasksByFile/);
       expect(COMMIT_MSG_HOOK).toMatch(
+        /CONDUCT_TASK_MEMBERSHIP_PROJECT_ROOT="\$WORKTREE_ROOT" '\/.*\/bin\/ai-conductor' task-membership-check "\$COMMIT_MSG_FILE"/,
+      );
+      expect(COMMIT_MSG_HOOK).toMatch(
         /CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" '\/.*\/bin\/ai-conductor' scope-check "\$COMMIT_MSG_FILE"/,
       );
+      expect(COMMIT_MSG_HOOK.indexOf('task-membership-check')).toBeLessThan(COMMIT_MSG_HOOK.indexOf('scope-check "$COMMIT_MSG_FILE"'));
       expect(COMMIT_MSG_HOOK).toMatch(
         /rc=0\n\s+CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" '\/.*\/bin\/ai-conductor' scope-check "\$COMMIT_MSG_FILE" \|\| rc=\$\?\n\s+if \[\[ "\$rc" == "3" \]\]; then\n\s+echo "commit-msg: scope-check recorded ambiguity \(exit 3\); allowing commit" >&2\n\s+elif \[\[ "\$rc" != "0" \]\]; then\n\s+echo "commit-msg: scope-check abstained \(exit \$rc\); allowing commit" >&2/,
       );
@@ -727,7 +731,11 @@ elif [[ "$1" == interpret-trailers ]]; then cat; fi
     }
 
     async function writeScopeCheck(exitCode: number): Promise<NodeJS.ProcessEnv> {
-      await writeFile(join(fakeBinDir, 'ai-conductor'), `#!/bin/sh\nexit ${exitCode}\n`, 'utf8');
+      await writeFile(
+        join(fakeBinDir, 'ai-conductor'),
+        `#!/bin/sh\nif [ "$1" = task-membership-check ]; then exit 0; fi\nexit ${exitCode}\n`,
+        'utf8',
+      );
       await chmod(join(fakeBinDir, 'ai-conductor'), 0o755);
       const hookPath = join(repoDir, '.pipeline', 'git-hooks', 'commit-msg');
       await writeFile(hookPath, buildCommitMsgHook(join(fakeBinDir, 'ai-conductor')), 'utf8');

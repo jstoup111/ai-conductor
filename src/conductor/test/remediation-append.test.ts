@@ -117,6 +117,10 @@ describe('prd_audit remediation append', () => {
         String(gap.parentTask ?? '').trim() === '' ? 0 : 1,
       );
       for (const check of checks) expect(renderedChecks, name).toContain(check);
+      // Every check must be provable inside BUILD at task close; a check that
+      // asks BUILD to evidence a future gate verdict can only be refused as a
+      // plan gap (build-loop-cannot-complete-a-feature-child-by-chil, 2026-10-10).
+      expect(renderedChecks.some((check) => /\bre-run\b/i.test(check)), name).toBe(false);
       for (const line of metadata) expect(appended, name).toContain(line);
     }
   });

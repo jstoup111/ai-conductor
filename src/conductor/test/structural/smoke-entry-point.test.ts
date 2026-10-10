@@ -1,4 +1,4 @@
-// Covers: task:5
+// Covers: task:5, task:6
 import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -35,6 +35,7 @@ const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
   'test/smoke/codex-read-only-review-policy.smoke.test.ts': 'toolchain',
   'test/smoke/git-guard-claude.smoke.test.ts': 'credentialed:claude',
   'test/smoke/git-guard-codex.smoke.test.ts': 'credentialed:codex',
+  'test/smoke/git-guard-pi.smoke.test.ts': 'credentialed:pi',
   'test/smoke/finish-record.smoke.test.ts': 'hermetic',
   'test/smoke/publish-interrupted.smoke.test.ts': 'toolchain',
   'test/smoke/surgical-finish-retry.smoke.test.ts': 'hermetic',
@@ -517,6 +518,7 @@ describe('structural: smoke test entry point', () => {
         'test/smoke/finish-record.smoke.test.ts',
         'test/smoke/git-guard-claude.smoke.test.ts',
         'test/smoke/git-guard-codex.smoke.test.ts',
+        'test/smoke/git-guard-pi.smoke.test.ts',
         'test/smoke/publish-interrupted.smoke.test.ts',
         'test/smoke/surgical-finish-retry.smoke.test.ts',
       ]);

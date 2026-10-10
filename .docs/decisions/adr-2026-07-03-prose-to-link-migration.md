@@ -77,6 +77,12 @@ combination, verified in the dry-run output before any write.
 - Prose that drifts from the recognized patterns after migration is ignored by design
   (PRD Non-Goal: native links are the only recognized form going forward).
 
+  > **Amended 2026-10-09 by #536:** Recognized prose (the same three forward, same-repo
+  > patterns) is now acted on as a standing behavior. The intake Action links it when an issue is
+  > opened or edited, and the drift report lists any declarations still unlinked. Unrecognized
+  > prose is still ignored. The one-time migration command is unchanged. See
+  > adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 2.
+
 ### Follow-up Actions
 - [ ] Parser with the two confidence classes + unit tests on real issue bodies (#217–#229)
 - [ ] Dry-run proposal output; confirm gate; GET-before-POST writer

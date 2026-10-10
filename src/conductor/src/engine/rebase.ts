@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { writeFile, readFile, access, mkdir, rename } from 'node:fs/promises';
 import { join, isAbsolute, relative, basename, resolve, dirname } from 'node:path';
 import type { CiRepairDiagnosticReason, StepName } from '../types/index.js';
+import { isRegionStep, type ChildId } from './child-context.js';
 import {
   isSkipVerdict,
   readVerdict,
@@ -2328,8 +2329,9 @@ async function applicableOriginalPass(
   gate: StepName,
   preRebaseHead: string,
   git: GitRunner | undefined,
+  child?: ChildId,
 ): Promise<GateVerdict | undefined> {
-  const verdict = await readVerdict(projectRoot, gate);
+  const verdict = await readVerdict(projectRoot, gate, isRegionStep(gate) ? child : undefined);
   if (!isApplicableOriginalPass(verdict)) return undefined;
   const identity = await currentPreservedJudgeIdentity(projectRoot, gate);
   if (!git || !identity ||
@@ -2364,7 +2366,9 @@ export async function reverifyOrInvalidateRebaseGate(
   preVerify: RebasePreVerifier | undefined,
   evidence: string,
   invalidateOnFailure = true,
+  child?: ChildId,
 ): Promise<{ kind: 'reverified'; preservationBasis?: 'test_suite_drift_budget' } | { kind: 'invalidated' } | { kind: 'unverified' }> {
+  const gateChild = isRegionStep(gate) ? child : undefined;
   const definition = ALL_STEPS.find((step) => step.name === gate);
   if (definition?.treeAttestingCompletion && preVerify) {
     try {
@@ -2376,7 +2380,7 @@ export async function reverifyOrInvalidateRebaseGate(
             ? 're-verified mechanically after file-changing rebase — test-suite PASS preserved within drift budget'
             : 're-verified mechanically after file-changing rebase — evidence remains intact',
           checkedAt: Date.now(),
-        });
+        }, gateChild);
         return { kind: 'reverified', ...(verification.preservationBasis === undefined ? {} : { preservationBasis: verification.preservationBasis }) };
       }
     } catch {
@@ -2389,7 +2393,7 @@ export async function reverifyOrInvalidateRebaseGate(
     reason: 'invalidated by file-changing rebase',
     checkedAt: Date.now(),
     kickback: { from: 'rebase', evidence },
-  });
+  }, gateChild);
   return { kind: 'invalidated' };
 }
 
@@ -2405,6 +2409,7 @@ export async function applyRebaseVerdicts(
     /** Event-spine sink for the `rebase_regrade_judged` verdict. */
     emit?: (event: Extract<ConductorEvent, { type: 'rebase_regrade_judged' }>) => Promise<void>;
   },
+  child?: ChildId,
 ): Promise<{
   satisfied: boolean;
   kickedBack: StepName[];
@@ -2508,7 +2513,7 @@ export async function applyRebaseVerdicts(
   const reverifiedGates = new Set<StepName>();
   if (preVerify && !documentOnly) {
     for (const gate of ALL_STEPS.filter((step) => step.treeAttestingCompletion)) {
-      const rerun = await reverifyOrInvalidateRebaseGate(projectRoot, gate.name, preVerify, evidence, false);
+      const rerun = await reverifyOrInvalidateRebaseGate(projectRoot, gate.name, preVerify, evidence, false, child);
       if (rerun.kind === 'reverified') {
         reverified.push(gate.name);
         reverifiedGates.add(gate.name);
@@ -2558,7 +2563,7 @@ export async function applyRebaseVerdicts(
     const candidates: RebaseRegradeGate[] = [];
     for (const gate of REBASE_REGRADE_GATES) {
       if (!classifiedReplay.preserved.includes(gate)) continue;
-      if (isSkipVerdict(await readVerdict(projectRoot, gate))) continue;
+      if (isSkipVerdict(await readVerdict(projectRoot, gate, isRegionStep(gate) ? child : undefined))) continue;
       candidates.push(gate);
     }
     if (candidates.length > 0) {
@@ -2608,7 +2613,7 @@ export async function applyRebaseVerdicts(
   const replayCandidates = replayPartition?.candidates ?? [];
   if (partition !== undefined) {
     for (const gate of partition.preserved as StepName[]) {
-      const original = await applicableOriginalPass(projectRoot, gate, outcome.replay?.preRebaseHead ?? '', git);
+      const original = await applicableOriginalPass(projectRoot, gate, outcome.replay?.preRebaseHead ?? '', git, child);
       const classified = replayCandidates.find((candidate) => candidate.gate === gate);
       if (original) {
         applicableOriginalPasses.add(gate);
@@ -2669,7 +2674,8 @@ export async function applyRebaseVerdicts(
     (left, right) => (gateOrder.get(left) ?? -1) - (gateOrder.get(right) ?? -1),
   );
   for (const target of orderedTargets) {
-    const before = await readVerdict(projectRoot, target);
+    const targetChild = isRegionStep(target) ? child : undefined;
+    const before = await readVerdict(projectRoot, target, targetChild);
     if (isSkipVerdict(before)) continue;
     // A successful tree-attesting pre-verify has already written this gate's
     // fresh satisfied verdict, so it is not kicked back.
@@ -2680,13 +2686,13 @@ export async function applyRebaseVerdicts(
     // failed preservation candidate.  It already keeps the gate open; do not
     // replace its evidence with a generic rebase invalidation.
     if (unprovedPreservations.includes(target)) {
-      const current = await readVerdict(projectRoot, target);
+      const current = await readVerdict(projectRoot, target, targetChild);
       if (current && (!current.satisfied || current.kickback || isSkipVerdict(current))) {
         kickedBack.push(target);
         continue;
       }
     }
-    await reverifyOrInvalidateRebaseGate(projectRoot, target, undefined, evidence);
+    await reverifyOrInvalidateRebaseGate(projectRoot, target, undefined, evidence, true, child);
     kickedBack.push(target);
   }
   // A completed changed rebase without P/B/O is still a first-class,

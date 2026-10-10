@@ -1,5 +1,5 @@
-// Covers: task:6, task:12
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+// Covers: task:6, task:12, task:rem-prd-audit-11-r3
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +12,7 @@ import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
 import * as protectedArtifactSeal from '../../src/engine/protected-artifact-seal.js';
@@ -508,6 +509,81 @@ describe('remediation halts without a planned repair (Task 11)', () => {
       detail: expect.stringContaining('remediation planner returned no recognized disposition'),
     }));
     expect((await readKickbackLedger(dir)).pendingRepair).toBeUndefined();
+  });
+});
+
+describe('whole-feature kickbacks from an active child (rem-prd-audit-11-r3)', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-flat-kickback-'));
+    await mkdir(join(dir, '.pipeline', 'children', '2', 'gates'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'children', '2', 'conduct-state.json'), '{"build":"done"}\n');
+    await writeFile(join(dir, '.pipeline', 'children', '2', 'gates', 'build.json'), '{"satisfied":true}\n');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function childFiles(): Promise<Record<string, string>> {
+    const base = join(dir, '.pipeline', 'children');
+    const files: Record<string, string> = {};
+    const visit = async (path: string, relative = ''): Promise<void> => {
+      for (const entry of await readdir(path, { withFileTypes: true })) {
+        const childRelative = join(relative, entry.name);
+        const childPath = join(path, entry.name);
+        if (entry.isDirectory()) await visit(childPath, childRelative);
+        else files[childRelative] = await readFile(childPath, 'utf8');
+      }
+    };
+    await visit(base);
+    return files;
+  }
+
+  it('keeps a manual-test kickback to plan feature-scoped even while child 2 is active', async () => {
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        plan: {
+          count: 2, cumulative: 2, treeHash: null, lastReason: 'prior plan finding',
+          priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+      growth: { authored: 0, added: 0, byGate: {} },
+    });
+    const before = await childFiles();
+    const events = new ConductorEventEmitter();
+    const kickbacks: unknown[] = [];
+    events.on('kickback', (event) => { kickbacks.push(event); });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: join(dir, '.pipeline', 'conduct-state.json'),
+      events,
+      daemon: false,
+    } as never);
+    (conductor as unknown as { activeRegionChild: ReturnType<typeof parseChildId> }).activeRegionChild = parseChildId(2);
+
+    const result = await (conductor as unknown as {
+      scanKickbackVerdicts: (
+        step: 'manual_test', state: Record<string, never>,
+        verdicts: { plan: { satisfied: false; checkedAt: number; kickback: { from: 'manual_test'; evidence: string } } },
+        steps: typeof ALL_STEPS, options: { navigate: false },
+      ) => Promise<'halt' | 'kicked' | null>;
+    }).scanKickbackVerdicts(
+      'manual_test',
+      {},
+      { plan: { satisfied: false, checkedAt: Date.now(), kickback: { from: 'manual_test', evidence: 'plan needs repair' } } },
+      ALL_STEPS,
+      { navigate: false },
+    );
+
+    expect(result).toBe('halt');
+    expect(await childFiles()).toEqual(before);
+    expect(kickbacks).toHaveLength(1);
+    expect(kickbacks[0]).toMatchObject({ type: 'kickback', from: 'manual_test', to: 'plan' });
+    expect(kickbacks[0]).not.toHaveProperty('child');
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain('for child 2');
   });
 });
 

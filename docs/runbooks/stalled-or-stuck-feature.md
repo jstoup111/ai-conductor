@@ -1318,7 +1318,9 @@ without re-writing the same halt.
 ### Clear a halt and let the feature resume
 
 **Blast radius:** clearing the halt makes the feature eligible for dispatch again on the next
-poll. Fix the cause first, or it halts again immediately.
+poll, including while sibling features are running and an origin refresh is waiting behind their
+provider windows (`daemon status` shows `ROOT REFRESH: pending`). It needs neither a base advance
+nor new task progress. Fix the cause first, or it halts again immediately.
 
 #### Audited clear
 
@@ -1410,9 +1412,10 @@ is required, and nothing should be repaired by hand:
 - The resumed run records the outcome, enrolls the PR in `.daemon/mergeable-watch.jsonl`, and the
   mergeable sweep reaps the worktree after the shipped record is proven on the default branch.
 
-**How to confirm:** the daemon log shows `re-dispatch <slug>: shipped record is on this feature's
-branch but FINISH recorded no outcome …`, then the FINISH publication transitions, and finally the
-enrollment. If it instead logs `skip <slug>: shipped dedup — … awaiting the human merge`, FINISH
+**How to confirm:** the daemon log shows `backlog: <slug> eligible to resume its unfinished FINISH
+publication … queued until a dispatch slot is free`, then the FINISH publication transitions, and
+finally the enrollment. Discovery repeats the queued line on every sweep until a dispatch slot frees;
+it does not mean FINISH is running. If it instead logs `skip <slug>: shipped dedup — … awaiting the human merge`, FINISH
 *did* record an outcome (`.pipeline/finish-choice` exists) — the work really is complete and waiting
 on your merge.
 

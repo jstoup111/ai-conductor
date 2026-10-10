@@ -147,6 +147,23 @@ const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'file-history',                     // per-session snapshots of every file any concurrent session edits
   'paste-cache',                      // per-session scratch for large pasted inputs
   'skills/synced/**/.last-complete-round', // claude.ai skill-sync round marker; see below
+  // Plugin-sync BOOKKEEPING under ~/.claude/plugins — catalog/directory caches,
+  // sweep stamps, bucket markers, and per-bucket sync metadata — that the CLI
+  // rewrites on its own plugin-sync cycle. Excluded as one category because each
+  // file was otherwise found one false halt at a time on 2026-10-10:
+  // `.last-complete-round` (unretryable-input-routing-never-fires-outside-thre,
+  // build-loop-cannot-complete-a-feature-child-by-chil), then
+  // `plugin-directory-cache-v2.json` + `synced/<id>/.marketplaces.json`
+  // (medium-tier-evaluator-policy-enforce-at-the-conduc). Patterns are
+  // segment-anchored (see `matchesSegmentPattern`), so a renamed cache version
+  // still matches. STAY FINGERPRINTED: `plugins/installed_plugins.json` (what is
+  // installed), `plugins/cache/` (installed plugin code), `plugins/store/`, and
+  // every synced plugin content file.
+  'plugins/plugin-*-cache*.json',
+  'plugins/.last_inuse_sweep',
+  'plugins/synced/.bucket-*',
+  'plugins/synced/**/.marketplaces.json',
+  'plugins/synced/**/.last-complete-round',
   'policy-limits.json.stamp.json',    // fetch stamp the CLI rewrites on its own policy-limits refresh
                                        // cycle; verified 2026-09-25 as the sole diff ("changed
                                        // policy-limits.json.stamp.json", 3 occurrences) behind a false
@@ -177,6 +194,13 @@ const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'tmp',                   // scratch dir (e.g. `arg0`) written by the CLI at startup
   'packages/standalone',   // self-update installer bookkeeping (current release, install lock)
   'models_cache.json',     // cache of available models, refreshed periodically
+  'session_index.jsonl',   // append-only {id, thread_name, updated_at} index of every Codex thread on
+                           // the machine — a session log like history.jsonl, no config, hooks, or
+                           // credentials. Every Codex session appends on thread start/rename, so any
+                           // concurrent session (a sibling daemon feature or the operator) trips the
+                           // guard. Verified 2026-10-10 as the sole diff ("0 added, 0 removed,
+                           // 1 changed: changed session_index.jsonl") behind 12 false halts across
+                           // 10 features in one day (codex-cli 0.160.1).
   // Codex's own SQLite stores at the provider-state ROOT — `goals_1`, `logs_2`,
   // `memories_1`, `state_5` today — plus their WAL sidecars, written continuously
   // by any running session. Matched by pattern rather than enumerated because the
@@ -237,14 +261,14 @@ function providerStateVolatileDirectoryBasenames(provider: ProviderWith<'selfHos
 }
 
 /**
- * True iff the root-level basename `path` matches `pattern`, where `*` stands for
- * any run of non-separator characters. Deliberately ROOT-LEVEL ONLY: a path
- * containing a separator never matches, so a pattern can never reach into a
- * subdirectory and silently blind the guard to (say)
- * `skills/evil/state_9.sqlite`.
+ * True iff `path` matches `pattern` segment for segment, where `*` stands for any
+ * run of non-separator characters. Deliberately SEGMENT-ANCHORED: the path must
+ * have exactly as many `/`-separated segments as the pattern, so a pattern can
+ * never reach into a deeper subdirectory and silently blind the guard. A
+ * root-level pattern such as `*.sqlite` therefore still matches only root-level
+ * basenames and never (say) `skills/evil/state_9.sqlite`.
  */
-function matchesRootPattern(path: string, pattern: string): boolean {
-  if (path.includes('/')) return false;
+function matchesSegmentPattern(path: string, pattern: string): boolean {
   const source = pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*');
   return new RegExp(`^${source}$`).test(path);
 }
@@ -254,7 +278,8 @@ function matchesRootPattern(path: string, pattern: string): boolean {
  * `basename` — the `<prefix>/**`+`/<basename>` exclusion form (any depth). It excludes ONE
  * named marker, never the subtree around it.
  *
- * Its only user is the `.last-complete-round` entry under `skills/synced`. Claude Code syncs
+ * Its users are the `.last-complete-round` entries under Claude's `skills/synced` and
+ * `plugins/synced`. Claude Code syncs
  * claude.ai skills into `skills/synced/<bucket-uuid>/` and writes, then deletes,
  * a `.last-complete-round` marker every sync round. Verified 2026-09-25 as the
  * sole diff (`1 added / 1 removed: skills/synced/<bucket-uuid>/.last-complete-round`)
@@ -270,14 +295,14 @@ function matchesNestedBasename(path: string, prefix: string, basename: string): 
 
 /**
  * True iff `path` (root-relative, POSIX-ish) is an excluded path, sits under one,
- * matches a nested-basename marker (see `matchesNestedBasename`), or matches a root-level `*` pattern. An exclusion entry containing `*` is a
+ * matches a nested-basename marker (see `matchesNestedBasename`), or matches a segment-anchored `*` pattern (see `matchesSegmentPattern`). An exclusion entry containing `*` is a
  * pattern; every other entry keeps the exact-or-prefix semantics it always had.
  */
 function isExcluded(path: string, exclude: readonly string[]): boolean {
   return exclude.some(ex => ex.includes('/**/')
     ? matchesNestedBasename(path, ex.slice(0, ex.indexOf('/**/')), ex.slice(ex.indexOf('/**/') + 4))
     : ex.includes('*')
-    ? matchesRootPattern(path, ex)
+    ? matchesSegmentPattern(path, ex)
     : path === ex || path.startsWith(`${ex}/`));
 }
 

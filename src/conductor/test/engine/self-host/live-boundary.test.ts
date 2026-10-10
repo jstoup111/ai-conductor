@@ -126,13 +126,16 @@ describe('live self-host boundary', () => {
         'session-env', 'projects', 'tasks', '.last-update-result.json',
         'stats-cache.json', 'mcp-needs-auth-cache.json', 'cache', 'file-history',
         'paste-cache', 'skills/synced/**/.last-complete-round',
+        'plugins/plugin-*-cache*.json', 'plugins/.last_inuse_sweep', 'plugins/synced/.bucket-*',
+        'plugins/synced/**/.marketplaces.json', 'plugins/synced/**/.last-complete-round',
         'policy-limits.json.stamp.json',
       ],
       codex: [
         'history.jsonl', 'sessions', 'shell_snapshots', 'cache', 'plugins/cache',
         'plugins/.remote-plugin-install-staging', 'mcp-oauth-locks',
         'thread-writer-locks', '.tmp', 'tmp', 'packages/standalone',
-        'models_cache.json', '*.sqlite', '*.sqlite-shm', '*.sqlite-wal',
+        'models_cache.json', 'session_index.jsonl',
+        '*.sqlite', '*.sqlite-shm', '*.sqlite-wal',
         '*.sqlite-journal',
       ],
       pi: ['sessions', 'models-store.json'],
@@ -1066,6 +1069,110 @@ describe('live self-host boundary', () => {
 
     try { expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true }); }
     finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  // Regression: every Codex session appends to `session_index.jsonl` when it
+  // starts or renames a thread. Observed 2026-10-10 as the sole diff behind 12
+  // false halts across 10 concurrently dispatched features.
+  it('ignores Codex session_index.jsonl appends but still halts on config.toml', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-codex-session-index-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await writeFile(join(provider, 'session_index.jsonl'), '{"id":"a","thread_name":"one"}\n');
+    await writeFile(join(provider, 'config.toml'), 'before');
+
+    const baseline = await fingerprintLiveBoundary({
+      liveCheckout: live, unrelatedProviderState: provider, provider: 'codex',
+    });
+    await writeFile(join(provider, 'session_index.jsonl'), '{"id":"a","thread_name":"one"}\n{"id":"b","thread_name":"two"}\n');
+
+    try {
+      expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true });
+      await writeFile(join(provider, 'config.toml'), 'after');
+      expect(await verifyLiveBoundary(baseline)).toMatchObject({ ok: false });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  // Plugin-sync bookkeeping is one category: each file was otherwise found one
+  // false halt at a time (2026-10-10: directory cache + .marketplaces.json halted
+  // medium-tier-evaluator-policy-enforce-at-the-conduc).
+  it('ignores Claude plugin-sync bookkeeping but still halts on installed plugin state and code', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-claude-plugin-bookkeeping-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    const plugins = join(provider, 'plugins');
+    const synced = join(plugins, 'synced', '6f39b65c_7cf0890d');
+    const code = join(plugins, 'cache', 'claude-plugins-official', 'skill-creator', 'b8e53f1c');
+    await Promise.all([mkdir(live), mkdir(synced, { recursive: true }), mkdir(code, { recursive: true })]);
+    await writeFile(join(plugins, 'plugin-directory-cache-v2.json'), '{}');
+    await writeFile(join(plugins, 'plugin-catalog-cache.json'), '{}');
+    await writeFile(join(plugins, '.last_inuse_sweep'), 'before');
+    await writeFile(join(plugins, 'installed_plugins.json'), '{"plugins":{}}');
+    await writeFile(join(synced, '.marketplaces.json'), '{"etag":"a"}');
+    await writeFile(join(code, 'SKILL.md'), 'plugin code');
+
+    const baseline = await fingerprintLiveBoundary({
+      liveCheckout: live, unrelatedProviderState: provider, provider: 'claude',
+    });
+    // A plugin-sync cycle: caches rewritten (one under a bumped version name),
+    // sweep stamp, sync metadata, round marker, and a new bucket marker.
+    await writeFile(join(plugins, 'plugin-directory-cache-v2.json'), '{"rows":[1]}');
+    await writeFile(join(plugins, 'plugin-directory-cache-v3.json'), '{"rows":[2]}');
+    await writeFile(join(plugins, 'plugin-catalog-cache.json'), '{"rows":[3]}');
+    await writeFile(join(plugins, '.last_inuse_sweep'), 'after');
+    await writeFile(join(synced, '.marketplaces.json'), '{"etag":"b"}');
+    await writeFile(join(synced, '.last-complete-round'), '1791600000\n');
+    await writeFile(join(plugins, 'synced', '.bucket-6f39b65c_7cf0890d'), '');
+
+    try {
+      expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true });
+      await writeFile(join(plugins, 'installed_plugins.json'), '{"plugins":{"evil":{}}}');
+      const installed = await verifyLiveBoundary(baseline);
+      expect(installed.ok ? '' : installed.reason).toContain('plugins/installed_plugins.json');
+      await writeFile(join(plugins, 'installed_plugins.json'), '{"plugins":{}}');
+      await writeFile(join(code, 'SKILL.md'), 'rewritten by the self-host process');
+      const rewritten = await verifyLiveBoundary(baseline);
+      expect(rewritten.ok ? '' : rewritten.reason).toContain('plugins/cache/claude-plugins-official/skill-creator/b8e53f1c/SKILL.md');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('keeps a segment pattern from matching a deeper path', async () => {
+    // `*` never crosses `/` and segment counts must agree, so neither a
+    // root-level `*.sqlite` nor `plugins/plugin-*-cache*.json` reaches deeper.
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-segment-pattern-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(join(provider, 'plugins', 'nested'), { recursive: true })]);
+    await writeFile(join(provider, 'plugins', 'nested', 'plugin-evil-cache.json'), 'before');
+    const baseline = await fingerprintLiveBoundary({
+      liveCheckout: live, unrelatedProviderState: provider, provider: 'claude',
+    });
+    await writeFile(join(provider, 'plugins', 'nested', 'plugin-evil-cache.json'), 'after');
+    try {
+      const result = await verifyLiveBoundary(baseline);
+      expect(result.ok ? '' : result.reason).toContain('plugins/nested/plugin-evil-cache.json');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  // The marker lives in the Claude home (~/.claude/plugins/synced/<id>/); Codex
+  // has no plugins/synced tree. Observed 2026-10-10 behind two false halts.
+  it('ignores the Claude plugin-sync round marker but still halts on synced plugin content', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-claude-plugin-sync-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    const synced = join(provider, 'plugins', 'synced', '6f39b65c_7cf0890d');
+    await Promise.all([mkdir(live), mkdir(synced, { recursive: true })]);
+    await writeFile(join(synced, 'SKILL.md'), 'synced plugin content\n');
+
+    const baseline = await fingerprintLiveBoundary({
+      liveCheckout: live, unrelatedProviderState: provider, provider: 'claude',
+    });
+    await writeFile(join(synced, '.last-complete-round'), '1791600000\n');
+
+    try {
+      expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true });
+      await writeFile(join(synced, 'SKILL.md'), 'rewritten by the self-host process\n');
+      const result = await verifyLiveBoundary(baseline);
+      expect(result).toMatchObject({ ok: false });
+      expect(result.ok ? '' : result.reason).toContain('plugins/synced/6f39b65c_7cf0890d/SKILL.md');
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   // The exclusion must not blind the guard to operator config, which is the

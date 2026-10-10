@@ -1201,8 +1201,9 @@ The pre-merge half needs a second piece of evidence, because `.docs/shipped/<slu
 by the mid-sequence `write_shipped_record` publication transition — on its own it proves one
 transition ran, not that the ship completed. So the pre-merge dedup skips a candidate only when
 FINISH **recorded its outcome** (`.pipeline/finish-choice` in the feature's worktree) or the worktree
-is already gone; a retained worktree with no outcome record is re-dispatched and logged as
-`re-dispatch <slug>: shipped record is on this feature's branch but FINISH recorded no outcome …`.
+is already gone; a retained worktree with no outcome record is re-admitted to the backlog and logged
+as `backlog: <slug> eligible to resume its unfinished FINISH publication … queued until a dispatch
+slot is free`. It dispatches when a slot is free.
 Without that, a FINISH that halted after writing the record was terminal: an operator could clear the
 HALT and discovery would still refuse the feature forever, and because the run never reported done it
 was never enrolled in the mergeable watch either, so nothing could reap it. The absent-worktree case

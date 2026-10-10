@@ -180,7 +180,7 @@ membership check, and halt and rebase guards. Features without children are unch
 **Done when:**
 - [test] for the leaf position, `startChild` creates no `refs/heads/feat/c*` ref, and no `startChild` call persists any event.
 - [test] for the first position, `startChild` creates `feat/c1/demo` at the leaf's tip at that moment (`B`, or `H` after a pre-region halt-record commit on the leaf), creates `.pipeline/children/1/`, and writes `refs/conductor/demo/positions` holding the sealed positions.
-- [test] with positions 1 and 3, after child 1's closure ref exists, `startChild` for position 3 creates `feat/c3/demo` at child 1's closure tip and no `feat/c2/demo` ref exists.
+- [test] with positions 1, 3 and 5 (position 5 is the leaf), after child 1's closure ref exists, `startChild` for position 3 creates `feat/c3/demo` at child 1's closure tip and no `feat/c2/demo` ref exists.
 - [test] with an existing `refs/heads/feat/c1`, `startChild` returns a needs-human refusal naming `refs/heads/feat/c1` and no `feat/c1/demo` ref is created.
 - [test] with 3 positions and `stacked_prs.max_slices: 2`, `startChild` returns a needs-human refusal naming `stacked_prs.max_slices` and creates no branch; when `feat/c2/demo` already exists at another sha, the compare-and-swap fails, the refusal names the branch and the existing ref is unchanged.
 
@@ -952,7 +952,7 @@ membership check, and halt and rebase guards. Features without children are unch
 | Story 2 happy: Given a two-child baseline at `coverage_binding` PASS, when the region is entered, then `feat/c1/demo` is created at `B`, the worktree is switched to it, `.pipeline/children/1/` exists, and a `child_started` event with `child: 1` is persisted to `.pipeline/events.jsonl`. | 10, 6, 7 | "on region entry HEAD is `feat/c1/demo`" | diff-local |
 | Story 2 happy: Given a three-child baseline in which child 1's `acceptance_specs`, `build`, `test_suite` and `build_review` have all passed, when the loop reaches the region exit, then `refs/conductor/demo/closed/c1` points at child 1's tip, `feat/c2/demo` is created at that tip, the worktree is switched to it, `current-task` is cleared, and `child_closed` (child 1), `child_switched` (1→2) and `child_started` (child 2) are persisted in that order. | 10, 8, 7 | "`refs/conductor/demo/closed/c1` equals `C1`, `feat/c2/demo` equals `C1`, HEAD is `feat/c2/demo` and `.pipeline/current-task` is absent" | diff-local |
 | Story 2 happy: Given a two-child baseline in which a pre-region halt record was committed on `feat/daemon-demo` at `H` and the halt was cleared, when the region is entered, then `feat/c1/demo` is created at `H`, and the later leaf move succeeds because the leaf has no commits of its own. | 10, 6, 8 | "entering the region creates `feat/c1/demo` equal to `H`" | diff-local |
-| Story 2 happy: Given a stacked feature with positions `1` and `3` (a gap), when child 1 closes, then the next child created is `feat/c3/demo` and no `feat/c2/demo` is created. | 10, 6 | "the loop creates `feat/c3/demo` at `C1` as the next child, and no `feat/c2/demo` ref is ever created" | diff-local |
+| Story 2 happy: Given a stacked feature with positions `1`, `3` and `5` (gaps; `5` is the leaf), when child 1 closes, then the next child created is `feat/c3/demo` and no `feat/c2/demo` is created. | 10, 6 | "the loop creates `feat/c3/demo` at `C1` as the next child, and no `feat/c2/demo` ref is ever created" | diff-local |
 | Story 2 negative: Given a three-child baseline in which child 1's `build_review` has not passed, when the loop selects its next step, then no `feat/c2/demo` branch is created and no task of child 2 is dispatched. | 10 | "no dispatch for tasks `T3`/`T4` and no `feat/c2/demo` creation happens before child 1's `build_review` PASS" | diff-local |
 | Story 2 negative: Given a two-child baseline in which a branch named exactly `feat/c1` already exists, when the region is entered, then the run halts needs-human naming `refs/heads/feat/c1`, and no `feat/c1/demo` branch is created. | 10.1, 6 | "naming `refs/heads/feat/c1` (reserved namespace)" | diff-local |
 | Story 2 negative: Given a three-child baseline in which child 1 closes while the worktree holds an uncommitted change to `src/a.ts`, when the switch to child 2 is attempted, then the switch is refused naming `src/a.ts`, no `git stash` entry is created, and the change is still in the worktree. | 7 | "returns a refusal naming `src/a.ts`, `git stash list` is unchanged" | diff-local |
@@ -1189,3 +1189,120 @@ membership check, and halt and rebase guards. Features without children are unch
 
 Scope note: 40 tasks puts this plan in the 21–40 warning band. The operator chose full #2942 scope
 (one feature). The coherence check maps every task to a story.
+
+> **Amended 2026-10-10 by #3053:** the appended remediation tasks below previously ended their
+> Done when with "Re-run <gate> and confirm task <id> is complete.", which BUILD cannot evidence at
+> task close (it names a future gate verdict) and halted the feature plan-gap on
+> `rem-prd-audit-13-r1`. Each is replaced by a check BUILD can prove; the owning gate still re-runs
+> after BUILD. Engine fix: #3109.
+
+### Task rem-prd-audit-13-r1: daemon-observe-cli.ts renderPlanGrowthSection: read effectiveGrowthCap from the flat ledger (readKickbackLedger(featureRoot) with no child) even when a child is active; add a test with child 2 active and a raised flat growth cap asserting the PLAN GROWTH line shows the raised cap
+**Gate:** prd-audit
+**Rationale:** Verified (95%): daemon-observe-cli.ts:642-643 reads effectiveGrowthCap from the child ledger, but child ledgers can never carry that field, so with a child active the PLAN GROWTH cap ignores the flat ledger's raised cap. This is clear implementation drift inside task 13 (status shows the active child; whole-feature data stays flat). No architectural decision is needed.
+**Criterion:** S4.2
+**Parent task:** 13
+**Done when:**
+- [test] S4.2 is satisfied by this task.
+- The repair for task rem-prd-audit-13-r1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-11-r1: conductor.ts routed-forward build/finish writeVerdict: pass this.activeRegionChild for region steps (build) so the verdict lands in .pipeline/children/<n>/gates/build.json; keep finish flat; add a test with child 2 active asserting no .pipeline/gates/build.json is created or modified
+**Gate:** prd-audit
+**Rationale:** Verified (95%): conductor.ts:14384 calls writeVerdict(this.projectRoot, step.name, verdict) with no child argument. A routed-forward build in an active child therefore writes the flat .pipeline/gates/build.json, which breaks task 11's doneWhen that region writes land in the active child and never create flat region gate files. child-region-access-audit misclassifies the site. Both fixes are BUILD work within task 11.
+**Criterion:** S4.5
+**Parent task:** 11
+**Done when:**
+- [test] S4.5 is satisfied by this task.
+- The repair for task rem-prd-audit-11-r1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-11-r2: child-region-access-audit.test.ts: classify each conductor.ts writeVerdict call site individually (not file-wide) so a call that omits the child argument for a region step fails the audit
+**Gate:** prd-audit
+**Rationale:** Verified (95%): conductor.ts:14384 calls writeVerdict(this.projectRoot, step.name, verdict) with no child argument. A routed-forward build in an active child therefore writes the flat .pipeline/gates/build.json, which breaks task 11's doneWhen that region writes land in the active child and never create flat region gate files. child-region-access-audit misclassifies the site. Both fixes are BUILD work within task 11.
+**Criterion:** S4.5
+**Parent task:** 11
+**Done when:**
+- [test] S4.5 is satisfied by this task.
+- The repair for task rem-prd-audit-11-r2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-11-r3: conductor.ts advanceTail kickback handling: pass the active child to bumpKickbackGateInLedger and countResolvedTasks only when the target is a region step; whole-feature targets (plan, coverage_binding) use the flat ledger and the ping-pong halt has no 'for child N' suffix; add a test with child 2 active asserting a manual_test kickback to plan changes no file under .pipeline/children/
+**Gate:** prd-audit
+**Rationale:** Verified (95%): conductor.ts:14209 passes this.activeRegionChild to bumpKickbackGateInLedger for every kickback target, including the whole-feature steps plan and coverage_binding. That violates task 11's doneWhen that kickbacks to plan or coverage_binding change only flat state and leave .pipeline/children/ untouched. This is a code fix inside task 11.
+**Criterion:** S4.7
+**Parent task:** 11
+**Done when:**
+- [test] S4.7 is satisfied by this task.
+- The repair for task rem-prd-audit-11-r3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-1-r1: n1-golden-state.test.ts: commit the .docs/stories and .docs/complexity setup files before the run so the protected-artifact seal is not tripped, then re-record the flag-on-single-slice fixtures under test/fixtures/n1-golden/ and assert they equal the flag-on-unsliced outputs except the slice-membership and story-ownership envelope fields
+**Gate:** prd-audit
+**Rationale:** Verified (90%): the committed flag-on-single-slice goldens record build 'refused' and a 'Protected artifact added' halt. The cause is the n1-golden-state.test.ts setup writing .docs/stories and .docs/complexity after the init commit, so the cell does not match the flag-on-unsliced cell as task 1 requires. This is test-fixture work owned by task 1.
+**Criterion:** S17.4
+**Parent task:** 1
+**Done when:**
+- [test] S17.4 is satisfied by this task.
+- The repair for task rem-prd-audit-1-r1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S4.2-r1: conduct-state-store.ts readConductStateOverlay: drop every region-step key (isRegionStep) and last_step from the flat featureState before overlaying the child's region entries, so a region status missing from .pipeline/children/<n>/conduct-state.json reads as absent/pending, never the flat value. Update conduct-state-overlay.test.ts: with flat build:'done' and child 2's document lacking build, child 2's overlay has no build:'done', while whole-feature keys (plan, coverage_binding) still come from the flat file
+**Gate:** prd-audit
+**Rationale:** Verified (99%): conduct-state-store.ts readConductStateOverlay spreads the full flat document (base.value), including region keys, under the child's region entries, so a region key absent from the child document inherits the flat value. Only last_step is stripped today. Task 9's done-when ('child 2's region statuses together with the flat whole-feature statuses') admits the fix. Approved ADR decision 4 is authoritative, so this is conforming BUILD work. Task 9's existing test that expects child 2 to report build:'done' from the flat file encodes the defect and must be inverted. Task 9's routed-port byte-identity and PASS/FAIL coverage stays intact.
+**Criterion:** S4.2
+**Parent task:** 9
+**Done when:**
+- [test] S4.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S4.2-r1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-b00b54a4-2-r1: conductor.ts activateChildRegionState / selectNextGate: add a conductor-level test with flat conduct-state build:'done' and child 2 active whose child document has no build key, asserting the selector dispatches build for child 2 (not skipped) and that state[build] after activation is not 'done'
+**Gate:** as-built
+**Rationale:** Same root defect as S4.2 (verified at conduct-state-store.ts:58-62), seen from ADR decision 4's consumer side: conductor.ts activateChildRegionState adopts overlay region values, and the selector at :6811 consumes them. The reader fix lives in rem-prd-audit-S4.2-r1. This task adds the conductor-level proof that selection does not skip a child's build. Tasks 9 and 10.2 (selector and resume read the overlay) admit it. No architectural decision is needed.
+**Governing clause:** adr-2026-10-07-per-child-build-region decision 4
+**Done when:**
+- adr-2026-10-07-per-child-build-region decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-b00b54a4-2-r1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S7.3-r1: task-membership-check-cli.ts: validate every id returned by extractBodyTaskIds(message), plus the stamped .pipeline/current-task, against the active child's membership, and reject on the first foreign id with the existing message naming that id, its owning child and the active child. Add a test on feat/c1/demo where a message with 'Task: T1' followed by 'Task: T3' is rejected naming T3 and child 2, with git rev-list --count HEAD unchanged
+**Gate:** prd-audit
+**Rationale:** Verified (99%): task-membership-check-cli.ts:76 checks only extractBodyTaskIds(message)[0], while extractBodyTaskIds returns every Task line. A commit with 'Task: T1' then 'Task: T3' on feat/c1/demo passes. Task 23 owns the commit-hook membership check, and its rejection contract covers any foreign task id. This is conforming BUILD work.
+**Criterion:** S7.3
+**Parent task:** 23
+**Done when:**
+- [test] S7.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S7.3-r1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-b00b54a4-3-r1: commit-msg hook test (task-membership-check): on feat/c1/demo, any message whose Task trailers include a child-2 id in any position (first, middle, last) is rejected, and a message whose trailers are all child-1 ids succeeds. Assert the accepted set equals the set extractBodyTaskIds returns, so recovery can never count a trailer the hook did not validate
+**Gate:** as-built
+**Rationale:** Same defect as S7.3 (verified at task-membership-check-cli.ts:76), raised against ADR decision 6: membership must cover every task id that recovery consumes. The CLI fix lives in rem-prd-audit-S7.3-r1. This task pins the invariant at the boundary between the hook and trailer recovery. Task 23 admits it.
+**Governing clause:** adr-2026-10-07-per-child-build-region decision 6
+**Done when:**
+- adr-2026-10-07-per-child-build-region decision 6 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-b00b54a4-3-r1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-b00b54a4-1-r1: conductor.ts region-entry (~:2447) and selector (~:6776) gates: replace the stackConfigured/listExistingChildren short-circuit with a child-cursor.ts helper (e.g. hasDurableChildState) that also detects any feat/c*/<slug> branch or refs/conductor/<slug>/closed/* ref, and consult resolveActiveChild whenever any of them exists. Add a test with stacked_prs.enabled false, no .pipeline/children/, and a surviving feat/c1/demo plus closure ref (recreated worktree) asserting the cursor is resolved and region state is child-scoped, not flat
+**Gate:** as-built
+**Rationale:** Verified (99%): conductor.ts:2447 returns early when stacked_prs is disabled and no .pipeline/children/ directory exists, and the :6776 gate uses the same two inputs. Both ignore surviving feat/c*/<slug> branches and refs/conductor/<slug>/closed/* refs. After worktree recreation, an existing stack is therefore treated as flat. Plan Task 5 already states the rule: 'no child' only when no child branch, no closure ref and no children directory exist. ADR decision 2 is authoritative and Task 5 (plus 10.2 for resume) admits the fix, so it is BUILD work.
+**Governing clause:** adr-2026-10-07-per-child-build-region decision 2
+**Done when:**
+- adr-2026-10-07-per-child-build-region decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-b00b54a4-1-r1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-b00b54a4-4-r1: task-seed.ts seedTaskStatus: accept the cursor's child and resolveChildBase result; on parent-missing/parent-not-ancestor mark no task proven and skip the completed-row restore (:499-508). Pass the active child from artifacts.ts (~:2958) and conductor.ts (~:4323). Extend child-base-sites.test.ts: at child 2 with feat/c1/demo missing, both callers seed zero proven tasks and restore no completed rows
+**Gate:** as-built
+**Rationale:** Verified (99%): artifacts.ts:2958 and conductor.ts:4323 call seedTaskStatus with no child, so task-seed.ts falls back to default-branch history and can restore completed rows while the child parent is missing. Plan Task 25 requires that the task seed consume the child base and prove nothing on parent-missing. ADR decision 8 is authoritative, so this is BUILD work within Task 25.
+**Governing clause:** adr-2026-10-07-per-child-build-region decision 8
+**Done when:**
+- adr-2026-10-07-per-child-build-region decision 8 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-b00b54a4-4-r1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-b00b54a4-5-r1: step-runners.ts (~:3559-3564, ~:4245-4250) and build-review-adjudication-coordinator.ts (~:194-205): persist build_review suppressions through a flat (child-less) RemediationCaseStore/suppression seam even when a child is active, while cases stay in the child store. Add a test with child 2 active asserting suppression history is written only to the flat feature path, nothing suppression-related appears under .pipeline/children/2/, and child 2's cases still land under .pipeline/children/2/. Update the Task 2 access allowlist entry for these sites
+**Gate:** as-built
+**Rationale:** Verified (99%): step-runners.ts:3559-3564 passes child into persistBuildReviewSuppressions, and build-review-adjudication-coordinator.ts:194-205 hands it a child-scoped RemediationCaseStore. Suppression history therefore lands in child-local stores. ADR adr-2026-10-03 decision 8 keeps suppressions whole-feature and relocates only cases and credit receipts. Task 28 (build-review remediation cases per child) admits narrowing the child routing to cases. Approved architecture is clear, so this is conforming BUILD work. Task 28's per-child case behavior is preserved.
+**Governing clause:** adr-2026-10-03-stacked-child-plans-identity-and-state decision 8
+**Done when:**
+- adr-2026-10-03-stacked-child-plans-identity-and-state decision 8 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-b00b54a4-5-r1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-0d789f28-1-r1: build-review-adjudication-coordinator.ts (~:470, :494, :527): read suppression history from the flat suppressionStore (after its persist), not from the child case store, and pass that whole-feature suppressions list into both assembleBuildReviewAdjudicationContext calls, while priorCases still come from the child store. Add a test with child 2 active, flat suppression history present and none under .pipeline/children/2/, asserting the judge's context.suppressionHistory contains the flat entries and priorCases contains only child 2's cases
+**Gate:** as-built
+**Rationale:** Verified (99%). In build-review-adjudication-coordinator.ts, lines 177-185 now persist suppressions through the flat, child-less suppressionStore. The coordinator then reads `prior` from the child-scoped `store` (:470) and passes prior.state.suppressions into both assembleBuildReviewAdjudicationContext calls (:494, :527). With a child active, the judge receives empty or stale suppression history instead of whole-feature history. A grep shows these two call sites are the only coordinator readers of state.suppressions; prd-widening and suppression-history readers use the flat store. ADR adr-2026-10-03 decision 8 is clear that suppressions stay whole-feature and only cases and credit receipts move per child. No architectural decision is needed, so this is a conforming BUILD repair that completes rem-asbuilt-b00b54a4-5-r1 under Task 28. Task 28's per-child case reads (priorCases from the child store) are preserved; only the suppression source changes. Suppressed-ID filtering is unaffected.
+**Governing clause:** adr-2026-10-03-stacked-child-plans-identity-and-state decision 8
+**Done when:**
+- adr-2026-10-03-stacked-child-plans-identity-and-state decision 8 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-0d789f28-1-r1 is committed and its targeted tests pass.

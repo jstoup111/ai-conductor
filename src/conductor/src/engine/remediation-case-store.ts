@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 
 import {
   createConductStateLease,
@@ -15,12 +15,12 @@ import type {
   RemediationCaseRefutation,
   RemediationCaseSourceOutcome,
 } from './remediation-case-artifact.js';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 
 /** Envelope format. Feature identity deliberately retains its own version. */
 const STORE_VERSION = 'v2' as const;
 const LEGACY_STORE_VERSION = 'v1' as const;
 const FEATURE_VERSION = 'v1' as const;
-const STORE_PATH = '.pipeline/remediation-cases.json';
 const MAX_REFERENCE_LENGTH = 256;
 const MAX_TEXT_LENGTH = 8_000;
 const MAX_CASES = 128;
@@ -105,6 +105,27 @@ export interface RemediationCasePrdWideningRecord {
 /** The tagged case-record vocabulary for the version-two shared envelope. */
 export type RemediationCaseDomainRecord = RemediationCaseRecord | RemediationCasePrdWideningRecord;
 
+/**
+ * Rubric-namespaced source ids (`<rubric>:<findingId>`) that a finalized case
+ * durably settles. A finalized non-action case settles every source it binds;
+ * a resolved, applied action case settles only its `merged` sources, so a
+ * sibling source that merely `acted` stays live and is re-adjudicated on
+ * recurrence. The adjudication coordinator and the effective build_review
+ * verdict both read settlement through this one predicate, so a lap the
+ * coordinator settles is never re-selected by the completion check.
+ */
+export function finalizedBuildReviewSourceIds(cases: readonly RemediationCaseRecord[]): ReadonlySet<string> {
+  return new Set(cases.flatMap((record) =>
+    record.disposition === 'refute' && (record.effect.kind === 'none' || record.effect.status === 'applied')
+      ? record.sources.map((source) => source.sourceId)
+      : record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
+      ? record.sources.map((source) => source.sourceId)
+      : record.resolution === 'resolved' && record.effect.kind !== 'none' && record.effect.status === 'applied'
+        ? record.sources.filter((source) => source.outcome === 'merged').map((source) => source.sourceId)
+        : [],
+  ));
+}
+
 /** Return only autonomous BUILD-review records from the shared domain vocabulary. */
 export function selectBuildReviewRemediationCases(
   records: readonly RemediationCaseDomainRecord[],
@@ -162,6 +183,8 @@ export interface RemediationCaseStoreOptions {
   readonly filesystem?: RemediationCaseStoreFilesystem;
   readonly lock?: ConductStateLease;
   readonly leaseOptions?: ConductStateLeaseOptions;
+  /** Active stacked BUILD child; omitted preserves the feature-wide flat store. */
+  readonly child?: ChildId;
 }
 
 export type RemediationCaseStoreFailureReason =
@@ -562,8 +585,8 @@ function isMissing(error: unknown): boolean {
 }
 
 /** Stable feature-worktree path for engine-owned remediation case control state. */
-export function remediationCaseStorePath(projectRoot: string): string {
-  return join(projectRoot, STORE_PATH);
+export function remediationCaseStorePath(projectRoot: string, child?: ChildId): string {
+  return pipelinePathFor(projectRoot, 'remediation-cases.json', child);
 }
 
 /**
@@ -581,7 +604,7 @@ export class RemediationCaseStore {
     options: RemediationCaseStoreOptions = {},
   ) {
     this.filesystem = options.filesystem ?? defaultFilesystem;
-    this.statePath = remediationCaseStorePath(projectRoot);
+    this.statePath = remediationCaseStorePath(projectRoot, options.child);
     this.lock = options.lock ?? createConductStateLease(this.statePath, {
       ...options.leaseOptions,
       label: 'remediation-case-store',
@@ -690,10 +713,11 @@ export class RemediationCaseStore {
 export async function readRemediationCaseStoreFeature(
   projectRoot: string,
   filesystem: RemediationCaseStoreFilesystem = defaultFilesystem,
+  child?: ChildId,
 ): Promise<RemediationCaseStoreFeatureReadResult> {
   let serialized: string;
   try {
-    serialized = await filesystem.readFile(remediationCaseStorePath(projectRoot));
+    serialized = await filesystem.readFile(remediationCaseStorePath(projectRoot, child));
   } catch (error) {
     return isMissing(error)
       ? { ok: true, feature: undefined }

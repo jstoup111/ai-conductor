@@ -18,6 +18,8 @@ import {
 import { readTaskDigests, readTaskDigestsLeniently, recordTaskDigests } from './task-digests.js';
 import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import { resolveTaskIds } from './task-progress.js';
+import { resolveChildBase } from './child-cursor.js';
+import type { ChildId } from './child-context.js';
 /** A seed failure that occurred while reopening a task whose plan text changed. */
 export class TaskReopenError extends Error {
   constructor(message: string) {
@@ -52,6 +54,8 @@ export interface TaskStatusFile {
 
 export interface SeedTaskStatusOptions {
   dispatchBoundary?: boolean;
+  /** Child-local trailer restoration begins at the closed parent tip. */
+  childBase?: { readonly slug: string; readonly child: ChildId };
 }
 
 interface EngineState {
@@ -135,9 +139,26 @@ function mergeDeclaredFiles(existingFiles: unknown, declaredFiles: string[]): st
  * no provable branch range, no restored completions, everything stays pending
  * and gets rebuilt. Redoing a task is cheap; skipping one is not.
  */
-async function trailerProvenCompletions(projectRoot: string): Promise<Map<string, string>> {
+async function trailerProvenCompletions(
+  projectRoot: string,
+  childBase?: SeedTaskStatusOptions['childBase'],
+): Promise<Map<string, string>> {
   const proven = new Map<string, string>();
   try {
+    if (childBase !== undefined) {
+      const resolved = await resolveChildBase(projectRoot, childBase.slug, childBase.child);
+      if (resolved.kind === 'parent') {
+        for (const commit of await listCommitsWithTrailers(projectRoot, resolved.sha, childBase)) {
+          for (const value of commit.trailers['Task'] ?? []) {
+            const canonical = canonicalTaskId(String(value).trim());
+            if (canonical && !proven.has(canonical)) proven.set(canonical, commit.sha);
+          }
+        }
+        return proven;
+      }
+      // A known but unavailable parent must not fall through to origin/main.
+      if (resolved.kind !== 'none') return proven;
+    }
     const originRef = await resolveOriginRef(projectRoot);
     if (!originRef) return proven;
 
@@ -402,7 +423,7 @@ export async function seedTaskStatus(
       (task) => task.status === 'in_progress',
     );
     const provenCompletions = hasMissingPlanTask || (options.dispatchBoundary && hasInProgressTask)
-      ? await trailerProvenCompletions(projectRoot)
+      ? await trailerProvenCompletions(projectRoot, options.childBase)
       : new Map<string, string>();
 
     // Load task evidence (sidecar). Task 14 (#773): no longer consulted to

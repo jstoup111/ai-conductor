@@ -1,0 +1,11 @@
+<!-- Recorded from 14a615c678ab0df4bb467fa0313bcb24434ef68f -->
+{"type":"tier_skip","step":"acceptance_specs","tier":"S","ts":"<TIMESTAMP>"}
+{"type":"step_started","step":"build","index":13,"executionContext":{"executionId":"00000000-0000-4000-8000-000000000052","subject":{"kind":"lifecycle-step","step":"build"}},"ts":"<TIMESTAMP>"}
+{"type":"step_completed","step":"build","status":"done","tier":"S","unmetered":true,"treeBefore":"3216a949401071925eed49036f7e158f392cc867","treeAfter":"3216a949401071925eed49036f7e158f392cc867","executionContext":{"executionId":"00000000-0000-4000-8000-000000000052","subject":{"kind":"lifecycle-step","step":"build"}},"ts":"<TIMESTAMP>"}
+{"type":"step_started","step":"test_suite","index":14,"executionContext":{"executionId":"00000000-0000-4000-8000-000000000057","subject":{"kind":"lifecycle-step","step":"test_suite"}},"ts":"<TIMESTAMP>"}
+{"type":"build_member_evidence_reused","member":"test_suite","decision":"reuse","basis":"fingerprint-match","mode":"aggregate","ts":"<TIMESTAMP>"}
+{"type":"step_completed","step":"test_suite","status":"done","tail":["Full test suite REUSED"],"tier":"S","unmetered":true,"executionContext":{"executionId":"00000000-0000-4000-8000-000000000057","subject":{"kind":"lifecycle-step","step":"test_suite"}},"ts":"<TIMESTAMP>"}
+{"type":"step_started","step":"build_review","index":15,"executionContext":{"executionId":"00000000-0000-4000-8000-000000000060","subject":{"kind":"lifecycle-step","step":"build_review"}},"ts":"<TIMESTAMP>"}
+{"type":"step_completed","step":"build_review","status":"done","tier":"S","unmetered":true,"executionContext":{"executionId":"00000000-0000-4000-8000-000000000060","subject":{"kind":"lifecycle-step","step":"build_review"}},"ts":"<TIMESTAMP>"}
+{"type":"tier_skip","step":"manual_test","tier":"S","ts":"<TIMESTAMP>"}
+{"type":"operator_park_boundary","featureSlug":"n1-golden","boundary":{"kind":"step","name":"build_review"},"ts":"<TIMESTAMP>"}

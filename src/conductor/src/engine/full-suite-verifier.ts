@@ -45,6 +45,8 @@ import {
 } from './scoped-run.js';
 import { changedPathsBetween, originDefaultBranch } from './rebase.js';
 import { worktreeStatus } from './worktree-shared.js';
+import { resolveChildBase } from './child-cursor.js';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 import type { AggregateTestSuiteConfig, TestSuiteConfig } from '../types/config.js';
 
 export type FullSuiteStaleReason =
@@ -162,6 +164,14 @@ export interface FullSuiteVerifierOptions {
   worktreeStatus?: typeof worktreeStatus;
   /** Test seam; production uses the engine-owned scoped-run process adapter. */
   scopedRunner?: ScopedRunRunner;
+  /** Default child context for callers that keep one verifier per BUILD region. */
+  activeChild?: FullSuiteActiveChild;
+}
+
+/** The cursor-owned child that scopes BUILD-region suite evidence. */
+export interface FullSuiteActiveChild {
+  readonly child: ChildId;
+  readonly isLeaf: boolean;
 }
 
 export interface FullSuiteGitResult {
@@ -186,6 +196,43 @@ export interface FullSuiteVerifyOptions {
    * FINISH validation fence sets this so the full suite runs once before SHIP.
    */
   requireAggregate?: boolean;
+  /**
+   * The active stacked child.  A closed parent is the authoritative changed
+   * surface; an unresolved parent deliberately degrades to aggregate work.
+   */
+  childBase?: { readonly slug: string; readonly child: ChildId };
+  /** Overrides the verifier default for this one region-owned operation. */
+  activeChild?: FullSuiteActiveChild;
+}
+
+interface FullSuiteSelectionOptions {
+  readonly projectRoot?: string;
+  readonly childBase?: { readonly slug: string; readonly child: ChildId };
+}
+
+async function selectionBase(
+  git: FullSuiteGitRunner,
+  options: FullSuiteSelectionOptions,
+): Promise<string | undefined> {
+  if (options.childBase !== undefined) {
+    // `projectRoot` is required whenever a child is supplied.  Treat a bad
+    // caller identically to an unavailable parent: aggregate is safer than a
+    // widened changed-only surface.
+    if (options.projectRoot === undefined) return undefined;
+    const child = await resolveChildBase(
+      options.projectRoot,
+      options.childBase.slug,
+      options.childBase.child,
+      { git },
+    );
+    if (child.kind === 'parent') return child.sha;
+    if (child.kind !== 'none') return undefined;
+  }
+  const branch = await originDefaultBranch(git);
+  if (!branch) return undefined;
+  const mergeBase = await git(['merge-base', `origin/${branch}`, 'HEAD']);
+  const base = mergeBase.exitCode === 0 ? mergeBase.stdout.trim() : '';
+  return base || undefined;
 }
 
 /**
@@ -218,13 +265,11 @@ export function changedOnlyRequiresAggregate(path: string): boolean {
  */
 export async function deriveFullSuiteChangedSelection(
   git: FullSuiteGitRunner,
+  options: FullSuiteSelectionOptions = {},
 ): Promise<FullSuiteScopedSelection> {
   try {
-    const branch = await originDefaultBranch(git);
-    if (!branch) return { status: 'EMPTY' };
-    const mergeBase = await git(['merge-base', `origin/${branch}`, 'HEAD']);
-    const base = mergeBase.exitCode === 0 ? mergeBase.stdout.trim() : '';
-    if (!/^[0-9a-f]{7,64}$/.test(base)) return { status: 'EMPTY' };
+    const base = await selectionBase(git, options);
+    if (base === undefined || !/^[0-9a-f]{7,64}$/.test(base)) return { status: 'EMPTY' };
     const paths = await changedPathsBetween(git, base, 'HEAD');
     const status = await git(['status', '--porcelain']);
     if (status.exitCode !== 0) return { status: 'EMPTY' };
@@ -242,13 +287,10 @@ export async function deriveFullSuiteChangedSelection(
  */
 export async function deriveFullSuiteScopedSelection(
   git: FullSuiteGitRunner,
+  options: FullSuiteSelectionOptions = {},
 ): Promise<FullSuiteScopedSelection> {
   try {
-    const branch = await originDefaultBranch(git);
-    if (!branch) return { status: 'EMPTY' };
-
-    const mergeBase = await git(['merge-base', `origin/${branch}`, 'HEAD']);
-    const base = mergeBase.exitCode === 0 ? mergeBase.stdout.trim() : '';
+    const base = await selectionBase(git, options);
     if (!base) return { status: 'EMPTY' };
 
     const selectors = (await changedPathsBetween(git, base, 'HEAD')).filter(
@@ -288,6 +330,7 @@ interface FullSuiteVerificationContext {
   fingerprint: FullSuiteFingerprint;
   selection: FullSuiteScopedSelection;
   worktreeClean?: boolean;
+  activeChild?: FullSuiteActiveChild;
 }
 
 type FullSuiteInspectionFailure = Extract<FullSuiteInspectionResult, { status: 'FAILED' }> & {
@@ -874,6 +917,7 @@ async function releaseFullSuiteLock(
 async function acquireFullSuiteLock(
   projectRoot: string,
   supplied: FullSuiteLockOptions = {},
+  child?: ChildId,
 ): Promise<FullSuiteLockAcquireResult> {
   const waitTimeoutMs = supplied.waitTimeoutMs ?? DEFAULT_LOCK_WAIT_MS;
   const maximumRetryDelayMs = supplied.maximumRetryDelayMs ??
@@ -883,7 +927,7 @@ async function acquireFullSuiteLock(
   const wait = supplied.wait ?? delay;
   const processIsLive = supplied.processIsLive ?? defaultProcessIsLive;
   const processOwnsRecordedLock = supplied.processOwnsRecordedLock ?? defaultProcessOwnsRecordedLock;
-  const pipelinePath = join(projectRoot, '.pipeline');
+  const pipelinePath = join(pipelinePathFor(projectRoot, 'test-suite-evidence.json', child), '..');
   const lockPath = join(pipelinePath, FULL_SUITE_LOCK_DIRECTORY);
   const startedAt = clock();
   let retryDelayMs = supplied.retryDelayMs ?? DEFAULT_LOCK_RETRY_MS;
@@ -1036,6 +1080,7 @@ export class FullSuiteVerifier {
       this.options.projectRoot,
       inspection.evidence,
       declaredEnvironmentValues(resolved.context.testSuite, environment),
+      resolved.context.activeChild?.child,
     );
     this.recordedPreservations.add(inspection);
   }
@@ -1047,6 +1092,7 @@ export class FullSuiteVerifier {
     const acquired = await acquireFullSuiteLock(
       this.options.projectRoot,
       this.options.lock,
+      this.activeChildFor(options)?.child,
     );
     if (!acquired.ok) {
       // A peer may have completed and persisted an exact-current PASS while
@@ -1126,7 +1172,8 @@ export class FullSuiteVerifier {
     try {
       // `changed` mode: carry the feature's first aggregate-PASS marker across
       // every evidence write so `full_suite: once` is durable.
-      const priorAggregatePassedAt = await this.priorAggregatePassedAt();
+      const activeChild = this.activeChildFor(options);
+      const priorAggregatePassedAt = await this.priorAggregatePassedAt(activeChild);
       const writeEvidence: typeof writeFullSuiteEvidence = (root, evidence, secrets) =>
         rawWriteEvidence(
           root,
@@ -1134,6 +1181,7 @@ export class FullSuiteVerifier {
             ? evidence
             : { ...evidence, aggregatePassedAt: priorAggregatePassedAt },
           secrets,
+          activeChild?.child,
         );
       // An inspection supplied by an execution-owning caller is also its record of
       // pre-lock drift. Do not mutate or replace that object. A stale result, though,
@@ -1167,7 +1215,7 @@ export class FullSuiteVerifier {
         }
         let persisted;
         try {
-          persisted = await readEvidence(projectRoot);
+          persisted = await readEvidence(projectRoot, activeChild?.child);
         } catch {
           return {
             status: 'FAILED',
@@ -1223,7 +1271,7 @@ export class FullSuiteVerifier {
         const evidence = buildPreflightFailEvidence('preflight_failed', message, testSuite);
         try {
           await writeEvidence(projectRoot, evidence, secretValues);
-          const persisted = await readEvidence(projectRoot);
+          const persisted = await readEvidence(projectRoot, activeChild?.child);
           if (!persisted.usable && persisted.reason === 'not_pass' && persisted.evidence !== undefined) {
             return { status: 'FAILED', reason: 'preflight_failed', message, freshness, evidence: persisted.evidence };
           }
@@ -1246,7 +1294,7 @@ export class FullSuiteVerifier {
         }
         let persisted;
         try {
-          persisted = await readEvidence(projectRoot);
+          persisted = await readEvidence(projectRoot, activeChild?.child);
         } catch {
           return {
             status: 'FAILED',
@@ -1324,7 +1372,7 @@ export class FullSuiteVerifier {
       }
       let persisted;
       try {
-        persisted = await readEvidence(projectRoot);
+        persisted = await readEvidence(projectRoot, activeChild?.child);
       } catch {
         return {
           status: 'FAILED',
@@ -1351,10 +1399,14 @@ export class FullSuiteVerifier {
     }
   }
 
-  private async priorAggregatePassedAt(): Promise<string | undefined> {
+  private activeChildFor(options: FullSuiteVerifyOptions): FullSuiteActiveChild | undefined {
+    return options.activeChild ?? this.options.activeChild;
+  }
+
+  private async priorAggregatePassedAt(activeChild?: FullSuiteActiveChild): Promise<string | undefined> {
     const { readEvidence = readFullSuiteEvidence } = this.options;
     try {
-      const prior = await readEvidence(this.options.projectRoot);
+      const prior = await readEvidence(this.options.projectRoot, activeChild?.child);
       return prior.evidence?.aggregatePassedAt;
     } catch {
       return undefined;
@@ -1374,7 +1426,11 @@ export class FullSuiteVerifier {
     if (testSuite.verification?.mode !== 'changed') return true;
     const policy = testSuite.verification.full_suite ?? 'before_publish';
     if (policy === 'skip') return false;
-    if (policy === 'once') return (await this.priorAggregatePassedAt()) === undefined;
+    if (policy === 'once') {
+      const activeChild = this.activeChildFor(options);
+      if (activeChild !== undefined && !activeChild.isLeaf) return false;
+      return (await this.priorAggregatePassedAt(activeChild)) === undefined;
+    }
     return true;
   }
 
@@ -1419,15 +1475,18 @@ export class FullSuiteVerifier {
         };
       }
       const aggregateTestSuite: AggregateTestSuiteConfig = testSuite as AggregateTestSuiteConfig;
+      const activeChild = this.activeChildFor(options);
       const verificationMode = aggregateTestSuite.verification?.mode ?? 'aggregate';
       const requireAggregate = await this.effectiveRequireAggregate(aggregateTestSuite, options);
       const selection: FullSuiteScopedSelection = verificationMode === 'scoped'
         ? await deriveFullSuiteScopedSelection(
           this.options.git ?? productionFullSuiteGitRunner(projectRoot),
+          { projectRoot, childBase: options.childBase },
         )
         : verificationMode === 'changed' && !requireAggregate
           ? await deriveFullSuiteChangedSelection(
             this.options.git ?? productionFullSuiteGitRunner(projectRoot),
+            { projectRoot, childBase: options.childBase },
           )
           : { status: 'EMPTY' as const };
       const fingerprintResult = await fingerprint({
@@ -1460,8 +1519,9 @@ export class FullSuiteVerifier {
         fingerprint: fingerprintResult.fingerprint,
         selection,
         worktreeClean: await fingerprintTimeWorktreeCleanliness(projectRoot, inspectWorktreeStatus),
+        ...(activeChild === undefined ? {} : { activeChild }),
       };
-      const persisted = await readEvidence(projectRoot);
+      const persisted = await readEvidence(projectRoot, activeChild?.child);
       if (!persisted.usable) {
         if (persisted.reason === 'io_error') {
           return {

@@ -1082,9 +1082,11 @@ export async function discoverBacklog(
         );
         continue;
       }
+      // Discovery only re-admits the feature to the backlog; dispatch still
+      // waits for a free slot, so this must not read as if FINISH were running.
       log(
-        `re-dispatch ${slug}: shipped record is on this feature's branch but FINISH recorded no ` +
-          'outcome and its worktree is retained — resuming the unfinished publication.',
+        `backlog: ${slug} eligible to resume its unfinished FINISH publication (shipped record on ` +
+          'its branch, no FINISH outcome, worktree retained) — queued until a dispatch slot is free.',
       );
     }
 

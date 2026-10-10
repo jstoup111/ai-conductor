@@ -6,6 +6,9 @@ import type { ConductorEvent } from '../types/events.js';
 import type { StepName } from '../types/index.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { AuditTrailWriter } from './audit-trail.js';
+import { readConductStateOverlay } from './conduct-state-store.js';
+import { pipelinePathFor } from './child-context.js';
+import { resolveActiveChild } from './child-cursor.js';
 import { isAcceptableOperatorRationale, resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { EventPersister } from './event-persister.js';
 import { HALT_CLASS_MARKER, HALT_MARKER } from './halt-marker.js';
@@ -82,8 +85,18 @@ export async function dispatchHaltClearCommand(
   }
   let step: StepName = 'build';
   try {
-    const state = JSON.parse(await readFile(join(worktree, '.pipeline', 'conduct-state.json'), 'utf8')) as { last_step?: StepName };
-    step = state.last_step ?? step;
+    const cursor = await resolveActiveChild(worktree, command.feature);
+    if (cursor.kind === 'active') {
+      const [overlay, childState] = await Promise.all([
+        readConductStateOverlay(worktree, cursor.child),
+        readFile(pipelinePathFor(worktree, 'conduct-state.json', cursor.child), 'utf8')
+          .then((raw) => JSON.parse(raw) as { last_step?: StepName }),
+      ]);
+      step = childState.last_step ?? (overlay.ok ? overlay.value.last_step : undefined) ?? step;
+    } else {
+      const flat = JSON.parse(await readFile(join(worktree, '.pipeline', 'conduct-state.json'), 'utf8')) as { last_step?: StepName };
+      step = flat.last_step ?? step;
+    }
   } catch {
     // Halt clearing must not rewrite state merely to enrich an audit event.
   }

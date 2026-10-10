@@ -22,13 +22,14 @@ import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds } from './build-review-work-order.js';
-import { RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseSuppressionEntry } from './remediation-case-store.js';
+import { finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseSuppressionEntry } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
 import type { BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import type { BumpKickbackGateInput, chargeBuildReviewEffectInLedger } from './kickback-ledger.js';
 import type { EffectMarkerTrackerClient } from './tracker-client.js';
 import type { RemediationCaseDeferralEffect } from './remediation-case-artifact.js';
 import type { ConductorEvent } from '../types/events.js';
+import type { ChildId } from './child-context.js';
 
 type RemediationCaseLifecycleEvent = Extract<ConductorEvent, {
   type: 'remediation_adjudication_started' | 'remediation_adjudication_completed' | 'remediation_adjudication_failed'
@@ -123,6 +124,8 @@ async function sourceTaskStatus(projectRoot: string): Promise<BuildReviewAdjudic
 export interface BuildReviewAdjudicationCoordinatorInput {
   readonly projectRoot: string;
   readonly feature: BuildReviewFeatureIdentity;
+  /** Child whose review lap owns this case history. */
+  readonly child?: ChildId;
   readonly aggregate: BuildReviewAggregate;
   readonly operatorResolvedFindingIds: ReadonlySet<string>;
   /** Engine-owned sub-floor identities; never written to the operator store. */
@@ -162,33 +165,16 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
    */
   const allOperatorResolved = (accepted: ReadonlySet<string>): boolean =>
     sources.every((source) => accepted.has(source.findingId) || input.suppressedFindingIds?.has(source.findingId));
-  /**
-   * A finalized non-action case is durable resolution for its exact source;
-   * a merged source is likewise settled even when its historical case acted.
-   * This deliberately keys by the rubric-namespaced source id, not prose or
-   * bare finding id, so a same-id finding in another rubric remains live.
-   *
-   * Settlement is per SOURCE, not per case. A resolved action case settles
-   * only the sources whose OWN outcome is `merged`; a sibling source that
-   * merely `acted` stays live and is re-adjudicated on recurrence. Testing
-   * the merge with `sources.some(...)` settled every source on the record,
-   * so one merged source silently retired its unmerged siblings.
-   */
-  const finalizedSourceIds = (cases: readonly RemediationCaseRecord[]): ReadonlySet<string> =>
-    new Set(cases.flatMap((record) =>
-      record.disposition === 'refute' && (record.effect.kind === 'none' || record.effect.status === 'applied')
-        ? record.sources.map((source) => source.sourceId)
-        : record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
-        ? record.sources.map((source) => source.sourceId)
-        : record.resolution === 'resolved' && record.effect.kind !== 'none' && record.effect.status === 'applied'
-          ? record.sources.filter((source) => source.outcome === 'merged').map((source) => source.sourceId)
-          : [],
-    ));
+  /** Settlement is per rubric-namespaced SOURCE; see `finalizedBuildReviewSourceIds`. */
+  const finalizedSourceIds = finalizedBuildReviewSourceIds;
   const fail = async (detail: string): Promise<BuildReviewAdjudicationCoordinatorResult> => {
     await input.emit?.({ type: 'remediation_adjudication_failed', domain: 'build_review', lapId: input.aggregate.lapId, reason: detail });
     return { ok: false, detail };
   };
-  const store = new RemediationCaseStore(input.projectRoot, input.feature);
+  const store = new RemediationCaseStore(input.projectRoot, input.feature, {
+    ...(input.child === undefined ? {} : { child: input.child }),
+  });
+  const suppressionStore = new RemediationCaseStore(input.projectRoot, input.feature);
   // Not a second writer: the same seam the effective-verdict path already ran
   // for this lap. Its upsert is keyed by finding id, so re-running it here is a
   // no-op refresh rather than a duplicate row.
@@ -196,9 +182,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     projectRoot: input.projectRoot,
     feature: input.feature,
     suppressions: input.suppressions ?? [],
-    store,
+    store: suppressionStore,
   });
   if (!persisted.ok) return fail(`case store ${persisted.reason}`);
+  const suppressionHistory = await suppressionStore.read();
+  if (!suppressionHistory.ok) return fail(`suppression store ${suppressionHistory.reason}`);
   // Before the judge is dispatched there is no frozen dispatch set, so live ids
   // are computed against the raw join. The two agree for every all-accepted lap,
   // and this is reassigned to the frozen set once one exists.
@@ -505,7 +493,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const taskStatus = await (input.readTaskStatus ?? (() => sourceTaskStatus(input.projectRoot)))();
   const contextEvidence = { planContract, taskStatus, attemptedCaseIds };
   const context = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: prior.state.suppressions, operatorResolvedFindingIds: resolved, ...contextEvidence,
+    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions, operatorResolvedFindingIds: resolved, ...contextEvidence,
   });
   if (!context.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(context.stop)}`, { settleAbsentAttempted: true });
   // A disposition arriving while the case store was read wins before the one
@@ -538,7 +526,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
     new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
   const freshContext = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: prior.state.suppressions,
+    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
     operatorResolvedFindingIds: resolved, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => input.suppressedFindingIds?.has(source.findingId)).map(buildReviewAdjudicationSourceId)]), ...contextEvidence,
   });
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(freshContext.stop)}`, { settleAbsentAttempted: true });
@@ -754,6 +742,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     );
     const action = await applyBuildReviewActionEffects({
       projectRoot: input.projectRoot, feature: input.feature, store, tasksByCaseId, chargeInput: input.chargeInput,
+      ...(input.child === undefined ? {} : { child: input.child }),
       ...(input.chargeEffect === undefined ? {} : { chargeEffect: input.chargeEffect }),
     });
     if (!action.ok) {

@@ -37,6 +37,19 @@ describe('kickback budget view', () => {
     expect(renderKickbackBudgetView(legacy, 'build_review', 5)).toContain('Adjustment history: unavailable');
   });
 
+  it('labels a child-scoped rendered budget once above its gate block', () => {
+    const rendered = renderKickbackBudgetView(
+      { count: 2, cumulative: 2, treeHash: null, lastReason: 'child finding', priorVerdict: false, resolvedBefore: 0 },
+      'build_review',
+      5,
+      undefined,
+      undefined,
+      2 as import('../../src/engine/child-context.js').ChildId,
+    );
+    expect(rendered).toMatch(/^Child: 2\nKickback budget \(build_review\):/);
+    expect(rendered.match(/^Child: 2$/gm)).toHaveLength(1);
+  });
+
   it.each([
     ['none', {}, 'live-halt', undefined, 'Resume authorization: none'],
     ['consumed', { resumeAuthorization: { adjustmentId: 'adjustment-1', haltGeneration: 'bound-halt', consumed: true } }, 'live-halt', 'consumed', 'Resume authorization: consumed'],

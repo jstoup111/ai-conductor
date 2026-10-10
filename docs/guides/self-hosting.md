@@ -297,13 +297,15 @@ power. The list is explicit and provider-specific, selected by the provider the 
 
 | Provider | Excluded | Also excluded |
 | --- | --- | --- |
-| `claude` | `history.jsonl`, `.last-cleanup`, `plugins/known_marketplaces.json`, `shell-snapshots`, `backups`, `sessions`, `session-env`, `projects`, `tasks`, `.last-update-result.json`, `stats-cache.json`, `mcp-needs-auth-cache.json`, `cache`, `file-history`, `paste-cache` | the selected auth file, `.credentials.json` |
-| `codex` | `history.jsonl`, `sessions`, `shell_snapshots`, `cache`, `plugins/cache`, `plugins/.remote-plugin-install-staging`, `mcp-oauth-locks`, `thread-writer-locks`, `.tmp`, `tmp`, `packages/standalone`, `models_cache.json`, and any root-level `*.sqlite`, `*.sqlite-shm`, `*.sqlite-wal`, `*.sqlite-journal` | the selected auth file, `auth.json` |
+| `claude` | `history.jsonl`, `.last-cleanup`, `plugins/known_marketplaces.json`, `shell-snapshots`, `backups`, `sessions`, `session-env`, `projects`, `tasks`, `.last-update-result.json`, `stats-cache.json`, `mcp-needs-auth-cache.json`, `cache`, `file-history`, `paste-cache`, `skills/synced/**/.last-complete-round` | the selected auth file, `.credentials.json` |
+| `codex` | `history.jsonl`, `sessions`, `shell_snapshots`, `cache`, `plugins/cache`, `plugins/.remote-plugin-install-staging`, `mcp-oauth-locks`, `thread-writer-locks`, `.tmp`, `tmp`, `packages/standalone`, `models_cache.json`, `session_index.jsonl`, `plugins/synced/**/.last-complete-round`, and any root-level `*.sqlite`, `*.sqlite-shm`, `*.sqlite-wal`, `*.sqlite-journal` | the selected auth file, `auth.json` |
 | `pi` | `sessions`, `models-store.json` | the selected auth file, `auth.json` |
 
 Claude and Codex additionally exclude any directory whose basename is `.in_use`, at any depth — the
 only basename-matched entry on this surface. Pi excludes no basename, so a nested `.in_use` under
-the Pi home stays fingerprinted.
+the Pi home stays fingerprinted. Each `<prefix>/**/.last-complete-round` entry excludes only the
+skill- or plugin-sync round marker at any depth under that prefix; the synced content beside it stays
+fingerprinted.
 
 Four entries carry extra caveats:
 
