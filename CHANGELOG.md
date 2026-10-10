@@ -27,6 +27,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Guided monitor triage sessions now tell you when to quit and return to the queue. ([implementation PR #3080](https://github.com/jstoup111/ai-conductor/pull/3080)).
 - Stacked features now build each child in order while keeping task commits in their owning child. ([implementation PR #3053](https://github.com/jstoup111/ai-conductor/pull/3053)).
 - PRD audits now exempt requirements explicitly discharged by a coherence waiver. ([implementation PR #3084](https://github.com/jstoup111/ai-conductor/pull/3084)).
+- Users can distinguish gate telemetry and metrics by complexity tier. ([implementation PR #3089](https://github.com/jstoup111/ai-conductor/pull/3089)).
 
 ### Changed
 
@@ -73,6 +74,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The daemon now fills a free slot (for example, a feature whose halt you cleared) while a sibling self-host build holds back the origin refresh, instead of waiting for that build to finish; `daemon status` shows when a refresh is pending. ([implementation PR #3108](https://github.com/jstoup111/ai-conductor/pull/3108)).
 - Daemon runs route unretryable prerequisite failures without repeating affected steps. ([implementation PR #3088](https://github.com/jstoup111/ai-conductor/pull/3088)).
 - Self-host builds no longer halt when Claude Code's plugin sync rewrites its catalog caches or sync bookkeeping; installed plugins and plugin code stay guarded. ([implementation PR #3110](https://github.com/jstoup111/ai-conductor/pull/3110)).
+- Build review now returns malformed changed-test Covers markers to BUILD without consuming the mechanical fault allowance. ([implementation PR #3087](https://github.com/jstoup111/ai-conductor/pull/3087)).
 
 ## Migration
 
