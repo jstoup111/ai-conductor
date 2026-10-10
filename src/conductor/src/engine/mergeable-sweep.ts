@@ -40,6 +40,7 @@ import type { CiFixOutcome } from './ci-fix.js';
 import {
   classifyShippedReadiness,
   routeShippedReadiness,
+  type ShippedReadinessVerdict,
 } from './shipped-readiness.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
@@ -107,6 +108,41 @@ export async function maybeClearConflictLabel(
   if (state.mergeable !== 'MERGEABLE' || state.hasHaltBodyMarker || state.readFailure) return entry;
   if ((entry.labelClearAttempts ?? 0) >= 3) {
     log?.(`[mergeable-sweep] label clear retry cap reached for ${entry.prUrl}`);
+    return clear();
+  }
+  await removeLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+  return { ...entry, labelClearAttempts: (entry.labelClearAttempts ?? 0) + 1 };
+}
+
+/**
+ * Retire only the remediation label the shipped-readiness path applied. A
+ * human, CI-exhaustion, or conflict-resolution label has no equivalent
+ * provenance and must remain sticky. Read uncertainty and transient readiness
+ * states deliberately preserve the label to avoid flapping.
+ */
+export async function maybeClearReadinessLabel(
+  entry: WatchEntry,
+  state: PrMergeState,
+  verdict: ShippedReadinessVerdict,
+  gh: PrRunner,
+  log?: (message: string) => void,
+): Promise<WatchEntry> {
+  if (entry.escalationCause !== 'shipped-readiness') return entry;
+  const clear = (): WatchEntry => {
+    const { escalationCause: _cause, labelClearAttempts: _attempts, ...cleared } = entry;
+    return cleared;
+  };
+  if (!state.labels.includes('needs-remediation')) return clear();
+  if (
+    state.hasHaltBodyMarker ||
+    state.readFailure ||
+    verdict === 'no-checks' ||
+    verdict === 'draft' ||
+    verdict === 'ci-pending' ||
+    verdict === 'indeterminate'
+  ) return entry;
+  if ((entry.labelClearAttempts ?? 0) >= 3) {
+    log?.(`[mergeable-sweep] readiness label clear retry cap reached for ${entry.prUrl}`);
     return clear();
   }
   await removeLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
@@ -572,10 +608,14 @@ export async function sweepMergeableLabels({
           indeterminate: () => true,
         });
 
-        // An indeterminate GitHub observation is deliberately read-only. It
-        // remains watched for the next tick, but neither a stale label nor a
-        // repair/escalation action can turn uncertainty into a side effect.
-        if (indeterminate) continue;
+        // Retire only labels whose recorded cause says they are stale. This is
+        // deliberately before normal reconciliation and candidate collection.
+        const readinessClearAttempts = entry.labelClearAttempts ?? 0;
+        const clearingReadinessLabel =
+          entry.escalationCause === 'shipped-readiness' && state.labels.includes('needs-remediation');
+        entry = await maybeClearReadinessLabel(entry, state, readiness, entryGh, log);
+        const readinessLabelRemoved =
+          clearingReadinessLabel && entry.labelClearAttempts === readinessClearAttempts + 1;
 
         // GitHub checks are authoritative for CI state. Retire the redundant
         // custom label whenever a readable reconciliation observation finds it.
@@ -583,15 +623,12 @@ export async function sweepMergeableLabels({
           await removeLabel(entryGh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
         }
 
-        // Task 17 (AC1): track CONFLICTING PRs for the post-label-pass
-        // autoresolve dispatch below. Collected unconditionally (cheap) but
-        // only ever consulted when `autoresolve` is configured, so a disabled
-        // config leaves the sweep's observable behavior unchanged (AC4).
-        //
-        // Draft PRs are never resolution candidates (see `isDraft` note on
-        // PrMergeState): a draft is an in-flight build's own PR, so dispatching
-        // autoresolve/CI-fix against it fights the running build. The ordinary
-        // `mergeable` label reconciliation below is unaffected.
+        // Shipped readiness owns only its own attribution. Conflict, CI, and
+        // human remediation labels stay sticky during readiness recovery.
+
+        // Task 17 (AC1): preserve the historical conflict candidate behavior,
+        // but collect after remediation recovery so later dispatch sees the
+        // entry's current bookkeeping.
         if (conflicting) {
           if (state.isDraft) {
             log?.(`[mergeable-sweep] skipping resolve for ${entry.prUrl} (draft PR)`);
@@ -600,16 +637,13 @@ export async function sweepMergeableLabels({
           }
         }
 
-        // A conflict-resolution label becomes stale once GitHub reports the PR
-        // mergeable again. Legacy/unattributed labels remain sticky.
-        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
-        if (idx >= 0) {
-          entry = await maybeClearConflictLabel(entry, state, entryGh, log);
-          survivors[idx] = entry;
-        }
+        // An indeterminate GitHub observation is deliberately read-only. It
+        // remains watched for the next tick, but neither a stale label nor a
+        // repair/escalation action can turn uncertainty into a side effect.
+        if (indeterminate) continue;
 
         // FR-12: if the PR carries `needs-remediation`, ensure `mergeable` is absent.
-        let hasRemediation = state.labels.includes('needs-remediation');
+        let hasRemediation = state.labels.includes('needs-remediation') && !readinessLabelRemoved;
 
         // A stale shipped PR with no checks, or a draft PR, needs human
         // attention. Attribute only a confirmed absent→present label write:
