@@ -20,7 +20,7 @@ import {
   pipelinePathFor,
   type ChildId,
 } from './child-context.js';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 
@@ -114,6 +114,12 @@ export function detectRewindCommand(argv: string[]): RewindDispatch | null {
   if (!target || target.startsWith('--')) return null;
   const child = values.get('--child');
   return { kind: 'rewind', target, ...(child === undefined ? {} : { child }) };
+}
+
+export function inPlaceHaltRecoveryHint(state: ConductState, target: string, slug: string): string | undefined {
+  const status = state[target as keyof ConductState];
+  if (state.last_step !== target || (status !== 'refused' && status !== 'failed')) return undefined;
+  return `rewind: "${target}" is the halted step itself (status ${status}); after resolving the cause, resume it in place with: ai-conductor halt clear --feature ${slug} --rationale "<what you fixed>"`;
 }
 
 export async function clearHaltAtomically(
@@ -471,8 +477,10 @@ export async function dispatchRewindCommand(
     ?? ((root, demoted) => clearDerivedRecords(root, demoted, dependencies.markerFilesystem));
   const originalState = { ...observed.value };
   let result: RewindStateResult | undefined;
+  let derivedRecordsPreflighted = false;
   try {
     await preflight(cwd);
+    derivedRecordsPreflighted = true;
     result = await rewindState({ state: observed.value, config, target: command.target, store, readCurrentState: async () => {
       const current = await read(statePath);
       return current.ok ? current.value : {};
@@ -480,6 +488,10 @@ export async function dispatchRewindCommand(
     await clear(cwd, result.demoted.map((step) => ({ step })));
   } catch (error) {
     console.error(`rewind: ${error instanceof Error ? error.message : String(error)}`);
+    const hint = derivedRecordsPreflighted && !result
+      ? inPlaceHaltRecoveryHint(observed.value, command.target, basename(cwd))
+      : undefined;
+    if (hint) console.error(hint);
     if (result) {
       try {
         await rollbackRewindState(originalState, config, result, store);
