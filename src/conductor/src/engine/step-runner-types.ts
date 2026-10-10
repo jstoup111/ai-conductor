@@ -1,4 +1,5 @@
 import type { BuildReviewRepairProvenance } from './build-review-inputs.js';
+import type { MalformedCoversMarker } from './build-review-test-scope.js';
 import type { CoverageBindingPayloadError } from './step-runners.js';
 import type { AuthenticationReadiness, CodexProbeFailure, ProviderExitFacts, TokenUsage } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
@@ -16,6 +17,8 @@ import type { CiFailureContext, CiFailureAttempt, GitRunner as RebaseGitRunner, 
 
 export interface StepRunResult {
   success: boolean;
+  /** Introduced Covers tokens that match no accepted reference grammar. */
+  buildReviewMalformedCovers?: readonly MalformedCoversMarker[];
   /** Pending-repair settlement halted BUILD at its final admission boundary. */
   pendingRepairSettlementHalt?: true;
   /** A queued self-host dispatch was parked before admission; no provider ran. */

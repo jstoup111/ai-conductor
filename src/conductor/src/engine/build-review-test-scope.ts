@@ -96,6 +96,13 @@ export interface BuildReviewTestScope {
   readonly sharedSources: readonly BuildReviewTestSourceReference[];
 }
 
+/** An introduced, malformed Covers token attached to a changed declaration without a valid Covers binding. */
+export interface MalformedCoversMarker {
+  readonly path: string;
+  readonly line: number;
+  readonly token: string;
+}
+
 type TargetBinding = BoundCoversMarker | UnresolvedCoversMarker;
 
 function declarationKey(declaration: SupportedTestDeclaration): string {
@@ -122,6 +129,49 @@ function targetBindings(
   return bindings.filter((binding): binding is TargetBinding =>
     (binding.kind === 'bound' || binding.kind === 'unresolved-reference') && declarationKey(binding.target) === key,
   );
+}
+
+function markerLine(text: string, marker: CoversMarker): number {
+  let line = 1;
+  for (let index = 0; index < marker.span.start; index += 1) {
+    if (text[index] === '\n') line += 1;
+  }
+  return line;
+}
+
+/**
+ * Lists malformed Covers tokens newly associated with changed declarations
+ * that have no resolving Covers binding in HEAD.
+ */
+export function findMalformedCoversMarkers(input: BuildReviewTestScopeInput): readonly MalformedCoversMarker[] {
+  const associations = compareCoversMarkerBindings(input);
+  const changedDeclarations = compareTestDeclarations(input.base.source, input.head.source).changed;
+  const text = sourceText(input.head.source);
+  const markers = new Map<string, MalformedCoversMarker>();
+
+  for (const declaration of changedDeclarations) {
+    const bindings = targetBindings(associations.head.bindings, declaration);
+    if (bindings.some((binding) => binding.kind === 'bound')) continue;
+    for (const binding of bindings) {
+      if (binding.kind !== 'unresolved-reference'
+        || binding.marker.reference.kind !== 'unresolved'
+        || binding.marker.reference.id.length === 0
+        || !isIntroducedAssociation(binding, associations.changes)) continue;
+      const marker = Object.freeze({
+        path: input.head.source.fileName,
+        line: markerLine(text, binding.marker),
+        token: binding.marker.reference.id,
+      });
+      markers.set(JSON.stringify([marker.path, marker.line, marker.token]), marker);
+    }
+  }
+
+  return Object.freeze([...markers.values()].sort((left, right) => {
+    if (left.path !== right.path) return left.path < right.path ? -1 : 1;
+    if (left.line !== right.line) return left.line - right.line;
+    if (left.token !== right.token) return left.token < right.token ? -1 : 1;
+    return 0;
+  }));
 }
 
 function changedAssociationFor(

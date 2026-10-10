@@ -1453,6 +1453,30 @@ hollow PASS.
 the provider-specific reason. Until that capability is available, route the affected steps to another
 provider or record reduced coverage; clearing the halt alone re-runs into the same denial.
 
+### build_review reports a malformed Covers marker
+
+**Symptom:** `.pipeline/HALT` begins `build_review malformed Covers markers unresolved after` and
+names each malformed marker by file, line, and token.
+
+**Recovery:** correct each named token in the feature worktree, commit the fix, then clear both live
+halt files:
+
+```bash
+cd .worktrees/<slug>
+# Correct every token named in .pipeline/HALT.
+git add <corrected-test-files>
+git commit -m "fix: correct Covers markers"
+rm -f .pipeline/HALT .pipeline/HALT.class
+```
+
+`ai-conductor build-review record-reduced-coverage` does not apply to this halt.
+
+Each malformed-marker kickback also counts toward `build_review`'s cumulative convergence cap. When
+that cap is spent first, `.pipeline/HALT` begins `build_review cumulative kickback cap exceeded:`
+instead, with the malformed markers on its `Latest reason:` line. Correct and commit those tokens as
+above, but do not remove the halt files; recover the budget through
+[`kickback-budget`](#kickback-loops).
+
 ### build_review has a scope-incomplete candidate
 
 **Symptom:** `build_review` reports a mechanical fault whose cause is `scope-incomplete`; after the

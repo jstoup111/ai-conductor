@@ -9571,6 +9571,9 @@ export class Conductor {
         // Kept separately from human-facing output so the terminal HALT is
         // composed from the classified recovery contract, not message text.
         let unretryableInputFailure: { failingStep: StepName; retryAfterStep: StepName } | undefined;
+        // A malformed Covers marker is a deterministic BUILD repair, not a
+        // retryable build_review failure or a mechanical review fault.
+        let buildReviewMalformedCovers: StepRunResult['buildReviewMalformedCovers'];
         // An incompatible build-review verdict is a stable schema failure,
         // not an exhausted-work retry. Keep its validator diagnostic for the
         // terminal HALT instead of replacing it with the generic fallback.
@@ -10290,6 +10293,16 @@ export class Conductor {
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
+          }
+
+          if (
+            step.name === 'build_review' &&
+            result.buildReviewMalformedCovers !== undefined &&
+            result.buildReviewMalformedCovers.length > 0
+          ) {
+            buildReviewMalformedCovers = result.buildReviewMalformedCovers;
+            failedStepResult = result;
+            break;
           }
 
           // Rate limit: wait deterministically, then retry WITHOUT burning the
@@ -12327,6 +12340,77 @@ export class Conductor {
               const reason =
                 `test_suite failure unresolved after ${count} build kickback(s) ` +
                 `(cap ${MAX_KICKBACKS_PER_GATE}): ${evidence}`;
+              await this.writeHaltMarker(reason + '\n', 'needs-human');
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await this.emitLoopHalt(reason, prUrl);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+
+            if (
+              step.name === 'build_review' &&
+              buildReviewMalformedCovers !== undefined &&
+              (this.daemon || this.mode === 'auto' || this.hasEnabledCustomBuildReviewPolicy())
+            ) {
+              const evidence = failedStepResult?.output ?? '';
+              const kickback = await consumeKickbackBudget('build_review', evidence);
+              if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted) {
+                const reason =
+                  `build_review cumulative kickback cap exceeded:\n` +
+                  renderKickbackBudgetView(
+                    kickback.entry,
+                    'build_review',
+                    MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+                  );
+                const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'build_review', {
+                  consumed: kickback.entry.cumulative,
+                  limit: kickback.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+                  latestReason: kickback.entry.lastReason,
+                });
+                const markerResult = await this.writeHaltMarker(
+                  `${reason}\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}\n`,
+                  'needs-human',
+                );
+                if (markerResult.status === 'failed') {
+                  this.log?.(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`);
+                }
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.emitLoopHalt(reason, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+              if (!kickback.exhausted) {
+                await emitTracked({
+                  type: 'kickback',
+                  from: 'build_review',
+                  to: 'build',
+                  evidence,
+                  count: kickback.entry.count,
+                  cumulativeCount: kickback.entry.cumulative,
+                });
+                pendingRetryHints.set(
+                  'build',
+                  `build_review found malformed Covers markers:\n${evidence}\n` +
+                    'Fix each token to an accepted form and commit before build_review re-runs.',
+                );
+                if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
+                await captureKickbackToBuildContext('build_review');
+                const navigationIndex = await this.navigateStateBack(state, 'build', steps);
+                await this.commitStateChanges(
+                  state,
+                  'restage BUILD review after malformed Covers kickback',
+                  filterRestageChanges(state, { build_review: 'stale', manual_test: 'stale' }),
+                );
+                i = navigationIndex - 1;
+                continue;
+              }
+              const reason =
+                `build_review malformed Covers markers unresolved after ${kickback.entry.count} ` +
+                `build kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${evidence}`;
               await this.writeHaltMarker(reason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
