@@ -141,7 +141,7 @@ All listed criteria are diff-local under a fixed checked-out dependency baseline
 **Steps:**
 1. Write failing targeted tests for the named checks through the lowest sufficient layer: unit for parsing/projection/state transitions, integration for the named production entry or storage/network adapter boundary.
 2. Run those selectors through `ai-conductor scoped-run` and establish RED.
-3. Add operational_log and a shared logger boundary accepting severity, raw body, occurrence time and discriminated ownership. Emit on the existing bus best-effort and preserve original local sink arguments. Reuse immutable feature logger closures and AsyncLocalStorage execution ownership; capture before formatDaemonFeatureTag. Do not intercept stdout or introduce a global current-feature slot. Known warn/error callsites must pass source severity rather than text heuristics.
+3. Add operational_log with its existing-field EVENT_SINKS declaration (persisted, not rendered; Task 8 adds only the logs declaration) and a shared logger boundary accepting severity, raw body, occurrence time and discriminated ownership. Emit on the existing bus best-effort and preserve original local sink arguments. Reuse immutable feature logger closures and AsyncLocalStorage execution ownership; capture before formatDaemonFeatureTag. Do not intercept stdout or introduce a global current-feature slot. Known warn/error callsites must pass source severity rather than text heuristics.
 4. Run the same selectors to GREEN and applicable static checks; do not launch an aggregate suite.
 5. Commit the scoped behavior and its tests with the task identity.
 
@@ -149,9 +149,11 @@ All listed criteria are diff-local under a fixed checked-out dependency baseline
 - `createOperationalLogger` emits typed info/warn/error occurrences with original operational content and passes unchanged content to its existing local sink; emitter failure is caught and does not replace the caller's result.
 - The diagnostic-boundary interleaving test uses two full slugs with the same shortened prefix and proves ordinary and deferred warn/error records keep their own complete slug, including A's scheduled diagnostic after A ends while B continues.
 - `createOperationalLogger` leaves unowned repository-wide diagnostics project-scoped even during feature execution; ANSI or misleading prefix text never supplies identity or borrows the active/last feature.
+- `EVENT_SINKS` declares `operational_log` as persisted and not rendered (`render: false, persist: true, audit: false, otel: false, otelTrace: false`, per adr-014-otel-observability-exporter D28), and the source typechecks with the new union member and its discriminated ownership narrowing.
 
 **Files:**
 - src/conductor/src/types/events.ts
+- src/conductor/src/engine/event-sinks.ts
 - src/conductor/src/engine/operational-log.ts
 - src/conductor/src/engine/daemon-log.ts
 - src/conductor/test/engine/operational-log.test.ts
