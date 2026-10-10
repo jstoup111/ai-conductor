@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:14
+// Covers: task:1, task:2, task:14, task:15
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -222,5 +222,94 @@ describe('sweepDependencyDrift', () => {
     ]);
     expect(await tracker.getBlockedBy('acme/app', 34)).toEqual([{ number: 35, state: 'open' }]);
     expect(await tracker.getBlockedBy('acme/app', 35)).toEqual([{ number: 34, state: 'open' }]);
+  });
+
+  it('reports a failed blocked-by read as indeterminate while retaining other findings', async () => {
+    const calls: string[] = [];
+    const tracker: DependencyDriftTracker = {
+      async listOpenIssues(repository) {
+        calls.push(`list:${repository}`);
+        return [
+          { number: 30, body: 'Blocked by #31.' },
+          { number: 44, body: '' },
+        ];
+      },
+      async getBlockedBy(repository, number) {
+        calls.push(`blocked_by:${repository}#${number}`);
+        if (number === 44) throw new Error('500 Internal Server Error');
+        return [];
+      },
+    };
+
+    await expect(sweepDependencyDrift({ repository: 'acme/app', tracker })).resolves.toEqual({
+      kind: 'swept',
+      unlinked: [{ source: 'acme/app#30', target: 'acme/app#31', kind: 'blocked-by', blocked_by: true }],
+      stale: [], cycles: [], contradictions: [], indeterminate: ['acme/app#44'],
+    });
+    expect(calls).toEqual(['list:acme/app', 'blocked_by:acme/app#30', 'blocked_by:acme/app#44']);
+  });
+
+  it('reports a rate-limited issue as indeterminate after one blocked-by read', async () => {
+    const calls: string[] = [];
+    const tracker: DependencyDriftTracker = {
+      async listOpenIssues(repository) {
+        calls.push(`list:${repository}`);
+        return [{ number: 45, body: '' }];
+      },
+      async getBlockedBy(repository, number) {
+        calls.push(`blocked_by:${repository}#${number}`);
+        throw new Error('API rate limit exceeded');
+      },
+    };
+
+    await expect(sweepDependencyDrift({ repository: 'acme/app', tracker })).resolves.toEqual({
+      kind: 'swept',
+      unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: ['acme/app#45'],
+    });
+    expect(calls).toEqual(['list:acme/app', 'blocked_by:acme/app#45']);
+  });
+
+  it('returns repository-indeterminate rather than a clean sweep when listing open issues fails', async () => {
+    const calls: string[] = [];
+    const tracker: DependencyDriftTracker = {
+      async listOpenIssues(repository) {
+        calls.push(`list:${repository}`);
+        throw new Error('tracker unavailable');
+      },
+      async getBlockedBy() {
+        throw new Error('must not read blockers after a failed listing');
+      },
+    };
+
+    await expect(sweepDependencyDrift({ repository: 'acme/app', tracker })).resolves.toEqual({
+      kind: 'repository-indeterminate',
+      cause: 'tracker unavailable',
+      unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: [],
+    });
+    expect(calls).toEqual(['list:acme/app']);
+  });
+
+  it('reports an unreadable cycle member as indeterminate and emits no cycle finding', async () => {
+    const calls: string[] = [];
+    const tracker: DependencyDriftTracker = {
+      async listOpenIssues(repository) {
+        calls.push(`list:${repository}`);
+        return [
+          { number: 34, body: '' },
+          { number: 35, body: '' },
+        ];
+      },
+      async getBlockedBy(repository, number) {
+        calls.push(`blocked_by:${repository}#${number}`);
+        if (number === 35) throw new Error('cycle member unavailable');
+        return [{ number: 35, state: 'open' }];
+      },
+    };
+
+    await expect(sweepDependencyDrift({ repository: 'acme/app', tracker })).resolves.toEqual({
+      kind: 'swept',
+      unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: ['acme/app#35'],
+    });
+    expect(calls).toEqual(['list:acme/app', 'blocked_by:acme/app#34', 'blocked_by:acme/app#35']);
   });
 });
