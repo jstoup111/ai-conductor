@@ -36,7 +36,10 @@ function triageInvocation(provider: string): string {
 }
 
 function monitorHostingBlock(provider: string): string[] {
-  const quitInstruction = findBuiltInProviderDescriptor(provider)?.interactiveLaunch?.quitInstruction;
+  const descriptor = findBuiltInProviderDescriptor(provider);
+  const quitInstruction = descriptor && 'interactiveLaunch' in descriptor
+    ? descriptor.interactiveLaunch?.quitInstruction
+    : undefined;
   return [
     MONITOR_HOSTED_MARKER,
     'Quitting this session returns the operator to the monitor queue.',
