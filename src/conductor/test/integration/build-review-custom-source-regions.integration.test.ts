@@ -46,11 +46,15 @@ function git() {
   };
 }
 
-async function review(region: { path: string; startLine: number; endLine: number; contentHash: string }, declaredDependencies: string[] = [], evidenceLocations = [`${region.path}:${region.startLine}`]) {
+type Region = { path: string; startLine: number; endLine: number; contentHash: string };
+
+async function review(cited: Region | readonly Region[], declaredDependencies: string[] = [], evidenceLocations?: string[]) {
+  const regions = Array.isArray(cited) ? cited : [cited as Region];
   const root = await fixture();
   const payload = { kind: 'custom-findings', version: 'v1', findings: [{
-    concernId: 'concern.one', summary: 'A concern.', evidenceLocations,
-    sourceRegions: [{ ...region, display: 'cited region' }],
+    concernId: 'concern.one', summary: 'A concern.',
+    evidenceLocations: evidenceLocations ?? regions.map((region) => `${region.path}:${region.startLine}`),
+    sourceRegions: regions.map((region) => ({ ...region, display: 'cited region' })),
   }] };
   const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }));
   const provider: LLMProvider = {
@@ -119,6 +123,17 @@ describe('custom source regions are validated against frozen source bytes', () =
     const { artifact } = await review({ path: 'src/a.ts', startLine: 1, endLine: 1, contentHash: `sha256:${'f'.repeat(64)}` });
     expect(artifact.result).toMatchObject({ kind: 'infrastructure-failure', reason: 'invalid-structured-result' });
     expect(artifact.result.detail).toContain('src/a.ts:1-1');
+  });
+
+  it('names only the cited region that failed admission, not the admitted ones beside it', async () => {
+    const { artifact } = await review([
+      { path: 'src/a.ts', startLine: 1, endLine: 1, contentHash: sha('export const value = 1;\n') },
+      { path: 'src/a.ts', startLine: 2, endLine: 2, contentHash: `sha256:${'f'.repeat(64)}` },
+    ]);
+    expect(artifact.result).toMatchObject({ kind: 'infrastructure-failure', reason: 'invalid-structured-result' });
+    expect(artifact.result.detail).toContain('findings[0].sourceRegions[1] must exactly match an admitted frozen source region');
+    expect(artifact.result.detail).not.toContain('findings[0].sourceRegions[0]');
+    expect(artifact.result.detail).toContain('src/a.ts:2-2 does not match the frozen head bytes');
   });
 
   it('refuses a line range beyond the frozen blob', async () => {
