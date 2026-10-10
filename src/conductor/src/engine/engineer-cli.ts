@@ -53,6 +53,8 @@ import {
   GITHUB_ISSUES_SOURCE,
   HANDLED_LABEL,
 } from './engineer/intake/github-issues.js';
+import { createTerminalGithubOperationConfirmation } from './github-operation-terminal-confirmation.js';
+import type { InteractiveGithubOperationConfirmation } from './github-operation-approval.js';
 import {
   createIntakeBackendComposite,
   type IntakeBackend,
@@ -520,6 +522,8 @@ export interface DispatchEngineerOpts {
   spawnHost?: (executable: string, argv: string[], cwd: string) => Promise<number>;
   /** Whether stdin and stdout are attached to an operator terminal. */
   isAttachedTerminal?: () => boolean;
+  /** Interactive approval boundary for guarded intake writes. */
+  githubOperationConfirmation?: InteractiveGithubOperationConfirmation;
   /** Environment used to form host-owned interactive argv. */
   env?: NodeJS.ProcessEnv;
   /**
@@ -1624,6 +1628,9 @@ export async function dispatchEngineer(
     // An absent ref is reported (found:false) and is NOT an error.
     case 'forget': {
       const { sourceRef } = dispatch;
+      const attached = opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY));
+      const confirmation = opts.githubOperationConfirmation
+        ?? createTerminalGithubOperationConfirmation({ isTerminal: attached });
       const engDir = engineerDir ?? resolveEngineerDir({});
       const ledger = createLedger(join(engDir, 'ledger.json'));
 
@@ -1651,7 +1658,9 @@ export async function dispatchEngineer(
       }
       if (dispatch.resolvedBy && parsedForget) {
         const tracker = createGithubTrackerClient(gh, {
-          intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor }),
+          intake: createGithubIntakeAuthorization({
+            gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor, confirmation,
+          }),
           events: opts.events,
         });
         try {
@@ -1686,7 +1695,9 @@ export async function dispatchEngineer(
       if (parsedForget) {
         try {
           const tracker = createGithubTrackerClient(gh, {
-            intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor }),
+            intake: createGithubIntakeAuthorization({
+              gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor, confirmation,
+            }),
             events: opts.events,
           });
           await tracker.removeIntakeIssueLabel(

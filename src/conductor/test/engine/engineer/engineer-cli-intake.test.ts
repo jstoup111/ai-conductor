@@ -19,6 +19,7 @@ import { createFileQueue } from '../../../src/engine/engineer/intake/queue.js';
 import { parseEnvelope } from '../../../src/engine/engineer/intake/port.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import type { HandoffDeps } from '../../../src/engine/engineer/handoff.js';
+import type { InteractiveGithubOperationConfirmation } from '../../../src/engine/github-operation-approval.js';
 
 const execFile = promisify(execFileCb);
 
@@ -27,6 +28,7 @@ const execFile = promisify(execFileCb);
 function makeGh(
   issuesByRepo: Record<string, Array<{ number: number; title: string; body: string; labels?: string[] }>>,
   rejectOperation?: 'comment' | 'close',
+  assignees: Array<{ login: string }> = [{ login: 'test-owner' }],
 ) {
   const calls: string[][] = [];
   const gh = async (args: string[], opts: { cwd: string }) => {
@@ -45,7 +47,7 @@ function makeGh(
       };
     }
     if (args[0] === 'issue' && args[1] === 'view' && args.includes('assignees')) {
-      return { stdout: JSON.stringify({ assignees: [{ login: 'test-owner' }] }) };
+      return { stdout: JSON.stringify({ assignees }) };
     }
     return { stdout: '' };
   };
@@ -354,11 +356,19 @@ describe('engineer forget (T23, FR-40)', () => {
     await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
 
     const { gh, calls } = makeGh({});
+    const confirmations: string[] = [];
+    const githubOperationConfirmation: InteractiveGithubOperationConfirmation = {
+      mode: 'interactive',
+      confirm: async (prompt) => {
+        confirmations.push(prompt.operation);
+        return true;
+      },
+    };
     const { out, opts } = captureOut();
 
     const code = await dispatchEngineer(
       { kind: 'forget', sourceRef: 'o/a#1', resolvedBy: 'o/a#2' },
-      opts({ gh }),
+      opts({ gh, githubOperationConfirmation }),
     );
     expect(code).toBe(0);
     expect(calls).toEqual([
@@ -374,6 +384,49 @@ describe('engineer forget (T23, FR-40)', () => {
     expect(JSON.parse(out[0])).toMatchObject({
       kind: 'forget', sourceRef: 'o/a#1', found: true, closed: true, resolvedBy: 'o/a#2',
     });
+    expect(confirmations).toEqual([]);
+  });
+
+  it('authorizes every guarded write before resolving an unassigned issue', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+
+    const { gh, calls } = makeGh({}, undefined, []);
+    const confirmations: Array<{
+      operation: string;
+      target: { repository: string; kind: string; number: number };
+      writeCount: number;
+    }> = [];
+    const githubOperationConfirmation: InteractiveGithubOperationConfirmation = {
+      mode: 'interactive',
+      confirm: async (prompt) => {
+        confirmations.push({ operation: prompt.operation, target: prompt.target, writeCount: calls.length });
+        return true;
+      },
+    };
+    const { out, opts } = captureOut();
+
+    const code = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'o/a#1', resolvedBy: 'o/a#2' },
+      opts({ gh, githubOperationConfirmation, isAttachedTerminal: () => true }),
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([
+      ['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees'],
+      ['issue', 'comment', '1', '-R', 'o/a', '--body', expect.stringContaining('o/a#2')],
+      ['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees'],
+      ['issue', 'close', '1', '-R', 'o/a'],
+      ['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees'],
+      ['api', '--method', 'DELETE', 'repos/o/a/issues/1/labels/engineer%3Ahandled'],
+    ]);
+    expect(confirmations).toEqual([
+      { operation: 'intake.issue.comment.create', target: { repository: 'o/a', kind: 'issue', number: 1 }, writeCount: 1 },
+      { operation: 'intake.issue.close', target: { repository: 'o/a', kind: 'issue', number: 1 }, writeCount: 3 },
+      { operation: 'intake.issue.label.remove', target: { repository: 'o/a', kind: 'issue', number: 1 }, writeCount: 5 },
+    ]);
+    expect(await ledger.known('github-issues', 'o/a#1')).toBe(false);
+    expect(JSON.parse(out[0])).toMatchObject({ closed: true, resolvedBy: 'o/a#2' });
   });
 
   it('only strips the label and reports closed:false without a resolving ref', async () => {
@@ -395,6 +448,34 @@ describe('engineer forget (T23, FR-40)', () => {
       ['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees'],
       ['api', '--method', 'DELETE', 'repos/o/a/issues/1/labels/engineer%3Ahandled'],
     ]);
+  });
+
+  it('authorizes the label removal before forgetting an unassigned issue', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+
+    const { gh, calls } = makeGh({}, undefined, []);
+    const confirmationWriteCounts: number[] = [];
+    const githubOperationConfirmation: InteractiveGithubOperationConfirmation = {
+      mode: 'interactive',
+      confirm: async (prompt) => {
+        expect(prompt.operation).toBe('intake.issue.label.remove');
+        confirmationWriteCounts.push(calls.length);
+        return true;
+      },
+    };
+    const { out, opts } = captureOut();
+
+    const code = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'o/a#1' },
+      opts({ gh, githubOperationConfirmation, isAttachedTerminal: () => true }),
+    );
+
+    expect(code).toBe(0);
+    expect(confirmationWriteCounts).toEqual([1]);
+    expect(calls).toContainEqual(['api', '--method', 'DELETE', 'repos/o/a/issues/1/labels/engineer%3Ahandled']);
+    expect(await ledger.known('github-issues', 'o/a#1')).toBe(false);
+    expect(JSON.parse(out[0])).toMatchObject({ closed: false });
   });
 
   it('refuses the drop when the audit comment is rejected, preserving the ledger entry', async () => {
