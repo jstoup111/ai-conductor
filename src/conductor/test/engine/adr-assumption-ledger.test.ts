@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, S1.1, S1.2, S1.3
+// Covers: task:1, task:3, task:4, S1.1, S1.2, S1.3
 import { describe, expect, it } from 'vitest';
 import {
   ADR_ASSUMPTION_LEDGER_HEADER,
@@ -191,6 +191,42 @@ ${LEDGER_HEADER}
     expect(result).toMatchObject({
       kind: 'diagnostics',
       diagnostics: [{ rule: 'malformed-entry', entryId: 'A1' }],
+    });
+  });
+
+  it('accepts approval only where a load-bearing non-verified row supplies a dated operator marker', () => {
+    const result = parseAdrAssumptionLedger(`# ADR: Approved assumptions
+
+## Assumptions
+
+${LEDGER_HEADER}
+|---|---|---|---|---|---|---|
+| A1 | Operator confirmation is recorded | inferred | 80% | yes | An unverified assumption could drive the decision | APPROVED by operator 2026-10-10 |
+| A2 | Source inspection established this fact | verified | 100% | yes | The verified premise could be misapplied | — |
+| A3 | This non-load-bearing context is incomplete | unverified | 20% | no | The context may be misleading | |
+`);
+
+    expect(result).toEqual({ kind: 'ok' });
+  });
+
+  it.each([
+    ['A2', 'unverified', '—'],
+    ['A3', 'inferred', 'PENDING'],
+    ['A4', 'inferred', 'APPROVED by operator 2026-02-30'],
+    ['A5', 'inferred', 'approved'],
+  ])('diagnoses a missing operator approval for %s', (id, basis, approval) => {
+    const result = parseAdrAssumptionLedger(`# ADR: Missing approval
+
+## Assumptions
+
+${LEDGER_HEADER}
+|---|---|---|---|---|---|---|
+| ${id} | This assumption needs approval | ${basis} | 80% | yes | The decision could rest on an unapproved assumption | ${approval} |
+`);
+
+    expect(result).toMatchObject({
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'missing-approval', entryId: id }],
     });
   });
 });
