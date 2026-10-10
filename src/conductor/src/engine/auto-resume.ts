@@ -1,6 +1,8 @@
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ConductState } from '../types/index.js';
+import { readConductStateOverlay } from './conduct-state-store.js';
+import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import { readState } from './state.js';
 import { ALL_STEPS } from './steps.js';
 import { slugify } from './worktree.js';
@@ -48,6 +50,23 @@ async function loadStateFromCandidates(paths: string[]): Promise<LoadedState | n
     }
   }
   return null;
+}
+
+/**
+ * The feature-level document remains the durable auto-resume anchor, but an
+ * active stacked child owns the BUILD-region statuses (and therefore the
+ * resume position).  Cursor failure deliberately keeps the existing flat
+ * read: auto-resume must not make an ordinary N=1 or pre-git workspace
+ * unresumable merely because there is no child to overlay.
+ */
+async function overlayActiveChildState(
+  worktreePath: string,
+  loaded: LoadedState,
+): Promise<LoadedState> {
+  const cursor = await resolveActiveChildForCurrentFeature(worktreePath).catch(() => ({ kind: 'no-child' as const }));
+  if (cursor.kind !== 'active') return loaded;
+  const overlay = await readConductStateOverlay(worktreePath, cursor.child);
+  return overlay.ok ? { ...loaded, state: overlay.value } : loaded;
 }
 
 function buildResume(
@@ -142,10 +161,11 @@ export async function detectAutoResume(
             join(wt, 'conduct-state.json'),
           ]);
           if (wtLoaded) {
-            if (wtLoaded.state.feature_status === 'complete') {
+            const activeState = await overlayActiveChildState(wt, wtLoaded);
+            if (activeState.state.feature_status === 'complete') {
               return { kind: 'complete', worktreePath: wt };
             }
-            return buildResume(wt, wtLoaded.state, wtLoaded.path);
+            return buildResume(wt, activeState.state, activeState.path);
           }
           // Worktree exists but has no state yet — resume there with the
           // root state we already loaded. (Common when the worktree skill
@@ -176,8 +196,9 @@ export async function detectAutoResume(
   ]);
   if (!wtLoaded) return { kind: 'none' };
 
-  if (wtLoaded.state.feature_status === 'complete') {
+  const activeState = await overlayActiveChildState(worktreePath, wtLoaded);
+  if (activeState.state.feature_status === 'complete') {
     return { kind: 'complete', worktreePath };
   }
-  return buildResume(worktreePath, wtLoaded.state, wtLoaded.path);
+  return buildResume(worktreePath, activeState.state, activeState.path);
 }

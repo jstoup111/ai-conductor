@@ -35,7 +35,8 @@ export interface ConductStateStore<State extends object> {
 
 /**
  * Read the feature-wide state together with one child's build-region state.
- * Only region steps are overlaid: DECIDE/SHIP metadata remains feature-wide.
+ * Only region steps plus the region's resume cursor are overlaid:
+ * DECIDE/SHIP metadata remains feature-wide.
  */
 export async function readConductStateOverlay(
   root: string,
@@ -49,13 +50,18 @@ export async function readConductStateOverlay(
   );
   const region = await regional.read();
   if (!region.ok) return region;
-  const regionEntries = Object.entries(region.value).filter(([field]) => isRegionStep(field));
+  const regionEntries = Object.entries(region.value).filter(
+    ([field]) => isRegionStep(field) || field === 'last_step',
+  );
   return { ok: true, value: { ...base.value, ...Object.fromEntries(regionEntries) } };
 }
 
 /**
  * Route mutations for acceptance/build/test-suite/review to the active child
- * while retaining all feature-wide state in the legacy flat document.
+ * while retaining all feature-wide state in the legacy flat document. A
+ * `last_step` written beside a region update follows that update into the
+ * child document, so resume consumers do not inherit a previous child's
+ * cursor.
  */
 export function createRoutedConductStateStore(
   root: string,
@@ -69,8 +75,13 @@ export function createRoutedConductStateStore(
     read: () => readConductStateOverlay(root, child),
     apply: (mutation) => storeFor(mutation.field).apply(mutation),
     async applyBatch(batch) {
-      const regionMutations = batch.mutations.filter((mutation) => isRegionStep(mutation.field));
-      const flatMutations = batch.mutations.filter((mutation) => !isRegionStep(mutation.field));
+      const hasRegionMutation = batch.mutations.some((mutation) => isRegionStep(mutation.field));
+      const regionMutations = batch.mutations.filter(
+        (mutation) => isRegionStep(mutation.field) || (hasRegionMutation && mutation.field === 'last_step'),
+      );
+      const flatMutations = batch.mutations.filter(
+        (mutation) => !isRegionStep(mutation.field) && !(hasRegionMutation && mutation.field === 'last_step'),
+      );
       if (regionMutations.length > 0) {
         const result = await regional.applyBatch({ name: batch.name, mutations: regionMutations });
         if (result.kind !== 'applied' && result.kind !== 'idempotent') return result;

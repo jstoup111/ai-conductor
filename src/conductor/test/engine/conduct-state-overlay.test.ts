@@ -36,4 +36,25 @@ describe('child-routed conduct state', () => {
     await expect(readFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8')).resolves.toContain('"test_suite": "done"');
     await expect(readFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), 'utf8')).resolves.toContain('"test_suite": "failed"');
   });
+
+  it('keeps a region completion cursor with its child', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conduct-state-overlay-'));
+    roots.push(root);
+    const child = parseChildId(2)!;
+    const state = createRoutedConductStateStore(root, child);
+
+    await state.applyBatch({
+      name: 'complete child build',
+      mutations: [
+        { field: 'build', expected: undefined, next: 'done', intent: 'complete child build' },
+        { field: 'last_step', expected: undefined, next: 'build', intent: 'record child cursor' },
+      ],
+    });
+
+    await expect(readConductStateOverlay(root, child)).resolves.toMatchObject({
+      ok: true,
+      value: { build: 'done', last_step: 'build' },
+    });
+    await expect(readFile(join(root, '.pipeline', 'conduct-state.json'), 'utf8')).rejects.toThrow();
+  });
 });
