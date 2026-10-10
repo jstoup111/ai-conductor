@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assembleBuildReviewAdjudicationContext,
   BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS,
+  describeBuildReviewAdjudicationContextStop,
 } from '../../src/engine/build-review-adjudication-context.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
@@ -501,5 +502,25 @@ describe('build-review adjudication context', () => {
       ok: false,
       stop: { code: 'missing-scope-evidence', subject: 'admitted-task-contracts' },
     });
+  });
+});
+
+describe('describeBuildReviewAdjudicationContextStop', () => {
+  it('names the subject, field, and bound of every stop shape', () => {
+    expect([
+      describeBuildReviewAdjudicationContextStop({ code: 'invalid-aggregate' }),
+      describeBuildReviewAdjudicationContextStop({ code: 'missing-scope-evidence', subject: 'task-status' }),
+      describeBuildReviewAdjudicationContextStop({ code: 'field-overflow', subject: 'admitted-task-contract', field: 'contract', limit: 8000, actual: 13038 }),
+      describeBuildReviewAdjudicationContextStop({ code: 'field-overflow', subject: 'prior-case', field: 'summary', limit: 8000, actual: 9000, caseId: 'case-1' }),
+      describeBuildReviewAdjudicationContextStop({ code: 'unrepresentable-prior-case', caseId: 'case-2', field: 'effect' }),
+      describeBuildReviewAdjudicationContextStop({ code: 'serialized-byte-overflow', limit: 131072, actual: 140000 }),
+    ]).toEqual([
+      'invalid-aggregate',
+      'missing-scope-evidence (task-status)',
+      'field-overflow (admitted-task-contract.contract: 13038 > 8000)',
+      'field-overflow (prior-case case-1.summary: 9000 > 8000)',
+      'unrepresentable-prior-case (case-2.effect)',
+      'serialized-byte-overflow (140000 > 131072 bytes)',
+    ]);
   });
 });

@@ -121,6 +121,56 @@ Final task body.`);
       expect(result.get('1.2')).toBe(body);
     });
 
+    it('ends the final task at a plan-level trailing section', () => {
+      const result = parsePlanTaskBodies([
+        '## Tasks',
+        '',
+        '### Task 1: First',
+        'First body.',
+        '',
+        '### Task 2: Final',
+        'Final body.',
+        '',
+        '## Task Dependency Graph',
+        '1 -> 2',
+        '',
+        '## Verification',
+        'Run the suite.',
+      ].join('\n'));
+
+      expect(result.get('2')).toBe('Final body.\n');
+    });
+
+    it('keeps deeper sub-headings and ends a task at a same-level non-task heading', () => {
+      const result = parsePlanTaskBodies([
+        '### Task 1: First',
+        'Body.',
+        '#### Done when',
+        '- it works',
+        '### Notes',
+        'Plan-level note.',
+        '### Task 2: Second',
+        'Second body.',
+      ].join('\n'));
+
+      expect(result.get('1')).toBe('Body.\n#### Done when\n- it works');
+      expect(result.get('2')).toBe('Second body.');
+    });
+
+    it('bounds bodies exactly where planTaskDigests bounds task identity', () => {
+      const plan = [
+        '## Tasks',
+        '### Task 1: Final',
+        'Body.',
+        '## Coverage Check',
+        'Trailing.',
+      ].join('\n');
+      const trailingChanged = plan.replace('Trailing.', 'Different trailing text.');
+
+      expect(parsePlanTaskBodies(trailingChanged).get('1')).toBe(parsePlanTaskBodies(plan).get('1'));
+      expect(planTaskDigests(trailingChanged).get('1')).toBe(planTaskDigests(plan).get('1'));
+    });
+
     it('returns undefined for an unknown task id', () => {
       const result = parsePlanTaskBodies('### Task 1: Only task\nBody.');
 
