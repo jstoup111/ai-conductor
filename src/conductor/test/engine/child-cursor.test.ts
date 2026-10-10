@@ -100,6 +100,18 @@ describe('resolveActiveChild', () => {
     });
   });
 
+  it('allows the next intermediate branch to be absent until lifecycle entry creates it', async () => {
+    await configureStacked(repository, true);
+    await seal(repository, [1, 2, 3]);
+    const tip = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
+    await git(['branch', 'feat/c1/demo', tip]);
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', tip]);
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'active', child: 2, position: 2, isLeaf: false, branch: 'feat/c2/demo',
+    });
+  });
+
   it('treats an empty non-leaf closure as closed and leaves the leaf active', async () => {
     await seal(repository, [1, 2]);
     const parentTip = (await git(['rev-parse', 'feat/daemon-demo'])).trim();

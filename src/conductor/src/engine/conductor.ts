@@ -173,6 +173,14 @@ import type {
   StateMutation,
   StateMutationResult,
 } from './conduct-state-store.js';
+import { createRoutedConductStateStore, readConductStateOverlay } from './conduct-state-store.js';
+import { isRegionStep, CHILD_REGION_STEPS, type ChildId } from './child-context.js';
+import { resolveActiveChild } from './child-cursor.js';
+import {
+  advanceChildRegion,
+  enterChildRegion,
+  type ActiveChildLifecycleTarget,
+} from './child-lifecycle.js';
 import {
   createStepStatusWriteRefusalDiagnostics,
   resolveConductorStateStore,
@@ -639,7 +647,7 @@ export class Conductor {
   private stateFilePath: string;
   /** Current run state, retained so terminal events can be step-stamped. */
   private haltState: ConductState = {};
-  private readonly stateStore: ConductStateStore<ConductState>;
+  private stateStore: ConductStateStore<ConductState>;
   /** Last state snapshot whose mutations this conductor has durably accepted. */
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
@@ -2283,6 +2291,19 @@ export class Conductor {
         `Protected artifact rotation refused: condition=${event.condition}${event.path ? ` path=${event.path}` : ''}`,
       );
     }
+  }
+
+  /** Adopt the cursor-selected child's overlay before a region dispatch. */
+  private async activateChildRegionState(state: ConductState, child: ChildId): Promise<void> {
+    this.stateStore = createRoutedConductStateStore(this.projectRoot, child);
+    const overlay = await readConductStateOverlay(this.projectRoot, child);
+    if (!overlay.ok) throw new Error(`cannot read child ${child} BUILD state: ${overlay.error.message}`);
+    for (const step of CHILD_REGION_STEPS) {
+      const value = overlay.value[step];
+      if (value === undefined) delete state[step];
+      else state[step] = value;
+    }
+    this.persistedStateSnapshot = { ...state };
   }
 
   /**
@@ -6462,6 +6483,10 @@ export class Conductor {
       return state.applicability_base_content_sha256 === digest ? 'base' : 'branch-only';
     };
     let lastSettledUnit: SchedulingUnitRef | undefined;
+    // The cursor is the sole authority for this cache. It is refreshed at
+    // every BUILD-region entry and after a non-leaf closure; it only avoids
+    // re-emitting lifecycle events while the same child is already checked out.
+    let activeChild: ActiveChildLifecycleTarget | undefined;
     let parkedAtOperatorBoundary = false;
     const stopAtOperatorParkBoundary =
       async (
@@ -6533,6 +6558,33 @@ export class Conductor {
         cleanupEmptyPipelineDirIfNotPreexisting();
         breadcrumb.lastAdvancedStep = step.name;
         breadcrumb.exitIndex = i;
+
+        // BUILD is a per-child region. Resolve and enter it before checking
+        // status, so a persisted child branch is always checked out before a
+        // region step can be skipped or dispatched.
+        if (isRegionStep(step.name)) {
+          const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+          if (slug) {
+            const cursor = await resolveActiveChild(this.projectRoot, slug);
+            if (cursor.kind === 'active') {
+              const target: ActiveChildLifecycleTarget = cursor;
+              const entered = await enterChildRegion(
+                this.projectRoot,
+                slug,
+                target,
+                this.events,
+                activeChild,
+              );
+              if (entered.kind === 'refused') {
+                throw new Error(`child ${target.child} region entry refused: ${entered.reason}`);
+              }
+              await this.activateChildRegionState(state, target.child);
+              activeChild = target;
+            } else if (cursor.kind !== 'no-child') {
+              throw new Error(`cannot enter BUILD region: child cursor returned ${cursor.kind}`);
+            }
+          }
+        }
 
         // Skip already-completed work. Without this, re-invoking the conductor
         // against a project with existing `done` / `skipped` state (e.g. after
@@ -13564,6 +13616,40 @@ export class Conductor {
           // next step, and a step that re-opened an upstream gate (kickback)
           // routes the loop back to plan/stories. Upstream of build → null →
           // the for loop's normal linear i++ (front half untouched).
+          // A non-leaf gets exactly one green BUILD region. Closing it creates
+          // the next child (or advances the leaf), switches cleanly, and
+          // deliberately re-enters at acceptance_specs instead of letting
+          // selectNextGate reach a whole-feature consumer.
+          if (
+            step.name === 'build_review' &&
+            activeChild !== undefined &&
+            !activeChild.isLeaf &&
+            CHILD_REGION_STEPS.every((regionStep) => {
+              const status = getStepStatus(state, regionStep);
+              return status === 'done' || status === 'skipped';
+            })
+          ) {
+            const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+            if (!slug) throw new Error('cannot advance child BUILD region without a feature slug');
+            const advanced = await advanceChildRegion(
+              this.projectRoot,
+              slug,
+              activeChild,
+              this.events,
+            );
+            if (advanced.kind === 'refused') {
+              throw new Error(`child ${activeChild.child} region exit refused: ${advanced.reason}`);
+            }
+            const next = await resolveActiveChild(this.projectRoot, slug);
+            if (next.kind !== 'active') {
+              throw new Error(`cannot resolve next child after closing ${activeChild.child}: ${next.kind}`);
+            }
+            activeChild = next;
+            await this.activateChildRegionState(state, next.child);
+            i = indexOf('acceptance_specs') - 1;
+            continue;
+          }
+
           let advance: number | null | 'halt';
           try {
             advance = await this.advanceTail(

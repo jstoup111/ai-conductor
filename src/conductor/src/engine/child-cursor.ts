@@ -123,11 +123,11 @@ export async function resolveChildBase(
   if (child === undefined) return { kind: 'none' };
 
   const git = dependencies.git ?? makeGitRunner(worktree);
-  let envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>>;
+  let envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>> | null;
   try {
     envelope = await readCoverageBindingEnvelope(worktree, envelopeFilesystem);
   } catch {
-    envelope = undefined;
+    envelope = null;
   }
   const positions = positionsFromEnvelope(envelope);
   const index = positions.indexOf(child);
@@ -234,6 +234,12 @@ export async function resolveActiveChild(
     if (nextChildBranch && !nextChildBranch.ok) return { kind: 'git-error' };
     const nextBranch = next === positions.at(-1) ? leafBranchFor(slug) : nextChildBranch!.branch;
     if (!nextBranch) return { kind: 'git-error' };
+    // The next intermediate branch is intentionally absent between closure
+    // and region entry. Its creation is startChild's responsibility, so there
+    // is no successor ancestry to validate until that branch exists.
+    const nextExists = await runGit(git, ['show-ref', '--verify', '--quiet', `refs/heads/${nextBranch}`]);
+    if (!nextExists || (nextExists.exitCode !== 0 && nextExists.exitCode !== 1)) return { kind: 'git-error' };
+    if (nextExists.exitCode === 1 && next !== positions.at(-1)) continue;
     const ancestry = await runGit(git, ['merge-base', '--is-ancestor', resolveThroughMap(closure.tip, rewrites.map), `refs/heads/${nextBranch}`]);
     if (!ancestry || (ancestry.exitCode !== 0 && ancestry.exitCode !== 1)) return { kind: 'git-error' };
     if (ancestry.exitCode === 1) {

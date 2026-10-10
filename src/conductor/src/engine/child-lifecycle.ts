@@ -9,6 +9,7 @@ import {
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
+import { resolveActiveChild } from './child-cursor.js';
 
 export type StartChildGitRunner = GitRunner;
 
@@ -24,6 +25,11 @@ export interface ChildLifecycleTarget {
   readonly child: ChildId;
   readonly position: ChildId;
   readonly branch: string;
+}
+
+/** The cursor-owned branch target needed to enter or advance a BUILD region. */
+export interface ActiveChildLifecycleTarget extends ChildLifecycleTarget {
+  readonly isLeaf: boolean;
 }
 
 export type ChildLifecycleResult =
@@ -166,6 +172,39 @@ export async function switchToChild(
   return { kind: 'completed' };
 }
 
+/**
+ * Put a clean worktree on the cursor-selected child before its first region
+ * dispatch.  The conductor owns cursor resolution; this helper owns the git
+ * probe/create/switch sequence so that no loop-local branch logic grows in
+ * conductor.ts.
+ */
+export async function enterChildRegion(
+  worktree: string,
+  slug: string,
+  target: ActiveChildLifecycleTarget,
+  emitter: ConductorEventEmitter,
+  previous?: ChildLifecycleTarget,
+  dependencies: StartChildDependencies = {},
+): Promise<ChildLifecycleResult> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const exists = await runGit(git, ['show-ref', '--verify', '--quiet', `refs/heads/${target.branch}`]);
+  if (!exists || (exists.exitCode !== 0 && exists.exitCode !== 1)) {
+    return refused(`cannot inspect child branch ${target.branch}`);
+  }
+  if (exists.exitCode === 1 && !target.isLeaf) {
+    const started = await startChild(worktree, slug, target.child, emitter, { git });
+    if (started.kind === 'refused') return started;
+  }
+  // The leaf already exists, so it never goes through startChild here.
+  if (exists.exitCode === 1 && target.isLeaf) {
+    return refused(`cannot resolve leaf branch ${target.branch}`);
+  }
+  const head = await runGit(git, ['symbolic-ref', '--short', 'HEAD']);
+  if (!head || head.exitCode !== 0) return refused('cannot determine current branch before child switch');
+  if (head.stdout.trim() === target.branch) return { kind: 'completed' };
+  return switchToChild(worktree, target, emitter, previous, { git });
+}
+
 /** Seal a non-leaf child at its current branch tip. */
 export async function closeChild(
   worktree: string,
@@ -216,4 +255,35 @@ export async function moveLeaf(
   const moved = await runGit(git, ['update-ref', `refs/heads/${branch}`, tip, oldTip]);
   if (!moved || moved.exitCode !== 0) return refused(`cannot move leaf branch ${branch}; concurrent update refused`);
   return { kind: 'completed' };
+}
+
+/**
+ * Close a completed non-leaf region, prepare the cursor's next child, and
+ * switch before its acceptance_specs dispatch.  The leaf is advanced only at
+ * the final non-leaf boundary; intermediate children are created from their
+ * predecessor's closure by enterChildRegion/startChild.
+ */
+export async function advanceChildRegion(
+  worktree: string,
+  slug: string,
+  completed: ActiveChildLifecycleTarget,
+  emitter: ConductorEventEmitter,
+  dependencies: StartChildDependencies = {},
+): Promise<ChildLifecycleResult> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const closed = await closeChild(worktree, slug, completed, emitter, { git });
+  if (closed.kind === 'refused') return closed;
+
+  const cursor = await resolveActiveChild(worktree, slug, { git });
+  if (cursor.kind !== 'active') return refused(`cannot resolve next child after closing ${completed.child}: ${cursor.kind}`);
+  const next: ActiveChildLifecycleTarget = cursor;
+
+  if (next.isLeaf) {
+    const tip = await runGit(git, ['rev-parse', '--verify', `refs/heads/${completed.branch}`]);
+    const sha = tip?.stdout.trim();
+    if (!tip || tip.exitCode !== 0 || !sha) return refused(`cannot resolve completed child branch ${completed.branch}`);
+    const moved = await moveLeaf(worktree, slug, sha, { git });
+    if (moved.kind === 'refused') return moved;
+  }
+  return enterChildRegion(worktree, slug, next, emitter, completed, { git });
 }
