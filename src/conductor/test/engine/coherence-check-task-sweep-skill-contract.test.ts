@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -12,6 +12,37 @@ async function taskOscillationSection(): Promise<string> {
   const skill = await readFile(coherenceCheckSkillPath, 'utf8');
   const start = skill.indexOf('**Task-versus-task oscillation.**');
   const end = skill.indexOf('\n**Preserved-behavior sweep.**', start);
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return skill.slice(start, end);
+}
+
+async function coherenceCheckSkill(): Promise<string> {
+  return readFile(coherenceCheckSkillPath, 'utf8');
+}
+
+function verificationSection(skill: string): string {
+  const start = skill.indexOf('## Verification');
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  return skill.slice(start);
+}
+
+function verdictVocabularySection(skill: string): string {
+  const start = skill.indexOf('### 4b. Verdict Vocabulary');
+  const end = skill.indexOf('\n### 4c.', start);
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return skill.slice(start, end);
+}
+
+function layerOwnershipSection(skill: string): string {
+  const start = skill.indexOf('**Layer ownership.**');
+  const end = skill.indexOf('\n**Task-versus-task oscillation.**', start);
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -47,5 +78,42 @@ describe('coherence-check task-versus-task sweep contract', () => {
     expect(section).toMatch(/operator as an assumption.*no `fail`/i);
     expect(section).toMatch(/nothing shared[\s\S]*need no row, section,\s+or verdict/i);
     expect(section).toMatch(/existing `task` rows[\s\S]*coverage verdicts/i);
+  });
+
+  it('assigns story, cross-layer, and task-pair sweeps to their owning checks', async () => {
+    const skill = await coherenceCheckSkill();
+    const ownership = layerOwnershipSection(skill);
+
+    expect(ownership).toMatch(/story↔story pairs belong to `\/conflict-check`/i);
+    expect(ownership).toMatch(/cross-layer pairs[\s\S]*?belong to `\/coherence-check`/i);
+    expect(ownership).toMatch(/task↔task pairs belong to `\/coherence-check`/i);
+    expect(ownership).toMatch(/`\/conflict-check` runs before `\/plan`/i);
+  });
+
+  it('limits same-layer deferrals to story pairs', async () => {
+    const skill = await coherenceCheckSkill();
+
+    expect(skill).not.toContain("same-layer pairs are `/conflict-check`'s sweep");
+    expect(skill).not.toContain('same-layer contradictions are what `/conflict-check` already sweeps for');
+
+    for (const line of skill.split('\n')) {
+      if (/same-layer/i.test(line) && /`\/conflict-check`/i.test(line)) {
+        expect(line).toMatch(/story.?story/i);
+      }
+    }
+  });
+
+  it('checks task pairs and preserves the exact verdict vocabulary', async () => {
+    const skill = await coherenceCheckSkill();
+    const verification = verificationSection(skill);
+    const verdictVocabulary = verdictVocabularySection(skill);
+    const verdicts = [...verdictVocabulary.matchAll(/^- \*\*([^*]+)\*\*/gm)].map(
+      ([, verdict]) => verdict,
+    );
+
+    expect(verification).toMatch(
+      /Task↔task pairs sharing a behavior, entity, file or fixture checked in both directions; any\s+invalidation recorded as `fail` on the `task` row\./,
+    );
+    expect(verdicts).toEqual(['covered', 'gap', 'fail']);
   });
 });
