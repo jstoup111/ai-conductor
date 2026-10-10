@@ -1,11 +1,11 @@
-// Covers: task:6
+// Covers: task:6,7
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { startChild } from '../../src/engine/child-lifecycle.js';
+import { startChild, switchToChild, type StartChildGitRunner } from '../../src/engine/child-lifecycle.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import {
   writeCoverageBindingEnvelope,
@@ -72,6 +72,7 @@ beforeEach(async () => {
   await git(['init', '-q', '-b', 'feat/daemon-demo']);
   await git(['config', 'user.email', 'test@example.com']);
   await git(['config', 'user.name', 'Test User']);
+  await writeFile(join(repository, '.git', 'info', 'exclude'), '.pipeline/\n');
   await commit('A');
 });
 
@@ -154,5 +155,77 @@ describe('startChild', () => {
     });
 
     await expect(git(['rev-parse', 'feat/c2/demo'])).resolves.toBe(`${existing}\n`);
+  });
+});
+
+describe('switchToChild', () => {
+  const firstChild = { child: parseChildId(1)!, position: parseChildId(1)!, branch: 'feat/c1/demo' };
+  const leafChild = { child: parseChildId(2)!, position: parseChildId(2)!, branch: 'feat/daemon-demo' };
+
+  it('refuses dirty paths without altering the worktree or stash', async () => {
+    await git(['branch', firstChild.branch]);
+    await mkdir(join(repository, 'src'), { recursive: true });
+    await writeFile(join(repository, 'src', 'a.ts'), 'committed work\n');
+    await git(['add', 'src/a.ts']);
+    await git(['commit', '-qm', 'track child source']);
+    await writeFile(join(repository, 'src', 'a.ts'), 'uncommitted work\n');
+    const stashBefore = await git(['stash', 'list']);
+
+    await expect(switchToChild(repository, firstChild, events().emitter)).resolves.toMatchObject({
+      kind: 'refused', reason: expect.stringContaining('src/a.ts'),
+    });
+
+    await expect(readFile(join(repository, 'src', 'a.ts'), 'utf8')).resolves.toBe('uncommitted work\n');
+    await expect(git(['stash', 'list'])).resolves.toBe(stashBefore);
+    await expect(git(['branch', '--show-current'])).resolves.toBe('feat/daemon-demo\n');
+  });
+
+  it('switches only a clean tree, clears the task stamp, and persists ordered lifecycle events', async () => {
+    await git(['branch', firstChild.branch]);
+    await mkdir(join(repository, '.pipeline'), { recursive: true });
+    await writeFile(join(repository, '.pipeline', 'current-task'), '7\n');
+    const entered = events();
+
+    await expect(switchToChild(repository, firstChild, entered.emitter)).resolves.toEqual({ kind: 'completed' });
+
+    await expect(git(['branch', '--show-current'])).resolves.toBe('feat/c1/demo\n');
+    await expect(readFile(join(repository, '.pipeline', 'current-task'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(entered.emitted).toEqual([
+      { type: 'child_started', child: 1, position: 1, branch: 'feat/c1/demo' },
+    ]);
+
+    await writeFile(join(repository, '.pipeline', 'current-task'), '7\n');
+    const switched = events();
+    await expect(switchToChild(repository, leafChild, switched.emitter, firstChild)).resolves.toEqual({ kind: 'completed' });
+
+    await expect(git(['branch', '--show-current'])).resolves.toBe('feat/daemon-demo\n');
+    await expect(readFile(join(repository, '.pipeline', 'current-task'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(switched.emitted).toEqual([
+      { type: 'child_switched', from: 1, to: 2, position: 2, branch: 'feat/daemon-demo' },
+      { type: 'child_started', child: 2, position: 2, branch: 'feat/daemon-demo' },
+    ]);
+  });
+
+  it('never asks the Git boundary to stash or autostash on either outcome', async () => {
+    const calls: string[][] = [];
+    let statusChecks = 0;
+    const gitRunner: StartChildGitRunner = async (args) => {
+      calls.push(args);
+      if (args[0] === 'status') {
+        statusChecks += 1;
+        return { exitCode: 0, stdout: statusChecks === 1 ? ' M src/a.ts\n' : '', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+
+    await expect(switchToChild(repository, firstChild, events().emitter, undefined, { git: gitRunner }))
+      .resolves.toMatchObject({ kind: 'refused', reason: expect.stringContaining('src/a.ts') });
+    await expect(switchToChild(repository, firstChild, events().emitter, undefined, { git: gitRunner }))
+      .resolves.toEqual({ kind: 'completed' });
+
+    expect(calls).toContainEqual(['status', '--porcelain']);
+    expect(calls).toContainEqual(['switch', 'feat/c1/demo']);
+    expect(calls.flat()).not.toContain('stash');
+    expect(calls.flat()).not.toContain('--autostash');
   });
 });
