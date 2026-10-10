@@ -1326,6 +1326,7 @@ export class DefaultStepRunner implements StepRunner {
             criteria: projection.projection.criteria,
             requirements,
             tasks: projection.projection.tasks,
+            waivedRequirements: 'waivedRequirements' in projection.projection.prd ? projection.projection.prd.waivedRequirements : [],
           });
           let currentHead: string | null = null;
           try {

@@ -1,4 +1,4 @@
-// Covers: task:13, task:14, task:15
+// Covers: task:5, task:13, task:14, task:15
 import { execFile } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -23,7 +23,7 @@ const execFileAsync = promisify(execFile);
 const dirs: string[] = [];
 afterEach(async () => { await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
 
-async function fixture(): Promise<string> {
+async function fixture({ waivedRequirement = false }: { waivedRequirement?: boolean } = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'prd-audit-dispatch-'));
   dirs.push(root);
   const git = (...args: string[]) => execFileAsync('git', ['-C', root, ...args]);
@@ -32,7 +32,11 @@ async function fixture(): Promise<string> {
   await mkdir(join(root, '.docs', 'plans'), { recursive: true }); await mkdir(join(root, '.docs', 'stories'), { recursive: true }); await mkdir(join(root, '.docs', 'specs'), { recursive: true }); await mkdir(join(root, '.docs', 'coherence'), { recursive: true }); await mkdir(join(root, '.pipeline'), { recursive: true });
   await writeFile(join(root, '.docs', 'plans', 'feature.md'), `# Plan\n\n**Stories:** .docs/stories/feature.md\n\n## Technical Approach\nBound the PRD audit.\n\n### Task 1: Project criteria\n\n**Story:** Story 1\n\n**Done when:**\n- the audit dispatches typed evidence\n\n### Task 2: Persist verdict\n\n**Story:** Story 1\n\n**Done when:**\n- the rendered report reflects the persisted judgment\n`);
   await writeFile(join(root, '.docs', 'stories', 'feature.md'), `# Stories\n\n## Story 1: Audit\n\n**Requirements:** FR-1\n\n### Happy Path\n- Given an active feature, when audited, then the evidence is bounded.\n\n### Negative Paths\n- Given a malformed judgment, when audited, then the engine rejects it.\n`);
-  await writeFile(join(root, '.docs', 'specs', 'feature.md'), `# PRD\n\n## Goals\n- Keep the audit bounded.\n\n## Non-Goals\n- Do not broaden review authority.\n\n## In Scope\n- Typed PRD evidence.\n\n## Out of Scope\n- Legacy Markdown parsing.\n\n## Functional Requirements\n- FR-1: The audit uses typed evidence.\n`);
+  await writeFile(join(root, '.docs', 'specs', 'feature.md'), `# PRD\n\n## Goals\n- Keep the audit bounded.\n\n## Non-Goals\n- Do not broaden review authority.\n\n## In Scope\n- Typed PRD evidence.\n\n## Out of Scope\n- Legacy Markdown parsing.\n\n## Functional Requirements\n- FR-1: The audit uses typed evidence.\n${waivedRequirement ? '- FR-17: Filers receive overlap guidance.\n' : ''}`);
+  if (waivedRequirement) {
+    await mkdir(join(root, '.docs', 'coherence-waivers'), { recursive: true });
+    await writeFile(join(root, '.docs', 'coherence-waivers', 'feature.md'), 'Waives: FR-17\n\nRationale: FR-17 is documentation.\n');
+  }
   await writeFile(join(root, '.docs', 'coherence', 'feature.md'), `# Coherence\n\n| Row Class | Id | Cited Ids | Verdict | Quote |\n| --- | --- | --- | --- | --- |\n| fr | FR-1 | story-1 | covered | The audit uses typed evidence. |\n| story | story-1 | 1, 2 | covered | Audit ownership remains attributable. |\n`);
   await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
     version: 2,
@@ -128,7 +132,7 @@ function dispatchedProjection(invoke: ReturnType<typeof vi.fn>) {
     plan: { intent: string };
     criteria: { id: string; kind: string; requirementAssociations: { path: string; requirementId: string }[] }[];
     tasks: { id: string; storyIds: string[]; doneWhen: string[] }[];
-    prd: { sources: Array<{ path: string; requirements: unknown; intent: unknown }> };
+    prd: { sources: Array<{ path: string; requirements: unknown; intent: unknown }>; waivedRequirements?: { path: string; requirementId: string; rationale: string }[] };
     coherence: unknown;
     changes: { changedFiles: unknown[]; base: string; head: string };
     history: unknown;
@@ -145,6 +149,25 @@ const passingJudgment = {
 };
 
 describe('PRD audit typed provider dispatch', () => {
+  it('dispatches a committed coherence-waived FR and settles the complete verdict', async () => {
+    const root = await fixture({ waivedRequirement: true });
+    const { invoke, runner: subject } = runner(root, { success: true, output: 'done', finalStructuredResult: passingJudgment } as InvokeResult);
+
+    await expect(subject.run('prd_audit', { complexity_tier: 'S' })).resolves.toMatchObject({ success: true });
+
+    expect(dispatchedProjection(invoke)).toMatchObject({
+      version: 6,
+      prd: {
+        sources: [expect.objectContaining({ path: '.docs/specs/feature.md' })],
+        waivedRequirements: [{ path: '.docs/specs/feature.md', requirementId: 'FR-17', rationale: 'FR-17 is documentation.' }],
+      },
+    });
+    expect(dispatchedProjection(invoke).prd.waivedRequirements).not.toContainEqual(expect.objectContaining({ requirementId: 'FR-1' }));
+    const persisted = JSON.parse(await readFile(join(root, PRD_AUDIT_VERDICT_PATH), 'utf8'));
+    expect(persisted).toMatchObject({ complete: true, diagnostics: [] });
+    expect(persisted.judgment.criterionJudgments).not.toContainEqual(expect.objectContaining({ grade: 'PLAN_GAP' }));
+  });
+
   it('projects each fixture criterion and task, then renders its validated terminal judgment', async () => {
     const root = await fixture();
     const { invoke, runner: subject } = runner(root, { success: true, output: 'done', finalStructuredResult: passingJudgment } as InvokeResult);
