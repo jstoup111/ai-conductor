@@ -4724,6 +4724,44 @@ TIER: M`,
       expect(prompts.join('\n')).not.toContain('Build Review Scope rubric');
     });
 
+    it('dispatches implementation quality as the only default rubric', async () => {
+      await scopedPlan();
+      const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => {
+        const result = { findings: [] };
+        return { success: true, output: JSON.stringify(result), exitCode: 0, finalStructuredResult: result };
+      });
+      const runner = new DefaultStepRunner({ invoke }, 'session-1', dir, {
+        gitRunner: scopedGit(),
+        planPath,
+        providerKey: 'codex',
+        config: { llm_provider: 'codex', build_review: { enabled: true } } as HarnessConfig,
+        providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('codex', invoke)]),
+        sessionStore: new ProviderSessionStore(),
+        configuredProviders: ['codex'],
+        ...currentBuildReviewProof(),
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const,
+          feature: { version: 'v1' as const, repository: dir, feature: 'feature' },
+          effective: {
+            rawVerdict: 'PASS' as const,
+            verdict: 'PASS' as const,
+            acceptedFindingIds: [],
+            unresolvedFindingIds: [],
+            suppressedFindingIds: [],
+            skippedRubrics: ['testQuality', 'security'] as const,
+            infrastructureFailureRubrics: [],
+            uncoveredInfrastructureFailureRubrics: [],
+          },
+        }),
+      });
+
+      const result = await runner.run('build_review', emptyState);
+      expect(result.success, result.output).toBe(true);
+
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(invoke.mock.calls[0]![0].prompt).toContain('name: build-review-implementation-quality');
+    });
+
     it('persists the exact dispatched rubric prompt beside the lap artifact for offline replay', async () => {
       await scopedPlan();
       const provider = createMockProvider();
