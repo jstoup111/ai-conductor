@@ -5,6 +5,11 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { reduceBuildReviewAdjudication } from '../../src/engine/build-review-adjudication.js';
+import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review-adjudication-coordinator.js';
+import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
+import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import { persistBuildReviewDecisionStop } from '../../src/engine/remediation-case-effects.js';
 import { RemediationCaseStore, type RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
 
@@ -51,6 +56,36 @@ const reducerInput = (overrides: Partial<Parameters<typeof reduceBuildReviewAdju
   ...overrides,
 });
 
+function implementationQualityAggregate() {
+  return joinBuildReviewRubricOutcomes({
+    lapId: 'lap-implementation-quality-adjudication' as never,
+    snapshotDigest: 'snapshot-implementation-quality-adjudication',
+    results: {
+      testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+      security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+      implementationQuality: {
+        kind: 'judged', rubric: 'implementationQuality',
+        lapId: 'lap-implementation-quality-adjudication' as never,
+        snapshotDigest: 'snapshot-implementation-quality-adjudication',
+        contractVersion: 'v3', verdict: 'FAIL',
+        findings: [{
+          concernKind: 'primitive-obsession',
+          summary: 'Raw strings permit invalid domain states.',
+          evidenceLocations: ['src/domain.ts:8'],
+          anchor: {
+            rubric: 'implementationQuality',
+            locus: {
+              path: 'src/domain.ts',
+              contentHash: `sha256:${'a'.repeat(64)}`,
+              display: 'changed domain state',
+            },
+          },
+        }],
+      },
+    },
+  });
+}
+
 describe('reduceBuildReviewAdjudication', () => {
   it.each([
     ['finalized non-action content', reducerInput(), 'pass'],
@@ -80,14 +115,64 @@ describe('reduceBuildReviewAdjudication', () => {
     expect(result).toMatchObject({ route: 'build', remainingMechanical: false, reason: 'applied action effect' });
   });
 
-  it('routes an acted implementation-quality source with an admitted work order to BUILD and preserves the source charge', () => {
-    const sourceId = 'implementationQuality:sha256:primitive-obsession';
-    const result = reduceBuildReviewAdjudication({
-      currentSourceIds: [sourceId], mechanical: 'healthy',
-      cases: [{ ...action(), sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-10T00:00:00.000Z' }] }],
+  it('routes an acted implementation-quality source with an admitted work order to BUILD and preserves the source charge', async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'implementation-quality-adjudication-'));
+    const aggregate = implementationQualityAggregate();
+    const source = projectBuildReviewAggregateSources(aggregate)?.[0];
+    if (!source) throw new Error('expected implementation-quality source');
+    const sourceId = buildReviewAdjudicationSourceId(source);
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'implementation-quality-case' }],
+      cases: [{
+        caseRef: 'implementation-quality-case', disposition: 'act', priority: 'medium', confidence: 'high',
+        rationale: 'Task 8 owns the implementation-quality repair.',
+        effect: {
+          kind: 'action', route: 'build', tasks: [{
+            title: 'Replace the raw domain-state string with an explicit domain type.',
+            admittedTaskIds: ['8'], admissionRationale: 'Task 8 owns implementation-quality remediation.',
+          }],
+        },
+      }],
+      consistency: {
+        verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['implementation-quality-case'],
+        rationale: 'The repair is bounded to the admitted task.',
+      },
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      projectRoot,
+      feature: { version: 'v1', repository: 'acme/repo', feature: 'implementation-quality' },
+      aggregate, operatorResolvedFindingIds: new Set<string>(), mechanical: 'healthy', judge: async () => judgement,
+      chargeInput: { treeHash: 'tree-implementation-quality', resolvedCount: 1, reason: 'implementation-quality fixture' },
+      generateId: (() => {
+        const ids = ['case-implementation-quality', 'effect-implementation-quality'];
+        return () => ids.shift()!;
+      })(),
+      readPlanContract: async () => ({
+        path: '.docs/plans/implementation-quality.md', pointers: [],
+        admittedTaskContracts: [{ id: '8', contract: 'Route implementationQuality findings through admission, caps, and dispositions.' }],
+      }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '8', status: 'in_progress' }] }),
     });
 
-    expect(result).toMatchObject({ route: 'build', remainingMechanical: false, reason: 'applied action effect' });
+    expect(source).toMatchObject({ rubric: 'implementationQuality' });
+    expect(result).toMatchObject({ ok: true, route: 'build', durable: { repairCaseIds: ['case-implementation-quality'] } });
+    expect(JSON.parse(await readFile(join(projectRoot, '.pipeline', 'build-review-work-order.json'), 'utf8'))).toMatchObject({
+      effectId: 'effect-implementation-quality',
+      cases: [{
+        caseId: 'case-implementation-quality',
+        tasks: [{ admittedTaskIds: ['8'] }],
+      }],
+    });
+    await expect(new RemediationCaseStore(projectRoot, { version: 'v1', repository: 'acme/repo', feature: 'implementation-quality' }).read())
+      .resolves.toMatchObject({ ok: true, state: { cases: [{
+        sources: [{ sourceId, outcome: 'acted' }],
+        effect: { id: 'effect-implementation-quality', kind: 'action', status: 'applied' },
+      }] } });
+    await expect(readKickbackLedger(projectRoot)).resolves.toMatchObject({ gates: { build_review: {
+      count: 1, cumulative: 1, chargedEffectIds: ['effect-implementation-quality'],
+    } } });
   });
 
   it.each([
