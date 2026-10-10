@@ -8,6 +8,13 @@ import {
   parsePlanTaskVerifyOnly,
 } from './autoheal.js';
 import { readEngineState } from './engine-state-store.js';
+import {
+  COVERAGE_BINDING_COMPLETION_STATUSES,
+  coverageBindingEnvelopePath,
+  parseCoverageBindingEnvelope,
+  projectChildOwnership,
+} from './coverage-binding-envelope.js';
+import { parseChildId, type ChildId } from './child-context.js';
 import { createRepairObligationStore, repairPlanIdentity, type RepairObligation } from './repair-obligations.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen, TEST_DONE_WHEN_TAG } from './plan-task-parse.js';
@@ -43,7 +50,7 @@ import type { ConductorEventEmitter } from '../ui/events.js';
  * work and we auto-hand-off to interactive mode rather than burning the
  * rest of the budget.
  */
-export async function countResolvedTasks(projectRoot: string): Promise<number> {
+export async function countResolvedTasks(projectRoot: string, activeChild?: ChildId): Promise<number> {
   const statusPath = join(projectRoot, '.pipeline/task-status.json');
   let raw: string;
   try {
@@ -61,9 +68,87 @@ export async function countResolvedTasks(projectRoot: string): Promise<number> {
   const tasks = normalizeTasks(parsed);
   if (tasks.length === 0) return 0;
 
-  const planIds = tasks.map((t) => t.id).filter((id): id is string => id !== undefined);
+  let planIds = tasks.map((t) => t.id).filter((id): id is string => id !== undefined);
+  if (activeChild !== undefined) {
+    const scope = await resolveChildTaskScope(projectRoot, activeChild);
+    // An unreadable child membership must never let unrelated completed rows
+    // count as progress.  Returning zero is the count API's existing
+    // fail-closed representation for unavailable task state.
+    if (scope.kind === 'refused') return 0;
+    planIds = scope.taskIds;
+  }
+  if (planIds.length === 0) return 0;
   const resolved = await resolveTaskIds(projectRoot, planIds);
   return resolved.size;
+}
+
+export type ChildTaskScope =
+  | { kind: 'available'; taskIds: string[] }
+  | { kind: 'refused'; reason: string };
+
+/**
+ * The authoritative task set for one stacked BUILD child.  Plan slices are
+ * sealed in coverage-binding; remediation tasks are additive and belong only
+ * to the child recorded at append time.  A present remediation id without
+ * that attribution is unsafe to assign speculatively, so it refuses rather
+ * than silently dropping it.
+ */
+export async function resolveChildTaskScope(
+  projectRoot: string,
+  child: ChildId,
+): Promise<ChildTaskScope> {
+  let envelope;
+  try {
+    envelope = parseCoverageBindingEnvelope(
+      JSON.parse(await readFile(coverageBindingEnvelopePath(projectRoot), 'utf8')),
+    );
+  } catch {
+    envelope = null;
+  }
+  if (
+    envelope === null ||
+    !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status) ||
+    envelope.sliceMembership === undefined
+  ) {
+    return {
+      kind: 'refused',
+      reason: `child ${child} task membership is unavailable: coverage-binding slice membership is missing or invalid`,
+    };
+  }
+
+  const state = await readEngineState(join(projectRoot, '.pipeline', 'engine-state.json'));
+  if (!state.ok) {
+    return {
+      kind: 'refused',
+      reason: `child ${child} task membership is unavailable: engine state is unreadable (${state.message})`,
+    };
+  }
+  const rawRecorded = state.value.appendedRemediationTaskIds;
+  if (rawRecorded !== undefined && (!Array.isArray(rawRecorded) || !rawRecorded.every((id) => typeof id === 'string' && id.length > 0))) {
+    return {
+      kind: 'refused',
+      reason: `child ${child} task membership is unavailable: appended remediation task ids are invalid`,
+    };
+  }
+  const recorded = (rawRecorded ?? []) as string[];
+  const rawChildren = state.value.appendedRemediationTaskChildren;
+  const children =
+    rawChildren !== null && typeof rawChildren === 'object' && !Array.isArray(rawChildren)
+      ? rawChildren as Record<string, unknown>
+      : undefined;
+  for (const id of recorded) {
+    const owner = typeof children?.[id] === 'number' ? parseChildId(children[id] as number) : undefined;
+    if (owner === undefined) {
+      return {
+        kind: 'refused',
+        reason: `child ${child} task membership is unavailable: remediation task ${id} has no recorded child`,
+      };
+    }
+  }
+
+  const owned = projectChildOwnership(envelope, child).taskIds;
+  const remediation = recorded.filter((id) => children?.[id] === child);
+  return { kind: 'available', taskIds: [...new Set([...owned, ...remediation])] };
 }
 
 /**
@@ -104,16 +189,20 @@ export async function resolveTaskIdsWithDiagnostics(
   }
 
   const tasks = normalizeTasks(parsed);
+  const planIdSet = new Set(planIds);
 
   const resolved = new Set<string>();
   for (const t of tasks) {
-    if ((t.status === 'completed' || t.status === 'skipped') && t.id !== undefined) {
+    if (
+      (t.status === 'completed' || t.status === 'skipped') &&
+      t.id !== undefined &&
+      planIdSet.has(t.id)
+    ) {
       resolved.add(t.id);
     }
   }
 
   const trailerIds = await distinctTaskTrailerIds(projectRoot);
-  const planIdSet = new Set(planIds);
   for (const id of trailerIds) {
     const canonical = canonicalTaskId(id);
     const match = planIdSet.has(id)

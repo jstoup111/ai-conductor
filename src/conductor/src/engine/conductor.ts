@@ -6400,7 +6400,7 @@ export class Conductor {
     const consumeKickbackBudget = async (gate: StepName, reason: string) => {
       const [treeHash, resolvedCount] = await Promise.all([
         currentTreeHash(this.projectRoot),
-        countResolvedTasks(this.projectRoot),
+        countResolvedTasks(this.projectRoot, this.activeRegionChild),
       ]);
       return bumpKickbackGateInLedger(this.projectRoot, gate, {
         treeHash,
@@ -6421,7 +6421,7 @@ export class Conductor {
         ? [baseline.treeHash, baseline.resolvedCount]
         : await Promise.all([
           currentTreeHash(this.projectRoot),
-          countResolvedTasks(this.projectRoot),
+          countResolvedTasks(this.projectRoot, this.activeRegionChild),
         ]);
       await updateKickbackLedger(this.projectRoot, (ledger) => {
         const existing = ledger.gates[sourceGate];
@@ -6477,7 +6477,7 @@ export class Conductor {
       if (!ctx) return { halt: false };
       const [treeAfter, resolvedAfter] = await Promise.all([
         currentTreeHash(this.projectRoot),
-        countResolvedTasks(this.projectRoot),
+        countResolvedTasks(this.projectRoot, this.activeRegionChild),
       ]);
       const progress = classifyBuildProgress({
         treeBefore: ctx.treeHash,
@@ -9383,7 +9383,7 @@ export class Conductor {
         // so the circuit breaker can detect "Claude ran but completed zero
         // additional tasks" = no point retrying further, hand off to REPL.
         let resolvedTasksBefore = step.name === 'build'
-          ? await countResolvedTasks(this.projectRoot)
+          ? await countResolvedTasks(this.projectRoot, this.activeRegionChild)
           : 0;
         // T4 (adr-2026-07-12-progress-aware-build-halt): bounded counter for
         // "attempts bypassed because this attempt made real forward
@@ -9883,7 +9883,7 @@ export class Conductor {
               // Re-read fresh from disk rather than writing the possibly-
               // stale in-memory snapshot — same reason as the other T7 stamps.
               const freshEvidence = await createTaskEvidence(this.projectRoot);
-              freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+              freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
               await freshEvidence.write();
             }
           } else
@@ -10082,7 +10082,7 @@ export class Conductor {
             !result.success
           ) {
             const [resolvedTasksAfter, headShaAttemptEnd] = await Promise.all([
-              countResolvedTasks(this.projectRoot),
+              countResolvedTasks(this.projectRoot, this.activeRegionChild),
               currentCommitSha(this.projectRoot),
             ]);
             const headMovedThisAttempt =
@@ -10282,7 +10282,7 @@ export class Conductor {
               const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
                 currentCommitSha(this.projectRoot),
                 currentTreeHash(this.projectRoot),
-                countResolvedTasks(this.projectRoot),
+                countResolvedTasks(this.projectRoot, this.activeRegionChild),
               ]);
               const outcomeStore = await readBuildOutcome(this.projectRoot);
               const note = result.output ? result.output.split('\n').slice(-200) : undefined;
@@ -11406,7 +11406,7 @@ export class Conductor {
               let progressAttemptCeiling: number | undefined;
               if (step.name === 'build') {
                 const headShaAfterBuild = await currentCommitSha(this.projectRoot);
-                const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
+                const resolvedTasksAfter = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
                 // #505 TS: Capture retry task counts for step_retry emit (before resolvedTasksBefore is overwritten).
                 retryResolvedBefore = resolvedTasksBefore;
                 retryResolvedAfter = resolvedTasksAfter;
@@ -11438,7 +11438,7 @@ export class Conductor {
                   // the terminal HALT fallback in case this build step
                   // ultimately exhausts retries after this stall.
                   lastBuildStallReason =
-                    `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))` +
+                    `build stalled${this.activeRegionChild === undefined ? '' : ` for child ${this.activeRegionChild}`}: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))` +
                     (completion.reason ? `\nCompletion gate: ${completion.reason}` : '');
                 } else if (
                   attempt >= 2 &&
@@ -11964,7 +11964,7 @@ export class Conductor {
                 // Conductor's start and this exit, and blindly writing the
                 // stale snapshot would clobber them.
                 const freshEvidence = await createTaskEvidence(this.projectRoot);
-                freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+                freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
                 await freshEvidence.write();
               }
               // Task 8 (builds-stall-when-work-lands-without-task-trailer-):
@@ -12013,7 +12013,7 @@ export class Conductor {
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 if (this.taskEvidence) {
                   const freshEvidence = await createTaskEvidence(this.projectRoot);
-                  freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+                  freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
                   await freshEvidence.write();
                 }
                 succeeded = true;
@@ -12034,7 +12034,7 @@ export class Conductor {
             // exhausted exit above for why this must not write the stale
             // in-memory `this.taskEvidence` snapshot.
             const freshEvidence = await createTaskEvidence(this.projectRoot);
-            freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+            freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
             await freshEvidence.write();
           }
 
@@ -12086,7 +12086,7 @@ export class Conductor {
             const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
               currentCommitSha(this.projectRoot),
               currentTreeHash(this.projectRoot),
-              countResolvedTasks(this.projectRoot),
+              countResolvedTasks(this.projectRoot, this.activeRegionChild),
             ]);
             const outcomeStore = await readBuildOutcome(this.projectRoot);
             const note = lastError ? lastError.split('\n').slice(-200) : undefined;
@@ -12418,7 +12418,7 @@ export class Conductor {
                     mechanical,
                     chargeInput: {
                       treeHash: await currentTreeHash(this.projectRoot),
-                      resolvedCount: await countResolvedTasks(this.projectRoot),
+                      resolvedCount: await countResolvedTasks(this.projectRoot, this.activeRegionChild),
                       reason: buildReviewFailureDetails(parsed).join('\n') || 'build_review adjudicated action',
                     },
                     ...(this.buildReviewChargeEffect === undefined ? {} : { chargeEffect: this.buildReviewChargeEffect }),
@@ -13674,7 +13674,7 @@ export class Conductor {
             const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
               currentCommitSha(this.projectRoot),
               currentTreeHash(this.projectRoot),
-              countResolvedTasks(this.projectRoot),
+              countResolvedTasks(this.projectRoot, this.activeRegionChild),
             ]);
             const outcomeStore = await readBuildOutcome(this.projectRoot);
             completedBuildTreeAfter = treeAfter;
@@ -14125,7 +14125,7 @@ export class Conductor {
       if (v && v.satisfied === false && v.kickback?.from === stepName) {
         const [treeHash, resolvedCount] = await Promise.all([
           currentTreeHash(this.projectRoot),
-          countResolvedTasks(this.projectRoot),
+          countResolvedTasks(this.projectRoot, this.activeRegionChild),
         ]);
         const kickback = await bumpKickbackGateInLedger(this.projectRoot, target, {
           treeHash,

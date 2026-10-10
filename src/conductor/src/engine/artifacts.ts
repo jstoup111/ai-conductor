@@ -43,6 +43,7 @@ import { resolveGateCodeValidityConfig } from './config.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import {
   HALT_MARKER_RELATIVE as HALT_MARKER,
+  resolveChildTaskScope,
   resolveTaskIdsWithDiagnostics,
 } from './task-progress.js';
 export { HALT_MARKER };
@@ -3089,9 +3090,22 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       // task is trailer-evidenced but rows are still pending/in_progress
       // (rows never explicitly flipped) previously false-halted here at
       // 100% real completion.
-      const taskResolution = await resolveTaskIdsWithDiagnostics(ctx.projectRoot, planTaskIds);
+      let scopedTaskIds = planTaskIds;
+      if (ctx.activeChild !== undefined) {
+        const scope = await resolveChildTaskScope(ctx.projectRoot, ctx.activeChild);
+        if (scope.kind === 'refused') return { done: false, reason: scope.reason };
+        const absentFromPlan = scope.taskIds.filter((id) => !planTaskIds.includes(id));
+        if (absentFromPlan.length > 0) {
+          return {
+            done: false,
+            reason: `child ${ctx.activeChild} task membership names task(s) absent from the plan: ${absentFromPlan.join(', ')}`,
+          };
+        }
+        scopedTaskIds = scope.taskIds;
+      }
+      const taskResolution = await resolveTaskIdsWithDiagnostics(ctx.projectRoot, scopedTaskIds);
       const resolvedIds = taskResolution.resolved;
-      const unresolved = planTaskIds.filter((id) => !resolvedIds.has(id));
+      const unresolved = scopedTaskIds.filter((id) => !resolvedIds.has(id));
 
       if (unresolved.length > 0) {
         const { parsePlanTasks } = await import('./autoheal.js');
@@ -3111,7 +3125,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           .find((reason): reason is string => Boolean(reason));
         return {
           done: false,
-          reason: `${unresolved.length}/${planTaskIds.length} tasks pending/not completed: ${ids} — ${titles}` +
+          reason: `${unresolved.length}/${scopedTaskIds.length} tasks pending/not completed: ${ids} — ${titles}` +
             (repairReason ? `; ${repairReason}` : ''),
         };
       }
