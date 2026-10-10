@@ -10875,14 +10875,10 @@ export class Conductor {
               });
               if (retryDecision.decision === 'route') break;
             }
-            const isVerdictStep =
-              step.name === 'architecture_review_as_built' ||
-              step.name === 'prd_audit' ||
-              step.name === 'build_review';
             if (
               this.daemon &&
               retryRoutingEnabled &&
-              isVerdictStep &&
+              step.name !== 'build' &&
               result.unretryableInputs !== undefined
             ) {
               const retryDecision = classifyRetryDecision({
@@ -12240,6 +12236,12 @@ export class Conductor {
               continue;
             }
 
+            // A runner's typed unretryable-input failure cannot be repaired by
+            // any step-specific recovery route. Preserve advisory skips above,
+            // then let the common terminal below record the needs-human halt.
+            let finishRemediationPlannerFault: string | undefined;
+            if (unretryableInputFailure === undefined) {
+
             // prd-audit gap-aware routing (daemon only). A blocking audit halts
             // today regardless of cause. Instead, distinguish WHO can close the
             // gap: a pure implementation gap (impl-gap) is the daemon's to fix —
@@ -13314,7 +13316,6 @@ export class Conductor {
             // no-plan finish round deliberately keeps the established terminal
             // (rather than inventing a remediation-specific halt), but it must
             // not erase the diagnostic that explains why no route occurred.
-            let finishRemediationPlannerFault: string | undefined;
             if (
               this.daemon &&
               step.name === 'finish' &&
@@ -13428,6 +13429,8 @@ export class Conductor {
               // No usable remediation plan → preserve its final named fault
               // on the existing generic FINISH terminal below.
               finishRemediationPlannerFault = outcome.reason;
+            }
+
             }
 
             // Unattended hard failure on a gating/structural step. Write a HALT
