@@ -30,7 +30,7 @@ const PRD_AUDIT_DIFF_EXCERPT_TOTAL_BYTES = 512 * 1024;
 
 /** Largest observed normal source inputs at the time these engineering bounds were set. */
 export const PRD_AUDIT_PROJECTION_CORPUS_MAXIMA_BYTES = {
-  planIntentBytes: 783,
+  planIntentBytes: 952,
   planTasksBytes: 146_186,
   criteriaBytes: 43_226,
   prdIntentBytes: 17_991,
