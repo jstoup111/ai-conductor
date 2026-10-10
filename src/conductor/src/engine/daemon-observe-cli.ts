@@ -23,6 +23,7 @@ import { isEngineVersionId } from './engine-store.js';
 import { readGatedSnapshot, type GatedSpecItem, type GatedRepoItem, type Clock } from './gated-snapshot.js';
 import { summarizeAccuracyLedger } from './attribution-audit.js';
 import { scanInheritedState } from './daemon-dashboard.js';
+import { formatHeartbeatAge } from './step-heartbeat.js';
 import { prdAuditAppendCap } from './remediation-caps.js';
 import { loadConfig } from './config.js';
 import { readGrowth, readKickbackLedger } from './kickback-ledger.js';
@@ -637,6 +638,26 @@ async function renderInapplicableSection(repoPath: string, out: (line: string) =
   }
 }
 
+/** Render persisted active steps only while the daemon owning them is live. */
+export async function renderInFlightSection(
+  repoPath: string,
+  out: (line: string) => void,
+  clock: () => Date,
+): Promise<void> {
+  const state = await scanInheritedState({
+    worktreeBase: join(repoPath, '.worktrees'),
+    processedDir: join(repoPath, '.daemon', 'processed'),
+    discover: async () => [],
+    now: () => clock().getTime(),
+  });
+  const now = clock().getTime();
+  for (const feature of state.inProgress) {
+    for (const step of feature.inFlight ?? []) {
+      out(`  IN FLIGHT [${feature.slug}]: ${step.step} running ${formatHeartbeatAge(Math.max(0, now - step.startedAtMs))}`);
+    }
+  }
+}
+
 /**
  * `conduct daemon status` — read-only sweep of the registry. Always exits 0
  * (stale/missing entries are reported, not errors). Returns the rows for testing.
@@ -685,6 +706,7 @@ export async function runDaemonStatus(
       await renderBlockedSection(record.path, out, clock);
       await renderAgreementLine(record.path, out);
       await renderInapplicableSection(record.path, out);
+      if (row.liveness === 'running') await renderInFlightSection(record.path, out, clock);
       await renderPlanGrowthSection(record.path, out);
     }
   }
