@@ -2,6 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   parseAdrAssumptionLedger,
+  stripFencedCodeBlocks,
   type AdrLedgerDiagnostic,
 } from './artifacts.js';
 import { makeGitRunner, originDefaultBranch } from './rebase.js';
@@ -34,12 +35,13 @@ async function resolveMergeBase(
   if (suppliedMergeBase) return { kind: 'resolved', sha: suppliedMergeBase };
 
   const git = makeGitRunner(worktreePath);
-  const localBase = baseRef ?? 'main';
   const originBranch = await originDefaultBranch(git);
   const originRef = originBranch ? `origin/${originBranch}` : undefined;
   const originExists = originRef !== undefined
     && (await git(['rev-parse', '--verify', '--quiet', `${originRef}^{commit}`])).exitCode === 0;
-  const comparisonBase = originExists ? originRef! : localBase;
+  const comparisonBase = originExists
+    ? originRef!
+    : baseRef ?? originBranch ?? 'main';
   const mergeBase = await git(['merge-base', comparisonBase, 'HEAD']);
   const sha = mergeBase.stdout.trim();
   if (mergeBase.exitCode !== 0 || sha === '') {
@@ -102,7 +104,7 @@ export async function evaluateAdrAssumptionLedgers(
       changed = baseContent.stdout !== content;
     }
 
-    if (!added && (!changed || !ASSUMPTIONS_HEADING.test(content))) continue;
+    if (!added && (!changed || !ASSUMPTIONS_HEADING.test(stripFencedCodeBlocks(content)))) continue;
     const parsed = parseAdrAssumptionLedger(content);
     if (parsed.kind === 'diagnostics') failures.push({ path, diagnostics: parsed.diagnostics });
   }

@@ -74,6 +74,41 @@ describe('evaluateAdrAssumptionLedgers', () => {
     });
   });
 
+  it('falls back to the local origin default branch when its tracking ref is absent', async () => {
+    await git('branch', 'trunk');
+    await git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+    await git('checkout', 'trunk');
+    await write('.docs/decisions/adr-2026-01-05-trunk-legacy.md', '# ADR: Trunk legacy\n\n**Status:** APPROVED\n');
+    await commitAll(repo, 'add trunk-only legacy ADR');
+    await git('checkout', '-b', 'feature-from-trunk');
+    await write('.docs/decisions/adr-2026-01-05-trunk-legacy.md', '# ADR: Trunk legacy\n\n**Status:** SUPERSEDED\n');
+    await commitAll(repo, 'change trunk legacy ADR');
+
+    await expect(evaluateAdrAssumptionLedgers({ worktreePath: repo })).resolves.toEqual({
+      kind: 'evaluated',
+      failures: [],
+    });
+  });
+
+  it('does not opt a changed legacy ADR into parsing for a fenced assumptions example', async () => {
+    await write('.docs/decisions/adr-2026-01-01-legacy.md', [
+      '# ADR: Legacy',
+      '',
+      '**Status:** SUPERSEDED',
+      '',
+      '```markdown',
+      '## Assumptions',
+      '```',
+      '',
+    ].join('\n'));
+    await commitAll(repo, 'add fenced assumptions example to legacy ADR');
+
+    await expect(evaluateAdrAssumptionLedgers({ worktreePath: repo, baseRef: 'main' })).resolves.toEqual({
+      kind: 'evaluated',
+      failures: [],
+    });
+  });
+
   it('fails closed when no merge base can be resolved', async () => {
     await git('checkout', '--orphan', 'unrelated-feature');
     await commitAll(repo, 'unrelated history');
