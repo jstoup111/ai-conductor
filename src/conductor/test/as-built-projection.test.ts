@@ -1,4 +1,4 @@
-// Covers: task:6, task:7, task:8
+// Covers: task:3, task:6, task:7, task:8
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, readdir, readFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -230,6 +230,54 @@ D1.1 — Additive amendment for the first decision.
         id: '1',
         text: 'First plan decision declaration.\nIts multi-line body remains part of the decision.\n\nD1.1 — Additive amendment for the first decision.',
       },
+      { id: '2', text: 'Second decision.' },
+    ]);
+  });
+
+  it('projects ATX-numbered decision headings with their bounded bodies', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'decisions', 'adr-plan-one.md'), `# ADR
+
+Status: APPROVED
+
+## Decision
+
+### 1. First decision.
+### 2. Second decision.
+Its body stays with decision two.
+### 3. Third decision.
+### 4. Fourth decision.
+`);
+
+    const result = await buildAsBuiltProjection(root);
+    if (!result.ok) throw new Error('expected a projection with the governing ADR');
+
+    expect(result.projection.governingAdrs.find((adr) => adr.stem === 'adr-plan-one')?.decisions).toEqual([
+      { id: '1', text: 'First decision.' },
+      { id: '2', text: 'Second decision.\nIts body stays with decision two.' },
+      { id: '3', text: 'Third decision.' },
+      { id: '4', text: 'Fourth decision.' },
+    ]);
+  });
+
+  it('prefers an ATX-numbered heading over a later decision-index line for the same id', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'decisions', 'adr-plan-one.md'), `# ADR
+
+Status: APPROVED
+
+## Decision
+
+### 1. First decision.
+### 2. Second decision.
+**D1** — First summary.
+`);
+
+    const result = await buildAsBuiltProjection(root);
+    if (!result.ok) throw new Error('expected a projection with the governing ADR');
+
+    expect(result.projection.governingAdrs.find((adr) => adr.stem === 'adr-plan-one')?.decisions).toEqual([
+      { id: '1', text: 'First decision.' },
       { id: '2', text: 'Second decision.' },
     ]);
   });

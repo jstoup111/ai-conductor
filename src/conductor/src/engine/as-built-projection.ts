@@ -90,8 +90,8 @@ function decisionText(content: string, id: string): string {
   // Same blockquote-aware grammar as parseAdrDecisions: additive amendments
   // are conventionally written as `> **D6.2 — ...**` blockquotes.
   const lines = section.split('\n').map((line) => line.replace(/^\s{0,3}>\s?/, ''));
-  const declaration = new RegExp(`^\\s*(?:\\*{0,2}${id}\\.\\s+|#{0,6}\\s*\\*{0,2}D${id}(?!\\.)\\b)`);
-  const nextDeclaration = /^\s*(?:\*{0,2}\d+\.\s+|#{0,6}\s*\*{0,2}D\d+(?!\.)\b)/;
+  const declaration = new RegExp(`^\\s*(?:(?:#{1,6}\\s+)?\\*{0,2}${id}\\.\\s+|#{0,6}\\s*\\*{0,2}D${id}(?!\\.)\\b)`);
+  const nextDeclaration = /^\s*(?:(?:#{1,6}\s+)?\*{0,2}\d+\.\s+|#{0,6}\s*\*{0,2}D\d+(?!\.)\b)/;
   const anyAmendment = /^\s*(?:[-*]\s*)?\*{0,2}D\d+\.\d+\b/;
   const amendedMarker = /^\s*\*{0,2}Amended\b/i;
   const isBoundary = (line: string): boolean =>
@@ -108,7 +108,7 @@ function decisionText(content: string, id: string): string {
 
   const decisionLines = collect(start);
   decisionLines[0] = decisionLines[0]!
-    .replace(/^\s*(?:\*{0,2}\d+\.\s+|#{0,6}\s*\*{0,2}D\d+\s*[—:-]?\s*)/, '');
+    .replace(/^\s*(?:(?:#{1,6}\s+)?\*{0,2}\d+\.\s+|#{0,6}\s*\*{0,2}D\d+\s*[—:-]?\s*)/, '');
 
   // Additive decision amendments conventionally follow the numbered decisions,
   // so retain each amendment's full multi-line body under its owning decision
