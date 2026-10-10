@@ -65,7 +65,7 @@ any non-null result, before any step dispatches. That conflates three different 
    for rerun. No completed operation names a preserved gate it did not stamp. Then resume proceeds
    through the normal clamp.
 
-> **Amended 2026-10-10 by #2943:** The stack preflight recovers the restack journal first; while a journal exists it owns any `applying` record it wrote and classification is deferred until it reaches `applied` (`adr-2026-10-10-stacked-restack-journaled-replay` decision 7).
+> **Amended 2026-10-10 by #2943:** The stack preflight recovers the restack journal first; while a journal exists it owns any `applying` record it wrote and classification is deferred until the journal is gone (`adr-2026-10-10-stacked-restack-journaled-replay` decision 7).
 3. **Fallbacks are fail-closed re-checks, never preservation.** A provisional `preparing-…`
    descriptor (no transition yet) completes by invalidating every gate downstream of `rebase` with
    no preservation. A full `applying` descriptor without persisted candidates (written before this

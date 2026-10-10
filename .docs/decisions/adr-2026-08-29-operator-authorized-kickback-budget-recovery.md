@@ -144,6 +144,8 @@ new dispatch; the kickback-ledger lease serializes against any last in-flight le
 missing/mismatched halt, unclassified or different halt class, unresolved feature, lost lease, or
 changed ledger snapshot refuses toward parked/halted.
 
+> **Amended 2026-10-10 by #2943:** For the `restack` pseudo-gate, `--child` names the originating child and is validated against the `cascades` ref rather than the child directory (`adr-2026-10-10-stacked-restack-journaled-replay` decision 10).
+
 ### D5 — A staged adjustment is the crash-recovery journal
 
 Under the ledger lease, the command writes a `pendingAdjustment` with a unique adjustment id, kind,

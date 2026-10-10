@@ -288,6 +288,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 
 > **Amended 2026-10-07 by #2942:** Without `--child`, `rewind`, `task` and `kickback-budget` now default to the active child of a feature with children; byte-identity without the flag holds for features with no children. `kickback-budget raise|reset --child` are offered. `rewind --child k` for a closed child is refused naming #2943, and the downstream cascade over children above k applies only to children that are not closed (`adr-2026-10-07-per-child-build-region` decisions 10–11).
 
+> **Amended 2026-10-10 by #2943:** `kickback-budget raise|reset --gate restack --child <k>` is the one exception: it validates `<k>` against `refs/conductor/<slug>/cascades`, not `.pipeline/children/<k>/`, so cascade-cap recovery survives worktree recreation (`adr-2026-10-10-stacked-restack-journaled-replay` decision 10).
+
 14. **The N=1 contract is structural and proven by golden tests.**
     - With no child there is no `children/` directory, no new key, and no event field.
     - A golden suite of committed fixture files, recorded from the pre-change base, is added in the
