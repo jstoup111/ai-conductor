@@ -356,6 +356,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   cause: contradictory FRs go to `prd`, incompatible design goes to `architecture_review`, pure phrasing
   is resolved in `stories`. In an unattended run a blocking conflict HALTs for a human — never a silent
   pass.
+- **Layer ownership** — story↔story pairs only. Cross-layer and task↔task pairs belong to
+  `coherence-check`, because this step runs before `plan` creates tasks.
 
 ### plan
 
@@ -427,6 +429,12 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   on whether a cited FR is actually *delivered* by that story's scenarios — a correct citation the
   acceptance criteria contradict is `fail`, not `covered`. Story-versus-story contradictions stay with
   `conflict-check`; this skill compares each story against the PRD.
+- **Task-versus-task sweep** — owns task↔task and cross-layer oscillation; story↔story pairs belong
+  to `conflict-check`, which runs before tasks exist. For each task pair sharing a behavior, entity,
+  file, or fixture, it asks whether completing one task leaves the other's `Done when` true, in both
+  directions; an acyclic dependency graph is not evidence of compatibility. An invalidation grounded in
+  quoted text from both tasks sets the affected `task` row to `fail` (never a new verdict word);
+  ungrounded suspicions are raised as assumptions, and pairs sharing nothing add no rows.
 - **Gate role** — blocking. It authors the artifact the land-time coherence gate validates. Verdicts are
   exactly `covered`, `gap`, or `fail` — `fail` marks a row whose counterpart exists but contradicts it
   or whose cited task checks cannot deliver the criterion under approved architecture,
