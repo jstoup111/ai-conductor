@@ -306,8 +306,8 @@ describe('kickback-ledger', () => {
 
     const config = {} as HarnessConfig;
     const [prdAudit, asBuilt] = await Promise.all([
-      readRemediationGateAppendBudget(dir, config, 'prd_audit', 2, 1, 1, 4),
-      readRemediationGateAppendBudget(dir, config, 'architecture_review_as_built', 2, 1, 1, 4),
+      readRemediationGateAppendBudget(dir, config, 'prd_audit', 2, 1, 1),
+      readRemediationGateAppendBudget(dir, config, 'architecture_review_as_built', 2, 1, 1),
     ]);
 
     expect({

@@ -4333,7 +4333,6 @@ export class Conductor {
     let prdAuditBudget: RemediationGateAppendBudget | undefined;
     let asBuiltBudget: RemediationGateAppendBudget | undefined;
     if (allTasks.length > 0 || prdAuditTasks.length > 0 || asBuiltTasks.length > 0) {
-      const authoredTaskCount = activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0;
       try {
         prdAuditBudget = prdAuditCapEnforced
           ? await readRemediationGateAppendBudget(
@@ -4343,7 +4342,6 @@ export class Conductor {
             prdAuditLapCap,
             prdAuditTasks.length,
             prdAuditGrowthTasks.length,
-            authoredTaskCount,
           )
           : undefined;
         asBuiltBudget = asBuiltCapEnforced
@@ -4354,7 +4352,6 @@ export class Conductor {
             asBuiltLapCap,
             asBuiltTasks.length,
             asBuiltGrowthTasks.length,
-            authoredTaskCount,
           )
           : undefined;
       } catch (error) {

@@ -4,7 +4,6 @@ import {
   isUnreadableKickbackGate,
   isUnreadableKickbackGrowth,
   isUnreadableKickbackLedger,
-  readGrowth,
   readGrowthAccounting,
   readKickbackLedger,
   type KickbackGateEntry,
@@ -115,10 +114,8 @@ export async function readRemediationGateAppendBudget(
   lapCap: number,
   taskCount: number,
   growthTaskCount: number,
-  authoredTaskCount: number,
 ): Promise<RemediationGateAppendBudget> {
   const ledger = await readKickbackLedger(projectRoot);
-  const growthCap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(config, authoredTaskCount);
   // A corrupt ledger must not be mistaken for fresh remediation allowance:
   // budget recovery is an explicit operator decision, not a best-effort
   // fallback. Scoped to THIS gate (adr-2026-08-31 decision 3) so a sibling
@@ -131,6 +128,7 @@ export async function readRemediationGateAppendBudget(
     // gates and growth accounting. Preserve its exhausted-budget projection;
     // only an unreadable ledger envelope blocks append before mutation.
     if (isUnreadableKickbackGrowth(ledger)) {
+      const growthCap = ledger.effectiveGrowthCap ?? 0;
       return {
         gate,
         priorLaps: lapCap,
@@ -143,7 +141,7 @@ export async function readRemediationGateAppendBudget(
     }
     throw new Error(`kickback ledger gate '${gate}' is unreadable`);
   }
-  const growth = await readGrowth(projectRoot, growthCap);
+  const { cap: growthCap, growth } = await readPlanGrowthBudget(projectRoot, config, { persist: true });
   const priorLaps = (
     ledger.gates[gate] as (KickbackGateEntry & { laps?: number }) | undefined
   )?.laps ?? 0;
