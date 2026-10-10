@@ -4486,10 +4486,47 @@ export function parseAdrAssumptionLedger(content: string): AdrAssumptionLedgerPa
     };
   }
 
+  const diagnostics: AdrLedgerDiagnostic[] = [];
+  const entryIds = new Set<string>();
+  for (const row of dataRows) {
+    const cells = row.split('|').slice(1, -1).map((cell) => cell.trim());
+    const [id = '', assumption = '', basis = '', confidence = '', loadBearing = '', impact = ''] = cells;
+    const entryId = id === '' ? undefined : id;
+    const normalizedBasis = basis.toLowerCase();
+    const normalizedLoadBearing = loadBearing.toLowerCase();
+    const isDuplicateId = entryIds.has(id);
+    entryIds.add(id);
+    const validConfidence = /^(?:0|[1-9]\d?|100)%$/.test(confidence);
+
+    if (
+      cells.length !== 7 ||
+      !/^A\d+$/.test(id) ||
+      isDuplicateId ||
+      assumption === '' ||
+      !['verified', 'inferred', 'unverified'].includes(normalizedBasis) ||
+      !validConfidence ||
+      !['yes', 'no'].includes(normalizedLoadBearing) ||
+      impact === ''
+    ) {
+      diagnostics.push({
+        rule: 'malformed-entry',
+        ...(entryId === undefined ? {} : { entryId }),
+        detail: `ADR assumptions ledger row ${entryId ?? '(missing id)'} is malformed.`,
+      });
+    }
+  }
+
   if (hasEmptyStatement && dataRows.some((row) => row.split('|')[5]?.trim().toLowerCase() === 'yes')) {
+    diagnostics.push({
+      rule: 'contradictory-empty-statement',
+      detail: 'No load-bearing assumptions conflicts with a yes row.',
+    });
+  }
+
+  if (diagnostics.length > 0) {
     return {
       kind: 'diagnostics',
-      diagnostics: [{ rule: 'contradictory-empty-statement', detail: 'No load-bearing assumptions conflicts with a yes row.' }],
+      diagnostics,
     };
   }
 
