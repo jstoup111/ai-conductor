@@ -7319,7 +7319,10 @@ export class Conductor {
                     subject: { kind: 'lifecycle-step', step: member.name as StepName },
                   };
                   memberExecutionContexts.set(member.name, executionContext);
-                  let stepInFlightTicker: StepInFlightTicker | null = null;
+                  // The lifecycle callbacks assign this asynchronously. Keep the
+                  // mutable value in a holder so both callback and finally
+                  // cleanup retain its declared union type.
+                  const stepInFlightTicker: { current: StepInFlightTicker | null } = { current: null };
                   try {
                     return await runGroupBranch(member, state, {
                       stepRunner: this.stepRunner,
@@ -7337,14 +7340,14 @@ export class Conductor {
                             index: indexOf(observation.member as StepName),
                             executionContext,
                           });
-                          stepInFlightTicker = new StepInFlightTicker({
+                          stepInFlightTicker.current = new StepInFlightTicker({
                             events: this.events,
                             step: member.name as StepName,
                             startedAtMs: Date.now(),
                             featureSlug: state.feature_desc,
                             config: this.config,
                           });
-                          stepInFlightTicker.start();
+                          stepInFlightTicker.current.start();
                         },
                         onAttempt: async (observation) => {
                           if (observation.result !== undefined) {
@@ -7373,7 +7376,7 @@ export class Conductor {
                           });
                         },
                         onSettled: async (observation) => {
-                          stepInFlightTicker?.stop();
+                          stepInFlightTicker.current?.stop();
                           await emitTracked({
                             type: 'group_member_step',
                             member: observation.member,
@@ -7437,7 +7440,7 @@ export class Conductor {
                       },
                     }, memberAttemptBudgets.get(member.name)!);
                   } finally {
-                    stepInFlightTicker?.stop();
+                    stepInFlightTicker.current?.stop();
                   }
                 }),
                 cap,
