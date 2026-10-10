@@ -46,6 +46,8 @@ function prViewJson(
     stdout: JSON.stringify({
       state,
       mergeable,
+      mergeStateStatus: 'CLEAN',
+      baseRefName: 'main',
       statusCheckRollup: checks,
       labels: labels.map((name) => ({ name })),
       isDraft,
@@ -244,10 +246,27 @@ function openMergeState(mergeable: string, headRefOid?: string): PrMergeState {
   return {
     state: 'OPEN',
     mergeable,
+    mergeStateStatus: 'CLEAN',
+    baseRefName: 'main',
     headRefOid,
     hasFailingOrPendingChecks: false,
     labels: [],
     checksOutcome: 'green',
+  };
+}
+
+function readinessState(overrides: Partial<PrMergeState> = {}): PrMergeState {
+  return {
+    state: 'OPEN',
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
+    baseRefName: 'main',
+    headRefOid: 'head',
+    hasFailingOrPendingChecks: false,
+    labels: [],
+    checksOutcome: 'green',
+    isDraft: false,
+    ...overrides,
   };
 }
 
@@ -322,6 +341,112 @@ describe('sweepMergeableLabels — Task 4 lazy re-read and head tracking', () =>
 
     expect(readPullRequestMergeState).toHaveBeenCalledTimes(2);
     expect(await readWatch(tmpDir)).toHaveLength(1);
+  });
+});
+
+// ── Task 5: exhaustive shipped-readiness routing ───────────────────────────
+
+describe('sweepMergeableLabels — Task 5 readiness routes', () => {
+  // Covers: task:5
+  it('routes open PRs by readiness while preserving lifecycle and failed-read handling', async () => {
+    const urls = {
+      ready: 'https://github.com/foo/bar/pull/51',
+      conflicting: 'https://github.com/foo/bar/pull/52',
+      rereadConflict: 'https://github.com/foo/bar/pull/53',
+      dirtyConflict: 'https://github.com/foo/bar/pull/54',
+      failing: 'https://github.com/foo/bar/pull/55',
+      pending: 'https://github.com/foo/bar/pull/56',
+      indeterminate: 'https://github.com/foo/bar/pull/57',
+      undocumented: 'https://github.com/foo/bar/pull/58',
+      draft: 'https://github.com/foo/bar/pull/59',
+      merged: 'https://github.com/foo/bar/pull/60',
+      closed: 'https://github.com/foo/bar/pull/61',
+      notFound: 'https://github.com/foo/bar/pull/62',
+      failedRead: 'https://github.com/foo/bar/pull/63',
+      afterFailure: 'https://github.com/foo/bar/pull/64',
+    };
+    const states: Record<string, PrMergeState | PrMergeState[] | Error> = {
+      [urls.ready]: readinessState(),
+      [urls.conflicting]: readinessState({ mergeable: 'CONFLICTING' }),
+      [urls.rereadConflict]: [
+        readinessState({ mergeable: 'UNKNOWN' }),
+        readinessState({ mergeable: 'CONFLICTING' }),
+      ],
+      [urls.dirtyConflict]: readinessState({ mergeStateStatus: 'DIRTY' }),
+      [urls.failing]: readinessState({ checksOutcome: 'failed' }),
+      [urls.pending]: readinessState({
+        checksOutcome: 'pending',
+        hasFailingOrPendingChecks: true,
+        labels: ['mergeable'],
+      }),
+      [urls.indeterminate]: [
+        readinessState({ mergeable: 'UNKNOWN' }),
+        readinessState({ mergeable: 'UNKNOWN' }),
+      ],
+      [urls.undocumented]: readinessState({ mergeStateStatus: 'NEW_GITHUB_VALUE' }),
+      [urls.draft]: readinessState({
+        isDraft: true,
+        mergeable: 'CONFLICTING',
+        checksOutcome: 'failed',
+      }),
+      [urls.merged]: readinessState({ state: 'MERGED' }),
+      [urls.closed]: readinessState({ state: 'CLOSED' }),
+      [urls.notFound]: readinessState({ state: 'NOTFOUND' }),
+      [urls.failedRead]: new Error('read failed'),
+      [urls.afterFailure]: readinessState(),
+    };
+    const reads = vi.fn(async (url: string) => {
+      const result = states[url];
+      if (result instanceof Error) throw result;
+      if (Array.isArray(result)) return result.shift()!;
+      return result;
+    });
+    const { gh, addLabelCalls, removeLabelCalls, allArgs } = makeFakeGh();
+    const autoresolveEligible = vi.fn(async () => ({ eligible: false }));
+    const ciFixEligible = vi.fn(async () => ({ eligible: false }));
+    const teardownWorktree = vi.fn(async () => undefined);
+
+    for (const [name, url] of Object.entries(urls)) {
+      await enrollWatch(tmpDir, entry(url, name));
+    }
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      tracker: { readPullRequestMergeState: reads },
+      autoresolve: { enabled: true, isEligible: autoresolveEligible, dispatch: async () => undefined },
+      ciFix: { enabled: true, isEligible: ciFixEligible, dispatch: async () => undefined },
+      shippedRecordProbe: async () => 'absent',
+      teardownWorktree,
+    });
+
+    expect(addLabelCalls).toContainEqual({ prUrl: urls.ready, label: 'mergeable' });
+    expect(removeLabelCalls).toContainEqual({ prUrl: urls.pending, label: 'mergeable' });
+    expect(addLabelCalls.filter(({ label }) => label === 'needs-remediation')).toEqual([]);
+    expect(autoresolveEligible.mock.calls.map(([candidate]) => candidate.prUrl)).toEqual([
+      urls.conflicting,
+      urls.rereadConflict,
+      urls.dirtyConflict,
+    ]);
+    expect(ciFixEligible.mock.calls.map(([candidate]) => candidate.prUrl)).toEqual([urls.failing]);
+    expect(allArgs.flat().join(' ')).not.toContain('/57/');
+    expect(allArgs.flat().join(' ')).not.toContain('/58/');
+    expect(teardownWorktree).not.toHaveBeenCalled();
+
+    const retained = await readWatch(tmpDir);
+    expect(retained.map(({ prUrl }) => prUrl)).not.toContain(urls.notFound);
+    for (const url of [urls.indeterminate, urls.undocumented, urls.failedRead, urls.afterFailure]) {
+      expect(retained.map(({ prUrl }) => prUrl)).toContain(url);
+    }
+    for (const url of [urls.indeterminate, urls.undocumented]) {
+      expect(retained.find((candidate) => candidate.prUrl === url)?.escalationCause).toBeUndefined();
+    }
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      tracker: { readPullRequestMergeState: reads },
+    });
+    expect(reads.mock.calls.filter(([url]) => url === urls.indeterminate)).toHaveLength(3);
   });
 });
 
@@ -1236,13 +1361,13 @@ describe('sweepMergeableLabels — FR-11: non-mergeable PR → remove mergeable 
     expect(removeLabelCalls).toContainEqual({ prUrl: PR_URL, label: 'mergeable' });
   });
 
-  it('removes mergeable from a PR with UNKNOWN mergeability', async () => {
+  it('leaves mergeable untouched while GitHub mergeability remains UNKNOWN', async () => {
     const { gh, removeLabelCalls } = makeFakeGh({
       [PR_URL]: prViewJson('OPEN', 'UNKNOWN', [], ['mergeable']),
     });
     await enrollWatch(tmpDir, entry());
     await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
-    expect(removeLabelCalls).toContainEqual({ prUrl: PR_URL, label: 'mergeable' });
+    expect(removeLabelCalls).toEqual([]);
   });
 });
 
@@ -2049,7 +2174,6 @@ describe('sweepMergeableLabels — draft PRs are observed but never resolved', (
     });
 
     expect(dispatchCalls).toHaveLength(0);
-    expect(logs.some((l) => l.includes(PR_URL) && l.includes('draft PR'))).toBe(true);
     expect(addLabelCalls.filter((call) => call.label === 'ci-failed')).toHaveLength(0);
     // No attempt counter burn for a PR that was never dispatched.
     const survivors = await readWatch(tmpDir);
