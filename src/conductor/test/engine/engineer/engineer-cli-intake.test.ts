@@ -350,6 +350,7 @@ describe('engineer land tracker write-back (Task 11)', () => {
   });
 });
 
+// Covers: task:2
 describe('engineer forget (T23, FR-40)', () => {
   it('comments the resolving ref, closes the issue, then drops its ledger entry and strips the label', async () => {
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
