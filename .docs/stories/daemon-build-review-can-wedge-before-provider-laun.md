@@ -14,11 +14,15 @@ recovering so that I can distinguish a pre-launch wedge from a quiet live provid
 #### Happy Path
 
 - Given any daemon-managed DECIDE, BUILD, or SHIP step, when provider preparation begins, then
-  feature-scoped status and logs identify the step as `preparing` with an attempt identity.
+  feature-scoped status identifies the step as `preparing` with an attempt identity, and the daemon
+  log does so when the project config sets `daemon_verbose: true` (routine lifecycle phases are
+  verbose-only in the daemon log, #2867).
 - Given preparation completes and the provider process starts, when the lifecycle transition is
-  observed, then status and logs identify the same attempt as `running`.
-- Given a preparation deadline expires, when recovery begins, then status and logs identify the
-  superseded attempt as `recovering` and include the timeout reason.
+  observed, then status identifies the same attempt as `running`, and the daemon log does so when
+  `daemon_verbose: true`.
+- Given a preparation deadline expires, when recovery begins, then status and the default daemon log
+  identify the superseded attempt as `recovering` and include the timeout reason; the default log
+  names it by step and recovery count rather than by its UUID attempt id (#2867).
 
 #### Negative Paths
 
@@ -32,7 +36,7 @@ recovering so that I can distinguish a pre-launch wedge from a quiet live provid
 ### Done When
 
 - [ ] A test matrix proves lifecycle transitions for representative DECIDE, BUILD, and SHIP steps.
-- [ ] Durable daemon output names phase, step, reason where applicable, and attempt identity.
+- [ ] Durable daemon output names phase, step and reason where applicable; attempt identity appears in status and, under `daemon_verbose: true`, in the daemon log.
 - [ ] Lifecycle evidence remains separate from step-completion evidence.
 
 ## Story TI-2: A pre-spawn wedge is recovered within a bounded time
