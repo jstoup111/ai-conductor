@@ -542,6 +542,12 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         counterfactualFileSelectors: ['src/widget/widget.check.ts'],
         excludedMarkerFiles: [],
       });
+      const testQuality = inputs.sourceSnapshot.testQuality!;
+      for (const selector of ['src/widget/widget.ts', 'scripts/test_a.sh', 'pkg/a_test.go']) {
+        expect(testQuality.inScopeTests).not.toContain(selector);
+        expect(testQuality.counterfactualFileSelectors).not.toContain(selector);
+        expect(testQuality.excludedMarkerFiles.map(({ selector: excluded }) => excluded)).not.toContain(selector);
+      }
     });
 
     it('records exactly the excluded marker files and ignores malformed Covers text', async () => {
@@ -576,6 +582,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           { selector: 'tools/old_check.sh', reason: 'unsupported-source-language' },
         ],
       });
+      const testQuality = inputs.sourceSnapshot.testQuality!;
+      expect(testQuality.inScopeTests).not.toContain('src/spec-text.ts');
+      expect(testQuality.counterfactualFileSelectors).not.toContain('src/spec-text.ts');
+      expect(testQuality.excludedMarkerFiles.map(({ selector }) => selector)).not.toContain('src/spec-text.ts');
     });
 
     it('uses the first declaration diagnostic as an excluded marker reason', async () => {

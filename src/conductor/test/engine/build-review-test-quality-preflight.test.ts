@@ -427,6 +427,9 @@ describe('build-review test-quality preflight', () => {
       classification: 'infrastructure-failure',
       changedTestSelectors: ['src/widget/widget.check.ts'],
     });
+    await expect(preflight).resolves.not.toMatchObject({
+      classification: 'approved-exception', exception: 'empty-test-set',
+    });
   });
 
   it('keeps test support at HEAD and refuses a support-only counterfactual', async () => {
