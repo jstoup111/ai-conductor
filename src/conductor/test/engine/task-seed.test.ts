@@ -1387,6 +1387,74 @@ Content
     });
   });
 
+  describe('Task 4: repair obligations reopen only live task work', () => {
+    async function seedCompletedTaskWithRepairs(currentByPlan: Record<string, Record<string, string>>) {
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(planPath, '# Plan\n\n## Task 1: Repaired task\n');
+      await fsPromises.writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
+        tasks: [{ id: '1', name: 'Repaired task', status: 'completed', commit: 'finished' }],
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: planPath,
+        repairObligations: {
+          version: 1,
+          records: {
+            older: {
+              id: 'older', planIdentity: '.docs/plans/test.md', taskIds: ['1'],
+              source: { findingId: 'F-old', authority: 'review', instruction: 'older repair' },
+              baseline: { head: 'before', tree: 'before', resolvedTaskIds: [] }, settlement: 'settled',
+              tasks: { '1': { status: 'open' } },
+            },
+            current: {
+              id: 'current', planIdentity: '.docs/plans/test.md', taskIds: ['1'],
+              source: { findingId: 'F-current', authority: 'review', instruction: 'current repair' },
+              baseline: { head: 'after', tree: 'after', resolvedTaskIds: [] }, settlement: 'settled',
+              tasks: { '1': { status: 'resolved', evidence: { kind: 'test', value: 'closed' } } },
+            },
+          },
+          currentByPlan,
+        },
+      }));
+      return planPath;
+    }
+
+    it('preserves a completed task when only an older superseded obligation remains open', async () => {
+      const planPath = await seedCompletedTaskWithRepairs({ '.docs/plans/test.md': { '1': 'current' } });
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks).toEqual([expect.objectContaining({ id: '1', status: 'completed', commit: 'finished' })]);
+    });
+
+    it('restages a completed task when its current obligation is open', async () => {
+      const planPath = await seedCompletedTaskWithRepairs({ '.docs/plans/test.md': { '1': 'current' } });
+      const statePath = join(dir, '.pipeline/engine-state.json');
+      const state = JSON.parse(await fsPromises.readFile(statePath, 'utf8'));
+      state.repairObligations.records.current.tasks['1'] = { status: 'open' };
+      await fsPromises.writeFile(statePath, JSON.stringify(state));
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks).toEqual([expect.objectContaining({ id: '1', status: 'pending', commit: 'finished' })]);
+    });
+
+    it.each([
+      ['has no currentByPlan entry', {}],
+      ['points currentByPlan at a nonexistent obligation', { '.docs/plans/test.md': { '1': 'missing' } }],
+    ])('restages a current-less task and does not throw when it %s', async (_caseName, currentByPlan) => {
+      const planPath = await seedCompletedTaskWithRepairs(currentByPlan);
+
+      await expect(seedTaskStatus(dir, planPath)).resolves.not.toThrow();
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks).toEqual([expect.objectContaining({ id: '1', status: 'pending', commit: 'finished' })]);
+    });
+  });
+
   describe('Task 3: rewritten plan tasks reopen through repair obligations', () => {
     it.each([
       ['absent taskDigests', undefined],

@@ -1,11 +1,13 @@
-// Covers: task:3
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+// Covers: task:1, task:3
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   createRepairObligationStore,
   type RepairAdmission,
+  type RepairObligationSection,
+  taskObligationStanding,
 } from '../../src/engine/repair-obligations.js';
 import type { EngineState, EngineStateStore } from '../../src/engine/engine-state-store.js';
 
@@ -44,7 +46,144 @@ function admission(overrides: Partial<RepairAdmission> = {}): RepairAdmission {
   };
 }
 
+function sectionForStanding(): RepairObligationSection {
+  return {
+    version: 1,
+    records: {
+      older: {
+        id: 'older', planIdentity: 'current-plan', taskIds: ['2'],
+        source: { findingId: 'old', authority: 'build_review', instruction: 'Old repair.' },
+        baseline: { head: 'old-head', tree: 'old-tree', resolvedTaskIds: [] },
+        settlement: 'unsettled', tasks: { '2': { status: 'open' } },
+      },
+      current: {
+        id: 'current', planIdentity: 'current-plan', taskIds: ['2'],
+        source: { findingId: 'current', authority: 'build_review', instruction: 'Current repair.' },
+        baseline: { head: 'current-head', tree: 'current-tree', resolvedTaskIds: [] },
+        settlement: 'unsettled', tasks: { '2': { status: 'open' } },
+      },
+    },
+    currentByPlan: { 'current-plan': { '2': 'current' } },
+    admissionsByPlan: {},
+  };
+}
+
+function standingIds(standing: ReturnType<typeof taskObligationStanding>) {
+  return standing.kind === 'live'
+    ? { kind: standing.kind, current: standing.current?.id, live: standing.live.map(({ id }) => id), superseded: standing.superseded.map(({ id }) => id) }
+    : standing;
+}
+
 describe('repair obligations', () => {
+  it('classifies binding obligations by current authority without using baselines', () => {
+    const section = sectionForStanding();
+
+    expect(taskObligationStanding(section, 'current-plan', 'T2')).toEqual({
+      kind: 'live',
+      current: section.records.current,
+      live: [section.records.current],
+      superseded: [section.records.older],
+    });
+
+    section.records.older.source.authority = 'prd_audit';
+    expect(taskObligationStanding(section, 'current-plan', '2')).toEqual({
+      kind: 'live',
+      current: section.records.current,
+      live: [section.records.older, section.records.current],
+      superseded: [],
+    });
+  });
+
+  it('keeps standing unchanged after rewriting obligation baselines', async () => {
+    const { projectRoot, statePath } = await createStatePath();
+    const repairs = createRepairObligationStore(projectRoot, statePath);
+    const older = await repairs.admitOrReplay('older', admission({ id: 'older', taskIds: ['2'] }));
+    const current = await repairs.admitOrReplay('current', admission({ id: 'current', taskIds: ['2'] }));
+    if (!older.ok || !current.ok) throw new Error('expected admissions');
+
+    const before = await repairs.read();
+    if (!before.ok) throw new Error(before.message);
+    await expect(repairs.rewriteBaselines(new Map([
+      [older.obligation.id, 'rewritten-older-head'],
+      [current.obligation.id, 'rewritten-current-head'],
+    ]))).resolves.toMatchObject({ ok: true });
+    const after = await repairs.read();
+    if (!after.ok) throw new Error(after.message);
+
+    expect(standingIds(taskObligationStanding(after.value, older.obligation.planIdentity, 'T2'))).toEqual(
+      standingIds(taskObligationStanding(before.value, older.obligation.planIdentity, '2')),
+    );
+  });
+
+  it('fails closed only when an open bound obligation has no usable current entry', () => {
+    const section = sectionForStanding();
+    delete section.currentByPlan['current-plan']['2'];
+
+    expect(taskObligationStanding(section, 'current-plan', '2')).toEqual({
+      kind: 'current-less',
+      reason: 'repair state is unavailable: task 2 has an open repair obligation but no current obligation is recorded for it',
+    });
+
+    expect(taskObligationStanding(section, 'current-plan', 'T2')).toEqual({
+      kind: 'current-less',
+      reason: 'repair state is unavailable: task T2 has an open repair obligation but no current obligation is recorded for it',
+    });
+
+    section.currentByPlan['current-plan']['2'] = 'missing';
+    expect(taskObligationStanding(section, 'current-plan', '2')).toEqual({
+      kind: 'current-less',
+      reason: 'repair state is unavailable: task 2 has an open repair obligation but no current obligation is recorded for it',
+    });
+
+    section.records.older.tasks['2'].status = 'resolved';
+    section.records.current.tasks['2'].status = 'resolved';
+    delete section.currentByPlan['current-plan']['2'];
+    expect(taskObligationStanding(section, 'current-plan', '2')).toEqual({
+      kind: 'live', current: undefined, live: [section.records.older, section.records.current], superseded: [],
+    });
+    expect(taskObligationStanding(section, 'current-plan', '3')).toEqual({ kind: 'none' });
+  });
+
+  it('closes live obligations but refuses superseded and current-less ones', async () => {
+    const { projectRoot, statePath } = await createStatePath();
+    const repairs = createRepairObligationStore(projectRoot, statePath);
+    const older = await repairs.admitOrReplay('older', admission({ id: 'older', taskIds: ['2'] }));
+    const current = await repairs.admitOrReplay('current', admission({ id: 'current', taskIds: ['2'] }));
+    if (!older.ok || !current.ok) throw new Error('expected admissions');
+
+    await expect(repairs.close({
+      planPath: '.docs/plans/current.md', taskId: '2', obligationId: older.obligation.id,
+      evidence: { kind: 'task-done', value: 'stale evidence' },
+    })).resolves.toEqual({ ok: false, kind: 'stale', message: 'Repair obligation has been superseded for this task' });
+    const otherAuthority = await repairs.admitOrReplay('other-authority', admission({
+      id: 'other-authority', taskIds: ['2'],
+      source: { findingId: 'other', authority: 'prd_audit', instruction: 'Other repair.' },
+    }));
+    if (!otherAuthority.ok) throw new Error('expected cross-authority admission');
+    await expect(repairs.close({
+      planPath: '.docs/plans/current.md', taskId: '2', obligationId: otherAuthority.obligation.id,
+      evidence: { kind: 'task-done', value: 'live evidence' },
+    })).resolves.toMatchObject({ ok: true });
+
+    const persisted = JSON.parse(await readFile(statePath, 'utf8')) as { repairObligations: RepairObligationSection };
+    delete persisted.repairObligations.currentByPlan[older.obligation.planIdentity]['2'];
+    await writeFile(statePath, JSON.stringify(persisted));
+    await expect(repairs.close({
+      planPath: '.docs/plans/current.md', taskId: '2', obligationId: current.obligation.id,
+      evidence: { kind: 'task-done', value: 'unavailable evidence' },
+    })).resolves.toEqual({
+      ok: false,
+      kind: 'incompatible',
+      message: 'repair state is unavailable: task 2 has an open repair obligation but no current obligation is recorded for it',
+    });
+    await expect(repairs.read()).resolves.toMatchObject({
+      ok: true, value: { records: {
+        older: { tasks: { '2': { status: 'open' } } },
+        current: { tasks: { '2': { status: 'open' } } },
+      } },
+    });
+  });
+
   it('settles only the current obligation and keeps a replay settled', async () => {
     const { projectRoot, statePath } = await createStatePath();
     const repairs = createRepairObligationStore(projectRoot, statePath);

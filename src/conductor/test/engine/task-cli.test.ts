@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:26, task:15
+// Covers: task:1, task:2, task:3, task:26, task:15
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   detectTaskCommand,
@@ -936,6 +936,119 @@ describe('runTaskDone', () => {
 
     await expect(runTaskDone(dir, '7', [{ index: 1, evidence: 'fresh proof' }])).resolves.toBe(0);
     expect(await resolveTaskIds(dir, ['7'])).toEqual(new Set(['7']));
+  });
+
+  it('closes only the live current repair and leaves its superseded predecessor unchanged', async () => {
+    await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+    await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+      '### Task 2: Repair current evidence',
+      '**Done when:**',
+      '- Current evidence is recorded.',
+      '',
+    ].join('\n'));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+      activePlanPath: '.docs/plans/feature.md',
+    }));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: [{ id: '2', status: 'in_progress' }],
+    }));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'current-task'), '2');
+    const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+    const older = await repairs.admitOrReplay('older-key', {
+      id: 'older', planPath: '.docs/plans/feature.md', taskIds: ['2'],
+      source: { findingId: 'older', authority: 'build_review', instruction: 'repair' },
+      baseline: { head: 'older-boundary', tree: 'older-tree', resolvedTaskIds: [] },
+    });
+    const current = await repairs.admitOrReplay('current-key', {
+      id: 'current', planPath: '.docs/plans/feature.md', taskIds: ['2'],
+      source: { findingId: 'current', authority: 'build_review', instruction: 'repair' },
+      baseline: { head: 'current-boundary', tree: 'current-tree', resolvedTaskIds: [] },
+    });
+    if (!older.ok || !current.ok) throw new Error('repair admission failed');
+    const before = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8'));
+    const supersededRecord = JSON.stringify(before.repairObligations.records[older.obligation.id]);
+
+    await expect(runTaskDone(dir, '2', [{ index: 1, evidence: 'fresh proof' }])).resolves.toBe(0);
+
+    const after = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8'));
+    expect(after.repairObligations.records[current.obligation.id].tasks['2']).toMatchObject({
+      status: 'resolved', evidence: { kind: 'current-done-when' },
+    });
+    expect(JSON.stringify(after.repairObligations.records[older.obligation.id])).toBe(supersededRecord);
+    const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'));
+    expect(status.tasks[0].status).toBe('completed');
+  });
+
+  it('closes each open live repair across authorities', async () => {
+    await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+    await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+      '### Task 2: Repair current evidence',
+      '**Done when:**',
+      '- Current evidence is recorded.',
+      '',
+    ].join('\n'));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/feature.md' }));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '2', status: 'in_progress' }] }));
+    const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+    const audit = await repairs.admitOrReplay('audit-key', {
+      id: 'audit', planPath: '.docs/plans/feature.md', taskIds: ['2'],
+      source: { findingId: 'audit', authority: 'prd_audit', instruction: 'repair' },
+      baseline: { head: 'audit-boundary', tree: 'audit-tree', resolvedTaskIds: [] },
+    });
+    const current = await repairs.admitOrReplay('current-key', {
+      id: 'current', planPath: '.docs/plans/feature.md', taskIds: ['2'],
+      source: { findingId: 'current', authority: 'build_review', instruction: 'repair' },
+      baseline: { head: 'current-boundary', tree: 'current-tree', resolvedTaskIds: [] },
+    });
+    if (!audit.ok || !current.ok) throw new Error('repair admission failed');
+
+    await expect(runTaskDone(dir, '2', [{ index: 1, evidence: 'fresh proof' }])).resolves.toBe(0);
+
+    const state = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8'));
+    expect(state.repairObligations.records[audit.obligation.id].tasks['2'].status).toBe('resolved');
+    expect(state.repairObligations.records[current.obligation.id].tasks['2'].status).toBe('resolved');
+  });
+
+  it.each(['with the current-task stamp', 'without the current-task stamp'])('refuses a current-less repair %s without changing repair or task status', async (stampCase) => {
+    await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+    await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+      '### Task 2: Repair current evidence',
+      '**Done when:**',
+      '- Current evidence is recorded.',
+      '',
+    ].join('\n'));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/feature.md' }));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '2', status: 'in_progress' }] }));
+    if (stampCase === 'with the current-task stamp') await fsPromises.writeFile(join(dir, '.pipeline', 'current-task'), '2');
+    const currentTaskBefore = stampCase === 'with the current-task stamp'
+      ? await fsPromises.readFile(join(dir, '.pipeline', 'current-task'), 'utf-8')
+      : undefined;
+    const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+    const admitted = await repairs.admitOrReplay('open-key', {
+      id: 'open', planPath: '.docs/plans/feature.md', taskIds: ['2'],
+      source: { findingId: 'open', authority: 'build_review', instruction: 'repair' },
+      baseline: { head: 'boundary', tree: 'tree', resolvedTaskIds: [] },
+    });
+    if (!admitted.ok) throw new Error(admitted.message);
+    const state = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8'));
+    delete state.repairObligations.currentByPlan['.docs/plans/feature.md']['2'];
+    const engineStateBefore = JSON.stringify(state);
+    const taskStatusBefore = await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8');
+    await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), engineStateBefore);
+
+    await expect(runTaskDone(dir, '2', [{ index: 1, evidence: 'fresh proof' }])).resolves.toBe(1);
+
+    expect(stdErr.join('\n')).toContain('repair state is unavailable: task 2 has an open repair obligation but no current obligation is recorded for it');
+    await expect(fsPromises.readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8')).resolves.toBe(engineStateBefore);
+    await expect(fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8')).resolves.toBe(taskStatusBefore);
+    if (currentTaskBefore !== undefined) {
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'current-task'), 'utf-8')).resolves.toBe(currentTaskBefore);
+    } else {
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'current-task'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+    }
   });
 
   describe('tagged Done when evidence from HEAD', () => {
