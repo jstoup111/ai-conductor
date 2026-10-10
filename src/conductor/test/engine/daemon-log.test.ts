@@ -336,6 +336,7 @@ describe('engine/daemon-log', () => {
   });
 
   describe('feature-owned multiline diagnostics', () => {
+    // Covers: task:2
     it('prefixes and persists every diagnostic line independently', () => {
       const live: string[] = [];
       const persisted: string[] = [];
@@ -348,9 +349,81 @@ describe('engine/daemon-log', () => {
 
       expect(live).toEqual([
         '[daemon][feature-a] stdout first line',
-        '[daemon][feature-a] stderr continuation',
+        '[daemon][feature-a] │ stderr continuation',
       ]);
       expect(persisted).toEqual(live);
+    });
+
+    // Covers: task:2
+    it('collapses forwarded feature and daemon-wide output at default verbosity', () => {
+      const live: string[] = [];
+      const logger = createDaemonModeLogger({
+        writeLive: (line) => live.push(line),
+        writePersisted: () => {},
+      });
+      const output = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join('\n');
+
+      createFeatureDaemonLogger('feature-a', logger).forwarded(output, '/tmp/feature-output');
+      logger({ depth: 0, kind: 'forwarded', text: output, moreAt: '/tmp/daemon-output' });
+
+      expect(live).toEqual([
+        '[daemon][feature-a] line 1 (+39 more lines; full text in /tmp/feature-output or set daemon_verbose: true to show them)',
+        '[daemon] line 1 (+39 more lines; full text in /tmp/daemon-output or set daemon_verbose: true to show them)',
+      ]);
+    });
+
+    // Covers: task:2
+    it('writes verbose forwarded continuations at the declared depth without losing whitespace', () => {
+      const live: string[] = [];
+      const logger = createDaemonModeLogger({
+        verbose: true,
+        writeLive: (line) => live.push(line),
+        writePersisted: () => {},
+      });
+      const output = Array.from(
+        { length: 40 },
+        (_, index) => (index === 1 ? '  indented continuation' : `line ${index + 1}`),
+      ).join('\n');
+
+      logger({ depth: 1, kind: 'forwarded', text: output });
+
+      expect(live).toHaveLength(40);
+      expect(live[0]).toBe('[daemon] · line 1');
+      expect(live[1]).toBe('[daemon] · │   indented continuation');
+      expect(live.at(-1)).toBe('[daemon] · │ line 40');
+    });
+
+    // Covers: task:2
+    it('formats JSON payloads, preserves invalid JSON, and removes a whitespace-leading first line', () => {
+      const live: string[] = [];
+      const logger = createDaemonModeLogger({
+        writeLive: (line) => live.push(line),
+        writePersisted: () => {},
+      });
+
+      logger({ depth: 0, kind: 'forwarded', text: ' {"ok":true} ' });
+      logger({ depth: 0, kind: 'forwarded', text: '{not json' });
+      logger({ depth: 0, kind: 'forwarded', text: ' ! [rejected]  HEAD -> feat/x' });
+
+      expect(live).toEqual([
+        '[daemon] JSON payload (11 bytes; set daemon_verbose: true to show it)',
+        '[daemon] {not json',
+        '[daemon] ! [rejected]  HEAD -> feat/x',
+      ]);
+    });
+
+    // Covers: task:2
+    it.each([false, true])('marks authored daemon-string continuations while dropping blank lines (verbose: %s)', (verbose) => {
+      const live: string[] = [];
+      const logger = createDaemonModeLogger({
+        verbose,
+        writeLive: (line) => live.push(line),
+        writePersisted: () => {},
+      });
+
+      logger('first\n\n  \n  second');
+
+      expect(live).toEqual(['[daemon] first', '[daemon] │   second']);
     });
   });
 
