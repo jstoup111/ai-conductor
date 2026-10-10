@@ -530,15 +530,17 @@ export interface DiscoverBacklogOpts {
    *   `resolved: false` the daemon FAIL-CLOSES (D3) — it builds NOTHING and
    *   surfaces a single warn-once "identity unresolved" line per pass. Absent
    *   entirely → the gate is skipped silently (legacy behavior).
-   * - `readStamp(slug)` — reads the spec's committed owner stamp; defaults to
+   * - `readStamp(slug, baseRef)` — reads the spec's committed owner stamp at
+   *   `baseRef`, the same ref the rest of the scan reads; defaults to
    *   "un-owned" when unset.
-   * - `readMergeTime(slug)` — the spec's first-appearance time for the un-owned
-   *   grandfather branch; defaults to null (indeterminate) when unset.
+   * - `readMergeTime(slug, baseRef)` — the spec's first-appearance time at
+   *   `baseRef` for the un-owned grandfather branch; defaults to null
+   *   (indeterminate) when unset.
    * - `cutover` — the configured grandfather cutover instant, or null.
    */
   daemonOwner?: OwnerResolution;
-  readStamp?: (slug: string) => Promise<OwnerStamp>;
-  readMergeTime?: (slug: string) => Promise<string | null>;
+  readStamp?: (slug: string, baseRef: string) => Promise<OwnerStamp>;
+  readMergeTime?: (slug: string, baseRef: string) => Promise<string | null>;
   cutover?: string | null;
   /**
    * Dependency-gate resolver injectable. Mirrors the owner-gate injectables
@@ -1144,8 +1146,11 @@ export async function discoverBacklog(
     // (legacy behavior).
     const daemonOwner = opts.daemonOwner;
     if (daemonOwner?.resolved) {
-      const stamp = opts.readStamp ? await opts.readStamp(slug) : { present: false as const };
-      const mergeTime = opts.readMergeTime ? await opts.readMergeTime(slug) : null;
+      // Read ownership at the scan's own base ref. A separately named branch
+      // (local `main`) can lag the pinned origin SHA the scan found this spec
+      // at, making a freshly landed, owned spec look un-owned.
+      const stamp = opts.readStamp ? await opts.readStamp(slug, baseBranch) : { present: false as const };
+      const mergeTime = opts.readMergeTime ? await opts.readMergeTime(slug, baseBranch) : null;
       const decision = decideSpecGate({
         daemonOwner: { id: daemonOwner.id },
         stamp,

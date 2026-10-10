@@ -1695,6 +1695,34 @@ describe('discoverBacklog — un-owned arrival default-builds with a loud escala
     expect(line).toBeDefined();
   });
 
+  it('reads the owner stamp and merge time at the scan base ref, not a separately named branch', async () => {
+    const tree = fsSource(dir);
+    const logs: string[] = [];
+    const stampRefs: string[] = [];
+    const mergeTimeRefs: string[] = [];
+    const { items } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: tree,
+      baseBranch: 'pinned-base-sha',
+      daemonOwner: { resolved: true, id: 'bob' },
+      readStamp: async (_slug, baseRef) => {
+        stampRefs.push(baseRef);
+        return baseRef === 'pinned-base-sha'
+          ? { present: true as const, id: 'bob' }
+          : { present: false as const };
+      },
+      readMergeTime: async (_slug, baseRef) => {
+        mergeTimeRefs.push(baseRef);
+        return null;
+      },
+      cutover: '2026-06-30T00:00:00Z',
+    });
+
+    expect(items.map((b) => b.slug)).toContain(stem);
+    expect(stampRefs).toEqual(['pinned-base-sha']);
+    expect(mergeTimeRefs).toEqual(['pinned-base-sha']);
+    expect(logs.some((l) => l.includes('un-owned'))).toBe(false);
+  });
+
   it('NEGATIVE PATH: an OTHER-owner stamped spec (Story 4) is still gated-out, unaffected by the un-owned default', async () => {
     const tree = fsSource(dir);
     const logs: string[] = [];
