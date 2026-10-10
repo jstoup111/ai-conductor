@@ -14381,7 +14381,12 @@ export class Conductor {
               { retainReplayPreservation: false },
             );
       if (step.name === 'finish' || (step.name === 'build' && buildRoutedForward)) {
-        await writeVerdict(this.projectRoot, step.name, verdict);
+        await writeVerdict(
+          this.projectRoot,
+          step.name,
+          verdict,
+          step.name === 'build' ? this.activeRegionChild : undefined,
+        );
       }
       await this.events.emit(this.withActiveRegionChild({
         type: 'gate_verdict',

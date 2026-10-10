@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:31
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:31, task:rem-prd-audit-11-r1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { join } from 'path';
@@ -1435,6 +1435,22 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
         reason: 'build routed after commit movement',
         checkedAt: expect.any(Number),
       }));
+    });
+
+    it('writes a routed child build verdict for child 2 without changing the flat build verdict', async () => {
+      const { conductor, state, build, indexOf } = await routedBuildFixture();
+      const child = parseChildId(2)!;
+      const flatBefore = await readFile(join(dir, '.pipeline', 'gates', 'build.json'), 'utf8');
+      (conductor as unknown as { activeRegionChild: typeof child }).activeRegionChild = child;
+
+      await advanceTail(conductor)(build, state, new Map(), ALL_STEPS, indexOf, true);
+
+      expect(await readVerdict(dir, 'build', child)).toEqual(expect.objectContaining({
+        satisfied: true,
+        reason: state.build_routed_reason,
+        checkedAt: expect.any(Number),
+      }));
+      expect(await readFile(join(dir, '.pipeline', 'gates', 'build.json'), 'utf8')).toBe(flatBefore);
     });
 
     it('does not treat an old route reason as a satisfied ordinary build', async () => {
