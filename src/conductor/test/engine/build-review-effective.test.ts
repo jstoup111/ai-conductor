@@ -319,6 +319,49 @@ describe('live build-review effective resolver', () => {
     ])).resolves.toMatchObject({ ok: true, effective: { verdict: 'FAIL' } });
   });
 
+  describe('finalized remediation cases settle their current sources', () => {
+    // The adjudication coordinator finalizes a case and marks build_review done;
+    // the completion check reads this resolver, so it must honor the same
+    // settlement or the gate re-selects a settled lap until the loop guard halts.
+    const noDispositions = () => ({ list: async () => ({ ok: true as const, records: [] }), listReducedCoverage: async () => ({ ok: true as const, records: [] }) });
+    const caseRecord = (sourceId: string, disposition: 'reject' | 'act', effect: Record<string, unknown> = { kind: 'none' }) => ({
+      id: 'case-1', domain: 'build_review', disposition, resolution: disposition === 'act' ? 'open' : 'resolved',
+      sources: [{ sourceId, outcome: disposition === 'act' ? 'acted' : 'rejected' }], effect,
+    });
+    const withCases = (raw: unknown, cases: readonly unknown[] | 'unreadable') => resolveEffectiveBuildReviewVerdict(worktree, raw, {
+      ...identityDeps,
+      createStore: noDispositions,
+      createCaseStore: () => ({
+        read: async () => cases === 'unreadable'
+          ? { ok: false as const, reason: 'malformed-json' as const }
+          : { ok: true as const, state: { cases } } as never,
+      }),
+    });
+    const builtinId = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'testQuality', contractVersion: currentContractVersion, concernKind: testQualityFinding.concernKind, anchor: testQualityFinding.anchor,
+    } as never)!.id;
+
+    it('passes a built-in finding whose rubric-namespaced source a rejected case settled', async () => {
+      await expect(withCases(aggregate(), [caseRecord(`testQuality:${builtinId}`, 'reject')])).resolves.toMatchObject({ ok: true, effective: {
+        rawVerdict: 'FAIL', verdict: 'PASS', unresolvedFindingIds: [], acceptedFindingIds: [], settledFindingIds: [builtinId],
+      } });
+    });
+
+    it('passes a custom finding whose source a rejected case settled', async () => {
+      const { aggregate: raw, findingId } = customAggregate(undefined);
+      await expect(withCases(raw, [caseRecord(`portablePolicy:${findingId}`, 'reject')])).resolves.toMatchObject({ ok: true, effective: {
+        rawVerdict: 'FAIL', verdict: 'PASS', unresolvedFindingIds: [], settledFindingIds: [findingId],
+      } });
+    });
+
+    it('keeps the finding blocking for an open action case, another rubric, or unreadable case state', async () => {
+      const blocked = { ok: true, effective: { verdict: 'FAIL', unresolvedFindingIds: [builtinId] } };
+      await expect(withCases(aggregate(), [caseRecord(`testQuality:${builtinId}`, 'act', { kind: 'action', status: 'reserved' })])).resolves.toMatchObject(blocked);
+      await expect(withCases(aggregate(), [caseRecord(`security:${builtinId}`, 'reject')])).resolves.toMatchObject(blocked);
+      await expect(withCases(aggregate(), 'unreadable')).resolves.toMatchObject(blocked);
+    });
+  });
+
   it('distinguishes an exactly covered infrastructure branch from an uncovered one', async () => {
     const decision = reducedCoverageDecision('testQuality');
     const fault = aggregate({ faults: { testQuality: 'provider-error' }, includeTestQualityFinding: false });

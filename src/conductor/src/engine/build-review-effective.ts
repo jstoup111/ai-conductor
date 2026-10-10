@@ -20,6 +20,7 @@ import {
   type BuildReviewReducedCoverageListResult,
 } from './build-review-dispositions.js';
 import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
+import { finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import type { ConductorEvent } from '../types/events.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
@@ -43,6 +44,8 @@ export interface BuildReviewEffectiveResolverDeps {
   readonly resolveMainRoot?: (projectRoot: string) => Promise<string>;
   readonly realpath?: (path: string) => Promise<string>;
   readonly createStore?: (projectRoot: string) => DispositionStore;
+  /** Autonomous remediation cases; a finalized case settles its current sources. */
+  readonly createCaseStore?: (projectRoot: string, feature: BuildReviewFeatureIdentity) => { read(): Promise<RemediationCaseStoreReadResult> };
   /** Reports durable dispositions that no longer bind the current contract. */
   readonly emit?: (event: Extract<ConductorEvent, { type: 'build_review_disposition_version_invalidated' }>) => void | Promise<void>;
   /** Reports ignored legacy records supplied by a custom disposition store. */
@@ -82,6 +85,7 @@ function applyCurrentCustomEffectiveVerdict(
   reducedCoverage: readonly import('./build-review-dispositions.js').BuildReviewReducedCoverageDispositionRecord[],
   dispositions: readonly import('./build-review-dispositions.js').BuildReviewDispositionRecord[],
   minConfidence: Partial<Record<string, number>>,
+  settledSourceIds: ReadonlySet<string>,
 ): BuildReviewEffectiveVerdict | undefined {
   const customSources = projectBuildReviewCustomSuppressionSources(aggregate);
   if (!customSources) return undefined;
@@ -106,6 +110,7 @@ function applyCurrentCustomEffectiveVerdict(
   ));
   const unresolved = [...effective.unresolvedFindingIds];
   const suppressed = [...effective.suppressedFindingIds];
+  const settled = [...(effective.settledFindingIds ?? [])];
   const acceptedCustomFindingIds = new Set(Object.values(aggregate.customResults ?? {}).flatMap((member) =>
     member.result.kind !== 'judged' ? [] : member.result.findings.flatMap((finding) => {
       const identity = typeof finding === 'object' && finding !== null && 'identity' in finding
@@ -116,6 +121,10 @@ function applyCurrentCustomEffectiveVerdict(
   ));
   for (const source of customSources) {
     if (acceptedCustomFindingIds.has(source.findingId)) continue;
+    if (settledSourceIds.has(`${source.rubric}:${source.findingId}`)) {
+      settled.push(source.findingId);
+      continue;
+    }
     if (source.confidence !== undefined && source.confidence < (minConfidence[source.rubric] ?? 0)) suppressed.push(source.findingId);
     else unresolved.push(source.findingId);
   }
@@ -130,6 +139,7 @@ function applyCurrentCustomEffectiveVerdict(
     unresolvedFindingIds: Object.freeze(unresolved),
     acceptedFindingIds: Object.freeze([...new Set([...effective.acceptedFindingIds, ...acceptedCustomFindingIds])]),
     suppressedFindingIds: Object.freeze(suppressed),
+    ...(settled.length === 0 ? {} : { settledFindingIds: Object.freeze(settled) }),
   });
 }
 
@@ -146,11 +156,12 @@ export function deriveComposedBuildReviewEffectiveVerdict(
   dispositions: readonly import('./build-review-dispositions.js').BuildReviewDispositionRecord[],
   reducedCoverage: readonly import('./build-review-dispositions.js').BuildReviewReducedCoverageDispositionRecord[],
   minConfidence: Partial<Record<string, number>> = {},
+  settledSourceIds: ReadonlySet<string> = new Set(),
 ): BuildReviewEffectiveVerdict | undefined {
   const builtinDispositions = dispositions.filter((record) => isRegisteredRubric(record.finding.canonicalPayload.rubric) && 'concernKind' in record.finding.canonicalPayload);
-  const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, builtinDispositions, reducedCoverage, minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>>);
+  const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, builtinDispositions, reducedCoverage, minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>>, settledSourceIds);
   return builtin === undefined ? undefined : applyCurrentCustomEffectiveVerdict(
-    aggregate, builtin, feature, reducedCoverage, dispositions, minConfidence,
+    aggregate, builtin, feature, reducedCoverage, dispositions, minConfidence, settledSourceIds,
   );
 }
 
@@ -175,6 +186,21 @@ export async function resolveBuildReviewFeatureIdentity(
   } catch {
     return undefined;
   }
+}
+
+async function readSettledBuildReviewSourceIds(
+  projectRoot: string,
+  feature: BuildReviewFeatureIdentity,
+  deps: BuildReviewEffectiveResolverDeps,
+): Promise<ReadonlySet<string>> {
+  try {
+    const read = await (deps.createCaseStore ?? ((root: string, caseFeature: BuildReviewFeatureIdentity) => new RemediationCaseStore(root, caseFeature)))(projectRoot, feature).read();
+    if (read.ok) return finalizedBuildReviewSourceIds(read.state.cases);
+    deps.log?.(`remediation case state unavailable (${read.reason}); no finding treated as settled`);
+  } catch {
+    deps.log?.('remediation case state unavailable; no finding treated as settled');
+  }
+  return new Set();
 }
 
 /**
@@ -233,6 +259,16 @@ export async function resolveEffectiveBuildReviewVerdict(
   let effective: BuildReviewEffectiveVerdict | undefined;
   try {
     effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {});
+    // The adjudication coordinator finalizes cases and marks the step done; this
+    // completion check must honor the same settlement or the gate re-selects a
+    // settled lap until the loop guard halts it. Unreadable case state settles
+    // nothing, so it can only keep a finding unresolved, never pass one.
+    if (effective && effective.unresolvedFindingIds.length > 0) {
+      const settledSourceIds = await readSettledBuildReviewSourceIds(projectRoot, feature, deps);
+      if (settledSourceIds.size > 0) {
+        effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {}, settledSourceIds);
+      }
+    }
   } catch {
     return { ok: false, reason: 'build-review disposition state is invalid' };
   }

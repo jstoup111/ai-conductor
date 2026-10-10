@@ -86,6 +86,12 @@ export interface BuildReviewEffectiveVerdict {
   readonly acceptedFindingIds: readonly string[];
   readonly unresolvedFindingIds: readonly string[];
   readonly suppressedFindingIds: readonly string[];
+  /**
+   * Current findings a finalized autonomous remediation case already settled
+   * (`finalizedBuildReviewSourceIds`). Like accepted findings they no longer
+   * block PASS; unlike them, no operator accepted any risk.
+   */
+  readonly settledFindingIds?: readonly string[];
   readonly skippedRubrics: readonly BuildReviewRubricId[];
   readonly infrastructureFailureRubrics: readonly BuildReviewRubricId[];
   /**
@@ -473,10 +479,12 @@ export function deriveEffectiveBuildReviewVerdict(
   acceptedFindingIds: ReadonlySet<string> = new Set(),
   reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
   minConfidence: Partial<Record<BuildReviewRubricId, number>> = {},
+  settledSourceIds: ReadonlySet<string> = new Set(),
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
   const accepted: string[] = [];
+  const settled: string[] = [];
   const unresolved: string[] = [];
   const suppressed: string[] = [];
   const skipped: BuildReviewRubricId[] = [];
@@ -514,6 +522,7 @@ export function deriveEffectiveBuildReviewVerdict(
       });
       if (!identity) return undefined;
       if (acceptedFindingIds.has(identity.id)) accepted.push(identity.id);
+      else if (settledSourceIds.has(`${rubric}:${identity.id}`)) settled.push(identity.id);
       else if (finding.confidence !== undefined && finding.confidence < (minConfidence[rubric] ?? 0)) suppressed.push(identity.id);
       else unresolved.push(identity.id);
     }
@@ -522,6 +531,7 @@ export function deriveEffectiveBuildReviewVerdict(
     rawVerdict: aggregate.verdict,
     verdict: judgedCount > 0 && unresolved.length === 0 && uncoveredInfrastructure.length === 0 && uncoveredScopeIncomplete.length === 0 ? 'PASS' : 'FAIL',
     acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved), suppressedFindingIds: Object.freeze(suppressed),
+    ...(settled.length === 0 ? {} : { settledFindingIds: Object.freeze(settled) }),
     skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
     uncoveredInfrastructureFailureRubrics: Object.freeze(uncoveredInfrastructure),
     uncoveredScopeIncompleteRubrics: Object.freeze(uncoveredScopeIncomplete),
@@ -540,6 +550,7 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
   dispositions: readonly BuildReviewDispositionRecord[],
   reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
   minConfidence: Partial<Record<BuildReviewRubricId, number>> = {},
+  settledSourceIds: ReadonlySet<string> = new Set(),
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -575,5 +586,6 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
     reducedCoverage.filter((decision) => decision.kind === 'reduced-coverage' &&
       matchesBuildReviewReducedCoverageDisposition(feature, decision.identity, [decision])),
     minConfidence,
+    settledSourceIds,
   );
 }
