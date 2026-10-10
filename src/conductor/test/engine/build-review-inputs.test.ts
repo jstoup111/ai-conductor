@@ -517,6 +517,118 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       }]);
     });
 
+    it('admits a bound .check.ts selector outside test paths and ignores unmarked changed files', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
+          'diff --git a/src/widget/widget.check.ts b/src/widget/widget.check.ts',
+          '--- a/src/widget/widget.check.ts', '+++ b/src/widget/widget.check.ts', '+widget check',
+          'diff --git a/src/widget/widget.ts b/src/widget/widget.ts',
+          '--- a/src/widget/widget.ts', '+++ b/src/widget/widget.ts', '+widget implementation',
+          'diff --git a/scripts/test_a.sh b/scripts/test_a.sh',
+          '--- a/scripts/test_a.sh', '+++ b/scripts/test_a.sh', '+script',
+          'diff --git a/pkg/a_test.go b/pkg/a_test.go',
+          '--- a/pkg/a_test.go', '+++ b/pkg/a_test.go', '+go test',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
+        { match: ['show', 'head123:src/widget/widget.check.ts'], result: { stdout: "// Covers: task:8\nit('widget', () => {});\n" } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(inputs.sourceSnapshot.testQuality).toMatchObject({
+        inScopeTests: ['src/widget/widget.check.ts'],
+        counterfactualFileSelectors: ['src/widget/widget.check.ts'],
+        excludedMarkerFiles: [],
+      });
+    });
+
+    it('records exactly the excluded marker files and ignores malformed Covers text', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
+          'diff --git a/tools/old_check.sh b/tools/old_check.sh',
+          '--- a/tools/old_check.sh', '+++ b/tools/old_check.sh', '+old check',
+          'diff --git a/src/hints.ts b/src/hints.ts',
+          '--- a/src/hints.ts', '+++ b/src/hints.ts', '+hint',
+          'diff --git a/src/spec-text.ts b/src/spec-text.ts',
+          '--- a/src/spec-text.ts', '+++ b/src/spec-text.ts', '+spec text',
+          'diff --git a/src/widget/other.check.ts b/src/widget/other.check.ts',
+          '--- a/src/widget/other.check.ts', '+++ b/src/widget/other.check.ts', '+other check',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
+        { match: ['show', 'head123:tools/old_check.sh'], result: { stdout: '# Covers: task:99\n' } },
+        { match: ['show', 'head123:src/hints.ts'], result: { stdout: '// Covers: task:8\nexport const x = 1;\n' } },
+        { match: ['show', 'head123:src/spec-text.ts'], result: { stdout: '// Covers: comment lines\n' } },
+        { match: ['show', 'head123:src/widget/other.check.ts'], result: { stdout: "// Covers: task:99\nit('other', () => {});\n" } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(inputs.sourceSnapshot.testQuality).toMatchObject({
+        inScopeTests: [],
+        counterfactualFileSelectors: [],
+        excludedMarkerFiles: [
+          { selector: 'src/hints.ts', reason: 'no-changed-test-declarations' },
+          { selector: 'src/widget/other.check.ts', reason: 'no-current-feature-binding' },
+          { selector: 'tools/old_check.sh', reason: 'unsupported-source-language' },
+        ],
+      });
+    });
+
+    it('uses the first declaration diagnostic as an excluded marker reason', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
+          'diff --git a/src/widget/multi.check.ts b/src/widget/multi.check.ts',
+          '--- a/src/widget/multi.check.ts', '+++ b/src/widget/multi.check.ts', '+multi check',
+          'diff --git a/tools/old_check.sh b/tools/old_check.sh',
+          '--- a/tools/old_check.sh', '+++ b/tools/old_check.sh', '+old check',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
+        { match: ['show', 'base123:src/widget/multi.check.ts'], result: { stdout: [
+          '// Covers: task:99',
+          'it(titleVar, () => {});',
+          "test.each([])('unsupported wrapper', () => {});",
+          "it('base', () => {});",
+        ].join('\n') } },
+        { match: ['show', 'head123:src/widget/multi.check.ts'], result: { stdout: [
+          '// Covers: task:99',
+          'it(titleVar, () => {});',
+          "test.each([])('unsupported wrapper', () => {});",
+          "it('changed', () => {});",
+        ].join('\n') } },
+        { match: ['show', 'head123:tools/old_check.sh'], result: { stdout: '# Covers: task:99\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(inputs.sourceSnapshot.testQuality?.excludedMarkerFiles).toEqual([
+        { selector: 'src/widget/multi.check.ts', reason: 'nonliteral-declaration-title' },
+        { selector: 'tools/old_check.sh', reason: 'unsupported-source-language' },
+      ]);
+    });
+
+    it('does not record a convention-path helper with no declarations as excluded', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
+          'diff --git a/test/helpers.ts b/test/helpers.ts',
+          '--- a/test/helpers.ts', '+++ b/test/helpers.ts', '+helper',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
+        { match: ['show', 'head123:test/helpers.ts'], result: { stdout: '// Covers: task:8\nexport const helper = true;\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(inputs.sourceSnapshot.testQuality?.excludedMarkerFiles).toEqual([]);
+    });
+
     it('selects a changed marked unsupported-language spec as one source-bound uncertainty candidate', async () => {
       const { git, calls } = fakeGit([
         ...freshProbeScript,
