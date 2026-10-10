@@ -749,6 +749,51 @@ describe('kickback-budget inspect shows plan growth', () => {
   });
 });
 
+// Covers: Task 3 — inspect reports remediation consumption from recorded laps,
+// rather than generic re-open counters retained in the durable ledger.
+describe('kickback-budget inspect reports remediation lap consumption', () => {
+  async function inspect(
+    fixture: { root: string },
+    format: 'human' | 'json',
+  ): Promise<{ code: number; output: string }> {
+    const lines: string[] = [];
+    const code = await dispatchKickbackBudgetCommand(
+      { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format },
+      { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => lines.push(line) },
+    );
+    return { code, output: lines.join('\n') };
+  }
+
+  it.each([
+    {
+      name: 'reports a consumed remediation lap despite zero generic re-opens',
+      entry: { ...baseEntry, count: 0, cumulative: 0, laps: 1 },
+      human: '1/1 consumed; 0 remaining', consumed: 1, remaining: 0,
+    },
+    {
+      name: 'reports no consumed remediation laps despite generic re-opens',
+      entry: { ...baseEntry, count: 2, cumulative: 5, laps: 0 },
+      human: '0/1 consumed; 1 remaining', consumed: 0, remaining: 1,
+    },
+  ])('$name', async ({ entry, human, consumed, remaining }) => {
+    // No config is written: inspect must fall back to the remediation gate's default lap cap.
+    const fixture = await makeFeature({ version: 1, gates: { architecture_review_as_built: entry } });
+    try {
+      const humanResult = await inspect(fixture, 'human');
+      expect(humanResult.code).toBe(0);
+      expect(humanResult.output).toContain(`Kickback budget (architecture_review_as_built): ${human}`);
+
+      const jsonResult = await inspect(fixture, 'json');
+      expect(jsonResult.code).toBe(0);
+      expect(JSON.parse(jsonResult.output).gates).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          gate: 'architecture_review_as_built', consumed, limit: 1, remaining,
+        }),
+      ]));
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+});
+
 // Covers: task:11 — D3 authority contract: machine-scoped identity through the
 // approved user-config → GitHub chain, a bounded rationale, and one shared
 // named-worktree resolution rather than a per-command copy.
