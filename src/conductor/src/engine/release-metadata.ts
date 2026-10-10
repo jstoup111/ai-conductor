@@ -167,8 +167,57 @@ function parseMigrationBlock(body: string): string | undefined {
   return migration;
 }
 
+/**
+ * The body with every HTML comment outside a code fence removed (lines kept).
+ *
+ * The PR template documents the note shape and an example ```bash migration```
+ * fence inside HTML comments, and engine-seeded draft bodies carry the template
+ * verbatim. Commented text is never a declaration: read as one, the example
+ * duplicates the live `Release-Disposition` line and the example fence turns a
+ * `none` Migration section into a malformed one, halting the self-host release
+ * gate. Inside a code fence `<!--` is literal content, not comment syntax.
+ */
+function withoutHtmlComments(body: string): string {
+  const kept: string[] = [];
+  let inComment = false;
+  let inFence = false;
+  for (const line of body.split('\n')) {
+    if (!inComment && fenceDelimiterRe.test(line.trim())) {
+      inFence = !inFence;
+      kept.push(line);
+      continue;
+    }
+    if (inFence) {
+      kept.push(line);
+      continue;
+    }
+    let rest = line;
+    let out = '';
+    for (;;) {
+      if (inComment) {
+        const close = rest.indexOf('-->');
+        if (close === -1) break;
+        rest = rest.slice(close + 3);
+        inComment = false;
+      } else {
+        const open = rest.indexOf('<!--');
+        if (open === -1) {
+          out += rest;
+          break;
+        }
+        out += rest.slice(0, open);
+        rest = rest.slice(open + 4);
+        inComment = true;
+      }
+    }
+    kept.push(out);
+  }
+  return kept.join('\n');
+}
+
 /** Parse the machine-readable release declaration embedded in an implementation PR body. */
 export function parseReleaseDisposition(body: string): ReleaseDisposition {
+  body = withoutHtmlComments(body);
   const fields = new Map<ReleaseFieldName, string>();
   for (const line of body.split(/\r?\n/)) {
     const match = /^Release-([A-Za-z]+):\s*(.*)$/.exec(line);

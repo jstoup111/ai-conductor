@@ -25,6 +25,91 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
     });
   });
 
+  describe('Release- lines inside HTML comments', () => {
+    // .github/pull_request_template.md documents the note shape inside an HTML
+    // comment above the live default line. Engine-seeded draft bodies carry the
+    // template verbatim, so the commented example must not count as a declaration.
+    const templateRegion = (live: string[]) => [
+      '## Release metadata',
+      '',
+      '<!--',
+      'For a reader-visible implementation change, replace the default line with exactly:',
+      'Release-Disposition: note',
+      'Release-Category: Added',
+      'Release-Semver: patch',
+      'Release-Note: Reader-facing summary of the delivered change.',
+      '-->',
+      '',
+      ...live,
+    ].join('\n');
+
+    it('reads only the live no-note line below the commented example', () => {
+      expect(parseReleaseDisposition(templateRegion(['Release-Disposition: no-note']))).toEqual({
+        disposition: 'no-note',
+      });
+    });
+
+    it('reads only the live note block below the commented example', () => {
+      expect(parseReleaseDisposition(templateRegion([
+        'Release-Disposition: note',
+        'Release-Category: Fixed',
+        'Release-Semver: patch',
+        'Release-Note: Ignore commented release fields.',
+      ]))).toEqual({
+        disposition: 'note',
+        category: 'Fixed',
+        semver: 'patch',
+        note: 'Ignore commented release fields.',
+      });
+    });
+
+    it('reads a "none" Migration section below the commented example fence', () => {
+      expect(parseReleaseDisposition([
+        templateRegion(['Release-Disposition: no-note']),
+        '',
+        '## Migration',
+        '',
+        '<!--',
+        'Required — even if the answer is "none".',
+        '',
+        '```bash migration',
+        '# commands go here',
+        '```',
+        '',
+        'Otherwise, write "none".',
+        '-->',
+        '',
+        'none',
+        '',
+        '<!-- /ai-conductor:step -->',
+        '',
+        '## Documentation',
+      ].join('\n'))).toEqual({ disposition: 'no-note' });
+    });
+
+    it('keeps comment syntax inside a runnable migration fence', () => {
+      expect(parseReleaseDisposition([
+        templateRegion([
+          'Release-Disposition: note',
+          'Release-Category: Fixed',
+          'Release-Semver: patch',
+          'Release-Note: Ignore commented release fields.',
+        ]),
+        '',
+        '## Migration',
+        '```bash migration',
+        'echo "<!-- not a comment"',
+        '```',
+      ].join('\n'))).toMatchObject({ migration: '```bash migration\necho "<!-- not a comment"\n```' });
+    });
+
+    it('still rejects a body whose only disposition is commented out', () => {
+      expect(() => parseReleaseDisposition(templateRegion([]))).toThrow(
+        'Invalid release disposition: Disposition',
+      );
+    });
+  });
+
   it('accepts a note disposition and runnable migration closed by the release-disposition region marker (Task 13)', () => {
     expect(parseReleaseDisposition([
       '<!-- ai-conductor:step release-disposition -->',
