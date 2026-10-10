@@ -77,7 +77,7 @@ export const ALL_STEPS: StepDefinition[] = [
     name: 'architecture_review',
     label: 'Architecture Review',
     phase: 'DECIDE',
-    enforcement: 'advisory',
+    enforcement: 'gating',
     prerequisites: ['architecture_diagram'],
     skippableForTiers: ['S'],
     isCheckpoint: false,

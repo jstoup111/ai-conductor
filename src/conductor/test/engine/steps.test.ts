@@ -108,10 +108,11 @@ describe('engine/steps', () => {
       expect(s.skippableForTiers).toEqual(['S']);
     });
 
-    it('architecture_review is DECIDE/advisory, skippable for S, kickback target (precedes stories)', () => {
+    // Covers: task:9
+    it('architecture_review is DECIDE/gating, skippable for S, kickback target (precedes stories)', () => {
       const s = ALL_STEPS[6];
       expect(s.name).toBe('architecture_review');
-      expect(s.enforcement).toBe('advisory');
+      expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['architecture_diagram']);
       expect(s.skippableForTiers).toEqual(['S']);
       expect(s.kickbackTarget).toBe(true);
