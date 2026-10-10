@@ -764,7 +764,16 @@ type ConductorEventBody =
       /** Unbound Covers declarations seen in the frozen test-quality scope. */
       unresolvedMarkers?: readonly { selector: string; reference: string }[];
       /** Findings below the configured per-rubric confidence floor. */
-      suppressedFindings?: readonly { findingId: string; rubric: string; confidence: number; floor: number }[];
+      suppressedFindings?: readonly { findingId: string; rubric: string; confidence: number; floor: number; summary?: string }[];
+    }
+  | {
+      /** The single operator-facing settlement for one adjudicated review lap. */
+      type: 'build_review_adjudicated';
+      lapId: string;
+      outcome: 'pass' | 'build' | 'decision-stop' | 'halt' | 'retry';
+      overturned: boolean;
+      findings: readonly { rubric: string; title: string; disposition: string }[];
+      cases: readonly { caseId: string; disposition: string; resolution: string }[];
     }
   | {
       /** A post-join remediation judgement is about to run for one build-review lap. */
@@ -900,6 +909,8 @@ type ConductorEventBody =
       type: 'step_failed';
       step: StepName;
       error: string;
+      /** A current aggregate FAIL that is about to be settled by adjudication. */
+      provisional?: 'pending-adjudication';
       retryCount: number;
       /** Bounded facts from the final failed provider attempt, when available. */
       providerExit?: ProviderExitFacts;

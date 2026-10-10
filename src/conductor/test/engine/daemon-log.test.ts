@@ -10,6 +10,8 @@ import {
   daemonLogPath,
   formatDaemonLogLine,
   formatDaemonActivityLine,
+  composeDaemonLineBody,
+  formatNextAction,
   formatDaemonConsoleTeeLine,
   createDaemonModeLogger,
   createFeatureDaemonLogger,
@@ -279,7 +281,62 @@ describe('engine/daemon-log', () => {
     });
   });
 
+  describe('daemon line bodies and next actions', () => {
+    // Covers: task:1
+    it.each([
+      [0, 'at the root', 'at the root'],
+      [1, 'one level deep', '· one level deep'],
+      [2, 'two levels deep', '·   two levels deep'],
+    ] as const)('places depth %s at its declared column', (depth, text, expected) => {
+      expect(composeDaemonLineBody({ depth, text })).toBe(expected);
+    });
+
+    // Covers: task:1
+    it('formats both kinds of next action', () => {
+      expect(formatNextAction({ kind: 'operator', action: 'ai-conductor monitor all' })).toBe(
+        ' — next: ai-conductor monitor all',
+      );
+      expect(
+        formatNextAction({ kind: 'none', why: 'the daemon retries automatically' }),
+      ).toBe(' — no action needed: the daemon retries automatically');
+    });
+
+    // Covers: task:1
+    it('normalizes a feature string message at depth zero in both sinks', () => {
+      const live: string[] = [];
+      const persisted: string[] = [];
+      const baseLog = createDaemonModeLogger({
+        writeLive: (line) => live.push(line),
+        writePersisted: (line) => persisted.push(line),
+      });
+
+      createFeatureDaemonLogger('feature-a', baseLog)('   ! [rejected] x');
+
+      expect(live).toEqual(['[daemon][feature-a] ! [rejected] x']);
+      expect(persisted).toEqual(live);
+    });
+
+    // Covers: task:1
+    it('accepts depth entries through both daemon loggers', () => {
+      const live: string[] = [];
+      const baseLog = createDaemonModeLogger({
+        writeLive: (line) => live.push(line),
+        writePersisted: () => {},
+      });
+      const featureLog = createFeatureDaemonLogger('feature-a', baseLog);
+
+      baseLog({ depth: 1, text: 'daemon detail' });
+      featureLog({ depth: 2, text: 'feature detail' });
+
+      expect(live).toEqual([
+        '[daemon] · daemon detail',
+        '[daemon][feature-a] ·   feature detail',
+      ]);
+    });
+  });
+
   describe('feature-owned multiline diagnostics', () => {
+    // Covers: task:2
     it('prefixes and persists every diagnostic line independently', () => {
       const live: string[] = [];
       const persisted: string[] = [];
@@ -292,9 +349,81 @@ describe('engine/daemon-log', () => {
 
       expect(live).toEqual([
         '[daemon][feature-a] stdout first line',
-        '[daemon][feature-a] stderr continuation',
+        '[daemon][feature-a] │ stderr continuation',
       ]);
       expect(persisted).toEqual(live);
+    });
+
+    // Covers: task:2
+    it('collapses forwarded feature and daemon-wide output at default verbosity', () => {
+      const live: string[] = [];
+      const logger = createDaemonModeLogger({
+        writeLive: (line) => live.push(line),
+        writePersisted: () => {},
+      });
+      const output = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join('\n');
+
+      createFeatureDaemonLogger('feature-a', logger).forwarded(output, '/tmp/feature-output');
+      logger({ depth: 0, kind: 'forwarded', text: output, moreAt: '/tmp/daemon-output' });
+
+      expect(live).toEqual([
+        '[daemon][feature-a] line 1 (+39 more lines; full text in /tmp/feature-output or set daemon_verbose: true to show them)',
+        '[daemon] line 1 (+39 more lines; full text in /tmp/daemon-output or set daemon_verbose: true to show them)',
+      ]);
+    });
+
+    // Covers: task:2
+    it('writes verbose forwarded continuations at the declared depth without losing whitespace', () => {
+      const live: string[] = [];
+      const logger = createDaemonModeLogger({
+        verbose: true,
+        writeLive: (line) => live.push(line),
+        writePersisted: () => {},
+      });
+      const output = Array.from(
+        { length: 40 },
+        (_, index) => (index === 1 ? '  indented continuation' : `line ${index + 1}`),
+      ).join('\n');
+
+      logger({ depth: 1, kind: 'forwarded', text: output });
+
+      expect(live).toHaveLength(40);
+      expect(live[0]).toBe('[daemon] · line 1');
+      expect(live[1]).toBe('[daemon] · │   indented continuation');
+      expect(live.at(-1)).toBe('[daemon] · │ line 40');
+    });
+
+    // Covers: task:2
+    it('formats JSON payloads, preserves invalid JSON, and removes a whitespace-leading first line', () => {
+      const live: string[] = [];
+      const logger = createDaemonModeLogger({
+        writeLive: (line) => live.push(line),
+        writePersisted: () => {},
+      });
+
+      logger({ depth: 0, kind: 'forwarded', text: ' {"ok":true} ' });
+      logger({ depth: 0, kind: 'forwarded', text: '{not json' });
+      logger({ depth: 0, kind: 'forwarded', text: ' ! [rejected]  HEAD -> feat/x' });
+
+      expect(live).toEqual([
+        '[daemon] JSON payload (11 bytes; set daemon_verbose: true to show it)',
+        '[daemon] {not json',
+        '[daemon] ! [rejected]  HEAD -> feat/x',
+      ]);
+    });
+
+    // Covers: task:2
+    it.each([false, true])('marks authored daemon-string continuations while dropping blank lines (verbose: %s)', (verbose) => {
+      const live: string[] = [];
+      const logger = createDaemonModeLogger({
+        verbose,
+        writeLive: (line) => live.push(line),
+        writePersisted: () => {},
+      });
+
+      logger('first\n\n  \n  second');
+
+      expect(live).toEqual(['[daemon] first', '[daemon] │   second']);
     });
   });
 

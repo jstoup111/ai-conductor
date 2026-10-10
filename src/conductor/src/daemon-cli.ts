@@ -1,4 +1,6 @@
 import chalk from 'chalk';
+import { createDaemonEventPresenter, type DaemonEventPresenter } from './engine/daemon-event-presenter.js';
+import { composeDaemonLineBody } from './engine/daemon-log.js';
 import { runSighupPersistence } from './engine/sighup-persistence.js';
 import { v4 as uuidv4 } from 'uuid';
 import { basename, join, dirname, isAbsolute } from 'node:path';
@@ -133,6 +135,7 @@ import {
   formatDaemonConsoleTeeLine,
   withDaemonLogFeatureOwnership,
   type DaemonLogSink,
+  type FeatureDaemonLogger,
 } from './engine/daemon-log.js';
 import type { ConductorEvent, StepName, StepStatus } from './types/index.js';
 import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
@@ -1055,6 +1058,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // read back via `conduct daemon logs` can be correlated in time; the
     // console stays uncluttered for live watching.
     writePersisted: (line) => logSink?.write(formatDaemonLogLine(stripAnsi(line))),
+    verbose: config?.daemon_verbose ?? false,
   });
   // daemon.ts is also used as a plain core, where its `[daemon]` messages are
   // meaningful. Its daemon-mode renderer already owns that prefix, though, so
@@ -1379,10 +1383,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // (beginFeatureRun below). Rendering them here would double-print them,
       // once tagged and once untagged.
       if (isForwardedFromFeature(event)) return;
-      renderDaemonEvent(event, globalSubscriberLog);
+      globalPresenter.render(event);
     },
     async stop() {},
   };
+  const globalPresenter = createDaemonEventPresenter({
+    log: (entry) => globalSubscriberLog(composeDaemonLineBody(entry)),
+    verbose: config?.daemon_verbose ?? false,
+    render: (event, output) => renderDaemonEventWithPresentation(event, output, globalSubscriberLog),
+  });
   subscriber.start([daemonLogRenderer]);
   const readOnlyReviewCapabilityProbe =
     opts.probeReadOnlyReviewCapability ?? probeReadOnlyReviewCapability;
@@ -1404,7 +1413,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
   const createProviderExecution = (
     eventTarget = events,
-    runtimeLog = log,
+    runtimeLog: (message: string) => void = log,
+    diagnosticLog?: (message: string) => void,
   ): ProviderExecutionContext => ({
     configuredProviders,
     runtimes: createProviderRuntimeSet(registry, runtimeLog, config),
@@ -1423,7 +1433,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         ...(executionContext ? { executionContext } : {}),
       }),
     warn: (_message, transition) => eventTarget.emit(transition),
-    ...(runtimeLog ? { diagnosticLog: runtimeLog } : {}),
+    diagnosticLog: diagnosticLog ?? runtimeLog,
   });
   // Slug-aware recovery dispatchers (rebase-autoresolve, ci-fix) know the
   // feature slug but have no persistent per-feature event bus like
@@ -1441,12 +1451,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       slug,
       (message) => log(message, true),
       formatDaemonFeatureTag(slug),
-    );
-    scopedEvents.on('provider_attempt', (event) => renderDaemonEvent(event, scopedLog));
-    scopedEvents.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
-    scopedEvents.on('session_policy', (event) => renderDaemonEvent(event, scopedLog));
-    subscribeRecoverySessionOccurrences(scopedEvents, scopedLog);
-    const providerExecution = createProviderExecution(scopedEvents, scopedLog);
+    ) as FeatureDaemonLogger;
+    const scopedPresenter = createDaemonEventPresenter({
+      log: scopedLog,
+      verbose: config?.daemon_verbose ?? false,
+      render: (event, output) => renderDaemonEventWithPresentation(event, output, scopedLog),
+    });
+    scopedEvents.on('provider_attempt', (event) => scopedPresenter.render(event));
+    scopedEvents.on('provider_fallback', (event) => scopedPresenter.render(event));
+    scopedEvents.on('session_policy', (event) => scopedPresenter.render(event));
+    subscribeRecoverySessionOccurrences(scopedEvents, scopedPresenter);
+    const providerExecution = createProviderExecution(scopedEvents, scopedLog, scopedLog.forwarded);
     const provider = providerExecution.configuredProviders[0];
     if (!provider) throw new Error('daemon recovery dispatch requires a configured provider');
     const managedSessionContext = await prepareDaemonFeatureManagedSessionContext({
@@ -1474,24 +1489,24 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // visible on the same feature logger as normal feature dispatches.
   const subscribeRecoverySessionOccurrences = (
     eventSource: ConductorEventEmitter,
-    eventLog: (message: string) => void,
+    presenter: DaemonEventPresenter,
   ): void => {
     for (const type of renderedSessionOccurrenceTypes()) {
-      eventSource.on(type, (event) => renderDaemonEvent(event, eventLog));
+      eventSource.on(type, (event) => presenter.render(event));
     }
   };
   // The pool emits a feature's start/resume/done records before and after its
   // worktree scope exists. Cache the scoped logger by slug so those lifecycle
   // records and the worktree-owned records share one immutable attribution.
-  const featureLogs = new Map<string, (message: string) => void>();
-  const featureLogFor = (slug: string): ((message: string) => void) => {
+  const featureLogs = new Map<string, FeatureDaemonLogger>();
+  const featureLogFor = (slug: string): FeatureDaemonLogger => {
     let featureLog = featureLogs.get(slug);
     if (!featureLog) {
       featureLog = createFeatureDaemonLogger(
         slug,
         (message) => log(message, true),
         formatDaemonFeatureTag(slug),
-      );
+      ) as FeatureDaemonLogger;
       featureLogs.set(slug, featureLog);
     }
     return featureLog;
@@ -1501,7 +1516,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const persistence = startFeatureEventPersistence(worktree.path, events, item.slug);
     const featureEvents = persistence.events;
     const featureLog = featureLogFor(item.slug);
-    const providerExecution = createProviderExecution(featureEvents, featureLog);
+    const providerExecution = createProviderExecution(featureEvents, featureLog, featureLog.forwarded);
     const provider = providerExecution.configuredProviders[0];
     let managedSessionContext: ManagedSessionContext;
     try {
@@ -1539,7 +1554,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       ? wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents, daemonOtel.spoolRuntime)
       : wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents);
     if (visualizer) activeDispatchVisualizers.add(visualizer);
-    const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
+    // This presenter intentionally belongs to this dispatch, not its feature:
+    // a redispatch gets fresh once/whenChanged memory.
+    const featurePresenter = createDaemonEventPresenter({
+      log: featureLog,
+      verbose: config?.daemon_verbose ?? false,
+      render: (event, output) => renderDaemonEventWithPresentation(event, output, featureLog),
+    });
+    const renderEvent = (event: ConductorEvent) => featurePresenter.render(event);
     const renderableEvents = renderedEventTypes();
     for (const type of renderableEvents) featureEvents.on(type, renderEvent);
     let stopPromise: Promise<void> | undefined;
@@ -1598,7 +1620,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     item: BacklogItem,
     providerExecution = createProviderExecution(),
     featureEvents: ConductorEventEmitter = events,
-    featureLog = log,
+    featureLog: (message: string) => void = log,
     sessionId = uuidv4(),
   ) => {
     const pipelineDir = join(wt.path, '.pipeline');
@@ -1841,7 +1863,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     worktree: FeatureWorktree,
     item: BacklogItem,
     providerExecution = createProviderExecution(),
-    featureLog = log,
+    featureLog: (message: string) => void = log,
     featureEvents?: ConductorEventEmitter,
     workOrderBaseSha?: string,
   ) => {
@@ -2786,13 +2808,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 return await withFeatureEventPersistence({
                   worktreePath: join(projectRoot, '.worktrees', entry.slug), globalEvents: events, featureSlug: entry.slug,
                   run: async (featureEvents) => {
+                const recoveryLog = createFeatureDaemonLogger(
+                  entry.slug,
+                  (message) => log(message, true),
+                  formatDaemonFeatureTag(entry.slug),
+                );
                 subscribeRecoverySessionOccurrences(
                   featureEvents,
-                  createFeatureDaemonLogger(
-                    entry.slug,
-                    (message) => log(message, true),
-                    formatDaemonFeatureTag(entry.slug),
-                  ),
+                  createDaemonEventPresenter({
+                    log: recoveryLog,
+                    verbose: config?.daemon_verbose ?? false,
+                    render: (event, output) => renderDaemonEventWithPresentation(
+                      event,
+                      output,
+                      recoveryLog,
+                    ),
+                  }),
                 );
                   // Create a real Tier-2 resolver that dispatches to the /rebase skill
                   // FR-7: wire stepRunner and events for rebase resolution dispatch
@@ -2893,13 +2924,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               return await withFeatureEventPersistence({
                 worktreePath: join(projectRoot, '.worktrees', entry.slug), globalEvents: events, featureSlug: entry.slug,
                 run: async (featureEvents) => {
+              const recoveryLog = createFeatureDaemonLogger(
+                entry.slug,
+                (message) => log(message, true),
+                formatDaemonFeatureTag(entry.slug),
+              );
               subscribeRecoverySessionOccurrences(
                 featureEvents,
-                createFeatureDaemonLogger(
-                  entry.slug,
-                  (message) => log(message, true),
-                  formatDaemonFeatureTag(entry.slug),
-                ),
+                createDaemonEventPresenter({
+                  log: recoveryLog,
+                  verbose: config?.daemon_verbose ?? false,
+                  render: (event, output) => renderDaemonEventWithPresentation(
+                    event,
+                    output,
+                    recoveryLog,
+                  ),
+                }),
               );
               const dispatchCiFix = createDaemonCiFixDispatch({
                 tracker: createGithubTrackerClient(makeProductionGh()),
@@ -3089,20 +3129,115 @@ export function resetRenderedReclaimRetentions(): void {
  * signal high: step boundaries, failures/retries, unsatisfied gates, kickbacks,
  * halts/convergence, and rate limits — not the full event firehose.
  */
-export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => void): void {
-  // Colors mirror the TTY dashboard palette (ui/dashboard-text.ts): green ✓,
-  // cyan ▶, red ✗, yellow warnings, dim chrome. chalk auto-disables under
-  // NO_COLOR / non-TTY, so piped or redirected daemon logs stay plain text.
-  //
-  // Task 11: a throwing renderer must never crash the daemon run — the whole
-  // switch is wrapped defensively so a malformed/unexpected event payload
-  // (e.g. from a future event kind whose formatter assumes a field that
-  // isn't there) degrades to a dropped line, not a process crash.
-  try {
-    renderDaemonEventUnsafe(event, log);
-  } catch {
-    // Best-effort: rendering a daemon.log line must never disrupt the run.
+const daemonLifetimePresenters = new WeakMap<(msg: string) => void, DaemonEventPresenter>();
+
+/**
+ * Compatibility seam for callers that have not yet moved their cases into the
+ * presenter. One presenter is created lazily for each daemon log sink; that
+ * keeps presenter memory daemon-lifetime for the global subscriber while Task
+ * 5 replaces per-dispatch callers with explicitly scoped instances.
+ */
+export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => void, options: { verbose?: boolean } = {}): void {
+  let presenter = daemonLifetimePresenters.get(log);
+  if (!presenter) {
+    presenter = createDaemonEventPresenter({
+      // The exported compatibility seam takes a string sink, while real
+      // daemon dispatches pass DaemonLogEntry through their feature logger.
+      log: (entry) => log(composeDaemonLineBody(entry)),
+      verbose: options.verbose ?? false,
+      // The legacy dispatcher is deliberately transitional. Subsequent tasks
+      // migrate its cases to the presenter's typed output API one group at a time.
+      render: (renderedEvent, output) => {
+        try {
+          renderDaemonEventWithPresentation(renderedEvent, output, log);
+        } catch {
+          // Best-effort: rendering a daemon.log line must never disrupt the run.
+        }
+      },
+    });
+    daemonLifetimePresenters.set(log, presenter);
   }
+  presenter.render(event);
+}
+
+/**
+ * Transitional formatter adapter.  It centralizes depth, verbosity and
+ * severity in the presenter while the long-lived textual cases retain their
+ * proven wording.  New cases belong above the fallback, never in a second
+ * logger or event channel.
+ */
+function renderDaemonEventWithPresentation(event: ConductorEvent, output: Parameters<NonNullable<Parameters<typeof createDaemonEventPresenter>[0]['render']>>[1], legacyLog?: (msg: string) => void): void {
+  const gateReruns = { kind: 'none' as const, why: 'the gate re-runs build_review' };
+  switch (event.type) {
+    case 'build_review_cache_discarded':
+      output.warning(`build_review cache discarded: ${event.rubric} (${event.reason}; cached ${event.cachedEngineStamp ?? 'pre-identity'} -> current ${event.currentEngineStamp})`, gateReruns);
+      return;
+    case 'build_review_read_only_capability': {
+      const reason = event.status === 'unavailable' ? ` — ${event.reason}` : '';
+      const text = `build_review read-only capability ${event.status}: ${event.provider} on ${event.platform}${reason}`;
+      if (event.status === 'unavailable') output.warning(text, gateReruns); else output.info(`✓ ${text}`);
+      return;
+    }
+    case 'build_review_policy_failed':
+      output.warning(`build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} policy ${event.stage} failed: ${event.reason}`, gateReruns);
+      return;
+    case 'build_review_rubric_infrastructure_failure':
+      output.warning(`build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} infrastructure failure: ${event.reason}${event.excerpt ? ` — ${event.excerpt}` : ''}`, gateReruns);
+      return;
+    case 'build_review_scope_incomplete':
+      output.warning(`build_review scope incomplete (${event.rubric}; ${event.candidates.map((candidate) => candidate.candidateId).join(', ')})`, { kind: 'operator', action: 'ai-conductor monitor all' });
+      return;
+    case 'remediation_adjudication_completed':
+      output.info(`build_review adjudication completed (${event.caseIds.length} settled case${event.caseIds.length === 1 ? '' : 's'})`);
+      for (const stop of event.decisionStops ?? []) {
+        output.warning(`build_review decision stop: needs a ${stop.owner ?? 'consistency'} decision (${stop.sourceIds.length} source${stop.sourceIds.length === 1 ? '' : 's'}) — ${stop.rationale}`, { kind: 'operator', action: 'ai-conductor monitor all' });
+        output.detail(`case ${stop.caseId}`);
+      }
+      return;
+    case 'remediation_case_refuted':
+      output.info('build_review refuted remediation case');
+      output.detail(event.caseId);
+      return;
+    case 'build_review_adjudicated': {
+      const findings = event.findings.map((finding) => `\"${finding.title}\" [${finding.rubric}]`).join('; ');
+      const suffix = findings ? ` — ${findings}` : '';
+      const text = `build_review final verdict: ${event.outcome === 'pass' ? 'PASS' : event.outcome}${event.overturned ? ' (provisional FAIL overturned)' : ''}${suffix}`;
+      if (event.outcome === 'pass') output.info(text);
+      else if (event.outcome === 'build') output.warning(text, { kind: 'none', why: 'the daemon re-runs build' });
+      else if (event.outcome === 'retry') output.warning(text, { kind: 'none', why: 'build_review re-runs' });
+      else output.halt(text, { kind: 'operator', action: 'ai-conductor monitor all' });
+      for (const entry of event.cases) output.detail(`${entry.caseId} [${entry.disposition}/${entry.resolution}]`);
+      return;
+    }
+    case 'build_review_outer_verdict': {
+      for (const finding of event.suppressedFindings ?? []) {
+        output.info(finding.summary
+          ? `build_review suppressed \"${finding.summary.replace(/\s+/g, ' ').trim()}\" [${finding.rubric}] (confidence ${finding.confidence} < floor ${finding.floor})`
+          : `build_review suppressed [${finding.rubric}] ${finding.findingId} (confidence ${finding.confidence} < floor ${finding.floor})`);
+      }
+      const raw = event.rawVerdict === event.effectiveVerdict ? '' : ` (raw: ${event.rawVerdict})`;
+      output.info(`build_review [${buildReviewLapTag(event.lapId)}] outer verdict: ${event.effectiveVerdict}${raw}${event.reason ? ` — ${event.reason}` : ''}${event.unresolvedMarkers ? ` — unresolved markers: ${event.unresolvedMarkers.length}` : ''}`);
+      return;
+    }
+    case 'self_host_containment_verdict':
+      output.whenChanged('self-host-containment', event.contained).info(event.contained ? `self-host containment verified: ${event.evidence}` : `self-host containment unavailable: ${event.reason}`);
+      return;
+    case 'self_host_boundary_fingerprint':
+      output.once('self-host-boundary-fingerprint').info(`self-host boundary fingerprint: ${event.surfaces.map((surface) => `${surface.label} ${surface.elapsedMs}ms/${surface.fileCount} files`).join('; ')}`);
+      output.detail(`self-host boundary fingerprint: ${event.surfaces.map((surface) => `${surface.label} ${surface.elapsedMs}ms/${surface.fileCount} files`).join('; ')}`);
+      return;
+    case 'session_policy':
+      output.once(`session-policy:${event.provider}:${event.reason}`).warning(`${event.step}: ${event.provider} session policy — ${event.reason}`, { kind: 'none', why: 'the daemon uses a fresh session' });
+      return;
+  }
+  if (!legacyLog) return;
+  const captured: string[] = [];
+  renderDaemonEventUnsafe(event, (line) => captured.push(line));
+  // Keep byte-stable legacy wording (including color spans) until its case is
+  // explicitly migrated above.  Dispatch wiring is nevertheless unified: the
+  // presenter remains the only event entry point and owns its per-dispatch
+  // suppression memory.
+  for (const line of captured) legacyLog(line);
 }
 
 function buildReviewLapTag(lapId: string): string {
@@ -3118,10 +3253,13 @@ function renderedExecutionSubject(event: ConductorEvent, legacyStep: string): st
     },
     legacyStep,
     executionContext: 'executionContext' in event ? event.executionContext : undefined,
-  })?.subjectLabel ?? legacyStep;
+})?.subjectLabel ?? legacyStep;
 }
 
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
+  // Colors mirror the TTY dashboard palette (ui/dashboard-text.ts): green ✓,
+  // cyan ▶, red ✗, yellow warnings, dim chrome. chalk auto-disables under
+  // NO_COLOR / non-TTY, so piped or redirected daemon logs stay plain text.
   const dot = chalk.dim('·');
   switch (event.type) {
     case 'test_suite_verification':

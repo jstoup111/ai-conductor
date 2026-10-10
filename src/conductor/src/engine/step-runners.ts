@@ -4296,7 +4296,7 @@ export class DefaultStepRunner implements StepRunner {
       rawVerdict: aggregate.verdict,
       effectiveVerdict: effective.ok ? effective.effective.verdict : 'FAIL',
       ...(suppressionEntries.length > 0
-        ? { suppressedFindings: suppressionEntries.map(({ findingId, rubric, confidence, floor }) => ({ findingId, rubric, confidence, floor })) }
+        ? { suppressedFindings: suppressionEntries.map(({ findingId, rubric, confidence, floor, summary }) => ({ findingId, rubric, confidence, floor, ...(summary === undefined ? {} : { summary }) })) }
         : {}),
     });
     return suppressionEntries;

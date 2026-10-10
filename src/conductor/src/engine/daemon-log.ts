@@ -23,8 +23,74 @@ const ROTATED_LOG_NAME = 'daemon.log.1';
 const ROTATE_SIZE_BYTES = 1_000_000;
 const FEATURE_TAG_DISPLAY_LENGTH = 24;
 const featureOwnership = new AsyncLocalStorage<string>();
+const daemonActivityLogger = Symbol('daemonActivityLogger');
 
-type DaemonActivityLogger = (message: string, featureOwned?: boolean) => void;
+/** The visual nesting column assigned by the daemon event presenter. */
+export type DaemonLogDepth = 0 | 1 | 2;
+
+/** One logical daemon log message before its daemon and feature prefixes are composed. */
+export interface DaemonLogEntry {
+  depth: DaemonLogDepth;
+  text: string;
+  /** Forwarded process output is summarized unless daemon verbosity is enabled. */
+  kind?: 'authored' | 'forwarded';
+  moreAt?: string;
+  /** Internal feature ownership tag, composed only after message presentation. */
+  featureTag?: string;
+}
+
+/** What an operator should do after a warning or halt. */
+export type NextAction =
+  | { kind: 'operator'; action: string }
+  | { kind: 'none'; why: string };
+
+export type DaemonLogMessage = string | DaemonLogEntry;
+/**
+ * This is intentionally a method-derived callback: daemon internals can pass it
+ * through older string-only dependency seams while new presentation code sends
+ * structured entries. The logger normalizes both forms at its own boundary.
+ */
+type BivariantDaemonActivityLogger = {
+  log(message: DaemonLogMessage, featureOwned?: boolean): void;
+}['log'];
+type DaemonActivityLogger = BivariantDaemonActivityLogger;
+type MarkedDaemonActivityLogger = DaemonActivityLogger & {
+  [daemonActivityLogger]: true;
+};
+type StringDaemonLogger = (message: string, featureOwned?: boolean) => void;
+
+export type FeatureDaemonLogger = ((message: DaemonLogMessage) => void) & {
+  forwarded(text: string, moreAt?: string): void;
+};
+
+/** Render the body of a daemon line at its declared visual depth. */
+export function composeDaemonLineBody({ depth, text }: DaemonLogEntry): string {
+  if (depth === 1) return `· ${text}`;
+  if (depth === 2) return `·   ${text}`;
+  return text;
+}
+
+/** Render the action suffix used by warnings and halts. */
+export function formatNextAction(next: NextAction): string {
+  return next.kind === 'operator'
+    ? ` — next: ${next.action}`
+    : ` — no action needed: ${next.why}`;
+}
+
+/** Stable raw-log warning shape for daemon paths that do not emit an event. */
+export function formatDaemonWarning(text: string, next: NextAction): string {
+  return `WARNING: ${text}${formatNextAction(next)}`;
+}
+
+/** Stable raw-log halt shape for daemon paths that do not emit an event. */
+export function formatDaemonHalt(text: string, next: NextAction): string {
+  return `✋ ${text}${formatNextAction(next)}`;
+}
+
+function normalizeDaemonLogMessage(message: DaemonLogMessage): DaemonLogEntry {
+  if (typeof message === 'string') return { depth: 0, kind: 'authored', text: message.trimStart() };
+  return { ...message, kind: message.kind ?? 'authored', text: message.text.trimStart() };
+}
 
 /** Render a feature slug for a daemon log tag, bounded for readable live output. */
 export function formatDaemonFeatureTag(featureSlug: string): string {
@@ -94,29 +160,75 @@ export function createDaemonModeLogger(sinks: {
   writeLive: (line: string) => void;
   writePersisted: (line: string) => void;
   formatActivityLine?: (message: string, featureOwned: boolean) => string;
-}): (msg: string, featureOwned?: boolean) => void {
+  verbose?: boolean;
+}): DaemonActivityLogger {
   const lastStatus = new Map<string, string>();
   const formatActivityLine = sinks.formatActivityLine ?? formatDaemonActivityLine;
 
-  return (msg: string, featureOwned = false) => {
-    // Subprocess output is commonly a single captured string containing many
-    // lines. Attribute and persist each physical line independently: otherwise
-    // only the first one receives the daemon/feature prefix and timestamp.
-    const lines = msg.split(/\r?\n/);
-    if (lines.at(-1) === '') lines.pop();
-    for (const lineMessage of lines) {
-      writeDaemonMessage(lineMessage, featureOwned, lastStatus, formatActivityLine, sinks);
+  const logger = ((message: DaemonLogMessage, featureOwned = false) => {
+    const entry = normalizeDaemonLogMessage(message);
+    const lines = entry.text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    if (lines.length === 0) return;
+
+    if (entry.kind === 'forwarded' && !sinks.verbose) {
+      const payload = entry.text.trim();
+      if (isJsonPayload(payload)) {
+        writeDaemonMessage(
+          { ...entry, text: `JSON payload (${Buffer.byteLength(payload)} bytes; set daemon_verbose: true to show it)` },
+          featureOwned,
+          lastStatus,
+          formatActivityLine,
+          sinks,
+        );
+        return;
+      }
+      if (lines.length > 1) {
+        const location = entry.moreAt ? `full text in ${entry.moreAt} or ` : '';
+        writeDaemonMessage(
+          { ...entry, text: `${lines[0]} (+${lines.length - 1} more lines; ${location}set daemon_verbose: true to show them)` },
+          featureOwned,
+          lastStatus,
+          formatActivityLine,
+          sinks,
+        );
+        return;
+      }
     }
-  };
+
+    for (const [index, lineMessage] of lines.entries()) {
+      writeDaemonMessage(
+        { ...entry, text: index === 0 ? lineMessage : `│ ${lineMessage}` },
+        featureOwned,
+        lastStatus,
+        formatActivityLine,
+        sinks,
+      );
+    }
+  }) as MarkedDaemonActivityLogger;
+  logger[daemonActivityLogger] = true;
+  return logger;
+}
+
+function isJsonPayload(text: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return Array.isArray(parsed) || (typeof parsed === 'object' && parsed !== null);
+  } catch {
+    return false;
+  }
 }
 
 function writeDaemonMessage(
-  msg: string,
+  entry: DaemonLogEntry,
   featureOwned: boolean,
   lastStatus: Map<string, string>,
   formatActivityLine: (message: string, featureOwned: boolean) => string,
   sinks: Pick<Parameters<typeof createDaemonModeLogger>[0], 'writeLive' | 'writePersisted'>,
 ): void {
+    const renderedText = entry.featureTag
+      ? `${entry.featureTag} ${composeDaemonLineBody(entry)}`
+      : composeDaemonLineBody(entry);
+    const { text: msg } = { ...entry, text: renderedText };
     // Lifecycle transition suppression (start/resume/done) tracks repository-global
     // status per feature slug. A genuine lifecycle line always opens with the glyph
     // (optionally behind a bracketed tag and/or ANSI color codes) — real emitters
@@ -152,7 +264,7 @@ function writeDaemonMessage(
       lastStatus.set(slug, outcomeStatus);
     }
 
-    const line = formatActivityLine(msg, featureOwned);
+    const line = formatActivityLine(renderedText, featureOwned);
     sinks.writeLive(line);
     sinks.writePersisted(line);
 }
@@ -161,16 +273,35 @@ function writeDaemonMessage(
  * Derive an immutable feature-owned logger from a daemon logger. The base logger
  * remains responsible for adding its `[daemon]` prefix and choosing live/file sinks.
  */
+export function createFeatureDaemonLogger<T extends StringDaemonLogger>(
+  featureSlug: string,
+  baseLog: T,
+  featureTag?: string,
+): FeatureDaemonLogger;
 export function createFeatureDaemonLogger(
   featureSlug: string,
-  baseLog: (message: string, featureOwned?: boolean) => void,
+  baseLog: DaemonActivityLogger | StringDaemonLogger,
   featureTag = formatDaemonFeatureTag(featureSlug),
-): (message: string) => void {
-  return (message) => {
-    const lines = message.split(/\r?\n/);
-    if (lines.at(-1) === '') lines.pop();
-    for (const line of lines) baseLog(`${featureTag} ${line}`, true);
+): FeatureDaemonLogger {
+  const entryLog = baseLog as MarkedDaemonActivityLogger;
+  const featureLog = ((message: DaemonLogMessage) => {
+    if (!entryLog[daemonActivityLogger]) {
+      if (typeof message !== 'string') throw new TypeError('string daemon logger received a structured entry');
+      baseLog(`${featureTag} ${message.trimStart()}`, true);
+      return;
+    }
+    if (typeof message === 'string') {
+      entryLog({ depth: 0, kind: 'authored', text: message, featureTag }, true);
+      return;
+    }
+
+    const entry = normalizeDaemonLogMessage(message);
+    entryLog({ ...entry, featureTag }, true);
+  }) as FeatureDaemonLogger;
+  featureLog.forwarded = (text, moreAt) => {
+    entryLog({ depth: 0, kind: 'forwarded', text, moreAt, featureTag }, true);
   };
+  return featureLog;
 }
 
 /** Absolute path to a repo's daemon activity log. */
