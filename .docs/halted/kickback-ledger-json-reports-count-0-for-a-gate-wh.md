@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-10T23:19:29.467Z
 Slug: kickback-ledger-json-reports-count-0-for-a-gate-wh
 Class: needs-human
 Halting step: unknown
