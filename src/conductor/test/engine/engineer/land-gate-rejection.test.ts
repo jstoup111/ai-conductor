@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, expect, it } from 'vitest';
 import {
   classifyLandGateRejection,
@@ -16,7 +17,7 @@ describe('land-gate rejection classification', () => {
     expect(error.message).toBe('stories must be accepted');
   });
 
-  it.each(['plan-task-count', 'adr-filename', 'architecture-mermaid-missing'] as const)(
+  it.each(['plan-task-count', 'adr-filename', 'architecture-mermaid-missing', 'draft-amendment-note'] as const)(
     'classifies the %s gate with its stable identifier',
     (gate) => {
       expect(classifyLandGateRejection(landGateError(gate, 'unchanged message'))).toEqual({
