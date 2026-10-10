@@ -537,7 +537,13 @@ describe('build-step stall circuit breaker', () => {
     // Stall tests own the build transition. Pre-resolve the intervening
     // coverage-binding gate so its default-off envelope is not a prerequisite
     // for every fixture here.
-    await writeState(statePath, { coverage_binding: 'done' } as ConductState);
+    await writeState(statePath, {
+      // These fixtures exercise BUILD's retry/stall transition. The
+      // architecture-review ledger gate requires a merge base, which these
+      // deliberately non-git temporary directories do not provide.
+      architecture_review: 'done',
+      coverage_binding: 'done',
+    } as ConductState);
   }
 
   // Writes the plan (Task 1..total headings), the status rows, AND a sidecar
@@ -1590,7 +1596,13 @@ describe('engine/conductor: pipeline-exit false-completion regression', () => {
       await mkdir(full.substring(0, full.lastIndexOf('/')), { recursive: true });
       await writeFile(full, content);
     }
-    await writeState(statePath, { coverage_binding: 'done' } as ConductState);
+    await writeState(statePath, {
+      // This regression isolates BUILD's halt-marker behavior; the fixture is
+      // intentionally not a Git worktree and therefore cannot satisfy the
+      // independent architecture-review ledger gate.
+      architecture_review: 'done',
+      coverage_binding: 'done',
+    } as ConductState);
 
     // Re-write the halt marker on every run() call so the predicate keeps
     // failing even after the conductor's stall handler clears it.
