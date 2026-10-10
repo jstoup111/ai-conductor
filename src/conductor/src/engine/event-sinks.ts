@@ -5,6 +5,8 @@ export interface SinkDeclaration {
   persist: boolean;
   audit: boolean;
   otel: boolean;
+  /** Logs are intentionally selected independently of traces and metrics. */
+  logs?: boolean;
   /** OTel events are visualizer-owned by default; false declares metrics-only ownership. */
   otelTrace?: false;
 }
@@ -13,7 +15,7 @@ export const EVENT_SINKS = {
   // ADR-014 D28: operational diagnostics already reach their local sink, so
   // persist the typed occurrence without rendering or exporting it until the
   // log-projection task claims the OTel declaration.
-  operational_log: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
+  operational_log: { render: false, persist: true, audit: false, otel: false, logs: true, otelTrace: false },
   // ADR-014 D17: spool health must survive the process without becoming input
   // to the spool itself, a renderer stream, or aggregate usage accounting.
   otel_spool_drop: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
@@ -234,6 +236,10 @@ export type OtelEventType = {
   [Type in keyof typeof EVENT_SINKS]: (typeof EVENT_SINKS)[Type]['otel'] extends true ? Type : never;
 }[keyof typeof EVENT_SINKS];
 
+export type LogEventType = {
+  [Type in keyof typeof EVENT_SINKS]: (typeof EVENT_SINKS)[Type] extends { readonly logs: true } ? Type : never;
+}[keyof typeof EVENT_SINKS];
+
 export type OtelTracedEventType = {
   [Type in OtelEventType]: (typeof EVENT_SINKS)[Type] extends { readonly otelTrace: false }
     ? never : Type;
@@ -241,7 +247,7 @@ export type OtelTracedEventType = {
 
 function eventTypesFor(sink: keyof Omit<SinkDeclaration, 'otelTrace'>): ConductorEvent['type'][] {
   return (Object.keys(EVENT_SINKS) as ConductorEvent['type'][])
-    .filter((type) => EVENT_SINKS[type][sink]);
+    .filter((type) => (EVENT_SINKS[type] as SinkDeclaration)[sink]);
 }
 
 export function persistedEventTypes(): ConductorEvent['type'][] {
@@ -307,6 +313,12 @@ export function formatSessionOccurrence(event: RenderedSessionOccurrence): strin
 
 export function otelEventTypes(): OtelEventType[] {
   return eventTypesFor('otel') as OtelEventType[];
+}
+
+/** Log subscriptions come from the same exhaustive event registry. */
+export function logEventTypes(): LogEventType[] {
+  return (Object.keys(EVENT_SINKS) as ConductorEvent['type'][])
+    .filter((type): type is LogEventType => (EVENT_SINKS[type] as SinkDeclaration).logs === true);
 }
 
 /** Visualizer subscriptions; metrics-only events remain covered by MetricsListener. */

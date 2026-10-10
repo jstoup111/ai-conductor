@@ -113,9 +113,9 @@ export function resolveLogConfig(config: Pick<HarnessConfig, 'otel'>): ResolvedL
   }
 
   const configuredSpool = logs.spool;
-  const maxBytes = configuredSpool?.max_bytes ?? DEFAULT_SPOOL_MAX_BYTES;
-  const headerReferences = logs.headers !== undefined
-    ? logs.headers
+  const maxBytes = (configuredSpool?.max_bytes as number | undefined) ?? DEFAULT_SPOOL_MAX_BYTES;
+  const headerReferences: Record<string, OtelHeaderEnvironmentReference> | undefined = logs.headers !== undefined
+    ? logs.headers as Record<string, OtelHeaderEnvironmentReference>
     : parentIsHttpOtlp
       ? parent.headers
       : undefined;

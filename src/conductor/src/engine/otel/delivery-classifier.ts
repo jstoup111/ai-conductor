@@ -1,4 +1,4 @@
-import { ProtobufMetricsSerializer, ProtobufTraceSerializer } from '@opentelemetry/otlp-transformer';
+import { ProtobufLogsSerializer, ProtobufMetricsSerializer, ProtobufTraceSerializer } from '@opentelemetry/otlp-transformer';
 
 export type DeliveryClassification =
   | { action: 'delete' }
@@ -20,10 +20,12 @@ function retryAfterMs(headers: Headers, now: () => number): number | undefined {
   return Number.isNaN(retryAt) ? undefined : Math.max(0, retryAt - now());
 }
 
-function rejectedItems(body: Uint8Array, signal: 'traces' | 'metrics'): number {
+function rejectedItems(body: Uint8Array, signal: 'traces' | 'metrics' | 'logs'): number {
   const response = signal === 'traces'
     ? ProtobufTraceSerializer.deserializeResponse(body).partialSuccess?.rejectedSpans
-    : ProtobufMetricsSerializer.deserializeResponse(body).partialSuccess?.rejectedDataPoints;
+    : signal === 'metrics'
+      ? ProtobufMetricsSerializer.deserializeResponse(body).partialSuccess?.rejectedDataPoints
+      : ProtobufLogsSerializer.deserializeResponse(body).partialSuccess?.rejectedLogRecords;
   return response ?? 0;
 }
 
@@ -32,7 +34,7 @@ export function classifyResponse(
   status: number,
   body?: Uint8Array,
   headers?: Headers,
-  signal: 'traces' | 'metrics' = 'traces',
+  signal: 'traces' | 'metrics' | 'logs' = 'traces',
   now: () => number = Date.now,
 ): DeliveryClassification {
   if (status >= 200 && status < 300) {

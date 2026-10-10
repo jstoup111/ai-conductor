@@ -123,7 +123,7 @@ import {
   startSessionEventTail,
 } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
-import { wireInteractiveOtelMetrics, wireOtelVisualizer } from './engine/otel/wire.js';
+import { wireInteractiveOtelMetrics, wireOtelLogs, wireOtelVisualizer } from './engine/otel/wire.js';
 import type { OtelVisualizerStartContext } from './engine/otel/wire.js';
 import { resolveEngineVersion } from './engine/shipped-record.js';
 import { resolveRunSourceRef } from './engine/run-provenance.js';
@@ -337,7 +337,16 @@ export function buildInteractiveVisualizers(
     { ...context.startContext, pipelineDir: context.pipelineDir },
     context.emitter,
   );
-  return [...started, ...(otel ? [otel] : []), ...(metrics ? [metrics] : [])];
+  // Visualizer construction is synchronous for compatibility.  The policy
+  // reader itself is deliberately async and fail-closed, so expose it as the
+  // same caller-owned lifecycle shape without blocking unrelated connectors.
+  let logOwner: ReturnType<typeof wireOtelLogs> | undefined;
+  const logs: VisualizerPlugin = {
+    name: 'otel-logs',
+    start: () => { logOwner = wireOtelLogs(config, { ...context.startContext, pipelineDir: context.pipelineDir }, context.emitter); },
+    stop: async () => { await logOwner?.then((owner) => owner?.stop()); },
+  };
+  return [...started, ...(otel ? [otel] : []), ...(metrics ? [metrics] : []), logs];
 }
 
 /** Invoke a visualizer factory with its real context and refuse malformed products. */

@@ -19,6 +19,8 @@ export interface SpoolDrainerOptions {
   exportTimeoutMs?: number;
   /** Optional event-spine owner for durable spool delivery telemetry. */
   events?: ConductorEventEmitter;
+  /** Re-authorizes a retained log batch immediately before its request. */
+  authorizeLog?: (destinationId: string | undefined) => Promise<{ endpoint: string; headers: Record<string, string> } | undefined>;
 }
 
 const INITIAL_BACKOFF_MS = 1_000;
@@ -115,7 +117,10 @@ export class SpoolDrainer {
       let backoffMs = INITIAL_BACKOFF_MS;
 
       while (!this.stopped) {
-        const classification = await this.deliver(signal, body);
+        const logDestination = signal === 'logs' ? await this.options.authorizeLog?.(batch.destinationId) : undefined;
+        // A disabled/revoked/mismatched policy leaves retained logs untouched.
+        if (signal === 'logs' && !logDestination) return;
+        const classification = await this.deliver(signal, body, logDestination);
         if (this.stopped) return;
         if (classification.action !== 'keep') {
           try {
@@ -156,7 +161,8 @@ export class SpoolDrainer {
   }
 
   private async runUntilStopped(): Promise<void> {
-    const signalLoops = (['traces', 'metrics'] as const).map((signal) => this.trackLoop((async () => {
+    const signals: SpoolSignal[] = ['traces', 'metrics', ...(this.options.authorizeLog ? ['logs' as const] : [])];
+    const signalLoops = signals.map((signal) => this.trackLoop((async () => {
       while (!this.stopped) {
         try {
           await this.drainSignal(signal);
@@ -184,14 +190,17 @@ export class SpoolDrainer {
     return loop;
   }
 
-  private async deliver(signal: SpoolSignal, body: Buffer) {
+  private async deliver(signal: SpoolSignal, body: Buffer, logDestination?: { endpoint: string; headers: Record<string, string> }) {
     const controller = new AbortController();
     this.inFlight.add(controller);
-    const timeout = setTimeout(() => controller.abort(), this.exportTimeoutMs);
+    const timeout = setTimeout(() => controller.abort(), signal === 'logs' ? Math.min(this.exportTimeoutMs, 2_000) : this.exportTimeoutMs);
+    timeout.unref?.();
     try {
-      const response = await this.send(`${this.options.endpoint.replace(/\/$/, '')}/v1/${signal}`, {
+      const endpoint = logDestination?.endpoint ?? this.options.endpoint;
+      const headers = logDestination?.headers ?? this.options.headers();
+      const response = await this.send(`${endpoint.replace(/\/$/, '')}/v1/${signal}`, {
         method: 'POST',
-        headers: { ...this.options.headers(), 'Content-Type': 'application/x-protobuf' },
+        headers: { ...headers, 'Content-Type': 'application/x-protobuf' },
         body: new Uint8Array(body).buffer as ArrayBuffer,
         signal: controller.signal,
       });
@@ -222,7 +231,7 @@ export class SpoolDrainer {
       await this.backlogDelay(BACKLOG_REPORT_INTERVAL_MS, controller.signal);
       if (this.stopped) return;
 
-      for (const signal of ['traces', 'metrics'] as const) {
+      for (const signal of ['traces', 'metrics', ...(this.options.authorizeLog ? ['logs' as const] : [])] as const) {
         const batches = await this.store.list(signal);
         const lastFailureClass = this.lastFailures.get(signal);
         if (batches.length === 0) continue;

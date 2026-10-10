@@ -1,0 +1,56 @@
+import { loadMergedConfigForRead } from '../config.js';
+import { resolveMainRepoRootStrict } from '../park-marker.js';
+import { resolveLogConfig, type ResolvedLogConfig } from './log-config.js';
+
+/** The only policy used to admit or deliver a remote log batch. */
+export type LogPolicy =
+  | { sendable: true; root: string; config: Extract<ResolvedLogConfig, { enabled: true }>; destinationId: string }
+  | { sendable: false; root?: string; reason: string };
+
+export interface LogPolicyOptions {
+  resolveRoot?: (startDir: string) => Promise<string | null>;
+  loadConfig?: typeof loadMergedConfigForRead;
+  /** Kept local and bounded: a worktree may never become an authorization source. */
+  warn?: (message: string) => void;
+}
+
+/**
+ * A non-secret identity for immutable batches.  Header *reference names*, not
+ * their resolved values, intentionally participate so rotating a credential
+ * does not strand a batch while changing its reference does.
+ */
+export function logDestinationId(config: Extract<ResolvedLogConfig, { enabled: true }>): string {
+  const headers = Object.entries(config.headerReferences ?? {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, reference]) => `${name}=$${reference.env}`)
+    .join('&');
+  return `${config.endpoint}|${headers}`;
+}
+
+/**
+ * Read the main checkout's user-over-project configuration without migration,
+ * normalization, or a configuration-file write.  Failure is deliberately
+ * fail-closed for logs only; callers' ordinary local configuration remains
+ * usable.
+ */
+export async function readLogPolicy(startDir: string, options: LogPolicyOptions = {}): Promise<LogPolicy> {
+  const root = await (options.resolveRoot ?? resolveMainRepoRootStrict)(startDir);
+  if (root === null) return { sendable: false, reason: 'log policy unavailable: canonical project root could not be resolved' };
+  const loaded = await (options.loadConfig ?? loadMergedConfigForRead)(root);
+  if (!loaded.ok) return { sendable: false, root, reason: 'log policy unavailable: canonical configuration could not be read' };
+  const resolved = resolveLogConfig(loaded.config);
+  if (!resolved.enabled) {
+    return { sendable: false, root, reason: resolved.error ?? 'log export is disabled' };
+  }
+  return { sendable: true, root, config: resolved, destinationId: logDestinationId(resolved) };
+}
+
+/** Recheck policy at the point of I/O; retained data never grants consent. */
+export async function authorizeLogDestination(
+  startDir: string,
+  destinationId: string,
+  options?: LogPolicyOptions,
+): Promise<Extract<LogPolicy, { sendable: true }> | undefined> {
+  const policy = await readLogPolicy(startDir, options);
+  return policy.sendable && policy.destinationId === destinationId ? policy : undefined;
+}

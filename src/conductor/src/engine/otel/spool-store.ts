@@ -2,13 +2,15 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
-export type SpoolSignal = 'traces' | 'metrics';
+export type SpoolSignal = 'traces' | 'metrics' | 'logs';
 
 export interface SpoolBatch {
   name: string;
   path: string;
   size: number;
   items: number;
+  /** Non-secret destination/reference identity for log batches only. */
+  destinationId?: string;
 }
 
 export type SpoolWriteResult =
@@ -45,6 +47,8 @@ export interface SpoolFilesystem {
 export interface SpoolStoreOptions {
   filesystem?: SpoolFilesystem;
   maxBytes?: number;
+  /** A log cap is independent of trace/metric retention. */
+  logMaxBytes?: number;
   now?: () => number;
   pid?: number;
   randomBytes?: (size: number) => Buffer;
@@ -67,6 +71,7 @@ export class SpoolStore {
   private readonly pid: number;
   private readonly randomBytes: (size: number) => Buffer;
   private readonly maxBytes: number | undefined;
+  private readonly logMaxBytes: number | undefined;
 
   constructor(private readonly root: string, options: SpoolStoreOptions = {}) {
     this.filesystem = options.filesystem ?? filesystem;
@@ -74,18 +79,22 @@ export class SpoolStore {
     this.pid = options.pid ?? process.pid;
     this.randomBytes = options.randomBytes ?? randomBytes;
     this.maxBytes = options.maxBytes;
+    this.logMaxBytes = options.logMaxBytes;
   }
 
   write(signal: SpoolSignal, body: Uint8Array): Promise<SpoolBatch>;
-  write(signal: SpoolSignal, body: Uint8Array, items: number): Promise<SpoolWriteResult>;
-  async write(signal: SpoolSignal, body: Uint8Array, items = 1): Promise<SpoolBatch | SpoolWriteResult> {
-    if (this.maxBytes !== undefined && body.byteLength > this.maxBytes) {
+  write(signal: SpoolSignal, body: Uint8Array, items: number, destinationId?: string): Promise<SpoolWriteResult>;
+  async write(signal: SpoolSignal, body: Uint8Array, items = 1, destinationId?: string): Promise<SpoolBatch | SpoolWriteResult> {
+    const maxBytes = signal === 'logs' ? this.logMaxBytes : this.maxBytes;
+    if (maxBytes !== undefined && body.byteLength > maxBytes) {
       return { rejectedOversize: true, rejectedItems: items, evictedBatches: 0, evictedItems: 0 };
     }
 
     const directory = this.directory(signal);
     await this.filesystem.mkdir(directory, { recursive: true, mode: 0o700 });
-    const name = `${String(this.now()).padStart(15, '0')}-${this.pid}-${this.randomBytes(4).toString('hex')}-${items}.pb`;
+    const identitySuffix = signal === 'logs' && destinationId !== undefined
+      ? `--${Buffer.from(destinationId, 'utf8').toString('base64url')}` : '';
+    const name = `${String(this.now()).padStart(15, '0')}-${this.pid}-${this.randomBytes(4).toString('hex')}-${items}${identitySuffix}.pb`;
     const path = join(directory, name);
     const temporaryPath = `${path}.${this.randomBytes(4).toString('hex')}.tmp`;
     const handle = await this.filesystem.open(temporaryPath, 'wx');
@@ -103,11 +112,11 @@ export class SpoolStore {
       // Keep the just-fsynced batch private while accounting for it. Once the
       // rename publishes it, write() must return immediately so an SDK success
       // callback cannot race a drainer through more store I/O.
-      if (this.maxBytes !== undefined) {
+      if (maxBytes !== undefined) {
         await this.removeStaleTemporaryFiles();
-        let totalBytes = await this.totalBytes();
-        for (const oldest of await this.allBatches()) {
-          if (totalBytes + body.byteLength <= this.maxBytes) break;
+        let totalBytes = await this.totalBytes(signal === 'logs' ? 'logs' : undefined);
+        for (const oldest of await this.allBatches(signal === 'logs' ? ['logs'] : ['traces', 'metrics'])) {
+          if (totalBytes + body.byteLength <= maxBytes) break;
           await this.delete(oldest);
           totalBytes -= oldest.size;
           evictedBatches += 1;
@@ -121,8 +130,8 @@ export class SpoolStore {
       if (!published) await this.filesystem.rm(temporaryPath, { force: true }).catch(() => undefined);
     }
 
-    const batch = { name, path, size: body.byteLength, items };
-    if (this.maxBytes === undefined) return batch;
+    const batch = { name, path, size: body.byteLength, items, ...(destinationId === undefined ? {} : { destinationId }) };
+    if (maxBytes === undefined) return batch;
 
     return { ...batch, rejectedOversize: false, rejectedItems: 0, evictedBatches, evictedItems };
   }
@@ -143,11 +152,12 @@ export class SpoolStore {
       .map(async (name) => {
         const path = join(directory, name);
         try {
+          const destinationId = this.destinationFromName(name);
           return {
             name,
             path,
             size: (await this.filesystem.stat(path)).size,
-            items: this.itemsFromName(name),
+            items: this.itemsFromName(name), ...(destinationId === undefined ? {} : { destinationId }),
           };
         } catch (error) {
           // A drainer may delete a batch after readdir but before stat. It was
@@ -177,15 +187,14 @@ export class SpoolStore {
     return join(this.root, signal);
   }
 
-  private async allBatches(): Promise<SpoolBatch[]> {
-    const signals: readonly SpoolSignal[] = ['traces', 'metrics'];
+  private async allBatches(signals: readonly SpoolSignal[] = ['traces', 'metrics']): Promise<SpoolBatch[]> {
     const batches = await Promise.all(signals.map((signal) => this.list(signal)));
     return batches.flat().sort((first, second) => first.name.localeCompare(second.name));
   }
 
   /** Keep crash-orphaned publication files from bypassing the spool byte cap. */
   private async removeStaleTemporaryFiles(): Promise<void> {
-    await Promise.all((['traces', 'metrics'] as const).map(async (signal) => {
+    await Promise.all((['traces', 'metrics', 'logs'] as const).map(async (signal) => {
       const directory = this.directory(signal);
       let names: string[];
       try {
@@ -208,7 +217,13 @@ export class SpoolStore {
   }
 
   private itemsFromName(name: string): number {
-    const match = /-(\d+)\.pb$/.exec(name);
+    const match = /-(\d+)(?:--[^.]+)?\.pb$/.exec(name);
     return match === null ? 1 : Number(match[1]);
+  }
+
+  private destinationFromName(name: string): string | undefined {
+    const match = /--([A-Za-z0-9_-]+)\.pb$/.exec(name);
+    if (!match) return undefined;
+    try { return Buffer.from(match[1], 'base64url').toString('utf8'); } catch { return undefined; }
   }
 }

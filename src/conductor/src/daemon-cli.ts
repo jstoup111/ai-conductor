@@ -108,7 +108,7 @@ import {
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
 import { formatGithubCredentialFallback, formatGithubOperationRefusal } from './engine/github-operations.js';
 import { createBotCoAuthorResolver, formatBotCoAuthorSkipped, installDaemonBotCoAuthor } from './engine/bot-co-author.js';
-import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
+import { wireDaemonOtel, wireOtelLogs, wireOtelVisualizer } from './engine/otel/wire.js';
 import { resolveOtelConfig, resolveWorkerName } from './engine/otel/otel-config.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { LiveBoundaryCoordinator } from './engine/self-host/live-boundary-coordinator.js';
@@ -1302,6 +1302,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     harnessVersion: await resolveHarnessVersion(__dirname),
     rootEvents: events,
   });
+  // One root owner receives forwarded feature occurrences as well as daemon
+  // diagnostics; individual feature teardown never owns this sender.
+  const daemonLogs = await wireOtelLogs(config ?? {}, {
+    pipelineDir: join(projectRoot, '.pipeline'), project: projectRoot, branch: undefined,
+    engineVersion: resolveEngineVersion(__dirname), harnessVersion: await resolveHarnessVersion(__dirname),
+  }, events, daemonOtel?.spoolRuntime);
   // The daemon owns SIGHUP, while each dispatch owns its tracer provider.
   // Keep the providers discoverable until their feature teardown completes so
   // the daemon can flush all pending spans before it re-raises SIGHUP.
@@ -3036,6 +3042,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   );
 
   await subscriber.stop();
+  await daemonLogs?.stop();
   await daemonOtel?.stop();
   removeDaemonOtelSighupHandler();
   daemonMemorySampler.stop();

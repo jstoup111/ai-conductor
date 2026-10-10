@@ -44,7 +44,7 @@ export interface ResourceContext {
  * already — so the run id and the engine version ride the trace scope only.
  * See adr-014's 2026-08-28 amendment.
  */
-export type ResourceSignal = 'metrics' | 'traces';
+export type ResourceSignal = 'metrics' | 'traces' | 'logs';
 
 /**
  * Build an OTel Resource with conductor-specific attributes (FR-6).
@@ -68,7 +68,7 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
   // one row per feature rather than one per run. Resolving the run id is also
   // skipped here: it writes the session-id file as a side effect, and the
   // metric scope has no use for the value.
-  if (signal === 'metrics') return resourceFromAttributes({
+  if (signal === 'metrics' || signal === 'logs') return resourceFromAttributes({
     ...ctx.attributes,
     'service.name': SERVICE_NAME,
     'service.instance.id': `${projectName}/${workerName}`,

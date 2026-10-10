@@ -410,7 +410,7 @@ type ConductorEventBody =
   | {
       /** A durable spool batch was evicted locally or rejected by the backend. */
       type: 'otel_spool_drop';
-      signal: 'traces' | 'metrics';
+      signal: 'traces' | 'metrics' | 'logs';
       reason: 'rejected' | 'evicted';
       batches: number;
       items: number;
@@ -419,7 +419,7 @@ type ConductorEventBody =
   | {
       /** Periodic durable-spool backlog health, persisted for operational inspection. */
       type: 'otel_spool_backlog';
-      signal: 'traces' | 'metrics';
+      signal: 'traces' | 'metrics' | 'logs';
       files: number;
       bytes: number;
       oldestAgeMs: number;

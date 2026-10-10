@@ -1,5 +1,7 @@
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
-import { ProtobufMetricsSerializer, ProtobufTraceSerializer } from '@opentelemetry/otlp-transformer';
+import { ProtobufLogsSerializer, ProtobufMetricsSerializer, ProtobufTraceSerializer } from '@opentelemetry/otlp-transformer';
+import type { SdkLogRecord } from '@opentelemetry/sdk-logs';
+import type { LogBatchExporter } from './log-processor.js';
 import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import type { ConductorEventEmitter } from '../../ui/events.js';
@@ -7,7 +9,7 @@ import { type SpoolWriteResult, SpoolStore } from './spool-store.js';
 
 function emitEviction(
   events: ConductorEventEmitter | undefined,
-  signal: 'traces' | 'metrics',
+  signal: 'traces' | 'metrics' | 'logs',
   result: SpoolWriteResult,
 ): void {
   const batches = result.rejectedOversize ? 1 : result.evictedBatches;
@@ -129,5 +131,31 @@ export class SpoolingMetricExporter implements PushMetricExporter {
       rendererName: 'otel',
       error: `[otel] spool write failed; sending directly: ${detail}`,
     });
+  }
+}
+
+/** Durable write-first log exporter. Credentials are intentionally absent from its store input. */
+export class SpoolingLogExporter implements LogBatchExporter {
+  private warned = false;
+  constructor(
+    private readonly store: SpoolStore,
+    private readonly destinationId: string,
+    private readonly inner: LogBatchExporter,
+    private readonly events?: ConductorEventEmitter,
+  ) {}
+  export(records: SdkLogRecord[], done: (result: ExportResult) => void): void { void this.write(records, done); }
+  async shutdown(): Promise<void> { await this.inner.shutdown?.(); }
+  private async write(records: SdkLogRecord[], done: (result: ExportResult) => void): Promise<void> {
+    try {
+      const result = await this.store.write('logs', ProtobufLogsSerializer.serializeRequest(records) ?? new Uint8Array(), records.length, this.destinationId);
+      emitEviction(this.events, 'logs', result);
+      done({ code: ExportResultCode.SUCCESS });
+    } catch (error) {
+      if (!this.warned) {
+        this.warned = true;
+        void this.events?.emit({ type: 'renderer_error', rendererName: 'otel', error: '[otel] log preservation failed; attempting authorized direct delivery' });
+      }
+      this.inner.export(records, done);
+    }
   }
 }

@@ -16,12 +16,18 @@ import {
   type ResourceMetrics,
 } from '@opentelemetry/sdk-metrics';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
+import { LoggerProvider } from '@opentelemetry/sdk-logs';
 import { basename, dirname, join } from 'node:path';
 import { buildResource } from './resource.js';
 import { buildExporters, isExportRefused } from './transport.js';
 import { MetricsRecorder } from './metrics.js';
 import { MetricsListener } from './metrics-listener.js';
 import { createSpoolRuntime, resolveSpoolDirSync, type SpoolRuntime, warnDisabledSpoolBacklog, warnSpoolUnavailable } from './spool-wiring.js';
+import { LogListener } from './log-listener.js';
+import { BoundedLogProcessor, type LogBatchExporter } from './log-processor.js';
+import { sendLogBatch } from './log-transport.js';
+import { readLogPolicy } from './log-policy.js';
+import { SpoolingLogExporter } from './spooling-exporter.js';
 
 const METRIC_LIFECYCLE_TIMEOUT_MS = 250;
 
@@ -85,6 +91,42 @@ export interface OtelVisualizerStartContext extends VisualizerStartContext {
   engineVersion: string | undefined;
   harnessVersion: string | undefined;
   env?: NodeJS.ProcessEnv;
+}
+
+export interface OtelLogOwner { stop(): Promise<void>; flush(): Promise<void>; }
+
+/** Creates the explicit opt-in log path beside, never inside, trace/metric wiring. */
+export async function wireOtelLogs(
+  _config: HarnessConfig,
+  context: OtelVisualizerStartContext,
+  events: ConductorEventEmitter,
+  spoolRuntime?: SpoolRuntime,
+): Promise<OtelLogOwner | null> {
+  const policy = await readLogPolicy(context.project ?? dirname(context.pipelineDir));
+  if (!policy.sendable) return null;
+  try {
+    const worker = 'unknown';
+    const direct: LogBatchExporter = {
+      export(records, done) { void sendLogBatch(records, { startDir: policy.root, destinationId: policy.destinationId })
+        .then((result) => done({ code: result.ok ? ExportResultCode.SUCCESS : ExportResultCode.FAILED })); },
+    };
+    const exporter = policy.config.spool.enabled && spoolRuntime
+      ? new SpoolingLogExporter(spoolRuntime.store, policy.destinationId, direct, events) : direct;
+    const provider = new LoggerProvider({ resource: buildResource({ pipelineDir: context.pipelineDir,
+      project: policy.root, projectName: basename(policy.root), workerName: worker,
+      ...(context.harnessVersion === undefined ? {} : { harnessVersion: context.harnessVersion }),
+    }, 'logs'), processors: [new BoundedLogProcessor(exporter)] });
+    const listener = new LogListener(provider.getLogger('conductor', '1.0.0'), policy.root, worker);
+    listener.start(events);
+    let stopped: Promise<void> | undefined;
+    return {
+      flush: () => provider.forceFlush().catch(() => undefined),
+      stop: () => stopped ??= (async () => { listener.stop(); await provider.forceFlush().catch(() => undefined); await provider.shutdown().catch(() => undefined); })(),
+    };
+  } catch {
+    void events.emit({ type: 'renderer_error', rendererName: 'otel', error: '[otel] log export setup failed; logs remain local' });
+    return null;
+  }
 }
 
 export function createOtelVisualizerRegistry(events: ConductorEventEmitter): PluginRegistry {

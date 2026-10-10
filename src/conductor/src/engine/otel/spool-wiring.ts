@@ -7,6 +7,7 @@ import type { ResolvedOtelConfig } from './otel-config.js';
 import { SpoolDrainer } from './spool-drainer.js';
 import { SpoolLease } from './spool-lease.js';
 import { SpoolStore } from './spool-store.js';
+import { readLogPolicy } from './log-policy.js';
 
 export interface SpoolRuntime {
   store: SpoolStore;
@@ -66,6 +67,16 @@ export function createSpoolRuntime(
       headers: () => config.headerReferences
         ? Object.fromEntries(Object.entries(config.headerReferences).map(([name, reference]) => [name, process.env[reference.env] ?? '']))
         : config.headers ?? {},
+      authorizeLog: async (destinationId) => {
+        const policy = await readLogPolicy(dirname(directory));
+        if (!policy.sendable || policy.destinationId !== destinationId) return undefined;
+        return {
+          endpoint: policy.config.endpoint,
+          headers: policy.config.headerReferences
+            ? Object.fromEntries(Object.entries(policy.config.headerReferences).map(([name, reference]) => [name, process.env[reference.env] ?? '']))
+            : {},
+        };
+      },
       events,
     });
   return { store, lease, drainer };
