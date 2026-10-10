@@ -4,6 +4,13 @@ spec_hash: 778b1d4f845a788f61dc088bae64ae50979d20d9cbd1c6d64df27447e03f5d8a
 pr: https://github.com/jstoup111/ai-conductor/pull/3091
 shipped: 2026-10-10
 engine_version: 20261010T011143Z-f79d1fd8d7cd
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This unplanned edit raises the recorded largest-observed plan-intent size, likely because this feature's own plan intent (about 952 bytes) exceeded the old recorded maximum. It is outside the story's intent about the spec commit message's Tasks section. Because the Math.max floor of 256 KiB dominates, it does not change projection limits or any user-visible behavior; it only updates an engineering-bound bookkeeping constant."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
