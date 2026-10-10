@@ -24,6 +24,15 @@ const metricOnlyEventType: OtelTracedEventType = 'daemon_backlog_snapshot';
 void metricOnlyEventType;
 
 describe('event sink registry', () => {
+  it('renders and persists in-flight step heartbeats without audit or OTel subscriptions', () => {
+    expect(EVENT_SINKS.step_in_flight).toEqual({
+      render: true,
+      persist: true,
+      audit: false,
+      otel: false,
+    });
+  });
+
   it('keeps metrics-only events covered without subscribing the trace visualizer', () => {
     const metricsOnly = [
       'daemon_backlog_snapshot', 'feature_dispatch_started',

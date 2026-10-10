@@ -156,6 +156,7 @@ export const EVENT_SINKS = {
   build_done_when_unverified: { render: false, persist: true, audit: false, otel: false },
   build_stall: { render: true, persist: true, audit: false, otel: true },
   build_progress: { render: true, persist: true, audit: false, otel: true },
+  step_in_flight: { render: true, persist: true, audit: false, otel: false },
   build_no_progress: { render: true, persist: true, audit: false, otel: true },
   build_active_stall: { render: true, persist: true, audit: false, otel: true },
   pipeline_closeout: { render: true, persist: false, audit: false, otel: true },

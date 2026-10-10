@@ -65,6 +65,22 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
     vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-08T12:00:00.000Z'));
   });
 
+  // Covers: task:1
+  it('renders non-build step heartbeats with their elapsed time and feature slug', () => {
+    expect(lines({
+      type: 'step_in_flight',
+      step: 'test_suite',
+      elapsedMs: 393_000,
+      featureSlug: 'feat-x',
+    })).toEqual(['· ▶ test_suite running 6m33s · feat-x']);
+
+    expect(lines({
+      type: 'step_in_flight',
+      step: 'prd_audit',
+      elapsedMs: 393_000,
+    })).toEqual([expect.stringContaining('▶ prd_audit running')]);
+  });
+
   it('renders build_progress with step, N/total, current task, and feature slug', () => {
     const [line] = lines({
       type: 'build_progress',

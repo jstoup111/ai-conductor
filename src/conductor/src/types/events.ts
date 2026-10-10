@@ -1302,6 +1302,16 @@ type ConductorEventBody =
     }
   | {
       /**
+       * Non-build step heartbeat: emitted by StepInFlightTicker at the
+       * `build_progress.heartbeat_minutes` interval while a step is running.
+       */
+      type: 'step_in_flight';
+      step: StepName;
+      elapsedMs: number;
+      featureSlug?: string;
+    }
+  | {
+      /**
        * Intra-step build quiet-episode warning: emitted when the build step
        * has gone `quietMinutes` without any task-status change
        * (adr-2026-07-10-intra-step-build-progress-events). Distinct from
