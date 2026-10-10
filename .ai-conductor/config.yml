@@ -200,9 +200,6 @@ llm_providers:
     # (`pi install npm:pi-subagents`).
     subagents: true
 
-conflict_check:
-  adr_corpus: repo_wide
-
 # Pre-BUILD coverage-binding judge. Disabled 2026-10-06 (operator order): its
 # refusals halted features on false or pedantic verdicts with no operator
 # lever, across codex terra and claude sonnet. Mechanical checks (plan slices,

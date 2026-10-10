@@ -255,15 +255,6 @@
 # Allowed: an object whose only live id is testQuality; its value takes enabled, llm_provider, model, effort, model_fallback_ladder, max_retries, escalate, and min_confidence (an integer 0 through 100, default 0).
 # Default: testQuality off.
 # Changing it: every retired rubric id is ignored with a one-time notice rather than failing the load.
-# Controls: conflict_check — which approved ADRs the DECIDE conflict_check step compares stories against.
-# Allowed: an object with the single key adr_corpus.
-# Default: adr_corpus change_set.
-# Changing it: any other nested key fails the load.
-# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
-# Controls: conflict_check.adr_corpus — how wide the ADR corpus for conflict_check is.
-# Allowed: change_set or repo_wide.
-# Default: change_set (only the ADRs in the current spec's change set).
-# Changing it: repo_wide considers every approved ADR, narrows to subjects overlapping the stories, and records both sets in the conflict report, which costs more but catches older decisions.
 # Controls: prd_audit — how far the SHIP-phase prd_audit gate may remediate its own findings before halting.
 # Allowed: an object with max_remediation_laps and max_appended_tasks (positive integers), max_appended_ratio (a number greater than 0 and at most 1), and halt_on_any_plan_gap (true or false).
 # Default: max_remediation_laps 1, max_appended_tasks 5, max_appended_ratio 0.25, halt_on_any_plan_gap false.
