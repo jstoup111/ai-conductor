@@ -1,7 +1,12 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:14
 
 import { describe, expect, it } from 'vitest';
-import { compareEdges, declaredEdges } from '../../../src/engine/engineer/dependency-reconciler.js';
+import {
+  compareEdges,
+  declaredEdges,
+  sweepDependencyDrift,
+  type DependencyDriftTracker,
+} from '../../../src/engine/engineer/dependency-reconciler.js';
 
 const SOURCE = 'acme/app#20';
 
@@ -100,5 +105,122 @@ describe('compareEdges', () => {
       unlinked: [],
       satisfied: [],
     });
+  });
+});
+
+interface DriftIssue {
+  number: number;
+  body: string;
+}
+
+interface DriftBlocker {
+  number: number;
+  state: 'open' | 'closed';
+  state_reason?: 'completed' | 'not_planned';
+}
+
+class RecordingDriftTracker implements DependencyDriftTracker {
+  readonly calls: string[] = [];
+  readonly writes: string[] = [];
+
+  constructor(
+    private readonly issues: readonly DriftIssue[],
+    private readonly blockers: ReadonlyMap<number, readonly DriftBlocker[]>,
+  ) {}
+
+  async listOpenIssues(repository: string): Promise<readonly DriftIssue[]> {
+    this.calls.push(`list:${repository}`);
+    return this.issues;
+  }
+
+  async getBlockedBy(repository: string, number: number): Promise<readonly DriftBlocker[]> {
+    this.calls.push(`blocked_by:${repository}#${number}`);
+    return this.blockers.get(number) ?? [];
+  }
+}
+
+function driftTracker(
+  issues: readonly DriftIssue[],
+  blockers: Record<number, readonly DriftBlocker[]>,
+): RecordingDriftTracker {
+  return new RecordingDriftTracker(issues, new Map(Object.entries(blockers).map(([number, entries]) => [Number(number), entries])));
+}
+
+describe('sweepDependencyDrift', () => {
+  it('returns unlinked, stale, cycle, and direction-contradiction findings from the four-category fixture', async () => {
+    const tracker = driftTracker(
+      [
+        { number: 30, body: 'Blocked by #31.' },
+        { number: 32, body: '' },
+        { number: 34, body: '' },
+        { number: 35, body: '' },
+        { number: 36, body: 'Blocks #37.' },
+      ],
+      {
+        30: [],
+        32: [{ number: 33, state: 'closed', state_reason: 'not_planned' }],
+        34: [{ number: 35, state: 'open' }],
+        35: [{ number: 34, state: 'open' }],
+        36: [{ number: 37, state: 'open' }],
+      },
+    );
+
+    await expect(sweepDependencyDrift({ repository: 'acme/app', tracker })).resolves.toEqual({
+      kind: 'swept',
+      unlinked: [{ source: 'acme/app#30', target: 'acme/app#31', kind: 'blocked-by', blocked_by: true }],
+      stale: [{ source: 'acme/app#32', target: 'acme/app#33', kind: 'blocked-by-stale' }],
+      cycles: [{ members: ['acme/app#34', 'acme/app#35'] }],
+      contradictions: [{ source: 'acme/app#36', target: 'acme/app#37', kind: 'reverse-direction' }],
+      indeterminate: [],
+    });
+  });
+
+  it('excludes completed blockers, closed issues, related prose, and returns a clean result with empty categories', async () => {
+    const excluded = driftTracker(
+      [
+        { number: 38, body: '' },
+        { number: 42, body: 'Related to #43.' },
+      ],
+      { 38: [{ number: 39, state: 'closed', state_reason: 'completed' }], 42: [] },
+    );
+    const clean = driftTracker([{ number: 50, body: 'No dependencies.' }], { 50: [] });
+
+    await expect(sweepDependencyDrift({ repository: 'acme/app', tracker: excluded })).resolves.toEqual({
+      kind: 'swept', unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: [],
+    });
+    await expect(sweepDependencyDrift({ repository: 'acme/app', tracker: clean })).resolves.toEqual({
+      kind: 'swept', unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: [],
+    });
+    expect(excluded.calls).not.toContain('blocked_by:acme/app#40');
+  });
+
+  it('makes no tracker writes and preserves present stale and cycle links', async () => {
+    const tracker = driftTracker(
+      [
+        { number: 32, body: '' },
+        { number: 34, body: '' },
+        { number: 35, body: '' },
+      ],
+      {
+        32: [{ number: 33, state: 'closed', state_reason: 'not_planned' }],
+        34: [{ number: 35, state: 'open' }],
+        35: [{ number: 34, state: 'open' }],
+      },
+    );
+
+    await sweepDependencyDrift({ repository: 'acme/app', tracker });
+
+    expect(tracker.writes).toEqual([]);
+    expect(tracker.calls).toEqual([
+      'list:acme/app',
+      'blocked_by:acme/app#32',
+      'blocked_by:acme/app#34',
+      'blocked_by:acme/app#35',
+    ]);
+    expect(await tracker.getBlockedBy('acme/app', 32)).toEqual([
+      { number: 33, state: 'closed', state_reason: 'not_planned' },
+    ]);
+    expect(await tracker.getBlockedBy('acme/app', 34)).toEqual([{ number: 35, state: 'open' }]);
+    expect(await tracker.getBlockedBy('acme/app', 35)).toEqual([{ number: 34, state: 'open' }]);
   });
 });
