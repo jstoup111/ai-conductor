@@ -26,6 +26,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon status shows each in-flight non-BUILD step while it runs. ([implementation PR #3085](https://github.com/jstoup111/ai-conductor/pull/3085)).
 - Guided monitor triage sessions now tell you when to quit and return to the queue. ([implementation PR #3080](https://github.com/jstoup111/ai-conductor/pull/3080)).
 - Stacked features now build each child in order while keeping task commits in their owning child. ([implementation PR #3053](https://github.com/jstoup111/ai-conductor/pull/3053)).
+- PRD audits now exempt requirements explicitly discharged by a coherence waiver. ([implementation PR #3084](https://github.com/jstoup111/ai-conductor/pull/3084)).
 
 ### Changed
 
@@ -66,6 +67,9 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Self-host builds no longer halt when Claude Code rewrites its plugin-sync round marker. ([implementation PR #3103](https://github.com/jstoup111/ai-conductor/pull/3103)).
 - Remediation tasks no longer carry an unprovable "re-run the gate" Done-when check that halted BUILD as a plan gap. ([implementation PR #3109](https://github.com/jstoup111/ai-conductor/pull/3109)).
 - Contributors can identify the active Vitest file when a Conductor CI shard ends unexpectedly. ([implementation PR #3083](https://github.com/jstoup111/ai-conductor/pull/3083)).
+- Operators can resolve GitHub intake issues with `compose forget --resolved-by` even after the ledger entry is absent. ([implementation PR #3090](https://github.com/jstoup111/ai-conductor/pull/3090)).
+- Pi users now receive protection against destructive Git commands during build dispatches. ([implementation PR #3081](https://github.com/jstoup111/ai-conductor/pull/3081)).
+- Validation-group reviews that kick back to build are no longer reported as interrupted in pipeline telemetry. ([implementation PR #3111](https://github.com/jstoup111/ai-conductor/pull/3111)).
 
 ## Migration
 
