@@ -132,7 +132,8 @@ describe('live self-host boundary', () => {
         'history.jsonl', 'sessions', 'shell_snapshots', 'cache', 'plugins/cache',
         'plugins/.remote-plugin-install-staging', 'mcp-oauth-locks',
         'thread-writer-locks', '.tmp', 'tmp', 'packages/standalone',
-        'models_cache.json', '*.sqlite', '*.sqlite-shm', '*.sqlite-wal',
+        'models_cache.json', 'session_index.jsonl',
+        'plugins/synced/**/.last-complete-round', '*.sqlite', '*.sqlite-shm', '*.sqlite-wal',
         '*.sqlite-journal',
       ],
       pi: ['sessions', 'models-store.json'],
@@ -1066,6 +1067,49 @@ describe('live self-host boundary', () => {
 
     try { expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true }); }
     finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  // Regression: every Codex session appends to `session_index.jsonl` when it
+  // starts or renames a thread. Observed 2026-10-10 as the sole diff behind 12
+  // false halts across 10 concurrently dispatched features.
+  it('ignores Codex session_index.jsonl appends but still halts on config.toml', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-codex-session-index-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await writeFile(join(provider, 'session_index.jsonl'), '{"id":"a","thread_name":"one"}\n');
+    await writeFile(join(provider, 'config.toml'), 'before');
+
+    const baseline = await fingerprintLiveBoundary({
+      liveCheckout: live, unrelatedProviderState: provider, provider: 'codex',
+    });
+    await writeFile(join(provider, 'session_index.jsonl'), '{"id":"a","thread_name":"one"}\n{"id":"b","thread_name":"two"}\n');
+
+    try {
+      expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true });
+      await writeFile(join(provider, 'config.toml'), 'after');
+      expect(await verifyLiveBoundary(baseline)).toMatchObject({ ok: false });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('ignores the Codex plugin-sync round marker but still halts on synced plugin content', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-codex-plugin-sync-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    const synced = join(provider, 'plugins', 'synced', '6f39b65c_7cf0890d');
+    await Promise.all([mkdir(live), mkdir(synced, { recursive: true })]);
+    await writeFile(join(synced, 'SKILL.md'), 'synced plugin content\n');
+
+    const baseline = await fingerprintLiveBoundary({
+      liveCheckout: live, unrelatedProviderState: provider, provider: 'codex',
+    });
+    await writeFile(join(synced, '.last-complete-round'), '1791600000\n');
+
+    try {
+      expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true });
+      await writeFile(join(synced, 'SKILL.md'), 'rewritten by the self-host process\n');
+      const result = await verifyLiveBoundary(baseline);
+      expect(result).toMatchObject({ ok: false });
+      expect(result.ok ? '' : result.reason).toContain('plugins/synced/6f39b65c_7cf0890d/SKILL.md');
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   // The exclusion must not blind the guard to operator config, which is the
