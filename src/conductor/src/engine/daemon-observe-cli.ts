@@ -24,9 +24,14 @@ import { readGatedSnapshot, type GatedSpecItem, type GatedRepoItem, type Clock }
 import { summarizeAccuracyLedger } from './attribution-audit.js';
 import { scanInheritedState } from './daemon-dashboard.js';
 import { formatHeartbeatAge } from './step-heartbeat.js';
-import { prdAuditAppendCap } from './remediation-caps.js';
+import { kickbackBudgetFallbackLimit, prdAuditAppendCap } from './remediation-caps.js';
 import { loadConfig } from './config.js';
-import { readGrowth, readKickbackLedger } from './kickback-ledger.js';
+import {
+  isUnreadableKickbackGate,
+  isUnreadableKickbackLedger,
+  readGrowth,
+  readKickbackLedger,
+} from './kickback-ledger.js';
 import { renderKickbackBudgetView } from './kickback-budget-view.js';
 import { resolveActiveChild } from './child-cursor.js';
 import { parseChildId, type ChildId } from './child-context.js';
@@ -666,34 +671,57 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
     const activeChild = await activeChildStatusLabel(featureRoot, feature.slug);
     const child = activeChild?.child;
     const childStatus = activeChild ? ` child ${activeChild.child}/${activeChild.total}` : '';
-    const initial = await readGrowth(featureRoot, 0);
     const config = await loadConfig(featureRoot);
-    const configCap = prdAuditAppendCap(
-      config.ok ? config.config : ({} as HarnessConfig),
-      initial.authored,
-    );
     const ledger = await readKickbackLedger(featureRoot, child);
-    const flatLedger = child === undefined ? ledger : await readKickbackLedger(featureRoot);
-    const cap = flatLedger.effectiveGrowthCap ?? configCap;
-    const growth = await readGrowth(featureRoot, cap);
-    const byGate = Object.entries(growth.byGate)
-      .map(([gate, count]) => `${gate}: ${count}`)
-      .join(', ');
-    out(
-      `  PLAN GROWTH [${feature.slug}${childStatus}]: authored ${growth.authored}; ` +
-      `added ${growth.added}${byGate ? ` (${byGate})` : ''}; ` +
-      `remaining ${growth.remaining}/${cap}`,
-    );
-    for (const [gate, entry] of Object.entries(ledger.gates)) {
-      if (!entry.capEvidence && (entry.adjustments?.length ?? 0) === 0) continue;
-      const limit = gate === 'build_review'
-        ? 5
-        : gate === 'prd_audit'
-          ? (config.ok ? (config.config as HarnessConfig & { prd_audit?: { max_remediation_laps?: number } }).prd_audit?.max_remediation_laps ?? 1 : 1)
-          : (config.ok ? (config.config as HarnessConfig & { architecture_review_as_built?: { max_remediation_laps?: number } }).architecture_review_as_built?.max_remediation_laps ?? 1 : 1);
-      const view = renderKickbackBudgetView(entry, gate, limit, undefined, undefined, child).replace(/\n/g, ' | ');
-      const allowance = entry.capEvidence ? `Allowance: ${entry.capEvidence.allowance}; ` : '';
+    try {
+      const initial = await readGrowth(featureRoot, 0);
+      const configCap = prdAuditAppendCap(
+        config.ok ? config.config : ({} as HarnessConfig),
+        initial.authored,
+      );
+      const flatLedger = child === undefined ? ledger : await readKickbackLedger(featureRoot);
+      const cap = flatLedger.effectiveGrowthCap ?? configCap;
+      const growth = await readGrowth(featureRoot, cap);
+      const byGate = Object.entries(growth.byGate)
+        .map(([gate, count]) => `${gate}: ${count}`)
+        .join(', ');
+      out(
+        `  PLAN GROWTH [${feature.slug}${childStatus}]: authored ${growth.authored}; ` +
+        `added ${growth.added}${byGate ? ` (${byGate})` : ''}; ` +
+        `remaining ${growth.remaining}/${cap}`,
+      );
+    } catch (error) {
+      out(
+        `  PLAN GROWTH [${feature.slug}${childStatus}]: unavailable (` +
+        `${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
+    const budgetConfig = config.ok ? config.config : {} as HarnessConfig;
+    const renderBudget = (gate: 'build_review' | 'prd_audit' | 'architecture_review_as_built') => {
+      const entry = ledger.gates[gate];
+      const pendingLaps = gate === 'build_review' ? 0 : ledger.pendingRepair?.charges[gate]?.laps ?? 0;
+      const view = renderKickbackBudgetView(
+        entry,
+        gate,
+        kickbackBudgetFallbackLimit(gate, budgetConfig),
+        undefined,
+        undefined,
+        child,
+        pendingLaps,
+      ).replace(/\n/g, ' | ');
+      const allowance = entry?.capEvidence ? `Allowance: ${entry.capEvidence.allowance}; ` : '';
       out(`  KICKBACK BUDGET [${feature.slug}]: ${allowance}${view}`);
+    };
+    for (const gate of ['prd_audit', 'architecture_review_as_built'] as const) {
+      if (isUnreadableKickbackLedger(ledger) || isUnreadableKickbackGate(ledger, gate)) {
+        out(`  KICKBACK BUDGET [${feature.slug}]: ${gate}: budget unavailable (durable entry failed validation)`);
+      } else {
+        renderBudget(gate);
+      }
+    }
+    const buildReview = ledger.gates.build_review;
+    if (buildReview && (buildReview.capEvidence || (buildReview.adjustments?.length ?? 0) > 0)) {
+      renderBudget('build_review');
     }
   }
 }

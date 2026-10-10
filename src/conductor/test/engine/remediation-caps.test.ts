@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 import { runDaemonStatus } from '../../src/engine/daemon-observe-cli.js';
-import { prdAuditAppendCap } from '../../src/engine/remediation-caps.js';
+import { kickbackBudgetFallbackLimit, prdAuditAppendCap } from '../../src/engine/remediation-caps.js';
 
 const AUTHORED_TASKS = 20;
 const DEFAULT_APPEND_CAP = 5;
@@ -49,6 +49,20 @@ async function writeFeature(root: string, slug: string, config: string): Promise
 }
 
 describe('remediation cap consumers', () => {
+  // Covers: task:1
+  it('resolves kickback-budget fallback limits through the enforcement caps', () => {
+    expect(kickbackBudgetFallbackLimit('build_review', {} as never)).toBe(5);
+    expect(kickbackBudgetFallbackLimit('architecture_review_as_built', {} as never)).toBe(1);
+    expect(kickbackBudgetFallbackLimit(
+      'architecture_review_as_built',
+      { architecture_review_as_built: { max_remediation_laps: 3 } } as never,
+    )).toBe(3);
+    expect(kickbackBudgetFallbackLimit(
+      'prd_audit',
+      { prd_audit: { max_remediation_laps: 2 } } as never,
+    )).toBe(2);
+  });
+
   it.each(configs)('reports the recorded $name PRD-audit append cap through both CLIs', async ({ config, expected }) => {
     const root = await mkdtemp(join(tmpdir(), 'remediation-caps-'));
     try {
