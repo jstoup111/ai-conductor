@@ -4,6 +4,13 @@ spec_hash: 0fca0e1d139ff83bbd8f2b09aea74bd99aff1ae13f9d534e311570536e4ff92d
 pr: https://github.com/jstoup111/ai-conductor/pull/3083
 shipped: 2026-10-10
 engine_version: 20261010T132818Z-14d7967cd432
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This documents the self-host live-boundary exclusion list, a mechanism unrelated to CI Vitest progress reporting, and no story or task covers it. It is docs-only and brings the guide in line with existing code, so it changes no behavior. Most likely it was a docs-currency catch-up after a rebase."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
