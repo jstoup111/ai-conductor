@@ -18,6 +18,7 @@ import { readKickbackHaltGeneration } from './daemon-rekick.js';
 import { loadConfig } from './config.js';
 import { prdAuditAppendCap } from './remediation-caps.js';
 import { childStateExists, parseChildId } from './child-context.js';
+import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
 
@@ -119,9 +120,15 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     catch (error) { print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1; }
   };
   if (command.action === 'inspect') {
-    const child = command.child === undefined ? undefined : parseChildId(command.child);
-    if (command.child !== undefined && child === undefined) {
-      print(`kickback-budget: invalid child id "${command.child}".`);
+    const cursor = await resolveActiveChildForCurrentFeature(worktree);
+    if (cursor.kind !== 'no-child' && cursor.kind !== 'active') {
+      print(`kickback-budget: active child resolution refused (${cursor.kind}).`);
+      return 1;
+    }
+    const selectedChild = command.child ?? (cursor.kind === 'active' ? String(cursor.child) : undefined);
+    const child = selectedChild === undefined ? undefined : parseChildId(selectedChild);
+    if (selectedChild !== undefined && child === undefined) {
+      print(`kickback-budget: invalid child id "${selectedChild}".`);
       return 1;
     }
     if (child !== undefined && !(await childStateExists(worktree, child))) {

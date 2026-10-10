@@ -7,7 +7,7 @@ import {
   readCoverageBindingEnvelope,
   type CoverageBindingEnvelopeFilesystem,
 } from './coverage-binding-envelope.js';
-import { childBranchFor, leafBranchFor, parseFeatureRef } from './feature-branch-identity.js';
+import { childBranchFor, featureSlugOf, leafBranchFor, parseFeatureBranch, parseFeatureRef } from './feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { resolveThroughMap } from './rebase-translate.js';
 
@@ -260,4 +260,20 @@ export async function resolveActiveChild(
   }
   const branch = childBranchFor(slug, child);
   return branch.ok ? { kind: 'active', child, position: child, isLeaf, branch: branch.branch } : { kind: 'git-error' };
+}
+
+/**
+ * Resolves a cursor for an operator command issued from a feature worktree.
+ * Non-feature directories deliberately retain the N=1 command path; a
+ * feature branch delegates to the cursor, which owns stacked-state refusal.
+ */
+export async function resolveActiveChildForCurrentFeature(
+  worktree: string,
+  dependencies: ActiveChildDependencies = {},
+): Promise<ActiveChildResolution> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const head = await runGit(git, ['symbolic-ref', '-q', '--short', 'HEAD']);
+  if (!head || head.exitCode !== 0 || !head.stdout.trim()) return { kind: 'no-child' };
+  const slug = featureSlugOf(parseFeatureBranch(head.stdout.trim()));
+  return slug === undefined ? { kind: 'no-child' } : resolveActiveChild(worktree, slug, { git });
 }
