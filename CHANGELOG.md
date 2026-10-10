@@ -62,6 +62,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Self-host builds no longer halt when a concurrent Codex session updates its session index or plugin-sync round marker. ([implementation PR #3095](https://github.com/jstoup111/ai-conductor/pull/3095)).
 - build_review no longer re-selects and halts a lap whose findings the adjudicator already settled (for example, rejected); the completion check now honors finalized remediation cases. ([implementation PR #3098](https://github.com/jstoup111/ai-conductor/pull/3098)).
 - FINISH no longer halts as non-advancing after recording the outcome when a PR carries accepted build-review risk; the accepted-risk PR section is now updated in place. ([implementation PR #3101](https://github.com/jstoup111/ai-conductor/pull/3101)).
+- Self-host builds no longer halt when Claude Code rewrites its plugin-sync round marker. ([implementation PR #3103](https://github.com/jstoup111/ai-conductor/pull/3103)).
+- Remediation tasks no longer carry an unprovable "re-run the gate" Done-when check that halted BUILD as a plan gap. ([implementation PR #3109](https://github.com/jstoup111/ai-conductor/pull/3109)).
 
 ## Migration
 
