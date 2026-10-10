@@ -1,4 +1,4 @@
-import { parsePlanTaskBodies, TASK_TRAILER_LINE_PATTERN } from '../plan-task-parse.js';
+import { parsePlanTaskTitles, TASK_TRAILER_LINE_PATTERN } from '../plan-task-parse.js';
 import { sectionBody, splitStoryBlocks } from '../story-criteria.js';
 
 /**
@@ -42,9 +42,11 @@ export function composeSpecCommitMessage(
     .filter((heading): heading is string => Boolean(heading));
   if (stories.length > 0) sections.push(`Stories:\n${stories.map((heading) => `- ${heading}`).join('\n')}`);
 
-  const taskIds = [...parsePlanTaskBodies(planText).keys()];
-  if (taskIds.length > 0) {
-    sections.push(`Tasks: ${taskIds.length}\n${taskIds.map((id) => `- Task ${id}`).join('\n')}`);
+  const tasks = [...parsePlanTaskTitles(planText)];
+  if (tasks.length > 0) {
+    sections.push(
+      `Tasks: ${tasks.length}\n${tasks.map(([id, title]) => (title ? `- Task ${id}: ${title}` : `- Task ${id}`)).join('\n')}`,
+    );
   }
 
   return [subjectFor(idea), ...sections].join('\n\n');
