@@ -23,12 +23,14 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators can select a child’s workflow state with --child when managing stacked features. ([implementation PR #3019](https://github.com/jstoup111/ai-conductor/pull/3019)).
 - Guided monitor sessions let operators choose their provider, model, and reasoning effort. ([implementation PR #3030](https://github.com/jstoup111/ai-conductor/pull/3030)).
 - Teams can safely opt into stacked delivery for eligible sliced plans. ([implementation PR #3039](https://github.com/jstoup111/ai-conductor/pull/3039)).
+- Daemon status shows each in-flight non-BUILD step while it runs. ([implementation PR #3085](https://github.com/jstoup111/ai-conductor/pull/3085)).
 
 ### Changed
 
 - Operators receive PRD audits with bounded evidence and validated typed verdicts. ([implementation PR #2897](https://github.com/jstoup111/ai-conductor/pull/2897)).
 - Feature cost totals, the shipped-record Cost block, --report and OTel cost metrics now include failed provider attempts for Claude, Codex and Pi, recorded through the existing cost telemetry. A failed attempt with no usable record is reported as unmetered, never as $0. ([implementation PR #3027](https://github.com/jstoup111/ai-conductor/pull/3027)).
 - Maintainers can classify confirmed maintenance changes and skip unnecessary acceptance specifications. ([implementation PR #3029](https://github.com/jstoup111/ai-conductor/pull/3029)).
+- Reviewers see plan task titles in landed specification commit bodies. ([implementation PR #3091](https://github.com/jstoup111/ai-conductor/pull/3091)).
 
 ### Removed
 
@@ -53,6 +55,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Feature branches handle base-deleted inherited protected artifacts without deadlocking. ([implementation PR #3041](https://github.com/jstoup111/ai-conductor/pull/3041)).
 - A no-op rebase no longer recounts a stale rebase kickback, which had halted features with a false "kickback ping-pong" after an earlier halt. ([implementation PR #3052](https://github.com/jstoup111/ai-conductor/pull/3052)).
 - Remediation now preserves engine-owned dispositions when it creates follow-up work. ([implementation PR #3040](https://github.com/jstoup111/ai-conductor/pull/3040)).
+- Halt records now reach the remote branch after a daemon rebase. ([implementation PR #3079](https://github.com/jstoup111/ai-conductor/pull/3079)).
 
 ## Migration
 
