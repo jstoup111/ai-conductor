@@ -237,8 +237,12 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     ]);
     if (unk) return { kind: 'reject', sub: 'land', flag: unk };
     return {
-      kind: 'land', project, idea, worktree, sourceRef, dependsOn,
-      declinedDependencies, ...(skipDependencyCheck === undefined ? {} : { skipDependencyCheck }),
+      kind: 'land', project, idea, worktree, sourceRef,
+      // Keep the established descriptor shape for callers that do not use
+      // dependency decisions; the fields are additive only when supplied.
+      ...(dependsOn.length === 0 ? {} : { dependsOn }),
+      ...(declinedDependencies.length === 0 ? {} : { declinedDependencies }),
+      ...(skipDependencyCheck === undefined ? {} : { skipDependencyCheck }),
     };
   }
 

@@ -209,6 +209,7 @@ describe('decideLandDependencies', () => {
     });
 
     expect(result).toMatchObject({ kind: 'refused-undecided', undecided: ['owner/repo#600'] });
+    if (result.kind !== 'refused-undecided') throw new Error('expected undecided dependency refusal');
     expect(result.message).toContain('--depends-on');
     expect(result.message).toContain('--decline-dependency');
   });

@@ -510,7 +510,7 @@ describe('event sink subscriptions', () => {
       persisted: DEPENDENCY_EVENT_TYPES.map((type) => persistedEventTypes().includes(type)),
       rendered: DEPENDENCY_EVENT_TYPES.map((type) => renderedEventTypes().includes(type)),
       audited: DEPENDENCY_EVENT_TYPES.map((type) => auditedEventTypes().includes(type)),
-      otel: DEPENDENCY_EVENT_TYPES.map((type) => otelEventTypes().includes(type)),
+      otel: DEPENDENCY_EVENT_TYPES.map((type) => otelEventTypes().includes(type as never)),
     }).toEqual({
       events,
       sinks: [

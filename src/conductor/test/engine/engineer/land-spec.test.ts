@@ -946,6 +946,7 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     const result = await landSpec(target(), 'dep bump', worktree, 'PROJ-123', {
       ownerConfig: {},
       gh,
+      skipDependencyCheck: 'Jira source refs have no GitHub dependency graph',
     });
 
     const { stdout: marker } = await execFile(
@@ -995,7 +996,11 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
 
     const gh: GhRunner = async () => ({ stdout: 'dana\n' });
 
-    const result = await landSpec(target(), idea, worktree, 'acme/widgets#42', { ownerConfig: {}, gh });
+    const result = await landSpec(target(), idea, worktree, 'acme/widgets#42', {
+      ownerConfig: {},
+      gh,
+      skipDependencyCheck: 'marker selection coverage does not exercise dependency proposals',
+    });
 
     // Marker lands ONLY at the newest plan's stem.
     const { stdout: marker } = await execFile(
