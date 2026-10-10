@@ -37,13 +37,10 @@ function triageInvocation(provider: string): string {
 
 function monitorHostingBlock(provider: string): string[] {
   const quitInstruction = findBuiltInProviderDescriptor(provider)?.interactiveLaunch?.quitInstruction;
-  if (quitInstruction === undefined) {
-    throw new Error(`Provider ${provider} has no interactive quit instruction.`);
-  }
   return [
     MONITOR_HOSTED_MARKER,
     'Quitting this session returns the operator to the monitor queue.',
-    `Quit instruction: ${quitInstruction}`,
+    `Quit instruction: ${quitInstruction ?? "end the session with the provider's normal exit control."}`,
     'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
   ];
 }

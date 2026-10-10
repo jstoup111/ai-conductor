@@ -1,4 +1,4 @@
-// Covers: task:2, task:10, task:11, task:12, task:13
+// Covers: task:2, task:3, task:10, task:11, task:12, task:13
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -9,6 +9,7 @@ import {
   openGuidedSession,
   type GuidedSessionLauncher,
 } from '../../../src/engine/monitor/session.js';
+import { BUILT_IN_PROVIDERS } from '../../../src/execution/provider-catalog.js';
 import {
   DAEMON_SESSION_MARKER,
   guardDaemonSessionInvocation,
@@ -97,6 +98,40 @@ describe('guided halt sessions', () => {
         'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
       ].join('\n'),
     }));
+  });
+
+  it('uses generic exit wording when Pi declares no quit instruction', async () => {
+    const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
+
+    await openGuidedSession({
+      provider: 'pi',
+      halt: {
+        project: '/workspace/project',
+        slug: 'repair-index',
+        reason: 'build review requires an operator decision',
+        haltClass: 'needs-human',
+      },
+    }, { launch });
+
+    const openingPrompt = launch.mock.calls[0]?.[0].openingPrompt;
+    expect(openingPrompt).toBe([
+      'Resolve this halted daemon feature with the existing daemon-triage procedure.',
+      'Invoke /skill:daemon-triage for feature repair-index.',
+      'Project: /workspace/project',
+      'Feature: repair-index',
+      'Reason: build review requires an operator decision',
+      'Classification: needs-human',
+      'Recovery procedure: Follow the needs-human halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
+      'Session host: conduct monitor queue.',
+      'Quitting this session returns the operator to the monitor queue.',
+      'Quit instruction: end the session with the provider\'s normal exit control.',
+      'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
+    ].join('\n'));
+    for (const quitInstruction of BUILT_IN_PROVIDERS.flatMap(
+      (provider) => provider.interactiveLaunch?.quitInstruction ?? [],
+    )) {
+      expect(openingPrompt).not.toContain(quitInstruction);
+    }
   });
 
   it('keeps monitor-hosting instructions exact-once and final when the reason contains them', async () => {
