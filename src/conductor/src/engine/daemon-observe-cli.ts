@@ -28,6 +28,13 @@ import { prdAuditAppendCap } from './remediation-caps.js';
 import { loadConfig } from './config.js';
 import { readGrowth, readKickbackLedger } from './kickback-ledger.js';
 import { renderKickbackBudgetView } from './kickback-budget-view.js';
+import { resolveActiveChild } from './child-cursor.js';
+import { parseChildId, type ChildId } from './child-context.js';
+import {
+  COVERAGE_BINDING_COMPLETION_STATUSES,
+  readCoverageBindingEnvelope,
+  type CoverageBindingEnvelopeFilesystem,
+} from './coverage-binding-envelope.js';
 import {
   readDaemonTimeline,
   type DaemonExitRecord,
@@ -41,6 +48,15 @@ const VERSION_UNKNOWN = 'version-unknown';
 /** Chunk size for reverse event-log scans.  Capability events are emitted at
  * startup and can be much older than ordinary daemon telemetry. */
 const CAPABILITY_EVENT_SCAN_CHUNK_BYTES = 64 * 1024;
+
+const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
+  readFile: (path) => readFile(path, 'utf8'),
+  // `daemon status` is an observation boundary. The envelope reader only uses
+  // readFile, and these fail loudly if that promise is ever broken.
+  mkdir: async () => { throw new Error('daemon status is read-only'); },
+  writeFile: async () => { throw new Error('daemon status is read-only'); },
+  rename: async () => { throw new Error('daemon status is read-only'); },
+};
 
 /**
  * Derive a version id label from a pidfile's `engineDir` (FR-14). Pure string
@@ -575,6 +591,27 @@ async function renderAgreementLine(repoPath: string, out: (line: string) => void
   out(`  attribution agreement: ${pct}% (n=${summary.sampleCount})`);
 }
 
+type ActiveChildStatusLabel = { child: ChildId; total: number };
+
+/**
+ * Resolve the one child whose ledger/status is visible. The cursor remains the
+ * authority: envelope data supplies only the human-facing denominator.
+ */
+async function activeChildStatusLabel(
+  featureRoot: string,
+  slug: string,
+): Promise<ActiveChildStatusLabel | undefined> {
+  const cursor = await resolveActiveChild(featureRoot, slug);
+  if (cursor.kind !== 'active') return undefined;
+  const envelope = await readCoverageBindingEnvelope(featureRoot, coverageBindingFilesystem);
+  const positions = envelope?.sliceMembership && COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)
+    ? [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
+      .map((position) => parseChildId(position))
+      .filter((position): position is ChildId => position !== undefined)
+    : [];
+  return positions.length >= 2 ? { child: cursor.child, total: positions.length } : undefined;
+}
+
 /**
  * Render cap accounting for every feature the durable dashboard model classifies
  * as in progress. The counts themselves stay owned by the kickback ledger;
@@ -593,20 +630,23 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
     .filter((feature, index, features) => features.findIndex((item) => item.slug === feature.slug) === index);
   for (const feature of visibleFeatures) {
     const featureRoot = join(repoPath, '.worktrees', feature.slug);
+    const activeChild = await activeChildStatusLabel(featureRoot, feature.slug);
+    const child = activeChild?.child;
+    const childStatus = activeChild ? ` child ${activeChild.child}/${activeChild.total}` : '';
     const initial = await readGrowth(featureRoot, 0);
     const config = await loadConfig(featureRoot);
     const configCap = prdAuditAppendCap(
       config.ok ? config.config : ({} as HarnessConfig),
       initial.authored,
     );
-    const ledger = await readKickbackLedger(featureRoot);
+    const ledger = await readKickbackLedger(featureRoot, child);
     const cap = ledger.effectiveGrowthCap ?? configCap;
     const growth = await readGrowth(featureRoot, cap);
     const byGate = Object.entries(growth.byGate)
       .map(([gate, count]) => `${gate}: ${count}`)
       .join(', ');
     out(
-      `  PLAN GROWTH [${feature.slug}]: authored ${growth.authored}; ` +
+      `  PLAN GROWTH [${feature.slug}${childStatus}]: authored ${growth.authored}; ` +
       `added ${growth.added}${byGate ? ` (${byGate})` : ''}; ` +
       `remaining ${growth.remaining}/${cap}`,
     );
@@ -617,7 +657,7 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
         : gate === 'prd_audit'
           ? (config.ok ? (config.config as HarnessConfig & { prd_audit?: { max_remediation_laps?: number } }).prd_audit?.max_remediation_laps ?? 1 : 1)
           : (config.ok ? (config.config as HarnessConfig & { architecture_review_as_built?: { max_remediation_laps?: number } }).architecture_review_as_built?.max_remediation_laps ?? 1 : 1);
-      const view = renderKickbackBudgetView(entry, gate, limit).replace(/\n/g, ' | ');
+      const view = renderKickbackBudgetView(entry, gate, limit, undefined, undefined, child).replace(/\n/g, ' | ');
       const allowance = entry.capEvidence ? `Allowance: ${entry.capEvidence.allowance}; ` : '';
       out(`  KICKBACK BUDGET [${feature.slug}]: ${allowance}${view}`);
     }
