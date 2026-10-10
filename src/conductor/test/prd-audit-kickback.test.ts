@@ -1164,7 +1164,7 @@ describe('prd_audit kickback', () => {
 
     await expect(readRemediationGateAppendBudget(
       root, { prd_audit: { max_remediation_laps: 1 } } as never,
-      'prd_audit', 1, 1, 1, 8,
+      'prd_audit', 1, 1, 1,
     )).resolves.toMatchObject({ priorLaps: 1, lapCap: 2, taskCount: 1, growthTaskCount: 1 });
   });
 

@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { readPlanGrowthBudget } from '../../src/engine/remediation-caps.js';
+import {
+  readPlanGrowthBudget,
+  readRemediationGateAppendBudget,
+} from '../../src/engine/remediation-caps.js';
 
 const STORY_TWO_SLUG = 'growth-feature';
 const STORY_TWO_CONFIG = {
@@ -85,6 +88,26 @@ describe('readPlanGrowthBudget', () => {
 
       await expect(readPlanGrowthBudget(root, {}, { persist: true })).resolves.toMatchObject({
         cap: 0, capSource: 'config-derived', authoredSource: 'unresolved',
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('readRemediationGateAppendBudget', () => {
+  it('uses the shared growth budget instead of every plan heading', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'remediation-caps-'));
+    try {
+      await writePlanFixture(root, STORY_TWO_SLUG, [taskHeadings('', 24), taskHeadings('rem-', 9)].join('\n'), {
+        growth: { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
+      });
+
+      await expect(readRemediationGateAppendBudget(
+        root, STORY_TWO_CONFIG, 'prd_audit', 1, 1, 1,
+      )).resolves.toMatchObject({
+        growthCap: 12,
+        growth: { authored: 24 },
       });
     } finally {
       await rm(root, { recursive: true, force: true });
