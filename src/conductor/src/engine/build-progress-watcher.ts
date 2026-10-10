@@ -101,6 +101,27 @@ async function countResolvedForTasks(
   }
 }
 
+/**
+ * The task a progress line names. Several rows can be `in_progress` at once
+ * (remediation tasks are seeded that way), so the first such row is not the
+ * one being worked; `.pipeline/current-task`, stamped by `task start`, is. Fall
+ * back to the first in-progress row only when the stamp is absent or names no
+ * current row, so the label can never point at a task outside the plan.
+ */
+async function currentTaskFor(
+  projectRoot: string,
+  tasks: readonly NormalizedTask[],
+): Promise<NormalizedTask | undefined> {
+  try {
+    const stamped = (await readFile(join(projectRoot, '.pipeline', 'current-task'), 'utf-8')).trim();
+    const match = stamped ? tasks.find((t) => t.id === stamped && t.status !== 'completed') : undefined;
+    if (match) return match;
+  } catch {
+    // No stamp: fall back to the first in-progress row.
+  }
+  return tasks.find((t) => t.status === 'in_progress');
+}
+
 export async function readSnapshot(projectRoot: string): Promise<BuildProgressSnapshot> {
   const statusPath = join(projectRoot, '.pipeline/task-status.json');
 
@@ -129,7 +150,7 @@ export async function readSnapshot(projectRoot: string): Promise<BuildProgressSn
 
   const resolved = await countResolvedForTasks(projectRoot, tasks);
   const total = explicitTotal ?? tasks.length;
-  const current = tasks.find((t) => t.status === 'in_progress');
+  const current = await currentTaskFor(projectRoot, tasks);
 
   const snapshot: BuildProgressSnapshot = {
     resolved,
@@ -397,7 +418,7 @@ export class BuildProgressWatcher {
 
     const resolved = await countResolvedForTasks(this.projectRoot, tasks);
     const total = tasks.length;
-    const current = tasks.find((t) => t.status === 'in_progress');
+    const current = await currentTaskFor(this.projectRoot, tasks);
 
     let head: string | undefined;
     let headProbeFailed = false;

@@ -83,6 +83,26 @@ describe('readSnapshot', () => {
     expect(snapshot.currentTaskName).toBe('second');
   });
 
+  it('names the stamped current task when several rows are in progress', async () => {
+    // Remediation tasks are seeded in_progress together; labeling the first
+    // such row showed the same task text for every position (build 41..44/45).
+    await writeStatus({
+      tasks: [
+        { id: '1', title: 'first', status: 'completed' },
+        { id: 'r1', title: 'remediation one', status: 'in_progress' },
+        { id: 'r2', title: 'remediation two', status: 'in_progress' },
+      ],
+    });
+    await writeFile(join(dir, '.pipeline/current-task'), 'r2\n');
+    expect(await readSnapshot(dir)).toMatchObject({ currentTaskId: 'r2', currentTaskName: 'remediation two' });
+
+    // A stamp naming no current row falls back to the first in-progress row.
+    await writeFile(join(dir, '.pipeline/current-task'), '1\n');
+    expect(await readSnapshot(dir)).toMatchObject({ currentTaskId: 'r1', currentTaskName: 'remediation one' });
+    await writeFile(join(dir, '.pipeline/current-task'), 'not-a-task\n');
+    expect(await readSnapshot(dir)).toMatchObject({ currentTaskId: 'r1' });
+  });
+
   it('reads the legacy id-keyed map schema (no "tasks" wrapper)', async () => {
     await writeStatus({
       '1': { title: 'alpha', status: 'completed' },
