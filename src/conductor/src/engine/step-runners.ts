@@ -104,6 +104,7 @@ import {
   type CoverageBindingSliceMembership,
 } from './coverage-binding-envelope.js';
 import { resolveActiveChild } from './child-cursor.js';
+import { parseFeatureRef } from './feature-branch-identity.js';
 import {
   amendmentBlocks,
   assembleAmendmentClaims,
@@ -138,6 +139,86 @@ function isCoverageBindingAmendmentEntry(
 
 function isCoverageBindingConflictEntry(entry: unknown): entry is CoverageBindingConflictEnvelopeEntry {
   return typeof entry === 'object' && entry !== null && (entry as { kind?: unknown }).kind === 'conflict';
+}
+
+type PositionImmutabilityCheck =
+  | { readonly kind: 'clear' }
+  | { readonly kind: 'refused'; readonly reason: string };
+
+function recordedPositions(value: string): number[] | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || !parsed.every((position) => Number.isSafeInteger(position) && position > 0)) return undefined;
+    const positions = [...new Set(parsed)].sort((left, right) => left - right);
+    return positions.length === parsed.length ? positions : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Once child state exists, the ref written at child-one creation is the
+ * durable position authority.  The envelope may be recreated with a
+ * worktree, so comparing it to its predecessor would let a reseal silently
+ * change the stack topology.
+ */
+async function verifyStackPositionImmutability(
+  projectDir: string,
+  slug: string,
+  positions: readonly number[],
+  git: GitRunner,
+): Promise<PositionImmutabilityCheck> {
+  if (slug === '') return { kind: 'clear' };
+
+  let childDirectoryExists = false;
+  try {
+    childDirectoryExists = (await readdir(join(projectDir, '.pipeline', 'children'))).length > 0;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return { kind: 'refused', reason: 'coverage_binding cannot inspect existing child state' };
+    }
+  }
+
+  const gitDirectory = await git(['rev-parse', '--git-dir']).catch(() => undefined);
+  // Non-git unit fixtures have no refs to inspect. A real worktree that loses
+  // git access while child state exists is refused above/below, never guessed.
+  if (!gitDirectory || gitDirectory.exitCode !== 0) {
+    return childDirectoryExists
+      ? { kind: 'refused', reason: 'coverage_binding cannot inspect existing child refs' }
+      : { kind: 'clear' };
+  }
+
+  const childRefs = await git(['for-each-ref', '--format=%(refname)', 'refs/heads/feat']).catch(() => undefined);
+  const closureRefs = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/closed/`]).catch(() => undefined);
+  if (!childRefs || childRefs.exitCode !== 0 || !closureRefs || closureRefs.exitCode !== 0) {
+    return { kind: 'refused', reason: 'coverage_binding cannot inspect existing child refs' };
+  }
+  const hasChildRef = childRefs.stdout.split('\n').some((ref) => {
+    const identity = parseFeatureRef(ref.trim());
+    return identity.kind === 'child' && identity.slug === slug;
+  });
+  const hasClosureRef = closureRefs.stdout.trim() !== '';
+  if (!hasChildRef && !hasClosureRef && !childDirectoryExists) return { kind: 'clear' };
+
+  const positionsRef = `refs/conductor/${slug}/positions`;
+  const recorded = await git(['cat-file', '-p', positionsRef]).catch(() => undefined);
+  const priorPositions = recorded && recorded.exitCode === 0 ? recordedPositions(recorded.stdout) : undefined;
+  if (!priorPositions) {
+    return { kind: 'refused', reason: `coverage_binding cannot read sealed positions from ${positionsRef}` };
+  }
+
+  const currentPositions = [...new Set(positions)].sort((left, right) => left - right);
+  const added = currentPositions.filter((position) => !priorPositions.includes(position));
+  const removed = priorPositions.filter((position) => !currentPositions.includes(position));
+  if (added.length === 0 && removed.length === 0) return { kind: 'clear' };
+  const changes = [
+    ...added.map((position) => `position ${position} was added`),
+    ...removed.map((position) => `position ${position} was removed`),
+  ];
+  return {
+    kind: 'refused',
+    reason: `coverage_binding refused: sealed child positions are immutable after child state exists; ${changes.join('; ')}`,
+  };
 }
 import {
   composeContainmentAdvisoryOutput,
@@ -4845,6 +4926,15 @@ export class DefaultStepRunner implements StepRunner {
     if (planText !== undefined) {
       const sliceValidation = validatePlanSlices(planText);
       if (sliceValidation.kind === 'invalid') {
+        const positionGuard = await verifyStackPositionImmutability(
+          this.projectDir,
+          this.featureDesc,
+          [],
+          this.gitRunner,
+        );
+        if (positionGuard.kind === 'refused') {
+          return { success: false, output: positionGuard.reason, refusal: { kind: 'needs-human', reason: positionGuard.reason } };
+        }
         await writeEnvelope('refused', []);
         const detail = sliceValidation.violations.map((violation) => violation.message).join('\n');
         const reason = `coverage_binding refused: plan slices are invalid.\n\n${detail}`;
@@ -4897,6 +4987,19 @@ export class DefaultStepRunner implements StepRunner {
           if (ownership.kind === 'owned') storyOwnership = ownership.ownership;
         }
       }
+    }
+
+    // The positions ref is the only durable topology authority after the
+    // region begins. Check it before every later envelope-write path, even
+    // when a currently disabled stack config would otherwise skip ownership.
+    const positionGuard = await verifyStackPositionImmutability(
+      this.projectDir,
+      this.featureDesc,
+      sliceMembership === undefined ? [] : Object.values(sliceMembership.taskSlices),
+      this.gitRunner,
+    );
+    if (positionGuard.kind === 'refused') {
+      return { success: false, output: positionGuard.reason, refusal: { kind: 'needs-human', reason: positionGuard.reason } };
     }
 
     // Tier S and legacy plans without obligation bookkeeping have no ADR layer.
@@ -5041,6 +5144,7 @@ export class DefaultStepRunner implements StepRunner {
     });
     const claims = [...criterionClaims, ...amendmentClaims];
     const previous = await readCoverageBindingEnvelope(this.projectDir, filesystem);
+    let membershipMoved = false;
     if (previous?.sliceMembership !== undefined) {
       if (sliceMembership === undefined) {
         await this.events?.emit({
@@ -5056,6 +5160,7 @@ export class DefaultStepRunner implements StepRunner {
           const to = currentTaskSlices[taskId];
           return from !== undefined && to !== undefined && from !== to ? [{ taskId, from, to }] : [];
         });
+        membershipMoved = moved.length > 0;
         const added = taskIds.filter((taskId) => previousTaskSlices[taskId] === undefined && currentTaskSlices[taskId] !== undefined);
         const removed = taskIds.filter((taskId) => previousTaskSlices[taskId] !== undefined && currentTaskSlices[taskId] === undefined);
         const titlesChanged = previous.sliceMembership.titles.length !== currentMembership.titles.length ||
@@ -5067,6 +5172,18 @@ export class DefaultStepRunner implements StepRunner {
         }
       }
     }
+    const storyReowns = !membershipMoved && previous?.storyOwnership !== undefined && storyOwnership !== undefined
+      ? [...new Set([...Object.keys(previous.storyOwnership), ...Object.keys(storyOwnership)])]
+        .sort()
+        .flatMap((story) => {
+          const from = previous.storyOwnership![story];
+          const to = storyOwnership[story];
+          return from !== undefined && to !== undefined && from !== to ? [{ story, from, to }] : [];
+        })
+      : [];
+    const emitStoryReowns = async () => {
+      for (const reown of storyReowns) await this.events?.emit({ type: 'story_reowned', ...reown });
+    };
     const previousDigests = new Set(previous?.entries.map((entry) => entry.digest) ?? []);
     const previousReopenEligible = previous?.status === 'invalidated' && previous.entries.length > 0;
     // Legacy invalidated envelopes have no predecessor and retain their
@@ -5152,6 +5269,7 @@ export class DefaultStepRunner implements StepRunner {
         await this.events?.emit({ type: 'coverage_binding_conflict_judged', step: 'coverage_binding', claimKind: claim.kind, claimId: claim.id, verdict: 'unjudged', taskIds: [] });
       }
       await this.events?.emit({ type: 'coverage_binding_disabled', step: 'coverage_binding' });
+      await emitStoryReowns();
       return { success: true, output: 'coverage_binding judge disabled' };
     }
 
@@ -5422,6 +5540,7 @@ export class DefaultStepRunner implements StepRunner {
       return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
     }
     await writeEnvelope('done', entries);
+    await emitStoryReowns();
     return { success: true, output: `coverage_binding judged ${entries.length} claim(s)` };
   }
 
