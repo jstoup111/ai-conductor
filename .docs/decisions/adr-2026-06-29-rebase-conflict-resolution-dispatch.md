@@ -75,6 +75,8 @@ accepted only when `isBranchCurrent(git, base.ref)` holds afterward (FR-8) AND t
 commits are preserved across `rebase --continue` (FR-9). On exhaustion, short-circuit, a
 non-current branch, or dropped commits, the existing `writeHalt` fires exactly as today.
 
+> **Amended 2026-10-10 by #2943:** In the stacked restack's narrow resolver hand-off, FR-8 checks currency against the explicit `newParent` and FR-9 compares subjects over `oldParent..ORIG_HEAD` (`adr-2026-10-10-stacked-restack-journaled-replay` decision 6).
+
 Rationale: this is the minimal, structurally-safe exception. The one genuinely judgement-bearing
 part of the rebase — *resolving* a conflict — is the only part that gains a prompt; *detecting*
 staleness and *deciding* satisfaction remain deterministic, so ADR-001's critical correctness

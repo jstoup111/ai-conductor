@@ -46,8 +46,13 @@ unfinished one.
   no closure ref, when the daemon restarts, then child 1 is still the active child, even though the
   leaf branch contains child 1's tip.
 - Given a three-child baseline with child 1 closed, when an operator commits directly onto
-  `feat/c1/demo` so that its tip is no longer an ancestor of `feat/c2/demo`, then the next dispatch
-  halts needs-human naming child 1 and "restack required (#2943)", and no region step runs.
+  `feat/c1/demo` past its closure tip, then the next dispatch runs a `feature-repair` restack that
+  moves `refs/conductor/demo/closed/c1` to the new tip and replays the children above it, and no
+  needs-human halt is written.
+- Given a three-child baseline with child 1 closed, when an operator amends or resets
+  `feat/c1/demo` so that its tip no longer contains `refs/conductor/demo/closed/c1`, then the next
+  dispatch halts needs-human as divergent, with `restack_refused` reason `closed-child-rewritten`
+  naming child 1, and no region step runs.
 - Given a two-child baseline with child state present, when the region is about to dispatch and the
   `coverage_binding` envelope is absent, then the run halts needs-human naming the missing envelope,
   and no region state is written to the flat `.pipeline/` paths.
@@ -58,9 +63,11 @@ unfinished one.
 ### Done When
 - [ ] Restarting, re-kicking or recreating the worktree of a two- or three-child feature resumes at the
       lowest position with no closure ref.
-- [ ] Closure refs are created only by compare-and-swap and are never pushed to `origin`.
-- [ ] A divergent closed child, a missing envelope with child state, and a detached HEAD each halt
-      needs-human with the cause named, and none of them writes a flat region file.
+- [ ] Closure refs are created, and moved inside a restack transaction, only by compare-and-swap,
+      and are never pushed to `origin`.
+- [ ] Commits appended past a closed child's closure are repaired automatically. A rewritten or reset
+      closed child, a missing envelope with child state, and a detached HEAD each halt needs-human
+      with the cause named, and none of them writes a flat region file.
 
 ## Story 2: Children are created and switched strictly in declared order
 
@@ -85,11 +92,6 @@ k+1 starts before child k has passed its whole region.
   and the later leaf move succeeds because the leaf has no commits of its own.
 - Given a stacked feature with positions `1`, `3` and `5` (gaps; `5` is the leaf), when child 1
   closes, then the next child created is `feat/c3/demo` and no `feat/c2/demo` is created.
-
-  > **Amended 2026-10-10 by #3053:** the criterion previously named positions `1` and `3` only,
-  > which makes position `3` the leaf. adr-2026-10-07-per-child-build-region decision 3 creates no
-  > branch for the leaf (it runs on `feat/daemon-demo` after the leaf move), so the example now adds
-  > a leaf at position `5`, matching the plan's tests and the shipped behavior.
 
 #### Negative Paths
 - Given a three-child baseline in which child 1's `build_review` has not passed, when the loop
@@ -141,8 +143,8 @@ keeps today's name and retained draft while containing every child's work.
   overwritten.
 
 ### Done When
-- [ ] The leaf branch is moved only by a guarded compare-and-swap to the last intermediate child's
-      closure tip.
+- [ ] The leaf branch is moved only by the guarded compare-and-swap to the last intermediate
+      child's closure tip, or by a restack move transaction.
 - [ ] A leaf with its own commits, or a raced leaf, halts with the leaf ref unchanged.
 
 ## Story 4: Region state lives with its child and is never written flat while children exist
@@ -349,9 +351,9 @@ findings and laps belong to the increment that introduced them.
 #### Negative Paths
 - Given a three-child baseline at child 2's `build_review`, when `feat/c1/demo` is missing, then input
   assembly fails with `MergeBaseError` naming the missing parent, and no review dispatch occurs.
-- Given a two-child baseline after the leaf's FINISH rebase, when the leaf's `build_review` re-runs and
-  child 1's tip cannot be translated through the rewrite map, then input assembly fails closed with
-  `parent-not-ancestor` rather than grading against the default branch.
+- Given a two-child baseline after the leaf's FINISH restack, when the leaf's `build_review` re-runs
+  and the restacked `refs/conductor/demo/closed/c1` is not an ancestor of the leaf's tip, then input
+  assembly fails closed with `parent-not-ancestor` rather than grading against the default branch.
 - Given a three-child baseline at child 2's `build_review`, when the degraded-fetch check runs, then no
   degraded-fetch warning is emitted for the `child-parent` base.
 
@@ -359,8 +361,8 @@ findings and laps belong to the increment that introduced them.
 - [ ] `resolveChildBase` returns none, parent tip, `parent-missing` or `parent-not-ancestor`. It is
       consumed by build-review inputs, disposition, full-suite selection, autoheal, task seed,
       amendment claims and acceptance attribution, each with its own fail-closed rule.
-- [ ] After the leaf's FINISH rebase, the leaf's parent tip is translated through the persisted
-      rewrite map.
+- [ ] After a restack, the leaf's parent tip is read from the restacked closure ref, with no
+      translation through the rewrite map.
 
 ## Story 10: The security rubric runs once, at the leaf, over the whole feature
 
@@ -449,7 +451,7 @@ feature.
 
 #### Negative Paths
 - Given a two-child baseline with child 1 closed, when `ai-conductor rewind --to build --child 1` runs,
-  then it is refused, naming child 1 as closed and #2943, and no state changes.
+  then it is refused, naming child 1 as closed and #2944, and no state changes.
 - Given a two-child baseline with child 2 active, when `ai-conductor task start T1` runs without `--child`,
   then it is refused, naming `T1` as owned by child 1.
 - Given a feature with no children, when each of the three commands runs without `--child`, then its
@@ -457,7 +459,7 @@ feature.
 
 ### Done When
 - [ ] The three CLIs default `--child` to the active child, and `raise`/`reset` accept `--child`.
-- [ ] `rewind` for a closed child is refused, naming #2943.
+- [ ] `rewind` for a closed child is refused, naming #2944.
 
 ## Story 13: Halt records stay on the active child and no child branch is pushed
 
@@ -488,33 +490,37 @@ publishing a branch that is not meant to be public yet.
 - [ ] Halt records written on a child branch carry `Child:` and are never pushed.
 - [ ] No push of any `feat/c<k>/<slug>` ref occurs anywhere in the build loop.
 
-## Story 14: Rebases wait for the leaf until restack exists
+## Story 14: Re-kick rebases refresh the whole stack at any active child
 
 **Requirement:** Scope item 7; ADR decision 12
 
-As an operator, I want the daemon to leave an in-progress stack on its pinned base until the leaf is
-active, so that a re-kick never rewrites earlier children's commits inside a later child.
+As an operator, I want the daemon's re-kick to refresh the whole stack whichever child is active, so
+that no child is left on a stale base and no single-branch rebase rewrites earlier children's commits
+inside a later child.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a three-child baseline with child 2 active, when a halt is cleared and the re-kick runs, then
-  the play-forward rebase is skipped, a `rebase_skipped_for_stack` event naming child 2 is persisted,
-  and the run resumes at child 2's next step.
+- Given a three-child baseline with child 2 active and the default branch advanced, when a halt is
+  cleared and the re-kick runs, then a `base-refresh` restack moves child 1 onto the new default tip
+  and restacks child 2, no `rebase_skipped_for_stack` event is emitted, and the run resumes at child
+  2's next step.
 - Given a three-child baseline with child 2 active, when the default branch advances and the
-  base-advance sweep re-kicks the feature, then the rebase is skipped the same way.
-- Given a two-child baseline with the leaf active, when a re-kick runs, then the leaf alone is rebased
-  as today.
+  base-advance sweep re-kicks the feature, then the whole stack is refreshed the same way.
+- Given a two-child baseline with the leaf active, when a re-kick runs, then a `base-refresh` restack
+  moves child 1 and the leaf.
 
 #### Negative Paths
-- Given a three-child baseline with child 2 active, when the re-kick runs, then neither
-  `feat/c1/demo` nor `feat/c2/demo` is rewritten (their SHAs are unchanged).
+- Given a stacked feature at any active child, when the re-kick runs, then no single-branch rebase
+  runs on any child branch or the leaf.
+- Given a three-child baseline with child 2 active whose restack is refused, when the re-kick ends,
+  then it halts needs-human naming the reason, and does not skip silently.
 - Given a feature with no children, when a re-kick runs, then the mandatory play-forward rebase runs
   exactly as today, and no `rebase_skipped_for_stack` event is emitted.
 
 ### Done When
-- [ ] `resumeRebaseFirst` and the base-advance re-kick consult the cursor and skip, with an event,
-      while a non-leaf child is active.
+- [ ] `resumeRebaseFirst` and the base-advance re-kick run a whole-stack `base-refresh` restack at any
+      active child of a stacked feature, and never skip it.
 
 ## Story 15: Child transitions are visible on the event spine and in status
 

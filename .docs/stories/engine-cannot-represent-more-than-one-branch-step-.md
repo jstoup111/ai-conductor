@@ -257,7 +257,8 @@ entries, so that a stalled child can be diagnosed without hand-reading files.
 - Given any `kickback-budget` invocation without `--child` on a feature with no children, when it runs, then its output is byte-identical to today. On a feature with children, it acts on the active child.
 
 #### Negative Paths
-- Given `kickback-budget raise` or `kickback-budget reset` with `--child 3` and no `.pipeline/children/3/`, when it runs, then it is refused naming child 3 as having no child state, and no ledger is read or changed
+- Given `kickback-budget raise` or `kickback-budget reset` with `--child 3`, any gate other than `restack`, and no `.pipeline/children/3/`, when it runs, then it is refused naming child 3 as having no child state, and no ledger is read or changed
+- Given `kickback-budget raise` or `kickback-budget reset --gate restack --child 3`, when it runs, then `--child 3` is validated against `refs/conductor/<slug>/cascades` rather than `.pipeline/children/3/`, and a child absent from that ref is refused with no ledger or ref changed
 - Given no `.pipeline/children/3/`, when `inspect --child 3` runs, then it is refused naming child 3 as having no child state
 - Given a corrupt `children/2/kickback-ledger.json`, when `inspect --child 2` runs, then it prints today's `kickback-budget: ledger is unreadable.` error and exits 1
 - Given `inspect --feature <slug> --child 2 --child 2`, when it is parsed, then it falls through exactly as a repeated flag does today

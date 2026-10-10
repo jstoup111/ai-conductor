@@ -37,7 +37,7 @@ As the operator, I want every `prd_audit` and `architecture_review_as_built` bud
 - **Given** a kickback ledger whose gate entry is unreadable, **When** the remediation budget is read, **Then** no remediation task is appended, no cap evidence is written, and no halt carrying a `Kickback halt generation:` line is written.
 - **Given** a remediation request from a source that has no plan-growth allowance at all (not a validated prd_audit FIXABLE or as-built REMEDIABLE finding), **When** the router refuses it, **Then** the halt writes no cap evidence and names no recovery command, because it is a policy refusal and not a spent budget.
 - **Given** a ledger written before this change whose cap evidence has no allowance field, **When** it is read, **Then** the evidence is treated as allowance `laps` and the ledger stays readable.
-- **Given** a cap evidence entry whose allowance is any value other than `laps` or `growth`, **When** the ledger is read, **Then** that gate reads unreadable and fails closed, while sibling gates keep their values.
+- **Given** a cap evidence entry whose allowance is any value other than `laps`, `growth`, or `restacks` (the allowance of the `restack` pseudo-gate), **When** the ledger is read, **Then** that gate reads unreadable and fails closed, while sibling gates keep their values.
 
 ### Done When
 - [ ] One unit test per exit (prd_audit laps, prd_audit growth, as-built growth, shared growth) reads the ledger after the halt and asserts the evidence allowance, consumed, limit, and a generation that appears in the halt body.

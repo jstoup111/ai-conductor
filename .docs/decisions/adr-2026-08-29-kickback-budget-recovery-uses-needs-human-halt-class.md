@@ -53,6 +53,8 @@ parsed to authorize mutation.
 
 > **Amended 2026-10-07 by #2942:** In a stacked feature the typed cap evidence is recorded in the halted child's ledger (`adr-2026-10-07-per-child-build-region` decision 10).
 
+> **Amended 2026-10-10 by #2943:** The `restack` pseudo-gate (stacked restack cascade cap) uses this mechanism unchanged: class `needs-human`, typed evidence with allowance `restacks` naming the originating child, written to the active child's ledger; its count and raised limit live in `refs/conductor/<slug>/cascades` (decision 10) (`adr-2026-10-10-stacked-restack-journaled-replay`).
+
 ### D3 — Explicit authorization is consumed before generic needs-human retention
 
 After park and processed-work checks, the daemon halted-feature boundary checks for a resume
@@ -120,6 +122,8 @@ and the pure budget view remain authoritative; and mechanical-fault state remain
 >    No unattended or automatic grant of either allowance exists.
 > 4. The halt body names the exhausted allowance and the exact recovery command. That text is
 >    diagnostic only; nothing parses it (D2).
+
+> **Amended 2026-10-10 by #2943:** The allowances are `laps`, `growth` and `restacks`. `restacks` belongs to the `restack` pseudo-gate; it is not growth, so `reset` accepts it (`adr-2026-10-10-stacked-restack-journaled-replay` decision 10).
 
 ## Amendment
 

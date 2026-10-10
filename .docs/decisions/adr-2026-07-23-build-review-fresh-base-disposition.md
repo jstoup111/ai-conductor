@@ -34,6 +34,8 @@ agent chose backup-branch + rebase over deletion).
    A persisted per-feature-session regrade counter caps invalidation at ONE; a second
    stale detection HALTs with the sha evidence. The engine never rebases or deletes
    in this path — history mutation stays with the existing re-kick machinery.
+
+> **Amended 2026-10-10 by #2943:** For a stacked child, the fresh base after a restack is its parent's restacked closure tip. The disposition still never rebases (`adr-2026-10-10-stacked-restack-journaled-replay` decision 8).
 3. **Telemetry.** Grading emits base-freshness evidence (tracking-ref sha, remote
    head sha, merge-base, fresh flag) to confirm the residual open question of which
    path leaves tracking refs stale.

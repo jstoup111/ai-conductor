@@ -84,6 +84,8 @@ mechanical allowance, and operator adjustment, serialize through one bounded fea
 using the existing conduct-state lease primitive with a kickback-ledger label. A live or ambiguous
 owner fails closed.
 
+> **Amended 2026-10-10 by #2943:** The `restack` pseudo-gate's count and raised limit live in one ref-backed store, `refs/conductor/<slug>/cascades`, a deliberate second store justified by durability across worktree recreation; its cap evidence and resume authorization stay in the active child's ledger (`adr-2026-10-10-stacked-restack-journaled-replay` decision 10).
+
 ### D2 — Reset changes consumption; raise changes only the effective limit
 
 - `reset` sets `cumulative` to zero and preserves the feature's effective limit.
@@ -141,6 +143,8 @@ The exact cumulative-cap halt proves the conductor reached its terminal boundary
 new dispatch; the kickback-ledger lease serializes against any last in-flight ledger writer. A
 missing/mismatched halt, unclassified or different halt class, unresolved feature, lost lease, or
 changed ledger snapshot refuses toward parked/halted.
+
+> **Amended 2026-10-10 by #2943:** For the `restack` pseudo-gate, `--child` names the originating child and is validated against the `cascades` ref rather than the child directory (`adr-2026-10-10-stacked-restack-journaled-replay` decision 10).
 
 ### D5 — A staged adjustment is the crash-recovery journal
 

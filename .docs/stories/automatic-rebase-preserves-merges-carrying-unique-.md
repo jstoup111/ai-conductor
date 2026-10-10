@@ -82,7 +82,9 @@ As the operator, I want a flattened merge that conflicts with the new base to be
 
 #### Happy Path
 - Given a merge-bearing branch whose first dry-run conflict against the target falls on a flattened merge commit, when `performRebase` runs, then it returns a `flatten_refused` outcome carrying the merge sha, both parent shas, the flattened sha, and the conflicting paths, without issuing any rebase command.
-- Given a `flatten_refused` outcome on the rebase step or the re-kick path, when the caller handles it, then `.pipeline/HALT` is written whose only recovery note is the recipe: park, `git -C <worktree> rebase -i --rebase-merges <base>`, re-apply `git diff <first parent> <merge>` at the merge stop, `git rebase --continue`, clear the HALT; and `rebase_conflict_halt` is emitted with its `mergeAudit` field populated.
+- Given a `flatten_refused` outcome on the rebase step or the re-kick path of a feature without children, when the caller handles it, then `.pipeline/HALT` is written whose only recovery note is the recipe: park, `git -C <worktree> rebase -i --rebase-merges <base>`, re-apply `git diff <first parent> <merge>` at the merge stop, `git rebase --continue`, clear the HALT; and `rebase_conflict_halt` is emitted with its `mergeAudit` field populated.
+
+- Given a stacked feature whose restack halts `flatten_refused` on the rebase step or the re-kick path, when the caller handles it, then every child branch, closure ref and the leaf are unmoved, the restack journal is aborted with no paused rebase, and the halt's recovery goes through the restack rather than a manual single-branch rebase recipe.
 
 #### Negative Paths
 - Given a `flatten_refused` outcome, when the rebase step or the re-kick path handles it, then the gated rebase resolver is never dispatched and no resolution attempt event is emitted.
@@ -92,7 +94,7 @@ As the operator, I want a flattened merge that conflicts with the new base to be
 
 ### Done When
 - [ ] A real-git test constructs a flattened merge conflicting with an advanced base and asserts a `flatten_refused` outcome, no rebase state directory, and an unchanged HEAD.
-- [ ] A test of the rebase step with a stub resolver asserts the resolver is called zero times for `flatten_refused` and the HALT text contains the recipe and excludes `reset --hard` and `checkout --`.
+- [ ] A test of the rebase step with a stub resolver asserts the resolver is called zero times for `flatten_refused` and, for a feature without children, the HALT text contains the recipe and excludes `reset --hard` and `checkout --`.
 - [ ] A test asserts the `rebase_conflict_halt` event with `mergeAudit` is persisted to `.pipeline/events.jsonl`.
 - [ ] The `RebaseOutcome` consumers compile only with an explicit `flatten_refused` branch (exhaustiveness enforced by the typecheck).
 

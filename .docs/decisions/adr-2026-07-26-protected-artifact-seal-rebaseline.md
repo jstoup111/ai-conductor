@@ -68,6 +68,8 @@ the permission predicate.
    This is the normal path; step 2 is the recovery path for worktrees rewritten outside the
    engine, including those already halted before this change ships.
 
+> **Amended 2026-10-10 by #2943:** The stacked restack checks the seal before its ref transaction and rotates it after the worktree sync, as `performRebase` does (`adr-2026-10-10-stacked-restack-journaled-replay` decision 5).
+
 4. **Lineage and observability.** The seal moves to `version: 2` with an append-only
    `rebaselines[]` of `{ fromCommit, toCommit, trigger, paths[] }`. v1 seals are read and upgraded
    in place. Rotations and rotation-refusals emit telemetry so `.daemon/daemon.log` distinguishes a

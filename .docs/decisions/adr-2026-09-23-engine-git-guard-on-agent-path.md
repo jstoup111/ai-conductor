@@ -238,6 +238,9 @@ Option A.
 >     unaffected (adr-2026-09-11-github-operation-ownership D9). A lease with an explicit expected
 >     value that differs from the tracking ref is refused; the safe alternative is to fetch, then
 >     push with a bare `--force-with-lease`.
+>
+> > **Amended 2026-10-10 by #2943:** Engine force pushes now use an explicit expected SHA, preceded by a single-branch fetch so the tracking ref equals the remote value and this hook still passes (`adr-2026-10-10-stacked-restack-journaled-replay` decision 11).
+>
 > 14. **The engine passes with no bypass variable.** Verified on main @ `fd6f539ca`:
 >     - the engine's branch deletions (`WorktreeManager.cleanup`, park reconciliation) run in the
 >       root checkout, which does not read a feature worktree's `core.hooksPath`; reclaim,
@@ -253,6 +256,9 @@ Option A.
 >     files' content and mode and rewrites them if they differ, failing the dispatch with a message
 >     naming the hook path if they still cannot be confirmed. Refusals are stderr-only, as for the
 >     guard; refusal telemetry stays out of scope.
+>
+> > **Amended 2026-10-10 by #2943:** Engine pushes are plain or `--force-with-lease=<ref>:<sha>` after a single-branch fetch; engine commits in a stacked feature worktree go through a guarded helper ending in `update-ref HEAD <new> <old>`, an update not a deletion (`adr-2026-10-10-stacked-restack-journaled-replay` decisions 4, 11).
+>
 > 15. **Coverage is proven by real-git tests and documented limits.** Tests run real `git` in
 >     temporary repositories and linked worktrees provisioned by `prepareWorktree`, push to a local
 >     bare remote, call `git` by absolute path so the guard is not on the path, and set `HOME` to an

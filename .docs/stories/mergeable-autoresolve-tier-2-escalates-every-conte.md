@@ -13,7 +13,8 @@ As an operator, I want a conflict confined to test code to be settled by the swe
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a watched pull request whose only remaining conflicts after tier 1 are in test files, when the resolver declares the replayed commit superseded by upstream and the configured suite command exits zero, then the rebased branch is pushed with lease protection and the sweep outcome for that pull request is refreshed rather than escalated.
+- Given a watched pull request for a feature without children whose only remaining conflicts after tier 1 are in test files, when the resolver declares the replayed commit superseded by upstream and the configured suite command exits zero, then the rebased branch is pushed with lease protection and the sweep outcome for that pull request is refreshed rather than escalated.
+- Given a watched pull request whose feature has children (a stacked leaf PR), when the sweep reaches a conflict, then no replay or push runs, the pull request escalates to a human, and `restack_refused` with reason `published-stack` is persisted.
 - Given a watched pull request whose only remaining conflicts are in test files, when the resolver merges both sides' changes without dropping any commit and the suite command exits zero, then the branch is pushed and no commit is reported as superseded.
 
 #### Negative Paths

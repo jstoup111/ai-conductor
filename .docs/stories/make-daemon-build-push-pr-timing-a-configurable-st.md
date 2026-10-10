@@ -128,7 +128,7 @@ PR and CI reflect the latest committed work.
 
 ---
 
-## Story: Post-rebase remote refresh — the only force-with-lease
+## Story: Post-rebase remote refresh — an explicit-SHA force-with-lease
 
 **Requirement:** TS-4 (adr-2026-07-03-post-rebase-force-with-lease)
 
@@ -140,8 +140,9 @@ draft PR keeps its identity and history continuity.
 #### Happy Path
 - Given `pr_timing: early-draft`, the branch was pushed earlier, and the native rebase step
   completes successfully having rewritten history, when the post-rebase refresh runs, then
-  exactly one `git push --force-with-lease` executes and the draft PR remains open with the
-  rebased history.
+  the engine fetches that one branch and exactly one
+  `git push --force-with-lease=refs/heads/<branch>:<expected-sha>` executes, and the draft PR
+  remains open with the rebased history.
 - Given the rebase step was satisfied as a no-op (branch already current), when the
   post-rebase refresh point fires, then a plain push (or no-op) runs — no force flag.
 
@@ -149,17 +150,19 @@ draft PR keeps its identity and history continuity.
 - Given the rebase step hits conflicts and enters a rebase-conflict HALT, when the HALT is
   taken, then zero pushes of any kind occur while the rebase is paused (captured runner
   argv asserted empty for push).
-- Given the lease check fails (remote moved since the daemon's last push), when the
-  force-with-lease push is rejected, then the failure is logged loudly, NO bare `--force`
+- Given the lease check fails (remote moved to a tip the engine has not seen), or the
+  single-branch fetch fails, when the push is refused (by the engine before pushing, or by
+  git), then the failure is logged loudly, NO bare `--force` or bare `--force-with-lease`
   retry occurs, and the build continues to finish (terminal publish remains load-bearing).
 - Given `pr_timing: finish`, when a successful rebase completes, then no push occurs at the
   post-rebase site.
 
 ### Done When
-- [ ] Grep-level invariant test: `--force-with-lease` appears at exactly one call site in
-      `src/conductor/src/`, and `push --force` (bare) at zero
-- [ ] Tests: successful rewrite → single force-with-lease; conflict HALT → zero pushes;
-      lease rejection → loud log, no bare-force, build continues
+- [ ] Invariant test: every engine force push in `src/conductor/src/` uses an explicit
+      expected-SHA lease (`--force-with-lease=refs/heads/<branch>:<expected-sha>`); none uses a
+      bare `--force-with-lease` or a bare `push --force`
+- [ ] Tests: successful rewrite → single explicit-SHA force-with-lease; conflict HALT → zero
+      pushes; lease refusal or fetch failure → loud log, no bare force, build continues
 - [ ] Rebase-step tests run with `daemon: true` + isolated repo per existing convention
 
 ---

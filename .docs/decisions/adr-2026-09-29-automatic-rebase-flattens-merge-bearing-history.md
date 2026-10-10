@@ -80,6 +80,8 @@ docs). It also stops at every conflicting merge, which would need a second conti
    that `performRebase` already classifies as current or mergeable-skip never reaches it. No new
    dispatch site is added.
 
+> **Amended 2026-10-10 by #2943:** Every engine-started rebase pins `rebase.updateRefs=false`, `rebase.rebaseMerges=false`, `rebase.autoSquash=false` and rename config. Stacked features replay with plumbing (`merge-tree` + `commit-tree`), not `git rebase` (`adr-2026-10-10-stacked-restack-journaled-replay` decisions 1, 3).
+
 2. **The replay list is the first-parent history, with each merge classified by tree identity.**
    Walk `rev-list --reverse --first-parent <mergeBase>..HEAD`:
    - A non-merge commit is picked as-is.
@@ -90,6 +92,8 @@ docs). It also stops at every conflicting merge, which would need a second conti
 
    Side-lineage commits (reachable only through a second parent) are never replayed individually.
    Classification is by exact tree object id. It never uses subjects, paths, or heuristics.
+
+> **Amended 2026-10-10 by #2943:** The stacked replay adds a third class: when the merged side Q is already an ancestor of the new parent, only the merge's hand-resolved part (`merge-tree --merge-base auto <acc> M`) is replayed; the `Flattened-merge:` trailer and `rebase_merge_audit` are kept (`adr-2026-10-10-stacked-restack-journaled-replay` decision 3).
 
 3. **The replay list is proven before any mutation.** Using only `merge-tree --write-tree` and
    `commit-tree` through the injected `GitRunner`, which write objects and never a ref, the index,
@@ -106,6 +110,8 @@ docs). It also stops at every conflicting merge, which would need a second conti
    with `-c sequence.editor=...`. The rebase state directory, `--continue`, `--abort`,
    `conflictedFiles`, `rebaseStateActive`, the gated resolver, the force-with-lease publication
    rule, and ORIG_HEAD capture all keep their current contracts.
+
+> **Amended 2026-10-10 by #2943:** For stacked features the real replay is the plumbing replay; `rebase -i` with an engine-written todo runs only in the narrow resolver hand-off (`adr-2026-10-10-stacked-restack-journaled-replay` decisions 3, 6).
 
 5. **A pre-mutation refusal is its own outcome and names the merge and a deterministic recovery
    path.**
@@ -167,6 +173,8 @@ docs). It also stops at every conflicting merge, which would need a second conti
 > paused-conflict resume note is never written. Autoresolve escalates it with the reason
 > `rebase-error`. It never carries placeholder shas and never uses the D5 recovery recipe. Like
 > D5, it mutates nothing and blocks finish.
+
+> **Amended 2026-10-10 by #2943:** The merge classification helper stays the one shared primitive; it now serves two executors, `performRebase` (N=1) and the stacked plumbing replay (`adr-2026-10-10-stacked-restack-journaled-replay` decision 3).
 
 ## Consequences
 

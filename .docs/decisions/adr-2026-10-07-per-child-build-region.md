@@ -125,6 +125,8 @@ The decisions below incorporate the fixes.
 
    This amends umbrella D10, which read the checkout directly.
 
+> **Amended 2026-10-10 by #2943:** Closure refs move by compare-and-swap inside a journaled restack transaction (decisions 4–5). A shared stack preflight recovers the restack journal and repairs commits appended past a closure (new cursor kind `repair-pending`) before the cursor is judged (decisions 7, 9); a rewritten closed child still halts. The cursor's leaf-rewrite-map-presence test is replaced by the `refs/conductor/<slug>/leaf-moved` ref (`adr-2026-10-10-stacked-restack-journaled-replay` decision 8).
+
 2. **When there are children, and what happens when the envelope is missing.**
    - A feature has children only when all of these hold:
      - `stacked_prs.enabled` is true;
@@ -158,6 +160,8 @@ The decisions below incorporate the fixes.
      `update-ref`. This is allowed only when the leaf has no commits of its own
      (`rev-list <leaf> ^<tip pN-1> ^origin/<default>` is empty). Otherwise the engine halts
      needs-human.
+
+> **Amended 2026-10-10 by #2943:** The leaf also moves inside a restack move transaction: when it is the active child, or when it is unentered and its tip lies inside a moved child's own range (for example a pre-region halt record), it moves to that commit's rewrite so the later leaf move sees no stray commit (decision 2) (`adr-2026-10-10-stacked-restack-journaled-replay`).
 
 4. **Region state is read through an overlay and written through a routed port.**
    - Region step status, verdicts, test-suite evidence, acceptance evidence (the RED marker, run
@@ -267,12 +271,16 @@ The decisions below incorporate the fixes.
       - This replaces the umbrella's follow-up "halt records to the leaf". A plumbing commit on the
         leaf would give it commits of its own and block decision 3's leaf move.
 
+> **Amended 2026-10-10 by #2943:** `rewind --child k` for a closed child stays refused; the refusal now names #2944, which owns closed-child re-validation (`adr-2026-10-10-stacked-restack-journaled-replay` decision 9).
+
 12. **Rebase guards until #2943.**
     - While the active child is not the leaf, `resumeRebaseFirst` and the base-advance re-kick
       rebase are skipped. The stack stays on its pinned base, and an event records the skip.
     - At the leaf, today's rebase applies to the leaf only.
     - This amends `adr-2026-09-11-finish-mergeability-respects-active-review-inputs` decision 5 for
       stacked features.
+
+> **Amended 2026-10-10 by #2943:** Lifted. The FINISH `rebase` step and the daemon re-kick base-refresh the whole existing stack at any active child, through the journaled restack; no single-branch rebase runs on a stacked feature and `rebase_skipped_for_stack` is no longer emitted for re-kick (`adr-2026-10-10-stacked-restack-journaled-replay` decision 9).
 
 13. **Events and immutability.**
     - New `ConductorEvent` variants `child_started`, `child_closed` and `child_switched` are
@@ -293,6 +301,8 @@ The decisions below incorporate the fixes.
 
     #3019's golden suite must stay byte-identical, and new cells cover flag on with one slice and
     flag on with an ineligible plan.
+
+> **Amended 2026-10-10 by #2943:** With no child, every successful feature-branch push records its tip under `refs/conductor/<slug>/pushed/<branch>` (decision 11); no other ref is written for N=1 (`adr-2026-10-10-stacked-restack-journaled-replay`).
 
 ## Consequences
 

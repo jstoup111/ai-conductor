@@ -53,6 +53,8 @@ any non-null result, before any step dispatches. That conflates three different 
    the same `applying` descriptor write that names the transition, before any state mutation.
    `validRebaseOperationRecord` accepts records with or without the field; when present, its gate
    set must equal `transition.preserved`.
+
+> **Amended 2026-10-10 by #2943:** Stacked operation records carry `cause: 'feature-repair' | 'base-refresh'`; N=1 records omit it (`adr-2026-10-10-stacked-restack-journaled-replay` decision 10).
 2. **Resume completes an `applying` operation instead of halting.** When resume finds
    `status: applying` with a valid full descriptor, it re-invokes `applyRebaseTransition` with the
    recorded id, replay, invalidated, reverified, preserved, and persisted candidates. The existing
@@ -62,6 +64,8 @@ any non-null result, before any step dispatches. That conflates three different 
    when its completion predicate mechanically re-verifies the current tree, otherwise invalidated
    for rerun. No completed operation names a preserved gate it did not stamp. Then resume proceeds
    through the normal clamp.
+
+> **Amended 2026-10-10 by #2943:** The stack preflight recovers the restack journal first; while a journal exists it owns any `applying` record it wrote and classification is deferred until the journal is gone (`adr-2026-10-10-stacked-restack-journaled-replay` decision 7).
 3. **Fallbacks are fail-closed re-checks, never preservation.** A provisional `preparing-…`
    descriptor (no transition yet) completes by invalidating every gate downstream of `rebase` with
    no preservation. A full `applying` descriptor without persisted candidates (written before this
