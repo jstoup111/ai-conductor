@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   BUILT_IN_PROVIDERS,
   DEFAULT_PROVIDER,
+  findBuiltInProviderDescriptor,
   PROVIDER_CAPABILITY_OWNERS,
   ProviderCapabilityUnsupportedError,
   requireProviderCapability,
@@ -148,6 +149,14 @@ describe('built-in provider catalog', () => {
       readOnlyReview: [true, true, true],
       readOnlyReviewUnsupported: undefined,
     });
+  });
+
+  it('declares interactive quit instructions only for supported providers', () => {
+    expect({
+      claude: findBuiltInProviderDescriptor('claude')?.interactiveLaunch?.quitInstruction,
+      codex: findBuiltInProviderDescriptor('codex')?.interactiveLaunch?.quitInstruction,
+      pi: findBuiltInProviderDescriptor('pi')?.interactiveLaunch,
+    }).toEqual({ claude: '/quit', codex: '/quit', pi: undefined });
   });
 
   it('renders selected model and effort through the catalog-owned interactive argv', () => {
