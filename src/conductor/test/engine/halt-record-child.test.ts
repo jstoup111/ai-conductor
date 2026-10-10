@@ -43,7 +43,9 @@ describe('child halt records', () => {
 
     await expect(recordHalt(worktree, input, remote.options)).resolves.toEqual({ kind: 'written' });
     await expect(readFile(join(worktree, haltRecordPath('demo')), 'utf8')).resolves.toContain('Child: 1\n');
+    await expect(currentBranch(worktree)).resolves.toBe('feat/c1/demo');
     await expect(supersedeHaltRecord(worktree, 'demo', 'operator resume', remote.options)).resolves.toEqual({ kind: 'written' });
+    await expect(currentBranch(worktree)).resolves.toBe('feat/c1/demo');
 
     expect(remote.calls).toEqual([]);
   });
@@ -143,6 +145,10 @@ async function makeFeatureWorktree(branch: string): Promise<string> {
   await execa('git', ['commit', '-qm', 'initial'], { cwd: root });
   await execa('git', ['worktree', 'add', '-q', '-b', branch, worktree], { cwd: root });
   return worktree;
+}
+
+async function currentBranch(worktree: string): Promise<string> {
+  return (await execa('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: worktree })).stdout.trim();
 }
 
 async function sealChildren(worktree: string, positions: readonly number[]): Promise<void> {
