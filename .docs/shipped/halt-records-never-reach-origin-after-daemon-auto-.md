@@ -4,13 +4,6 @@ spec_hash: 31f0019bf1e2feb6cc4ea1128c916844f852065e51d4dfcf51810bad0d5b4849
 pr: https://github.com/jstoup111/ai-conductor/pull/3079
 shipped: 2026-10-10
 engine_version: 20261010T011143Z-f79d1fd8d7cd
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-1
-    summary: "This is an unplanned edit to an engine source constant. It records this plan's larger intent section as the new observed corpus maximum, so a corpus-maxima test can pass. It changes no runtime bound and no user-visible behavior, and it falls outside the halt-record lease intent."
-    accepted: false
-    authority: engine
 ---
 
 ## Cost
@@ -29,8 +22,10 @@ providers:
   claude: input: 46, output: 9221, cache_read: 692918, cache_creation: 150069, cost_usd: 1.5237, dispatches: 4, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","c02754fb-9f69-41d6-97e3-06bc25bb22d2","lifecycle-step","finish"]
+state: measured
+active_ms: 3183796
+provider_active_ms: 1448097
+no_provider_active_ms: 1735699
 
 ## Build Review
 laps_to_pass: 1
