@@ -735,7 +735,10 @@ export async function landSpec(
     skipReason: opts.skipDependencyCheck,
   });
   if (dependencyDecision.kind === 'refused-undecided') {
-    throw landGateError('dependency-proposals-undecided', dependencyDecision.message);
+    throw landGateError(
+      'dependency-proposals-undecided',
+      `${dependencyDecision.message}${dependencyDecision.skipUnused ? `\n${dependencyDecision.skipUnused}` : ''}`,
+    );
   }
   if (dependencyDecision.kind === 'refused-unavailable') {
     throw landGateError('dependency-check-unavailable', dependencyDecision.message);

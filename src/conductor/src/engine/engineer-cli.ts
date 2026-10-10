@@ -28,7 +28,7 @@ import { ConductorEventEmitter } from '../ui/events.js';
 import { EventPersister } from './event-persister.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo, TargetPathMissingError } from './engineer/target.js';
-import { classifyLandGateRejection, landSpec } from './engineer/land-spec.js';
+import { classifyLandGateRejection, landSpec, type LandSpecResult } from './engineer/land-spec.js';
 import { loadConfig, loadMergedConfig, validateConfig, type ConfigResult } from './config.js';
 import { readUserConfig } from './user-config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
@@ -603,6 +603,29 @@ export interface DispatchEngineerOpts {
    * that returns false when stdin is not a TTY (so non-interactive runs don't loop).
    */
   confirmAnother?: () => boolean | Promise<boolean>;
+}
+
+/** Render computed dependency evidence for the operator before the final JSON handoff. */
+function renderLandDependencyDecision(
+  dependency: NonNullable<LandSpecResult['dependency']>,
+  print: (line: string) => void,
+): void {
+  if (dependency.proposals.kind !== 'computed') return;
+
+  for (const proposal of dependency.proposals.proposals) {
+    print(`engineer land: dependency proposal ${proposal.target} (${proposal.source})`);
+  }
+  for (const target of dependency.proposals.satisfied) {
+    print(`engineer land: dependency satisfied ${target}`);
+  }
+  for (const advisory of dependency.proposals.advisory) {
+    if (advisory.reason === 'markerless-branch' && advisory.branch) {
+      print(`engineer land: dependency advisory markerless branch ${advisory.branch}`);
+      continue;
+    }
+    const subject = advisory.target ?? advisory.branch;
+    print(`engineer land: dependency advisory ${advisory.reason}${subject ? ` ${subject}` : ''}`);
+  }
 }
 
 function forgetAuthorizationRefusalExplanation(error: unknown, attached: boolean): string {
@@ -1488,9 +1511,7 @@ export async function dispatchEngineer(
       }
 
       if (result.dependency) {
-        // Keep the operator-facing proposal record on stdout; Task 12 consumes
-        // the same returned data for post-commit writes and spine emission.
-        print(JSON.stringify({ kind: 'land-dependency-proposals', ...result.dependency }));
+        renderLandDependencyDecision(result.dependency, print);
       }
 
       // The dependency decision is deliberately post-commit.  A failed or
