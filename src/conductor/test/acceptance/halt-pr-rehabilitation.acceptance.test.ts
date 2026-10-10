@@ -231,6 +231,9 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
               mergeable: 'MERGEABLE',
               statusCheckRollup: [],
               labels: [],
+              mergeStateStatus: 'CLEAN',
+              baseRefName: 'main',
+              headRefOid: 'fixture-head',
             }),
           };
         }
