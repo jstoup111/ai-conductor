@@ -774,8 +774,9 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(persisted.state.suppressions).toEqual([entry]);
   });
 
-  it('shows the judge a suppression the seam wrote on an earlier lap as non-blocking history', async () => {
+  it('gives child 2 the flat suppression history and only its own prior cases', async () => {
     const root = await projectRoot();
+    const child = parseChildId(2)!;
     const earlierLap = {
       findingId: 'finding-suppressed-on-an-earlier-lap',
       rubric: 'testQuality',
@@ -788,16 +789,40 @@ describe('coordinateBuildReviewAdjudication', () => {
     await expect(persistBuildReviewSuppressions({ projectRoot: root, feature, suppressions: [earlierLap] }))
       .resolves.toEqual({ ok: true });
 
+    const resolvedRefutedCase = (id: string, priorSourceId: string): RemediationCaseStoreState['cases'][number] => ({
+      id, domain: 'build_review', disposition: 'refute', priority: 'high', confidence: 'high',
+      rationale: 'Child 2 resolved an earlier finding.', resolution: 'resolved',
+      sources: [{ sourceId: priorSourceId, outcome: 'refuted', recordedAt: '2026-10-10T00:00:00.000Z' }],
+      effect: { kind: 'none' },
+      refutation: {
+        claim: 'The earlier finding does not apply.',
+        assertions: [{ assertion: 'Child 2 has the required behavior.', verdict: 'refuted', evidence: [{ path: 'test/child-2.test.ts', excerpt: 'fixture' }] }],
+      },
+    });
+    await seedCases(new RemediationCaseStore(root, feature), {
+      version: 'v1', feature, suppressions: [earlierLap],
+      cases: [resolvedRefutedCase('case-flat', 'testQuality:sha256:flat-earlier')],
+    });
+    await seedCases(new RemediationCaseStore(root, feature, { child }), {
+      version: 'v1', feature, suppressions: [],
+      cases: [resolvedRefutedCase('case-child-2', 'testQuality:sha256:child-2-earlier')],
+    });
+
     const judge = vi.fn(async (context: unknown) => {
       expect(context).toMatchObject({
         currentFindings: [expect.objectContaining({ findingId })],
-        suppressionHistory: [earlierLap],
       });
+      const received = context as { readonly suppressionHistory: unknown; readonly priorCases: readonly { readonly id: string }[] };
+      expect(received.suppressionHistory).toEqual([earlierLap]);
+      expect(received.priorCases.map(({ id }) => id)).toEqual(['case-child-2']);
       return actionJudgement();
     });
 
-    await expect(coordinateBuildReviewAdjudication(input(root, judge))).resolves.toMatchObject({ ok: true, route: 'build' });
+    await expect(coordinateBuildReviewAdjudication({ ...input(root, judge), child })).resolves.toMatchObject({ ok: true, route: 'build' });
     expect(judge).toHaveBeenCalledTimes(1);
+    await expect(new RemediationCaseStore(root, feature, { child }).read()).resolves.toMatchObject({
+      ok: true, state: { suppressions: [] },
+    });
   });
 
   it.each([

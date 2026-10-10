@@ -185,6 +185,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     store: suppressionStore,
   });
   if (!persisted.ok) return fail(`case store ${persisted.reason}`);
+  const suppressionHistory = await suppressionStore.read();
+  if (!suppressionHistory.ok) return fail(`suppression store ${suppressionHistory.reason}`);
   // Before the judge is dispatched there is no frozen dispatch set, so live ids
   // are computed against the raw join. The two agree for every all-accepted lap,
   // and this is reassigned to the frozen set once one exists.
@@ -491,7 +493,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const taskStatus = await (input.readTaskStatus ?? (() => sourceTaskStatus(input.projectRoot)))();
   const contextEvidence = { planContract, taskStatus, attemptedCaseIds };
   const context = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: prior.state.suppressions, operatorResolvedFindingIds: resolved, ...contextEvidence,
+    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions, operatorResolvedFindingIds: resolved, ...contextEvidence,
   });
   if (!context.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(context.stop)}`, { settleAbsentAttempted: true });
   // A disposition arriving while the case store was read wins before the one
@@ -524,7 +526,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
     new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
   const freshContext = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: prior.state.suppressions,
+    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
     operatorResolvedFindingIds: resolved, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => input.suppressedFindingIds?.has(source.findingId)).map(buildReviewAdjudicationSourceId)]), ...contextEvidence,
   });
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(freshContext.stop)}`, { settleAbsentAttempted: true });
