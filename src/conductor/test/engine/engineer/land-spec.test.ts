@@ -18,7 +18,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { findDraftAmendmentNoteLines, landSpec, resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
+import {
+  classifyLandGateRejection,
+  findDraftAmendmentNoteLines,
+  landSpec,
+  resolveIdeaFiles,
+} from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
 
@@ -1824,9 +1829,16 @@ describe('Task 1: draft amendment note land gate', () => {
     await writeFile(join(dir, path), '# Draft\n\n**Amended 2026-10-10 by operator:** correction\n');
     const headBefore = await git(['rev-parse', 'HEAD'], dir);
 
-    const error = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }).catch((reason: unknown) => reason);
-    expect(error).toMatchObject({ gate: 'draft-amendment-note' });
-    expect((error as Error).message).toMatch(new RegExp(`${path}.*fold the correction into the artifact text`, 'is'));
+    const error = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh })
+      .then(
+        () => new Error('expected landSpec to refuse the dated amendment note'),
+        (reason: unknown) => reason,
+      );
+
+    expect(classifyLandGateRejection(error)).toMatchObject({
+      gate: 'draft-amendment-note',
+      reason: expect.stringMatching(new RegExp(`${path}.*fold the correction into the artifact text`, 'is')),
+    });
     expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
   });
 
