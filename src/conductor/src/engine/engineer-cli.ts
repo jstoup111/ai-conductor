@@ -103,7 +103,10 @@ type EngineerDispatchDescriptor =
   | { kind: 'guide' }
   | { kind: 'projects' }
   | { kind: 'worktree'; project: string; idea: string; sourceRef?: string; body?: string }
-  | { kind: 'land'; project: string; idea: string; worktree: string; sourceRef?: string }
+  | {
+    kind: 'land'; project: string; idea: string; worktree: string; sourceRef?: string;
+    dependsOn?: string[]; declinedDependencies?: string[]; skipDependencyCheck?: string;
+  }
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
   | { kind: 'poll' }
   | { kind: 'claim' }
@@ -209,9 +212,18 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     // Optional intake write-back anchor — present when the idea came from an
     // intake envelope (github-issues). Absent for human-typed ideas.
     const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
-    const unk = findUnknownFlag(argv, ['--project', '--idea', '--worktree', '--source-ref']);
+    const dependsOn = parseRepeatableFlag(argv, '--depends-on');
+    const declinedDependencies = parseRepeatableFlag(argv, '--decline-dependency');
+    const skipDependencyCheck = parseOptionalFlagPreservingEmpty(argv, '--skip-dependency-check');
+    const unk = findUnknownFlag(argv, [
+      '--project', '--idea', '--worktree', '--source-ref', '--depends-on',
+      '--decline-dependency', '--skip-dependency-check',
+    ]);
     if (unk) return { kind: 'reject', sub: 'land', flag: unk };
-    return { kind: 'land', project, idea, worktree, sourceRef };
+    return {
+      kind: 'land', project, idea, worktree, sourceRef, dependsOn,
+      declinedDependencies, ...(skipDependencyCheck === undefined ? {} : { skipDependencyCheck }),
+    };
   }
 
   if (subCmd === 'handoff') {
@@ -472,6 +484,25 @@ function parseFlag(argv: string[], flag: string): string | null {
   const val = argv[idx + 1];
   if (!val || val.startsWith('--')) return null;
   return val;
+}
+
+/** Values may repeat for decision flags. Unlike parseFlag this deliberately
+ * preserves an empty value: landSpec owns the closed-gate validation and event. */
+function parseRepeatableFlag(argv: string[], flag: string): string[] {
+  const values: string[] = [];
+  for (let index = 4; index < argv.length; index++) {
+    if (argv[index] !== flag) continue;
+    const value = argv[index + 1];
+    if (value !== undefined && !value.startsWith('--')) values.push(value);
+  }
+  return values;
+}
+
+function parseOptionalFlagPreservingEmpty(argv: string[], flag: string): string | undefined {
+  const index = argv.indexOf(flag);
+  if (index === -1 || index >= argv.length - 1) return undefined;
+  const value = argv[index + 1];
+  return value.startsWith('--') ? undefined : value;
 }
 
 // ── Optional IO/deps injection (for tests) ────────────────────────────────────
@@ -1219,7 +1250,10 @@ export async function dispatchEngineer(
 
     // ── land ──────────────────────────────────────────────────────────────────
     case 'land': {
-      const { project: projectName, idea, worktree, sourceRef } = dispatch;
+      const {
+        project: projectName, idea, worktree, sourceRef,
+        dependsOn = [], declinedDependencies = [], skipDependencyCheck,
+      } = dispatch;
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
@@ -1267,7 +1301,25 @@ export async function dispatchEngineer(
           idea,
           worktree,
           sourceRef,
-          { ownerConfig, gh },
+          {
+            ownerConfig,
+            gh,
+            dependencyGit: async (args) => {
+              try {
+                const result = await git(args, { cwd: target.canonicalPath });
+                return { exitCode: 0, stdout: result.stdout, stderr: '' };
+              } catch (error) {
+                return {
+                  exitCode: 1,
+                  stdout: '',
+                  stderr: error instanceof Error ? error.message : String(error),
+                };
+              }
+            },
+            acceptedDependencies: dependsOn,
+            declinedDependencies,
+            skipDependencyCheck,
+          },
         );
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1318,6 +1370,11 @@ export async function dispatchEngineer(
         );
       }
 
+      if (result.dependency) {
+        // Keep the operator-facing proposal record on stdout; Task 12 consumes
+        // the same returned data for post-commit writes and spine emission.
+        print(JSON.stringify({ kind: 'land-dependency-proposals', ...result.dependency }));
+      }
       print(JSON.stringify(result));
       return 0;
     }
