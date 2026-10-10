@@ -66,7 +66,7 @@ As the operator, I want every halt that means "a budget ran out" or "a human mus
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a feature whose `manual_test` FAIL survives the per-gate kickback cap, when the cap halt is written, then its class is `needs-human`, and a subsequent base-advance re-kick sweep skips the feature and logs the retained disposition.
+- Given a feature whose `manual_test` FAIL survives the per-gate kickback cap, when the cap halt is written, then its class is `needs-human`, and a subsequent base-advance re-kick sweep skips the feature, and the daemon log carries the retained disposition (logged once per disposition change across the daemon's retention checks, #2867).
 - Given a feature whose `test_suite` failure survives the per-gate kickback cap, or whose per-gate remediation budget is exhausted at a build kickback, when that halt is written, then its class is `needs-human` and the re-kick sweep retains it.
 - Given a halt of class `needs-human`, `plan-gap`, `over-scope`, or `kickback-cap` and no operator resume authorization in the feature's ledger, when any automatic path runs (base-advance sweep, progress re-kick, episode-end sweep), then the halt is retained and no dispatch occurs.
 
