@@ -26,6 +26,13 @@ Verified facts (basis: direct code reads, 2026-07-22):
 - `land` must work offline (no-remote local-commit fallback) — a blocking check may not
   depend on network reachability.
 
+  > **Amended 2026-10-09 by #536:** One sanctioned exception now applies. Land invoked with
+  > `--source-ref` (an intake idea already claimed from the tracker) runs a dependency-proposal
+  > gate that refuses when the tracker is unreachable, unless the operator passes
+  > `--skip-dependency-check "<reason>"`, which is recorded on the event spine. Land without
+  > `--source-ref` stays fully offline. See adr-2026-10-09-dependency-reconciler-and-edge-write-ownership
+  > decision 6.
+
 ## Options Considered
 
 ### Option A (waiver): Mirror the release-gate waiver pattern
