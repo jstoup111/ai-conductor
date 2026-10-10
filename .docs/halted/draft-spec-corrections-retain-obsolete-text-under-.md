@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-10T23:28:05.554Z
 Slug: draft-spec-corrections-retain-obsolete-text-under-
 Class: needs-human
 Halting step: prd_audit
