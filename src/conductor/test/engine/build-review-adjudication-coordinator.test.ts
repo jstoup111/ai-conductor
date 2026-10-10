@@ -834,7 +834,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       return;
     }
     expect(judge).not.toHaveBeenCalled();
-    expect(result).toEqual({ ok: false, detail: 'adjudication context field-overflow' });
+    expect(result).toEqual({ ok: false, detail: 'adjudication context field-overflow (policy-context.criteria[]: 257 > 256)' });
     expect(events).toEqual(['remediation_adjudication_failed']);
   });
 

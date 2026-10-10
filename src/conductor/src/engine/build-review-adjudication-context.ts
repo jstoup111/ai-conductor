@@ -428,6 +428,26 @@ export function buildReviewAdjudicationSourceId(
   return `${source.rubric}:${source.findingId}`;
 }
 
+/**
+ * Operator-facing description of a context stop. The halt reason is the only
+ * place an operator sees why a lap stopped, so it carries the offending
+ * subject, field, and bound rather than the bare code.
+ */
+export function describeBuildReviewAdjudicationContextStop(stop: BuildReviewAdjudicationContextStop): string {
+  switch (stop.code) {
+    case 'invalid-aggregate':
+      return stop.code;
+    case 'missing-scope-evidence':
+      return `${stop.code} (${stop.subject})`;
+    case 'field-overflow':
+      return `${stop.code} (${stop.subject}${stop.caseId === undefined ? '' : ` ${stop.caseId}`}.${stop.field}: ${stop.actual} > ${stop.limit})`;
+    case 'unrepresentable-prior-case':
+      return `${stop.code} (${stop.caseId}.${stop.field})`;
+    case 'serialized-byte-overflow':
+      return `${stop.code} (${stop.actual} > ${stop.limit} bytes)`;
+  }
+}
+
 export function assembleBuildReviewAdjudicationContext(
   input: AssembleBuildReviewAdjudicationContextInput,
 ): AssembleBuildReviewAdjudicationContextResult {

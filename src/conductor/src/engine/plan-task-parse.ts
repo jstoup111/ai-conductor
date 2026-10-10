@@ -331,28 +331,38 @@ export function planTaskDigests(text: string): Map<string, string> {
 /**
  * Returns the committed body text for every recognized task heading.
  *
- * Bodies retain their authored line endings and continue until the next task
- * heading, so blank lines and fenced code remain available to consumers that
- * need to resolve evidence inside a task's prose.
+ * Bodies retain their authored line endings, so blank lines and fenced code
+ * remain available to consumers that need to resolve evidence inside a task's
+ * prose. Like `planTaskDigests`, a task owns text only until the next Markdown
+ * heading at its level or above: plan-level trailing sections (dependency
+ * graph, verification, coverage check) are not part of the final task's
+ * contract, and carrying them overflowed the build_review adjudication
+ * context's per-contract text bound.
  */
 export function parsePlanTaskBodies(text: string): Map<string, string> {
   const result = new Map<string, string>();
   let currentIds: string[] = [];
+  let currentLevel = 0;
   let bodyLines: string[] = [];
 
   const saveCurrentBody = () => {
     if (currentIds.length === 0) return;
     const body = bodyLines.join('\n');
     for (const id of currentIds) result.set(id, body);
+    currentIds = [];
   };
 
   for (const { line, fenced } of linesWithFenceState(text)) {
+    const heading = fenced ? null : line.match(MARKDOWN_HEADING);
+    if (heading && currentIds.length > 0 && heading[1].length <= currentLevel) saveCurrentBody();
+
     const headerMatch = fenced ? null : line.match(TASK_HEADER_PATTERN);
     if (headerMatch) {
       saveCurrentBody();
       currentIds = expandTaskIds(
         headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
       );
+      currentLevel = line.match(MARKDOWN_HEADING)![1].length;
       bodyLines = [];
       continue;
     }

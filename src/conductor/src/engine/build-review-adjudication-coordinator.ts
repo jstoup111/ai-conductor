@@ -8,6 +8,7 @@ import { resolveFeaturePlanPath } from './artifacts.js';
 import {
   assembleBuildReviewAdjudicationContext,
   buildReviewAdjudicationSourceId,
+  describeBuildReviewAdjudicationContextStop,
   type BuildReviewAdjudicationPlanContract,
   type BuildReviewAdjudicationTaskStatus,
 } from './build-review-adjudication-context.js';
@@ -506,7 +507,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const context = assembleBuildReviewAdjudicationContext({
     aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: prior.state.suppressions, operatorResolvedFindingIds: resolved, ...contextEvidence,
   });
-  if (!context.ok) return failUnlessAccepted(`adjudication context ${context.stop.code}`, { settleAbsentAttempted: true });
+  if (!context.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(context.stop)}`, { settleAbsentAttempted: true });
   // A disposition arriving while the case store was read wins before the one
   // provider dispatch.  Rebuild the complete projection rather than letting
   // the provider see an obsolete source.
@@ -540,7 +541,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: prior.state.suppressions,
     operatorResolvedFindingIds: resolved, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => input.suppressedFindingIds?.has(source.findingId)).map(buildReviewAdjudicationSourceId)]), ...contextEvidence,
   });
-  if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${freshContext.stop.code}`, { settleAbsentAttempted: true });
+  if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(freshContext.stop)}`, { settleAbsentAttempted: true });
   await input.emit?.({ type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId });
   let judgement: RemediationCaseJudgement;
   try { judgement = await input.judge(freshContext.context); } catch { return failUnlessAccepted('remediate judgement failed', { settleAbsentAttempted: true }); }
