@@ -1434,6 +1434,8 @@ type ConductorEventBody =
       step: StepName;
       satisfied: boolean;
       reason?: string;
+      /** The run complexity tier, when available at emission time. */
+      tier?: ComplexityTier;
       /** Timestamp (ms epoch) the gate's verdict was computed, for audit non-divergence checks. */
       checkedAt?: number;
     }
@@ -1523,6 +1525,8 @@ type ConductorEventBody =
       from: StepName;
       to: StepName;
       evidence?: string;
+      /** The run complexity tier, when available at emission time. */
+      tier?: ComplexityTier;
       /** How many times this gate has been re-opened this feature. */
       count: number;
       /** Total build-review laps across progress resets; absent for other kickback sources. */
