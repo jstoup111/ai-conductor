@@ -522,3 +522,173 @@ Task 1 ─┬─ Task 2
 - [ ] No task exceeds 5 minutes of work, except compile-atomic Task 1 (see Technical Approach)
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-4: build-review-cache.test.ts: add implementationQuality cache-hit case (matching rubric id, projection digest, policy fingerprint, engine identity, SKILL.md digest) asserting zero provider dispatches
+**Gate:** prd-audit
+**Rationale:** Verified missing test coverage (95%). Task 4 done-when already requires an IQ cache-hit test with zero dispatch. This is BUILD test work within Task 4, with no architecture decision needed.
+**Criterion:** S2.2
+**Parent task:** 4
+**Done when:**
+- [test] S2.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-4 is complete.
+
+### Task rem-prd-audit-4-2: build-review-cache.test.ts: add implementationQuality case where a changed build-review-implementation-quality SKILL.md digest yields a cache miss and a re-judge dispatch
+**Gate:** prd-audit
+**Rationale:** Task 4 done-when admits the skill-digest miss test. The cache already keys on skillDigest generically, so only the IQ test is missing.
+**Criterion:** S2.6
+**Parent task:** 4
+**Done when:**
+- [test] S2.6 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-4-2 is complete.
+
+### Task rem-prd-audit-4-3: build-review-cache.test.ts: add implementationQuality cases where a changed resolved provider, model, and effort each separately miss the cache and re-dispatch
+**Gate:** prd-audit
+**Rationale:** Task 4 done-when admits the provider/model/effort miss tests. The existing miss tests cover security only, so IQ needs its own cases.
+**Criterion:** S2.7
+**Parent task:** 4
+**Done when:**
+- [test] S2.7 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-4-3 is complete.
+
+### Task rem-prd-audit-4-4: build-review-coordinator.test.ts: add IQ-enabled fixtures where skills/build-review-implementation-quality/SKILL.md is missing and separately unreadable, asserting infrastructure-failure naming the path and no PASS recorded
+**Gate:** prd-audit
+**Rationale:** Task 4 done-when requires the missing and unreadable skill-file coordinator cases. Every coordinator fixture currently disables IQ, so these are coverage gaps to fill in BUILD.
+**Criterion:** S2.8
+**Parent task:** 4
+**Done when:**
+- [test] S2.8 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-4-4 is complete.
+
+### Task rem-prd-audit-5: build-review-coordinator.test.ts: add implementationQuality invalid payload followed by invalid repair-turn payload asserting mechanical-fault lane, no PASS, no content finding
+**Gate:** prd-audit
+**Rationale:** Task 5 done-when requires the IQ double-invalid coordinator case. Only testQuality has it today, so this is test work in BUILD.
+**Criterion:** S3.8
+**Parent task:** 5
+**Done when:**
+- [test] S3.8 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-5 is complete.
+
+### Task rem-prd-audit-7: build-review-effective.test.ts: assert above-min_confidence IQ finding yields FAIL with id in unresolvedFindingIds and not in any beyond bucket; build-review-adjudication-context.test.ts: assert the unresolved IQ finding appears in raw sources with its rubric question
+**Gate:** prd-audit
+**Rationale:** Task 7 done-when admits both the effective-verdict test and the adjudication-context raw-source test. The question is already registered; only the tests are missing.
+**Criterion:** S4.1
+**Parent task:** 7
+**Done when:**
+- [test] S4.1 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-7 is complete.
+
+### Task rem-prd-audit-7-2: build-review-effective.test.ts: assert a below-min_confidence implementationQuality finding lands in suppressedFindingIds with effective PASS
+**Gate:** prd-audit
+**Rationale:** Task 7 done-when requires the below-threshold IQ suppression test. The generic suppression at build-review-aggregate.ts:537 exists but is unproven for IQ.
+**Criterion:** S4.4
+**Parent task:** 7
+**Done when:**
+- [test] S4.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-7-2 is complete.
+
+### Task rem-as-built-8: build-review-adjudication-context.ts / remediation-case-validator.ts / build-review-adjudication-coordinator.ts: require admission (case-v2 admittedTaskIds validation) whenever an implementationQuality finding is in scope so an unadmitted act is rejected missing-admission-task; add regression test that IQ act without an admitted task cannot authorize BUILD
+**Gate:** as-built
+**Rationale:** Verified (97%): build-review-adjudication-context.ts:493 selects case-v1 unless a custom policy is present. Built-in IQ therefore goes through case-v1, which bypasses admission (remediation-case-validator.ts:93). The approved ADR D3 #475 amendment is authoritative and already requires bounded admission, so this is a conforming implementation fix under Task 8, not an architecture decision.
+**Governing clause:** adr-2026-08-21-review-bound-by-plan-done-when-criteria decision 3
+**Done when:**
+- adr-2026-08-21-review-bound-by-plan-done-when-criteria decision 3 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-8 is complete.
+
+### Task rem-prd-audit-8: build-review-adjudication.test.ts: assert IQ act case citing an admitted task id routes build with that work order and increments build_review per-gate and cumulative kickback counts
+**Gate:** prd-audit
+**Rationale:** Task 8 done-when admits the admitted IQ act test covering the build route, work order and ledger charge. It depends on the admission fix bound to the same task.
+**Criterion:** S4.2
+**Parent task:** 8
+**Done when:**
+- [test] S4.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-8 is complete.
+
+### Task rem-prd-audit-8-2: build-review-adjudication.test.ts: assert IQ act citing no admitted task is rejected missing-admission-task, deferred to intake or escalated, with no build route, no appended plan task, no plan route
+**Gate:** prd-audit
+**Rationale:** Task 8 done-when admits the unadmitted-act rejection test. It closes together with the as-built admission fix.
+**Criterion:** S4.5
+**Parent task:** 8
+**Done when:**
+- [test] S4.5 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-8-2 is complete.
+
+### Task rem-prd-audit-8-3: build-review-adjudication.test.ts: add parameterized matrix over seven IQ concern kinds × act(admitted)/act(unadmitted)/defer/refute/escalate asserting no appended plan task and never a plan route
+**Gate:** prd-audit
+**Rationale:** Task 8 done-when explicitly requires the seven-kind × five-disposition matrix. It is test work only.
+**Criterion:** S4.6
+**Parent task:** 8
+**Done when:**
+- [test] S4.6 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-8-3 is complete.
+
+### Task rem-prd-audit-8-4: conductor-kickback-ledger.test.ts: add IQ-enabled fixture where an implementationQuality FAIL at the cumulative build_review cap halts for a human instead of kicking back
+**Gate:** prd-audit
+**Rationale:** Task 8 done-when requires an IQ cap-halt ledger test. The existing fixtures disable IQ.
+**Criterion:** S4.7
+**Parent task:** 8
+**Done when:**
+- [test] S4.7 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-8-4 is complete.
+
+### Task rem-prd-audit-8-5: build-review-dispositions.test.ts: assert accepted and refuted implementationQuality identities recurring on unchanged code leave effective verdict PASS
+**Gate:** prd-audit
+**Rationale:** Task 8 done-when admits the IQ accepted/refuted recurrence test. It is test work only.
+**Criterion:** S4.8
+**Parent task:** 8
+**Done when:**
+- [test] S4.8 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-8-5 is complete.
+
+### Task rem-prd-audit-12: model-table-metadata.ts: set build-review-implementation-quality provider cells to the resolved default rubric model and effort medium; regenerate ARCHITECTURE.md model table via bin/generate-model-table; extend model-table-metadata.test.ts assertion
+**Gate:** prd-audit
+**Rationale:** Task 12 done-when requires the provider cells to list the resolved default rubric model and the default effort 'medium'. The current row says 'inherits resolved rubric policy'. This is a conforming metadata, generated-table and test fix.
+**Criterion:** S5.3
+**Parent task:** 12
+**Done when:**
+- [test] S5.3 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-12 is complete.
+
+### Task rem-prd-audit-11: test/check_build_review_rubric_skill_vocabularies.sh fixtures: add implementationQuality extra-kind and missing-kind scenarios asserting non-zero exit naming implementationQuality and the kind
+**Gate:** prd-audit
+**Rationale:** Task 11 done-when requires IQ extra-kind and missing-kind fixtures for the vocabulary drift guard. The loop is already generic, so only the fixtures are missing.
+**Criterion:** S5.4
+**Parent task:** 11
+**Done when:**
+- [test] S5.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-11 is complete.
+
+### Task rem-prd-audit-10: build-review-skill-contract.test.ts: add contract check that rejects skill text directing judgement of acceptance-criteria compliance, plan conformance, or ADR conformance (naming the forbidden question) and passes on the shipped skill
+**Gate:** prd-audit
+**Rationale:** Task 10 done-when requires a contract check that fails on skill text directing acceptance-criteria, plan or ADR conformance judging. Today the test only asserts that the exclusions are mentioned. This is a conforming test and check implementation.
+**Criterion:** S5.5
+**Parent task:** 10
+**Done when:**
+- [test] S5.5 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-10 is complete.
+
+### Task rem-prd-audit-9: step-runners.ts: resolve Pattern-source against the active planPath (as at the replication gate) instead of '.docs/plans/current.md'; step-runners.test.ts: assert declared plan persists declaredReplicationSuppressions {findingId, sourcePath, targetPath} for a target-anchored source-only-evidence duplication finding and the effective verdict does not fail
+**Gate:** prd-audit
+**Rationale:** Verified (95%): step-runners.ts:3420 hard-codes '.docs/plans/current.md' rather than the active planPath that the replication gate uses, and the derivation/persistence has no step-runners test. Task 9 admits both the fix and the test.
+**Criterion:** S6.11
+**Parent task:** 9
+**Done when:**
+- [test] S6.11 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-9 is complete.
+
+### Task rem-prd-audit-9-2: step-runners.test.ts: assert duplication finding anchored outside derived target, or with evidence naming another file, is absent from declaredReplicationSuppressions and fails the lap; assert plan without Pattern-source yields empty suppressions
+**Gate:** prd-audit
+**Rationale:** Task 9 done-when requires the negative step-runners cases. The filter logic exists but is untested.
+**Criterion:** S6.12
+**Parent task:** 9
+**Done when:**
+- [test] S6.12 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-9-2 is complete.
+
+### Task rem-as-built-1: build-review-projections.ts: remove the unreachable implementationQuality branch (or the test-only buildReviewEffectiveResultDescriptor if wholly unused) and its test-only callers, keeping registry-parser coverage in build-review-registry.test.ts
+**Gate:** as-built
+**Rationale:** Verified (95%): buildReviewEffectiveResultDescriptor (build-review-projections.ts:196) has only test callers, and production uses the registry contract parser. This is dead-code cleanup within Task 1's registration scope, with no architecture decision needed. Registry-path coverage from Task 1's registry test preserves the behavior.
+**Parent task:** 1
+**Governing clause:** Task 1
+**Done when:**
+- Task 1 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-1 is complete.
