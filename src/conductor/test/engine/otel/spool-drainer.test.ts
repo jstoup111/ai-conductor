@@ -344,15 +344,18 @@ describe('SpoolDrainer', () => {
     const acceptedButUndeleted = await store.write('traces', Buffer.from('accepted-before-crash'));
     now += 1;
     await store.write('traces', Buffer.from('next-batch'));
+    let signalDeleteAttempted!: () => void;
+    const deleteAttempted = new Promise<void>((resolve) => { signalDeleteAttempted = resolve; });
     const crashBeforeDelete = Object.assign(Object.create(store) as SpoolStore, {
-      delete: async () => { throw new Error('simulated crash after accept before delete'); },
+      delete: async () => {
+        signalDeleteAttempted();
+        throw new Error('simulated crash after accept before delete');
+      },
     });
 
     const crashingDrainer = new SpoolDrainer(crashBeforeDelete, { endpoint, headers: () => ({}) });
     const crashing = crashingDrainer.drainUntilStopped();
-    for (let turn = 0; turn < 1_000 && received.length === 0; turn += 1) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
+    await deleteAttempted;
     await crashingDrainer.stop();
     await crashing;
     await drainUntilEmpty(new SpoolDrainer(store, { endpoint, headers: () => ({}) }), store);
