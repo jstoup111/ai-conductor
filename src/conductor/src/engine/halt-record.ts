@@ -196,7 +196,7 @@ export async function publishHaltRecord(
     gh: remote.gh ?? makeProductionGh(),
   });
   return (remote.remoteGit ?? executeRemoteGit)(
-    ['push', 'origin', `HEAD:refs/heads/${branch}`],
+    ['push', 'origin', `HEAD:refs/heads/${branch}`, '--force-with-lease'],
     {
       cwd: root,
       config: (args) => git(args, { cwd: root }),
