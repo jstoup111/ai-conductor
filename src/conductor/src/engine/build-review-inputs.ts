@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { basename, dirname, relative } from 'node:path';
 import { resolveFreshBase, type GitRunner } from './rebase.js';
+import { resolveChildBase } from './child-cursor.js';
+import type { ChildId } from './child-context.js';
 import {
   readBaseAdvanceHistory,
   readTestSuiteRemediations,
@@ -11,7 +13,11 @@ import {
   isEngineAppendedRemediationAmendment,
   readRecordedAppendedRemediationTaskIds,
 } from './protected-artifact-seal.js';
-import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
+import {
+  FullSuiteVerifier,
+  type FullSuiteActiveChild,
+  type FullSuiteInspectionResult,
+} from './full-suite-verifier.js';
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
@@ -64,12 +70,12 @@ export interface BuildReviewInputs {
   /** The resolved `git merge-base <baseRef> HEAD` sha the diff was computed
    * from — the exact commit the grader's diff is anchored to. */
   mergeBase: string;
-  /** The ref the diff's merge-base was computed against (`origin/<default>`
-   * or a local branch on fallback). */
+  /** The ref the diff's merge-base was computed against (`origin/<default>`,
+   * a local fallback, or a closed parent child tip). */
   baseRef: string;
-  /** Where the base came from — origin's discovered default, or the local
-   * fallback (no remote / probe failure). */
-  baseKind: 'remote' | 'local';
+  /** Where the base came from — a closed parent child, origin's discovered
+   * default, or the local fallback (no remote / probe failure). */
+  baseKind: 'child-parent' | 'remote' | 'local';
   /** The local tracking ref's sha at resolution time, or `null` on fallback. */
   trackingRefSha: string | null;
   /** The true remote head sha reported by the freshness probe, or `null` on
@@ -110,6 +116,8 @@ export interface BuildReviewInputs {
 export interface BuildReviewFrozenInputs extends BuildReviewInputs {
   readonly testSuiteProof: FullSuitePassEvidence;
   readonly sourceSnapshot: BuildReviewSourceSnapshot;
+  /** Whole-feature source for the leaf-only security rubric. */
+  readonly securitySourceSnapshot?: BuildReviewSourceSnapshot;
   /** Present only for a lap that includes an enabled custom policy member. */
   readonly sourceMaterialization?: BuildReviewLapMaterialization;
 }
@@ -239,13 +247,19 @@ export interface BuildReviewPatchEquivalentExclusion {
 
 /** Process-free proof inspection seam; it must never launch the aggregate suite. */
 export interface BuildReviewInputOptions {
-  readonly inspectTestSuite?: () => Promise<FullSuiteInspectionResult>;
+  readonly inspectTestSuite?: (activeChild?: FullSuiteActiveChild) => Promise<FullSuiteInspectionResult>;
   /** Test seam for a parser/analyzer failure; consumer source is never loaded. */
   readonly analyzeTestScope?: (input: BuildReviewTestScopeInput) => BuildReviewTestScope;
   /** Enabled members for the lap being prepared; omitted preserves legacy built-in preparation. */
   readonly lapMembers?: readonly BuildReviewMaterializationMember[];
   /** Private source-view placement, supplied by the review execution owner. */
   readonly materialization?: BuildReviewMaterializationOptions;
+  /** Active child identity for a child-local review; omitted preserves flat review behavior. */
+  readonly childBase?: { readonly slug: string; readonly child: ChildId };
+  /** Stacked security runs only at the leaf; absent preserves flat behavior. */
+  readonly securityScope?: 'leaf' | 'non-leaf';
+  /** Child-local suite evidence that must prove the review's test-suite gate. */
+  readonly activeChild?: FullSuiteActiveChild;
 }
 
 /** The three distinguishable grading-provenance cases (Task 24). */
@@ -773,10 +787,11 @@ async function snapshotTypedTestScope(
  * of a freshly-resolved base ref and HEAD, plus the plan body. Inputs are
  * strictly `(git, planPath)` — no conductor state.
  *
- * Base resolution goes through `resolveFreshBase` (Task 2): when the local
- * tracking ref is stale relative to the true remote head, it fetches before
- * computing the merge-base, so build_review never grades a diff against a
- * stale origin snapshot. On no-remote/probe-failure, it falls back to the
+ * A child review first resolves its closed parent through `resolveChildBase`.
+ * Otherwise base resolution goes through `resolveFreshBase` (Task 2): when
+ * the local tracking ref is stale relative to the true remote head, it fetches
+ * before computing the merge-base, so build_review never grades a diff against
+ * a stale origin snapshot. On no-remote/probe-failure, it falls back to the
  * pre-existing local-branch behavior — degraded, but still functional — and
  * emits one advisory log so operators can see why the base wasn't fresh.
  */
@@ -786,20 +801,58 @@ export async function assembleBuildReviewInputs(
   options: BuildReviewInputOptions = {},
 ): Promise<BuildReviewFrozenInputs> {
   const inspection = await (
-    options.inspectTestSuite?.() ?? new FullSuiteVerifier({ projectRoot: projectRootForPlan(planPath) }).inspect()
+    options.inspectTestSuite?.(options.activeChild) ??
+    new FullSuiteVerifier({
+      projectRoot: projectRootForPlan(planPath),
+      ...(options.activeChild === undefined ? {} : { activeChild: options.activeChild }),
+    }).inspect()
   );
   if (inspection.status !== 'CURRENT') throw new TestSuiteProofError(inspection);
 
-  const resolution = await resolveFreshBase(git);
-
-  if (resolution.kind === 'local') {
-    console.warn(
-      `[build_review] base resolution degraded to local fallback (ref=${resolution.ref}); ` +
-        'grading against a possibly stale base. No origin remote, or the freshness probe/fetch failed.',
-    );
+  const projectRoot = projectRootForPlan(planPath);
+  const childBase = options.childBase === undefined
+    ? { kind: 'none' as const }
+    : await resolveChildBase(projectRoot, options.childBase.slug, options.childBase.child, { git });
+  let baseRef: string;
+  let baseKind: BuildReviewInputs['baseKind'];
+  let trackingRefSha: string | null;
+  let remoteHeadSha: string | null;
+  let fresh: boolean;
+  if (childBase.kind === 'parent') {
+    // A closure tip is local daemon state, not a remote freshness source.
+    // It is already immutable review authority, so it has no degraded-fetch
+    // advisory and must not initiate a default-branch probe.
+    baseRef = childBase.sha;
+    baseKind = 'child-parent';
+    trackingRefSha = null;
+    remoteHeadSha = null;
+    fresh = true;
+  } else {
+    if (childBase.kind === 'parent-missing') {
+      throw new MergeBaseError(
+        `build_review cannot resolve parent child ${childBase.parent}: branch ${childBase.branch} is missing`,
+        childBase.branch,
+      );
+    }
+    if (childBase.kind === 'parent-not-ancestor') {
+      throw new MergeBaseError(
+        `build_review cannot resolve parent child ${childBase.parent}: tip ${childBase.sha} is not an ancestor of HEAD`,
+        childBase.sha,
+      );
+    }
+    const resolution = await resolveFreshBase(git);
+    if (resolution.kind === 'local') {
+      console.warn(
+        `[build_review] base resolution degraded to local fallback (ref=${resolution.ref}); ` +
+          'grading against a possibly stale base. No origin remote, or the freshness probe/fetch failed.',
+      );
+    }
+    baseRef = resolution.ref;
+    baseKind = resolution.kind;
+    trackingRefSha = resolution.trackingRefSha;
+    remoteHeadSha = resolution.remoteHeadSha;
+    fresh = resolution.fresh;
   }
-
-  const baseRef = resolution.ref;
 
   // Freeze both revision identities before any dependent read. The symbolic
   // labels can advance while this assembly is running; every source read below
@@ -821,7 +874,6 @@ export async function assembleBuildReviewInputs(
     );
   }
   const source = new BuildReviewScopeSource(git, liveHeadSha);
-  const projectRoot = projectRootForPlan(planPath);
   const planRepoPath = safeRepoRelativePath(relative(projectRoot, planPath).replaceAll('\\', '/'));
 
   const mergeBase = await git(['merge-base', baseTipSha, liveHeadSha]);
@@ -944,15 +996,15 @@ export async function assembleBuildReviewInputs(
         options.materialization ?? { projectRoot },
       );
 
-  return {
+  const assembled: BuildReviewFrozenInputs = {
     diff: diffResult.stdout,
     planBody,
     mergeBase: mergeBaseSha,
     baseRef,
-    baseKind: resolution.kind,
-    trackingRefSha: resolution.trackingRefSha,
-    remoteHeadSha: resolution.remoteHeadSha,
-    fresh: resolution.fresh,
+    baseKind,
+    trackingRefSha,
+    remoteHeadSha,
+    fresh,
     removalContext: sourceSnapshot.removalContext,
     repairContext,
     repairProvenance,
@@ -961,4 +1013,18 @@ export async function assembleBuildReviewInputs(
     ...(sourceMaterialization === undefined ? {} : { sourceMaterialization }),
     patchEquivalentExclusion: equivalentExclusion,
   };
+  if (options.securityScope === 'leaf') {
+    // Keep the child's ordinary snapshot authoritative for test-quality, but
+    // derive a second, default-branch snapshot for the leaf security review.
+    const wholeFeature = await assembleBuildReviewInputs(git, planPath, {
+      ...options,
+      childBase: undefined,
+      securityScope: undefined,
+      lapMembers: undefined,
+      materialization: undefined,
+      inspectTestSuite: async () => inspection,
+    });
+    return { ...assembled, securitySourceSnapshot: wholeFeature.sourceSnapshot };
+  }
+  return assembled;
 }

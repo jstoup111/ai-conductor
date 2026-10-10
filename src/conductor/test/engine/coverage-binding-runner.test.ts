@@ -352,6 +352,7 @@ describe('coverage-binding runner batches', () => {
     try {
       fixture.gitRunner.mockImplementation(async (args: string[]) => {
         if (args[0] === 'rev-parse') return { exitCode: 0, stdout: 'head\n', stderr: '' };
+        if (args[0] === 'for-each-ref') return { exitCode: 0, stdout: '', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 1, stdout: '', stderr: 'no merge base' };
         return { exitCode: 1, stdout: '', stderr: `unexpected git command: ${args.join(' ')}` };
       });
@@ -369,6 +370,7 @@ describe('coverage-binding runner batches', () => {
     try {
       fixture.gitRunner.mockImplementation(async (args: string[]) => {
         if (args[0] === 'rev-parse') return { exitCode: 0, stdout: 'head\n', stderr: '' };
+        if (args[0] === 'for-each-ref') return { exitCode: 0, stdout: '', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base\n', stderr: '' };
         if (args[0] === 'show') return { exitCode: 1, stdout: '', stderr: 'object read failed' };
         if (args[0] === 'cat-file') return { exitCode: 0, stdout: '', stderr: '' };

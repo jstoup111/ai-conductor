@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:12, task:21
+// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:12, task:21, task:31
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir,} from 'fs/promises';
 import { basename, join } from 'path';
@@ -74,6 +74,7 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
 import type {
   ExecuteProviderCandidatesInput,
@@ -206,6 +207,45 @@ describe('recovery retry budget', () => {
     expect(seenContexts[0]).toEqual({ recoveryCount: 0, retriesExhausted: false });
     expect(seenContexts[1]).toEqual({ recoveryCount: 1, retriesExhausted: false });
     expect(seenContexts[2]).toEqual({ recoveryCount: 2, retriesExhausted: true });
+  });
+
+  it('starts recovery retries fresh for a newly active child', async () => {
+    await writeState(statePath, {
+      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', stories: 'done',
+      conflict_check: 'done', plan: 'done', coherence_check: 'done', architecture_diagram: 'done',
+      architecture_review: 'done', writing_system_tests: 'done',
+    } as ConductState);
+    const { runner } = failThenSucceedRunner('build', Infinity);
+    const child1 = parseChildId(1)!;
+    const child2 = parseChildId(2)!;
+    const seenContexts: Array<{ recoveryCount: number; retriesExhausted: boolean }> = [];
+    let conductor: Conductor;
+    const onRecovery = vi.fn(async (_step, _gating, context) => {
+      seenContexts.push(context ?? { recoveryCount: -1, retriesExhausted: false });
+      if (seenContexts.length === 1) {
+        (conductor as unknown as { activeRegionChild: typeof child2 }).activeRegionChild = child2;
+        return 'retry' as const;
+      }
+      return 'quit' as const;
+    });
+
+    conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'build',
+      maxRetries: 1,
+      onRecovery,
+    });
+    (conductor as unknown as { activeRegionChild: typeof child1 }).activeRegionChild = child1;
+
+    await conductor.run();
+
+    expect(seenContexts).toEqual([
+      { recoveryCount: 0, retriesExhausted: false },
+      { recoveryCount: 0, retriesExhausted: false },
+    ]);
   });
 
   it('does not infinite-loop when a non-conforming onRecovery returns retry after exhaustion', async () => {

@@ -144,7 +144,7 @@ describe('remediation case effects', () => {
     // Exactly one repair route is charged, for the one admitted act, within
     // the remaining allowance; sibling non-action cases charge nothing.
     expect(chargeEffect).toHaveBeenCalledTimes(1);
-    expect(chargeEffect).toHaveBeenCalledWith(root, 'effect-custom-merged', expect.anything());
+    expect(chargeEffect).toHaveBeenCalledWith(root, 'effect-custom-merged', expect.anything(), undefined);
 
     expect(publishWorkOrder).toHaveBeenCalledWith(root, expect.objectContaining({
       effectId: 'effect-custom-merged',
@@ -426,7 +426,7 @@ describe('remediation case effects', () => {
     });
 
     expect(result).toMatchObject({ ok: true, status: 'applied', effectId: 'effect-2' });
-    expect(chargeEffect).toHaveBeenCalledWith(root, 'effect-2', expect.anything());
+    expect(chargeEffect).toHaveBeenCalledWith(root, 'effect-2', expect.anything(), undefined);
   });
 
   it('never reopens a failed sibling while finalizing a later reserved action', async () => {

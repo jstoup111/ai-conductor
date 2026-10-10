@@ -95,6 +95,27 @@ describe('consumeResumeAuthorizations', () => {
     }
   });
 
+  it('reads and consumes the active child ledger rather than a flat authorization', async () => {
+    const { root, worktree } = await seed();
+    try {
+      const child = 2 as import('../../src/engine/child-context.js').ChildId;
+      await mkdir(join(worktree, '.pipeline', 'children', '2'), { recursive: true });
+      await writeFile(
+        join(worktree, '.pipeline', 'children', '2', 'kickback-ledger.json'),
+        JSON.stringify({ version: 1, gates: { build_review: gateEntry } }),
+      );
+
+      await expect(consumeResumeAuthorizations(base(worktree, {
+        resolveActiveChild: async () => ({ kind: 'active', child, position: child, isLeaf: true, branch: 'feat/feature' }),
+      }) as never)).resolves.toEqual(['feature']);
+
+      expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
+      expect((await readKickbackLedger(worktree, child)).gates.build_review.resumeAuthorization?.consumed).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('retains the halt with an unconsumed authorization when the clear reports partial', async () => {
     const { root, worktree } = await seed();
     try {

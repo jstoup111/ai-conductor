@@ -25,6 +25,7 @@ import {
   type CoverageBindingEnvelopeFilesystem,
 } from './coverage-binding-envelope.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
+import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 
 export interface PlanGapInput {
   index: number;
@@ -166,11 +167,17 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
   }
 
   const projectRoot = await resolveTaskProjectRoot(cwd);
+  const cursor = await resolveActiveChildForCurrentFeature(projectRoot);
+  if (cursor.kind !== 'no-child' && cursor.kind !== 'active') {
+    console.error(`[task-cli] active child resolution refused (${cursor.kind})`);
+    return 1;
+  }
+  const selectedChild = cmd.child ?? (cursor.kind === 'active' ? String(cursor.child) : undefined);
 
-  if (cmd.child !== undefined) {
-    const child = parseChildId(cmd.child);
+  if (selectedChild !== undefined) {
+    const child = parseChildId(selectedChild);
     if (child === undefined) {
-      console.error(`[task-cli] invalid child id "${cmd.child}" (expected 1-9)`);
+      console.error(`[task-cli] invalid child id "${selectedChild}" (expected 1-9)`);
       return 1;
     }
     if (!await childStateExists(projectRoot, child)) {

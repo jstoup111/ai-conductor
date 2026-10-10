@@ -1,0 +1,33 @@
+<!-- Recorded from 14a615c678ab0df4bb467fa0313bcb24434ef68f -->
+{
+  "version": 1,
+  "slug": "n1-golden",
+  "runId": "n1-golden-session",
+  "status": "disabled",
+  "entries": [
+    {
+      "kind": "conflict",
+      "digest": "sha256:1838d94c89440387f09aa3952ecc8b37032c57922f512e4f8c8f2c1d27a462f0",
+      "claimKind": "criterion",
+      "claimId": "stories#unparseable",
+      "verdict": "unjudged"
+    }
+  ],
+  "adrLayer": {
+    "disposition": "not-applicable",
+    "adrIds": []
+  },
+  "sliceMembership": {
+    "taskSlices": {
+      "1": 1,
+      "2": 1,
+      "3": 1
+    },
+    "titles": [
+      "Only"
+    ]
+  },
+  "storyOwnership": {
+    "1": 1
+  }
+}

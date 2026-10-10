@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-vi.mock('execa', () => ({ execa: vi.fn(async () => ({ stdout: '' })) }));
+vi.mock('execa', () => ({ execa: vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '' })) }));
 
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';

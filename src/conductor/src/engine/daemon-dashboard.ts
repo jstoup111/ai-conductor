@@ -15,6 +15,14 @@ import {
 } from './step-heartbeat.js';
 import { readFullSuiteEvidence } from './full-suite-evidence.js';
 import { computeBuildReviewMetrics, readMergedFeatureEvents } from './build-tail-rollup.js';
+import { resolveActiveChild } from './child-cursor.js';
+import { parseChildId, isRegionStep, type ChildId } from './child-context.js';
+import { readConductStateOverlay } from './conduct-state-store.js';
+import {
+  COVERAGE_BINDING_COMPLETION_STATUSES,
+  readCoverageBindingEnvelope,
+  type CoverageBindingEnvelopeFilesystem,
+} from './coverage-binding-envelope.js';
 
 // ── Startup inherited-state dashboard (ADR-013 / FR-1, FR-2, FR-3) ────────────
 //
@@ -47,6 +55,8 @@ export interface HaltedEntry {
   lifecycle?: ProviderLifecycleDiagnostic;
   /** Feature-declared skips, distinct from tier/config skips. */
   inapplicable?: Array<{ step: string; reason: string }>;
+  /** Cursor-derived active BUILD child, when this is a stacked feature. */
+  activeChild?: ActiveChildDashboardState;
 }
 
 /** Lifecycle evidence surfaced from the feature's persisted provider events. */
@@ -100,11 +110,19 @@ export interface InProgressEntry {
   inapplicable?: Array<{ step: string; reason: string }>;
   /** Steps that have started but have no terminal event in the merged ledger. */
   inFlight?: InFlightStep[];
+  /** Cursor-derived active BUILD child, when this is a stacked feature. */
+  activeChild?: ActiveChildDashboardState;
 }
 
 export interface InFlightStep {
   step: string;
   startedAtMs: number;
+}
+
+/** The stable, operator-facing position of the active stacked child. */
+export interface ActiveChildDashboardState {
+  child: ChildId;
+  total: number;
 }
 
 /** A dashboard observation needs only a short current-activity window. */
@@ -253,6 +271,15 @@ export interface ScanInheritedStateDeps {
 /** The completed-run marker; mirrors the private constant in conductor.ts. */
 const DONE_MARKER = '.pipeline/DONE';
 
+const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
+  readFile: (path) => readFile(path, 'utf8'),
+  // Dashboard reads never write. These methods satisfy the shared envelope
+  // filesystem surface and deliberately fail if that contract changes.
+  mkdir: async () => { throw new Error('dashboard is read-only'); },
+  writeFile: async () => { throw new Error('dashboard is read-only'); },
+  rename: async () => { throw new Error('dashboard is read-only'); },
+};
+
 /** `true` when `path` exists (any type), tolerant of missing/unreadable paths. */
 async function pathExists(path: string): Promise<boolean> {
   try {
@@ -384,6 +411,47 @@ async function loadWorktreeState(
   } catch {
     return { present: true, state: null }; // malformed JSON
   }
+}
+
+/**
+ * The dashboard has no independent notion of a current child. It asks the
+ * cursor, then overlays only that child's BUILD-region state on the feature
+ * state. A cursor or child-state read refusal is intentionally non-fatal to a
+ * startup dashboard scan; the ordinary flat observation remains available.
+ */
+async function loadDashboardWorktreeState(
+  wt: string,
+  slug: string,
+): Promise<{
+  present: boolean;
+  state: Record<string, unknown> | null;
+  activeChild?: ActiveChildDashboardState;
+}> {
+  const flat = await loadWorktreeState(wt);
+  if (!flat.present || flat.state === null) return flat;
+
+  const cursor = await resolveActiveChild(wt, slug);
+  if (cursor.kind !== 'active') return flat;
+
+  const envelope = await readCoverageBindingEnvelope(wt, coverageBindingFilesystem);
+  const positions = envelope?.sliceMembership && COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)
+    ? [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
+      .map((position) => parseChildId(position))
+      .filter((position): position is ChildId => position !== undefined)
+    : [];
+  if (positions.length < 2) return flat;
+
+  const activeChild = { child: cursor.child, total: positions.length };
+  const overlay = await readConductStateOverlay(wt, cursor.child);
+  if (overlay.ok) return { present: true, state: overlay.value, activeChild };
+
+  // Do not leak a previous child's region progress when its active child's
+  // state cannot be read. Feature-wide statuses are still sound.
+  return {
+    present: true,
+    state: Object.fromEntries(Object.entries(flat.state).filter(([step]) => !isRegionStep(step))),
+    activeChild,
+  };
 }
 
 /**
@@ -683,7 +751,7 @@ export async function scanInheritedState(
         // A halted worktree is KEPT for the human, so its conduct-state is still
         // on disk — mine it for the step reached, tier, and any PR already open.
         const entry: HaltedEntry = { slug, reason: haltReason(haltContent) };
-        const { state } = await loadWorktreeState(wt);
+        const { state, activeChild } = await loadDashboardWorktreeState(wt, slug);
         if (state) {
           entry.step = lastMeaningfulStep(state);
           const { tier, prUrl } = stateExtras(state);
@@ -692,6 +760,7 @@ export async function scanInheritedState(
           const inapplicable = inapplicableEntries(state);
           if (inapplicable) entry.inapplicable = inapplicable;
         }
+        if (activeChild) entry.activeChild = activeChild;
         const lifecycle = await readProviderLifecycleDiagnostic(wt, entry.step);
         if (lifecycle?.phase === 'halted') entry.lifecycle = lifecycle;
         halted.push(entry);
@@ -699,7 +768,7 @@ export async function scanInheritedState(
         continue;
       }
 
-      const { present, state } = await loadWorktreeState(wt);
+      const { present, state, activeChild } = await loadDashboardWorktreeState(wt, slug);
       const isRetainedFeatureWorktree =
         !slug.startsWith('resolve-') && !slug.startsWith('engineer-');
       if (processedSlugs.has(slug)) {
@@ -764,6 +833,7 @@ export async function scanInheritedState(
         const steps = inFlightSteps(liveSteps);
         if (steps.length > 0) entry.inFlight = steps;
       }
+      if (activeChild) entry.activeChild = activeChild;
       // Best-effort: a missing/malformed heartbeat file is "no heartbeat yet",
       // never a scan failure — same tolerance as every other worktree read here.
       // A heartbeat naming a different step than the one in flight is a
@@ -882,6 +952,11 @@ function tierTag(tier?: ComplexityTier): string {
 /** `  → <url>` PR suffix, or empty when no PR is open. */
 function prSuffix(prUrl?: string): string {
   return prUrl ? `  → ${prUrl}` : '';
+}
+
+/** Cursor-derived stack position, deliberately distinct from provider child telemetry. */
+function activeChildSuffix(entry: { activeChild?: ActiveChildDashboardState }): string {
+  return entry.activeChild ? ` (child ${entry.activeChild.child}/${entry.activeChild.total})` : '';
 }
 
 /**
@@ -1063,7 +1138,7 @@ export function renderDashboard(
   lines.push(`HALTED (${halted.length})`);
   for (const h of halted) {
     const step = h.step ? ` @${h.step}` : '';
-    lines.push(`  • ${h.slug}${tierTag(h.tier)}${step} — reason: ${h.reason}${lifecycleSuffix(h.lifecycle)}${prSuffix(h.prUrl)}; remedy: clear this row's .pipeline/HALT to resume`);
+    lines.push(`  • ${h.slug}${tierTag(h.tier)}${step}${activeChildSuffix(h)} — reason: ${h.reason}${lifecycleSuffix(h.lifecycle)}${prSuffix(h.prUrl)}; remedy: clear this row's .pipeline/HALT to resume`);
     for (const entry of h.inapplicable ?? []) {
       lines.push(`    inapplicable: ${entry.step} — ${entry.reason}`);
     }
@@ -1072,7 +1147,7 @@ export function renderDashboard(
   const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
   lines.push(`IN-PROGRESS (${inProgress.length})`);
   for (const p of inProgress) {
-    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${elapsedStepTimeSuffix(p.elapsedStepTimeMs)}${lastTestOutcomeSuffix(p.lastTestOutcome)}${childWorkSuffix(p)}${tokenBurnSuffix(p)}${prSuffix(p.prUrl)}`);
+    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activeChildSuffix(p)}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${elapsedStepTimeSuffix(p.elapsedStepTimeMs)}${lastTestOutcomeSuffix(p.lastTestOutcome)}${childWorkSuffix(p)}${tokenBurnSuffix(p)}${prSuffix(p.prUrl)}`);
     for (const entry of p.inapplicable ?? []) {
       lines.push(`    inapplicable: ${entry.step} — ${entry.reason}`);
     }

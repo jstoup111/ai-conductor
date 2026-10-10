@@ -23,6 +23,7 @@ import { BuildReviewSourceReadError } from '../../src/engine/build-review-scope-
 import { recordTestSuiteRemediation } from '../../src/engine/test-suite-remediation.js';
 import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import { materializeBuildReviewLap } from '../../src/engine/build-review-materialization.js';
 
 // Assembled so the text-only marker scan never reads a fixture string as this file's own marker (#2597).
@@ -92,6 +93,35 @@ function fakeGit(
 const execFileAsync = promisify(execFile);
 
 describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
+  it('binds the suite-proof inspection to the active leaf child', async () => {
+    const child = parseChildId(2)!;
+    const root = await mkdtemp(join(tmpdir(), 'build-review-leaf-proof-'));
+    const planPath = join(root, '.docs/plans/example.md');
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await writeFile(planPath, '# Plan\n');
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      { match: ['symbolic-ref', 'refs/remotes/origin/HEAD'], result: { stdout: 'refs/remotes/origin/main\n' } },
+      { match: ['rev-parse', 'refs/remotes/origin/main'], result: { stdout: 'tracking\n' } },
+      { match: ['ls-remote', 'origin', 'main'], result: { stdout: 'tracking\trefs/heads/main\n' } },
+      { match: ['rev-parse', 'origin/main'], result: { stdout: 'base\n' } },
+      { match: ['rev-parse', 'HEAD'], result: { stdout: 'head\n' } },
+      { match: ['merge-base', 'base', 'head'], result: { stdout: 'base\n' } },
+      { match: ['diff', 'base..head'], result: { stdout: '' } },
+    ]);
+    const inspectTestSuite = vi.fn(async () => CURRENT_PROOF);
+
+    try {
+      await assembleBuildReviewInputs(git, planPath, {
+        inspectTestSuite,
+        activeChild: { child, isLeaf: true },
+      });
+
+      expect(inspectTestSuite).toHaveBeenCalledWith({ child, isLeaf: true });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   describe('unit (scripted GitRunner)', () => {
     let planPath: string;
     let dir: string;

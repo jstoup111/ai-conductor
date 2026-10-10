@@ -202,8 +202,9 @@ describe('printGuide: bare `compose --help` lists the unclaim/requeue maintenanc
   });
 });
 
-describe('resolved intake forget help (Task 4)', () => {
-  it('explains that --resolved-by comments and closes only when the flag is supplied', async () => {
+// Covers: task:5
+describe('resolved intake forget help (Task 5)', () => {
+  it('explains the approval route and absent-entry resolution behavior', async () => {
     const out: string[] = [];
     const code = await dispatchEngineer(
       { kind: 'help', topic: 'forget' },
@@ -211,11 +212,22 @@ describe('resolved intake forget help (Task 4)', () => {
     );
 
     expect(code).toBe(0);
-    const text = out.join('\n').toLowerCase();
+    const rendered = out.join('\n');
+    const text = rendered.toLowerCase();
     expect(text).toContain('--resolved-by <reference>');
     expect(text).toContain('comment');
     expect(text).toContain('close');
     expect(text).toMatch(/without.*--resolved-by.*does not close/i);
+    expect(text).toContain('sole assignee');
+    expect(text).toContain('interactive');
+    expect(text).toMatch(/non-interactive.*refused/i);
+    expect(text).toMatch(/--resolved-by.*without.*ledger entry/i);
+
+    const flagTokens = [...rendered.matchAll(/(?:^|\s)(-[A-Za-z-]\S*)/g)].map((match) => match[1]);
+    expect(flagTokens).not.toHaveLength(0);
+    expect(new Set(flagTokens)).toEqual(new Set(['--resolved-by']));
+    expect(text).not.toMatch(/override|bypass|skip/);
+    expect(rendered).not.toMatch(/(?:^|\s)[A-Z][A-Z0-9_]*\b/);
   });
 
   it('shows the optional --resolved-by form in the compose guide', async () => {

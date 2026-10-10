@@ -55,6 +55,13 @@ export const EVENT_SINKS = {
   coverage_binding_invalidated: { render: false, persist: true, audit: false, otel: false },
   coverage_binding_task_reopened: { render: false, persist: true, audit: false, otel: false },
   plan_slices_changed: { render: false, persist: true, audit: false, otel: false },
+  // Per-child transitions are durable spine occurrences. They intentionally do
+  // not widen the renderer, audit, or OTel surfaces until a later task owns one.
+  child_started: { render: false, persist: true, audit: false, otel: false },
+  child_closed: { render: false, persist: true, audit: false, otel: false },
+  child_switched: { render: false, persist: true, audit: false, otel: false },
+  rebase_skipped_for_stack: { render: false, persist: true, audit: false, otel: false },
+  story_reowned: { render: false, persist: true, audit: false, otel: false },
   config_deprecated_key: { render: false, persist: true, audit: false, otel: false },
   build_review_read_only_capability: { render: true, persist: true, audit: false, otel: false },
   contained_live_checkout_drift: { render: true, persist: true, audit: false, otel: false },

@@ -20,6 +20,7 @@ import { readRegionCaptures } from './pr-body-region-store.js';
 import { seedTaskStatus, TaskReopenError } from './task-seed.js';
 import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
+import { resolveChildBase } from './child-cursor.js';
 import {
   gateVerdictStillValid,
   rebaseOperationPublicationBlocker,
@@ -42,6 +43,7 @@ import { resolveGateCodeValidityConfig } from './config.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import {
   HALT_MARKER_RELATIVE as HALT_MARKER,
+  resolveChildTaskScope,
   resolveTaskIdsWithDiagnostics,
 } from './task-progress.js';
 export { HALT_MARKER };
@@ -99,7 +101,9 @@ import {
   COVERAGE_BINDING_COMPLETION_STATUSES,
   coverageBindingEnvelopePath,
   parseCoverageBindingEnvelope,
+  projectChildOwnership,
 } from './coverage-binding-envelope.js';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -772,6 +776,7 @@ export async function resolveArtifactFiles(
 export async function recordAppendedRemediationTaskIds(
   projectRoot: string,
   ids: string[],
+  child?: ChildId,
 ): Promise<void> {
   if (ids.length === 0) return;
   const pipelineDir = join(projectRoot, '.pipeline');
@@ -781,9 +786,25 @@ export async function recordAppendedRemediationTaskIds(
     const prior = Array.isArray(state.appendedRemediationTaskIds)
       ? state.appendedRemediationTaskIds.filter((value): value is string => typeof value === 'string')
       : [];
+    const appendedRemediationTaskIds = Array.from(new Set([...prior, ...ids]));
+    if (child === undefined) {
+      return {
+        ...state,
+        appendedRemediationTaskIds,
+      };
+    }
+    const priorChildren = typeof state.appendedRemediationTaskChildren === 'object'
+      && state.appendedRemediationTaskChildren !== null
+      && !Array.isArray(state.appendedRemediationTaskChildren)
+      ? state.appendedRemediationTaskChildren
+      : {};
     return {
       ...state,
-      appendedRemediationTaskIds: Array.from(new Set([...prior, ...ids])),
+      appendedRemediationTaskIds,
+      appendedRemediationTaskChildren: {
+        ...priorChildren,
+        ...Object.fromEntries(ids.map((id) => [id, child])),
+      },
     };
   });
   if (!result.ok) {
@@ -1111,6 +1132,12 @@ export async function sweepStaleReviewArtifacts(
 
 export interface CompletionResult {
   done: boolean;
+  /**
+   * A deliberately empty child acceptance scope.  This is distinct from a
+   * skipped step: the child entered the gate, the sealed ownership baseline
+   * proved that it owns no story criteria, and no authoring dispatch is due.
+   */
+  acceptanceOutcome?: 'no-owned-criteria';
   /** Human-readable description of what's missing; injected into retry prompt. */
   reason?: string;
   /**
@@ -1241,6 +1268,11 @@ export async function recordPrBodyRegenAttempt(dir: string, prUrl: string): Prom
 
 /** Context threaded through completion predicates. Optional fields fail open. */
 export interface CompletionContext {
+  /**
+   * The active stacked BUILD child. Acceptance evidence is local to this
+   * region; absent preserves the legacy feature-root evidence paths.
+   */
+  activeChild?: ChildId;
   /**
    * Whether this BUILD lap has already spent its one retry for explicit
    * unverified Done-when closes. Task 9 persists and supplies this flag.
@@ -1618,6 +1650,21 @@ export interface AcceptanceRedRemediationException {
   attribution: string;
 }
 
+/**
+ * A child-owned acceptance spec can legitimately be green when an earlier
+ * child delivered the behavior first. Its attribution is checked against the
+ * earlier child's durable closure tip at the completion boundary.
+ */
+export interface AcceptanceRedPriorChildGreenException {
+  kind: 'prior-child-green';
+  reason: string;
+  attribution: string;
+}
+
+export type AcceptanceRedException =
+  | AcceptanceRedRemediationException
+  | AcceptanceRedPriorChildGreenException;
+
 export interface AcceptanceSpecsGeneratedEvidence {
   outcome: 'specs-generated';
   /** The exact test command run (for the audit trail / reason messages). */
@@ -1636,8 +1683,8 @@ export interface AcceptanceSpecsGeneratedEvidence {
   ranAt: string;
   /** Why the observed failures prove the feature remains unimplemented. */
   intentRationale: string;
-  /** Recorded authorization for a remediation that could not establish RED separately. */
-  exception?: AcceptanceRedRemediationException;
+  /** Recorded authorization for a run that could not establish ordinary RED separately. */
+  exception?: AcceptanceRedException;
   /** Raw runner summary line, e.g. pytest's "5 failed in 12.3s". */
   summary?: string;
 }
@@ -1736,15 +1783,15 @@ export function validateAcceptanceRedEvidence(
       reason: `acceptance-specs RED run executed 0 tests — the command did not select the feature's specs`,
     };
   }
-  const hasRemediationException = hasRecordedRemediationException(e.exception);
-  if ('exception' in e && !hasRemediationException) {
+  const hasRecordedException = hasRecordedAcceptanceRedException(e.exception);
+  if ('exception' in e && !hasRecordedException) {
     return {
       ok: false,
       class: 'shape',
-      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record a remediation "exception" with a non-empty reason and attribution`,
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record a recognized "exception" with a non-empty reason and attribution`,
     };
   }
-  if (failed < 1 && !hasRemediationException) {
+  if (failed < 1 && !hasRecordedException) {
     return {
       ok: false,
       class: 'outcome',
@@ -1766,7 +1813,7 @@ export function validateAcceptanceRedEvidence(
     };
   }
   if (
-    (!hasRemediationException &&
+    (!hasRecordedException &&
       (!Array.isArray(e.failingTests) || e.failingTests.length === 0)) ||
     (Array.isArray(e.failingTests) &&
       e.failingTests.some(
@@ -1937,16 +1984,47 @@ async function groundDispositionOnlyEvidence(
   // shape-only behavior rather than guessing which stories document applies.
   if (!ctx.featureDesc && !ctx.planPath && !ctx.artifactResolution) return null;
 
-  const authoritativeCriteria = extractAuthoritativeStoryCriteria(storiesText);
+  const allAuthoritativeCriteria = extractAuthoritativeStoryCriteria(storiesText);
+  let authoritativeCriteria = allAuthoritativeCriteria;
+  if (ctx.activeChild !== undefined) {
+    let envelope;
+    try {
+      envelope = parseCoverageBindingEnvelope(
+        JSON.parse(await readFile(coverageBindingEnvelopePath(dir), 'utf-8')),
+      );
+    } catch {
+      envelope = null;
+    }
+    if (
+      envelope === null ||
+      !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status) ||
+      envelope.storyOwnership === undefined
+    ) {
+      return dispositionGroundingRefusal(
+        `disposition-only evidence cannot be validated for child ${ctx.activeChild}: coverage-binding ownership is missing or invalid`,
+      );
+    }
+    const ownedStories = new Set(projectChildOwnership(envelope, ctx.activeChild).storyIds);
+    authoritativeCriteria = allAuthoritativeCriteria.filter((criterion) =>
+      [...ownedStories].some((storyId) => criterion.startsWith(`Story ${storyId} `)),
+    );
+  }
   const authoritativeSet = new Set(authoritativeCriteria);
   const recordedCriteria = evidence.dispositions.map((entry) =>
-    canonicalizeDispositionCriterion(entry.criterion, authoritativeCriteria),
+    canonicalizeDispositionCriterion(entry.criterion, allAuthoritativeCriteria),
   );
   const recordedSet = new Set(recordedCriteria);
-  const unexpected = recordedCriteria.filter((criterion) => !authoritativeSet.has(criterion));
+  const allAuthoritativeSet = new Set(allAuthoritativeCriteria);
+  const foreign = ctx.activeChild === undefined
+    ? []
+    : recordedCriteria.filter((criterion) =>
+      allAuthoritativeSet.has(criterion) && !authoritativeSet.has(criterion),
+    );
+  const unexpected = recordedCriteria.filter((criterion) => !allAuthoritativeSet.has(criterion));
   const omitted = authoritativeCriteria.filter((criterion) => !recordedSet.has(criterion));
-  if (unexpected.length > 0 || omitted.length > 0) {
+  if (foreign.length > 0 || unexpected.length > 0 || omitted.length > 0) {
     const differences = [
+      foreign.length > 0 ? `not owned by child ${ctx.activeChild}: ${foreign.join(', ')}` : '',
       unexpected.length > 0 ? `invented: ${unexpected.join(', ')}` : '',
       omitted.length > 0 ? `omitted: ${omitted.join(', ')}` : '',
     ].filter(Boolean);
@@ -2066,16 +2144,71 @@ function isDispositionOnlyEvidence(ev: unknown): ev is AcceptanceDispositionOnly
   return typeof ev === 'object' && ev !== null && (ev as Record<string, unknown>).outcome === 'disposition-only';
 }
 
-function hasRecordedRemediationException(exception: unknown): boolean {
+function hasRecordedAcceptanceRedException(exception: unknown): boolean {
   if (typeof exception !== 'object' || exception === null) return false;
   const candidate = exception as Record<string, unknown>;
   return (
-    candidate.kind === 'remediation' &&
+    (candidate.kind === 'remediation' || candidate.kind === 'prior-child-green') &&
     typeof candidate.reason === 'string' &&
     candidate.reason.trim() !== '' &&
     typeof candidate.attribution === 'string' &&
     candidate.attribution.trim() !== ''
   );
+}
+
+function priorChildGreenAttribution(exception: unknown): string | undefined {
+  if (!hasRecordedAcceptanceRedException(exception)) return undefined;
+  const candidate = exception as Record<string, unknown>;
+  return candidate.kind === 'prior-child-green' ? candidate.attribution as string : undefined;
+}
+
+async function validatePriorChildGreenAttribution(
+  dir: string,
+  ctx: CompletionContext,
+  attribution: string,
+): Promise<CompletionResult | null> {
+  if (ctx.activeChild === undefined || !ctx.featureDesc) {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} requires an active child and feature slug`,
+    };
+  }
+  const childBase = await resolveChildBase(
+    dir,
+    slugify(ctx.featureDesc),
+    ctx.activeChild,
+    { ...(ctx.git === undefined ? {} : { git: ctx.git }) },
+  );
+  if (childBase.kind === 'none') {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} is invalid for child ${ctx.activeChild}: it has no parent closure tip`,
+    };
+  }
+  if (childBase.kind === 'parent-missing') {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} cannot resolve parent child ${childBase.parent} branch ${childBase.branch}`,
+    };
+  }
+  if (childBase.kind === 'parent-not-ancestor') {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} cannot use parent child ${childBase.parent} closure tip ${childBase.sha}: it is not an ancestor of HEAD`,
+    };
+  }
+  if (attribution !== childBase.sha) {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} does not match parent child ${childBase.parent} closure tip ${childBase.sha}`,
+    };
+  }
+  return null;
 }
 
 /**
@@ -2099,8 +2232,8 @@ export const BUILD_REVIEW_VERDICT = '.pipeline/build-review.json';
  * Best-effort: a missing file (already removed, or never written) is a no-op,
  * not an error.
  */
-export async function removeBuildReviewVerdict(dir: string): Promise<void> {
-  await rm(join(dir, BUILD_REVIEW_VERDICT), { force: true });
+export async function removeBuildReviewVerdict(dir: string, child?: ChildId): Promise<void> {
+  await rm(pipelinePathFor(dir, 'build-review.json', child), { force: true });
 }
 
 /**
@@ -2123,6 +2256,7 @@ export async function discardStaleLapBuildReviewFail(
   dir: string,
   verdictRaw: unknown,
   git?: GitRunner,
+  child?: ChildId,
 ): Promise<{ storedLapId: string; currentLapId: string } | null> {
   const aggregate = parseBuildReviewAggregate(verdictRaw);
   if (!aggregate || aggregate.verdict === 'PASS') return null;
@@ -2132,7 +2266,7 @@ export async function discardStaleLapBuildReviewFail(
     if (!sha) return null;
     const currentLapId = `lap-${sha}`;
     if (aggregate.lapId === currentLapId) return null;
-    await removeBuildReviewVerdict(dir).catch(() => {
+    await removeBuildReviewVerdict(dir, child).catch(() => {
       /* best-effort removal — the returned mismatch still suppresses the kickback */
     });
     return { storedLapId: aggregate.lapId, currentLapId };
@@ -2821,7 +2955,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
 
       // Seed task-status.json from the plan, ensuring file exists and is consistent.
       try {
-        await seedTaskStatus(ctx.projectRoot, ctx.planPath, enginePlanPath);
+        await seedTaskStatus(ctx.projectRoot, ctx.planPath, enginePlanPath, {
+          ...(ctx.activeChild === undefined || !ctx.featureDesc
+            ? {}
+            : { childBase: { slug: ctx.featureDesc, child: ctx.activeChild } }),
+        });
       } catch (err) {
         console.error(
           `[build] seedTaskStatus failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -2957,9 +3095,22 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       // task is trailer-evidenced but rows are still pending/in_progress
       // (rows never explicitly flipped) previously false-halted here at
       // 100% real completion.
-      const taskResolution = await resolveTaskIdsWithDiagnostics(ctx.projectRoot, planTaskIds);
+      let scopedTaskIds = planTaskIds;
+      if (ctx.activeChild !== undefined) {
+        const scope = await resolveChildTaskScope(ctx.projectRoot, ctx.activeChild);
+        if (scope.kind === 'refused') return { done: false, reason: scope.reason };
+        const absentFromPlan = scope.taskIds.filter((id) => !planTaskIds.includes(id));
+        if (absentFromPlan.length > 0) {
+          return {
+            done: false,
+            reason: `child ${ctx.activeChild} task membership names task(s) absent from the plan: ${absentFromPlan.join(', ')}`,
+          };
+        }
+        scopedTaskIds = scope.taskIds;
+      }
+      const taskResolution = await resolveTaskIdsWithDiagnostics(ctx.projectRoot, scopedTaskIds);
       const resolvedIds = taskResolution.resolved;
-      const unresolved = planTaskIds.filter((id) => !resolvedIds.has(id));
+      const unresolved = scopedTaskIds.filter((id) => !resolvedIds.has(id));
 
       if (unresolved.length > 0) {
         const { parsePlanTasks } = await import('./autoheal.js');
@@ -2979,7 +3130,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           .find((reason): reason is string => Boolean(reason));
         return {
           done: false,
-          reason: `${unresolved.length}/${planTaskIds.length} tasks pending/not completed: ${ids} — ${titles}` +
+          reason: `${unresolved.length}/${scopedTaskIds.length} tasks pending/not completed: ${ids} — ${titles}` +
             (repairReason ? `; ${repairReason}` : ''),
         };
       }
@@ -3035,12 +3186,36 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // criterion below this layer and therefore must have no spec files or RED-run
   // contract. Both shapes are validated before completion.
   acceptance_specs: async (dir, ctx): Promise<CompletionResult> => {
+    // A stack-eligible child can own implementation tasks while owning no
+    // stories.  Its acceptance gate is therefore already complete from the
+    // sealed ownership baseline; asking the acceptance author to invent work
+    // would make sibling criteria leak into this child.  This outcome is only
+    // available with an active child, so flat (non-stacked) features retain
+    // the ordinary evidence requirement.
+    if (ctx.activeChild !== undefined) {
+      let envelope;
+      try {
+        envelope = parseCoverageBindingEnvelope(
+          JSON.parse(await readFile(coverageBindingEnvelopePath(dir), 'utf-8')),
+        );
+      } catch {
+        envelope = null;
+      }
+      if (
+        envelope !== null &&
+        COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status) &&
+        envelope.storyOwnership !== undefined &&
+        projectChildOwnership(envelope, ctx.activeChild).storyIds.length === 0
+      ) {
+        return { done: true, acceptanceOutcome: 'no-owned-criteria' };
+      }
+    }
     const files = await findArtifactFiles(
       dir,
       'acceptance_specs',
       extraArtifactGlobs('acceptance_specs', ctx.config),
     );
-    const evidencePath = join(dir, ACCEPTANCE_SPECS_RED_EVIDENCE);
+    const evidencePath = pipelinePathFor(dir, basename(ACCEPTANCE_SPECS_RED_EVIDENCE), ctx.activeChild);
     let raw: string;
     try {
       raw = await readFile(evidencePath, 'utf-8');
@@ -3065,6 +3240,15 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (!verdict.ok) {
       return { done: false, reason: verdict.reason, acceptanceRedRefusalClass: verdict.class };
     }
+    const priorChildGreen = priorChildGreenAttribution(
+      typeof parsed === 'object' && parsed !== null
+        ? (parsed as Record<string, unknown>).exception
+        : undefined,
+    );
+    if (priorChildGreen !== undefined) {
+      const attributionRefusal = await validatePriorChildGreenAttribution(dir, ctx, priorChildGreen);
+      if (attributionRefusal) return attributionRefusal;
+    }
     if (isDispositionOnlyEvidence(parsed)) {
       // rem-build-review-task13-1: the zero-spec check counts only the
       // FEATURE's own acceptance specs — the acceptance corpus is
@@ -3072,27 +3256,82 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       // not refuse a legitimate disposition-only completion. Attribution
       // follows resolveArtifactFiles' feature association: a spec belongs
       // to the feature when it is among the feature's changed paths or its
-      // filename stem matches a feature identity. With no attribution
-      // context at all (legacy callers), fall back fail-closed to the
-      // whole corpus, exactly as before.
+      // filename stem matches a feature identity. A non-first child instead
+      // has a stronger association boundary: only changes since its parent's
+      // closure tip belong to it, even when an earlier child's filename has
+      // the feature's stem. With no attribution context at all (legacy
+      // callers), fall back fail-closed to the whole corpus, exactly as before.
+      let childChangedPaths: ReadonlySet<string> | undefined;
+      if (ctx.activeChild !== undefined) {
+        if (!ctx.featureDesc) {
+          return {
+            done: false,
+            acceptanceRedRefusalClass: 'shape',
+            reason: `disposition-only acceptance evidence cannot resolve child ${ctx.activeChild}'s base without the feature slug`,
+          };
+        }
+        const childBase = await resolveChildBase(
+          dir,
+          slugify(ctx.featureDesc),
+          ctx.activeChild,
+          { ...(ctx.git === undefined ? {} : { git: ctx.git }) },
+        );
+        if (childBase.kind === 'parent-missing') {
+          return {
+            done: false,
+            acceptanceRedRefusalClass: 'shape',
+            reason: `disposition-only acceptance evidence cannot resolve child ${ctx.activeChild}'s base: parent child ${childBase.parent} branch ${childBase.branch} is missing`,
+          };
+        }
+        if (childBase.kind === 'parent-not-ancestor') {
+          return {
+            done: false,
+            acceptanceRedRefusalClass: 'shape',
+            reason: `disposition-only acceptance evidence cannot resolve child ${ctx.activeChild}'s base: parent child ${childBase.parent} tip ${childBase.sha} is not an ancestor of HEAD`,
+          };
+        }
+        if (childBase.kind === 'parent') {
+          const git = ctx.git ?? makeGitRunner(dir);
+          let changed: Awaited<ReturnType<GitRunner>>;
+          try {
+            changed = await git(['diff', '--name-only', childBase.sha, 'HEAD']);
+          } catch {
+            return {
+              done: false,
+              acceptanceRedRefusalClass: 'shape',
+              reason: `disposition-only acceptance evidence cannot determine changes since parent child ${childBase.parent} (${childBase.sha})`,
+            };
+          }
+          if (changed.exitCode !== 0) {
+            return {
+              done: false,
+              acceptanceRedRefusalClass: 'shape',
+              reason: `disposition-only acceptance evidence cannot determine changes since parent child ${childBase.parent} (${childBase.sha})`,
+            };
+          }
+          childChangedPaths = new Set(
+            changed.stdout.split(/\r?\n/).map((path) => path.trim()).filter(Boolean),
+          );
+        }
+      }
       const featureIdentities = [
         ...(ctx.artifactResolution?.featureIdentities ?? []),
         ctx.planPath ? planStem(ctx.planPath) : undefined,
         ctx.featureDesc ? slugify(ctx.featureDesc) : undefined,
       ].filter((identity): identity is string => Boolean(identity));
-      const changedPaths = ctx.artifactResolution?.changedPaths ?? new Set<string>();
+      const changedPaths = childChangedPaths ?? ctx.artifactResolution?.changedPaths ?? new Set<string>();
       const hasAttributionContext = featureIdentities.length > 0 || changedPaths.size > 0;
       const featureSpecFiles = hasAttributionContext
         ? files.filter((file) => {
             const repoPath = relative(dir, file).replaceAll('\\', '/');
             return (
               changedPaths.has(repoPath) ||
-              featureIdentities.some((identity) =>
+              (childChangedPaths === undefined && featureIdentities.some((identity) =>
                 artifactMatchesFeatureIdentity(acceptanceSpecStem(file), identity, {
                   strategy: 'normalized-stem',
                   stripDatePrefix: true,
                 }),
-              )
+              ))
             );
           })
         : files;
@@ -3108,7 +3347,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         };
       }
       try {
-        await access(join(dir, '.pipeline/acceptance-specs-run.json'));
+        await access(pipelinePathFor(dir, 'acceptance-specs-run.json', ctx.activeChild));
         return {
           done: false,
           acceptanceRedRefusalClass: 'shape',
@@ -3133,7 +3372,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       viaException:
         typeof parsed === 'object' &&
         parsed !== null &&
-        hasRecordedRemediationException((parsed as Record<string, unknown>).exception),
+        hasRecordedAcceptanceRedException((parsed as Record<string, unknown>).exception),
     };
   },
 
@@ -3514,7 +3753,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // keep the gate unsatisfied (fail-closed) — a FAIL surfaces the grader's
   // reasons so the kickback message tells `build` what to fix.
   build_review: async (dir, ctx): Promise<CompletionResult> => {
-    const path = join(dir, BUILD_REVIEW_VERDICT);
+    const path = pipelinePathFor(dir, 'build-review.json', ctx.activeChild);
     const cmpFloor = verdictFreshnessComparand(ctx);
 
     // gate-code-validity-on-redispatch (#817): before falling into the
@@ -4547,18 +4786,18 @@ export type RetryDecision =
     };
 
 /**
- * Pure, synchronous rerun-vs-route classifier for the SHIP-tail verdict steps
- * (issue #646). A terminal refusal is classified before the eligible-step
- * check, so callers must keep out-of-scope steps such as `build` from this
- * helper. In scope, signal (a) "named-route" fires when the step has a real, fresh, non-passing
+ * Pure, synchronous rerun-vs-route classifier. Terminal refusals and typed
+ * unretryable inputs apply before verdict-step eligibility; the latter applies
+ * to every step except `build`. Legacy signals remain scoped to the SHIP-tail
+ * verdict steps (issue #646). Signal (a) "named-route" fires when the step has a real, fresh, non-passing
  * decision to route on — `completion.routeClass === 'named-route'` for the
  * review steps, or `prdAuditNonClean` for prd_audit — regardless of attempt
  * number. Signal (b) "identical-repeat" fires only when the retry has already
  * happened once (`attempt >= 2`) and produced the exact same reason on inputs
  * that provably haven't changed. The conductor computes `inputsUnchanged` and
  * `prdAuditNonClean` and passes them in. Signal (c) "unretryable-inputs"
- * fires on the first attempt when the runner reports inputs that only another
- * step can change. This helper does no I/O.
+ * fires on the first attempt for every step except `build` when the runner
+ * reports inputs that only another step can change. This helper does no I/O.
  */
 export function classifyRetryDecision(input: {
   step: StepName;
@@ -4583,9 +4822,10 @@ export function classifyRetryDecision(input: {
   if (terminalRefusal === 'needs-human' || terminalRefusal === 'validation-verdict') {
     return { decision: 'route', signal: 'terminal-refusal' };
   }
+  if (step !== 'build' && unretryableInputs) {
+    return { decision: 'route', signal: 'unretryable-inputs' };
+  }
   if (!RETRY_CLASSIFY_STEPS.has(step)) return { decision: 'rerun' };
-
-  if (unretryableInputs) return { decision: 'route', signal: 'unretryable-inputs' };
 
   // D5: no verdict for this dispatch is a retryable absence, even when its
   // diagnostic happens to repeat byte-for-byte. This must outrank a PRD

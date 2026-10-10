@@ -167,7 +167,7 @@ park`/`unpark`/`restart` and `reseal`), corrupting the run that dispatched them;
 started the session owns all conductor operations for it. The only exceptions are the
 session-sanctioned worker commands the harness's own skills and hooks require a session to run —
 `scoped-run`, `overlap-scan`, `plan-protected-targets`, `manual-test-record`, `closeout-event`, and
-`derive-feedback`, `scope-check`, `task` (`start`/`done`), and `github-operation` — which stay
+`derive-feedback`, `scope-check`, `task-membership-check`, `task` (`start`/`done`), and `github-operation` — which stay
 available under the marker. There is no config off-switch; enforcement lives in
 `src/conductor/src/execution/daemon-session.ts`. The same policy backs the instruction audit that
 keeps engine prompts and shipped skills from directing a managed session to a refused command — see
@@ -221,6 +221,29 @@ intentional widening. It is not an operator workflow; worktree provisioning wire
 The report-only default is deliberate. Set `build_review.scopeContainmentEnforced: true` to enable refusal.
 A `Scope:` trailer documents a widening; its path, rationale, task id, and commit SHA are supplied directly to
 `build_review`, and it never bypasses the grader's semantic scope judgment.
+
+## `ai-conductor task-membership-check`
+
+```bash
+ai-conductor task-membership-check <commit-message-path>
+```
+
+This hook-only command is invoked by the generated `commit-msg` hook when a commit carries a `Task:`
+trailer. It guards [stacked-feature](configuration.md#child-by-child-build) child branches; worktree
+provisioning wires it automatically.
+
+On any branch other than `feat/c<k>/<slug>` it exits 0 without reading state. On a child branch it
+collects the task ids from the message and `.pipeline/current-task`, then resolves each id's owning child
+from the coverage-binding envelope's slice membership plus the remediation-task child map in
+`.pipeline/engine-state.json`.
+
+| Exit | Meaning | Hook behavior |
+| --- | --- | --- |
+| 0 | Not a child branch, no task id, or every id belongs to the checked-out child | Allows the commit |
+| 1 | An id belongs to another child or has no recorded owner, or membership cannot be read (missing or foreign envelope, malformed engine state) | Blocks the commit and prints the reason |
+
+Unlike `scope-check`, this check fails closed: a cross-child commit would put one child's work into
+another child's pull request.
 
 ## `ai-conductor inline`
 
@@ -437,12 +460,19 @@ invoke Git, GitHub, or the network. The daemon startup dashboard does not yet re
 that UI work is tracked in [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
 
 For every in-progress feature it also prints a `PLAN GROWTH [<slug>]:` line reading the feature's
-kickback ledger and resolved `prd_audit` cap: the plan's authored task count, the number of tasks added
+kickback ledger and resolved `prd_audit` cap. For a stacked feature the line reads
+`PLAN GROWTH [<slug> child <k>/<N>]:`, and its per-gate budgets come from the active child's ledger. It shows the plan's authored task count, the number of tasks added
 so far (broken down by the gate that added them, when any), and how many remain under the cap.
 
 For every halted or in-progress feature with an honored
 [per-feature applicability](steps.md#per-feature-applicability) declaration, it prints
 `inapplicable [<slug>]: <step> — <reason>`.
+
+While the repo's daemon is running and its newest `daemon_backlog_snapshot` shows a free slot while
+an origin refresh is still pending, it prints `ROOT REFRESH: pending — <n> slot(s) free, <m> busy; …`.
+On a self-host daemon whose containment is unproven, that refresh waits for every open provider
+window to close. The free slots still fill from local discovery, so a cleared halt or an unparked
+feature is dispatched without waiting. This line tells a refresh-blocked pool from an empty backlog.
 
 While the repo's daemon is running, it prints `IN FLIGHT [<slug>]: <step> running <age>` for each step
 in an in-progress feature's `.pipeline/events.jsonl` that has a `step_started` event and no terminal
@@ -687,7 +717,7 @@ returns 1.
 | `handoff` | `compose handoff --project <name> --branch <branch> --worktree <path> [--source-ref <ref>]` | Opens the spec PR with the `spec` label and with `gh` running inside the per-idea worktree, then removes the worktree and prints `{kind:'pr-opened', url}` or `{kind:'local-commit', branch, repoPath, reason}`. `--branch` must be `spec/<slug>`, where `<slug>` is 1–50 lowercase alphanumeric segments joined by single hyphens; one trailing hyphen is permitted. Then starts the target repo's daemon, fire-and-forget. With `--source-ref`, writes back to the ledger, applies the `engineer:handled` label, and mirrors the issue's `priority: <band>` criticality labels onto the spec PR (fail-open — a read or write failure logs one `[pr-criticality]` line and never fails the handoff). On failure it records branch evidence and keeps the worktree. | 0, including when worktree removal fails (warned); 1 on project not found, target resolution error, or PR open failure |
 | `poll` | `compose poll` | One synchronous sweep of the GitHub issues adapter, enqueuing every returned envelope into the durable inbox. A registration whose path is absent is skipped without a GitHub call, while other registrations continue polling. Prints `{kind:'poll', enqueued, sourceRefs}`. No routing, no timer, no detached process; the ledger dedups, so a second poll enqueues nothing new. | 0; 1 on unknown flag |
 | `claim` | `compose claim` | Claims the oldest unblocked inbox entry. The whole claim walk holds the inbox lease (`<engineer dir>/inbox.lease`) and waits up to 5 minutes for a concurrent claim. It first returns inbox envelopes left `.claimed` while their ledger entry is still pending, reporting `released <n> stranded intake claim(s)` on stderr. Before selecting work, it also reaps stranded `claimed` entries older than `stale_claim_window_hours` (24 hours by default), returns them to pending, and may serve a reaped entry in that same claim. Builds a fresh blocker resolver per call and reads issue labels uncached. Prints `{empty:true}`, `{allBlocked:true, entries:[…]}`, or the claimed envelope. A real claim acks the queue, moves the ledger to `claimed`, and persists a claim record for a later `worktree --source-ref`. | 0 for each printed outcome; 1 on unknown flag, corrupt intake ledger, lease wait timeout (`engineer claim: Intake claim in progress: …`), or stranded-claim recovery or queue read fault (`engineer claim: <message>`), with nothing claimed |
-| `forget` | `compose forget <sourceRef> [--resolved-by <reference>]` | Drops the ledger entry and strips the `engineer:handled` label so `poll` sees the issue again. With `--resolved-by`, it first comments the supplied resolving reference on the originating GitHub issue and closes it; without that explicit flag it never closes the issue. A missing entry is an error when `--resolved-by` is supplied and otherwise reports `{found:false}`. Label removal is best-effort. | 0 on a completed drop; 1 on an unknown flag or a refused/failed resolved-by close |
+| `forget` | `compose forget <sourceRef> [--resolved-by <reference>]` | Drops the ledger entry and strips the `engineer:handled` label so `poll` sees the issue again. With `--resolved-by`, it first comments the supplied resolving reference on the originating GitHub issue and closes it; without that explicit flag it never closes the issue. With `--resolved-by` and no ledger entry, it still comments and closes the issue and reports `{found:false, removed:false, closed:true, resolvedBy}`; without the flag, a missing entry reports `{found:false}`. When the machine owner is not the issue's sole assignee, each GitHub write asks for approval at an interactive terminal; a non-interactive invocation is refused, and the error says to rerun the same command from an interactive terminal. Label removal is best-effort. | 0 on a completed drop or resolved-by close; 1 on an unknown flag, a non-GitHub `<sourceRef>` with `--resolved-by`, or a refused/failed resolved-by comment or close |
 | `unclaim` | `compose unclaim <sourceRef>` | Single-entry maintenance: returns a `claimed` ledger entry without a recorded PR to pending while preserving its original capture time, so it can be claimed again. Missing, non-claimed, or PR-delivered entries report a non-error result and are left unchanged; resolve or forget a delivered entry instead. | 0 for handled or refused entries; 1 on unknown flag |
 | `requeue` | `compose requeue --stale [--older-than <dur>]` | Bulk maintenance: returns stale claimed entries without a recorded PR to pending; PR-bearing claimed entries are reserved for `resolve`/`forget` and never touched. Without `--older-than`, it uses `stale_claim_window_hours` (24 hours by default); the flag supplies a one-run duration override. Entries whose source issue is confirmed closed are removed instead; unconfirmed liveness failures are reported without removal. | 0 after the sweep; 1 on an unparseable `--older-than` or unknown flag |
 | `resolve` | `compose resolve <sourceRef> --pr-url <url> [--branch <branch>]` | Recovers a stranded entry that is `claimed` but never delivered by transitioning it to `done` with `{prUrl, branch}`. The branch is preserved when `--branch` is omitted. A missing entry reports `{found:false}`. | 0; 1 on a `--pr-url` that does not match `^https?://`; 1 on unknown flag |
@@ -846,11 +876,15 @@ is removed after a successful close. See [gates](../explanation/gates.md).
 
 ### Per-child selection (`--child`)
 
-`task`, `rewind`, and `kickback-budget inspect` accept `--child <k>` to select one child of a stacked
+`task`, `rewind`, and `kickback-budget` accept `--child <k>` to select one child of a stacked
 feature. `<k>` is an integer from 1 to 9 whose `.pipeline/children/<k>/` directory exists in the
 feature's worktree; see [per-child state](artifacts.md#per-child-state). An invalid id, or a child
-with no state directory, exits 1 before any read or write. Without `--child`, every command behaves
-as before. A repeated `--child`, or one without a value, prints the `task` guide (exit 2); for
+with no state directory, exits 1 before any read or write.
+
+Without `--child`, `task`, `rewind`, and `kickback-budget inspect` select the
+[active child](configuration.md#child-by-child-build) when one exists; `kickback-budget raise|reset`
+use the flat ledger. A feature with no children behaves as before. If the active child cannot be
+resolved, for example on a diverged stack, these commands exit 1 before any read or write. A repeated `--child`, or one without a value, prints the `task` guide (exit 2); for
 `rewind` and `kickback-budget` it falls through to `error: unknown command` (exit 1).
 
 `task start|done --child <k>` also requires the coverage-binding envelope's slice membership to place
@@ -1101,8 +1135,8 @@ do not hand the amendment to BUILD. The land gate repeats this check when a spec
 
 ```bash
 ai-conductor kickback-budget inspect --feature <slug> [--child <k>] [--format human|json]
-ai-conductor kickback-budget raise --feature <slug> --gate <gate> --by <positive-integer> --rationale "<reason>"
-ai-conductor kickback-budget reset --feature <slug> --gate <gate> --rationale "<reason>"
+ai-conductor kickback-budget raise --feature <slug> --gate <gate> --by <positive-integer> --rationale "<reason>" [--child <k>]
+ai-conductor kickback-budget reset --feature <slug> --gate <gate> --rationale "<reason>" [--child <k>]
 ```
 
 Use this operator-only command to inspect or authorize one recovery from a budget-cap halt. `raise`
@@ -1149,7 +1183,8 @@ removes that temporary park after success. It preserves a park that already exis
 feature when ready, otherwise the daemon leaves the authorization unconsumed.
 
 `inspect --child <k>` reads child `k`'s ledger instead of the flat one. Human output starts with
-`Child: <k>`; JSON adds a `child` field. `raise` and `reset` reject `--child` as an unknown flag. See
+`Child: <k>`; JSON adds a `child` field. `raise --child <k>` and `reset --child <k>` check cap evidence
+in, and apply the authorization to, child `k`'s ledger. See
 [Per-child selection](#per-child-selection---child).
 
 ## `ai-conductor decide-grant`
@@ -1258,6 +1293,8 @@ The command demotes child `k`'s region from the target, then the region steps of
 above `k` in ascending order, then every later whole-feature step in the flat state. It then clears
 those verdicts and the halt markers, emits `operator_rewind` with a `child` field, and prints
 `Rewound child <k> to <step>.` A failure restores every changed store and leaves the halt in place.
+An explicit `--child <k>` naming a child before the active one exits 1 with `child <k> is closed and
+cannot be rewound (#2943)`; re-running a closed child needs a restack.
 See [Per-child selection](#per-child-selection---child).
 
 ## `ai-conductor reseal`

@@ -166,11 +166,20 @@ describe('cumulative build-review kickback bound', () => {
     };
     await writeKickbackLedger(dir, { version: 1, gates: { build_review: semanticEntry } });
     let mixedLap = false;
+    const buildReviewConfig = {
+      build_review: { enabled: true, rubrics: { security: { enabled: false } } },
+    } as HarnessConfig;
     vi.mocked(coordinateBuildReviewRubrics).mockImplementation(async (): Promise<BuildReviewCoordination> => ({
       kind: 'ready',
       branches: mixedLap
-        ? [{ kind: 'dispatched', rubric: 'testQuality', result: { kind: 'judged', rubric: 'testQuality', lapId: parseBuildReviewLapId('lap-current')!, snapshotDigest: 'sha256:fixture', contractVersion: 'v3', findings: [], verdict: 'PASS' } }]
-        : [{ kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'invalid-provider-result', detail: 'worker response unavailable' }],
+        ? [
+            { kind: 'dispatched', rubric: 'testQuality', result: { kind: 'judged', rubric: 'testQuality', lapId: parseBuildReviewLapId('lap-current')!, snapshotDigest: 'sha256:fixture', contractVersion: 'v3', findings: [], verdict: 'PASS' } },
+            { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+          ]
+        : [
+            { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'invalid-provider-result', detail: 'worker response unavailable' },
+            { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+          ],
     }));
     const provider: LLMProvider = { invoke: vi.fn(), };
     const makeRunner = () => new DefaultStepRunner(provider, 'mechanical-lap', dir, {
@@ -205,8 +214,8 @@ describe('cumulative build-review kickback bound', () => {
     const runRubricLap = async (headSha: string) => (makeRunner() as unknown as {
       runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean }>;
     }).runRubricBuildReview({
-      sourceSnapshot: { headSha, digest: `sha256:${headSha}`, mergeBase: 'base' },
-    } as BuildReviewFrozenInputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+      sourceSnapshot: { headSha, digest: 'sha256:fixture', mergeBase: 'base' },
+    } as BuildReviewFrozenInputs, resolveBuildReviewConfig(buildReviewConfig));
 
     await runRubricLap('mechanical-one');
     await runRubricLap('mechanical-two');
@@ -232,7 +241,7 @@ describe('cumulative build-review kickback bound', () => {
       daemon: true,
       fromStep: 'build_review',
       maxRetries: 1,
-      config: { build_review: { enabled: true }, kickback_escalation: { enabled: false } },
+      config: { ...buildReviewConfig, kickback_escalation: { enabled: false } },
       buildReviewEffectiveResolver: async () => ({
         ok: true,
         effective: {

@@ -10,6 +10,7 @@ import {
   chargeBuildReviewEffectInLedger,
   type BumpKickbackGateInput,
 } from './kickback-ledger.js';
+import type { ChildId } from './child-context.js';
 import type { FileIntakeIssueResult } from './engineer/intake/file-issue.js';
 import type { EffectMarkerTrackerClient } from './tracker-client.js';
 import type { RemediationCaseDeferralEffect } from './remediation-case-artifact.js';
@@ -153,6 +154,8 @@ export async function applyBuildReviewActionEffects(input: {
    */
   readonly tasksByCaseId: ReadonlyMap<string, readonly BuildReviewWorkOrderTask[]>;
   readonly chargeInput: BumpKickbackGateInput;
+  /** The current BUILD child owns its own review convergence budget. */
+  readonly child?: ChildId;
   readonly workOrderId?: () => string;
   /** Testable I/O boundaries; production defaults retain the durable adapters. */
   readonly publishWorkOrder?: typeof publishBuildReviewWorkOrder;
@@ -234,7 +237,7 @@ export async function applyBuildReviewActionEffects(input: {
     }
     let charged: Awaited<ReturnType<typeof chargeBuildReviewEffectInLedger>>;
     try {
-      charged = await (input.chargeEffect ?? chargeBuildReviewEffectInLedger)(input.projectRoot, primaryEffectId, input.chargeInput);
+      charged = await (input.chargeEffect ?? chargeBuildReviewEffectInLedger)(input.projectRoot, primaryEffectId, input.chargeInput, input.child);
     } catch (error) {
       const diagnostic = `build-review effect charge failed: ${error instanceof Error ? error.message : String(error)}`;
       return { value: { ok: false as const, reason: diagnostic, failedCaseIds }, nextState: failPending(diagnostic) };
