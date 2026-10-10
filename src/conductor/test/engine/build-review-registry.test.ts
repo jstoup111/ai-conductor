@@ -15,8 +15,8 @@ import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-
 import type { HarnessConfig } from '../../src/types/config.js';
 
 describe('engine/build-review-registry', () => {
-  it('registers the test-quality and security rubrics with their versioned execution descriptors', () => {
-    expect(BUILD_REVIEW_RUBRIC_IDS).toEqual(['testQuality', 'security']);
+  it('registers the default-on implementation-quality rubric with the versioned built-ins', () => {
+    expect(BUILD_REVIEW_RUBRIC_IDS).toEqual(['testQuality', 'security', 'implementationQuality']);
     expect(BUILD_REVIEW_RUBRIC_REGISTRY).toMatchObject({
       testQuality: {
         skillName: 'build-review-test-quality',
@@ -26,6 +26,12 @@ describe('engine/build-review-registry', () => {
       },
       security: {
         skillName: 'build-review-security',
+        cachePolicy: 'content-addressed',
+        prerequisite: 'none',
+        contract: { projection: { version: 'v3' }, output: { version: 'v3' } },
+      },
+      implementationQuality: {
+        skillName: 'build-review-implementation-quality',
         cachePolicy: 'content-addressed',
         prerequisite: 'none',
         contract: { projection: { version: 'v3' }, output: { version: 'v3' } },
@@ -54,6 +60,7 @@ describe('engine/build-review-registry', () => {
 
     expect(isRegisteredRubric('testQuality')).toBe(true);
     expect(isRegisteredRubric('security')).toBe(true);
+    expect(isRegisteredRubric('implementationQuality')).toBe(true);
     expect(isRegisteredRubric('kotlinPolicy')).toBe(false);
     expect(config.catalog).toContainEqual(expect.objectContaining({
       id: 'kotlinPolicy',
@@ -64,6 +71,9 @@ describe('engine/build-review-registry', () => {
     );
     expect(getBuildReviewRubricDescriptor('security')).toBe(
       BUILD_REVIEW_RUBRIC_REGISTRY.security,
+    );
+    expect(getBuildReviewRubricDescriptor('implementationQuality')).toBe(
+      BUILD_REVIEW_RUBRIC_REGISTRY.implementationQuality,
     );
   });
 

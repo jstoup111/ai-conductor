@@ -78,6 +78,19 @@ function titleHash(text: string): string {
 }
 
 describe('build-review domain', () => {
+  it('keeps implementation-quality concern kinds closed and anchors them to changed content', () => {
+    expect(BUILD_REVIEW_FINDING_VOCABULARIES.implementationQuality.concernKinds).toEqual([
+      'duplication', 'excess-complexity', 'obscured-intent', 'primitive-obsession',
+      'representable-invalid-state', 'non-exhaustive-domain-match', 'non-semantic-name',
+    ]);
+    const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
+    const anchor = { rubric: 'implementationQuality', locus: { path: 'src/domain.ts', contentHash: HASH, display: 'new state model' } };
+    const payload = { kind: 'judged', rubric: 'implementationQuality', ...expected, contractVersion: 'v3', findings: [{ concernKind: 'primitive-obsession', summary: 'Raw strings represent domain state.', evidenceLocations: ['src/domain.ts:8'], anchor }] };
+    const references = { changedTests: [], changedContentRegions: [anchor.locus], changedPaths: ['src/domain.ts'], planTasks: [] };
+    expect(parseBuildReviewJudgedResult(payload, references)).toMatchObject({ verdict: 'FAIL' });
+    expect(describeBuildReviewJudgedResultRejection({ ...payload, findings: [{ ...payload.findings[0], concernKind: 'unmet-acceptance-criterion' }] }, 'implementationQuality', expected, references)).toContain('one of');
+    expect(parseBuildReviewFindingAnchor({ ...anchor, locus: { ...anchor.locus, line: 8 } }, references)).toBeUndefined();
+  });
   it('keeps the security concern vocabulary closed to the approved ten kinds', () => {
     expect(BUILD_REVIEW_FINDING_VOCABULARIES.security.concernKinds).toEqual([
       'committed-secret', 'injection', 'broken-access-control', 'path-traversal',

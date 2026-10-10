@@ -16,6 +16,9 @@ const testQualitySkillPath = fileURLToPath(
 const securitySkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-security/SKILL.md', import.meta.url),
 );
+const implementationQualitySkillPath = fileURLToPath(
+  new URL('../../../../skills/build-review-implementation-quality/SKILL.md', import.meta.url),
+);
 
 function judgementSection(skill: string): string {
   return skill.split('## Judgement\n')[1]?.split('\n## ')[0] ?? '';
@@ -113,5 +116,17 @@ describe('build-review Security skill contract', () => {
     })).toEqual(finding.anchor);
     expect(finding.anchor.locus.path).toBe('src/request.ts');
     expect(finding.evidenceLocations).toEqual(['src/legacy-request.ts:42']);
+  });
+});
+
+describe('build-review implementation-quality skill contract', () => {
+  it('is a gated, judgement-only contract with a findings-only result', async () => {
+    const skill = await readFile(implementationQualitySkillPath, 'utf8');
+    expectVocabularyDefinitions(skill, 'implementationQuality');
+    expect(skill).toMatch(/judgement-only contract/i);
+    expect(skill).toMatch(/Return only.*findings/i);
+    expect(skill).not.toMatch(/scopeResolutions|counterfactualSensitivity/);
+    expect(skill).toMatch(/acceptance-criteria compliance.*prd_audit/i);
+    expect(skill).toMatch(/ADR conformance.*as-built architecture review/i);
   });
 });
