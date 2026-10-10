@@ -749,7 +749,7 @@ describe('kickback-budget inspect shows plan growth', () => {
   });
 });
 
-// Covers: Task 3 — inspect reports remediation consumption from recorded laps,
+// Covers: task:3 — inspect reports remediation consumption from recorded laps,
 // rather than generic re-open counters retained in the durable ledger.
 describe('kickback-budget inspect reports remediation lap consumption', () => {
   async function inspect(
