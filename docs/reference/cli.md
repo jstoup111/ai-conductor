@@ -441,8 +441,8 @@ For every halted or in-progress feature with an honored
 While the repo's daemon is running, it prints `IN FLIGHT [<slug>]: <step> running <age>` for each step
 in an in-progress feature's `.pipeline/events.jsonl` that has a `step_started` event and no terminal
 step event (`step_completed`, `step_failed`, `step_interrupted`, or `step_refused`). Events pair by
-execution id, so a retry keeps the original start time. Rows for a daemon that is not running omit
-these lines.
+execution id (by step name for ledgers without execution context); a `step_retry` keeps the original
+start time. Rows for a daemon that is not running omit these lines.
 
 Nine rendered states. `restart-pending` and `dead-pane` are overlays: they take precedence in the
 badge, but the underlying liveness and pause facts stay on the row.
