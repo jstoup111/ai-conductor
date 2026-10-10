@@ -108,6 +108,11 @@ jobs:
       # Same script integrity check 1b calls, so the two can never enforce
       # different file sets or severities.
       - run: bash test/lint_shell.sh
+      # macOS /bin/bash is 3.2, and the hooks' #!/bin/bash shebang runs under
+      # it. Parse the same file set with that bash so a construct only newer
+      # bash accepts cannot break every Mac session again (#3013).
+      - name: Bash 3.2 syntax
+        run: docker run --rm -v "$PWD:/w:ro" -w /w bash:3.2 bash test/lint_shell.sh --syntax
 
   lint:
     needs: changes
