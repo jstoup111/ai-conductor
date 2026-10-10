@@ -548,6 +548,28 @@ describe('accepted build-review risk shipped projection', () => {
     expect(Buffer.from(second.body).equals(Buffer.from(first.body))).toBe(true);
     expect(second.body.split('## Accepted build-review risk')).toHaveLength(2);
   });
+
+  it('replaces an existing accepted-risk section in place, so content appended after it never moves', () => {
+    // FINISH appends the shipment-plan declaration after this section and binds
+    // its prose judgment to the PR body. Re-appending the section on every
+    // upsert moved it below the declaration, rewrote the body, staled the
+    // accepted judgment, and halted FINISH as non-advancing (PR #3083).
+    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v1', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus: { path: 'test/engine/shipped-record.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } })!;
+    const accepted: BuildReviewDispositionRecord = { version: 'v1', feature: { version: 'v1', repository: 'repo', feature: 'feature' }, finding, sourceLapId: parseBuildReviewLapId('lap-1')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z' };
+    const first = upsertBuildReviewAcceptedRisk('## Summary\nWhat changed.\n\nCloses owner/repo#1', [accepted]);
+    if (!first.ok) throw new Error('expected the section to render');
+    const withDeclaration = `${first.body}\n\nPlan: .docs/plans/feature.md`;
+
+    const repeated = upsertBuildReviewAcceptedRisk(withDeclaration, [accepted]);
+    expect(repeated).toEqual({ ok: true, body: withDeclaration, changed: false });
+    if (!repeated.ok) return;
+    expect(repeated.body.trimEnd().endsWith('Plan: .docs/plans/feature.md')).toBe(true);
+
+    const removed = upsertBuildReviewAcceptedRisk(withDeclaration, []);
+    expect(removed).toMatchObject({ ok: true, changed: true });
+    if (!removed.ok) return;
+    expect(removed.body).toBe('## Summary\nWhat changed.\n\nCloses owner/repo#1\n\nPlan: .docs/plans/feature.md');
+  });
 });
 
 describe('reduced build-review coverage shipped projection', () => {
