@@ -37,6 +37,10 @@ import type { FeatureWorktree } from './daemon-runner.js';
 import { shippedRecordOnMain } from './shipped-record-on-main.js';
 import { leafBranchFor } from './feature-branch-identity.js';
 import type { CiFixOutcome } from './ci-fix.js';
+import {
+  classifyShippedReadiness,
+  routeShippedReadiness,
+} from './shipped-readiness.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
 
@@ -407,9 +411,11 @@ export async function sweepMergeableLabels({
         const entryGh = runnerForEntry(gh, entry, operations);
         let state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
 
-        // GitHub checks are authoritative for CI state. Retire the redundant
-        // custom label whenever a reconciliation read finds it on a PR.
-        if (state.labels.includes('ci-failed')) {
+        // Preserve lifecycle reconciliation: closed, merged, and not-found
+        // states retain their existing stale CI-label cleanup before taking
+        // their dedicated lifecycle path. Open states wait for readiness
+        // classification so indeterminate observations stay read-only.
+        if (state.state !== 'OPEN' && state.labels.includes('ci-failed')) {
           await removeLabel(entryGh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
         }
 
@@ -481,10 +487,13 @@ export async function sweepMergeableLabels({
         // for an otherwise readable OPEN PR. Give that lazy result exactly one
         // more read; a second failure stays explicit on the state so the
         // readiness classifier can safely call it indeterminate.
+        let mergeabilityReread: 'not-needed' | 'completed' | 'failed' = 'not-needed';
         if (state.state === 'OPEN' && state.mergeable === 'UNKNOWN') {
           try {
             state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
+            mergeabilityReread = 'completed';
           } catch (error) {
+            mergeabilityReread = 'failed';
             state = {
               ...state,
               readFailure: { kind: 'runner', error },
@@ -512,6 +521,21 @@ export async function sweepMergeableLabels({
         // The timestamp begins with the first observation of a head and is
         // reset only when that SHA changes. Missing head data leaves legacy
         // bookkeeping intact until GitHub supplies an OID.
+        const headFirstSeenAt = entry.headFirstSeenAt
+          ? Date.parse(entry.headFirstSeenAt)
+          : undefined;
+        const readiness = classifyShippedReadiness(
+          state,
+          {
+            mergeabilityReread,
+            ...(Number.isFinite(headFirstSeenAt) ? { headFirstSeenAt } : {}),
+          },
+          now().getTime(),
+        );
+
+        // The timestamp begins with the first observation of a head and is
+        // reset only when that SHA changes. Missing head data leaves legacy
+        // bookkeeping intact until GitHub supplies an OID.
         if (state.headRefOid && state.headRefOid !== entry.headSha) {
           entry = {
             ...entry,
@@ -524,6 +548,35 @@ export async function sweepMergeableLabels({
         recordDisposition(log, entry, `live:${state.state}`);
         survivors.push(entry);
 
+        let conflicting = false;
+        let ciFailing = false;
+        const indeterminate = routeShippedReadiness(readiness, {
+          ready: () => false,
+          conflicting: () => {
+            conflicting = true;
+            return false;
+          },
+          'ci-failing': () => {
+            ciFailing = true;
+            return false;
+          },
+          'ci-pending': () => false,
+          'no-checks': () => false,
+          draft: () => false,
+          indeterminate: () => true,
+        });
+
+        // An indeterminate GitHub observation is deliberately read-only. It
+        // remains watched for the next tick, but neither a stale label nor a
+        // repair/escalation action can turn uncertainty into a side effect.
+        if (indeterminate) continue;
+
+        // GitHub checks are authoritative for CI state. Retire the redundant
+        // custom label whenever a readable reconciliation observation finds it.
+        if (state.labels.includes('ci-failed')) {
+          await removeLabel(entryGh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
+        }
+
         // Task 17 (AC1): track CONFLICTING PRs for the post-label-pass
         // autoresolve dispatch below. Collected unconditionally (cheap) but
         // only ever consulted when `autoresolve` is configured, so a disabled
@@ -533,7 +586,7 @@ export async function sweepMergeableLabels({
         // PrMergeState): a draft is an in-flight build's own PR, so dispatching
         // autoresolve/CI-fix against it fights the running build. The ordinary
         // `mergeable` label reconciliation below is unaffected.
-        if (state.mergeable === 'CONFLICTING') {
+        if (conflicting) {
           if (state.isDraft) {
             log?.(`[mergeable-sweep] skipping resolve for ${entry.prUrl} (draft PR)`);
           } else {
@@ -623,7 +676,7 @@ export async function sweepMergeableLabels({
           // Draft PRs are excluded here for the same reason as the
           // CONFLICTING collection above — resolution only ever runs against
           // non-draft (ready-for-review) PRs.
-          if (state.checksOutcome === 'failed') {
+          if (ciFailing) {
             if (state.isDraft) {
               log?.(`[mergeable-sweep] skipping ci-fix for ${entry.prUrl} (draft PR)`);
             } else {
