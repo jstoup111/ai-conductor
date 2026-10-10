@@ -54,7 +54,11 @@ function securityJudged(findings: readonly BuildReviewFinding[] = []): BuildRevi
 }
 
 function results(testQuality: BuildReviewRubricResult, security: BuildReviewRubricResult = securityJudged()) {
-  return { testQuality, security };
+  return {
+    testQuality,
+    security,
+    implementationQuality: { kind: 'skipped', rubric: 'implementationQuality', reason: 'disabled' } as const,
+  };
 }
 
 const finding: BuildReviewFinding = {
@@ -365,7 +369,7 @@ describe('build-review raw aggregate', () => {
     expect(parseBuildReviewAggregate(aggregate)).toEqual(aggregate);
     expect(deriveEffectiveBuildReviewVerdict(aggregate)).toEqual({
       rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
-      skippedRubrics: ['testQuality', 'security'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+      skippedRubrics: ['testQuality', 'security', 'implementationQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
       uncoveredScopeIncompleteRubrics: [],
     });
   });
@@ -381,7 +385,7 @@ describe('build-review raw aggregate', () => {
       reasons: ['[testQuality] infrastructure failure: provider unavailable'],
     });
     expect(deriveEffectiveBuildReviewVerdict(aggregate, new Set(['fabricated']))).toMatchObject({
-      verdict: 'FAIL', skippedRubrics: [], infrastructureFailureRubrics: ['testQuality'],
+      verdict: 'FAIL', skippedRubrics: ['implementationQuality'], infrastructureFailureRubrics: ['testQuality'],
     });
   });
 
