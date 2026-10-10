@@ -24,12 +24,11 @@ import { readGatedSnapshot, type GatedSpecItem, type GatedRepoItem, type Clock }
 import { summarizeAccuracyLedger } from './attribution-audit.js';
 import { scanInheritedState } from './daemon-dashboard.js';
 import { formatHeartbeatAge } from './step-heartbeat.js';
-import { kickbackBudgetFallbackLimit, prdAuditAppendCap } from './remediation-caps.js';
+import { kickbackBudgetFallbackLimit, readPlanGrowthBudget } from './remediation-caps.js';
 import { loadConfig } from './config.js';
 import {
   isUnreadableKickbackGate,
   isUnreadableKickbackLedger,
-  readGrowth,
   readKickbackLedger,
 } from './kickback-ledger.js';
 import { renderKickbackBudgetView } from './kickback-budget-view.js';
@@ -652,8 +651,8 @@ async function activeChildStatusLabel(
 
 /**
  * Render cap accounting for every feature the durable dashboard model classifies
- * as in progress. The counts themselves stay owned by the kickback ledger;
- * `readGrowth` also retains its legacy-ledger recomputation contract here.
+ * as in progress. The shared budget owns both cap calculation and growth
+ * accounting, while the status view remains a non-persisting observation.
  */
 async function renderPlanGrowthSection(repoPath: string, out: (line: string) => void): Promise<void> {
   const state = await scanInheritedState({
@@ -674,22 +673,19 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
     const config = await loadConfig(featureRoot);
     const ledger = await readKickbackLedger(featureRoot, child);
     try {
-      const initial = await readGrowth(featureRoot, 0);
-      const configCap = prdAuditAppendCap(
+      const { growth, cap, capSource, authoredSource } = await readPlanGrowthBudget(
+        featureRoot,
         config.ok ? config.config : ({} as HarnessConfig),
-        initial.authored,
+        { persist: false },
       );
-      const flatLedger = child === undefined ? ledger : await readKickbackLedger(featureRoot);
-      const cap = flatLedger.effectiveGrowthCap ?? configCap;
-      const growth = await readGrowth(featureRoot, cap);
       const byGate = Object.entries(growth.byGate)
         .map(([gate, count]) => `${gate}: ${count}`)
         .join(', ');
-      out(
-        `  PLAN GROWTH [${feature.slug}${childStatus}]: authored ${growth.authored}; ` +
-        `added ${growth.added}${byGate ? ` (${byGate})` : ''}; ` +
-        `remaining ${growth.remaining}/${cap}`,
-      );
+      const added = `added ${growth.added}${byGate ? ` (${byGate})` : ''}`;
+      const summary = authoredSource === 'unresolved'
+        ? `plan unresolved; ${added}${capSource === 'raised' ? `; remaining ${growth.remaining}/${cap}` : ''}`
+        : `authored ${growth.authored}; ${added}; remaining ${growth.remaining}/${cap}`;
+      out(`  PLAN GROWTH [${feature.slug}${childStatus}]: ${summary}`);
     } catch (error) {
       out(
         `  PLAN GROWTH [${feature.slug}${childStatus}]: unavailable (` +
