@@ -10,7 +10,11 @@ import {
 } from './autoheal.js';
 import { createTaskEvidence } from './task-evidence.js';
 import { planTaskDigests, parsePlanTaskPaths } from './plan-task-parse.js';
-import { createRepairObligationStore, repairPlanIdentity } from './repair-obligations.js';
+import {
+  createRepairObligationStore,
+  repairPlanIdentity,
+  taskObligationStanding,
+} from './repair-obligations.js';
 import { readTaskDigests, readTaskDigestsLeniently, recordTaskDigests } from './task-digests.js';
 import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import { resolveTaskIds } from './task-progress.js';
@@ -343,10 +347,15 @@ export async function seedTaskStatus(
     }
     const planIdentity = repairPlanIdentity(projectRoot, resolvedPlanPath);
     const openRepairTaskIds = new Set(
-      Object.values(repairs.value.records)
-        .filter((obligation) => obligation.planIdentity === planIdentity)
-        .flatMap((obligation) => Object.entries(obligation.tasks)
-          .flatMap(([taskId, task]) => task.status === 'open' ? [canonicalTaskId(taskId)] : [])),
+      Array.from(planTasks.keys()).flatMap((taskId) => {
+        const canonicalId = canonicalTaskId(taskId);
+        const standing = taskObligationStanding(repairs.value, planIdentity, canonicalId);
+        if (standing.kind === 'current-less') return [canonicalId];
+        if (standing.kind === 'live' && standing.live.some(
+          (obligation) => obligation.tasks[canonicalId]?.status === 'open',
+        )) return [canonicalId];
+        return [];
+      }),
     );
 
     // Load existing task-status.json.
