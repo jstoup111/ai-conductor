@@ -1,5 +1,6 @@
 import type { HarnessConfig } from '../types/config.js';
 import {
+  MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   isUnreadableKickbackGate,
   isUnreadableKickbackGrowth,
   isUnreadableKickbackLedger,
@@ -30,6 +31,13 @@ export function remediationLapCapForGate(
     return remediationConfig.architecture_review_as_built?.max_remediation_laps ?? 1;
   }
   return genericCap;
+}
+
+/** Resolve the fallback limit an operator sees when a gate has no durable cap evidence. */
+export function kickbackBudgetFallbackLimit(gate: string, config: HarnessConfig): number {
+  return gate === 'build_review'
+    ? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW
+    : remediationLapCapForGate(gate, config);
 }
 
 /**
