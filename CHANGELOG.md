@@ -36,10 +36,12 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Maintainers can classify confirmed maintenance changes and skip unnecessary acceptance specifications. ([implementation PR #3029](https://github.com/jstoup111/ai-conductor/pull/3029)).
 - Reviewers see plan task titles in landed specification commit bodies. ([implementation PR #3091](https://github.com/jstoup111/ai-conductor/pull/3091)).
 - ADR authors can cite decisions headed with ATX-numbered headings. ([implementation PR #3115](https://github.com/jstoup111/ai-conductor/pull/3115)).
+- Composer `land`, `handoff`, and `forget` now post their GitHub issue write-backs from an operator session without an assignment or terminal prompt; daemon sessions keep the stricter rule. ([implementation PR #3134](https://github.com/jstoup111/ai-conductor/pull/3134)).
 
 ### Removed
 
 - Plugin manifests now reject unsupported `step` and `hook` kinds. ([implementation PR #3032](https://github.com/jstoup111/ai-conductor/pull/3032)).
+- conflict-check always compares stories against the full approved ADR corpus; the `conflict_check.adr_corpus` config key is removed. ([implementation PR #3122](https://github.com/jstoup111/ai-conductor/pull/3122)).
 
 ### Fixed
 
@@ -78,6 +80,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Build review now returns malformed changed-test Covers markers to BUILD without consuming the mechanical fault allowance. ([implementation PR #3087](https://github.com/jstoup111/ai-conductor/pull/3087)).
 - Completed work stays closed when an older repair obligation is superseded. ([implementation PR #3082](https://github.com/jstoup111/ai-conductor/pull/3082)).
 - When merge-conflict autoresolve escalates on a failing test suite, the daemon log and the escalation comment now name the failing tests instead of only "exit code 1". ([implementation PR #3118](https://github.com/jstoup111/ai-conductor/pull/3118)).
+- Build review includes changed test files outside conventional test paths when they contain Covers markers. ([implementation PR #3092](https://github.com/jstoup111/ai-conductor/pull/3092)).
 
 ## Migration
 
