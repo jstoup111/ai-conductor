@@ -433,7 +433,7 @@ Content with \`src/file3.ts\`
 
       expect({
         dispatchOptionCount,
-        dispatch: buildReviewHaltRender.includes('await seedTaskStatus(projectRoot, planPath, undefined, { dispatchBoundary: true });'),
+        dispatch: buildReviewHaltRender.includes('await seedTaskStatus(projectRoot, planPath, undefined, { dispatchBoundary: true, childBase });'),
         remediation: conductor.includes('await seedTaskStatus(this.projectRoot, planPath);'),
         completion: artifacts.includes('await seedTaskStatus(ctx.projectRoot, ctx.planPath, enginePlanPath);'),
         repairRestage: repairRestage.includes('await seedTaskStatus(projectRoot, planPath);'),

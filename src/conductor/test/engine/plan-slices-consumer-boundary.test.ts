@@ -166,6 +166,9 @@ describe('plan-slices consumer boundary', () => {
       .toEqual([join('engine', 'plan-slices.ts')]);
     expect(sources.filter(({ source }) => /\bstacked_prs\b/.test(source)).map(({ path }) => path).sort())
       .toEqual([
+      join('engine', 'child-cursor.ts'),
+      join('engine', 'child-lifecycle.ts'),
+      join('engine', 'conductor.ts'),
         join('engine', 'config.ts'),
       join('engine', 'engineer', 'land-spec.ts'),
       join('engine', 'plan-slices.ts'),
