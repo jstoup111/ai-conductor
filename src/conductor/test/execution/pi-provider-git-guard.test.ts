@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:3
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -117,6 +117,17 @@ describe('PiProvider git guard dispatch environment', () => {
       '/prepared/.pipeline/bin',
       prepared.wrapperDirectory,
     ]);
+  });
+
+  it('fails before launch when the git guard cannot be verified', async () => {
+    const error = 'git guard repair failed: /prepared/.pipeline/bin/git: guard is not a regular executable file';
+    mockEnsureGitGuardForDispatch.mockRejectedValue(new Error(error));
+
+    const result = await provider.invoke(baseOptions);
+
+    expect(mockEnsureGitGuardForDispatch).toHaveBeenCalledWith('/prepared');
+    expect(result).toEqual({ success: false, output: error, exitCode: 1 });
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it.each([
