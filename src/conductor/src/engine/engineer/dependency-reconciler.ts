@@ -33,6 +33,13 @@ export interface DeclaredEdgesResult {
   manualReview: DeclaredEdgeManualReviewItem[];
 }
 
+export interface ComparedEdges {
+  /** Declared edges whose target is absent from the tracker's blocked_by list. */
+  unlinked: DependencyEdge[];
+  /** Declared edges whose target is already present in the tracker's blocked_by list. */
+  satisfied: DependencyEdge[];
+}
+
 /**
  * Build the same-repository edge represented by one structured form value.
  * The action currently supplies qualified refs, while accepting `#N` keeps the
@@ -90,4 +97,24 @@ export function declaredEdges(input: DeclaredEdgesInput): DeclaredEdgesResult {
   }
 
   return { edges, manualReview };
+}
+
+/**
+ * Partition declared edges by whether their target is already linked in the
+ * tracker's `blocked_by` relation. Actual-only links are intentionally ignored:
+ * callers decide separately whether those links are stale.
+ */
+export function compareEdges(
+  declared: readonly DependencyEdge[],
+  actualBlockedBy: Iterable<string>,
+): ComparedEdges {
+  const actualTargets = new Set(actualBlockedBy);
+  const unlinked: DependencyEdge[] = [];
+  const satisfied: DependencyEdge[] = [];
+
+  for (const edge of declared) {
+    (actualTargets.has(edge.target) ? satisfied : unlinked).push(edge);
+  }
+
+  return { unlinked, satisfied };
 }

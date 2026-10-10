@@ -1,7 +1,7 @@
-// Covers: task:1
+// Covers: task:1, task:2
 
 import { describe, expect, it } from 'vitest';
-import { declaredEdges } from '../../../src/engine/engineer/dependency-reconciler.js';
+import { compareEdges, declaredEdges } from '../../../src/engine/engineer/dependency-reconciler.js';
 
 const SOURCE = 'acme/app#20';
 
@@ -76,5 +76,29 @@ describe('declaredEdges', () => {
     const prose = declaredEdges({ ref: SOURCE, body: 'Blocked by #10.' });
 
     expect(form.edges.map((edge) => edge.target)).toEqual(prose.edges.map((edge) => edge.target));
+  });
+});
+
+describe('compareEdges', () => {
+  it('separates declared targets that are missing from those already blocked by', () => {
+    const declared = declaredEdges({
+      ref: SOURCE,
+      body: 'Blocked by #10. Depends on #11. Gated on #12.',
+    }).edges;
+
+    const result = compareEdges(declared, ['acme/app#11']);
+
+    expect(new Set(result.unlinked.map((edge) => edge.target))).toEqual(
+      new Set(['acme/app#10', 'acme/app#12']),
+    );
+    expect(new Set(result.satisfied.map((edge) => edge.target))).toEqual(new Set(['acme/app#11']));
+    expect(result.unlinked).not.toContainEqual(result.satisfied[0]);
+  });
+
+  it('returns no comparison results when no edges are declared regardless of actual links', () => {
+    expect(compareEdges([], ['acme/app#10', 'acme/app#11'])).toEqual({
+      unlinked: [],
+      satisfied: [],
+    });
   });
 });
