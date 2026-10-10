@@ -214,6 +214,19 @@ describe('build-review rubric projections', () => {
     expect(isTestQualityProjection(deriveBuildReviewRubricProjections(threeFileSource).testQuality)).toBe(true);
   });
 
+  it('uses the security-only whole-feature snapshot without widening test-quality', () => {
+    const child = withSnapshot(source(), { mergeBase: 'child-parent', diff: FIXTURE_DIFF });
+    const wholeFeature = { ...child.inputs.sourceSnapshot, mergeBase: 'default-merge-base', diff: THREE_FILE_DIFF };
+
+    const projections = deriveBuildReviewRubricProjections({ ...child, securitySnapshot: wholeFeature });
+
+    expect(projections.testQuality).toMatchObject({ mergeBase: 'child-parent' });
+    expect(projections.security).toMatchObject({
+      mergeBase: 'default-merge-base',
+      changedFiles: deriveChangedFileReferences(THREE_FILE_DIFF),
+    });
+  });
+
   it('keeps the security projection sealed when the post-exclusion frozen diff is empty', () => {
     const projection = deriveBuildReviewRubricProjections(withSnapshot(source(), { diff: '' })).security;
 

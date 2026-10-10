@@ -196,10 +196,14 @@ describe('build_review input isolation', () => {
 
   it('keeps a judged finding with environment-sounding prose in the blocking finding lane', async () => {
     const provider: LLMProvider = { invoke: vi.fn(), };
-    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+    vi.mocked(coordinateBuildReviewRubrics).mockImplementation(async ({ inputs }) => ({
       kind: 'ready',
-      branches: [{ kind: 'dispatched' as const, rubric: 'testQuality', result: {} as never }],
-    });
+      branches: [{
+        kind: 'dispatched' as const,
+        rubric: 'testQuality',
+        result: { snapshotDigest: inputs.sourceSnapshot.digest } as never,
+      }],
+    }));
     const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
       gitRunner: realGit(), planPath,
       config: { build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,
@@ -239,10 +243,14 @@ describe('build_review input isolation', () => {
 
   it('publishes an exhausted malformed artifact as the current lap mechanical failure', async () => {
     const provider: LLMProvider = { invoke: vi.fn(), };
-    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+    vi.mocked(coordinateBuildReviewRubrics).mockImplementation(async ({ inputs }) => ({
       kind: 'ready',
-      branches: [{ kind: 'dispatched' as const, rubric: 'testQuality', result: {} as never }],
-    });
+      branches: [{
+        kind: 'dispatched' as const,
+        rubric: 'testQuality',
+        result: { snapshotDigest: inputs.sourceSnapshot.digest } as never,
+      }],
+    }));
     const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
       gitRunner: realGit(), planPath,
       config: { build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,

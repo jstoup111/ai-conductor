@@ -1,4 +1,4 @@
-// Covers: task:8
+// Covers: task:8, task:27
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -8,6 +8,7 @@ import {
   formatGapReport,
 } from '../../src/engine/complete-verifier.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import type { ShipmentEvidenceResult } from '../../src/engine/shipment-evidence.js';
 
 const evaluateShipmentEvidenceSpy = vi.fn(async (input: {
@@ -159,6 +160,31 @@ describe('engine/complete-verifier', () => {
       failedSteps: ['test_suite'],
       reasons: ['full-suite PASS evidence is stale: source_changed'],
     });
+  });
+
+  it('uses the leaf child overlay and suite evidence for a completed stacked feature', async () => {
+    const child = parseChildId(2)!;
+    await writeState({
+      feature_status: 'complete',
+      feature_desc: 'add-foo',
+      pr_url: 'https://github.com/x/y/pull/1',
+      test_suite: 'stale',
+    });
+    await mkdir(join(dir, '.pipeline/children/2'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/children/2/conduct-state.json'), JSON.stringify({ test_suite: 'done' }));
+    await writeFile(join(dir, '.pipeline/manual-test-results.md'), '| Story | Result |\n|---|---|\n| foo | PASS |\n');
+    await writeFile(join(dir, '.pipeline/finish-choice'), 'pr');
+
+    const suite = vi.fn(async () => ({ status: 'CURRENT', evidence: {} } as FullSuiteInspectionResult));
+    await expect(verifyCompleteState(dir, {
+      fullSuiteInspect: suite,
+      resolveActiveChild: async () => ({
+        kind: 'active', child, position: child, isLeaf: true,
+        branch: 'feat/c2/add-foo', leafMovePending: false,
+      }),
+    })).resolves.toEqual({ ok: true });
+
+    expect(suite).toHaveBeenCalledWith({ child, isLeaf: true });
   });
 
   it('reports manual_test gap when results contain a FAIL row', async () => {

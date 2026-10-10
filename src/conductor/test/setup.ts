@@ -49,6 +49,12 @@ if (runTmpRoot) {
   process.env.TEMP = runTmpRoot;
 }
 
+// Test fixtures run real Git commands against short-lived repositories. An
+// inherited external-diff hook makes otherwise ordinary `git diff` calls
+// materialize `full_*`/`r_*` files in the real `/tmp`, bypassing TMPDIR.
+// Individual tests that exercise the hook explicitly stub their own value.
+delete process.env.GIT_EXTERNAL_DIFF;
+
 process.env[NO_AUTOLAUNCH_ENV] = '1';
 process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
 process.env.CONDUCT_DAEMON_SESSION_UNSAFE_ALLOW = '1';

@@ -150,6 +150,18 @@ describe('engine/build-review verdict wiring contract', () => {
     await expect(checkGateCompletion(dir, 'build_review')).resolves.toMatchObject({ done: true });
   });
 
+  it('reads a child build-review PASS without consulting the flat verdict path', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-child-verdict-'));
+    dirs.push(dir);
+    const path = join(dir, '.pipeline', 'children', '1', 'build-review.json');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify({ verdict: 'PASS', rubric: { testQuality: false } }));
+
+    await expect(checkGateCompletion(dir, 'build_review', { activeChild: 1 as never }))
+      .resolves.toMatchObject({ done: true });
+    await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('uses the effective reducer for a current strict aggregate and rejects a malformed envelope', async () => {
     const lapId = parseBuildReviewLapId('lap-current')!;
     const judged = () => ({

@@ -1919,6 +1919,43 @@ type ConductorEventBody =
       failingTests?: Array<{ name: string; reason: string }>;
       viaException: boolean;
     }
+  // ── Per-child build region lifecycle ──────────────────────────────────────
+  | {
+      /** A declared child region became active on its branch. */
+      type: 'child_started';
+      child: ChildId;
+      position: number;
+      branch: string;
+    }
+  | {
+      /** A child completed its region and its closure tip was recorded. */
+      type: 'child_closed';
+      child: ChildId;
+      position: number;
+      branch: string;
+      tip: string;
+    }
+  | {
+      /** The worktree moved from one child region to the next declared position. */
+      type: 'child_switched';
+      from: number;
+      to: number;
+      position: number;
+      branch: string;
+    }
+  | {
+      /** A rebase was skipped while an intermediate child keeps the stack pinned. */
+      type: 'rebase_skipped_for_stack';
+      child: ChildId;
+      reason: string;
+    }
+  | {
+      /** A reseal changed a story's owner without moving any task. */
+      type: 'story_reowned';
+      story: string;
+      from: number;
+      to: number;
+    }
   // ── Worktree reclamation lifecycle ──
   | {
       type: 'worktree_reclaim_reclaimed';

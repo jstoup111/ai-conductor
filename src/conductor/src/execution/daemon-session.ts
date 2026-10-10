@@ -84,6 +84,9 @@ const SESSION_SANCTIONED_SUBCOMMANDS = [
   // git-hook-assets.ts — the commit-msg hook records advisory containment
   // evidence for a commit authored inside the daemon-managed maker session.
   'scope-check',
+  // git-hook-assets.ts — blocking child membership validation for a commit
+  // authored inside the daemon-managed maker session.
+  'task-membership-check',
   // engine/conductor.ts FINISH publication prompts + skills/pr/SKILL.md — the
   // author_pr_prose / repair passes submit PR edits as a guarded
   // `pull-request.edit` request. github-operations.ts enforces feature

@@ -488,6 +488,10 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Outputs** — committed acceptance spec files in the project's test directories, plus gitignored run
   evidence: `.pipeline/acceptance-specs-red.json`, `.pipeline/fr-coverage.md`, and
   `.pipeline/acceptance-specs-run.json`.
+- **Stacked children** — for a [stacked feature's](configuration.md#child-by-child-build) active
+  child `<k>`, the skill covers only that child's owned stories and writes the RED marker and run
+  contract under `.pipeline/children/<k>/`. An owned spec already green from the parent child's
+  closure tip records a `prior-child-green` exception attributed to that tip.
 - **Gate role** — blocking. The gate rejects unless the RED evidence shows at least one failure, zero
   skips, zero errors, and at least one executed spec. Any unresolved FR-coverage row is a hard stop
   under the daemon.

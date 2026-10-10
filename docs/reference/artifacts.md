@@ -407,8 +407,12 @@ worktree removal.
 A stacked feature keeps per-child region state under `.pipeline/children/<k>/`, where `<k>` is a
 child id from 1 to 9. Each child directory holds whole copies of the flat schemas above:
 `conduct-state.json`, `kickback-ledger.json`, and `gates/<step>.json` for the child-region steps
-`acceptance_specs`, `build`, `test_suite`, and `build_review`. Whole-feature verdicts are never stored
-under a child. Each child file uses its own lease. Flat enumerations never descend into `children/`.
+`acceptance_specs`, `build`, `test_suite`, and `build_review`. It also holds that child's region
+evidence: the acceptance RED marker and `acceptance-specs-run.json`, `test-suite-evidence.json`,
+`build-review.json`, and `remediation-cases.json`. Whole-feature verdicts are never stored
+under a child. Region readers (selector, resume, gates, halt clear, daemon status, dashboard, and the
+FINISH checks) see the flat state overlaid with the [active child's](configuration.md#child-by-child-build)
+region keys. `task-status.json` and `current-task` stay flat. Each child file uses its own lease. Flat enumerations never descend into `children/`.
 A fresh feature session removes each existing child's ledger along with the flat one. A feature with no
 `children/` directory reads and writes exactly the flat paths. Operators select a child with
 [`--child <k>`](cli.md#per-child-selection---child).
@@ -638,7 +642,11 @@ On a halt or error the daemon **deliberately leaves the worktree in place** for 
 legacy interactive cleanup path also deletes the branch.
 
 A stacked feature's child branch is `feat/c<k>/<slug>`, with `<k>` from 1 to 9 and a single-segment
-slug. No step creates child branches yet. Every branch consumer resolves names through
+slug. The build loop creates each child branch at its region entry and never pushes it; see
+[child-by-child build](configuration.md#child-by-child-build). Closure and sealed positions live
+outside `refs/heads` in the shared `.git`, so they survive worktree recreation:
+`refs/conductor/<slug>/closed/c<k>` points at a closed child's tip, and
+`refs/conductor/<slug>/positions` holds the sealed slice positions. Every branch consumer resolves names through
 `feature-branch-identity.ts` and recognizes them. A child branch is daemon-owned and is attributed to
 its parent feature in intake overlap. Attribution is not authority: halt-PR and GitHub writes from a
 child also require its `feat/daemon-<slug>` leaf to exist. `shipped-record` refuses a child branch,
@@ -763,7 +771,10 @@ no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` fo
 
 `ConductorEvent` is a discriminated union. Any member may carry an optional integer `child` (1–9)
 naming a stacked feature's child; it is omitted when no child applies, and cost and time rollups ignore
-it. `EventPersister` writes the event types marked
+it. Stacked builds also persist `child_started`, `child_closed` (with the closure `tip`), and
+`child_switched`, each carrying the position and branch; `rebase_skipped_for_stack`; and
+`story_reowned` (`story`, `from`, `to`) when a reseal changes a story's owner without moving a task.
+None appears for a feature without children. `EventPersister` writes the event types marked
 `persist: true` in `event-sinks.ts`; common persisted types include:
 
 `land_gate_rejected`, `contained_live_checkout_drift`, `self_host_containment_verdict`, `self_host_boundary_fingerprint`, `containment_check_unresolved`,

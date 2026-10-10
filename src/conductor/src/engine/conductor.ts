@@ -139,6 +139,7 @@ import { ExecutionLifecycle } from './execution-lifecycle.js';
 import { BuildProgressWatcher, isNoTaskProgressBuildStall } from './build-progress-watcher.js';
 import { StepInFlightTicker } from './step-in-flight-ticker.js';
 import {
+  loadConfig,
   resolveBuildProgressConfig,
   resolveGateCodeValidityConfig,
   BUILD_PROGRESS_HALT_DEFAULTS,
@@ -161,7 +162,6 @@ import { SafetyAttemptCache, evaluateSafetyBoundary } from './safety-boundary.js
 import { runSpotAudit } from './attribution-audit.js';
 import {
   readState,
-  saveStepStatus,
   requireStateMutation,
   getStepStatus,
   filterRestageChanges,
@@ -173,6 +173,19 @@ import type {
   StateMutation,
   StateMutationResult,
 } from './conduct-state-store.js';
+import { createRoutedConductStateStore, readConductStateOverlay } from './conduct-state-store.js';
+import {
+  isRegionStep,
+  CHILD_REGION_STEPS,
+  pipelinePathFor,
+  type ChildId,
+} from './child-context.js';
+import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
+import {
+  advanceChildRegion,
+  enterChildRegion,
+  type ActiveChildLifecycleTarget,
+} from './child-lifecycle.js';
 import {
   createStepStatusWriteRefusalDiagnostics,
   resolveConductorStateStore,
@@ -276,6 +289,7 @@ import {
   projectExecutionSummaryEntries,
   testSuiteBudgetVerdict,
   type FullSuiteInspectionResult,
+  type FullSuiteVerifyOptions,
 } from './full-suite-verifier.js';
 import { sanitizeFullSuiteDiagnosticOutput } from './full-suite-evidence.js';
 import {
@@ -628,8 +642,6 @@ const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
 
-
-
 /**
  * Render the operator-facing recovery for a terminal mechanical review fault.
  * The aggregate is the current-lap authority for the rubric and closed cause;
@@ -639,11 +651,39 @@ export class Conductor {
   private stateFilePath: string;
   /** Current run state, retained so terminal events can be step-stamped. */
   private haltState: ConductState = {};
-  private readonly stateStore: ConductStateStore<ConductState>;
+  private stateStore: ConductStateStore<ConductState>;
+  private readonly resolveActiveChild: typeof resolveActiveChild;
+  private readonly enterChildRegion: typeof enterChildRegion;
+  private readonly advanceChildRegion: typeof advanceChildRegion;
   /** Last state snapshot whose mutations this conductor has durably accepted. */
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
+  /** Cursor-selected owner of the current stacked BUILD region. */
+  private activeRegionChild: ChildId | undefined;
+  /** The cursor's leaf bit travels with child-local suite evidence. */
+  private activeRegionIsLeaf: boolean | undefined;
+
+  /** Session-local loop counters must not carry a prior child's failures forward. */
+  private childScopedStepKey(step: StepName, child: ChildId | undefined): StepName {
+    return `${step}#${child === undefined ? 'feature' : child}` as StepName;
+  }
+
+  /** Child-local suite selection has the same authoritative base as review. */
+  private fullSuiteVerifyOptions(
+    options: Omit<FullSuiteVerifyOptions, 'childBase' | 'activeChild'> = {},
+  ): FullSuiteVerifyOptions {
+    const slug = this.featureSlug ?? this.featureDesc ?? '';
+    return {
+      ...options,
+      ...(this.activeRegionChild === undefined || slug === ''
+        ? {}
+        : { childBase: { slug, child: this.activeRegionChild } }),
+      ...(this.activeRegionChild === undefined || this.activeRegionIsLeaf === undefined
+        ? {}
+        : { activeChild: { child: this.activeRegionChild, isLeaf: this.activeRegionIsLeaf } }),
+    };
+  }
   private readonly remediationProjectionLimitOverrides: Partial<RemediationProjectionLimits> | undefined;
   private readonly executionLifecycle: ExecutionLifecycle;
   /** Route every conductor-owned marker failure through the existing event spine. */
@@ -662,9 +702,59 @@ export class Conductor {
     );
   }
 
+  /** Keep child-local terminal diagnostics actionable without changing N=1 text. */
+  private withActiveChild(reason: string): string {
+    return this.activeRegionChild === undefined
+      ? reason
+      : `${reason} for child ${this.activeRegionChild}`;
+  }
+
+  /**
+   * Cursor failures are not ordinary dispatch errors: they mean this BUILD
+   * region has no safe child target. Keep their operator-facing recovery
+   * precise and terminal before any region state or provider work can start.
+   */
+  private async haltChildRegionRefusal(reason: string): Promise<void> {
+    const body = `child BUILD region refused: ${reason}`;
+    await this.writeHaltMarker(`${body}\n`, 'needs-human');
+    const prUrl = await this.surfaceRemediationPr(body);
+    await this.emitLoopHalt(body, prUrl);
+  }
+
+  private renderChildCursorRefusal(cursor: Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>): string {
+    switch (cursor.kind) {
+      case 'divergent':
+        return `child ${cursor.child} diverged from its declared successor; restack required (#2943)`;
+      case 'envelope-missing':
+        return 'coverage-binding envelope is missing while child state exists';
+      case 'detached-head':
+        return 'worktree is in detached HEAD while resolving the active child';
+      case 'git-error':
+        return 'git failed while resolving the active child cursor';
+    }
+  }
+
   /** Delegate conductor lifecycle delivery to the shared engine owner. */
   private emitExecutionEvent(event: ConductorEvent): Promise<void> {
-    return this.executionLifecycle.emit(event);
+    return this.executionLifecycle.emit(this.withActiveRegionChild(event));
+  }
+
+  /**
+   * Region occurrences identify the cursor-selected child; feature-wide
+   * occurrences remain intentionally unqualified, even while a leaf is active.
+   */
+  private withActiveRegionChild(event: ConductorEvent): ConductorEvent {
+    if (this.activeRegionChild === undefined) return event;
+    const belongsToRegion =
+      (event.type === 'step_started' ||
+        event.type === 'step_completed' ||
+        event.type === 'step_failed' ||
+        event.type === 'step_interrupted' ||
+        event.type === 'step_refused' ||
+        event.type === 'gate_verdict') && isRegionStep(event.step)
+      || (event.type === 'kickback' && (isRegionStep(event.from) || isRegionStep(event.to)))
+      || (event.type === 'loop_halt' && event.step !== undefined && isRegionStep(event.step));
+    return belongsToRegion ? { ...event, child: this.activeRegionChild } : event;
   }
 
   /** A width-one validation recheck is group-derived only in auto mode with a retained sibling. */
@@ -1289,6 +1379,7 @@ export class Conductor {
     };
 
     return {
+      ...(this.activeRegionChild === undefined ? {} : { activeChild: this.activeRegionChild }),
       sessionStartedAt: state.session_started_at,
       attemptStartedAt: this.currentAttemptStartedAt,
       attemptRunId: this.currentRunId,
@@ -1326,7 +1417,7 @@ export class Conductor {
       fullSuiteInspect: async () => {
         const retained = this.retainedFullSuiteInspection;
         this.retainedFullSuiteInspection = undefined;
-        return retained ?? this.fullSuiteVerifier.inspect();
+        return retained ?? this.fullSuiteVerifier.inspect(this.fullSuiteVerifyOptions());
       },
       unverifiedDoneWhenNudgeSpent: await this.unverifiedDoneWhenNudgeSpent(state),
     };
@@ -1656,7 +1747,7 @@ export class Conductor {
     // lap PASS is STALE here, so the fence routes back to one full run.
     const ctx = {
       ...(await this.completionCtx(state)),
-      fullSuiteInspect: () => this.fullSuiteVerifier.inspect({ requireAggregate: true }),
+      fullSuiteInspect: () => this.fullSuiteVerifier.inspect(this.fullSuiteVerifyOptions({ requireAggregate: true })),
     };
     const nonGreen: Array<{ name: StepName; verdict: GateObjectiveVerdict; reason: string }> = [];
 
@@ -2019,7 +2110,27 @@ export class Conductor {
     status: StepStatus,
   ): Promise<void> {
     await this.restoreMissingStateFile(state);
-    const result = await saveStepStatus(this.stateFilePath, step, status, this.stateStore);
+    // The routed child store owns BUILD-region fields.  Reading
+    // `stateFilePath` here would use the flat value as the compare-and-swap
+    // expectation while applying against the child's overlay, producing a
+    // false concurrent-write refusal after entering a region.
+    const result = await this.applyStateBatch({
+      name: 'save step status',
+      mutations: [
+        {
+          field: step,
+          expected: state[step],
+          intent: `save ${step} step status`,
+          next: status,
+        } as StateMutation<ConductState>,
+        {
+          field: 'last_step',
+          expected: state.last_step,
+          intent: 'record last completed step',
+          next: step,
+        },
+      ],
+    });
     requireStateMutation(result, `Conductor step-status update for ${step}`);
     if (result.kind === 'applied' && result.resolvedFields?.includes(step)) return;
     state[step] = status;
@@ -2188,6 +2299,9 @@ export class Conductor {
     );
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
+    this.resolveActiveChild = opts.childRegionLifecycle?.resolveActiveChild ?? resolveActiveChild;
+    this.enterChildRegion = opts.childRegionLifecycle?.enterChildRegion ?? enterChildRegion;
+    this.advanceChildRegion = opts.childRegionLifecycle?.advanceChildRegion ?? advanceChildRegion;
     this.remediationProjectionLimitOverrides = opts.remediationProjectionLimitOverrides;
     this.executionLifecycle = new ExecutionLifecycle({
       events: this.events,
@@ -2283,6 +2397,80 @@ export class Conductor {
         `Protected artifact rotation refused: condition=${event.condition}${event.path ? ` path=${event.path}` : ''}`,
       );
     }
+  }
+
+  /** Adopt the cursor-selected child's overlay before a region dispatch. */
+  private async activateChildRegionState(
+    state: ConductState,
+    child: ChildId,
+    isLeaf?: boolean,
+  ): Promise<void> {
+    this.stateStore = createRoutedConductStateStore(this.projectRoot, child);
+    const overlay = await readConductStateOverlay(this.projectRoot, child);
+    if (!overlay.ok) throw new Error(`cannot read child ${child} BUILD state: ${overlay.error.message}`);
+    for (const step of CHILD_REGION_STEPS) {
+      const value = overlay.value[step];
+      if (value === undefined) delete state[step];
+      else state[step] = value;
+    }
+    // `last_step` is written alongside every region status through the routed
+    // store.  Keeping the flat breadcrumb here makes its compare-and-swap
+    // expectation target a field that does not exist in the child state,
+    // falsely reporting a concurrent update on the first resumed dispatch.
+    const lastStep = overlay.value.last_step;
+    if (lastStep === undefined) delete state.last_step;
+    else state.last_step = lastStep;
+    this.activeRegionChild = child;
+    this.activeRegionIsLeaf = isLeaf;
+    this.persistedStateSnapshot = { ...state };
+  }
+
+  /**
+   * Resume derives its first candidate before the ordinary loop reaches a
+   * region step. Adopt the cursor-selected child here so index derivation and
+   * its state-only prerequisite clamp consume the same overlay as dispatch.
+   *
+   * Do not probe the cursor for an ordinary unconfigured workspace: it is a
+   * git fail-closed boundary and legacy resume workspaces may be non-git. A
+   * configured stack or durable child directory establishes child awareness.
+   */
+  private async activateChildRegionStateForResume(state: ConductState): Promise<boolean> {
+    const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    if (!slug) return true;
+
+    const [loadedConfig, durableChildState] = await Promise.all([
+      loadConfig(this.projectRoot),
+      hasDurableChildState(this.projectRoot, slug),
+    ]);
+    const stackConfigured = loadedConfig.ok && loadedConfig.config.stacked_prs?.enabled === true;
+    if (!stackConfigured && durableChildState === false) return true;
+
+    const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+    if (cursor.kind === 'active') {
+      await this.activateChildRegionState(state, cursor.child, cursor.isLeaf);
+      return true;
+    }
+    if (cursor.kind === 'no-child') return true;
+
+    await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+    return false;
+  }
+
+  /**
+   * Whole-feature verdicts stay flat. For a selected child, each region
+   * verdict is replaced by the child's record; an absent child record masks a
+   * stale flat record so gateSatisfied falls back to child overlay state.
+   */
+  private async readGateVerdictOverlay(): Promise<Partial<Record<StepName, GateObjectiveVerdict>>> {
+    const verdicts = await readAllVerdicts(this.projectRoot);
+    if (this.activeRegionChild === undefined) return verdicts;
+
+    for (const step of CHILD_REGION_STEPS) {
+      const verdict = await readVerdict(this.projectRoot, step, this.activeRegionChild);
+      if (verdict) verdicts[step] = verdict;
+      else delete verdicts[step];
+    }
+    return verdicts;
   }
 
   /**
@@ -4119,7 +4307,11 @@ export class Conductor {
           // Record the appended ids so the build completion predicate can
           // reject a later removal of their headings from the plan.
           try {
-            await recordAppendedRemediationTaskIds(this.projectRoot, appendResult.appendedIds);
+            await recordAppendedRemediationTaskIds(
+              this.projectRoot,
+              appendResult.appendedIds,
+              this.activeRegionChild,
+            );
           } catch (err) {
             this.log?.(
               `WARNING: failed to record appended remediation task ids (removal guard disarmed): ${err instanceof Error ? err.message : String(err)}`,
@@ -4127,7 +4319,11 @@ export class Conductor {
           }
           // Re-seed task-status.json with the appended tasks marked as pending
           try {
-            await seedTaskStatus(this.projectRoot, planPath);
+            await seedTaskStatus(this.projectRoot, planPath, undefined, {
+              ...(this.activeRegionChild === undefined || !this.featureSlug
+                ? {}
+                : { childBase: { slug: this.featureSlug, child: this.activeRegionChild } }),
+            });
           } catch {
             // Log but continue — seeding failure doesn't block remediation routing
           }
@@ -4515,7 +4711,11 @@ export class Conductor {
     | { readonly kind: 'absent' }
     | { readonly kind: 'invalid'; readonly reason: string }
   > {
-    const featureRead = await readRemediationCaseStoreFeature(this.projectRoot);
+    const featureRead = await readRemediationCaseStoreFeature(
+      this.projectRoot,
+      undefined,
+      this.activeRegionChild,
+    );
     if (classifyBuildReviewDurableRead(featureRead) === 'absent') return { kind: 'absent' };
     if (!featureRead.ok) return { kind: 'invalid', reason: `case store ${featureRead.reason}` };
     if (!featureRead.feature) return { kind: 'absent' };
@@ -4527,7 +4727,9 @@ export class Conductor {
     // stable action effects it recorded are what bind the order's own effect
     // identity. No open action case means no live route, which is the same
     // benign absence as no order at all.
-    const state = await new RemediationCaseStore(this.projectRoot, feature).read();
+    const state = await new RemediationCaseStore(this.projectRoot, feature, {
+      ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
+    }).read();
     if (!state.ok) return { kind: 'invalid', reason: `case store ${state.reason}` };
     const openActionCases = new Map(state.state.cases.flatMap((record) =>
       isBuildEligibleActionCase(record)
@@ -4600,18 +4802,27 @@ export class Conductor {
     // neither and keeps its historical behavior.
     let verdictRaw: unknown;
     try {
-      verdictRaw = JSON.parse(await readFile(join(this.projectRoot, BUILD_REVIEW_VERDICT), 'utf-8'));
+      verdictRaw = JSON.parse(await readFile(
+        pipelinePathFor(this.projectRoot, 'build-review.json', this.activeRegionChild),
+        'utf-8',
+      ));
     } catch {
       return { kind: 'absent' };
     }
     const aggregate = parseBuildReviewAggregate(verdictRaw);
     if (!aggregate || aggregate.verdict !== 'PASS') return { kind: 'absent' };
-    const featureRead = await readRemediationCaseStoreFeature(this.projectRoot);
+    const featureRead = await readRemediationCaseStoreFeature(
+      this.projectRoot,
+      undefined,
+      this.activeRegionChild,
+    );
     if (classifyBuildReviewDurableRead(featureRead) === 'absent') return { kind: 'absent' };
     if (!featureRead.ok) return { kind: 'invalid', reason: `case store ${featureRead.reason}` };
     if (!featureRead.feature) return { kind: 'absent' };
     const feature = featureRead.feature;
-    const store = new RemediationCaseStore(this.projectRoot, feature);
+    const store = new RemediationCaseStore(this.projectRoot, feature, {
+      ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
+    });
     const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(this.projectRoot, feature);
     const missingAttemptEvidence = classifyBuildReviewDurableRead(attemptEvidence) === 'absent';
     if (missingAttemptEvidence) {
@@ -4827,7 +5038,7 @@ export class Conductor {
       .then((choice) => choice.trim() as FinishChoice)
       .catch(() => undefined);
     const effectivePrUrl = prUrl ?? this.haltState.pr_url;
-    await this.events.emit({
+    await this.events.emit(this.withActiveRegionChild({
       type: 'loop_halt',
       ...(step ? { step } : {}),
       reason,
@@ -4836,7 +5047,7 @@ export class Conductor {
       ...(headSha === undefined ? {} : { headSha }),
       ...(this.haltState.rebase_base_sha === undefined ? {} : { baseSha: this.haltState.rebase_base_sha }),
       prDisposition: resolvePrDisposition({ prUrl: effectivePrUrl, finishChoice }),
-    });
+    }));
   }
 
   /** Halt a deterministic SHIP-validator precondition fault in either dispatch path. */
@@ -5726,7 +5937,7 @@ export class Conductor {
    */
   private async preVerifyRebaseGate(state: ConductState, step: StepName) {
     if (step === 'test_suite') {
-      const inspection = await this.fullSuiteVerifier.inspect();
+      const inspection = await this.fullSuiteVerifier.inspect(this.fullSuiteVerifyOptions());
       if (inspection.status === 'PRESERVED_WITHIN_BUDGET') {
         await this.recordFullSuitePreservation(inspection);
       }
@@ -5801,19 +6012,36 @@ export class Conductor {
     if (this.fromStep) {
       startIndex = indexOf(this.fromStep);
     } else if (this.resume) {
+      if (!await this.activateChildRegionStateForResume(state)) return;
       // A restarted process has no `lastRebaseOutcome`, so the durable
       // operation descriptor is the only authority that can prevent it from
       // selecting finish across an interrupted/inconsistent rebase write.
       let rebaseClassification = await classifyRebaseOperation(this.projectRoot);
       if (rebaseClassification.kind === 'applying') {
+        // Resume may begin directly at the rebase fence, before the loop has
+        // reached a region step. Re-adopt the cursor-selected child so the
+        // interrupted operation reads and mutates that child's state/verdicts.
+        const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+        if (slug) {
+          const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+          if (cursor.kind === 'active') {
+            await this.activateChildRegionState(state, cursor.child, cursor.isLeaf);
+          } else if (cursor.kind !== 'no-child') {
+            await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+            return;
+          }
+        }
         const rebaseIndex = indexOf('rebase');
         const completion = await completeInterruptedRebaseOperation({
           projectRoot: this.projectRoot,
-          stateFilePath: this.stateFilePath,
+          stateFilePath: this.activeRegionChild === undefined
+            ? this.stateFilePath
+            : pipelinePathFor(this.projectRoot, 'conduct-state.json', this.activeRegionChild),
           stateStore: this.stateStore,
           operation: rebaseClassification.operation,
           downstreamSteps: steps.slice(rebaseIndex + 1).map((step) => step.name),
           preVerify: (step) => this.preVerifyRebaseGate(state, step),
+          child: this.activeRegionChild,
         });
         if (completion.stateResult === 'refused') {
           await this.writeHaltMarker(
@@ -5877,7 +6105,7 @@ export class Conductor {
       // Read verdicts and derive gate topology to find the earliest unsatisfied gate.
       let resumeClamp: { verdicts: Awaited<ReturnType<typeof readAllVerdicts>>; earliestGateIdx: number } | undefined;
       try {
-        const verdicts = await readAllVerdicts(this.projectRoot);
+        const verdicts = await this.readGateVerdictOverlay();
         const topo = deriveGateTopology(steps);
         const earliestGateIdx = earliestUnsatisfiedGateIndex({
           steps,
@@ -6220,7 +6448,7 @@ export class Conductor {
     let staleLapDiscards = 0;
 
     const pendingBuildKickbackGate = async (): Promise<string | null> => {
-      const ledger = await readKickbackLedger(this.projectRoot);
+      const ledger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
       const pending = Object.entries(ledger.gates)
         .filter(([, entry]) => !entry.priorVerdict)
         .map(([gate]) => gate);
@@ -6231,13 +6459,13 @@ export class Conductor {
     const consumeKickbackBudget = async (gate: StepName, reason: string) => {
       const [treeHash, resolvedCount] = await Promise.all([
         currentTreeHash(this.projectRoot),
-        countResolvedTasks(this.projectRoot),
+        countResolvedTasks(this.projectRoot, this.activeRegionChild),
       ]);
       return bumpKickbackGateInLedger(this.projectRoot, gate, {
         treeHash,
         resolvedCount,
         reason,
-      });
+      }, this.activeRegionChild);
     };
 
     /**
@@ -6252,7 +6480,7 @@ export class Conductor {
         ? [baseline.treeHash, baseline.resolvedCount]
         : await Promise.all([
           currentTreeHash(this.projectRoot),
-          countResolvedTasks(this.projectRoot),
+          countResolvedTasks(this.projectRoot, this.activeRegionChild),
         ]);
       await updateKickbackLedger(this.projectRoot, (ledger) => {
         const existing = ledger.gates[sourceGate];
@@ -6274,7 +6502,7 @@ export class Conductor {
           },
           result: undefined,
         };
-      }, sourceGate);
+      }, sourceGate, this.activeRegionChild);
       // This producer/consumer hand-off is only for the immediately following
       // existing-task BUILD rewind; every other capture samples afresh. Each
       // participating gate consumes its own entry, so the other gates on a
@@ -6304,11 +6532,11 @@ export class Conductor {
           },
           result: entry,
         };
-      }, sourceGate);
+      }, sourceGate, this.activeRegionChild);
       if (!ctx) return { halt: false };
       const [treeAfter, resolvedAfter] = await Promise.all([
         currentTreeHash(this.projectRoot),
-        countResolvedTasks(this.projectRoot),
+        countResolvedTasks(this.projectRoot, this.activeRegionChild),
       ]);
       const progress = classifyBuildProgress({
         treeBefore: ctx.treeHash,
@@ -6462,6 +6690,10 @@ export class Conductor {
       return state.applicability_base_content_sha256 === digest ? 'base' : 'branch-only';
     };
     let lastSettledUnit: SchedulingUnitRef | undefined;
+    // The cursor is the sole authority for this cache. It is refreshed at
+    // every BUILD-region entry and after a non-leaf closure; it only avoids
+    // re-emitting lifecycle events while the same child is already checked out.
+    let activeChild: ActiveChildLifecycleTarget | undefined;
     let parkedAtOperatorBoundary = false;
     const stopAtOperatorParkBoundary =
       async (
@@ -6534,6 +6766,44 @@ export class Conductor {
         breadcrumb.lastAdvancedStep = step.name;
         breadcrumb.exitIndex = i;
 
+        // BUILD is a per-child region. Resolve and enter it before checking
+        // status, so a persisted child branch is always checked out before a
+        // region step can be skipped or dispatched.
+        if (isRegionStep(step.name)) {
+          const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+          // The cursor has no work in an ordinary flat feature. Besides
+          // avoiding needless Git probes, keeping this boundary explicit
+          // preserves the N=1 path for callers that intentionally provide no
+          // Git adapter. Durable child state remains sufficient to re-enter a
+          // stack even if its current config has since disabled creation.
+          if (slug) {
+            const durableChildState = await hasDurableChildState(this.projectRoot, slug);
+            const childCursorRelevant = this.config.stacked_prs?.enabled === true || durableChildState !== false;
+            if (childCursorRelevant) {
+            const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+            if (cursor.kind === 'active') {
+              const target: ActiveChildLifecycleTarget = cursor;
+              const entered = await this.enterChildRegion(
+                this.projectRoot,
+                slug,
+                target,
+                this.events,
+                activeChild,
+              );
+              if (entered.kind === 'refused') {
+                await this.haltChildRegionRefusal(`child ${target.child} region entry refused: ${entered.reason}`);
+                return;
+              }
+              await this.activateChildRegionState(state, target.child, target.isLeaf);
+              activeChild = target;
+            } else if (cursor.kind !== 'no-child') {
+              await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+              return;
+            }
+            }
+          }
+        }
+
         // Skip already-completed work. Without this, re-invoking the conductor
         // against a project with existing `done` / `skipped` state (e.g. after
         // a crash, a terminal close, or a fresh `ai-conductor` call without
@@ -6544,6 +6814,43 @@ export class Conductor {
         // `failed` is NOT short-circuited here — the conductor re-enters a
         // failed step so it can run through the retry/recovery flow again.
         const currentStatus = state[step.name];
+        // An active child that owns no story criteria has a complete
+        // acceptance scope without an authoring run.  Resolve this before
+        // opening a step attempt so writing-system-tests is never dispatched
+        // merely to discover an empty input.  The typed child verdict is the
+        // durable explanation across restart; flat features cannot reach this
+        // outcome because completionCtx omits activeChild for them.
+        if (step.name === 'acceptance_specs' && currentStatus !== 'done' && currentStatus !== 'skipped') {
+          const completionContext = await this.completionCtx(state);
+          const completion = await checkStepCompletion(
+            this.projectRoot,
+            step.name,
+            completionContext,
+          );
+          if (completion.acceptanceOutcome === 'no-owned-criteria') {
+            const verdict = await computeAndWriteVerdict(
+              this.projectRoot,
+              step.name,
+              completionContext,
+              { retainReplayPreservation: false },
+            );
+            await this.saveConductorStepStatus(state, step.name, 'done');
+            state[step.name] = 'done';
+            await emitTracked({
+              type: 'gate_verdict',
+              step: step.name,
+              satisfied: verdict.satisfied,
+              reason: verdict.reason,
+            });
+            await emitTracked({
+              type: 'step_completed',
+              step: step.name,
+              status: 'done',
+              unmetered: true,
+            });
+            continue;
+          }
+        }
         // A repaired tree cannot rely on a suite verdict that attested the
         // prior tree. Remember this before BUILD settles so its success path
         // can restage the serial verifier for a fresh evidence check.
@@ -9005,14 +9312,15 @@ export class Conductor {
               // still halt before BUILD. The marker remains actionable and a
               // subsequent valid cap halt receives its durable generation.
             }
-            const reason =
+            const reason = this.withActiveChild(
               `BUILD dispatch halted: ${gate} ${allowance} allowance exhausted.\n` +
               `${detail}\n${findings}${asBuiltFindingDetail}\n` +
               renderKickbackRecoveryHint({
                 slug: state.feature_desc,
                 gate,
                 allowance,
-              });
+              }),
+            );
             await this.writeHaltMarker(
               `${reason}\n${generation === undefined ? '' : `Kickback halt generation: ${generation}\n`}`,
               // A corrupt ledger cannot establish that an allowance was
@@ -9144,7 +9452,7 @@ export class Conductor {
         // so the circuit breaker can detect "Claude ran but completed zero
         // additional tasks" = no point retrying further, hand off to REPL.
         let resolvedTasksBefore = step.name === 'build'
-          ? await countResolvedTasks(this.projectRoot)
+          ? await countResolvedTasks(this.projectRoot, this.activeRegionChild)
           : 0;
         // T4 (adr-2026-07-12-progress-aware-build-halt): bounded counter for
         // "attempts bypassed because this attempt made real forward
@@ -9299,10 +9607,11 @@ export class Conductor {
           step.name === 'acceptance_specs' &&
           stepHasCompletionCheck(step.name, this.config)
         ) {
+          const preCheckContext = await this.completionCtx(state);
           const preCheck = await checkStepCompletion(
             this.projectRoot,
             step.name,
-            await this.completionCtx(state),
+            preCheckContext,
           );
           this.currentAttemptStartedAt = undefined;
           this.currentRunId = undefined;
@@ -9322,6 +9631,7 @@ export class Conductor {
                 this.acceptanceRedExec(command, opts.cwd);
               const healResult = await selfHealAcceptanceRed({
                 worktree: this.projectRoot,
+                ...(preCheckContext.activeChild === undefined ? {} : { child: preCheckContext.activeChild }),
                 specFiles: specFiles.map((f) => relative(this.projectRoot, f)),
                 exec,
               });
@@ -9447,6 +9757,9 @@ export class Conductor {
             await seedBuildTaskTelemetry(
               this.projectRoot,
               state.feature_desc ?? this.featureDesc ?? '',
+              this.activeRegionChild === undefined
+                ? undefined
+                : { slug: state.feature_desc ?? this.featureSlug ?? this.featureDesc ?? '', child: this.activeRegionChild },
             );
             // `seedBuildTaskTelemetry` can admit a plan-amendment repair on
             // this very first BUILD attempt. The startup recovery above has
@@ -9642,7 +9955,7 @@ export class Conductor {
               // Re-read fresh from disk rather than writing the possibly-
               // stale in-memory snapshot — same reason as the other T7 stamps.
               const freshEvidence = await createTaskEvidence(this.projectRoot);
-              freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+              freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
               await freshEvidence.write();
             }
           } else
@@ -9841,7 +10154,7 @@ export class Conductor {
             !result.success
           ) {
             const [resolvedTasksAfter, headShaAttemptEnd] = await Promise.all([
-              countResolvedTasks(this.projectRoot),
+              countResolvedTasks(this.projectRoot, this.activeRegionChild),
               currentCommitSha(this.projectRoot),
             ]);
             const headMovedThisAttempt =
@@ -10041,7 +10354,7 @@ export class Conductor {
               const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
                 currentCommitSha(this.projectRoot),
                 currentTreeHash(this.projectRoot),
-                countResolvedTasks(this.projectRoot),
+                countResolvedTasks(this.projectRoot, this.activeRegionChild),
               ]);
               const outcomeStore = await readBuildOutcome(this.projectRoot);
               const note = result.output ? result.output.split('\n').slice(-200) : undefined;
@@ -10372,7 +10685,7 @@ export class Conductor {
             // failure, so stop here instead of entering the generic retry
             // loop below.
             if (step.name === 'build_review') {
-              const ledger = await readKickbackLedger(this.projectRoot);
+              const ledger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
               if (isUnreadableKickbackLedger(ledger)) {
                 const reason = 'build_review halted: kickback ledger is unreadable; budget enforcement requires human recovery.';
                 state[step.name] = 'failed';
@@ -10387,7 +10700,7 @@ export class Conductor {
               }
               const mechanicalEntry = ledger.gates.build_review;
               const aggregateRaw = await readFile(
-                join(this.projectRoot, BUILD_REVIEW_VERDICT),
+                pipelinePathFor(this.projectRoot, 'build-review.json', this.activeRegionChild),
                 'utf-8',
               ).then((content) => {
                 try {
@@ -10401,9 +10714,11 @@ export class Conductor {
                 (mechanicalEntry?.mechanicalFaults ?? 0) >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW &&
                 aggregateRaw !== undefined
               ) {
-                const reason = renderExhaustedMechanicalBuildReviewHalt(
-                  mechanicalEntry ?? { mechanicalFaults: 0 },
-                  aggregateRaw,
+                const reason = this.withActiveChild(
+                  renderExhaustedMechanicalBuildReviewHalt(
+                    mechanicalEntry ?? { mechanicalFaults: 0 },
+                    aggregateRaw,
+                  ),
                 );
                 const aggregate = parseBuildReviewAggregate(aggregateRaw);
                 const failure = aggregate && Object.values(aggregate.results).find(
@@ -10491,7 +10806,7 @@ export class Conductor {
                 typeof retries === 'number' &&
                 retries < MAX_SUITE_INFRASTRUCTURE_RETRIES
               ) {
-                const entry = await bumpSuiteInfrastructureRetriesInLedger(this.projectRoot);
+                const entry = await bumpSuiteInfrastructureRetriesInLedger(this.projectRoot, this.activeRegionChild);
                 const infrastructureAttempt = entry.suiteInfrastructureRetries ?? retries + 1;
                 await emitTracked({
                   type: 'step_retry',
@@ -10628,7 +10943,7 @@ export class Conductor {
             // configured with fewer generic retries; its final attempt
             // materializes the aggregate needed for the operator recovery.
             if (step.name === 'build_review') {
-              const ledger = await readKickbackLedger(this.projectRoot);
+              const ledger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
               if (isUnreadableKickbackLedger(ledger)) {
                 const reason = 'build_review halted: kickback ledger is unreadable; budget enforcement requires human recovery.';
                 state[step.name] = 'failed';
@@ -11165,7 +11480,7 @@ export class Conductor {
               let progressAttemptCeiling: number | undefined;
               if (step.name === 'build') {
                 const headShaAfterBuild = await currentCommitSha(this.projectRoot);
-                const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
+                const resolvedTasksAfter = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
                 // #505 TS: Capture retry task counts for step_retry emit (before resolvedTasksBefore is overwritten).
                 retryResolvedBefore = resolvedTasksBefore;
                 retryResolvedAfter = resolvedTasksAfter;
@@ -11197,7 +11512,7 @@ export class Conductor {
                   // the terminal HALT fallback in case this build step
                   // ultimately exhausts retries after this stall.
                   lastBuildStallReason =
-                    `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))` +
+                    `build stalled${this.activeRegionChild === undefined ? '' : ` for child ${this.activeRegionChild}`}: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))` +
                     (completion.reason ? `\nCompletion gate: ${completion.reason}` : '');
                 } else if (
                   attempt >= 2 &&
@@ -11723,7 +12038,7 @@ export class Conductor {
                 // Conductor's start and this exit, and blindly writing the
                 // stale snapshot would clobber them.
                 const freshEvidence = await createTaskEvidence(this.projectRoot);
-                freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+                freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
                 await freshEvidence.write();
               }
               // Task 8 (builds-stall-when-work-lands-without-task-trailer-):
@@ -11772,7 +12087,7 @@ export class Conductor {
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 if (this.taskEvidence) {
                   const freshEvidence = await createTaskEvidence(this.projectRoot);
-                  freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+                  freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
                   await freshEvidence.write();
                 }
                 succeeded = true;
@@ -11793,7 +12108,7 @@ export class Conductor {
             // exhausted exit above for why this must not write the stale
             // in-memory `this.taskEvidence` snapshot.
             const freshEvidence = await createTaskEvidence(this.projectRoot);
-            freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+            freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
             await freshEvidence.write();
           }
 
@@ -11845,7 +12160,7 @@ export class Conductor {
             const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
               currentCommitSha(this.projectRoot),
               currentTreeHash(this.projectRoot),
-              countResolvedTasks(this.projectRoot),
+              countResolvedTasks(this.projectRoot, this.activeRegionChild),
             ]);
             const outcomeStore = await readBuildOutcome(this.projectRoot);
             const note = lastError ? lastError.split('\n').slice(-200) : undefined;
@@ -12014,7 +12329,10 @@ export class Conductor {
               let verdictRaw: unknown = null;
               try {
                 verdictRaw = JSON.parse(
-                  await readFile(join(this.projectRoot, BUILD_REVIEW_VERDICT), 'utf-8'),
+                  await readFile(
+                    pipelinePathFor(this.projectRoot, 'build-review.json', this.activeRegionChild),
+                    'utf-8',
+                  ),
                 );
               } catch {
                 /* missing/unreadable — falls through to generic HALT below */
@@ -12031,6 +12349,8 @@ export class Conductor {
                 const staleLap = await discardStaleLapBuildReviewFail(
                   this.projectRoot,
                   verdictRaw,
+                  undefined,
+                  this.activeRegionChild,
                 );
                 if (staleLap) {
                   staleLapDiscards += 1;
@@ -12103,7 +12423,7 @@ export class Conductor {
                   // content-complete PASS was unreachable.
                   const uncoveredInfrastructure = effective.effective.uncoveredInfrastructureFailureRubrics;
                   const uncoveredScopeIncomplete = effective.effective.uncoveredScopeIncompleteRubrics ?? [];
-                  const mechanicalLedger = await readKickbackLedger(this.projectRoot);
+                  const mechanicalLedger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
                   if (isUnreadableKickbackGate(mechanicalLedger, 'build_review')) {
                     const reason = `build_review adjudication halted: kickback ledger gate 'build_review' is unreadable`;
                     await this.writeHaltMarker(reason + '\n', 'needs-human');
@@ -12170,6 +12490,7 @@ export class Conductor {
                     adjudication: {
                     projectRoot: this.projectRoot,
                     feature: effective.feature,
+                    ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
                     operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
                     suppressedFindingIds: new Set(suppressedFindingIds),
                     suppressions,
@@ -12177,7 +12498,7 @@ export class Conductor {
                     mechanical,
                     chargeInput: {
                       treeHash: await currentTreeHash(this.projectRoot),
-                      resolvedCount: await countResolvedTasks(this.projectRoot),
+                      resolvedCount: await countResolvedTasks(this.projectRoot, this.activeRegionChild),
                       reason: buildReviewFailureDetails(parsed).join('\n') || 'build_review adjudicated action',
                     },
                     ...(this.buildReviewChargeEffect === undefined ? {} : { chargeEffect: this.buildReviewChargeEffect }),
@@ -12245,7 +12566,7 @@ export class Conductor {
                     continue;
                   }
                   if (outcome.kind === 'repair') {
-                    const ledger = await readKickbackLedger(this.projectRoot);
+                    const ledger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
                     const count = ledger.gates.build_review?.count ?? 1;
                     const evidence = `build-review admitted repair ${outcome.caseIds.join(', ')}\n${outcome.trace}` +
                       (outcome.remainingInfrastructure ? `\n${BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE}` : '');
@@ -12289,6 +12610,7 @@ export class Conductor {
                             detail: scopeFault.detail,
                             lapId: aggregate.lapId,
                           },
+                    this.activeRegionChild,
                   );
                   if (bumpedMechanicalFaults.kind === 'unreadable') {
                     const reason = `build_review adjudication halted: ${bumpedMechanicalFaults.reason}`;
@@ -12338,7 +12660,7 @@ export class Conductor {
                       'by operator disposition at exit time; re-running build_review.',
                   );
                   if (buildReviewKickbackCharged) {
-                    await refundBuildReviewKickback(this.projectRoot, buildReviewBeforeConsumption);
+                    await refundBuildReviewKickback(this.projectRoot, buildReviewBeforeConsumption, this.activeRegionChild);
                   }
                   await this.saveConductorStepStatus(state, step.name, 'failed');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
@@ -12373,6 +12695,14 @@ export class Conductor {
                       root: this.projectRoot,
                       gradedBaseSha: lastBuildReviewMergeBase,
                       flaggedPaths: extractFlaggedPaths(failureDetails),
+                      ...(this.activeRegionChild === undefined
+                        ? {}
+                        : {
+                            childBase: {
+                              slug: state.feature_desc ?? this.featureSlug ?? this.featureDesc ?? '',
+                              child: this.activeRegionChild,
+                            },
+                          }),
                       regrade: async () => 'pass',
                     });
                   } catch {
@@ -12405,7 +12735,7 @@ export class Conductor {
 
                 if (scopeFailDisposition?.kind === 'invalidated') {
                   if (await reenterBuildReviewIfEffectivePass()) continue;
-                  await removeBuildReviewVerdict(this.projectRoot).catch(() => {
+                  await removeBuildReviewVerdict(this.projectRoot, this.activeRegionChild).catch(() => {
                     /* best-effort removal */
                   });
                   const regradeCount = await readRegradeCount(this.projectRoot).catch(() => 0);
@@ -12446,18 +12776,19 @@ export class Conductor {
                 const count = kickback.entry.count;
                 if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted) {
                   if (await reenterBuildReviewIfEffectivePass()) continue;
-                  const reason =
+                  const reason = this.withActiveChild(
                     `build_review cumulative kickback cap exceeded:\n` +
                     renderKickbackBudgetView(
                       kickback.entry,
                       'build_review',
                       MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
-                    );
+                    ),
+                  );
                   const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'build_review', {
                     consumed: kickback.entry.cumulative,
                     limit: kickback.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
                     latestReason: kickback.entry.lastReason,
-                  });
+                  }, this.activeRegionChild);
                   const markerResult = await this.writeHaltMarker(
                     `${reason}\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}\n`,
                     'needs-human',
@@ -13159,8 +13490,10 @@ export class Conductor {
             // once retries are exhausted. Terminal-side prompt hosts should drop
             // `retry` from the menu when `retriesExhausted` is set; if a caller
             // ignores the context, this loop prevents an infinite retry storm.
+            const retryKey = this.childScopedStepKey(step.name, this.activeRegionChild);
+            let count = 0;
             while (true) {
-              const count = recoveryRetries.get(step.name) ?? 0;
+              count = recoveryRetries.get(retryKey) ?? 0;
               const retriesExhausted = count >= MAX_RECOVERY_RETRIES;
               action = await this.onRecovery(step.name, gating, {
                 recoveryCount: count,
@@ -13170,7 +13503,7 @@ export class Conductor {
               break;
             }
             if (action === 'retry') {
-              recoveryRetries.set(step.name, (recoveryRetries.get(step.name) ?? 0) + 1);
+              recoveryRetries.set(retryKey, count + 1);
               i--;
               continue;
             }
@@ -13425,7 +13758,7 @@ export class Conductor {
             const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
               currentCommitSha(this.projectRoot),
               currentTreeHash(this.projectRoot),
-              countResolvedTasks(this.projectRoot),
+              countResolvedTasks(this.projectRoot, this.activeRegionChild),
             ]);
             const outcomeStore = await readBuildOutcome(this.projectRoot);
             completedBuildTreeAfter = treeAfter;
@@ -13564,6 +13897,45 @@ export class Conductor {
           // next step, and a step that re-opened an upstream gate (kickback)
           // routes the loop back to plan/stories. Upstream of build → null →
           // the for loop's normal linear i++ (front half untouched).
+          // A non-leaf gets exactly one green BUILD region. Closing it creates
+          // the next child (or advances the leaf), switches cleanly, and
+          // deliberately re-enters at acceptance_specs instead of letting
+          // selectNextGate reach a whole-feature consumer.
+          if (
+            step.name === 'build_review' &&
+            activeChild !== undefined &&
+            !activeChild.isLeaf &&
+            CHILD_REGION_STEPS.every((regionStep) => {
+              const status = getStepStatus(state, regionStep);
+              return status === 'done' || status === 'skipped';
+            })
+          ) {
+            const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+            if (!slug) throw new Error('cannot advance child BUILD region without a feature slug');
+            const advanced = await this.advanceChildRegion(
+              this.projectRoot,
+              slug,
+              activeChild,
+              this.events,
+            );
+            if (advanced.kind === 'refused') {
+              await this.haltChildRegionRefusal(`child ${activeChild.child} region exit refused: ${advanced.reason}`);
+              return;
+            }
+            const next = await this.resolveActiveChild(this.projectRoot, slug);
+            if (next.kind !== 'active') {
+              const reason = next.kind === 'no-child'
+                ? `cannot resolve next child after closing ${activeChild.child}: cursor returned no-child`
+                : this.renderChildCursorRefusal(next);
+              await this.haltChildRegionRefusal(reason);
+              return;
+            }
+            activeChild = next;
+            await this.activateChildRegionState(state, next.child, next.isLeaf);
+            i = indexOf('acceptance_specs') - 1;
+            continue;
+          }
+
           let advance: number | null | 'halt';
           try {
             advance = await this.advanceTail(
@@ -13708,7 +14080,7 @@ export class Conductor {
 
   private async runTestSuiteStep(): Promise<StepRunResult> {
     this.retainedFullSuiteInspection = undefined;
-    const verifyOptions = { requireAggregate: this.testSuiteRequiresAggregate };
+    const verifyOptions = this.fullSuiteVerifyOptions({ requireAggregate: this.testSuiteRequiresAggregate });
     const inspection = await this.fullSuiteVerifier.inspect(verifyOptions);
     const verification = await this.fullSuiteVerifier.ensure(inspection, verifyOptions);
     if (verification.status === 'FAILED') {
@@ -13835,15 +14207,19 @@ export class Conductor {
     let result: 'halt' | 'kicked' | null = null;
     for (const [target, v] of Object.entries(verdicts) as Array<[StepName, GateObjectiveVerdict]>) {
       if (v && v.satisfied === false && v.kickback?.from === stepName) {
+        // Only BUILD-region targets own child-local task progress, budget, and
+        // telemetry. A feature-wide target can be re-opened while a child is
+        // active, but it must remain in the flat feature ledger and state.
+        const kickbackChild = isRegionStep(target) ? this.activeRegionChild : undefined;
         const [treeHash, resolvedCount] = await Promise.all([
           currentTreeHash(this.projectRoot),
-          countResolvedTasks(this.projectRoot),
+          countResolvedTasks(this.projectRoot, kickbackChild),
         ]);
         const kickback = await bumpKickbackGateInLedger(this.projectRoot, target, {
           treeHash,
           resolvedCount,
           reason: v.kickback?.evidence ?? '',
-        });
+        }, kickbackChild);
         const count = kickback.entry.count;
         await this.events.emit({
           type: 'kickback',
@@ -13851,11 +14227,15 @@ export class Conductor {
           to: target,
           evidence: v.kickback?.evidence,
           count,
+          ...(kickbackChild === undefined ? {} : { child: kickbackChild }),
         });
         if (kickback.exhausted) {
-          const reason =
+          const pingPongReason =
             `kickback ping-pong: ${target} re-opened ${count + 1} times ` +
             `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
+          const reason = kickbackChild === undefined
+            ? pingPongReason
+            : this.withActiveChild(pingPongReason);
           await this.writeHaltMarker(reason + '\n', 'needs-human');
           const prUrl = await this.surfaceRemediationPr(reason);
           await this.emitLoopHalt(reason, prUrl);
@@ -13976,17 +14356,17 @@ export class Conductor {
                 },
                 result: true,
               };
-            }, 'build_review');
+            }, 'build_review', this.activeRegionChild);
             if (credited) convergenceCredit = { gate: target };
           }
-          await this.events.emit({
+          await this.events.emit(this.withActiveRegionChild({
             type: 'kickback',
             from: 'rebase',
             to: target,
             evidence: verdict.kickback.evidence,
             count: 1,
             ...(convergenceCredit === undefined ? {} : { convergenceCredit }),
-          });
+          }));
           if (getStepStatus(state, target) !== 'skipped') reopened[target] = 'pending';
         }
         await this.commitStateChanges(state, 'reopen persisted rebase kickbacks', reopened);
@@ -14013,15 +14393,22 @@ export class Conductor {
               { retainReplayPreservation: false },
             );
       if (step.name === 'finish' || (step.name === 'build' && buildRoutedForward)) {
-        await writeVerdict(this.projectRoot, step.name, verdict);
+        await writeVerdict(
+          this.projectRoot,
+          step.name,
+          verdict,
+          step.name === 'build' ? this.activeRegionChild : undefined,
+        );
       }
-      await this.events.emit({
+      await this.events.emit(this.withActiveRegionChild({
         type: 'gate_verdict',
         step: step.name,
         satisfied: verdict.satisfied,
         reason: verdict.reason,
-      });
-      if (verdict.satisfied) stuckGate.delete(step.name);
+      }));
+      if (verdict.satisfied) {
+        stuckGate.delete(this.childScopedStepKey(step.name, this.activeRegionChild));
+      }
 
       // Task 15: Post-green spot-audit dispatch for semantic attribution verification.
       // Only dispatch after build gate is satisfied and sampling is enabled.
@@ -14163,7 +14550,7 @@ export class Conductor {
       await this.applyStateBatch({ name: 'record selector tail skips', mutations });
     }
 
-    const verdicts = await readAllVerdicts(this.projectRoot);
+    const verdicts = await this.readGateVerdictOverlay();
 
     // Kickback: a step re-opened an upstream gate (verdict is
     // {satisfied:false, kickback.from === this step}). Re-open that gate
@@ -14224,10 +14611,13 @@ export class Conductor {
     // Oscillation / stuck guard: cap how many times any single gate may be
     // selected before it satisfies. Catches a gate whose verdict never improves
     // and a build↔plan kickback oscillation.
-    const sel = (stuckGate.get(selectedStep.name) ?? 0) + 1;
-    stuckGate.set(selectedStep.name, sel);
+    const selectedKey = this.childScopedStepKey(selectedStep.name, this.activeRegionChild);
+    const sel = (stuckGate.get(selectedKey) ?? 0) + 1;
+    stuckGate.set(selectedKey, sel);
     if (sel > MAX_GATE_SELECTIONS) {
-      const reason = `gate '${selectedStep.name}' selected ${sel} times without satisfying: ${decision.reason}`;
+      const reason = this.withActiveChild(
+        `gate '${selectedStep.name}' selected ${sel} times without satisfying: ${decision.reason}`,
+      );
       await this.writeHaltMarker(reason + '\n', 'needs-human');
       const prUrl = await this.surfaceRemediationPr(reason);
       await this.emitLoopHalt(reason, prUrl);
@@ -14588,7 +14978,7 @@ export class Conductor {
       const outcome: RebaseOutcome = { kind: 'noop', baseSha: null };
       this.lastRebaseOutcome = outcome;
       const ranManualTest = getStepStatus(state, 'manual_test') !== 'skipped';
-      await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest);
+      await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest, undefined, undefined, undefined, this.activeRegionChild);
       if (outcome.baseSha !== null && outcome.baseSha !== undefined) {
         state.rebase_base_sha = outcome.baseSha;
         await this.persistPendingStateChanges(state, 'persist rebase base provenance');
@@ -14733,6 +15123,7 @@ export class Conductor {
           : {}),
         emit: async (event) => { await this.events?.emit(event); },
       },
+      this.activeRegionChild,
     );
 
     // The replay decision has already written the authoritative gate verdicts.
@@ -14747,13 +15138,16 @@ export class Conductor {
     if (transitionReplay) {
       const transition = await applyRebaseTransition({
         projectRoot: this.projectRoot,
-        stateFilePath: this.stateFilePath,
+        stateFilePath: this.activeRegionChild === undefined
+          ? this.stateFilePath
+          : pipelinePathFor(this.projectRoot, 'conduct-state.json', this.activeRegionChild),
         stateStore: this.stateStore,
         replay: transitionReplay,
         invalidated: verdict.kickedBack,
         preserved: verdict.preservedGates ?? [],
         preservedCandidates: verdict.preservedCandidates ?? [],
         reverified: verdict.reverified,
+        child: this.activeRegionChild,
       });
       if (transition.stateResult === 'refused') {
         await this.writeHaltMarker('rebase continuation state transition was refused; inspect concurrent state updates before resuming\n', 'needs-human');

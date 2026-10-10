@@ -5,7 +5,7 @@ import { tmpdir } from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-vi.mock('execa', () => ({ execa: vi.fn(async () => ({ stdout: '' })) }));
+vi.mock('execa', () => ({ execa: vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '' })) }));
 
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -1992,8 +1992,8 @@ describe('integration/gate-loop', () => {
       ) => Promise<import('execa').Result>;
       const mockExeca = vi.mocked(execa) as unknown as import('vitest').Mock<ExecaInvocation>;
       mockExeca.mockImplementation(async (_command: string, args: readonly string[] = [], options?: import('execa').Options) => {
-        if (args[0] === 'ls-tree') return { stdout: '.docs/plans/p.md\0' } as never;
-        if (args[0] === 'show') return { stdout: planText } as never;
+        if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '.docs/plans/p.md\0', stderr: '' } as never;
+        if (args[0] === 'show') return { exitCode: 0, stdout: planText, stderr: '' } as never;
         if (args[0] === 'cat-file' && args.includes('--batch')) {
           const requestedPaths = String(options?.input ?? '')
             .trim()
@@ -2003,9 +2003,9 @@ describe('integration/gate-loop', () => {
             const content = Buffer.from(planText);
             return Buffer.concat([Buffer.from(`${request.split(':', 1)[0]} blob ${content.length}\n`), content, Buffer.from('\n')]);
           }));
-          return { stdout: response } as never;
+          return { exitCode: 0, stdout: response, stderr: '' } as never;
         }
-        return { stdout: '' } as never;
+        return { exitCode: 0, stdout: '', stderr: '' } as never;
       });
       await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
 
@@ -2109,7 +2109,7 @@ describe('integration/gate-loop', () => {
       try {
         await conductor.run();
       } finally {
-        mockExeca.mockImplementation(async () => ({ stdout: '' }) as never);
+        mockExeca.mockImplementation(async () => ({ exitCode: 0, stdout: '', stderr: '' }) as never);
       }
 
       // The kickback fired and the loop still converged despite the wipe —

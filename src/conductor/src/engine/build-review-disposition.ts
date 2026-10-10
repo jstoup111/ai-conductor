@@ -3,6 +3,9 @@ import { join } from 'node:path';
 
 import type { GitRunner } from './rebase.js';
 import { changedPathsBetween, resolveFreshBase } from './rebase.js';
+import { resolveChildBase } from './child-cursor.js';
+import type { ChildId } from './child-context.js';
+import { MergeBaseError } from './build-review-inputs.js';
 
 // ── Task 6: pure scope-FAIL classifier ───────────────────────────────────────
 //
@@ -79,6 +82,8 @@ export interface RunScopeFailDispositionOpts {
   gradedBaseSha: string;
   /** Repo-relative paths the verdict cited as out-of-scope. */
   flaggedPaths: string[];
+  /** Active child identity for a child-local review disposition. */
+  childBase?: { slug: string; child: ChildId };
   /** Re-runs build_review against fresh inputs; injected so callers never
    * dispatch an agent session directly from this layer. */
   regrade: () => Promise<'pass' | 'fail'>;
@@ -191,12 +196,33 @@ export async function runScopeFailDisposition(
 ): Promise<Disposition> {
   const { git, root, gradedBaseSha, flaggedPaths, regrade } = opts;
 
-  const fresh = await resolveFreshBase(git, {});
   let freshBaseSha = gradedBaseSha;
-  if (fresh.kind === 'remote') {
-    const rev = await git(['rev-parse', fresh.ref]);
-    if (rev.exitCode === 0 && rev.stdout.trim()) {
-      freshBaseSha = rev.stdout.trim();
+  const childBase = opts.childBase === undefined
+    ? { kind: 'none' as const }
+    : await resolveChildBase(root, opts.childBase.slug, opts.childBase.child, { git });
+  if (childBase.kind === 'parent') {
+    // A child closure is the authoritative local base. The stale-default
+    // branch probe has no bearing on a child-local review disposition.
+    freshBaseSha = childBase.sha;
+  } else {
+    if (childBase.kind === 'parent-missing') {
+      throw new MergeBaseError(
+        `build_review cannot resolve parent child ${childBase.parent}: branch ${childBase.branch} is missing`,
+        childBase.branch,
+      );
+    }
+    if (childBase.kind === 'parent-not-ancestor') {
+      throw new MergeBaseError(
+        `build_review cannot resolve parent child ${childBase.parent}: tip ${childBase.sha} is not an ancestor of HEAD`,
+        childBase.sha,
+      );
+    }
+    const fresh = await resolveFreshBase(git, {});
+    if (fresh.kind === 'remote') {
+      const rev = await git(['rev-parse', fresh.ref]);
+      if (rev.exitCode === 0 && rev.stdout.trim()) {
+        freshBaseSha = rev.stdout.trim();
+      }
     }
   }
 

@@ -1,3 +1,4 @@
+// Covers: task:1
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -11,6 +12,9 @@ export interface Cell {
   name: string;
   configYaml: string;
   planMd: string;
+  coverageBinding?: 'done' | 'refused';
+  complexityMd?: string;
+  storiesFixture?: 'one' | 'two';
 }
 
 const UNSLICED_PLAN = `# Implementation Plan: n1-golden
@@ -57,10 +61,75 @@ const SLICED_PLAN = `# Implementation Plan: n1-golden
 **Done when:** Verification complete.
 `;
 
+const SINGLE_SLICE_PLAN = `# Implementation Plan: n1-golden
+
+## Slices
+
+| Slice | Title | Tasks |
+| --- | --- | --- |
+| 1 | Only | 1, 2, 3 |
+
+### Task 1: Setup
+**Story:** Story 1
+**Dependencies:** none
+**Done when:** Setup complete.
+
+### Task 2: Implement
+**Story:** Story 1
+**Dependencies:** none
+**Done when:** Implementation complete.
+
+### Task 3: Verify
+**Story:** Story 1
+**Dependencies:** none
+**Done when:** Verification complete.
+`;
+
+const INELIGIBLE_TWO_SLICE_PLAN = `# Implementation Plan: n1-golden
+
+## Slices
+
+| Slice | Title | Tasks |
+| --- | --- | --- |
+| 1 | First | 1, 2 |
+| 2 | Second | 3 |
+
+### Task 1: Setup
+**Story:** Story 1
+**Dependencies:** none
+**Done when:** Setup complete.
+
+### Task 2: Implement
+**Story:** Story 1
+**Dependencies:** none
+**Done when:** Implementation complete.
+
+### Task 3: Verify
+**Story:** Story 2
+**Dependencies:** none
+**Done when:** Verification complete.
+`;
+
 export const CELLS: Cell[] = [
   { name: 'flag-off-unsliced', configYaml: 'stacked_prs:\n  enabled: false\n', planMd: UNSLICED_PLAN },
   { name: 'flag-on-unsliced', configYaml: 'stacked_prs:\n  enabled: true\n', planMd: UNSLICED_PLAN },
   { name: 'flag-off-sliced', configYaml: 'stacked_prs:\n  enabled: false\n', planMd: SLICED_PLAN },
+  {
+    name: 'flag-on-single-slice',
+    configYaml: 'stacked_prs:\n  enabled: true\n  max_slices: 2\n',
+    planMd: SINGLE_SLICE_PLAN,
+    coverageBinding: 'done',
+    complexityMd: 'Tier: M\nStacked-Delivery: approved\n',
+    storiesFixture: 'one',
+  },
+  {
+    name: 'flag-on-ineligible',
+    configYaml: 'stacked_prs:\n  enabled: true\n  max_slices: 2\n',
+    planMd: INELIGIBLE_TWO_SLICE_PLAN,
+    coverageBinding: 'refused',
+    complexityMd: 'Tier: M\n',
+    storiesFixture: 'two',
+  },
 ];
 
 /**

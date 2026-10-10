@@ -83,8 +83,13 @@ k+1 starts before child k has passed its whole region.
 - Given a two-child baseline in which a pre-region halt record was committed on `feat/daemon-demo`
   at `H` and the halt was cleared, when the region is entered, then `feat/c1/demo` is created at `H`,
   and the later leaf move succeeds because the leaf has no commits of its own.
-- Given a stacked feature with positions `1` and `3` (a gap), when child 1 closes, then the next
-  child created is `feat/c3/demo` and no `feat/c2/demo` is created.
+- Given a stacked feature with positions `1`, `3` and `5` (gaps; `5` is the leaf), when child 1
+  closes, then the next child created is `feat/c3/demo` and no `feat/c2/demo` is created.
+
+  > **Amended 2026-10-10 by #3053:** the criterion previously named positions `1` and `3` only,
+  > which makes position `3` the leaf. adr-2026-10-07-per-child-build-region decision 3 creates no
+  > branch for the leaf (it runs on `feat/daemon-demo` after the leaf move), so the example now adds
+  > a leaf at position `5`, matching the plan's tests and the shipped behavior.
 
 #### Negative Paths
 - Given a three-child baseline in which child 1's `build_review` has not passed, when the loop

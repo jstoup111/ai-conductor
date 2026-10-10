@@ -19,7 +19,8 @@ import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { hasHaltSignal, isEngineFlooredBody } from './halt-pr-rehabilitation.js';
 import { readState, replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
-import { readAllVerdicts } from './gate-verdicts.js';
+import { readAllVerdicts, readVerdict } from './gate-verdicts.js';
+import { resolveActiveChild } from './child-cursor.js';
 import { gateSatisfied } from './selector.js';
 import {
   dispatchFinishRecord,
@@ -573,7 +574,15 @@ export function createProductionFinishPublicationCoordinator(
             // observation preserves selector fallback behavior for missing or
             // malformed verdicts without manufacturing state.
             observeImplementationEvidence: async () => {
-              const verdicts = await readAllVerdicts(deps.projectRoot);
+              const cursor = state.feature_desc === undefined
+                ? { kind: 'no-child' as const }
+                : await resolveActiveChild(deps.projectRoot, state.feature_desc);
+              const verdicts = cursor.kind === 'active' && cursor.isLeaf
+                ? {
+                  build_review: (await readVerdict(deps.projectRoot, 'build_review', cursor.child)) ?? undefined,
+                  test_suite: (await readVerdict(deps.projectRoot, 'test_suite', cursor.child)) ?? undefined,
+                }
+                : await readAllVerdicts(deps.projectRoot);
               const buildReviewSatisfied = gateSatisfied('build_review', state, verdicts);
               const testSuiteSatisfied = gateSatisfied('test_suite', state, verdicts);
               if (buildReviewSatisfied && testSuiteSatisfied) return { state: 'present' };
