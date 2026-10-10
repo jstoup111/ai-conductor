@@ -1,3 +1,4 @@
+// Covers: task:1
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // The engine mints `executionContext.executionId` via `node:crypto.randomUUID`
@@ -22,8 +23,10 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
+import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { writeState } from '../../src/engine/state.js';
 import { bumpKickbackGateInLedger } from '../../src/engine/kickback-ledger.js';
 import { runTaskStart } from '../../src/engine/task-cli.js';
@@ -31,6 +34,23 @@ import { loadConfig } from '../../src/engine/config.js';
 import { CELLS, RECORD, expectGolden, readAndNormalize } from './n1-golden-shared.js';
 
 const execFile = promisify(execFileCb);
+const ONE_STORY = `# Stories: n1-golden
+
+## Story 1: Golden coverage
+
+### Acceptance Criteria
+
+- Given a golden cell, when it runs, then it remains stable.
+`;
+
+const TWO_STORIES = `${ONE_STORY}
+
+## Story 2: Golden coverage follow-up
+
+### Acceptance Criteria
+
+- Given a golden cell, when it runs, then it remains stable.
+`;
 
 describe('N=1 golden state', () => {
   const roots: string[] = [];
@@ -73,6 +93,33 @@ describe('N=1 golden state', () => {
       USER: 'test-user',
     };
     await execFile('git', ['commit', '-m', 'init'], { cwd: root, env });
+
+    if (cell.coverageBinding) {
+      await mkdir(join(root, '.docs', 'stories'), { recursive: true });
+      await mkdir(join(root, '.docs', 'complexity'), { recursive: true });
+      await mkdir(join(root, 'skills', 'tdd'), { recursive: true });
+      await writeFile(join(root, '.docs', 'stories', 'n1-golden.md'), cell.storiesFixture === 'two' ? TWO_STORIES : ONE_STORY);
+      await writeFile(join(root, '.docs', 'complexity', 'n1-golden.md'), cell.complexityMd!);
+      await writeFile(join(root, 'skills', 'tdd', 'SKILL.md'), '# tdd\n');
+
+      const coverageRunner = new DefaultStepRunner(
+        { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: vi.fn() } as LLMProvider,
+        'n1-golden-session',
+        root,
+        {
+          featureDesc: 'n1-golden',
+          planPath: join(root, '.docs', 'plans', 'n1-golden.md'),
+          projectRoot: root,
+          config: { coverage_binding: { judge: { enabled: false } }, stacked_prs: { enabled: true, max_slices: 2 } },
+        },
+      );
+      const coverage = await coverageRunner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(coverage.success, coverage.output).toBe(cell.coverageBinding === 'done');
+      const coverageGolden = coverage.success
+        ? await readAndNormalize(join(root, '.pipeline', 'coverage-binding.json'), root)
+        : coverage.refusal?.reason ?? coverage.output ?? '';
+      await expectGolden(`${cell.name}-coverage-binding`, coverageGolden);
+    }
 
     // Seed conduct-state: every step before acceptance_specs is done
     const pipeline = join(root, '.pipeline');
@@ -202,6 +249,12 @@ describe('N=1 golden state', () => {
       const childrenEntries = await readdir(join(pipeline, 'children')).catch(() => []);
       throw new Error(`.pipeline/children exists: ${childrenEntries.map((e) => `.pipeline/children/${e}`).join(', ')}`);
     }
+    const [conductorRefs, childBranches] = await Promise.all([
+      execFile('git', ['for-each-ref', '--format=%(refname)', 'refs/conductor/'], { cwd: root }),
+      execFile('git', ['branch', '--list', 'feat/c*/*', '--format=%(refname:short)'], { cwd: root }),
+    ]);
+    expect(conductorRefs.stdout.trim()).toBe('');
+    expect(childBranches.stdout.trim()).toBe('');
     expect(eventsContent).not.toContain('"child"');
   });
 });

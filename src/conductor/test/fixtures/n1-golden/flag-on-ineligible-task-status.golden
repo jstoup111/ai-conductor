@@ -1,0 +1,21 @@
+<!-- Recorded from 14a615c678ab0df4bb467fa0313bcb24434ef68f -->
+{
+  "plan_ref": ".docs/plans/n1-golden.md",
+  "tasks": [
+    {
+      "id": "1",
+      "name": "Setup",
+      "status": "pending"
+    },
+    {
+      "id": "2",
+      "name": "Implement",
+      "status": "in_progress"
+    },
+    {
+      "id": "3",
+      "name": "Verify",
+      "status": "pending"
+    }
+  ]
+}
