@@ -40,6 +40,69 @@ export interface ComparedEdges {
   satisfied: DependencyEdge[];
 }
 
+/** One open issue, including the raw body needed for declaration parsing. */
+export interface DependencyDriftIssue {
+  number: number;
+  body: string;
+}
+
+/** The read-only fields consumed from GitHub's `blocked_by` response. */
+export interface DependencyDriftBlocker {
+  number: number;
+  state: 'open' | 'closed';
+  state_reason?: string;
+  repository?: string;
+  repository_url?: string;
+}
+
+/**
+ * Deliberately read-only tracker seam for the drift audit. It is narrower than
+ * TrackerClient because listing every open issue is only needed by this sweep.
+ */
+export interface DependencyDriftTracker {
+  listOpenIssues(repository: string): Promise<readonly DependencyDriftIssue[]>;
+  getBlockedBy(repository: string, number: number): Promise<readonly DependencyDriftBlocker[]>;
+}
+
+export interface DependencyDriftStaleFinding {
+  source: string;
+  target: string;
+  kind: 'blocked-by-stale';
+}
+
+export interface DependencyDriftCycleFinding {
+  members: string[];
+}
+
+export interface DependencyDriftContradictionFinding {
+  source: string;
+  target: string;
+  kind: 'reverse-direction';
+}
+
+export interface DependencyDriftSweptResult {
+  kind: 'swept';
+  unlinked: DependencyEdge[];
+  stale: DependencyDriftStaleFinding[];
+  cycles: DependencyDriftCycleFinding[];
+  contradictions: DependencyDriftContradictionFinding[];
+  indeterminate: string[];
+}
+
+export interface DependencyDriftRepositoryIndeterminateResult {
+  kind: 'repository-indeterminate';
+  cause: string;
+  unlinked: [];
+  stale: [];
+  cycles: [];
+  contradictions: [];
+  indeterminate: [];
+}
+
+export type DependencyDriftResult =
+  | DependencyDriftSweptResult
+  | DependencyDriftRepositoryIndeterminateResult;
+
 /**
  * Build the same-repository edge represented by one structured form value.
  * The action currently supplies qualified refs, while accepting `#N` keeps the
@@ -117,4 +180,119 @@ export function compareEdges(
   }
 
   return { unlinked, satisfied };
+}
+
+function blockerRef(repository: string, blocker: DependencyDriftBlocker): string {
+  const fromUrl = blocker.repository_url?.match(/\/repos\/([^/]+\/[^/]+)$/)?.[1];
+  return `${blocker.repository ?? fromUrl ?? repository}#${blocker.number}`;
+}
+
+/** Return each directed cycle once, using its sorted members as its identity. */
+function findCycles(graph: ReadonlyMap<string, readonly string[]>): DependencyDriftCycleFinding[] {
+  const cycles: DependencyDriftCycleFinding[] = [];
+  const seenCycles = new Set<string>();
+  const visited = new Set<string>();
+  const active = new Set<string>();
+  const stack: string[] = [];
+
+  const visit = (source: string): void => {
+    visited.add(source);
+    active.add(source);
+    stack.push(source);
+
+    for (const target of graph.get(source) ?? []) {
+      if (!graph.has(target)) continue;
+      if (active.has(target)) {
+        const members = stack.slice(stack.indexOf(target));
+        const identity = [...members].sort().join('|');
+        if (!seenCycles.has(identity)) {
+          seenCycles.add(identity);
+          cycles.push({ members });
+        }
+      } else if (!visited.has(target)) {
+        visit(target);
+      }
+    }
+
+    stack.pop();
+    active.delete(source);
+  };
+
+  for (const source of graph.keys()) {
+    if (!visited.has(source)) visit(source);
+  }
+  return cycles;
+}
+
+/**
+ * Read and classify dependency drift without mutating the tracker. Every open
+ * issue is read once, then cycle detection runs over that captured graph so a
+ * sweep never needs a second `blocked_by` request for a blocker.
+ */
+export async function sweepDependencyDrift({
+  repository,
+  tracker,
+}: {
+  repository: string;
+  tracker: DependencyDriftTracker;
+}): Promise<DependencyDriftResult> {
+  let issues: readonly DependencyDriftIssue[];
+  try {
+    issues = await tracker.listOpenIssues(repository);
+  } catch (error: unknown) {
+    return {
+      kind: 'repository-indeterminate',
+      cause: error instanceof Error ? error.message : String(error),
+      unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: [],
+    };
+  }
+
+  const unlinked: DependencyEdge[] = [];
+  const stale: DependencyDriftStaleFinding[] = [];
+  const contradictions: DependencyDriftContradictionFinding[] = [];
+  const indeterminate: string[] = [];
+  const graph = new Map<string, string[]>();
+
+  for (const issue of issues) {
+    const source = `${repository}#${issue.number}`;
+    let blockedBy: readonly DependencyDriftBlocker[];
+    try {
+      blockedBy = await tracker.getBlockedBy(repository, issue.number);
+    } catch {
+      indeterminate.push(source);
+      continue;
+    }
+
+    const actual = new Set(blockedBy.map((blocker) => blockerRef(repository, blocker)));
+    const declared = declaredEdges({ ref: source, body: issue.body });
+    unlinked.push(...compareEdges(declared.edges, actual).unlinked);
+
+    for (const blocker of blockedBy) {
+      const target = blockerRef(repository, blocker);
+      if (blocker.state_reason === 'not_planned') {
+        stale.push({ source, target, kind: 'blocked-by-stale' });
+      }
+      if (blocker.state === 'open') {
+        const targets = graph.get(source) ?? [];
+        targets.push(target);
+        graph.set(source, targets);
+      }
+    }
+    if (!graph.has(source)) graph.set(source, []);
+
+    for (const item of declared.manualReview) {
+      if (item.reason === 'reverse-direction' && item.target && actual.has(item.target)) {
+        contradictions.push({ source, target: item.target, kind: 'reverse-direction' });
+      }
+    }
+  }
+
+  return {
+    kind: 'swept',
+    unlinked,
+    stale,
+    cycles: findCycles(graph),
+    contradictions,
+    indeterminate,
+  };
 }
