@@ -78,7 +78,7 @@ import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { runMigration } from './engineer/issue-dep-migration.js';
-import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead, type GhRunner } from './tracker-client.js';
+import { createGithubTrackerClient, createGuardedGithubOperationRunner, GithubTrackerOperationRefusalError, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead, type GhRunner } from './tracker-client.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
 import { bindMutationToPullRequest } from './ship-draft-pr.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
@@ -554,6 +554,15 @@ export interface DispatchEngineerOpts {
    * that returns false when stdin is not a TTY (so non-interactive runs don't loop).
    */
   confirmAnother?: () => boolean | Promise<boolean>;
+}
+
+function forgetAuthorizationRefusalExplanation(error: unknown, attached: boolean): string {
+  if (!(error instanceof GithubTrackerOperationRefusalError)
+    || error.reason !== 'explicit-authorization-required') return '';
+
+  return attached
+    ? ' The operator declined the interactive approval.'
+    : ' The machine owner is not confirmed as this issue\'s sole assignee, and approval requires that you rerun the same command from an interactive terminal.';
 }
 
 /**
@@ -1628,9 +1637,9 @@ export async function dispatchEngineer(
     // An absent ref is reported (found:false) and is NOT an error.
     case 'forget': {
       const { sourceRef } = dispatch;
-      const attached = opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY));
+      const attached = (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))();
       const confirmation = opts.githubOperationConfirmation
-        ?? createTerminalGithubOperationConfirmation({ isTerminal: attached });
+        ?? createTerminalGithubOperationConfirmation({ isTerminal: () => attached });
       const engDir = engineerDir ?? resolveEngineerDir({});
       const ledger = createLedger(join(engDir, 'ledger.json'));
 
@@ -1673,7 +1682,7 @@ export async function dispatchEngineer(
         } catch (err: unknown) {
           printErr(
             `engineer forget: failed to comment on ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
-            'ledger entry retained.',
+            `ledger entry retained.${forgetAuthorizationRefusalExplanation(err, attached)}`,
           );
           return 1;
         }
@@ -1682,7 +1691,8 @@ export async function dispatchEngineer(
         } catch (err: unknown) {
           printErr(
             `engineer forget: failed to close ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
-            `close the issue by hand, then rerun \`engineer forget ${sourceRef}\` without --resolved-by.`,
+            `close the issue by hand, then rerun \`engineer forget ${sourceRef}\` without --resolved-by.` +
+            forgetAuthorizationRefusalExplanation(err, attached),
           );
           return 1;
         }
@@ -1707,7 +1717,10 @@ export async function dispatchEngineer(
             process.cwd(),
           );
         } catch (err: unknown) {
-          printErr(`engineer forget: label strip failed for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}`);
+          printErr(
+            `engineer forget: label strip failed for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}` +
+            forgetAuthorizationRefusalExplanation(err, attached),
+          );
         }
       }
 

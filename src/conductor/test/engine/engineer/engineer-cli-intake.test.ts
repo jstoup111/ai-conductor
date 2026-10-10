@@ -479,6 +479,98 @@ describe('engineer forget (T23, FR-40)', () => {
     expect(JSON.parse(out[0])).toMatchObject({ closed: false });
   });
 
+  // Covers: task:3
+  it('explains an attached-terminal decline before commenting and retains the ledger entry', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    const { gh, calls } = makeGh({}, undefined, []);
+    const githubOperationConfirmation: InteractiveGithubOperationConfirmation = {
+      mode: 'interactive',
+      confirm: async () => false,
+    };
+    const { err, opts } = captureOut();
+
+    const code = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'o/a#1', resolvedBy: 'o/a#2' },
+      opts({ gh, githubOperationConfirmation, isAttachedTerminal: () => true }),
+    );
+
+    expect(code).not.toBe(0);
+    expect(calls).toEqual([['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees']]);
+    expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
+    expect(err.join('\n')).toContain('o/a#1');
+    expect(err.join('\n')).toContain('declined');
+  });
+
+  // Covers: task:3
+  it('explains an attached-terminal decline before closing and retains the ledger entry', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    const { gh, calls } = makeGh({}, undefined, []);
+    let prompts = 0;
+    const githubOperationConfirmation: InteractiveGithubOperationConfirmation = {
+      mode: 'interactive',
+      confirm: async () => ++prompts === 1,
+    };
+    const { err, opts } = captureOut();
+
+    const code = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'o/a#1', resolvedBy: 'o/a#2' },
+      opts({ gh, githubOperationConfirmation, isAttachedTerminal: () => true }),
+    );
+
+    expect(code).not.toBe(0);
+    expect(calls).toEqual([
+      ['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees'],
+      ['issue', 'comment', '1', '-R', 'o/a', '--body', expect.any(String)],
+      ['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees'],
+    ]);
+    expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
+    expect(err.join('\n')).toContain('declined');
+    expect(err.join('\n')).toContain('by hand');
+    expect(err.join('\n')).toContain('without --resolved-by');
+  });
+
+  // Covers: task:3
+  it('explains a nonterminal resolution refusal and retains the ledger entry', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    const { gh, calls } = makeGh({}, undefined, []);
+    const { err, opts } = captureOut();
+
+    const code = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'o/a#1', resolvedBy: 'o/a#2' },
+      opts({ gh, isAttachedTerminal: () => false }),
+    );
+
+    expect(code).not.toBe(0);
+    expect(calls).toEqual([['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees']]);
+    expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
+    expect(err.join('\n')).toContain('sole assignee');
+    expect(err.join('\n')).toContain('interactive terminal');
+    expect(err.join('\n')).toContain('rerun the same command');
+  });
+
+  // Covers: task:3
+  it('warns about a nonterminal label-strip refusal after plain forget', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    const { gh, calls } = makeGh({}, undefined, []);
+    const { err, opts } = captureOut();
+
+    const code = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'o/a#1' },
+      opts({ gh, isAttachedTerminal: () => false }),
+    );
+
+    expect(code).toBe(0);
+    expect(await ledger.known('github-issues', 'o/a#1')).toBe(false);
+    expect(calls).toEqual([['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees']]);
+    expect(err.join('\n')).toContain('label strip failed');
+    expect(err.join('\n')).toContain('sole assignee');
+    expect(err.join('\n')).toContain('interactive terminal');
+  });
+
   it('refuses the drop when the audit comment is rejected, preserving the ledger entry', async () => {
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
