@@ -167,7 +167,7 @@ park`/`unpark`/`restart` and `reseal`), corrupting the run that dispatched them;
 started the session owns all conductor operations for it. The only exceptions are the
 session-sanctioned worker commands the harness's own skills and hooks require a session to run —
 `scoped-run`, `overlap-scan`, `plan-protected-targets`, `manual-test-record`, `closeout-event`, and
-`derive-feedback`, `scope-check`, `task` (`start`/`done`), and `github-operation` — which stay
+`derive-feedback`, `scope-check`, `task-membership-check`, `task` (`start`/`done`), and `github-operation` — which stay
 available under the marker. There is no config off-switch; enforcement lives in
 `src/conductor/src/execution/daemon-session.ts`. The same policy backs the instruction audit that
 keeps engine prompts and shipped skills from directing a managed session to a refused command — see
@@ -221,6 +221,29 @@ intentional widening. It is not an operator workflow; worktree provisioning wire
 The report-only default is deliberate. Set `build_review.scopeContainmentEnforced: true` to enable refusal.
 A `Scope:` trailer documents a widening; its path, rationale, task id, and commit SHA are supplied directly to
 `build_review`, and it never bypasses the grader's semantic scope judgment.
+
+## `ai-conductor task-membership-check`
+
+```bash
+ai-conductor task-membership-check <commit-message-path>
+```
+
+This hook-only command is invoked by the generated `commit-msg` hook when a commit carries a `Task:`
+trailer. It guards [stacked-feature](configuration.md#child-by-child-build) child branches; worktree
+provisioning wires it automatically.
+
+On any branch other than `feat/c<k>/<slug>` it exits 0 without reading state. On a child branch it
+collects the task ids from the message and `.pipeline/current-task`, then resolves each id's owning child
+from the coverage-binding envelope's slice membership plus the remediation-task child map in
+`.pipeline/engine-state.json`.
+
+| Exit | Meaning | Hook behavior |
+| --- | --- | --- |
+| 0 | Not a child branch, no task id, or every id belongs to the checked-out child | Allows the commit |
+| 1 | An id belongs to another child or has no recorded owner, or membership cannot be read (missing or foreign envelope, malformed engine state) | Blocks the commit and prints the reason |
+
+Unlike `scope-check`, this check fails closed: a cross-child commit would put one child's work into
+another child's pull request.
 
 ## `ai-conductor inline`
 
@@ -437,7 +460,8 @@ invoke Git, GitHub, or the network. The daemon startup dashboard does not yet re
 that UI work is tracked in [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
 
 For every in-progress feature it also prints a `PLAN GROWTH [<slug>]:` line reading the feature's
-kickback ledger and resolved `prd_audit` cap: the plan's authored task count, the number of tasks added
+kickback ledger and resolved `prd_audit` cap. For a stacked feature the line reads
+`PLAN GROWTH [<slug> child <k>/<N>]:`, and its per-gate budgets come from the active child's ledger. It shows the plan's authored task count, the number of tasks added
 so far (broken down by the gate that added them, when any), and how many remain under the cap.
 
 For every halted or in-progress feature with an honored
@@ -846,11 +870,15 @@ is removed after a successful close. See [gates](../explanation/gates.md).
 
 ### Per-child selection (`--child`)
 
-`task`, `rewind`, and `kickback-budget inspect` accept `--child <k>` to select one child of a stacked
+`task`, `rewind`, and `kickback-budget` accept `--child <k>` to select one child of a stacked
 feature. `<k>` is an integer from 1 to 9 whose `.pipeline/children/<k>/` directory exists in the
 feature's worktree; see [per-child state](artifacts.md#per-child-state). An invalid id, or a child
-with no state directory, exits 1 before any read or write. Without `--child`, every command behaves
-as before. A repeated `--child`, or one without a value, prints the `task` guide (exit 2); for
+with no state directory, exits 1 before any read or write.
+
+Without `--child`, `task`, `rewind`, and `kickback-budget inspect` select the
+[active child](configuration.md#child-by-child-build) when one exists; `kickback-budget raise|reset`
+use the flat ledger. A feature with no children behaves as before. If the active child cannot be
+resolved, for example on a diverged stack, these commands exit 1 before any read or write. A repeated `--child`, or one without a value, prints the `task` guide (exit 2); for
 `rewind` and `kickback-budget` it falls through to `error: unknown command` (exit 1).
 
 `task start|done --child <k>` also requires the coverage-binding envelope's slice membership to place
@@ -1101,8 +1129,8 @@ do not hand the amendment to BUILD. The land gate repeats this check when a spec
 
 ```bash
 ai-conductor kickback-budget inspect --feature <slug> [--child <k>] [--format human|json]
-ai-conductor kickback-budget raise --feature <slug> --gate <gate> --by <positive-integer> --rationale "<reason>"
-ai-conductor kickback-budget reset --feature <slug> --gate <gate> --rationale "<reason>"
+ai-conductor kickback-budget raise --feature <slug> --gate <gate> --by <positive-integer> --rationale "<reason>" [--child <k>]
+ai-conductor kickback-budget reset --feature <slug> --gate <gate> --rationale "<reason>" [--child <k>]
 ```
 
 Use this operator-only command to inspect or authorize one recovery from a budget-cap halt. `raise`
@@ -1149,7 +1177,8 @@ removes that temporary park after success. It preserves a park that already exis
 feature when ready, otherwise the daemon leaves the authorization unconsumed.
 
 `inspect --child <k>` reads child `k`'s ledger instead of the flat one. Human output starts with
-`Child: <k>`; JSON adds a `child` field. `raise` and `reset` reject `--child` as an unknown flag. See
+`Child: <k>`; JSON adds a `child` field. `raise --child <k>` and `reset --child <k>` check cap evidence
+in, and apply the authorization to, child `k`'s ledger. See
 [Per-child selection](#per-child-selection---child).
 
 ## `ai-conductor decide-grant`
@@ -1258,6 +1287,8 @@ The command demotes child `k`'s region from the target, then the region steps of
 above `k` in ascending order, then every later whole-feature step in the flat state. It then clears
 those verdicts and the halt markers, emits `operator_rewind` with a `child` field, and prints
 `Rewound child <k> to <step>.` A failure restores every changed store and leaves the halt in place.
+An explicit `--child <k>` naming a child before the active one exits 1 with `child <k> is closed and
+cannot be rewound (#2943)`; re-running a closed child needs a restack.
 See [Per-child selection](#per-child-selection---child).
 
 ## `ai-conductor reseal`
