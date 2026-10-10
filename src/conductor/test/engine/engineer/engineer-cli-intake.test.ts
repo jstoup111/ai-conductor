@@ -639,6 +639,23 @@ describe('engineer forget (T23, FR-40)', () => {
   });
 
   // Covers: task:4
+  it('refuses an absent non-GitHub source ref with the flag before calling the tracker or changing the ledger', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    const { gh, calls } = makeGh({});
+    const { opts } = captureOut();
+
+    expect(await ledger.known('github-issues', 'local-intake:42')).toBe(false);
+    const code = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'local-intake:42', resolvedBy: 'o/a#2' },
+      opts({ gh }),
+    );
+
+    expect(code).not.toBe(0);
+    expect(calls).toHaveLength(0);
+    expect(await ledger.known('github-issues', 'local-intake:42')).toBe(false);
+  });
+
+  // Covers: task:4
   it('comments and closes a sole-assigned absent ledger entry without changing its ledger or stripping its label', async () => {
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
