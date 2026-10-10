@@ -114,9 +114,14 @@ operator approval, and only when the claim carries an originating GitHub issue, 
 
 `ai-conductor compose forget <owner/repo#N> --resolved-by <reference>`
 
-This comments the supplied resolving reference and closes the originating issue before dropping
-the claim. Without both preconditions, do not use `--resolved-by` and do not close anything. End
-the session after the successful drop; this path authors and lands nothing.
+This comments the supplied resolving reference and closes the originating issue, whether or not the
+issue has a ledger entry. On an issue not solely assigned to the machine owner, each write asks for
+interactive terminal approval; an agent shell cannot give that approval. If the primitive refuses
+because it requires an interactive terminal, give the operator this exact command to run in their
+own terminal: `ai-conductor compose forget <owner/repo#N> --resolved-by <reference>`. Do not retry
+the command or close the issue another way. Without both preconditions, do not use `--resolved-by`
+and do not close anything. End the session after the successful resolved-by action; this path
+authors and lands nothing.
 
 ### 4. Land the authored spec
 
