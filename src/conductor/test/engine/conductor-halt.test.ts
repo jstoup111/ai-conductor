@@ -1,3 +1,4 @@
+// Covers: task:2
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -77,6 +78,56 @@ describe('engine/conductor typed unretryable-input halts', () => {
       halt: "step 'build_review' failed in auto mode (retries exhausted)\n",
       haltClass: 'needs-human',
     });
+  });
+
+  it('routes finish unretryable inputs to its prerequisite without retrying finish', async () => {
+    const state: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'finish') break;
+      state[step.name] = 'done';
+    }
+    await writeState(statePath, state as ConductState);
+
+    const events = new ConductorEventEmitter();
+    const emitted: unknown[] = [];
+    const emitter = events as unknown as { emit(event: unknown): void };
+    const emit = vi.spyOn(emitter, 'emit').mockImplementation((event) => {
+      emitted.push(event);
+    });
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => step === 'finish'
+        ? { success: false, unretryableInputs: { retryAfterStep: 'test_suite' } }
+        : { success: true }),
+    };
+
+    await new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      daemon: true,
+      fromStep: 'finish',
+      maxRetries: 3,
+    }).run();
+
+    expect(runner.run).toHaveBeenCalledTimes(1);
+    expect(runner.run).toHaveBeenCalledWith('finish', expect.anything(), expect.anything());
+    expect(runner.run).not.toHaveBeenCalledWith('remediate', expect.anything(), expect.anything());
+    expect(emitted).toContainEqual(expect.objectContaining({
+      type: 'retry_decision',
+      step: 'finish',
+      attempt: 1,
+      decision: 'route',
+      signal: 'unretryable-inputs',
+    }));
+    expect(emitted.filter((event) => (event as { type?: string }).type === 'retry_decision')).toHaveLength(1);
+
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+    expect(halt).toMatch(/finish.*inputs cannot change.*test_suite/is);
+    expect(halt).not.toContain('retries exhausted');
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    emit.mockRestore();
   });
 });
 
