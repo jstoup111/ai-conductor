@@ -4,6 +4,13 @@ spec_hash: 9248c898a8ed3647d4b74eb3b3ac5fabbfbf95c5749d33ab28a31e901a9f13ec
 pr: https://github.com/jstoup111/ai-conductor/pull/3085
 shipped: 2026-10-10
 engine_version: 20261010T011143Z-f79d1fd8d7cd
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "Neither story covers this bound. It raises an engineering size bound for the PRD-audit projection, apparently because this feature's longer plan intent exceeded the old observed maximum. The change is internal engine bookkeeping with no operator-visible behavior change, and it is outside the feature's intent of in-flight step heartbeats and status lines."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
