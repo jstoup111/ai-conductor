@@ -1,11 +1,13 @@
-// Covers: task:2, task:4
+// Covers: task:2, task:3, task:4
 // Covers: task:9, task:10
 // Covers: task:5
 // Covers: task:rem-as-built-rem-ab14-1
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 import { DefaultStepRunner, cachedRubricInvocation, dispatchRubricContract, type StepRunnerOptions } from '../../src/engine/step-runners.js';
 import { classifyRetryDecision } from '../../src/engine/artifacts.js';
@@ -29,9 +31,11 @@ import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import type { ResolvedBuildReviewCustomCatalogEntry } from '../../src/engine/resolved-config.js';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
+import type { GitRunner } from '../../src/engine/rebase.js';
 
 const buildReviewPublication = vi.hoisted(() => ({ count: 0 }));
 const buildReviewRegistryOverride = vi.hoisted(() => ({ descriptor: undefined as unknown }));
+const execFileAsync = promisify(execFile);
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -415,6 +419,143 @@ describe('build_review oversized projection step', () => {
       return { exitCode: 1, stdout: '', stderr: '' };
     };
   }
+});
+
+describe('build_review malformed Covers marker gate', () => {
+  let projectRoot: string;
+  let planPath: string;
+
+  beforeEach(async () => {
+    buildReviewPublication.count = 0;
+    projectRoot = await mkdtemp(join(tmpdir(), 'build-review-malformed-covers-'));
+    planPath = join(projectRoot, 'plan.md');
+    await execFileAsync('git', ['init', '-b', 'main', projectRoot]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await writeFile(planPath, '# Plan\n\n### Task 1: fixture behavior\n', 'utf8');
+    await writeFile(join(projectRoot, 'base.ts'), 'export const base = true;\n', 'utf8');
+    await git('add', '.');
+    await git('commit', '-m', 'base');
+    await git('remote', 'add', 'origin', projectRoot);
+    await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+    await git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+    await git('checkout', '-b', 'feature/malformed-covers');
+  });
+
+  afterEach(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  async function git(...args: string[]): Promise<string> {
+    const { stdout } = await execFileAsync('git', ['-C', projectRoot, ...args]);
+    return stdout.trim();
+  }
+
+  function realGit(): GitRunner {
+    return async (args: string[]) => {
+      try {
+        const { stdout, stderr } = await execFileAsync('git', ['-C', projectRoot, ...args]);
+        return { exitCode: 0, stdout, stderr };
+      } catch (err) {
+        const failure = err as { code?: number; stdout?: string; stderr?: string };
+        return { exitCode: failure.code ?? 1, stdout: failure.stdout ?? '', stderr: failure.stderr ?? '' };
+      }
+    };
+  }
+
+  async function commitTests(files: Record<string, string>): Promise<void> {
+    for (const [path, content] of Object.entries(files)) {
+      const absolute = join(projectRoot, path);
+      await mkdir(dirname(absolute), { recursive: true });
+      await writeFile(absolute, content, 'utf8');
+    }
+    await git('add', '.');
+    await git('commit', '-m', 'add fixture tests');
+  }
+
+  function createFixtureRunner(testQualityEnabled = true, coordinator?: StepRunnerOptions['buildReviewCoordinator']): DefaultStepRunner {
+    return new DefaultStepRunner({ invoke: vi.fn() }, 'malformed-covers', projectRoot, {
+      planPath,
+      gitRunner: realGit(),
+      config: {
+        test_suite: { scoped_command: 'true' },
+        build_review: {
+          enabled: true,
+          rubrics: { testQuality: { enabled: testQualityEnabled } },
+        },
+      } as HarnessConfig,
+      buildReviewInputOptions: {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' },
+        } as never),
+      },
+      ...(coordinator ? { buildReviewCoordinator: coordinator } : {}),
+    });
+  }
+
+  it('fails before coordinator dispatch and publication when an introduced Covers token is malformed', async () => {
+    await commitTests({
+      'test/alpha.test.ts': "// Covers: Task: 32\nit('alpha', () => {});\n",
+    });
+    const dispatchesBefore = vi.mocked(coordinateBuildReviewRubrics).mock.calls.length;
+    const result = await createFixtureRunner().run('build_review', state);
+
+    expect(result).toMatchObject({
+      success: false,
+      buildReviewMalformedCovers: [{ path: 'test/alpha.test.ts', line: 1, token: 'Task: 32' }],
+    });
+    expect(result.output).toMatch(/^build_review: changed test Covers marker matches no reference grammar/);
+    expect(result.output).toContain('test/alpha.test.ts:1 token `Task: 32`');
+    expect(result.output).toMatch(/Accepted forms: task:<id>, S<story>\.<n>, FR-<n>\.$/);
+    expect(vi.mocked(coordinateBuildReviewRubrics)).toHaveBeenCalledTimes(dispatchesBefore);
+    await expect(access(join(projectRoot, '.pipeline', 'build-review.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(buildReviewPublication.count).toBe(0);
+  });
+
+  it('lists every malformed marker and otherwise preserves coordinator dispatch behavior', async () => {
+    await commitTests({
+      'test/alpha.test.ts': "// Covers: Task: 32\nit('alpha', () => {});\n",
+      'test/beta.test.ts': "// Covers: Task: 64\nit('beta', () => {});\n",
+    });
+    const result = await createFixtureRunner().run('build_review', state);
+
+    expect(result.output).toContain('test/alpha.test.ts:1 token `Task: 32`');
+    expect(result.output).toContain('test/beta.test.ts:1 token `Task: 64`');
+    expect(result.output).toMatch(/Accepted forms: task:<id>, S<story>\.<n>, FR-<n>\.$/);
+  });
+
+  it.each([
+    ['well-formed absent task', '// Covers: task:99'],
+    ['resolving sibling', '// Covers: task:1, Task: 32'],
+  ] as const)('dispatches the coordinator for a %s marker', async (_name, marker) => {
+    await commitTests({ 'test/covered.test.ts': `${marker}\nit('covered', () => {});\n` });
+    let receivedInputs: Parameters<NonNullable<StepRunnerOptions['buildReviewCoordinator']>>[0] | undefined;
+    const coordinator = vi.fn(async (inputs: Parameters<NonNullable<StepRunnerOptions['buildReviewCoordinator']>>[0]) => {
+      receivedInputs = inputs;
+      return { success: true, output: 'coordinator result' };
+    });
+
+    const result = await createFixtureRunner(true, coordinator).run('build_review', state);
+
+    expect(result.buildReviewMalformedCovers).toBeUndefined();
+    expect(coordinator).toHaveBeenCalledOnce();
+    if (marker === '// Covers: task:99') {
+      expect(receivedInputs?.sourceSnapshot.testQuality?.unresolvedMarkers)
+        .toEqual(expect.arrayContaining([expect.objectContaining({ reference: 'task:99' })]));
+    }
+  });
+
+  it('leaves malformed markers to the coordinator when testQuality is disabled', async () => {
+    await commitTests({ 'test/disabled.test.ts': "// Covers: Task: 32\nit('disabled', () => {});\n" });
+    const coordinatorResult = { success: true, output: 'coordinator result' };
+    const coordinator = vi.fn(async () => coordinatorResult);
+
+    const result = await createFixtureRunner(false, coordinator).run('build_review', state);
+
+    expect(result).toEqual(expect.objectContaining(coordinatorResult));
+    expect(result.buildReviewMalformedCovers).toBeUndefined();
+    expect(coordinator).toHaveBeenCalledOnce();
+  });
 });
 
 describe('build_review structured rubric dispatch', () => {

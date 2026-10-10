@@ -5599,6 +5599,19 @@ export class DefaultStepRunner implements StepRunner {
       return withBaseFreshness({ success: true, output: 'build_review disabled' });
     }
 
+    if (buildReviewConfig.rubrics.testQuality.enabled && inputs.malformedCoversMarkers.length > 0) {
+      const output = [
+        'build_review: changed test Covers marker matches no reference grammar',
+        ...inputs.malformedCoversMarkers.map((marker) => `${marker.path}:${marker.line} token \`${marker.token}\``),
+        'Accepted forms: task:<id>, S<story>.<n>, FR-<n>.',
+      ].join('\n');
+      return withBaseFreshness({
+        success: false,
+        output,
+        buildReviewMalformedCovers: inputs.malformedCoversMarkers,
+      });
+    }
+
     // The lifecycle still exposes one public build_review step. Its
     // coordinator owns the bounded auxiliary fan-out and receives the one
     // frozen snapshot. The injectable coordinator remains a narrow test seam.
