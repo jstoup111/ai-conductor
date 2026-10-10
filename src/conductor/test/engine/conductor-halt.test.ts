@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:3
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -96,7 +96,7 @@ describe('engine/conductor typed unretryable-input halts', () => {
     });
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) => step === 'finish'
-        ? { success: false, unretryableInputs: { retryAfterStep: 'test_suite' } }
+        ? { success: false, unretryableInputs: { retryAfterStep: 'test_suite' as const } }
         : { success: true }),
     };
 
@@ -128,6 +128,161 @@ describe('engine/conductor typed unretryable-input halts', () => {
     expect(halt).not.toContain('retries exhausted');
     await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
     emit.mockRestore();
+  });
+
+  it('keeps build facet failures on the same retry ladder as ordinary runner failures', async () => {
+    const runBuildFailure = async (withFacet: boolean) => {
+      const state: Record<string, unknown> = { complexity_tier: 'M' };
+      for (const step of ALL_STEPS) {
+        if (step.name === 'build') break;
+        state[step.name] = 'done';
+      }
+      await writeState(statePath, state as ConductState);
+
+      const events = new ConductorEventEmitter();
+      const retryDecisions: unknown[] = [];
+      events.on('retry_decision', (event) => { retryDecisions.push(event); });
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => step === 'build'
+          ? {
+            success: false,
+            output: 'build failure',
+            ...(withFacet ? { unretryableInputs: { retryAfterStep: 'test_suite' as const } } : {}),
+          }
+          : { success: true }),
+      };
+
+      await new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 3,
+      }).run();
+
+      return {
+        buildDispatches: vi.mocked(runner.run).mock.calls.filter(([step]) => step === 'build').length,
+        unretryableDecisions: retryDecisions.filter((event) =>
+          (event as { signal?: string }).signal === 'unretryable-inputs'),
+      };
+    };
+
+    await expect(runBuildFailure(true)).resolves.toEqual({
+      buildDispatches: 3,
+      unretryableDecisions: [],
+    });
+    await expect(runBuildFailure(false)).resolves.toEqual({
+      buildDispatches: 3,
+      unretryableDecisions: [],
+    });
+  });
+
+  it('restores ordinary finish retries when retry routing is disabled', async () => {
+    const state: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'finish') break;
+      state[step.name] = 'done';
+    }
+    await writeState(statePath, state as ConductState);
+
+    const events = new ConductorEventEmitter();
+    const retryDecisions: unknown[] = [];
+    events.on('retry_decision', (event) => { retryDecisions.push(event); });
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => step === 'finish'
+        ? { success: false, unretryableInputs: { retryAfterStep: 'test_suite' as const } }
+        : { success: true }),
+    };
+
+    await new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      daemon: true,
+      fromStep: 'finish',
+      maxRetries: 3,
+      config: { retry_routing: { enabled: false } },
+    }).run();
+
+    expect(vi.mocked(runner.run).mock.calls.filter(([step]) => step === 'finish')).toHaveLength(3);
+    expect(retryDecisions).toEqual([]);
+  });
+
+  it('keeps facet-free finish failures on the ordinary retry ladder', async () => {
+    const state: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'finish') break;
+      state[step.name] = 'done';
+    }
+    await writeState(statePath, state as ConductState);
+
+    const events = new ConductorEventEmitter();
+    const retryDecisions: unknown[] = [];
+    events.on('retry_decision', (event) => { retryDecisions.push(event); });
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => step === 'finish'
+        ? { success: false, output: 'ordinary finish failure' }
+        : { success: true }),
+    };
+
+    await new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      daemon: true,
+      fromStep: 'finish',
+      maxRetries: 3,
+    }).run();
+
+    expect(vi.mocked(runner.run).mock.calls.filter(([step]) => step === 'finish')).toHaveLength(3);
+    expect(retryDecisions.filter((event) =>
+      (event as { signal?: string }).signal === 'unretryable-inputs')).toEqual([]);
+  });
+
+  it('skips an advisory facet failure and advances to the controlled next step', async () => {
+    const state: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'architecture_diagram') break;
+      state[step.name] = 'done';
+    }
+    for (const step of ALL_STEPS) {
+      if (step.name === 'architecture_review') continue;
+      if (ALL_STEPS.indexOf(step) > ALL_STEPS.findIndex(({ name }) => name === 'architecture_review')) {
+        state[step.name] = 'done';
+      }
+    }
+    await writeState(statePath, state as ConductState);
+
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => step === 'architecture_diagram'
+        ? { success: false, unretryableInputs: { retryAfterStep: 'test_suite' as const } }
+        : { success: true }),
+    };
+
+    await new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      mode: 'auto',
+      daemon: true,
+      fromStep: 'architecture_diagram',
+      maxRetries: 3,
+    }).run();
+
+    expect(vi.mocked(runner.run).mock.calls.map(([step]) => step)).toEqual([
+      'architecture_diagram',
+      'architecture_review',
+    ]);
+    expect(JSON.parse(await readFile(statePath, 'utf8'))).toMatchObject({ architecture_diagram: 'skipped' });
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 
