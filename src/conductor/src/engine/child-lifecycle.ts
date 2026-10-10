@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { parseChildId, type ChildId } from './child-context.js';
 import { loadConfig } from './config.js';
 import {
@@ -19,6 +19,16 @@ export type StartChildResult =
 export interface StartChildDependencies {
   readonly git?: StartChildGitRunner;
 }
+
+export interface ChildLifecycleTarget {
+  readonly child: ChildId;
+  readonly position: ChildId;
+  readonly branch: string;
+}
+
+export type ChildLifecycleResult =
+  | StartChildResult
+  | { readonly kind: 'completed' };
 
 const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
@@ -109,7 +119,7 @@ export async function startChild(
   }
 
   const ref = `refs/heads/${branch.branch}`;
-  const created = await runGit(git, ['update-ref', ref, sha, '']);
+  const created = await runGit(git, ['update-ref', ref, sha!, '']);
   if (created === undefined || created.exitCode !== 0) {
     return refused(`cannot create child branch ${ref}`);
   }
@@ -123,10 +133,75 @@ export async function startChild(
     return refused(`cannot write sealed positions for ${slug}`);
   }
   const positionsRef = `refs/conductor/${slug}/positions`;
-  const recorded = await runGit(git, ['update-ref', positionsRef, blobSha, '']);
+  const recorded = await runGit(git, ['update-ref', positionsRef, blobSha!, '']);
   if (recorded === undefined || recorded.exitCode !== 0) {
     return refused(`cannot record sealed positions at ${positionsRef}`);
   }
 
   return { kind: 'started' };
+}
+
+/** Move the worktree between child branches without ever hiding dirty work in a stash. */
+export async function switchToChild(
+  worktree: string,
+  target: ChildLifecycleTarget,
+  emitter: ConductorEventEmitter,
+  previous?: ChildLifecycleTarget,
+  dependencies: StartChildDependencies = {},
+): Promise<ChildLifecycleResult> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const status = await runGit(git, ['status', '--porcelain']);
+  if (!status || status.exitCode !== 0) return refused('cannot inspect worktree cleanliness');
+  if (status.stdout.trim() !== '') return refused(`worktree is dirty: ${status.stdout.trim().split('\n').join(', ')}`);
+  const switched = await runGit(git, ['switch', target.branch]);
+  if (!switched || switched.exitCode !== 0) return refused(`cannot switch to child branch ${target.branch}`);
+  await rm(`${worktree}/.pipeline/current-task`, { force: true });
+  if (previous && previous.child !== target.child) {
+    await emitter.emit({
+      type: 'child_switched', from: previous.child, to: target.child,
+      position: target.position, branch: target.branch,
+    });
+  }
+  await emitter.emit({ type: 'child_started', child: target.child, position: target.position, branch: target.branch });
+  return { kind: 'completed' };
+}
+
+/** Seal a non-leaf child at its current branch tip. */
+export async function closeChild(
+  worktree: string,
+  slug: string,
+  child: ChildLifecycleTarget,
+  emitter: ConductorEventEmitter,
+  dependencies: StartChildDependencies = {},
+): Promise<ChildLifecycleResult> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const resolved = await runGit(git, ['rev-parse', '--verify', `refs/heads/${child.branch}`]);
+  const tip = resolved?.stdout.trim();
+  if (!resolved || resolved.exitCode !== 0 || !tip) return refused(`cannot resolve child branch ${child.branch}`);
+  const ref = `refs/conductor/${slug}/closed/c${child.child}`;
+  const written = await runGit(git, ['update-ref', ref, tip, '']);
+  if (!written || written.exitCode !== 0) return refused(`cannot close child ${child.child} at ${ref}`);
+  await emitter.emit({ type: 'child_closed', child: child.child, position: child.position, branch: child.branch, tip });
+  return { kind: 'completed' };
+}
+
+/** Advance the leaf ref only when it has no commits outside the completed child. */
+export async function moveLeaf(
+  worktree: string,
+  slug: string,
+  tip: string,
+  dependencies: StartChildDependencies = {},
+): Promise<ChildLifecycleResult> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const branch = leafBranchFor(slug);
+  const old = await runGit(git, ['rev-parse', '--verify', `refs/heads/${branch}`]);
+  const oldTip = old?.stdout.trim();
+  if (!old || old.exitCode !== 0 || !oldTip) return refused(`cannot resolve leaf branch ${branch}`);
+  const stray = await runGit(git, ['rev-list', `refs/heads/${branch}`, `^${tip}`]);
+  if (!stray || stray.exitCode !== 0) return refused(`cannot inspect leaf branch ${branch}`);
+  const strayTip = stray.stdout.split('\n').find(Boolean);
+  if (strayTip) return refused(`cannot move leaf branch ${branch}; unrelated commit ${strayTip}`);
+  const moved = await runGit(git, ['update-ref', `refs/heads/${branch}`, tip, oldTip]);
+  if (!moved || moved.exitCode !== 0) return refused(`cannot move leaf branch ${branch}; concurrent update refused`);
+  return { kind: 'completed' };
 }
