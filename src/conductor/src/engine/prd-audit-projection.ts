@@ -537,8 +537,10 @@ export async function buildPrdAuditProjection(
                 : [];
             });
         }
-      } catch {
-        // Task 3 turns unreadable active waivers into a projection fault.
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          return { ok: false, fault: { dimension: 'coherence-waiver', detail: 'active coherence waiver is unreadable' } };
+        }
       }
       prd = { sources, path: first.path, requirements: first.requirements, waivedRequirements };
     } catch {
