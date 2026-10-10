@@ -8,7 +8,13 @@ import {
   parsePlanTaskVerifyOnly,
 } from './autoheal.js';
 import { readEngineState } from './engine-state-store.js';
-import { createRepairObligationStore, repairPlanIdentity, type RepairObligation } from './repair-obligations.js';
+import {
+  createRepairObligationStore,
+  repairPlanIdentity,
+  taskObligationStanding,
+  type RepairObligation,
+  type RepairObligationSection,
+} from './repair-obligations.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen, TEST_DONE_WHEN_TAG } from './plan-task-parse.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
@@ -132,8 +138,15 @@ export async function resolveTaskIdsWithDiagnostics(
 
   for (const planId of planIds) {
     const canonicalId = canonicalTaskId(planId);
-    const obligations = repairState.obligations.filter((obligation) => obligation.tasks[canonicalId] !== undefined);
-    if (obligations.length === 0) continue;
+    const standing = taskObligationStanding(repairState.section, repairState.planIdentity, planId);
+    if (standing.kind === 'none') continue;
+    if (standing.kind === 'current-less') {
+      resolved.delete(planId);
+      unavailableReasons.set(planId, standing.reason);
+      continue;
+    }
+
+    const obligations = standing.live;
 
     if (obligations.every((obligation) => obligation.tasks[canonicalId].status === 'resolved')) {
       resolved.add(planId);
@@ -171,7 +184,12 @@ export async function resolveTaskIds(projectRoot: string, planIds: string[]): Pr
 
 type OpenRepairState =
   | { kind: 'none' }
-  | { kind: 'available'; obligations: RepairObligation[] }
+  | {
+    kind: 'available';
+    obligations: RepairObligation[];
+    section: RepairObligationSection;
+    planIdentity: string;
+  }
   | { kind: 'unavailable'; reason: string };
 
 /**
@@ -204,7 +222,9 @@ async function readOpenRepairState(projectRoot: string): Promise<OpenRepairState
     return { kind: 'unavailable', reason: `repair state is unavailable: ${binding.reason}` };
   }
   const obligations = records.filter((obligation) => obligation.planIdentity === binding.identity);
-  return obligations.length === 0 ? { kind: 'none' } : { kind: 'available', obligations };
+  return obligations.length === 0
+    ? { kind: 'none' }
+    : { kind: 'available', obligations, section: repairs.value, planIdentity: binding.identity };
 }
 
 export type OpenRepairLookup =
