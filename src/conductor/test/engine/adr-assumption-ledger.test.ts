@@ -138,4 +138,59 @@ ${LEDGER_HEADER}
       diagnostics: [{ rule: 'empty-section' }],
     });
   });
+
+  it('reports every malformed ledger row by its id', () => {
+    const result = parseAdrAssumptionLedger(`# ADR: Malformed rows
+
+## Assumptions
+
+${LEDGER_HEADER}
+|---|---|---|---|---|---|---|
+| A1 | Parser input | guessed | 100% | yes | The gate misreads it | — |
+| A2 | Consumer behavior | verified | high | no | Callers may need a different API | — |
+| A3 | Output format | inferred | 80% | no | | — |
+`);
+
+    expect(result).toEqual({
+      kind: 'diagnostics',
+      diagnostics: [
+        expect.objectContaining({ rule: 'malformed-entry', entryId: 'A1' }),
+        expect.objectContaining({ rule: 'malformed-entry', entryId: 'A2' }),
+        expect.objectContaining({ rule: 'malformed-entry', entryId: 'A3' }),
+      ],
+    });
+  });
+
+  it('reports a duplicate ledger entry id', () => {
+    const result = parseAdrAssumptionLedger(`# ADR: Duplicate entry
+
+## Assumptions
+
+${LEDGER_HEADER}
+|---|---|---|---|---|---|---|
+| A1 | Parser input | verified | 100% | yes | The gate misreads it | — |
+| A1 | Consumer behavior | inferred | 80% | no | Callers may need a different API | — |
+`);
+
+    expect(result).toMatchObject({
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'malformed-entry', entryId: 'A1' }],
+    });
+  });
+
+  it('reports a confidence outside the allowed percentage range by its id', () => {
+    const result = parseAdrAssumptionLedger(`# ADR: Invalid confidence
+
+## Assumptions
+
+${LEDGER_HEADER}
+|---|---|---|---|---|---|---|
+| A1 | Parser input | verified | 140% | yes | The gate misreads it | — |
+`);
+
+    expect(result).toMatchObject({
+      kind: 'diagnostics',
+      diagnostics: [{ rule: 'malformed-entry', entryId: 'A1' }],
+    });
+  });
 });
