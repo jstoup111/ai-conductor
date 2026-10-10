@@ -726,8 +726,9 @@ export const SUBCOMMAND_HELP = {
     'Loop fit: first step of the loop — claim → worktree → land → handoff → resolve/forget.',
   forget:
     'compose forget <sourceRef> [--resolved-by <reference>] — drop a ledger entry and strip its intake label.\n' +
-    'Flags: <sourceRef> positional (required, must not start with --), --resolved-by <reference> (optional — comments the reference on the originating GitHub issue, then closes it).\n' +
-    'Mutates: removes the entry from the ledger and strips the source label (e.g. on the GitHub issue); with --resolved-by, comments and closes the originating issue first. Without --resolved-by, it does not close the issue.\n' +
+    'Flags: <sourceRef> positional (required, must not start with a dash), --resolved-by <reference> (optional — comments the reference on the originating GitHub issue, then closes it).\n' +
+    'Mutates: removes the entry from the ledger and strips the source label (e.g. on the GitHub issue); --resolved-by comments and closes the originating issue and works without a ledger entry. Without --resolved-by the issue does not close.\n' +
+    'Authorization: when the machine owner is not the sole assignee, each write asks for approval at an interactive terminal; non-interactive invocations are refused.\n' +
     'Loop fit: terminal step — claim → worktree → land → handoff → resolve/forget (abandon path, alternative to resolve).',
   resolve:
     'compose resolve <sourceRef> --pr-url <url> [--branch <branch>] — mark a claimed ledger entry as delivered when the normal write-back failed.\n' +
