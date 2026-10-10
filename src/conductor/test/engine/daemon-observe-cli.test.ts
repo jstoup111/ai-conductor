@@ -1081,6 +1081,15 @@ describe('engine/daemon-observe-cli', () => {
         out: (line) => staleOut.push(line),
       });
       expect(staleOut.join('\n')).not.toContain('IN FLIGHT');
+
+      await rm(join(repo, '.daemon', 'daemon.pid'));
+      const stoppedOut: string[] = [];
+      await runDaemonStatus({
+        registryPath: await registry([record('repo-in-flight', repo)]),
+        clock,
+        out: (line) => stoppedOut.push(line),
+      });
+      expect(stoppedOut.join('\n')).not.toContain('IN FLIGHT');
     });
   });
 
