@@ -87,6 +87,16 @@ Unlike signal (b) it fires on try 1, because unchangeability is asserted by the 
 rather than inferred from a repeat. Signals (a) and (b) are unchanged, and the classifier stays pure
 and LLM-free per `adr-2026-07-13`'s Non-goals.
 
+> **Amended 2026-10-09 by #2418:** Signal (c)'s step scope is every step except `build` (D6), not
+> `adr-2026-07-13`'s three verdict steps. `classifyRetryDecision` evaluates the facet before its
+> verdict-step eligibility check, as it already evaluates a terminal refusal, and the step-runner seam
+> carries no verdict-step allowlist; its only step exclusion is `build`. As at the completion-gate-miss
+> seam, signal (c) is evaluated only in daemon runs. The completion-gate-miss seam keeps
+> `adr-2026-07-13` D3's three-verdict-step scope unchanged. Why: the shipped three-step gate at the
+> step-runner seam was copied from the completion-gate-miss seam and never decided here, while D6
+> names `build` as this decision's only exclusion; this paragraph is now the seam's single recorded
+> scope.
+
 ### D3 — The route is the halt, and the halt names the step
 
 An unretryable step-runner failure does not fall through to `planRemediation`: there is no gap to
@@ -100,6 +110,12 @@ clears and re-dispatches `mechanical` halts on every sweep, and a halt the daemo
 a guard. `adr-2026-07-28-total-halt-classification-legacy-boundary` permits only `needs-human` or
 `mechanical` for a new writer and requires `needs-human` where retry safety is not mechanically
 provable.
+
+> **Amended 2026-10-09 by #2418:** The route reaches this halt directly. No step-specific recovery
+> route — remediation planning, a kickback, or verdict-file routing — runs for an unretryable-input
+> failure, whichever step raised it. One exception follows from enforcement rather than routing: an
+> `advisory` step is skipped after its single attempt, exactly as an advisory step that exhausted its
+> retries is skipped today, because an advisory failure must not block the pipeline.
 
 **This is the residual path, not the common one.** With `adr-2026-08-19-tree-attesting-gates-recheck-before-dispatch`
 in force, a stale proof is resolved by re-dispatching `test_suite` and this halt is not reached. D3
