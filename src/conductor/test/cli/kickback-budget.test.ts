@@ -1,4 +1,4 @@
-// Covers: task:11, task:27, task:28, task:33
+// Covers: task:8, task:11, task:27, task:28, task:33
 import { describe, expect, it } from 'vitest';
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -218,7 +218,9 @@ describe('kickback-budget inspect --child', () => {
 
       const childless = await inspect(fixture, undefined, 'json');
       expect(childless.code).toBe(0);
-      expect(childless.output).toBe('{"feature":"feature","gates":[{"gate":"build_review","consumed":0,"limit":5,"remaining":5,"latestReason":"","adjustments":[],"mechanicalFaults":0,"planGrowth":{"authored":0,"added":0,"byGate":{},"remaining":0,"cap":0,"capSource":"config-derived"}},{"gate":"prd_audit","consumed":0,"limit":1,"remaining":1,"latestReason":"","adjustments":[],"laps":0,"lapCap":1,"planGrowth":{"authored":0,"added":0,"byGate":{},"remaining":0,"cap":0,"capSource":"config-derived"}},{"gate":"architecture_review_as_built","consumed":0,"limit":1,"remaining":1,"latestReason":"","adjustments":[],"laps":0,"lapCap":1,"planGrowth":{"authored":0,"added":0,"byGate":{},"remaining":0,"cap":0,"capSource":"config-derived"}}]}');
+      expect(JSON.parse(childless.output).gates).toEqual(expect.arrayContaining([
+        expect.objectContaining({ planGrowth: expect.objectContaining({ cap: null, authoredSource: 'unresolved' }) }),
+      ]));
       expect(JSON.parse(childless.output)).not.toHaveProperty('child');
 
       const human = await inspect(fixture, undefined);
@@ -745,6 +747,90 @@ describe('kickback-budget inspect shows plan growth', () => {
         { cwd: fixture.root, resolveMainRoot: async () => fixture.root, isInteractive: () => false, print: () => {} },
       )).toBe(0);
       expect(await readFile(ledgerPath)).toEqual(before);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+});
+
+// Covers: task:8 — feature-scoped inspect projects the shared, non-persisting
+// growth budget, including the unresolved fail-closed view.
+describe('kickback-budget inspect daemon plan-growth budget', () => {
+  async function daemonFeature(input: {
+    slug?: string;
+    planStem?: string;
+    headings: number;
+    remHeadings?: number;
+    ledger?: Record<string, unknown>;
+    config?: string;
+  }): Promise<{ root: string; worktree: string; ledgerPath: string }> {
+    const slug = input.slug ?? 'feature';
+    const fixture = await makeFeature(input.ledger ?? { version: 1, gates: {} });
+    await mkdir(join(fixture.worktree, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(fixture.worktree, '.pipeline', 'conduct-state.json'), JSON.stringify({ build: 'in_progress', feature_desc: slug }));
+    const headings = Array.from({ length: input.headings }, (_, index) => `### Task ${index + 1}: task`).join('\n');
+    const remHeadings = Array.from({ length: input.remHeadings ?? 0 }, (_, index) => `### Task rem-${index + 1}: remediation`).join('\n');
+    await writeFile(join(fixture.worktree, '.docs', 'plans', `${input.planStem ?? slug}.md`), `${headings}\n${remHeadings}`);
+    await writeFile(join(fixture.worktree, '.docs', 'plans', 'other.md'), '### Task other: other');
+    if (input.config) {
+      await mkdir(join(fixture.worktree, '.ai-conductor'), { recursive: true });
+      await writeFile(join(fixture.worktree, '.ai-conductor', 'config.yml'), input.config);
+    }
+    return { ...fixture, ledgerPath: join(fixture.worktree, '.pipeline', 'kickback-ledger.json') };
+  }
+
+  async function inspect(fixture: { root: string }, format: 'human' | 'json'): Promise<string> {
+    const output: string[] = [];
+    expect(await dispatchKickbackBudgetCommand(
+      { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format },
+      { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => output.push(line) },
+    )).toBe(0);
+    return output.join('\n');
+  }
+
+  it('renders the config-derived budget for a slug-matched daemon plan', async () => {
+    const fixture = await daemonFeature({ headings: 17 });
+    try {
+      expect(await inspect(fixture, 'human')).toContain('Plan growth: 0/4 added; 4 remaining (config-derived cap)');
+      const json = JSON.parse(await inspect(fixture, 'json'));
+      expect(json.gates[0].planGrowth).toMatchObject({ authored: 17, cap: 4, authoredSource: 'plan' });
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('renders an unresolved plan without inventing a config-derived cap', async () => {
+    const fixture = await daemonFeature({ planStem: 'not-feature', headings: 3 });
+    try {
+      const human = await inspect(fixture, 'human');
+      expect(human).toContain('Plan growth: plan unresolved; 0 added');
+      expect(human).not.toContain('(config-derived cap)');
+      expect(JSON.parse(await inspect(fixture, 'json')).gates[0].planGrowth).toMatchObject({ cap: null, authoredSource: 'unresolved' });
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('uses config and raised shared caps for recorded remediation growth', async () => {
+    const baseLedger = {
+      version: 1,
+      growth: { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
+      gates: {},
+    };
+    const config = 'prd_audit:\n  max_appended_tasks: 30\n  max_appended_ratio: 0.5\n';
+    const fixture = await daemonFeature({ headings: 24, remHeadings: 9, ledger: baseLedger, config });
+    try {
+      expect(JSON.parse(await inspect(fixture, 'json')).gates[0].planGrowth)
+        .toMatchObject({ authored: 24, added: 9, cap: 12, remaining: 3, capSource: 'config-derived' });
+      await writeFile(fixture.ledgerPath, JSON.stringify({ ...baseLedger, effectiveGrowthCap: 20 }));
+      expect(await inspect(fixture, 'human')).toContain('(raised cap)');
+      expect(JSON.parse(await inspect(fixture, 'json')).gates[0].planGrowth).toMatchObject({ cap: 20, remaining: 11, capSource: 'raised' });
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('reconciles the inspect view without persisting the ledger', async () => {
+    const fixture = await daemonFeature({
+      headings: 12,
+      ledger: { version: 1, growth: { authored: 0, added: 2, byGate: { prd_audit: 2 } }, gates: {} },
+    });
+    try {
+      const before = await readFile(fixture.ledgerPath);
+      expect(JSON.parse(await inspect(fixture, 'json')).gates[0].planGrowth).toMatchObject({ authored: 10, added: 2 });
+      expect(await readFile(fixture.ledgerPath)).toEqual(before);
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 });

@@ -2,8 +2,9 @@ import type { KickbackGateEntry, PlanGrowth } from './kickback-ledger.js';
 import type { ChildId } from './child-context.js';
 
 export interface KickbackPlanGrowthView extends PlanGrowth {
-  cap: number;
+  cap: number | null;
   capSource: 'raised' | 'config-derived';
+  authoredSource: 'plan' | 'ledger' | 'unresolved';
 }
 
 export interface KickbackResumeAuthorizationView {
@@ -109,7 +110,9 @@ export function renderKickbackBudgetView(
     `Adjustment history: ${history === 'unavailable' ? 'unavailable' : history.length === 0 ? 'none' : history.map((item) => `${item.kind} ${item.id}${item.allowance ? ` (${item.allowance})` : ''}`).join(', ')}`,
     authorizationLine,
     ...(view.planGrowth === undefined ? [] : [
-      `Plan growth: ${view.planGrowth.added}/${view.planGrowth.cap} added; ${view.planGrowth.remaining} remaining (${view.planGrowth.capSource} cap)`,
+      view.planGrowth.authoredSource === 'unresolved' && view.planGrowth.cap === null
+        ? `Plan growth: plan unresolved; ${view.planGrowth.added} added`
+        : `Plan growth: ${view.planGrowth.added}/${view.planGrowth.cap} added; ${view.planGrowth.remaining} remaining (${view.planGrowth.capSource} cap)`,
     ]),
     ...(view.mechanicalFaults === undefined ? [] : [`Mechanical faults: ${view.mechanicalFaults}`]),
   ].join('\n');

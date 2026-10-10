@@ -316,7 +316,6 @@ import {
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   MAX_SUITE_INFRASTRUCTURE_RETRIES,
   bumpSuiteInfrastructureRetriesInLedger,
-  readGrowth,
   readKickbackLedger,
   isUnreadableKickbackLedger,
   refundBuildReviewKickback,
@@ -549,7 +548,8 @@ export type { SchedulingUnitRef } from '../types/scheduling-unit.js';
 import {
   MAX_KICKBACKS_PER_GATE,
   kickbackEscalationEnabled,
-  prdAuditAppendCap,
+  pendingRepairSettlementBudgets,
+  readPlanGrowthBudget,
   readRemediationGateAppendBudget,
   remediationLapCapForGate,
   validationJoinRemediationRoundCap,
@@ -4251,7 +4251,6 @@ export class Conductor {
     let prdAuditBudget: RemediationGateAppendBudget | undefined;
     let asBuiltBudget: RemediationGateAppendBudget | undefined;
     if (allTasks.length > 0 || prdAuditTasks.length > 0 || asBuiltTasks.length > 0) {
-      const authoredTaskCount = activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0;
       try {
         prdAuditBudget = prdAuditCapEnforced
           ? await readRemediationGateAppendBudget(
@@ -4261,7 +4260,6 @@ export class Conductor {
             prdAuditLapCap,
             prdAuditTasks.length,
             prdAuditGrowthTasks.length,
-            authoredTaskCount,
           )
           : undefined;
         asBuiltBudget = asBuiltCapEnforced
@@ -4272,7 +4270,6 @@ export class Conductor {
             asBuiltLapCap,
             asBuiltTasks.length,
             asBuiltGrowthTasks.length,
-            authoredTaskCount,
           )
           : undefined;
       } catch (error) {
@@ -6343,9 +6340,7 @@ export class Conductor {
         const entry = ledger.gates.prd_audit;
         const lapCap = entry?.effectiveLapCap ?? prdAuditRemediationLapCap;
         if ((entry?.laps ?? 0) >= lapCap) return false;
-        const unboundedGrowth = await readGrowth(this.projectRoot, Number.MAX_SAFE_INTEGER);
-        const growthCap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(this.config, unboundedGrowth.authored);
-        return (await readGrowth(this.projectRoot, growthCap)).remaining > 0;
+        return (await readPlanGrowthBudget(this.projectRoot, this.config, { persist: true })).growth.remaining > 0;
       } catch {
         return false;
       }
@@ -9251,23 +9246,16 @@ export class Conductor {
           let growthCap: number | undefined;
           try {
             settlementLedger = await readKickbackLedger(this.projectRoot);
-            // Read the durable growth denominator before calculating the
-            // configured 25% cap. `readGrowth` also preserves the pending
-            // task exclusion, so an unsettled append cannot enlarge its own
-            // allowance.
-            const unboundedGrowth = await readGrowth(this.projectRoot, Number.MAX_SAFE_INTEGER);
-            growthCap = settlementLedger.effectiveGrowthCap ??
-              prdAuditAppendCap(this.config, unboundedGrowth.authored);
-            settlementGrowth = await readGrowth(this.projectRoot, growthCap);
+            const budgets = await pendingRepairSettlementBudgets(
+              this.projectRoot,
+              this.config,
+              settlementLedger,
+            );
+            growthCap = budgets[0]?.growthCap;
+            settlementGrowth = budgets[0]?.growth;
             settlement = await settlePendingRepair(
               this.projectRoot,
-              (['prd_audit', 'architecture_review_as_built'] as const).map((gate) => ({
-                gate,
-                lapCap: settlementLedger!.gates[gate]?.effectiveLapCap ??
-                  remediationLapCapForGate(gate, this.config),
-                growthCap: growthCap!,
-                growth: settlementGrowth!,
-              })),
+              budgets,
               { events: { emit: (event) => this.events.emit(event) } },
             );
           } catch (error) {

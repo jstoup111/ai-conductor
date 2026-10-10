@@ -1,4 +1,4 @@
-// Covers: task:6, task:11
+// Covers: task:6, task:7, task:11
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -961,6 +961,112 @@ describe('engine/daemon-observe-cli', () => {
         );
         return featureRoot;
       }
+
+      async function writeDaemonPlan(
+        repo: string,
+        slug: string,
+        plan: string,
+        options: { activePlan?: string; otherPlan?: { name: string; content: string }; planName?: string } = {},
+      ): Promise<string> {
+        const featureRoot = join(repo, '.worktrees', slug);
+        const plansDir = join(featureRoot, '.docs', 'plans');
+        await mkdir(join(featureRoot, '.pipeline'), { recursive: true });
+        await mkdir(plansDir, { recursive: true });
+        await writeFile(join(plansDir, options.planName ?? `${slug}.md`), plan, 'utf8');
+        if (options.otherPlan) {
+          await writeFile(join(plansDir, options.otherPlan.name), options.otherPlan.content, 'utf8');
+        }
+        await writeFile(
+          join(featureRoot, '.pipeline', 'conduct-state.json'),
+          JSON.stringify({ build: 'in_progress', feature_desc: slug }),
+          'utf8',
+        );
+        if (options.activePlan) {
+          await writeFile(
+            join(featureRoot, '.pipeline', 'engine-state.json'),
+            JSON.stringify({ activePlanPath: `.docs/plans/${options.activePlan}` }),
+            'utf8',
+          );
+        }
+        return featureRoot;
+      }
+
+      function tasks(prefix: string, count: number): string {
+        return Array.from({ length: count }, (_, index) => `### Task ${prefix}${index + 1}: work`).join('\n');
+      }
+
+      // Covers: task:7
+      it('resolves a daemon feature plan without an activePlanPath', async () => {
+        const repo = join(root, 'repo-daemon-plan');
+        const slug = 'daemon-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, tasks('', 17), {
+          otherPlan: { name: 'other.md', content: tasks('', 5) },
+        });
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {} }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-daemon-plan', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain('  PLAN GROWTH [daemon-feature]: authored 17; added 0; remaining 4/4');
+      });
+
+      // Covers: task:7
+      it('honors a recorded active plan over the daemon feature plan', async () => {
+        const repo = join(root, 'repo-recorded-plan');
+        const slug = 'recorded-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, tasks('', 17), {
+          activePlan: 'recorded.md',
+          otherPlan: { name: 'recorded.md', content: tasks('', 5) },
+        });
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {} }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-recorded-plan', repo)]), out: (line) => out.push(line) });
+
+        expect(out.join('\n')).toContain('PLAN GROWTH [recorded-feature]: authored 5;');
+      });
+
+      // Covers: task:7
+      it('renders an unresolved daemon plan without a zero-cap remainder', async () => {
+        const repo = join(root, 'repo-unresolved-plan');
+        const slug = 'unresolved-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, tasks('', 3), {
+          planName: 'first-other.md',
+          otherPlan: { name: 'also-other.md', content: tasks('', 5) },
+        });
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {} }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-unresolved-plan', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain('  PLAN GROWTH [unresolved-feature]: plan unresolved; added 0');
+        expect(out.some((line) => line.includes('remaining 0/0'))).toBe(false);
+      });
+
+      // Covers: task:7
+      it('renders config-derived and raised shared budgets for recorded growth', async () => {
+        const repo = join(root, 'repo-shared-budget');
+        const slug = 'shared-budget-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, [tasks('', 24), tasks('rem-', 9)].join('\n'), {
+          otherPlan: { name: 'other.md', content: tasks('', 5) },
+        });
+        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
+        await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 30\n  max_appended_ratio: 0.5\n', 'utf8');
+        const ledgerPath = join(featureRoot, '.pipeline', 'kickback-ledger.json');
+        const growth = { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } };
+        await writeFile(ledgerPath, JSON.stringify({ version: 1, gates: {}, growth }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-shared-budget', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain('  PLAN GROWTH [shared-budget-feature]: authored 24; added 9 (prd_audit: 5, architecture_review_as_built: 4); remaining 3/12');
+
+        await writeFile(ledgerPath, JSON.stringify({ version: 1, effectiveGrowthCap: 20, gates: {}, growth }), 'utf8');
+        const raisedOut: string[] = [];
+        await runDaemonStatus({ registryPath: await registry([record('repo-shared-budget', repo)]), out: (line) => raisedOut.push(line) });
+
+        expect(raisedOut.find((line) => line.startsWith('  PLAN GROWTH [shared-budget-feature]'))).toMatch(/remaining 11\/20$/);
+      });
 
       it('uses the effective growth cap and reports growth cap evidence without an adjustment', async () => {
         const repo = join(root, 'repo-plan-growth');

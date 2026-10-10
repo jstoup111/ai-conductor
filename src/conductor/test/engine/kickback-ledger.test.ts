@@ -35,6 +35,7 @@ import {
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   MAX_SUITE_INFRASTRUCTURE_RETRIES,
   recordGrowth,
+  readGrowthAccounting,
   recordPendingRepair,
   discardPendingRepair,
   settlePendingRepair,
@@ -305,8 +306,8 @@ describe('kickback-ledger', () => {
 
     const config = {} as HarnessConfig;
     const [prdAudit, asBuilt] = await Promise.all([
-      readRemediationGateAppendBudget(dir, config, 'prd_audit', 2, 1, 1, 4),
-      readRemediationGateAppendBudget(dir, config, 'architecture_review_as_built', 2, 1, 1, 4),
+      readRemediationGateAppendBudget(dir, config, 'prd_audit', 2, 1, 1),
+      readRemediationGateAppendBudget(dir, config, 'architecture_review_as_built', 2, 1, 1),
     ]);
 
     expect({
@@ -623,6 +624,158 @@ describe('kickback-ledger', () => {
 
       await expect(readGrowth(dir, 4)).resolves.toEqual({
         authored: 3,
+        added: 0,
+        byGate: {},
+        remaining: 4,
+      });
+    });
+
+    it('derives authored count from the slug-matched feature plan when no active plan is recorded', async () => {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({
+        feature_desc: 'slug-feature',
+      }));
+      await writeFile(join(dir, '.docs/plans/slug-feature.md'), Array.from(
+        { length: 17 },
+        (_, index) => `### Task ${index + 1}: Feature work`,
+      ).join('\n'));
+      await writeFile(join(dir, '.docs/plans/other.md'), Array.from(
+        { length: 5 },
+        (_, index) => `### Task ${index + 1}: Other work`,
+      ).join('\n'));
+
+      await expect(readGrowth(dir, 4)).resolves.toEqual({
+        authored: 17,
+        added: 0,
+        byGate: {},
+        remaining: 4,
+      });
+    });
+
+    it('reports plan as the authored source when the feature plan resolves', async () => {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({
+        feature_desc: 'slug-feature',
+      }));
+      await writeFile(join(dir, '.docs/plans/slug-feature.md'), Array.from(
+        { length: 17 },
+        (_, index) => `### Task ${index + 1}: Feature work`,
+      ).join('\n'));
+      await writeFile(join(dir, '.docs/plans/other.md'), '### Task 1: Other work');
+
+      await expect(readGrowthAccounting(dir, 4, { persist: true })).resolves.toEqual({
+        growth: { authored: 17, added: 0, byGate: {}, remaining: 4 },
+        authoredSource: 'plan',
+      });
+    });
+
+    it('reports ledger as the authored source when no feature plan resolves', async () => {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({
+        feature_desc: 'slug-feature',
+      }));
+      await writeFile(join(dir, '.docs/plans/first.md'), '### Task 1: First work');
+      await writeFile(join(dir, '.docs/plans/second.md'), '### Task 1: Second work');
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {},
+        growth: { authored: 3, added: 1, byGate: { prd_audit: 1 } },
+      });
+
+      await expect(readGrowthAccounting(dir, 4, { persist: true })).resolves.toEqual({
+        growth: { authored: 3, added: 1, byGate: { prd_audit: 1 }, remaining: 3 },
+        authoredSource: 'ledger',
+      });
+    });
+
+    it('reports unresolved as the authored source when neither plan nor ledger growth resolves', async () => {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({
+        feature_desc: 'slug-feature',
+      }));
+      await writeFile(join(dir, '.docs/plans/first.md'), '### Task 1: First work');
+      await writeFile(join(dir, '.docs/plans/second.md'), '### Task 1: Second work');
+
+      await expect(readGrowthAccounting(dir, 4, { persist: true })).resolves.toEqual({
+        growth: { authored: 0, added: 0, byGate: {}, remaining: 4 },
+        authoredSource: 'unresolved',
+      });
+    });
+
+    it('reads reconciled plan growth without persisting when requested', async () => {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({
+        feature_desc: 'daemon-feature',
+      }));
+      await writeFile(join(dir, '.docs/plans/daemon-feature.md'), Array.from(
+        { length: 12 },
+        (_, index) => `### Task ${index + 1}: Feature work`,
+      ).join('\n'));
+      await writeFile(join(dir, '.docs/plans/other.md'), '### Task 1: Other work');
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {},
+        growth: { authored: 0, added: 2, byGate: { prd_audit: 2 } },
+      });
+      const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+      const before = await readFile(ledgerPath, 'utf8');
+
+      await expect(readGrowthAccounting(dir, 4, { persist: false })).resolves.toEqual({
+        growth: { authored: 10, added: 2, byGate: { prd_audit: 2 }, remaining: 2 },
+        authoredSource: 'plan',
+      });
+      await expect(readFile(ledgerPath, 'utf8')).resolves.toBe(before);
+
+      await expect(readGrowth(dir, 4)).resolves.toEqual({
+        authored: 10, added: 2, byGate: { prd_audit: 2 }, remaining: 2,
+      });
+      await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+        growth: { authored: 10, added: 2, byGate: { prd_audit: 2 } },
+      });
+    });
+
+    it('prefers the recorded active plan over the slug-matched feature plan', async () => {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({
+        feature_desc: 'slug-feature',
+      }));
+      await writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/other.md',
+      }));
+      await writeFile(join(dir, '.docs/plans/slug-feature.md'), Array.from(
+        { length: 17 },
+        (_, index) => `### Task ${index + 1}: Feature work`,
+      ).join('\n'));
+      await writeFile(join(dir, '.docs/plans/other.md'), Array.from(
+        { length: 5 },
+        (_, index) => `### Task ${index + 1}: Other work`,
+      ).join('\n'));
+
+      await expect(readGrowth(dir, 4)).resolves.toEqual({
+        authored: 5,
+        added: 0,
+        byGate: {},
+        remaining: 4,
+      });
+    });
+
+    it('does not derive authored count when multiple plans cannot be resolved for the feature', async () => {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({
+        feature_desc: 'slug-feature',
+      }));
+      await writeFile(join(dir, '.docs/plans/first.md'), '### Task 1: First work');
+      await writeFile(join(dir, '.docs/plans/second.md'), '### Task 1: Second work');
+
+      await expect(readGrowth(dir, 4)).resolves.toEqual({
+        authored: 0,
         added: 0,
         byGate: {},
         remaining: 4,

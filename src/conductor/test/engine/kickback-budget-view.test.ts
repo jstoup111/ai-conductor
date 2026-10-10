@@ -1,4 +1,4 @@
-// Covers: task:5, task:10, task:12
+// Covers: task:5, task:8, task:10, task:12
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -75,10 +75,21 @@ describe('kickback budget view', () => {
       { ...baseEntry, laps: 1, adjustmentsKnown: true },
       'prd_audit',
       2,
-      { authored: 10, added: 2, byGate: { prd_audit: 2 }, remaining: 0, cap: 2, capSource: 'config-derived' },
+      { authored: 10, added: 2, byGate: { prd_audit: 2 }, remaining: 0, cap: 2, capSource: 'config-derived', authoredSource: 'plan' },
     );
     expect(rendered).toContain('Plan growth: 2/2 added; 0 remaining (config-derived cap)');
     expect(rendered).not.toContain('raised cap');
+  });
+
+  it('renders an unresolved unraised plan growth view without a numeric cap', () => {
+    const rendered = renderKickbackBudgetView(
+      baseEntry,
+      'build_review',
+      5,
+      { authored: 0, added: 0, byGate: {}, remaining: 0, cap: null, capSource: 'config-derived', authoredSource: 'unresolved' },
+    );
+    expect(rendered).toContain('Plan growth: plan unresolved; 0 added');
+    expect(rendered).not.toContain('config-derived cap');
   });
 
   it('names the exhausted allowance and renders the exact recovery command', () => {
