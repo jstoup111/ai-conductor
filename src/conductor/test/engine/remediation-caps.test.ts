@@ -96,6 +96,7 @@ describe('readPlanGrowthBudget', () => {
 });
 
 describe('readRemediationGateAppendBudget', () => {
+  // Covers: task:4
   it('uses the shared growth budget instead of every plan heading', async () => {
     const root = await mkdtemp(join(tmpdir(), 'remediation-caps-'));
     try {
