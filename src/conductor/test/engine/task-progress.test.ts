@@ -25,7 +25,7 @@ import {
   runTaskStart,
 } from '../../src/engine/task-cli.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
-import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
+import { createRepairObligationStore, taskObligationStanding } from '../../src/engine/repair-obligations.js';
 import { makeGitRunner, performRebase } from '../../src/engine/rebase.js';
 import { translateAfterRebase } from '../../src/engine/rebase-translate.js';
 
@@ -405,6 +405,13 @@ describe('task-progress', () => {
         [current.id, 'translated-current'],
       ]));
       expect(rewritten).toEqual({ ok: true, value: { rewritten: [older.id, current.id] } });
+      const rewrittenState = await repairs.read();
+      if (!rewrittenState.ok) throw new Error(rewrittenState.message);
+      expect(taskObligationStanding(rewrittenState.value, current.planIdentity, '2')).toMatchObject({
+        kind: 'live',
+        current: { id: current.id },
+        superseded: [{ id: older.id }],
+      });
 
       const result = await resolveTaskIdsWithDiagnostics(dir, ['2']);
       expect(result.resolved).toEqual(new Set(['2']));
