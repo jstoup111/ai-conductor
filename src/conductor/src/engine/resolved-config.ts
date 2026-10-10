@@ -819,6 +819,7 @@ export function resolveBuildReviewCustomCatalog(
 const DEFAULT_RUBRIC_EFFORT: Readonly<Record<BuildReviewRubricId, 'medium' | 'high'>> = {
   testQuality: 'high',
   security: 'high',
+  implementationQuality: 'medium',
 };
 
 /**
@@ -833,6 +834,7 @@ const DEFAULT_RUBRIC_EFFORT: Readonly<Record<BuildReviewRubricId, 'medium' | 'hi
 const DEFAULT_RUBRIC_ENABLED: Readonly<Record<BuildReviewRubricId, boolean>> = {
   testQuality: false,
   security: false,
+  implementationQuality: true,
 };
 
 function freezeProviderSelection(selection: ProviderSelection): ProviderSelection {

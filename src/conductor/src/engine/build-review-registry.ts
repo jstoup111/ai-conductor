@@ -29,7 +29,7 @@ export interface BuildReviewRubricDescriptor {
   >;
 }
 
-export const BUILD_REVIEW_RUBRIC_IDS = ['testQuality', 'security'] as const;
+export const BUILD_REVIEW_RUBRIC_IDS = ['testQuality', 'security', 'implementationQuality'] as const;
 
 type RegisteredBuildReviewRubricId = (typeof BUILD_REVIEW_RUBRIC_IDS)[number];
 
@@ -96,6 +96,26 @@ const BUILD_REVIEW_RUBRIC_CATALOG: readonly BuildReviewRubricRegistryCatalogMemb
       output: Object.freeze({
         version: 'v3',
         jsonSchema: BUILD_REVIEW_JUDGED_V3_SCHEMAS.security,
+        parse: parseBuildReviewJudgedResult,
+      }),
+      identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),
+    }),
+    }),
+  },
+  {
+    id: 'implementationQuality',
+    descriptor: Object.freeze({
+    skillName: 'build-review-implementation-quality',
+    cachePolicy: 'content-addressed',
+    prerequisite: 'none',
+    contract: Object.freeze({
+      projection: Object.freeze({
+        version: 'v3',
+        build: (source: BuildReviewProjectionSource) => deriveBuildReviewRubricProjections(source).implementationQuality,
+      }),
+      output: Object.freeze({
+        version: 'v3',
+        jsonSchema: BUILD_REVIEW_JUDGED_V3_SCHEMAS.implementationQuality,
         parse: parseBuildReviewJudgedResult,
       }),
       identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),

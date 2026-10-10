@@ -4345,6 +4345,7 @@ export class DefaultStepRunner implements StepRunner {
     const label: Record<BuildReviewDispatchableRubric['rubric'], string> = {
       testQuality: 'Test Quality',
       security: 'Security',
+      implementationQuality: 'Implementation quality',
     };
     const contractShape = renderRubricContractShape(getBuildReviewRubricDescriptor(branch.rubric).contract);
     const rubricPrompt = [

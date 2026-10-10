@@ -189,6 +189,7 @@ function customPolicyContext(
 const BUILTIN_POLICY_QUESTIONS: Readonly<Record<BuildReviewRubricId, string>> = Object.freeze({
   testQuality: 'Are the tests for new behavior real?',
   security: 'Does the changed code introduce a concrete security defect?',
+  implementationQuality: 'Does the changed code introduce a concrete code-quality or domain-modelling defect?',
 });
 function isBuiltinPolicyRubric(rubric: string): rubric is BuildReviewRubricId {
   return Object.hasOwn(BUILTIN_POLICY_QUESTIONS, rubric);
