@@ -149,14 +149,14 @@ a remediate session every lap it recurs unchanged.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given lap one deferred finding B and its deferral effect is applied, when lap two reports B with the identical content-anchored id, then the live source set is empty after operator resolution and settlement, and no remediate dispatch occurs.
+- Given lap one deferred finding B and its required local post-ship handoff is applied, when lap two reports B with the identical content-anchored id, then the live source set is empty after operator resolution and settlement, and no remediate dispatch occurs.
 - Given lap one rejected finding C, when lap two reports C with the identical id, then no remediate dispatch occurs.
 - Given a finding was recorded with a merged source outcome on a finalized case, when it recurs with the identical id, then no remediate dispatch occurs.
 - Given lap two reports settled finding B and new finding D, when adjudication runs, then the judge is dispatched with D as its only current source.
 
 #### Negative Paths
 - Given lap one deferred finding B, when lap two reports B with an anchor that differs by one character, then B is a live source and the judge is dispatched, because only an exact id is settled.
-- Given lap one deferred finding B but its deferral effect is still reserved, when lap two reports B, then B is not settled and the lap follows the existing unfinished-effect route.
+- Given lap one deferred finding B but its required local post-ship handoff is missing or unfinished, when lap two reports B, then B is not settled and the lap follows the existing unfinished-effect route.
 - Given lap one produced an open action case for finding A that BUILD has not attempted, when lap two reports A, then A is not settled and the existing action route applies.
 - Given the settlement predicate runs, when the case store is read afterwards, then no case was written, resolved, or pruned by the predicate.
 - Given the case store is unreadable, when the settlement predicate would run, then the lap fails closed exactly as it does today for an unreadable store.
@@ -164,7 +164,7 @@ a remediate session every lap it recurs unchanged.
 ### Done When
 - [ ] A finding whose exact id links to a finalized deferred, rejected, or merged case is removed from the live source set before dispatch.
 - [ ] A lap whose live set is empty after settlement finalizes from durable state without dispatching the judge.
-- [ ] A drifted id, a reserved or failed effect, and an open action case each leave the finding live.
+- [ ] A drifted id, an unfinished required local handoff or BUILD effect, and an open action case each leave the finding live; optional remote publication state after a confirmed local handoff does not.
 - [ ] The predicate performs no write to the case store.
 
 ## Story 7: A skipped dispatch is recorded

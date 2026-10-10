@@ -104,7 +104,7 @@ As a feature owner, I want a diff that introduces a security defect to fail buil
 #### Negative Paths
 
 - Given `security` and `testQuality` both enabled and `testQuality` settles as an infrastructure failure while `security` returns a valid judged result, when the lap is joined, then the security judged result and its findings are preserved and the lap's coverage records the test-quality failure separately.
-- Given the adjudicator returns `defer` for a security finding, when the route is reduced, then the finding is filed as an intake issue with the deferral justification and the lap does not silently PASS on that finding.
+- Given the adjudicator returns a valid `defer` for a security finding, when the route is reduced, then its justification and source are durably retained with an applied local handoff before otherwise valid settlement; optional issue publication is not a prerequisite, and an absent required handoff cannot silently PASS.
 - Given the adjudicator returns `refute` with evidence for a security finding, when the route is reduced, then the finding settles as refuted without charging the kickback ledger.
 - Given the security branch ends in an infrastructure failure, when the lap is joined, then the aggregate verdict is not `PASS`, the mechanical-fault lane is charged rather than the kickback budget, and the outer verdict names the failed rubric.
 - Given a security finding that the disposition store already carries as an operator-accepted risk under the current contract version, when the effective verdict is derived, then that finding is excluded and an otherwise clean lap passes.

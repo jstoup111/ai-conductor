@@ -133,6 +133,16 @@ gains no tracker dependency. The filed issue is a new intake that re-enters DECI
 claim route; it is not a deferred amendment of this feature's sealed plan and is never consumed by
 this feature's SHIP (adr-2026-08-04 §5).
 
+> **Amended 2026-09-30 by #1810:** D4-D5's unimplemented dedicated `beyond` record and automatic
+> filing prescription are replaced by the shared post-ship source/action handoff in
+> [adr-2026-09-30-durable-post-ship-action-cases](adr-2026-09-30-durable-post-ship-action-cases.md)
+> D1-D7. Already-classified non-blocking concerns are retained locally, collected by the dispatcher,
+> and optionally published only on explicit operator request. Existing issue links are reused.
+> No background auto-filing obligation or new review authority is introduced. D1, rubric judgement,
+> and the later security amendment's requirement to adjudicate security findings remain intact;
+> an adjudicated non-blocking security deferral uses the same local handoff under the amended
+> case/effect contract. Related filing observability follows the new ADR D9 event contract.
+
 **D6 — Contract and spine.** The `boundTo` grammar is stated in all four
 `skills/build-review-*/SKILL.md` result contracts, embedded in `renderBuildReviewJudgedResultShape`,
 and pinned by `build-review-rubric-skills.test.ts` in the same change as the parser

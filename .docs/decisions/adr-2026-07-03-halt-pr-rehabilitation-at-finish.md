@@ -52,6 +52,15 @@ a *facet to fix* once a halt signal is established:
    (REST), `injectIssueRef` (`Closes`, idempotent, only when the item carries a
    `sourceRef`). All mechanics are warn-only: failures log and never block the
    ship (mirrors `conduct shipped-record` degradation).
+> **Amended 2026-09-30 by #1810:** Closing-reference injection now follows
+> `adr-2026-09-30-durable-post-ship-action-cases` D10-D11: the common FINISH coordinator applies
+> and verifies the complete approved GitHub target set before readiness/final completion,
+> including explicit extras without an origin. Skip only an empty usable target set. A failed,
+> refused, or uncertain linkage is incomplete FINISH publication, not successful coverage;
+> preserve created resources and recover through FINISH without a BUILD repair. This narrows
+> only the sourceRef-only and warn-only linkage promises. Existing title/label responsibilities,
+> source-ref compatibility, and unrelated presentation behavior remain in their governing scope.
+
 3. **Gate enforces presentation.** The finish completion check
    (`artifacts.ts`, `finish-choice`/`pr_url` block) additionally reads the
    recorded PR (`gh pr view --json title,isDraft,labels`) and FAILS the step
