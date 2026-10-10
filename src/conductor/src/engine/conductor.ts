@@ -664,10 +664,12 @@ export class Conductor {
   private events: ConductorEventEmitter;
   /** Cursor-selected owner of the current stacked BUILD region. */
   private activeRegionChild: ChildId | undefined;
+  /** The cursor's leaf bit travels with child-local suite evidence. */
+  private activeRegionIsLeaf: boolean | undefined;
 
   /** Child-local suite selection has the same authoritative base as review. */
   private fullSuiteVerifyOptions(
-    options: Omit<FullSuiteVerifyOptions, 'childBase'> = {},
+    options: Omit<FullSuiteVerifyOptions, 'childBase' | 'activeChild'> = {},
   ): FullSuiteVerifyOptions {
     const slug = this.featureSlug ?? this.featureDesc ?? '';
     return {
@@ -675,6 +677,9 @@ export class Conductor {
       ...(this.activeRegionChild === undefined || slug === ''
         ? {}
         : { childBase: { slug, child: this.activeRegionChild } }),
+      ...(this.activeRegionChild === undefined || this.activeRegionIsLeaf === undefined
+        ? {}
+        : { activeChild: { child: this.activeRegionChild, isLeaf: this.activeRegionIsLeaf } }),
     };
   }
   private readonly remediationProjectionLimitOverrides: Partial<RemediationProjectionLimits> | undefined;
@@ -2386,7 +2391,11 @@ export class Conductor {
   }
 
   /** Adopt the cursor-selected child's overlay before a region dispatch. */
-  private async activateChildRegionState(state: ConductState, child: ChildId): Promise<void> {
+  private async activateChildRegionState(
+    state: ConductState,
+    child: ChildId,
+    isLeaf?: boolean,
+  ): Promise<void> {
     this.stateStore = createRoutedConductStateStore(this.projectRoot, child);
     const overlay = await readConductStateOverlay(this.projectRoot, child);
     if (!overlay.ok) throw new Error(`cannot read child ${child} BUILD state: ${overlay.error.message}`);
@@ -2396,6 +2405,7 @@ export class Conductor {
       else state[step] = value;
     }
     this.activeRegionChild = child;
+    this.activeRegionIsLeaf = isLeaf;
     this.persistedStateSnapshot = { ...state };
   }
 
@@ -2421,7 +2431,7 @@ export class Conductor {
 
     const cursor = await this.resolveActiveChild(this.projectRoot, slug);
     if (cursor.kind === 'active') {
-      await this.activateChildRegionState(state, cursor.child);
+      await this.activateChildRegionState(state, cursor.child, cursor.isLeaf);
       return true;
     }
     if (cursor.kind === 'no-child') return true;
@@ -5980,7 +5990,7 @@ export class Conductor {
         if (slug) {
           const cursor = await this.resolveActiveChild(this.projectRoot, slug);
           if (cursor.kind === 'active') {
-            await this.activateChildRegionState(state, cursor.child);
+            await this.activateChildRegionState(state, cursor.child, cursor.isLeaf);
           } else if (cursor.kind !== 'no-child') {
             await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
             return;
@@ -6741,7 +6751,7 @@ export class Conductor {
                 await this.haltChildRegionRefusal(`child ${target.child} region entry refused: ${entered.reason}`);
                 return;
               }
-              await this.activateChildRegionState(state, target.child);
+              await this.activateChildRegionState(state, target.child, target.isLeaf);
               activeChild = target;
             } else if (cursor.kind !== 'no-child') {
               await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
@@ -13862,7 +13872,7 @@ export class Conductor {
               return;
             }
             activeChild = next;
-            await this.activateChildRegionState(state, next.child);
+            await this.activateChildRegionState(state, next.child, next.isLeaf);
             i = indexOf('acceptance_specs') - 1;
             continue;
           }
@@ -14011,7 +14021,7 @@ export class Conductor {
 
   private async runTestSuiteStep(): Promise<StepRunResult> {
     this.retainedFullSuiteInspection = undefined;
-    const verifyOptions = { requireAggregate: this.testSuiteRequiresAggregate };
+    const verifyOptions = this.fullSuiteVerifyOptions({ requireAggregate: this.testSuiteRequiresAggregate });
     const inspection = await this.fullSuiteVerifier.inspect(verifyOptions);
     const verification = await this.fullSuiteVerifier.ensure(inspection, verifyOptions);
     if (verification.status === 'FAILED') {
