@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  createGithubIntakeAuthorization,
   createGithubIssuesAdapter,
   GITHUB_ISSUES_SOURCE,
 } from '../../../src/engine/engineer/intake/github-issues.js';
@@ -199,6 +200,84 @@ describe('intake writeback — independent assignment authorization', () => {
       expect(fake.mutations).toHaveLength(3);
       expect(await intakeLedger.known(GITHUB_ISSUES_SOURCE, SOURCE_REF)).toBe(false);
     } finally {
+      await rm(engineerDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('intake writeback — operator-session authority outside daemon sessions', () => {
+  function authorizedAdapter(fake: ReturnType<typeof terminal>, operatorSession: boolean, env: NodeJS.ProcessEnv) {
+    return createGithubIssuesAdapter({
+      gh: fake.gh,
+      registry: { list: async () => [] },
+      ledger: ledger(),
+      intakeAuthorization: createGithubIntakeAuthorization({
+        gh: fake.gh,
+        resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
+        operatorSession,
+        env,
+      }),
+    });
+  }
+
+  it('lets an operator-run session write back to an issue not assigned to the operator', async () => {
+    const fake = terminal([]);
+    const intake = authorizedAdapter(fake, true, {});
+
+    await expect(intake.report(SOURCE_REF, 'routed', { repo: 'acme/target' })).resolves.toEqual({ ok: true });
+
+    expect(fake.mutations).toEqual([['issue', 'comment', '17', '-R', REPOSITORY, '--body', 'Routed to acme/target']]);
+    expect(fake.assignees).toEqual([]);
+  });
+
+  it('refuses the same write inside an engine-dispatched daemon session', async () => {
+    const fake = terminal([]);
+    const intake = authorizedAdapter(fake, true, { CONDUCT_DAEMON_SESSION: '1' });
+
+    const outcome = await intake.report(SOURCE_REF, 'routed', { repo: 'acme/target' });
+
+    expect(outcome.ok).toBe(false);
+    expect(fake.mutations).toEqual([]);
+  });
+
+  it('refuses the same write when the caller is not an operator-run entry point', async () => {
+    const fake = terminal([]);
+    const intake = authorizedAdapter(fake, false, {});
+
+    const outcome = await intake.report(SOURCE_REF, 'routed', { repo: 'acme/target' });
+
+    expect(outcome.ok).toBe(false);
+    expect(fake.mutations).toEqual([]);
+  });
+
+  it('compose forget closes an unassigned issue from an operator session without a terminal', async () => {
+    const engineerDir = await mkdtemp(join(tmpdir(), 'intake-operator-session-'));
+    const previous = process.env.CONDUCT_DAEMON_SESSION;
+    delete process.env.CONDUCT_DAEMON_SESSION;
+    try {
+      const fake = terminal([]);
+      const intakeLedger = createLedger(join(engineerDir, 'ledger.json'));
+      await intakeLedger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef: SOURCE_REF });
+
+      const errors: string[] = [];
+      const result = await dispatchEngineer(
+        { kind: 'forget', sourceRef: SOURCE_REF, resolvedBy: 'acme/other#8' },
+        {
+          engineerDir,
+          gh: fake.gh,
+          intakeResolveActor: async () => ({ resolved: true, id: 'alice' }),
+          isAttachedTerminal: () => false,
+          print: () => {},
+          printErr: (message) => errors.push(message),
+        },
+      );
+
+      expect(result, errors.join('\n')).toBe(0);
+      expect(fake.mutations.some((args) => args[0] === 'issue' && args[1] === 'comment')).toBe(true);
+      expect(fake.mutations.some((args) => args[0] === 'issue' && args[1] === 'close')).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.CONDUCT_DAEMON_SESSION;
+      else process.env.CONDUCT_DAEMON_SESSION = previous;
       await rm(engineerDir, { recursive: true, force: true });
     }
   });

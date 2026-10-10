@@ -37,6 +37,7 @@ export interface GithubIntakeBackendDeps {
   missingRegistrationEpisodes?: Set<string>;
   resolveActor?: () => Promise<OwnerResolution>;
   events?: IntakeEventEmitter;
+  operatorSession?: boolean;
 }
 
 export type IntakeBackendFactory = (deps: GithubIntakeBackendDeps) => IntakeBackend;
@@ -61,6 +62,8 @@ export function createIntakeBackendComposite(deps: {
   trackerExclusionEpisodes?: Set<string>;
   resolveActor?: () => Promise<OwnerResolution>;
   events?: IntakeEventEmitter;
+  /** Forwarded to the GitHub backend's intake-write authorization. */
+  operatorSession?: boolean;
 }): IntakeBackend {
   const excludedProjects = deps.trackerExclusionEpisodes ?? new Set<string>();
 
@@ -116,6 +119,7 @@ export function createIntakeBackendComposite(deps: {
     missingRegistrationEpisodes: deps.missingRegistrationEpisodes,
     resolveActor: deps.resolveActor,
     events: deps.events,
+    operatorSession: deps.operatorSession,
   });
 
   return {

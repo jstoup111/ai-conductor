@@ -53,6 +53,13 @@ A source issue is a separate mutation target: an owned feature does not authoriz
 
 Approved policy: an existing intake issue without committed feature provenance is actionable when assigned exclusively to the resolved operator. Multiple distinct assignees, another assignee, or no assignment requires explicit operator authorization for that exact issue and operation. Never reassign an existing issue to manufacture permission.
 
+> **Amended 2026-10-10 by operator hotfix:** An operator-run CLI entry point (`compose land`,
+> `compose handoff`, and `compose forget`) running outside an engine-dispatched session, so without
+> the `CONDUCT_DAEMON_SESSION` marker, is itself explicit operator authorization for its intake
+> writes. The assignment-or-interactive-approval rule above still governs the daemon process and
+> every engine-dispatched session. The operator directed this on 2026-10-10: GitHub calls are fine
+> unless running in the daemon.
+
 Creating a new issue is allowed for an identified operator through an explicit intake action or an already-authorized feature workflow. Creation authorization is scoped to the destination repository and operation. The returned resource identity may authorize immediate labels/dependency metadata in that same creation transaction; it is not a durable exemption for later sweeps. A later run must resolve current ownership or obtain explicit authorization.
 
 New feature PRs and branch publication use their committed feature owner before the first remote write. Linking a dependency on an issue does not grant permission to modify the referenced issue.
