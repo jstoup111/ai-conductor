@@ -7,6 +7,8 @@ import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import { makeProductionGh, makeProductionGit, type GhRunner, type GitRunner } from './pr-labels.js';
+import { parseFeatureBranch } from './feature-branch-identity.js';
+import type { ChildId } from './child-context.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
 
@@ -22,6 +24,8 @@ export interface HaltRecordInput {
   headSha: string;
   haltedAt: string;
   haltBody: string;
+  /** Active child position when this feature is running as a stacked delivery. */
+  child?: ChildId;
 }
 
 /** The operator action that resolved a previously raised halt. */
@@ -45,6 +49,11 @@ export interface HaltRecordRemoteOptions {
   readonly gh?: GhRunner;
   readonly events?: GithubOperationEventEmitter;
 }
+
+type HaltRecordPublicationResult = Awaited<ReturnType<typeof executeRemoteGit>> | {
+  readonly kind: 'refused';
+  readonly reason: string;
+};
 
 /** Resolve a halt record's repository-relative path. */
 export function haltRecordPath(slug: string): string {
@@ -92,6 +101,7 @@ export function renderHaltRecord(input: HaltRecordInput): string {
     `Halting step: ${input.step}\n` +
     `Phase: ${input.phase}\n` +
     `Branch: ${input.branch}\n` +
+    (input.child === undefined ? '' : `Child: ${input.child}\n`) +
     `Head SHA: ${input.headSha}\n` +
     `Halted at: ${input.haltedAt}\n\n` +
     `Push status: this record may be ahead of the remote; push is not guaranteed.\n\n` +
@@ -130,11 +140,13 @@ export async function recordHalt(
     const commitResult = await commitHaltRecordChange(root, relPath, `halt record: ${input.slug}`);
     if (commitResult.kind !== 'written') return commitResult;
 
-    try {
-      const result = await publishHaltRecord(root, input.branch, remote, input.slug);
-      if (result.kind !== 'executed') return { kind: 'pushFailed', reason: haltRecordRemoteFailure(result) };
-    } catch (error) {
-      return { kind: 'pushFailed', reason: errorMessage(error) };
+    if (!isChildBranch(input.branch)) {
+      try {
+        const result = await publishHaltRecord(root, input.branch, remote, input.slug);
+        if (result.kind !== 'executed') return { kind: 'pushFailed', reason: haltRecordRemoteFailure(result) };
+      } catch (error) {
+        return { kind: 'pushFailed', reason: errorMessage(error) };
+      }
     }
 
     return { kind: 'written' };
@@ -169,8 +181,10 @@ export async function supersedeHaltRecord(
 
     try {
       const branch = await currentBranch(root);
-      const result = await publishHaltRecord(root, branch, remote, slug);
-      if (result.kind !== 'executed') return { kind: 'pushFailed', reason: haltRecordRemoteFailure(result) };
+      if (!isChildBranch(branch)) {
+        const result = await publishHaltRecord(root, branch, remote, slug);
+        if (result.kind !== 'executed') return { kind: 'pushFailed', reason: haltRecordRemoteFailure(result) };
+      }
     } catch (error) {
       return { kind: 'pushFailed', reason: errorMessage(error) };
     }
@@ -186,7 +200,10 @@ export async function publishHaltRecord(
   branch: string,
   remote: HaltRecordRemoteOptions,
   slug = basename(root),
-) {
+): Promise<HaltRecordPublicationResult> {
+  if (isChildBranch(branch)) {
+    return { kind: 'refused', reason: `halt records on child branch "${branch}" are not pushed` };
+  }
   const git = remote.git ?? makeProductionGit();
   const mutation = remote.mutation ?? await resolveFeatureRemoteMutation({
     cwd: root,
@@ -207,10 +224,14 @@ export async function publishHaltRecord(
   );
 }
 
-function haltRecordRemoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
+function haltRecordRemoteFailure(result: HaltRecordPublicationResult): string {
   if (result.kind === 'failed') return result.error;
   if (result.kind === 'refused') return result.reason;
   return 'remote Git operation did not execute';
+}
+
+function isChildBranch(branch: string): boolean {
+  return parseFeatureBranch(branch).kind === 'child';
 }
 
 async function commitHaltRecordChange(

@@ -63,6 +63,29 @@ Run this **after `/plan` and before `/pipeline`** (or `/tdd`). The flow is:
 
 ## Process
 
+### Stacked-Child Scope
+
+When this step is dispatched for a stacked feature's active child, the dispatch supplies the child
+identifier `<k>`, its owned stories and criteria, and (except for the first child) the supplied
+parent closure tip. Cover **only the supplied owned stories**: derive dispositions, search for
+existing proof, generate or copy specs, and select the RED run only for those stories and their
+criteria. Do not use another child's stories or criteria to fill, omit, or justify this child's
+coverage.
+
+For that child, write the RED marker at
+`.pipeline/children/<k>/acceptance-specs-red.json` and its run contract at
+`.pipeline/children/<k>/acceptance-specs-run.json`. These files belong to the supplied child;
+do not read, replace, or reuse another child's evidence.
+
+If an owned spec already passes because the supplied parent closure tip already contains the
+behavior, do not manufacture a failure. Record the genuine run and its `prior-child-green`
+exception in the child RED marker. Set the exception attribution to the **supplied parent closure
+tip** so the engine can verify that the earlier child, rather than an ungrounded assumption,
+explains the passing result. All other execution requirements still apply.
+
+For a feature with no active child, retain the flat behavior: cover its feature stories and write
+`.pipeline/acceptance-specs-red.json` and `.pipeline/acceptance-specs-run.json` unchanged.
+
 ### 1. Detect Project Type
 
 First, determine the **test framework, runner, and directory layout** from the loaded
@@ -489,9 +512,11 @@ not a failing test. Two rules follow:
   daemon is a gate hole: the build will be declared GREEN while the specs never ran, and CI (which
   has the infra) then fails.
 
-**Record the RED evidence (gating, `specs-generated` only).** After the RED run, write `.pipeline/acceptance-specs-red.json`
-capturing the REAL result of running the feature's own specs, so the harness can verify they
-actually executed — not merely that spec files exist on disk:
+**Record the RED evidence (gating, `specs-generated` only).** After the RED run, write
+`.pipeline/acceptance-specs-red.json` for a feature with no active child, or
+`.pipeline/children/<k>/acceptance-specs-red.json` for the supplied active child, capturing the
+REAL result of running the feature's or child's own specs, so the harness can verify they actually
+executed — not merely that spec files exist on disk:
 
 ```json
 {
@@ -597,12 +622,14 @@ run command, target specs, exception, or other generated-spec fields:
 
 #### Record the run contract (deterministic RED backstop, `specs-generated` only)
 
-**Write `.pipeline/acceptance-specs-run.json` before reporting complete.** The RED evidence in
-`.pipeline/acceptance-specs-red.json` captures the RESULT of one run this skill happened to
-perform. If that run never happened, or the daemon needs to re-establish RED later (e.g. after
-a self-heal), the engine has no deterministic way to know *how* to re-run this feature's specs
-on its own. The run contract fixes that: it is the exact, machine-replayable command the
-engine's self-heal runner uses to redrive RED without guessing a path or invoking an LLM.
+**Write `.pipeline/acceptance-specs-run.json` before reporting complete for a feature with no
+active child; write `.pipeline/children/<k>/acceptance-specs-run.json` for the supplied active
+child.** The RED evidence in the matching `acceptance-specs-red.json` captures the RESULT of one
+run this skill happened to perform. If that run never happened, or the daemon needs to
+re-establish RED later (e.g. after a self-heal), the engine has no deterministic way to know
+*how* to re-run this feature's or child's specs on its own. The run contract fixes that: it is
+the exact, machine-replayable command the engine's self-heal runner uses to redrive RED without
+guessing a path or invoking an LLM.
 
 Shape — exactly three fields, matching the command actually run in this step:
 

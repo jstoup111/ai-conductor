@@ -1481,8 +1481,9 @@ removal attempts; other `needs-remediation` causes remain sticky.
 
 Opts a project into stacked delivery of a sliced plan. Plan-slice grammar validation (the
 `plan-slices` land gate and the `coverage_binding` slice layer) runs regardless of this block; the
-checks below run only when `enabled` is `true`. Build-loop slice checkpoints remain reserved for the
-stacked child-plans chain (#2940–#2949), which superseded #2724.
+checks below run only when `enabled` is `true`. An admitted plan builds
+[child by child](#child-by-child-build). Restack, fix routing to the owning child, and child
+publication remain reserved for the stacked child-plans chain (#2943–#2945).
 
 | Key | Type | Validation | Default |
 | --- | --- | --- | --- |
@@ -1507,6 +1508,45 @@ gate at `engineer/land` and the `coverage_binding` step refuse the plan unless a
 The refusal lists every failed condition; `coverage_binding` refuses as `needs-human`. On success,
 `coverage_binding` records the story-to-slice mapping as `storyOwnership` in
 [`coverage-binding.json`](artifacts.md).
+
+### Child-by-child build
+
+A feature has children when `enabled` is `true` and the sealed `coverage_binding` envelope records
+`storyOwnership` and two or more slice positions. Each position is a child; the last is the leaf. A
+single-slice or ineligible plan builds flat, unchanged. Once a child branch, closure ref, or
+`.pipeline/children/` directory exists, the engine uses them whatever the flag says.
+
+The **active child** is the lowest non-leaf position without a closure ref, otherwise the leaf. The
+engine runs the BUILD region (`acceptance_specs`, `build`, `test_suite`, `build_review`) once per
+child, in declared order:
+
+- **Branches.** At region entry the engine creates `feat/c<k>/<slug>` from the leaf tip (first child)
+  or the previous child's closure tip, and checks it out. A dirty tree refuses the switch. The leaf
+  is the feature branch `feat/daemon-<slug>`. Before the leaf region, the engine moves it to the last
+  intermediate child's closure tip; if the leaf has commits of its own it halts `needs-human`. Child
+  branches are never pushed. See [branch naming](artifacts.md#worktree-and-branch-names).
+- **Closure.** A closed child's tip is recorded at `refs/conductor/<slug>/closed/c<k>`; only an
+  explicit operator recovery removes it. A closed child whose branch gains non-halt-record commits,
+  or whose tip is not an ancestor of the next child's branch, halts `needs-human` with
+  `restack required (#2943)`.
+- **Scope.** Each child's acceptance specs cover only the stories it owns, `build` completes on its
+  own slice tasks plus remediation tasks recorded to it, and `build_review` grades its diff against
+  the parent child's closure tip. A spec an earlier child already turned green records the
+  `prior-child-green` RED exception. Commits on a child branch are checked by
+  [`task-membership-check`](cli.md#ai-conductor-task-membership-check).
+- **Leaf-only work.** The `security` rubric is skipped on non-leaf children (reason `leaf-only`)
+  and grades the whole feature diff at the leaf. Under `test_suite.verification.full_suite: once`,
+  the aggregate suite runs once, at the leaf.
+- **Caps.** Kickback caps and the stuck-gate guard count per child; plan growth stays feature-wide.
+- **Rebase.** While a non-leaf child is active, the re-kick rebase is skipped and a
+  `rebase_skipped_for_stack` event is recorded. At the leaf, the normal rebase applies.
+- **Positions.** Sealed positions are recorded at `refs/conductor/<slug>/positions`. Once child state
+  exists, a `coverage_binding` reseal that moves, adds, or removes a position refuses.
+- **Halts.** A halt record is committed to the active child's branch with a `Child:` line and is not
+  pushed.
+
+Per-child state is described in [per-child state](artifacts.md#per-child-state); operator commands
+select a child with [`--child`](cli.md#per-child-selection---child).
 
 
 ## conflict_check

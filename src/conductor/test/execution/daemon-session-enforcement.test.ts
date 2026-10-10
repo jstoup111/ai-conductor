@@ -39,6 +39,7 @@ describe('guardDaemonSessionInvocation', () => {
     ['closeout-event', true],
     ['derive-feedback', true],
     ['scope-check', true],
+    ['task-membership-check', true],
     ['github-operation', true],
     ['daemon', false],
     ['config', false],
@@ -112,6 +113,9 @@ describe('guardDaemonSessionInvocation', () => {
       // git-hook-assets.ts — commit-msg records containment from the same
       // daemon-managed maker session that authored the commit.
       argvFor('scope-check', '/worktree/.git/COMMIT_EDITMSG'),
+      // The same hook rejects cross-child task attribution before allowing
+      // the commit to complete.
+      argvFor('task-membership-check', '/worktree/.git/COMMIT_EDITMSG'),
       // FINISH publication prompts submit PR prose through the guarded operation.
       argvFor('github-operation', '--request-file', '/tmp/pr-prose-request.json'),
     ]) {

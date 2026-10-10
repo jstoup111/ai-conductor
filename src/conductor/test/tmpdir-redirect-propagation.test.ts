@@ -44,6 +44,10 @@ describe('tmpdir redirect propagation into forked workers', () => {
     });
   });
 
+  it('does not inherit an external Git diff hook into test workers', () => {
+    expect(process.env.GIT_EXTERNAL_DIFF).toBeUndefined();
+  });
+
   it('places a real mkdtemp call inside the run root', async () => {
     // Same shape as the canonical leaking call site (governor.test.ts) —
     // proving containment against the actual pattern, not just the env var.

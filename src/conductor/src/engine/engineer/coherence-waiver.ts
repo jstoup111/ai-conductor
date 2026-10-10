@@ -33,17 +33,8 @@ export interface ParsedCoherenceWaiver {
 const WAIVES_LINE_RE = /^Waives:\s*(.*)$/m;
 const RATIONALE_RE = /^Rationale:\s*([\s\S]*)$/m;
 
-/**
- * Parse a coherence waiver's `Waives: <gap ids>` / `Rationale: <prose>`
- * shape. Parse, don't validate: a missing `Waives:` line, an empty
- * gap-id list, an empty rationale, or a gap id outside `knownGapIds` (the
- * validator's own reported gap-id set for this change set) is malformed —
- * no catch-all, never silently accepted.
- */
-export function parseCoherenceWaiver(
-  text: string,
-  knownGapIds: Iterable<string>,
-): ParsedCoherenceWaiver | null {
+/** Parse the structural `Waives:` / non-empty `Rationale:` declaration. */
+export function parseCoherenceWaiverDeclaration(text: string): ParsedCoherenceWaiver | null {
   const waivesMatch = text.match(WAIVES_LINE_RE);
   if (!waivesMatch) return null;
   const rationaleMatch = text.match(RATIONALE_RE);
@@ -54,9 +45,22 @@ export function parseCoherenceWaiver(
     .map((s) => s.trim())
     .filter(Boolean);
   if (gapIds.length === 0) return null;
-  const known = new Set(knownGapIds);
-  if (!gapIds.every((id) => known.has(id))) return null;
   return { gapIds, rationale };
+}
+
+/**
+ * Parse a coherence waiver declaration and validate its ids against the
+ * validator's reported gap-id vocabulary for this change set.
+ */
+export function parseCoherenceWaiver(
+  text: string,
+  knownGapIds: Iterable<string>,
+): ParsedCoherenceWaiver | null {
+  const declaration = parseCoherenceWaiverDeclaration(text);
+  if (!declaration) return null;
+  const known = new Set(knownGapIds);
+  if (!declaration.gapIds.every((id) => known.has(id))) return null;
+  return declaration;
 }
 
 /**

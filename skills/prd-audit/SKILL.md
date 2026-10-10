@@ -106,7 +106,9 @@ each available story criterion in the advisory judgment.
   task, and do not use this grade when the required work is outside the approved plan.
 - **PLAN_GAP** — the criterion is unmet and no existing task owns its repair. Describe why the plan
   is insufficient. For a PRD requirement with no traced story criterion, make that missing coverage
-  explicit as a PLAN_GAP rather than assessing the FR as though it were a criterion.
+  explicit as a PLAN_GAP rather than assessing the FR as though it were a criterion. A requirement
+  listed under the PRD's waived requirements in the projection is discharged by the feature's
+  committed coherence waiver: do not grade it, associate it with a criterion, or make it a PLAN_GAP.
 - **OVER_SCOPE** — shipped behavior goes beyond the planned implementation. Judge it against intent:
   PRD Goals/Non-Goals and In/Out Scope when available, otherwise the stories plus the plan outcome.
   State whether the widening is within intent, outside intent but not user-visible, or outside intent

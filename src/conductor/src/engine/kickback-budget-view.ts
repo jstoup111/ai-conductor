@@ -1,4 +1,5 @@
 import type { KickbackGateEntry, PlanGrowth } from './kickback-ledger.js';
+import type { ChildId } from './child-context.js';
 
 export interface KickbackPlanGrowthView extends PlanGrowth {
   cap: number;
@@ -87,6 +88,7 @@ export function renderKickbackBudgetView(
   fallbackLimit: number,
   planGrowth?: KickbackPlanGrowthView,
   liveHaltGeneration?: string,
+  child?: ChildId,
 ): string {
   const view = kickbackBudgetView(entry, gate, fallbackLimit, planGrowth, liveHaltGeneration);
   const history = view.adjustments === 'unavailable' ? 'unavailable' : (view.adjustments ?? []);
@@ -101,6 +103,7 @@ export function renderKickbackBudgetView(
           ? 'Resume authorization: pending (live halt not read)'
           : `Resume authorization: stale (bound to halt generation ${authorization.boundHaltGeneration}; live halt generation ${authorization.liveHaltGeneration}); the daemon will not consume it`;
   return [
+    ...(child === undefined ? [] : [`Child: ${child}`]),
     `Kickback budget (${gate}): ${view.consumed}/${view.limit} consumed; ${view.remaining} remaining`,
     `Latest reason: ${view.latestReason || 'none'}`,
     `Adjustment history: ${history === 'unavailable' ? 'unavailable' : history.length === 0 ? 'none' : history.map((item) => `${item.kind} ${item.id}${item.allowance ? ` (${item.allowance})` : ''}`).join(', ')}`,

@@ -60,6 +60,9 @@ import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
 import { writeFile, mkdir, readFile } from 'fs/promises';
 import { createHash } from 'crypto';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
+import { readVerdict } from '../../src/engine/gate-verdicts.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
 import { voidCoverageBindingForDecideChange } from '../../src/engine/coverage-binding-void.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { rewindState } from '../../src/engine/rewind.js';
@@ -3181,6 +3184,36 @@ describe('engine/conductor', () => {
     ).nonGreenFinishValidators(state);
 
     expect(nonGreen).toEqual([]);
+  });
+
+  it('rechecks aggregate suite evidence and writes the FINISH fence verdict under the leaf child', async () => {
+    const child = parseChildId(2)!;
+    const inspect = vi.fn(async () => ({ status: 'CURRENT', evidence: {} } as FullSuiteInspectionResult));
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      config: { test_suite: { verification: { mode: 'changed', drift_budget: {} as never } } },
+      fullSuiteVerifier: {
+        inspect,
+        ensure: async () => { throw new Error('FINISH fence must only inspect existing evidence'); },
+      },
+    });
+    (conductor as unknown as { activeRegionChild: number; activeRegionIsLeaf: boolean }).activeRegionChild = child;
+    (conductor as unknown as { activeRegionChild: number; activeRegionIsLeaf: boolean }).activeRegionIsLeaf = true;
+
+    await (conductor as unknown as {
+      nonGreenFinishValidators: (value: ConductState) => Promise<unknown[]>;
+    }).nonGreenFinishValidators({ test_suite: 'done' } as ConductState);
+
+    expect(inspect).toHaveBeenCalledWith(expect.objectContaining({
+      requireAggregate: true,
+      activeChild: { child, isLeaf: true },
+    }));
+    expect(await readVerdict(dir, 'test_suite', child)).toMatchObject({ satisfied: true });
+    await expect(readFile(join(dir, '.pipeline/test-suite-evidence.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('parks a cached-login audit verifier failure and redispatches only that verifier when ready', async () => {

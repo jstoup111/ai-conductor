@@ -30,6 +30,8 @@ import {
   type GitRunner,
 } from './rebase.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
+import { resolveActiveChild } from './child-cursor.js';
+import { listExistingChildren } from './child-context.js';
 import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import { applyRebaseTransition } from './rebase-transition.js';
@@ -206,6 +208,8 @@ export async function clearHaltForResume(
 export interface ConsumeResumeAuthorizationsDeps {
   listHaltedWorktrees: () => Promise<string[]>;
   worktreePath: (slug: string) => string;
+  /** Resolve the halted region whose ledger owns a child-scoped authorization. */
+  resolveActiveChild?: typeof resolveActiveChild;
   isOperatorParked: (slug: string) => Promise<boolean>;
   /**
    * True when the slug's work already shipped. A processed feature has nothing
@@ -253,7 +257,13 @@ export async function consumeResumeAuthorizations(
         }
       }
       const path = deps.worktreePath(slug);
-      const ledger = await readKickbackLedger(path);
+      const children = await listExistingChildren(path);
+      const child = children.length === 0 ? undefined : await (async () => {
+        const activeChild = await (deps.resolveActiveChild ?? resolveActiveChild)(path, slug);
+        if (activeChild.kind !== 'active') throw new Error(`active child cursor is ${activeChild.kind}`);
+        return activeChild.child;
+      })();
+      const ledger = await readKickbackLedger(path, child);
       if (isUnreadableKickbackLedger(ledger)) {
         throw new Error('kickback ledger is unreadable');
       }
@@ -295,7 +305,7 @@ export async function consumeResumeAuthorizations(
       // Repair-then-clear, then consume. A `partial` clear leaves the halt and
       // the authorization exactly as they were, so the next iteration retries.
       if ((await deps.clearHalt(slug)) === 'partial') continue;
-      if (await consumeKickbackResumeAuthorization(path, gate, entry.resumeAuthorization!.adjustmentId)) {
+      if (await consumeKickbackResumeAuthorization(path, gate, entry.resumeAuthorization!.adjustmentId, child)) {
         await deps.emit?.(slug, { type: 'halt_cleared', cause: 'kickback-budget' });
         cleared.push(slug);
       }
@@ -785,6 +795,27 @@ export async function resumeRebaseFirst(opts: {
 
   // One-shot: consume the sentinel up front so a crash can't loop on it.
   await rm(sentinel, { force: true });
+
+  // A non-leaf child is a pinned, independently reviewed increment. Rebasing
+  // the worktree at this boundary would move its in-progress branch (and can
+  // strand its predecessor refs) before the region closes. The cursor is the
+  // sole authority for whether that stack state exists; an ordinary feature
+  // keeps the established play-forward path below.
+  const activeChild = await resolveActiveChild(opts.worktreePath, opts.slug ?? basename(opts.worktreePath));
+  if (activeChild.kind === 'active' && !activeChild.isLeaf) {
+    await opts.events.emit({
+      type: 'rebase_skipped_for_stack',
+      child: activeChild.child,
+      reason: 'active child is not the leaf',
+    });
+    opts.log?.(
+      `re-kick ${basename(opts.worktreePath)}: rebase skipped — active child ${activeChild.child} is not the leaf`,
+    );
+    // The sentinel was deliberately consumed: the child gate loop resumes at
+    // its existing overlay state, and retries the rebase only after the leaf
+    // becomes active.
+    return 'rebased';
+  }
 
   // Check and verify merged history BEFORE rebasing. Merge state alone is never
   // completion evidence: every refusal and unavailable dependency parks the

@@ -555,6 +555,7 @@ export const PREPARE_COMMIT_MSG_HOOK = [
  * commit-msg if it exists.
  */
 export function buildCommitMsgHook(launcher = resolveCanonicalLauncher()): string {
+  const taskMembershipCheck = `${shellQuote(launcher)} task-membership-check "$COMMIT_MSG_FILE"`;
   const scopeCheck = `${shellQuote(launcher)} scope-check "$COMMIT_MSG_FILE"`;
   return [
   '#!/bin/bash',
@@ -648,6 +649,7 @@ export function buildCommitMsgHook(launcher = resolveCanonicalLauncher()): strin
   '  # ADR 2026-08-09 D3: scope-check records containment; it never blocks.',
   '  # See adr-2026-08-09-non-blocking-plan-scope-containment. An out-of-floor',
   '  # result is advisory; an unresolvable check records ambiguity before exit 3.',
+  `    CONDUCT_TASK_MEMBERSHIP_PROJECT_ROOT="$WORKTREE_ROOT" ${taskMembershipCheck}`,
   '  if [[ -f "$TASK_STATUS_FILE" ]]; then',
   '    rc=0',
   `    CONDUCT_SCOPE_CHECK_PROJECT_ROOT="$WORKTREE_ROOT" ${scopeCheck} || rc=$?`,

@@ -70,8 +70,8 @@ import {
   resolveFeaturePlanPath,
   splitStoryBlocks,
   selectFeaturePlan,
-  BUILD_REVIEW_VERDICT,
 } from './artifacts.js';
+import { pipelinePathFor } from './child-context.js';
 import {
   customStepsInPerChildRegion,
   deriveStoryOwnership,
@@ -92,6 +92,7 @@ import {
   parseConflictBatchPayload,
   conflictClaimDigest,
   issueJudgeClaimIds,
+  projectChildOwnership,
   readCoverageBindingEnvelope,
   writeCoverageBindingCodeStamp,
   writeCoverageBindingEnvelope,
@@ -102,6 +103,8 @@ import {
   type CoverageBindingConflictEnvelopeEntry,
   type CoverageBindingSliceMembership,
 } from './coverage-binding-envelope.js';
+import { resolveActiveChild, resolveChildBase } from './child-cursor.js';
+import { parseFeatureRef } from './feature-branch-identity.js';
 import {
   amendmentBlocks,
   assembleAmendmentClaims,
@@ -136,6 +139,86 @@ function isCoverageBindingAmendmentEntry(
 
 function isCoverageBindingConflictEntry(entry: unknown): entry is CoverageBindingConflictEnvelopeEntry {
   return typeof entry === 'object' && entry !== null && (entry as { kind?: unknown }).kind === 'conflict';
+}
+
+type PositionImmutabilityCheck =
+  | { readonly kind: 'clear' }
+  | { readonly kind: 'refused'; readonly reason: string };
+
+function recordedPositions(value: string): number[] | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || !parsed.every((position) => Number.isSafeInteger(position) && position > 0)) return undefined;
+    const positions = [...new Set(parsed)].sort((left, right) => left - right);
+    return positions.length === parsed.length ? positions : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Once child state exists, the ref written at child-one creation is the
+ * durable position authority.  The envelope may be recreated with a
+ * worktree, so comparing it to its predecessor would let a reseal silently
+ * change the stack topology.
+ */
+async function verifyStackPositionImmutability(
+  projectDir: string,
+  slug: string,
+  positions: readonly number[],
+  git: GitRunner,
+): Promise<PositionImmutabilityCheck> {
+  if (slug === '') return { kind: 'clear' };
+
+  let childDirectoryExists = false;
+  try {
+    childDirectoryExists = (await readdir(join(projectDir, '.pipeline', 'children'))).length > 0;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return { kind: 'refused', reason: 'coverage_binding cannot inspect existing child state' };
+    }
+  }
+
+  const gitDirectory = await git(['rev-parse', '--git-dir']).catch(() => undefined);
+  // Non-git unit fixtures have no refs to inspect. A real worktree that loses
+  // git access while child state exists is refused above/below, never guessed.
+  if (!gitDirectory || gitDirectory.exitCode !== 0) {
+    return childDirectoryExists
+      ? { kind: 'refused', reason: 'coverage_binding cannot inspect existing child refs' }
+      : { kind: 'clear' };
+  }
+
+  const childRefs = await git(['for-each-ref', '--format=%(refname)', 'refs/heads/feat']).catch(() => undefined);
+  const closureRefs = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/closed/`]).catch(() => undefined);
+  if (!childRefs || childRefs.exitCode !== 0 || !closureRefs || closureRefs.exitCode !== 0) {
+    return { kind: 'refused', reason: 'coverage_binding cannot inspect existing child refs' };
+  }
+  const hasChildRef = childRefs.stdout.split('\n').some((ref) => {
+    const identity = parseFeatureRef(ref.trim());
+    return identity.kind === 'child' && identity.slug === slug;
+  });
+  const hasClosureRef = closureRefs.stdout.trim() !== '';
+  if (!hasChildRef && !hasClosureRef && !childDirectoryExists) return { kind: 'clear' };
+
+  const positionsRef = `refs/conductor/${slug}/positions`;
+  const recorded = await git(['cat-file', '-p', positionsRef]).catch(() => undefined);
+  const priorPositions = recorded && recorded.exitCode === 0 ? recordedPositions(recorded.stdout) : undefined;
+  if (!priorPositions) {
+    return { kind: 'refused', reason: `coverage_binding cannot read sealed positions from ${positionsRef}` };
+  }
+
+  const currentPositions = [...new Set(positions)].sort((left, right) => left - right);
+  const added = currentPositions.filter((position) => !priorPositions.includes(position));
+  const removed = priorPositions.filter((position) => !currentPositions.includes(position));
+  if (added.length === 0 && removed.length === 0) return { kind: 'clear' };
+  const changes = [
+    ...added.map((position) => `position ${position} was added`),
+    ...removed.map((position) => `position ${position} was removed`),
+  ];
+  return {
+    kind: 'refused',
+    reason: `coverage_binding refused: sealed child positions are immutable after child state exists; ${changes.join('; ')}`,
+  };
 }
 import {
   composeContainmentAdvisoryOutput,
@@ -964,6 +1047,13 @@ const FINISH_PROSE_DIFF_BUDGET =
   'Do not print the whole branch diff: read only targeted hunks (`git diff <base>..HEAD -- <path>`) ' +
   'for the few files whose behavior the prose must describe, and keep each read small. ';
 
+const productionCoverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
+  readFile: (path) => readFile(path, 'utf8'),
+  mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
+  writeFile,
+  rename,
+};
+
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
   private sessionStartedInitialized = false;
@@ -1326,6 +1416,7 @@ export class DefaultStepRunner implements StepRunner {
             criteria: projection.projection.criteria,
             requirements,
             tasks: projection.projection.tasks,
+            waivedRequirements: 'waivedRequirements' in projection.projection.prd ? projection.projection.prd.waivedRequirements : [],
           });
           let currentHead: string | null = null;
           try {
@@ -2912,9 +3003,10 @@ export class DefaultStepRunner implements StepRunner {
     tier: ConductState['complexity_tier'],
     executionContext?: ExecutionContext,
     readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
+    child?: import('./child-context.js').ChildId,
   ): Promise<StepRunResult> {
     try {
-      return await this.runRubricBuildReviewInner(inputs, config, tier, executionContext, readOnlyReviewCapabilities);
+      return await this.runRubricBuildReviewInner(inputs, config, tier, executionContext, readOnlyReviewCapabilities, child);
     } finally {
       // A custom lap owns one source view for every catalog member. Some
       // built-in paths settle before dispatch (for example a deterministic
@@ -2934,6 +3026,7 @@ export class DefaultStepRunner implements StepRunner {
     tier: ConductState['complexity_tier'],
     executionContext?: ExecutionContext,
     readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
+    child?: import('./child-context.js').ChildId,
   ): Promise<StepRunResult> {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
@@ -2941,7 +3034,7 @@ export class DefaultStepRunner implements StepRunner {
     // A prior lap's aggregate cannot represent this lap. Invalidate it before
     // dispatch so a mechanical early return leaves no stale semantic FAIL for
     // the conductor to route back to build.
-    const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
+    const effectivePipelineDir = this.buildReviewPipelineDir(child);
     await rm(join(effectivePipelineDir, 'build-review.json'), { force: true });
 
     const engineIdentity = await this.resolveBuildReviewEngineIdentity();
@@ -3134,6 +3227,7 @@ export class DefaultStepRunner implements StepRunner {
             config: lapGate === undefined ? config : { ...config, maxParallel: Math.max(config.maxParallel, config.catalog.length) },
             inputs,
             lapId,
+            securityLeafOnly: child !== undefined && inputs.securitySourceSnapshot === undefined,
             engineIdentity,
             useCandidateCache: true,
             ...(customPolicyLap ? { joinsCustomPolicyLap: true } : {}),
@@ -3194,7 +3288,7 @@ export class DefaultStepRunner implements StepRunner {
             mutationMembersFromOutcomes(customSettled.status === 'fulfilled' ? customSettled.value : []), {}, changedInputs,
           ));
           await this.emitBuildReviewCustomMemberResults(lapId, customResults);
-          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
+          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config, child });
         }
       }
       if (customSettled.status === 'rejected') throw customSettled.reason;
@@ -3210,7 +3304,7 @@ export class DefaultStepRunner implements StepRunner {
         if (changedInputs.length > 0) {
           ({ customResults } = await settleLapInputMutation(mutationMembersFromOutcomes(outcomes), {}, changedInputs));
           await this.emitBuildReviewCustomMemberResults(lapId, customResults);
-          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
+          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config, child });
         }
         lapGate!.discardCacheWrites();
         return {
@@ -3224,7 +3318,7 @@ export class DefaultStepRunner implements StepRunner {
         if (changedInputs.length > 0) {
           ({ customResults } = await settleLapInputMutation(mutationMembersFromOutcomes(outcomes), {}, changedInputs));
           await this.emitBuildReviewCustomMemberResults(lapId, customResults);
-          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
+          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config, child });
         }
         lapGate!.discardCacheWrites();
         return { success: false, output: 'build_review custom policy produced no durable result' };
@@ -3251,6 +3345,7 @@ export class DefaultStepRunner implements StepRunner {
           customResults,
           currentCustomRubrics: customEntries.map((entry) => entry.id),
           config,
+          child,
         });
       }
     }
@@ -3260,7 +3355,7 @@ export class DefaultStepRunner implements StepRunner {
       return { success: true, output: 'build_review disabled' };
     }
     if (coordination.kind === 'passed') {
-      return this.publishBuildReviewPass(coordination.reason);
+      return this.publishBuildReviewPass(coordination.reason, child);
     }
     if (coordination.kind === 'refused') {
       return { success: false, output: `build_review refused: ${coordination.reason}` };
@@ -3268,11 +3363,18 @@ export class DefaultStepRunner implements StepRunner {
 
     const results = Object.fromEntries(await Promise.all(coordination.branches.map(async (branch) => {
       if (branch.kind === 'cache-hit' || branch.kind === 'dispatched') {
+        // The coordinator contract carries the snapshot identity needed to
+        // locate its durable branch artifact. Treat a violated contract as a
+        // per-rubric malformed result rather than crashing the entire lap and
+        // losing independently settled sibling findings.
+        if (typeof branch.result?.snapshotDigest !== 'string') {
+          return [branch.rubric, { kind: 'malformed' as const, rubric: branch.rubric }];
+        }
         const rawArtifact = await this.buildReviewArtifactReader(
           this.projectDir,
           branch.rubric,
           lapId,
-          inputs.sourceSnapshot.digest,
+          branch.result.snapshotDigest,
           {
             readFile: async (path) => readFile(path, 'utf-8'),
             mkdir: async (path) => { await mkdir(path, { recursive: true }); },
@@ -3372,7 +3474,7 @@ export class DefaultStepRunner implements StepRunner {
         reason: scopeIncompleteFault.reason,
         detail: scopeIncompleteFault.detail,
         lapId,
-      });
+      }, child);
       if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
         return {
           success: false,
@@ -3399,7 +3501,7 @@ export class DefaultStepRunner implements StepRunner {
           reason: infrastructureFailure.reason,
           detail: infrastructureFailure.detail,
           lapId,
-        });
+        }, child);
         if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
           return {
             success: false,
@@ -3471,7 +3573,7 @@ export class DefaultStepRunner implements StepRunner {
         : `build_review requires human action: ${infrastructureFailure.rubric} projection-oversized.`;
       return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
     }
-    if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
+    if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict(child);
     // A judged finding is a completed review, even when another rubric had a
     // mechanical fault. Let the conductor route that semantic failure through
     // its ordinary kickback budget; only a pure mechanical lap retries here.
@@ -4054,6 +4156,7 @@ export class DefaultStepRunner implements StepRunner {
     readonly customResults: Readonly<Record<string, BuildReviewCustomArtifactMember>>;
     readonly currentCustomRubrics: readonly string[];
     readonly config: ReturnType<typeof resolveBuildReviewConfig>;
+    readonly child?: import('./child-context.js').ChildId;
   }): Promise<StepRunResult> {
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId: input.lapId,
@@ -4077,7 +4180,7 @@ export class DefaultStepRunner implements StepRunner {
         reason: infrastructureFailure.reason,
         detail: infrastructureFailure.detail,
         lapId: input.lapId,
-      });
+      }, input.child);
       if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
         return {
           success: false,
@@ -4094,7 +4197,7 @@ export class DefaultStepRunner implements StepRunner {
         return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
       }
     }
-    const pipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
+    const pipelineDir = this.buildReviewPipelineDir(input.child);
     const aggregatePath = join(pipelineDir, 'build-review.json');
     // adr-2026-08-18 D9: effective state resolves BEFORE publication so a
     // reduced-coverage lap's evidence is stamped into the one aggregate that
@@ -4147,7 +4250,7 @@ export class DefaultStepRunner implements StepRunner {
     if (!persistedSuppressions.ok) {
       return { success: false, output: `build_review suppression history persistence failed: ${persistedSuppressions.reason}` };
     }
-    if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
+    if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict(input.child);
     return {
       success: effective.effective.verdict === 'PASS' || hasFinding,
       output: JSON.stringify(aggregate),
@@ -4836,6 +4939,15 @@ export class DefaultStepRunner implements StepRunner {
     if (planText !== undefined) {
       const sliceValidation = validatePlanSlices(planText);
       if (sliceValidation.kind === 'invalid') {
+        const positionGuard = await verifyStackPositionImmutability(
+          this.projectDir,
+          this.featureDesc,
+          [],
+          this.gitRunner,
+        );
+        if (positionGuard.kind === 'refused') {
+          return { success: false, output: positionGuard.reason, refusal: { kind: 'needs-human', reason: positionGuard.reason } };
+        }
         await writeEnvelope('refused', []);
         const detail = sliceValidation.violations.map((violation) => violation.message).join('\n');
         const reason = `coverage_binding refused: plan slices are invalid.\n\n${detail}`;
@@ -4888,6 +5000,19 @@ export class DefaultStepRunner implements StepRunner {
           if (ownership.kind === 'owned') storyOwnership = ownership.ownership;
         }
       }
+    }
+
+    // The positions ref is the only durable topology authority after the
+    // region begins. Check it before every later envelope-write path, even
+    // when a currently disabled stack config would otherwise skip ownership.
+    const positionGuard = await verifyStackPositionImmutability(
+      this.projectDir,
+      this.featureDesc,
+      sliceMembership === undefined ? [] : Object.values(sliceMembership.taskSlices),
+      this.gitRunner,
+    );
+    if (positionGuard.kind === 'refused') {
+      return { success: false, output: positionGuard.reason, refusal: { kind: 'needs-human', reason: positionGuard.reason } };
     }
 
     // Tier S and legacy plans without obligation bookkeeping have no ADR layer.
@@ -4975,13 +5100,29 @@ export class DefaultStepRunner implements StepRunner {
             if (amendmentArtifacts.length === 0) {
               amendmentClaims = [];
             } else {
-              const originRef = await resolveOriginRef(this.projectDir).catch(() => null);
-              if (originRef === null) throw new Error('could not resolve the origin reference for DECIDE amendment inputs');
-              const mergeBase = await this.gitRunner(['merge-base', originRef, 'HEAD']);
-              const amendmentBase = mergeBase.exitCode === 0 && mergeBase.stdout.trim()
-                ? mergeBase.stdout.trim()
-                : (() => { throw new Error(`could not resolve merge base for DECIDE amendment inputs: ${mergeBase.stderr || mergeBase.stdout || originRef}`); })();
+              const active = this.featureDesc === ''
+                ? undefined
+                : await resolveActiveChild(this.projectDir, this.featureDesc, { git: this.gitRunner });
+              const childBase = active?.kind === 'active'
+                ? await resolveChildBase(this.projectDir, this.featureDesc, active.child, { git: this.gitRunner })
+                : { kind: 'none' as const };
+              // Without an authoritative parent closure, inherited-vs-new is
+              // unknowable.  Every amendment remains a claimed obligation.
+              const amendmentBase = childBase.kind === 'parent'
+                ? childBase.sha
+                : childBase.kind === 'parent-missing' || childBase.kind === 'parent-not-ancestor'
+                  ? undefined
+                  : await (async () => {
+                    const originRef = await resolveOriginRef(this.projectDir).catch(() => null);
+                    if (originRef === null) throw new Error('could not resolve the origin reference for DECIDE amendment inputs');
+                    const mergeBase = await this.gitRunner(['merge-base', originRef, 'HEAD']);
+                    if (mergeBase.exitCode !== 0 || !mergeBase.stdout.trim()) {
+                      throw new Error(`could not resolve merge base for DECIDE amendment inputs: ${mergeBase.stderr || mergeBase.stdout || originRef}`);
+                    }
+                    return mergeBase.stdout.trim();
+                  })();
               const decideArtifacts = await Promise.all(amendmentArtifacts.map(async ({ path, text }) => {
+                if (amendmentBase === undefined) return { path, text, baseText: undefined };
                 const basePath = `${amendmentBase}:${path}`;
                 const baseResult = await this.gitRunner(['show', basePath]);
                 let baseText: string | undefined;
@@ -5032,6 +5173,7 @@ export class DefaultStepRunner implements StepRunner {
     });
     const claims = [...criterionClaims, ...amendmentClaims];
     const previous = await readCoverageBindingEnvelope(this.projectDir, filesystem);
+    let membershipMoved = false;
     if (previous?.sliceMembership !== undefined) {
       if (sliceMembership === undefined) {
         await this.events?.emit({
@@ -5047,6 +5189,7 @@ export class DefaultStepRunner implements StepRunner {
           const to = currentTaskSlices[taskId];
           return from !== undefined && to !== undefined && from !== to ? [{ taskId, from, to }] : [];
         });
+        membershipMoved = moved.length > 0;
         const added = taskIds.filter((taskId) => previousTaskSlices[taskId] === undefined && currentTaskSlices[taskId] !== undefined);
         const removed = taskIds.filter((taskId) => previousTaskSlices[taskId] !== undefined && currentTaskSlices[taskId] === undefined);
         const titlesChanged = previous.sliceMembership.titles.length !== currentMembership.titles.length ||
@@ -5058,6 +5201,18 @@ export class DefaultStepRunner implements StepRunner {
         }
       }
     }
+    const storyReowns = !membershipMoved && previous?.storyOwnership !== undefined && storyOwnership !== undefined
+      ? [...new Set([...Object.keys(previous.storyOwnership), ...Object.keys(storyOwnership)])]
+        .sort()
+        .flatMap((story) => {
+          const from = previous.storyOwnership![story];
+          const to = storyOwnership[story];
+          return from !== undefined && to !== undefined && from !== to ? [{ story, from, to }] : [];
+        })
+      : [];
+    const emitStoryReowns = async () => {
+      for (const reown of storyReowns) await this.events?.emit({ type: 'story_reowned', ...reown });
+    };
     const previousDigests = new Set(previous?.entries.map((entry) => entry.digest) ?? []);
     const previousReopenEligible = previous?.status === 'invalidated' && previous.entries.length > 0;
     // Legacy invalidated envelopes have no predecessor and retain their
@@ -5143,6 +5298,7 @@ export class DefaultStepRunner implements StepRunner {
         await this.events?.emit({ type: 'coverage_binding_conflict_judged', step: 'coverage_binding', claimKind: claim.kind, claimId: claim.id, verdict: 'unjudged', taskIds: [] });
       }
       await this.events?.emit({ type: 'coverage_binding_disabled', step: 'coverage_binding' });
+      await emitStoryReowns();
       return { success: true, output: 'coverage_binding judge disabled' };
     }
 
@@ -5413,6 +5569,7 @@ export class DefaultStepRunner implements StepRunner {
       return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
     }
     await writeEnvelope('done', entries);
+    await emitStoryReowns();
     return { success: true, output: `coverage_binding judged ${entries.length} claim(s)` };
   }
 
@@ -5460,8 +5617,26 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     let containmentReport: ContainmentFloorReport | undefined;
+    let activeChild: import('./child-context.js').ChildId | undefined;
+    let activeChildIsLeaf = true;
+    let activeSuiteChild: import('./full-suite-verifier.js').FullSuiteActiveChild | undefined;
     let inputs;
     try {
+      let activeChildBase = this.buildReviewInputOptions?.childBase;
+      if (activeChildBase === undefined && this.featureDesc !== '') {
+        const active = await resolveActiveChild(this.projectDir, this.featureDesc, { git: this.gitRunner });
+        if (active.kind === 'active') {
+          activeChildBase = { slug: this.featureDesc, child: active.child };
+          activeChildIsLeaf = active.isLeaf;
+          activeSuiteChild = { child: active.child, isLeaf: active.isLeaf };
+        }
+      }
+      activeChild = activeChildBase?.child;
+      if (activeSuiteChild === undefined && activeChildBase !== undefined) {
+        // An injected child base is a focused test/embedding seam. Its leaf
+        // status is unknown, but its evidence must still remain child-local.
+        activeSuiteChild = { child: activeChildBase.child, isLeaf: true };
+      }
       // A custom member changes the lap's source authority from by-reference
       // to a detached, immutable view shared by every member in the lap.
       const lapMembers = this.usesInjectedBuildReviewGit && this.buildReviewInputOptions?.materialization === undefined
@@ -5475,6 +5650,9 @@ export class DefaultStepRunner implements StepRunner {
       inputs = {
         ...await assembleBuildReviewInputs(this.gitRunner, planPath, {
           ...this.buildReviewInputOptions,
+          ...(activeChildBase === undefined ? {} : { childBase: activeChildBase }),
+          ...(activeChildBase === undefined ? {} : { securityScope: activeChildIsLeaf ? 'leaf' as const : 'non-leaf' as const }),
+          ...(activeSuiteChild === undefined ? {} : { activeChild: activeSuiteChild }),
           lapMembers,
           materialization: this.buildReviewInputOptions?.materialization ?? { projectRoot: this.projectDir },
         }),
@@ -5615,19 +5793,27 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     return withBaseFreshness(withContainmentAdvisory(
-      await this.runRubricBuildReview(inputs, buildReviewConfig, tier, executionContext, readOnlyReviewCapabilities),
+      await this.runRubricBuildReview(
+        inputs,
+        buildReviewConfig,
+        tier,
+        executionContext,
+        readOnlyReviewCapabilities,
+        activeChild,
+      ),
     ));
   }
 
   private async publishBuildReviewPass(
     reason: 'build_review_no_rubrics' | 'test_quality_empty_scope',
+    child?: import('./child-context.js').ChildId,
   ): Promise<StepRunResult> {
     const verdict = {
       verdict: 'PASS' as const,
       reason,
       rubric: { testQuality: false },
     };
-    const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
+    const effectivePipelineDir = this.buildReviewPipelineDir(child);
     const verdictPath = join(effectivePipelineDir, 'build-review.json');
     try {
       await mkdir(effectivePipelineDir, { recursive: true });
@@ -5640,17 +5826,23 @@ export class DefaultStepRunner implements StepRunner {
         output: `build_review empty-set PASS publication failed: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
-    await this.stampBuildReviewVerdict();
+    await this.stampBuildReviewVerdict(child);
     return { success: true, output: JSON.stringify(verdict) };
   }
 
-  private async stampBuildReviewVerdict(): Promise<void> {
+  private buildReviewPipelineDir(child?: import('./child-context.js').ChildId): string {
+    return child === undefined
+      ? this.pipelineDir ?? join(this.projectDir, '.pipeline')
+      : pipelinePathFor(this.projectDir, '', child);
+  }
+
+  private async stampBuildReviewVerdict(child?: import('./child-context.js').ChildId): Promise<void> {
     if (!resolveGateCodeValidityConfig(this.config).enabled) {
       // gate_code_validity disabled: restore pre-feature behavior exactly —
       // no read-back, no codeStamp field, no git-diff calls.
       return;
     }
-    const verdictPath = join(this.projectDir, BUILD_REVIEW_VERDICT);
+    const verdictPath = pipelinePathFor(this.projectDir, 'build-review.json', child);
     let parsed: unknown;
     try {
       const raw = await readFile(verdictPath, 'utf-8');
@@ -5730,6 +5922,45 @@ export class DefaultStepRunner implements StepRunner {
     }
   }
 
+  /** Render only the active child's sealed story blocks for acceptance authoring. */
+  private async acceptanceChildInput(): Promise<string> {
+    if (!this.featureDesc) return '';
+
+    const active = await resolveActiveChild(this.projectDir, this.featureDesc);
+    if (active.kind !== 'active') return '';
+
+    const envelope = await readCoverageBindingEnvelope(
+      this.projectDir,
+      this.coverageBindingFilesystem ?? productionCoverageBindingFilesystem,
+    );
+    if (envelope === null) {
+      throw new Error(`acceptance_specs cannot resolve child ${active.child} ownership: coverage-binding envelope is missing or invalid`);
+    }
+    const ownership = projectChildOwnership(envelope, active.position);
+    const decideSet = await resolveCoverageBindingDecideSet(this.projectDir, this.featureDesc);
+    if (decideSet?.storiesPath === null || decideSet?.storiesPath === undefined) {
+      throw new Error(`acceptance_specs cannot resolve child ${active.child} stories: the feature DECIDE set has no stories artifact`);
+    }
+
+    let storiesText: string;
+    try {
+      storiesText = await readFile(join(this.projectDir, decideSet.storiesPath), 'utf8');
+    } catch (error) {
+      throw new Error(`acceptance_specs cannot read child ${active.child} stories at ${decideSet.storiesPath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const ownedStories = new Set(ownership.storyIds);
+    const blocks = splitStoryBlocks(storiesText).filter((block) => block.id !== undefined && ownedStories.has(block.id));
+    if (blocks.length !== ownedStories.size) {
+      const present = new Set(blocks.flatMap((block) => block.id === undefined ? [] : [block.id]));
+      const missing = ownership.storyIds.filter((id) => !present.has(id));
+      throw new Error(`acceptance_specs cannot resolve child ${active.child} owned stories: missing ${missing.join(', ')}`);
+    }
+
+    return `\n\nCHILD-SCOPED ACCEPTANCE INPUT (engine-owned) — active child ${active.child}. ` +
+      `Write and run acceptance evidence only for these owned stories; do not use criteria from another child.\n` +
+      `${blocks.map((block) => block.text).join('\n\n')}`;
+  }
+
   private async buildSystemPrompt(
     step: StepName,
     autonomous: boolean,
@@ -5761,6 +5992,10 @@ export class DefaultStepRunner implements StepRunner {
 
     // Effort is now controlled via CLAUDE_CODE_EFFORT_LEVEL env var (Claude's
     // native reasoning knob) — no prose hint needed in the system prompt.
+
+    if (step === 'acceptance_specs') {
+      prompt += await this.acceptanceChildInput();
+    }
 
     if (step === 'architecture_review_as_built') {
       const policy = await resolveAsBuiltPolicy({

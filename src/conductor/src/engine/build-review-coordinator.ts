@@ -139,6 +139,8 @@ export type BuildReviewCoordination =
 export interface BuildReviewCoordinationInput {
   readonly config: ResolvedBuildReviewConfig;
   readonly inputs: BuildReviewFrozenInputs;
+  /** A non-leaf child must settle security without dispatching it. */
+  readonly securityLeafOnly?: boolean;
   readonly lapId: BuildReviewLapId;
   /** Test seam for an engine-held projection corruption at branch settlement. */
   /** Legacy test seams may override one projection; unset members use the engine-derived projection. */
@@ -631,6 +633,7 @@ export async function coordinateBuildReviewRubrics(
     } : {
       runnerSelectors: [], changedTestSelectors: [], unresolvedMarkers, revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
     },
+    ...(input.inputs.securitySourceSnapshot === undefined ? {} : { securitySnapshot: input.inputs.securitySourceSnapshot }),
   };
   // The descriptor is the live projection seam.  Keeping construction here
   // lets the coordinator retain its preflight inputs while preventing a
@@ -648,7 +651,12 @@ export async function coordinateBuildReviewRubrics(
   const resolved = new Map<BuildReviewRubricId, BuildReviewCoordinatedBranch>();
   const misses: BuildReviewDispatchableRubric[] = [];
 
-  for (const branch of classification.branches) {
+  const branches = input.securityLeafOnly
+    ? classification.branches.map((branch) => !('kind' in branch) && branch.rubric === 'security'
+      ? { kind: 'skipped', rubric: 'security', reason: 'leaf-only' } as BuildReviewSkip
+      : branch)
+    : classification.branches;
+  for (const branch of branches) {
     if ("kind" in branch) {
       resolved.set(branch.rubric, branch);
       await input.emit?.({ type: "build_review_rubric_skipped", rubric: branch.rubric, lapId: input.lapId, reason: branch.reason });

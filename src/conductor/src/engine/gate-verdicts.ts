@@ -142,6 +142,12 @@ export function validRebaseOperationRecord(operation: RebaseOperationRecord | un
 
 export interface GateVerdict {
   satisfied: boolean;
+  /**
+   * A typed successful resolution for an acceptance gate whose active child
+   * owns no story criteria.  Kept on the child verdict rather than inferred
+   * from missing evidence so restarts preserve why no authoring ran.
+   */
+  outcome?: 'no-owned-criteria';
   /** Why — for an unsatisfied verdict, what's missing. */
   reason?: string;
   /** Epoch ms when this verdict was computed/written. */
@@ -186,11 +192,13 @@ export async function computeAndWriteVerdict(
   options: { retainReplayPreservation?: boolean } = {},
 ): Promise<GateVerdict> {
   const result = await checkGateCompletion(dir, step, ctx);
-  const prior = await readVerdict(dir, step);
+  const child = isRegionStep(step) ? ctx.activeChild : undefined;
+  const prior = await readVerdict(dir, step, child);
   const verdict: GateVerdict = {
     satisfied: result.done,
     reason: result.reason,
     checkedAt: Date.now(),
+    ...(result.acceptanceOutcome === undefined ? {} : { outcome: result.acceptanceOutcome }),
     // A validation-group join may re-check a preserved sibling without
     // dispatching a new judge. Keep its replay-bound authority while the
     // objective predicate remains satisfied; otherwise that bookkeeping pass
@@ -199,7 +207,7 @@ export async function computeAndWriteVerdict(
       ? { preservation: prior.preservation }
       : {}),
   };
-  await writeVerdict(dir, step, verdict);
+  await writeVerdict(dir, step, verdict, child);
   return verdict;
 }
 

@@ -34,6 +34,7 @@ import {
   type GithubMutationExecutionContext,
 } from './tracker-client.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
+import { parseFeatureBranch } from './feature-branch-identity.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -61,6 +62,10 @@ export interface EscalateBuildFailureOpts {
 export interface EscalateBuildFailureResult {
   /** URL of the draft PR that was found or created. Absent on any early exit. */
   prUrl?: string;
+  /** A child branch is a local stack segment and must never receive a PR. */
+  kind?: 'refused';
+  /** Human-readable reason for a refused child-branch escalation. */
+  reason?: string;
 }
 
 /**
@@ -100,6 +105,12 @@ export async function escalateBuildFailure(
   } catch (err) {
     log?.(`[escalate] failed to derive current branch: ${err}`);
     return {};
+  }
+
+  if (parseFeatureBranch(branch).kind === 'child') {
+    const reason = `build-failure escalation refuses child branch "${branch}"`;
+    log?.(`[escalate] ${reason}`);
+    return { kind: 'refused', reason };
   }
 
   // ── Step 1b: derive the default base from origin/HEAD (never hardcode) ────

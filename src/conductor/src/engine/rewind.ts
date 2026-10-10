@@ -22,6 +22,7 @@ import {
 } from './child-context.js';
 import { join } from 'node:path';
 import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 
 export interface RewindStateInput {
   state: ConductState;
@@ -370,10 +371,20 @@ export async function dispatchRewindCommand(
   cwd = process.cwd(),
   dependencies: RewindCommandDependencies = {},
 ): Promise<number> {
-  if (command.child !== undefined) {
-    const child = parseChildId(command.child);
+  const cursor = await resolveActiveChildForCurrentFeature(cwd);
+  if (cursor.kind !== 'no-child' && cursor.kind !== 'active') {
+    console.error(`rewind: active child resolution refused (${cursor.kind})`);
+    return 1;
+  }
+  const requestedChild = command.child ?? (cursor.kind === 'active' ? String(cursor.child) : undefined);
+  if (requestedChild !== undefined) {
+    const child = parseChildId(requestedChild);
     if (child === undefined) {
-      console.error(`rewind: invalid child id "${command.child}" (expected 1-9)`);
+      console.error(`rewind: invalid child id "${requestedChild}" (expected 1-9)`);
+      return 1;
+    }
+    if (command.child !== undefined && cursor.kind === 'active' && child < cursor.child) {
+      console.error(`rewind: child ${child} is closed and cannot be rewound (#2943)`);
       return 1;
     }
     if (!(await childStateExists(cwd, child))) {

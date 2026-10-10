@@ -448,15 +448,19 @@ export function detectKickbackBudgetCommand(argv: string[]): KickbackBudgetDispa
     const child = values.get('--child');
     return { kind: 'kickback-budget', action, feature, format, ...(child === undefined ? {} : { child }) };
   }
-  if (values.has('--child')) return null;
   const gate = values.get('--gate'); const rationale = values.get('--rationale');
   if (!gate || !rationale?.trim()) return null;
   if (action === 'raise') {
     const by = Number(values.get('--by'));
     if (!Number.isSafeInteger(by) || by <= 0) return null;
-    return { kind: 'kickback-budget', action, feature, gate, by, rationale, format };
+    const child = values.get('--child');
+    return { kind: 'kickback-budget', action, feature, gate, by, rationale, format, ...(child === undefined ? {} : { child }) };
   }
-  return !values.has('--by') ? { kind: 'kickback-budget', action, feature, gate, rationale, format } : null;
+  const child = values.get('--child');
+  return !values.has('--by') ? {
+    kind: 'kickback-budget', action, feature, gate, rationale, format,
+    ...(child === undefined ? {} : { child }),
+  } : null;
 }
 
 export interface DecideGrantCommandDeps {

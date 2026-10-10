@@ -1,4 +1,4 @@
-// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4
+// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,7 @@ import { persistBuildReviewSuppressions } from '../../src/engine/build-review-su
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
@@ -313,6 +314,35 @@ function input(root: string, judge: (context: unknown) => Promise<RemediationCas
 }
 
 describe('coordinateBuildReviewAdjudication', () => {
+  it('keeps child cases local while writing suppression history to the flat store', async () => {
+    const root = await projectRoot();
+    const child = parseChildId(2)!;
+    const suppression = {
+      findingId: findingId,
+      rubric: 'testQuality',
+      summary: 'The changed test is insensitive.',
+      confidence: 40,
+      floor: 70,
+      lastSeenLap: 'lap-1',
+    };
+
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => securityActionJudgement()),
+      aggregate: securityAggregate,
+      child,
+      suppressions: [suppression],
+    })).resolves.toMatchObject({ ok: true, route: 'build' });
+
+    await expect(new RemediationCaseStore(root, feature).read()).resolves.toMatchObject({
+      ok: true,
+      state: { cases: [], suppressions: [suppression] },
+    });
+    await expect(new RemediationCaseStore(root, feature, { child }).read()).resolves.toMatchObject({
+      ok: true,
+      state: { cases: [expect.any(Object)], suppressions: [] },
+    });
+  });
+
   it('routes a security act through BUILD with a bounded work order and leaves the plan unchanged', async () => {
     const root = await projectRoot();
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
@@ -744,8 +774,9 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(persisted.state.suppressions).toEqual([entry]);
   });
 
-  it('shows the judge a suppression the seam wrote on an earlier lap as non-blocking history', async () => {
+  it('gives child 2 the flat suppression history and only its own prior cases', async () => {
     const root = await projectRoot();
+    const child = parseChildId(2)!;
     const earlierLap = {
       findingId: 'finding-suppressed-on-an-earlier-lap',
       rubric: 'testQuality',
@@ -758,16 +789,40 @@ describe('coordinateBuildReviewAdjudication', () => {
     await expect(persistBuildReviewSuppressions({ projectRoot: root, feature, suppressions: [earlierLap] }))
       .resolves.toEqual({ ok: true });
 
+    const resolvedRefutedCase = (id: string, priorSourceId: string): RemediationCaseStoreState['cases'][number] => ({
+      id, domain: 'build_review', disposition: 'refute', priority: 'high', confidence: 'high',
+      rationale: 'Child 2 resolved an earlier finding.', resolution: 'resolved',
+      sources: [{ sourceId: priorSourceId, outcome: 'refuted', recordedAt: '2026-10-10T00:00:00.000Z' }],
+      effect: { kind: 'none' },
+      refutation: {
+        claim: 'The earlier finding does not apply.',
+        assertions: [{ assertion: 'Child 2 has the required behavior.', verdict: 'refuted', evidence: [{ path: 'test/child-2.test.ts', excerpt: 'fixture' }] }],
+      },
+    });
+    await seedCases(new RemediationCaseStore(root, feature), {
+      version: 'v1', feature, suppressions: [earlierLap],
+      cases: [resolvedRefutedCase('case-flat', 'testQuality:sha256:flat-earlier')],
+    });
+    await seedCases(new RemediationCaseStore(root, feature, { child }), {
+      version: 'v1', feature, suppressions: [],
+      cases: [resolvedRefutedCase('case-child-2', 'testQuality:sha256:child-2-earlier')],
+    });
+
     const judge = vi.fn(async (context: unknown) => {
       expect(context).toMatchObject({
         currentFindings: [expect.objectContaining({ findingId })],
-        suppressionHistory: [earlierLap],
       });
+      const received = context as { readonly suppressionHistory: unknown; readonly priorCases: readonly { readonly id: string }[] };
+      expect(received.suppressionHistory).toEqual([earlierLap]);
+      expect(received.priorCases.map(({ id }) => id)).toEqual(['case-child-2']);
       return actionJudgement();
     });
 
-    await expect(coordinateBuildReviewAdjudication(input(root, judge))).resolves.toMatchObject({ ok: true, route: 'build' });
+    await expect(coordinateBuildReviewAdjudication({ ...input(root, judge), child })).resolves.toMatchObject({ ok: true, route: 'build' });
     expect(judge).toHaveBeenCalledTimes(1);
+    await expect(new RemediationCaseStore(root, feature, { child }).read()).resolves.toMatchObject({
+      ok: true, state: { suppressions: [] },
+    });
   });
 
   it.each([

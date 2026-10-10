@@ -18,6 +18,7 @@ import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js
 import { maskProjectOwnedRegions } from '../../src/engine/pr-body-regions.js';
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 import { recordSkipVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
 import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 import type { dispatchFinishRecord } from '../../src/engine/finish-record-cli.js';
@@ -29,6 +30,7 @@ async function observeImplementationEvidence(input: {
   root: string;
   state: ConductState;
   substituteGateSatisfied?: (step: string, state: ConductState, verdicts: unknown) => boolean;
+  activeLeafChild?: number;
 }): Promise<'valid' | 'invalid' | 'indeterminate'> {
   let observation: 'valid' | 'invalid' | 'indeterminate' | undefined;
   const advanceFinishPublication = vi.fn(async (args: { observe: () => Promise<{ implementationEvidence: 'valid' | 'invalid' | 'indeterminate' }> }) => {
@@ -44,6 +46,17 @@ async function observeImplementationEvidence(input: {
     vi.doMock('../../src/engine/selector.js', async () => ({
       ...await vi.importActual('../../src/engine/selector.js'),
       gateSatisfied: input.substituteGateSatisfied,
+    }));
+  }
+  if (input.activeLeafChild !== undefined) {
+    vi.doMock('../../src/engine/child-cursor.js', () => ({
+      resolveActiveChild: async () => ({
+        kind: 'active' as const,
+        child: parseChildId(input.activeLeafChild!)!,
+        position: parseChildId(input.activeLeafChild!)!,
+        isLeaf: true,
+        branch: 'feat/daemon-feature',
+      }),
     }));
   }
 
@@ -71,6 +84,7 @@ async function observeImplementationEvidence(input: {
   } finally {
     vi.doUnmock('../../src/engine/finish-publication.js');
     vi.doUnmock('../../src/engine/selector.js');
+    vi.doUnmock('../../src/engine/child-cursor.js');
     vi.resetModules();
   }
 }
@@ -603,6 +617,26 @@ describe('production FINISH publication composition', () => {
           feature_desc: 'feature', worktree_branch: 'feat/feature', build_review: 'stale',
         } as ConductState,
       })).resolves.toBe('invalid');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reads implementation verdicts from the active leaf child', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-child-verdict-'));
+    const child = parseChildId(2)!;
+    try {
+      await Promise.all([
+        writeVerdict(root, 'build_review', { satisfied: false, checkedAt: 0 }),
+        writeVerdict(root, 'test_suite', { satisfied: false, checkedAt: 0 }),
+        writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 0 }, child),
+        writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }, child),
+      ]);
+      await expect(observeImplementationEvidence({
+        root,
+        state: { feature_desc: 'feature', worktree_branch: 'feat/daemon-feature' } as ConductState,
+        activeLeafChild: child,
+      })).resolves.toBe('valid');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

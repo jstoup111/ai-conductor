@@ -61,7 +61,11 @@ describe('feature branch identity drift', () => {
       .filter(({ source }) => /import\s*\{(?=[^}]*\bparseFeatureRef\b)[^}]*\}\s*from\s*['"][^'"]*feature-branch-identity\.js['"]/.test(withoutComments(source)))
       .map(({ path }) => path)
       .sort();
-    expect(parseFeatureRefImporters).toEqual([join('engine', 'engineer', 'intake', 'overlap-sources.ts')]);
+    expect(parseFeatureRefImporters).toEqual([
+      join('engine', 'child-cursor.ts'),
+      join('engine', 'engineer', 'intake', 'overlap-sources.ts'),
+      join('engine', 'step-runners.ts'),
+    ]);
   });
 
   it('detects a reintroduced daemon branch literal in memory', async () => {

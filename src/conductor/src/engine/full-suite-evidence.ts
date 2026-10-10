@@ -7,6 +7,7 @@ import {
   type FullSuiteCategoryFingerprints,
   type FullSuiteFingerprintCategory,
 } from './full-suite-fingerprint.js';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 
 export const FULL_SUITE_EVIDENCE_VERSION = 4 as const;
 export const FULL_SUITE_LIST_EVIDENCE_VERSION = 5 as const;
@@ -439,9 +440,10 @@ export async function writeFullSuiteEvidence(
   projectRoot: string,
   evidence: FullSuiteEvidence,
   secretValues: readonly string[] = [],
+  child?: ChildId,
 ): Promise<void> {
-  const directory = join(projectRoot, '.pipeline');
-  const destination = join(projectRoot, FULL_SUITE_EVIDENCE_PATH);
+  const destination = pipelinePathFor(projectRoot, 'test-suite-evidence.json', child);
+  const directory = join(destination, '..');
   const temporary = join(
     directory,
     `.test-suite-evidence.${process.pid}.${randomUUID()}.tmp`,
@@ -486,11 +488,12 @@ export async function writeFullSuiteEvidence(
 
 export async function readFullSuiteEvidence(
   projectRoot: string,
+  child?: ChildId,
 ): Promise<FullSuiteEvidenceReadResult> {
   let parsed: unknown;
   try {
     const serialized = await readFile(
-      join(projectRoot, FULL_SUITE_EVIDENCE_PATH),
+      pipelinePathFor(projectRoot, 'test-suite-evidence.json', child),
       'utf8',
     );
     parsed = JSON.parse(serialized);
@@ -499,7 +502,7 @@ export async function readFullSuiteEvidence(
     if (code === 'ENOENT') {
       let entries: string[];
       try {
-        entries = await readdir(join(projectRoot, '.pipeline'));
+        entries = await readdir(join(pipelinePathFor(projectRoot, 'test-suite-evidence.json', child), '..'));
       } catch (directoryError) {
         return (directoryError as NodeJS.ErrnoException).code === 'ENOENT'
           ? { usable: false, reason: 'missing' }

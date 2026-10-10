@@ -105,8 +105,10 @@ describe('SpoolDrainer', () => {
   });
 
   it('continues after a listed batch is concurrently evicted before read', async () => {
-    const store = new SpoolStore(await temporaryDirectory());
+    let now = 1_727_000_000_000;
+    const store = new SpoolStore(await temporaryDirectory(), { now: () => now });
     await store.write('traces', Buffer.from('evicted'));
+    now += 1;
     await store.write('traces', Buffer.from('delivered'));
     const racingStore = Object.create(store) as SpoolStore;
     const read = store.read.bind(store);

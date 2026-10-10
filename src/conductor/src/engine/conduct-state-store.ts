@@ -5,6 +5,10 @@ import type {
   StateMutation,
   StateMutationResult,
 } from '../types/state.js';
+import type { ConductState, StateResult } from '../types/state.js';
+import { join } from 'node:path';
+import { isRegionStep, pipelinePathFor, type ChildId } from './child-context.js';
+import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 
 export type {
   ConductStateStoreError,
@@ -27,4 +31,82 @@ export interface ConductStateStore<State extends object> {
   /** Optional until every adapter supports recovery's explicit field deletion. */
   applyCorrection?(batch: PrivilegedStateCorrection<State>): Promise<StateMutationResult>;
   replace(replacement: PrivilegedStateReplacement<State>): Promise<StateMutationResult>;
+}
+
+/**
+ * Read the feature-wide state together with one child's build-region state.
+ * Only region steps plus the region's resume cursor are overlaid:
+ * DECIDE/SHIP metadata remains feature-wide.
+ */
+export async function readConductStateOverlay(
+  root: string,
+  child?: ChildId,
+): Promise<StateResult<ConductState>> {
+  const flat = createFilesystemConductStateStore(join(root, '.pipeline', 'conduct-state.json'));
+  const base = await flat.read();
+  if (!base.ok || child === undefined) return base;
+  const regional = createFilesystemConductStateStore(
+    pipelinePathFor(root, 'conduct-state.json', child),
+  );
+  const region = await regional.read();
+  if (!region.ok) return region;
+  const regionEntries = Object.entries(region.value).filter(
+    ([field]) => isRegionStep(field) || field === 'last_step',
+  );
+  // A child's cursor is authoritative only when it exists in that child
+  // document. Do not inherit the flat cursor from an earlier child: the
+  // routed writer would then compare it against an absent child value and
+  // refuse the first resumed region transition as a false conflict.
+  // Region state is never inherited from the flat feature document. An absent
+  // child value means pending, rather than a completion from an earlier child.
+  const featureState = Object.fromEntries(
+    Object.entries(base.value).filter(([field]) => !isRegionStep(field) && field !== 'last_step'),
+  ) as ConductState;
+  return { ok: true, value: { ...featureState, ...Object.fromEntries(regionEntries) } };
+}
+
+/**
+ * Route mutations for acceptance/build/test-suite/review to the active child
+ * while retaining all feature-wide state in the legacy flat document. A
+ * `last_step` written beside a region update follows that update into the
+ * child document, so resume consumers do not inherit a previous child's
+ * cursor.
+ */
+export function createRoutedConductStateStore(
+  root: string,
+  child?: ChildId,
+): ConductStateStore<ConductState> & { read(): Promise<StateResult<ConductState>> } {
+  const flat = createFilesystemConductStateStore(join(root, '.pipeline', 'conduct-state.json'));
+  if (child === undefined) return flat;
+  const regional = createFilesystemConductStateStore(pipelinePathFor(root, 'conduct-state.json', child));
+  const storeFor = (field: string) => isRegionStep(field) ? regional : flat;
+  return {
+    read: () => readConductStateOverlay(root, child),
+    apply: (mutation) => storeFor(mutation.field).apply(mutation),
+    async applyBatch(batch) {
+      const hasRegionMutation = batch.mutations.some((mutation) => isRegionStep(mutation.field));
+      const regionMutations = batch.mutations.filter(
+        (mutation) => isRegionStep(mutation.field) || (hasRegionMutation && mutation.field === 'last_step'),
+      );
+      const flatMutations = batch.mutations.filter(
+        (mutation) => !isRegionStep(mutation.field) && !(hasRegionMutation && mutation.field === 'last_step'),
+      );
+      if (regionMutations.length > 0) {
+        const result = await regional.applyBatch({ name: batch.name, mutations: regionMutations });
+        if (result.kind !== 'applied' && result.kind !== 'idempotent') return result;
+      }
+      if (flatMutations.length > 0) return flat.applyBatch({ name: batch.name, mutations: flatMutations });
+      return { kind: 'applied' };
+    },
+    async replace(replacement) {
+      const region: ConductState = {};
+      const feature: ConductState = {};
+      for (const [field, value] of Object.entries(replacement.next)) {
+        (isRegionStep(field) ? region : feature)[field as keyof ConductState] = value as never;
+      }
+      const regionResult = await regional.replace({ ...replacement, next: region });
+      if (regionResult.kind !== 'applied' && regionResult.kind !== 'idempotent') return regionResult;
+      return flat.replace({ ...replacement, next: feature });
+    },
+  };
 }

@@ -24,6 +24,8 @@ import type { RateLimitEpisode } from './rate-limit-episode.js';
 import type { ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import type { performRebase } from './rebase.js';
 import type { RemediationProjectionLimits } from './remediation-projection.js';
+import type { resolveActiveChild } from './child-cursor.js';
+import type { advanceChildRegion, enterChildRegion } from './child-lifecycle.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -75,6 +77,16 @@ export interface ConductorOptions {
   stepRunner: StepRunner;
   events: ConductorEventEmitter;
   featureSlug?: string;
+  /**
+   * Region lifecycle seams. Production uses the real cursor and lifecycle
+   * helpers; focused conductor tests use these to prove terminal routing
+   * without making a git race part of the loop fixture.
+   */
+  childRegionLifecycle?: {
+    resolveActiveChild?: typeof resolveActiveChild;
+    enterChildRegion?: typeof enterChildRegion;
+    advanceChildRegion?: typeof advanceChildRegion;
+  };
   operatorParkBoundary?: () => Promise<boolean>;
   resume?: boolean;
   fromStep?: StepName;
