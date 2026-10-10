@@ -273,6 +273,8 @@ The decisions below incorporate the fixes.
 
 > **Amended 2026-10-10 by #2943:** `rewind --child k` for a closed child stays refused; the refusal now names #2944, which owns closed-child re-validation (`adr-2026-10-10-stacked-restack-journaled-replay` decision 9).
 
+> **Amended 2026-10-10 by #2846:** The `kickback-budget` default to the active child (decision 11) and the child-ledger recovery read (decision 10) apply to child-scoped gates. `coverage_binding` runs at or before the region (decision 4) and its existing-task reopen is a repair budget that stays feature-wide (decision 10), so its laps, cap evidence, adjustments, and resume authorization live in the feature ledger: `kickback-budget` resolves it there with or without children and refuses `--child` for it, and re-kick's resume-authorization sweep also reads the feature ledger for it (`adr-2026-08-29-kickback-budget-recovery-uses-needs-human-halt-class` decision 6).
+
 12. **Rebase guards until #2943.**
     - While the active child is not the leaf, `resumeRebaseFirst` and the base-advance re-kick
       rebase are skipped. The stack stays on its pinned base, and an event records the skip.
