@@ -7758,8 +7758,10 @@ export class Conductor {
                         if (event.phase === 'dispatch') {
                           branchDispatchStartedAt.set(event.member, Date.now());
                         }
-                        if (event.phase === 'result') {
-                          // This settles before runGroupBranch returns to the join.
+                        if (event.phase === 'result' && event.outcome !== 'verdict:pass') {
+                          // Successful attempts already stamp and handshake in
+                          // verifyDispatch before runGroupBranch settles. Retain
+                          // terminal observation only for non-pass outcomes.
                           await this.stampVerdictRunIdentity(
                             event.member as StepName,
                             branchRunIds.get(event.member),

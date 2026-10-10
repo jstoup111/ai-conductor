@@ -219,7 +219,7 @@ describe('validation-group dispatch handshake retries', () => {
       expect(calls.filter((step) => step === member)).toHaveLength(1);
     }
     expect(calls.filter((step) => step === 'prd_audit')).toHaveLength(1);
-    expect(handshake).toHaveBeenCalledTimes(3);
+    expect(handshake).not.toHaveBeenCalled();
     expect(events).toContainEqual(expect.objectContaining({
       type: 'parallel_completed', step: 'manual_test',
       branches: ['manual_test', 'prd_audit', 'architecture_review_as_built'],
@@ -245,6 +245,32 @@ describe('validation-group dispatch handshake retries', () => {
     await conductor.run();
 
     expect(handshake).toHaveBeenCalledWith('prd_audit', expect.any(String), expect.any(Number), 'audit failed');
+  });
+
+  it('handshakes a successful fresh verifier pass once', async () => {
+    const { dir, statePath } = await fixture();
+    const conductor = new Conductor({
+      projectRoot: dir, stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async (step, _state, options) => {
+        if (step === 'manual_test') {
+          await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
+        } else if (step === 'prd_audit') {
+          await writePrdPass(dir, options);
+        } else if (step === 'architecture_review_as_built') {
+          await writeAsBuiltPass(dir, options);
+        }
+        return { success: true };
+      }) },
+      events: new ConductorEventEmitter(), fromStep: 'manual_test', mode: 'auto', daemon: true,
+      verifyArtifacts: true, config: { gate_code_validity: { enabled: false }, defaults: { max_retries: 1 } },
+    });
+    const handshake = vi.spyOn(conductor as unknown as {
+      verdictDispatchHandshake: (step: StepName) => Promise<undefined>;
+    }, 'verdictDispatchHandshake').mockResolvedValue(undefined);
+
+    await conductor.run();
+
+    expect(handshake.mock.calls.filter(([step]) => step === 'prd_audit')).toHaveLength(1);
   });
 
   it.each([2, 1])(
