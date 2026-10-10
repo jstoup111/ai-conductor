@@ -1,0 +1,5 @@
+# Complexity: prd_audit honors a committed coherence waiver for an uncovered FR
+
+Tier: S
+
+Rationale: The tier signals are 0 models or tables, 0 external integrations, no auth, no state machine, and 1 story. The change is additive and touches one contract: a waiver-declaration parser export (`engine/engineer/coherence-waiver.ts`), one projected field (`prd-audit-projection.ts`, version 5 to 6), one coverage-loop exemption (`prd-audit-contract.ts`), and its runner pass-through (`step-runners.ts`), plus one PLAN_GAP paragraph in `skills/prd-audit/SKILL.md`. The prd_audit routing, remediation, and land gates are untouched. The rule the change narrows is recorded in `architecture-review-2026-09-30-prd-audit-receives-bounded-inputs-and-returns-vali` §3. It was corrected by an additive amendment in a prior `spec: amend` commit on this branch, so no new ADR or architecture pass is needed. The fail-closed paths are enumerated: no waiver, a foreign-stem waiver, a malformed waiver, an undeclared or ambiguous FR, and an unreadable waiver. Each is a story criterion.

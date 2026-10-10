@@ -114,6 +114,8 @@ remain an explicit blocking gap unless valid existing criterion PLAN_GAP evidenc
 it under the current contract. Do not invent a story criterion, turn it into a no-owner
 OVER_SCOPE row, or invent a new requirement-only repair authority to satisfy the schema.
 
+> **Amended 2026-10-09 by #2888:** A requirement is also discharged when the audited feature's own committed coherence waiver (`.docs/coherence-waivers/<plan-stem>.md`, well-formed `Waives:` and non-empty `Rationale:`) lists its `FR-N` id and exactly one projected PRD source declares that id. The projection carries such requirements to the auditor as waived, with the waiver rationale, and the coverage check does not demand story or PLAN_GAP evidence for them. A waiver is DECIDE-approved evidence for that requirement, landed with that feature's spec. It is not a story criterion, a no-owner row, or a repair authority. Without such a waiver, the original rule above still applies unchanged.
+
 ### 4. Engine-owned persisted verdict and derived report
 
 Use `.pipeline/prd-audit.json` as the new versioned run-evidence authority and
