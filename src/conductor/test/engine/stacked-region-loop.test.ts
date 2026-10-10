@@ -62,6 +62,8 @@ describe('stacked BUILD region loop', () => {
       stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
       featureSlug: 'demo',
       fromStep: 'acceptance_specs',
+      // Production composition roots inject the parsed project configuration.
+      config: { stacked_prs: { enabled: true, max_slices: 2 } },
       events,
       stepRunner: {
         run: async (step) => {
