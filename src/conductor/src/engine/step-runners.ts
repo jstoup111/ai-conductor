@@ -4016,7 +4016,7 @@ export class DefaultStepRunner implements StepRunner {
           { read: (side, path) => frozenBlobs.readAtOptional(side === 'head' ? inputs.sourceSnapshot.headSha : inputs.sourceSnapshot.mergeBase, path) },
         );
         if (admission.kind === 'rejected') {
-          return settleCustomStructuredRejection(invoked.finalStructuredResult, { sourceRegions: [] }, admission.detail);
+          return settleCustomStructuredRejection(invoked.finalStructuredResult, { sourceRegions: admission.admittedSourceRegions }, admission.detail);
         }
         const sourceRegions = admission.sourceRegions;
         const stamped = stampBuildReviewCustomJudgedResult(parsed, {

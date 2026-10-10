@@ -22,7 +22,14 @@ export type BuildReviewSourceRegionRejectionReason =
 
 export type BuildReviewSourceRegionAdmission =
   | { readonly kind: 'admitted'; readonly sourceRegions: readonly BuildReviewCandidateScopeSourceRegion[] }
-  | { readonly kind: 'rejected'; readonly reason: BuildReviewSourceRegionRejectionReason; readonly detail: string };
+  | {
+    readonly kind: 'rejected';
+    readonly reason: BuildReviewSourceRegionRejectionReason;
+    /** The first rejected claim, in citation order. */
+    readonly detail: string;
+    /** Claims that did admit, so a diagnosis names only the regions that failed. */
+    readonly admittedSourceRegions: readonly BuildReviewCandidateScopeSourceRegion[];
+  };
 
 export interface BuildReviewFrozenSourceReader {
   /** Reads one blob of the reviewed baseline or head commit, never the worktree. */
@@ -43,10 +50,39 @@ export function hashBuildReviewFrozenSourceLines(text: string, startLine: number
   return `sha256:${createHash('sha256').update(content).digest('hex')}`;
 }
 
+type BuildReviewSourceRegionCheck =
+  | { readonly kind: 'admitted'; readonly sourceRegion: BuildReviewCandidateScopeSourceRegion }
+  | { readonly kind: 'rejected'; readonly reason: BuildReviewSourceRegionRejectionReason; readonly detail: string };
+
+async function admitBuildReviewCustomSourceRegion(
+  region: BuildReviewCandidateScopeSourceRegion,
+  changes: readonly BuildReviewPathChange[],
+  reader: BuildReviewFrozenSourceReader,
+): Promise<BuildReviewSourceRegionCheck> {
+  const label = `${region.path}:${region.startLine}-${region.endLine}`;
+  const change = changes.find((candidate) => candidate.path === region.path);
+  if (!change) return { kind: 'rejected', reason: 'outside-changed-input', detail: `source region ${label} is outside the frozen changed input` };
+  const side = change.kind === 'D' ? 'baseline' : 'head';
+  let blob: BuildReviewOptionalSourceRead;
+  try {
+    blob = await reader.read(side, region.path);
+  } catch (error) {
+    return { kind: 'rejected', reason: 'frozen-blob-unavailable', detail: `source region ${label} could not be read from the frozen ${side}: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  if (blob.kind === 'absent') return { kind: 'rejected', reason: 'frozen-blob-unavailable', detail: `source region ${label} names no blob in the frozen ${side}` };
+  const expected = hashBuildReviewFrozenSourceLines(blob.value, region.startLine, region.endLine);
+  if (expected === undefined) return { kind: 'rejected', reason: 'range-outside-blob', detail: `source region ${label} is outside the frozen ${side} blob` };
+  if (expected !== region.contentHash) return { kind: 'rejected', reason: 'content-hash-mismatch', detail: `source region ${label} does not match the frozen ${side} bytes` };
+  // The admitted record carries the engine-computed hash, never the claim.
+  return { kind: 'admitted', sourceRegion: Object.freeze({ path: region.path, startLine: region.startLine, endLine: region.endLine, contentHash: expected, display: region.display }) };
+}
+
 /**
  * Derives the admitted reference set for a custom judgement from the frozen
  * baseline/head input.  A reviewer's claim contributes only a lookup key:
- * every admitted region is re-read and re-hashed by the engine.
+ * every admitted region is re-read and re-hashed by the engine.  Every claim
+ * is checked, so a rejection still carries the regions that did admit and a
+ * diagnosis can name only the regions that failed.
  */
 export async function admitBuildReviewCustomSourceRegions(
   claimed: readonly BuildReviewCandidateScopeSourceRegion[],
@@ -54,23 +90,14 @@ export async function admitBuildReviewCustomSourceRegions(
   reader: BuildReviewFrozenSourceReader,
 ): Promise<BuildReviewSourceRegionAdmission> {
   const admitted: BuildReviewCandidateScopeSourceRegion[] = [];
+  let rejection: Extract<BuildReviewSourceRegionCheck, { kind: 'rejected' }> | undefined;
   for (const region of claimed) {
-    const label = `${region.path}:${region.startLine}-${region.endLine}`;
-    const change = changes.find((candidate) => candidate.path === region.path);
-    if (!change) return { kind: 'rejected', reason: 'outside-changed-input', detail: `source region ${label} is outside the frozen changed input` };
-    const side = change.kind === 'D' ? 'baseline' : 'head';
-    let blob: BuildReviewOptionalSourceRead;
-    try {
-      blob = await reader.read(side, region.path);
-    } catch (error) {
-      return { kind: 'rejected', reason: 'frozen-blob-unavailable', detail: `source region ${label} could not be read from the frozen ${side}: ${error instanceof Error ? error.message : String(error)}` };
-    }
-    if (blob.kind === 'absent') return { kind: 'rejected', reason: 'frozen-blob-unavailable', detail: `source region ${label} names no blob in the frozen ${side}` };
-    const expected = hashBuildReviewFrozenSourceLines(blob.value, region.startLine, region.endLine);
-    if (expected === undefined) return { kind: 'rejected', reason: 'range-outside-blob', detail: `source region ${label} is outside the frozen ${side} blob` };
-    if (expected !== region.contentHash) return { kind: 'rejected', reason: 'content-hash-mismatch', detail: `source region ${label} does not match the frozen ${side} bytes` };
-    // The admitted record carries the engine-computed hash, never the claim.
-    admitted.push(Object.freeze({ path: region.path, startLine: region.startLine, endLine: region.endLine, contentHash: expected, display: region.display }));
+    const check = await admitBuildReviewCustomSourceRegion(region, changes, reader);
+    if (check.kind === 'admitted') admitted.push(check.sourceRegion);
+    else rejection ??= check;
   }
-  return { kind: 'admitted', sourceRegions: Object.freeze(admitted) };
+  const sourceRegions = Object.freeze(admitted);
+  return rejection === undefined
+    ? { kind: 'admitted', sourceRegions }
+    : { ...rejection, admittedSourceRegions: sourceRegions };
 }
