@@ -708,7 +708,25 @@ export class Conductor {
 
   /** Delegate conductor lifecycle delivery to the shared engine owner. */
   private emitExecutionEvent(event: ConductorEvent): Promise<void> {
-    return this.executionLifecycle.emit(event);
+    return this.executionLifecycle.emit(this.withActiveRegionChild(event));
+  }
+
+  /**
+   * Region occurrences identify the cursor-selected child; feature-wide
+   * occurrences remain intentionally unqualified, even while a leaf is active.
+   */
+  private withActiveRegionChild(event: ConductorEvent): ConductorEvent {
+    if (this.activeRegionChild === undefined) return event;
+    const belongsToRegion =
+      (event.type === 'step_started' ||
+        event.type === 'step_completed' ||
+        event.type === 'step_failed' ||
+        event.type === 'step_interrupted' ||
+        event.type === 'step_refused' ||
+        event.type === 'gate_verdict') && isRegionStep(event.step)
+      || (event.type === 'kickback' && (isRegionStep(event.from) || isRegionStep(event.to)))
+      || (event.type === 'loop_halt' && event.step !== undefined && isRegionStep(event.step));
+    return belongsToRegion ? { ...event, child: this.activeRegionChild } : event;
   }
 
   /** A width-one validation recheck is group-derived only in auto mode with a retained sibling. */
@@ -4961,7 +4979,7 @@ export class Conductor {
       .then((choice) => choice.trim() as FinishChoice)
       .catch(() => undefined);
     const effectivePrUrl = prUrl ?? this.haltState.pr_url;
-    await this.events.emit({
+    await this.events.emit(this.withActiveRegionChild({
       type: 'loop_halt',
       ...(step ? { step } : {}),
       reason,
@@ -4970,7 +4988,7 @@ export class Conductor {
       ...(headSha === undefined ? {} : { headSha }),
       ...(this.haltState.rebase_base_sha === undefined ? {} : { baseSha: this.haltState.rebase_base_sha }),
       prDisposition: resolvePrDisposition({ prUrl: effectivePrUrl, finishChoice }),
-    });
+    }));
   }
 
   /** Halt a deterministic SHIP-validator precondition fault in either dispatch path. */
@@ -14115,13 +14133,13 @@ export class Conductor {
           reason: v.kickback?.evidence ?? '',
         });
         const count = kickback.entry.count;
-        await this.events.emit({
+        await this.events.emit(this.withActiveRegionChild({
           type: 'kickback',
           from: stepName,
           to: target,
           evidence: v.kickback?.evidence,
           count,
-        });
+        }));
         if (kickback.exhausted) {
           const reason =
             `kickback ping-pong: ${target} re-opened ${count + 1} times ` +
@@ -14249,14 +14267,14 @@ export class Conductor {
             }, 'build_review');
             if (credited) convergenceCredit = { gate: target };
           }
-          await this.events.emit({
+          await this.events.emit(this.withActiveRegionChild({
             type: 'kickback',
             from: 'rebase',
             to: target,
             evidence: verdict.kickback.evidence,
             count: 1,
             ...(convergenceCredit === undefined ? {} : { convergenceCredit }),
-          });
+          }));
           if (getStepStatus(state, target) !== 'skipped') reopened[target] = 'pending';
         }
         await this.commitStateChanges(state, 'reopen persisted rebase kickbacks', reopened);
@@ -14285,12 +14303,12 @@ export class Conductor {
       if (step.name === 'finish' || (step.name === 'build' && buildRoutedForward)) {
         await writeVerdict(this.projectRoot, step.name, verdict);
       }
-      await this.events.emit({
+      await this.events.emit(this.withActiveRegionChild({
         type: 'gate_verdict',
         step: step.name,
         satisfied: verdict.satisfied,
         reason: verdict.reason,
-      });
+      }));
       if (verdict.satisfied) stuckGate.delete(step.name);
 
       // Task 15: Post-green spot-audit dispatch for semantic attribution verification.
