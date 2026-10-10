@@ -26,6 +26,14 @@ import type {
   BuildReviewJudgedResultRejection,
 } from '../engine/build-review-domain.js';
 import type { ChildId } from '../engine/child-context.js';
+import type {
+  CommitSha,
+  JournalState,
+  RefName,
+  RestackCause,
+  RestackOpId,
+  RestackRefusalReason,
+} from '../engine/restack/restack-types.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
@@ -1969,6 +1977,46 @@ type ConductorEventBody =
       type: 'rebase_skipped_for_stack';
       child: ChildId;
       reason: string;
+    }
+  // ── Stacked restack and expected-lease occurrences ──────────────────────
+  | {
+      type: 'restack_planned';
+      opId: RestackOpId;
+      cause: RestackCause;
+      children: ChildId[];
+    }
+  | {
+      type: 'restack_applied';
+      opId: RestackOpId;
+      cause: RestackCause;
+      child: ChildId;
+      oldTip: CommitSha;
+      newTip: CommitSha;
+      wouldInvalidate: StepName[];
+      parentOverlapPaths: string[];
+    }
+  | {
+      type: 'restack_conflict';
+      opId: RestackOpId;
+      child: ChildId;
+      commit: CommitSha;
+      paths: string[];
+    }
+  | {
+      type: 'restack_refused';
+      reason: RestackRefusalReason;
+      detail?: string;
+    }
+  | {
+      type: 'restack_recovered';
+      opId: RestackOpId;
+      fromState: Exclude<JournalState, 'applied' | 'aborted'>;
+    }
+  | {
+      type: 'push_lease_refused';
+      ref: RefName;
+      expected: CommitSha;
+      actual: CommitSha;
     }
   | {
       /** A reseal changed a story's owner without moving any task. */

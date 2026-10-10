@@ -1,4 +1,4 @@
-// Covers: task:4, task:1, task:3, task:5, task:6, task:8, task:10, task:11, task:15, task:17, task:23
+// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:8, task:10, task:11, task:15, task:17, task:23
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,8 @@ import {
 } from '../../src/engine/event-sinks.js';
 import type { SchedulingUnitRef } from '../../src/engine/conductor.js';
 import { parseChildId } from '../../src/engine/child-context.js';
+import { emitRestackRefused } from '../../src/engine/restack/restack-events.js';
+import { parseCommitSha, parseRefName, type RestackOpId } from '../../src/engine/restack/restack-types.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -52,6 +54,31 @@ type GithubWriteCredentialFallbackReasonIsClosed = Assert<Equal<
 const githubWriteCredentialFallbackEventContract: GithubWriteCredentialFallbackEventHasClosedFields
   & GithubWriteCredentialFallbackReasonIsClosed = true;
 void githubWriteCredentialFallbackEventContract;
+
+type RestackRefusedEvent = Extract<ConductorEvent, { type: 'restack_refused' }>;
+type RestackRefusalReasonIsClosed = Assert<Equal<
+  RestackRefusedEvent['reason'],
+  | 'cascade-cap'
+  | 'dirty-overlap'
+  | 'sync-collision'
+  | 'checked-out-elsewhere'
+  | 'stack-ref-changed'
+  | 'lock-unavailable'
+  | 'verification-failed'
+  | 'replay-mismatch'
+  | 'range-not-ancestor'
+  | 'closed-child-rewritten'
+  | 'flatten_refused'
+  | 'restack-outstanding'
+  | 'published-stack'
+  | 'deferred-base-refresh'
+>>;
+const restackRefusalReasonContract: RestackRefusalReasonIsClosed = true;
+void restackRefusalReasonContract;
+
+// @ts-expect-error -- restack refusals use the closed ADR reason vocabulary.
+const restackRefusalWithUnknownReason = { type: 'restack_refused', reason: 'unexpected-reason' } satisfies ConductorEvent;
+void restackRefusalWithUnknownReason;
 
 const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'step_started',
@@ -252,6 +279,12 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'child_closed',
   'child_switched',
   'rebase_skipped_for_stack',
+  'restack_planned',
+  'restack_applied',
+  'restack_conflict',
+  'restack_refused',
+  'restack_recovered',
+  'push_lease_refused',
   'story_reowned',
 ] satisfies Array<ConductorEvent['type']>;
 
@@ -474,6 +507,83 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
+  // Covers: task:2
+  it('persists restack and lease occurrences with every declared field through the canonical event spine', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'restack-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const childOne = parseChildId(1)!;
+    const childTwo = parseChildId(2)!;
+    const sha = (value: string) => parseCommitSha(value.repeat(40))!;
+    const ref = parseRefName('refs/heads/feat/daemon-demo')!;
+    const opId = 'restack-1' as RestackOpId;
+    const restackEvents = [
+      { type: 'restack_planned', opId, cause: 'base-refresh', children: [childOne, childTwo] },
+      {
+        type: 'restack_applied',
+        opId,
+        cause: 'feature-repair',
+        child: childOne,
+        oldTip: sha('a'),
+        newTip: sha('b'),
+        wouldInvalidate: ['build_review'],
+        parentOverlapPaths: ['src/conductor/src/engine/restack/restack-events.ts'],
+      },
+      {
+        type: 'restack_conflict',
+        opId,
+        child: childTwo,
+        commit: sha('c'),
+        paths: ['src/conductor/src/engine/restack/restack-events.ts'],
+      },
+      emitRestackRefused({ reason: 'dirty-overlap', child: childTwo, detail: 'src/dirty.ts' }),
+      { type: 'restack_recovered', opId, fromState: 'ready' },
+      { type: 'push_lease_refused', ref, expected: sha('d'), actual: sha('e') },
+    ] satisfies ConductorEvent[];
+
+    try {
+      persister.start();
+      for (const event of restackEvents) await events.emit(event);
+      persister.stop();
+
+      const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => {
+          const { ts: _ts, ...record } = JSON.parse(line);
+          return record;
+        });
+
+      expect(records).toEqual(restackEvents);
+      for (const event of restackEvents) {
+        expect(EVENT_SINKS[event.type]).toMatchObject({ persist: true });
+      }
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:2
+  it('keeps a named child and optional detail when emitting a restack refusal', () => {
+    const child = parseChildId(2)!;
+
+    expect(emitRestackRefused({
+      reason: 'checked-out-elsewhere',
+      child,
+      detail: 'feat/c2/demo',
+    })).toEqual({
+      type: 'restack_refused',
+      reason: 'checked-out-elsewhere',
+      child,
+      detail: 'feat/c2/demo',
+    });
+    expect(emitRestackRefused({ reason: 'published-stack' })).toEqual({
+      type: 'restack_refused',
+      reason: 'published-stack',
+    });
+  });
+
   // Covers: task:3
   it('persists child lifecycle and ownership events through the canonical event spine', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'child-event-sinks-'));
