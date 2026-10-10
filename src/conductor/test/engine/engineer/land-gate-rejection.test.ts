@@ -16,7 +16,7 @@ describe('land-gate rejection classification', () => {
     expect(error.message).toBe('stories must be accepted');
   });
 
-  // Covers: Task 8 Done when 2
+  // Covers: task:8
   it.each([
     'plan-task-count',
     'adr-filename',
