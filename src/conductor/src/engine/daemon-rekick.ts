@@ -64,7 +64,9 @@ export function createRetentionLogGate(log: (message: string) => void): {
       seen.set(slug, disposition);
       const known = RETAINED_HALT_CLASSES.has(disposition) || disposition === 'mechanical' || disposition === 'legacy'
         ? disposition : 'unclassified';
+      // ai-conductor:session-command-context=operator-only
       const next: NextAction = { kind: 'operator', action: `ai-conductor monitor all — ${recoveryProcedure(known as HaltDisposition)}` };
+      // /ai-conductor:session-command-context
       log(`${subject}: ${slug} retained — halt disposition ${disposition}${formatNextAction(next)}`);
     },
     forget(slug) { seen.delete(slug); },
