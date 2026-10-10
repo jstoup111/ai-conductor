@@ -540,9 +540,9 @@ describe('engine-managed auxiliary rows', () => {
           name: 'build-review-implementation-quality',
           executionPath: 'engine-managed auxiliary rubric',
           providerCells: {
-            claude: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
-            codex: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
-            pi: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
+            claude: { model: 'opus', effort: 'medium' },
+            codex: { model: 'gpt-5.6-sol', effort: 'medium' },
+            pi: { model: 'n/a', effort: 'n/a' },
           },
         }),
         expect.objectContaining({
