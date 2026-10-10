@@ -49,7 +49,9 @@ describe('PiProvider prepared-worktree git guard integration', () => {
       resolvedGit = { stdout: command.stdout };
       if (resolvedGit.stdout.trim() === guardedGit) {
         const refusal = await execa('sh', ['-c', 'git clean -f'], childOptions);
-        clean = { exitCode: refusal.exitCode, stderr: refusal.stderr };
+        // Execa leaves exitCode undefined when a child cannot report one; this
+        // assertion only distinguishes a refused clean from success.
+        clean = { exitCode: refusal.exitCode ?? -1, stderr: refusal.stderr };
       }
       return {
         stdout: JSON.stringify({
