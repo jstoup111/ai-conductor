@@ -140,6 +140,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
   }
 
   describe('remediation effective plan-growth cap (Task 2, #2185)', () => {
+    // Covers: task:4
     it('uses an operator-raised effective growth cap to append all requested fixes', async () => {
       await writeKickbackLedger(dir, {
         version: 1,
@@ -173,6 +174,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       expect((await readKickbackLedger(dir)).gates.prd_audit?.capEvidence).toBeUndefined();
     });
 
+    // Covers: task:4
     it('uses the config-derived cap for a separate feature without a raised cap and does not mutate config', async () => {
       const secondFeature = await mkdtemp(join(tmpdir(), 'conductor-kickback-ledger-second-'));
       try {
