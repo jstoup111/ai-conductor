@@ -63,6 +63,10 @@ const RUBRICS: Record<string, { referenceFields: string[]; fixed: Record<string,
     referenceFields: ['locus'],
     fixed: {},
   },
+  implementationQuality: {
+    referenceFields: ['locus'],
+    fixed: {},
+  },
 };
 const SPECIMENS: Record<string, unknown> = { OBJ, PATH, GARBAGE };
 const BASELINE_CANDIDATES = ['OBJ', 'PATH', 'TASK'];
@@ -141,7 +145,7 @@ if (testOverride !== undefined) {
   }
 }
 
-for (const rubric of ['testQuality', 'security']) {
+for (const rubric of ['testQuality', 'security', 'implementationQuality']) {
   const descriptor = descriptorFor(rubric) as {
     contract?: { output?: { jsonSchema?: { properties?: { findings?: { items?: { properties?: { concernKind?: { enum?: unknown } } } } } } } };
   };
@@ -201,7 +205,7 @@ check_vocabulary_drift() {
     return 1
   fi
 
-  for rubric in testQuality security; do
+  for rubric in testQuality security implementationQuality; do
     skill_file="$harness_dir/skills/build-review-$(rubric_skill_name "$rubric")/SKILL.md"
     if [ ! -f "$skill_file" ]; then
       echo "missing vocabulary source for ${rubric}: ${skill_file}" >&2
@@ -246,7 +250,7 @@ check_reference_grammar_drift() {
     return 1
   fi
 
-  for rubric in testQuality security; do
+  for rubric in testQuality security implementationQuality; do
     if grep -qE "^${rubric} !baseline-rejected$" <<<"$probe_output"; then
       echo "build-review ${rubric} reference grammar drift !baseline-rejected: the parser rejected the fully-documented specimen anchor — update the anchor contract and the probe specimens together" >&2
       return 1
@@ -276,6 +280,7 @@ rubric_skill_name() {
   case "$1" in
     testQuality) printf '%s' test-quality ;;
     security) printf '%s' security ;;
+    implementationQuality) printf '%s' implementation-quality ;;
     *) return 1 ;;
   esac
 }
@@ -302,7 +307,7 @@ function parseContentRegionReference(value: unknown): unknown {
 }
 export function parseBuildReviewFindingAnchor(value: Record<string, unknown>): unknown {
   const source = value;
-  return source.rubric === 'testQuality' || source.rubric === 'security'
+  return source.rubric === 'testQuality' || source.rubric === 'security' || source.rubric === 'implementationQuality'
     ? parseContentRegionReference(source.locus)
     : undefined;
 }
@@ -313,6 +318,7 @@ const concernKinds = {
     'unsafe-deserialization', 'cryptographic-failure', 'security-misconfiguration',
     'authentication-failure', 'integrity-failure', 'ssrf',
   ],
+  implementationQuality: ['duplication', 'excess-complexity', 'obscured-intent', 'primitive-obsession', 'representable-invalid-state', 'non-exhaustive-domain-match', 'non-semantic-name'],
 };
 export function getBuildReviewRubricDescriptor(rubric: keyof typeof concernKinds): unknown {
   return { contract: { output: { jsonSchema: { properties: { findings: { items: { properties: {
@@ -321,7 +327,7 @@ export function getBuildReviewRubricDescriptor(rubric: keyof typeof concernKinds
 }
 EOF
 
-for rubric in test-quality security; do
+for rubric in test-quality security implementation-quality; do
   mkdir -p "$fixture_harness/skills/build-review-$rubric"
 done
 
@@ -336,6 +342,12 @@ printf '%s\n' '## Judgement' \
   >"$fixture_harness/skills/build-review-security/SKILL.md"
 printf '\n%s\n' '**Reference grammar:** `anchor.locus` is a `content-region` reference.' \
   >>"$fixture_harness/skills/build-review-security/SKILL.md"
+printf '%s\n' '## Judgement' \
+  '- `duplication` — definition' '- `excess-complexity` — definition' '- `obscured-intent` — definition' '- `primitive-obsession` — definition' \
+  '- `representable-invalid-state` — definition' '- `non-exhaustive-domain-match` — definition' '- `non-semantic-name` — definition' \
+  >"$fixture_harness/skills/build-review-implementation-quality/SKILL.md"
+printf '\n%s\n' '**Reference grammar:** `anchor.locus` is a `content-region` reference.' \
+  >>"$fixture_harness/skills/build-review-implementation-quality/SKILL.md"
 
 # The aligned fixture must pass both checks before any drift scenario runs.
 if ! check_vocabulary_drift "$fixture_domain" "$fixture_harness" >/dev/null; then

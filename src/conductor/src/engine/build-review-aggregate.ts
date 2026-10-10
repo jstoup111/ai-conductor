@@ -305,6 +305,7 @@ function normalizeBuildReviewAggregateResults(
   return Object.freeze({
     testQuality: results.testQuality,
     security: results.security ?? { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+    implementationQuality: results.implementationQuality ?? { kind: 'skipped', rubric: 'implementationQuality', reason: 'disabled' },
   });
 }
 
@@ -322,7 +323,12 @@ export function joinBuildReviewRubricOutcomes(input: BuildReviewAggregateInput):
     coverage[name] = coverageFor(result);
     rubric[name] = legacyFailure(result);
     findings[name] = legacyFindingDetails(result);
-    reasons.push(...findings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
+    // The default-on rubric's disabled compatibility placeholder is coverage,
+    // not a reader-facing reason. This preserves old aggregate rendering while
+    // still retaining the exhaustive result in the typed map.
+    if (!(name === 'implementationQuality' && results[name].kind === 'skipped')) {
+      reasons.push(...findings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
+    }
     if (scopeFault) {
       scopeIncomplete.push(scopeFault);
       reasons.push(`[${name}] scope incomplete: ${scopeFault.detail}`);
@@ -400,7 +406,9 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     expectedCoverage[name] = coverageFor(results[name]);
     expectedRubric[name] = legacyFailure(results[name]);
     expectedFindings[name] = legacyFindingDetails(results[name]);
-    expectedReasons.push(...expectedFindings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
+    if (!(name === 'implementationQuality' && results[name].kind === 'skipped')) {
+      expectedReasons.push(...expectedFindings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
+    }
     const scopeFault = scopeFaultFor(results[name]);
     if (scopeFault) {
       expectedScopeIncomplete.push(scopeFault);
