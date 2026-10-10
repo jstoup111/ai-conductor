@@ -26,7 +26,7 @@ As a project operator, I want `security` to be a registered build_review rubric 
 
 - Given a project config with `build_review.rubrics.security.enabled: "yes"`, when configuration is validated, then validation fails naming `build_review.rubrics.security.enabled` and its expected boolean type, and no lap is dispatched.
 - Given a project config with `build_review.rubrics.security.effort: extreme`, when configuration is validated, then validation fails naming the key and the allowed effort values.
-- Given an enabled gate with `security` and `testQuality` both disabled, when the lap runs, then the verdict is PASS with reason `build_review_no_rubrics` and no grader is dispatched.
+- Given an enabled gate with `security`, `testQuality`, and `implementationQuality` all disabled, when the lap runs, then the verdict is PASS with reason `build_review_no_rubrics` and no grader is dispatched.
 
 ### Done When
 
