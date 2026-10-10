@@ -4,13 +4,6 @@ spec_hash: 2cf28f1919eec3077fe97a39a2cc13d27b9e1f1ad5c60d3431ca9103817f1b00
 pr: https://github.com/jstoup111/ai-conductor/pull/3115
 shipped: 2026-10-10
 engine_version: 20261010T180413Z-fbbc3bdb2533
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-1
-    summary: "This unplanned two-line operator-guide edit documents exactly the heading shape the feature makes citable. It aligns the guide with the shipped parser and adds no behavior, so it is within the feature's intent even though no story criterion owns it."
-    accepted: false
-    authority: engine
 ---
 
 ## Cost
@@ -29,8 +22,10 @@ providers:
   claude: input: 46, output: 15571, cache_read: 761270, cache_creation: 187327, cost_usd: 1.9625, dispatches: 5, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","e1fd4cc1-e42b-4b55-952c-89e3f1f88cf7","lifecycle-step","finish"]
+state: measured
+active_ms: 3794318
+provider_active_ms: 1332567
+no_provider_active_ms: 2461751
 
 ## Build Review
 laps_to_pass: 1
