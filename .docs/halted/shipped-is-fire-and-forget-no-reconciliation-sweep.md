@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-10T22:47:17.660Z
 Slug: shipped-is-fire-and-forget-no-reconciliation-sweep
 Class: needs-human
 Halting step: unknown
