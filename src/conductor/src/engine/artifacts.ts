@@ -1114,6 +1114,12 @@ export async function sweepStaleReviewArtifacts(
 
 export interface CompletionResult {
   done: boolean;
+  /**
+   * A deliberately empty child acceptance scope.  This is distinct from a
+   * skipped step: the child entered the gate, the sealed ownership baseline
+   * proved that it owns no story criteria, and no authoring dispatch is due.
+   */
+  acceptanceOutcome?: 'no-owned-criteria';
   /** Human-readable description of what's missing; injected into retry prompt. */
   reason?: string;
   /**
@@ -3074,6 +3080,30 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // criterion below this layer and therefore must have no spec files or RED-run
   // contract. Both shapes are validated before completion.
   acceptance_specs: async (dir, ctx): Promise<CompletionResult> => {
+    // A stack-eligible child can own implementation tasks while owning no
+    // stories.  Its acceptance gate is therefore already complete from the
+    // sealed ownership baseline; asking the acceptance author to invent work
+    // would make sibling criteria leak into this child.  This outcome is only
+    // available with an active child, so flat (non-stacked) features retain
+    // the ordinary evidence requirement.
+    if (ctx.activeChild !== undefined) {
+      let envelope;
+      try {
+        envelope = parseCoverageBindingEnvelope(
+          JSON.parse(await readFile(coverageBindingEnvelopePath(dir), 'utf-8')),
+        );
+      } catch {
+        envelope = null;
+      }
+      if (
+        envelope !== null &&
+        COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status) &&
+        envelope.storyOwnership !== undefined &&
+        projectChildOwnership(envelope, ctx.activeChild).storyIds.length === 0
+      ) {
+        return { done: true, acceptanceOutcome: 'no-owned-criteria' };
+      }
+    }
     const files = await findArtifactFiles(
       dir,
       'acceptance_specs',

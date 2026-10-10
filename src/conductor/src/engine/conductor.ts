@@ -6668,6 +6668,43 @@ export class Conductor {
         // `failed` is NOT short-circuited here — the conductor re-enters a
         // failed step so it can run through the retry/recovery flow again.
         const currentStatus = state[step.name];
+        // An active child that owns no story criteria has a complete
+        // acceptance scope without an authoring run.  Resolve this before
+        // opening a step attempt so writing-system-tests is never dispatched
+        // merely to discover an empty input.  The typed child verdict is the
+        // durable explanation across restart; flat features cannot reach this
+        // outcome because completionCtx omits activeChild for them.
+        if (step.name === 'acceptance_specs' && currentStatus !== 'done' && currentStatus !== 'skipped') {
+          const completionContext = await this.completionCtx(state);
+          const completion = await checkStepCompletion(
+            this.projectRoot,
+            step.name,
+            completionContext,
+          );
+          if (completion.acceptanceOutcome === 'no-owned-criteria') {
+            const verdict = await computeAndWriteVerdict(
+              this.projectRoot,
+              step.name,
+              completionContext,
+              { retainReplayPreservation: false },
+            );
+            await this.saveConductorStepStatus(state, step.name, 'done');
+            state[step.name] = 'done';
+            await emitTracked({
+              type: 'gate_verdict',
+              step: step.name,
+              satisfied: verdict.satisfied,
+              reason: verdict.reason,
+            });
+            await emitTracked({
+              type: 'step_completed',
+              step: step.name,
+              status: 'done',
+              unmetered: true,
+            });
+            continue;
+          }
+        }
         // A repaired tree cannot rely on a suite verdict that attested the
         // prior tree. Remember this before BUILD settles so its success path
         // can restage the serial verifier for a fresh evidence check.

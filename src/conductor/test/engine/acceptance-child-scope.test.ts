@@ -18,6 +18,10 @@ import {
   checkStepCompletion,
 } from '../../src/engine/artifacts.js';
 import { parseChildId } from '../../src/engine/child-context.js';
+import { readVerdict } from '../../src/engine/gate-verdicts.js';
+import { Conductor } from '../../src/engine/conductor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 
 describe('acceptance_specs child scope', () => {
@@ -201,6 +205,92 @@ describe('acceptance_specs child-scoped disposition grounding', () => {
       done: false,
       acceptanceRedRefusalClass: 'shape',
       reason: expect.stringContaining('feat/c1/feature'),
+    });
+  });
+});
+
+describe('acceptance_specs child with no owned criteria', () => {
+  const roots: string[] = [];
+  const child1 = parseChildId(1)!;
+
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+    vi.resetAllMocks();
+  });
+
+  async function createFile(root: string, relativePath: string, content: string): Promise<void> {
+    const path = join(root, relativePath);
+    await mkdir(join(path, '..'), { recursive: true });
+    await writeFile(path, content);
+  }
+
+  it('records no-owned-criteria and dispatches build without dispatching acceptance authoring', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'acceptance-child-empty-'));
+    roots.push(root);
+    await createFile(root, '.pipeline/coverage-binding.json', JSON.stringify({
+      version: 1,
+      slug: 'feature',
+      runId: 'run-1',
+      status: 'done',
+      entries: [],
+      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'second'] },
+      // Child 1 deliberately owns a task but no story; child 2 owns the only
+      // story in this fixture.
+      storyOwnership: { '2': 2 },
+    }));
+    const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done']));
+    await createFile(root, '.pipeline/conduct-state.json', JSON.stringify({
+      ...state,
+      feature_desc: 'feature',
+      acceptance_specs: 'pending',
+      build: 'pending',
+    }));
+    await createFile(root, '.pipeline/children/1/conduct-state.json', JSON.stringify({
+      acceptance_specs: 'pending',
+      build: 'pending',
+      test_suite: 'done',
+      build_review: 'done',
+    }));
+    resolveActiveChild.mockResolvedValue({
+      kind: 'active', child: child1, position: 1, isLeaf: false, branch: 'feat/c1/feature',
+    });
+    const run = vi.fn().mockResolvedValue({ success: true });
+
+    await new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'feature',
+      fromStep: 'acceptance_specs',
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      childRegionLifecycle: {
+        resolveActiveChild,
+        enterChildRegion: async () => ({ kind: 'completed' }),
+      },
+    }).run();
+
+    expect(run.mock.calls.map(([step]) => step)).toEqual(['build']);
+    await expect(readVerdict(root, 'acceptance_specs', child1)).resolves.toMatchObject({
+      satisfied: true,
+      outcome: 'no-owned-criteria',
+    });
+  });
+
+  it('does not produce no-owned-criteria without an active child', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'acceptance-flat-'));
+    roots.push(root);
+    await createFile(root, '.pipeline/coverage-binding.json', JSON.stringify({
+      version: 1,
+      slug: 'feature',
+      runId: 'run-1',
+      status: 'done',
+      entries: [],
+      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'second'] },
+      storyOwnership: { '2': 2 },
+    }));
+
+    await expect(checkStepCompletion(root, 'acceptance_specs', { featureDesc: 'feature' })).resolves.not.toMatchObject({
+      acceptanceOutcome: 'no-owned-criteria',
     });
   });
 });
