@@ -61,6 +61,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review adjudication no longer halts on a plan's final task absorbing trailing plan sections, and adjudication-context halts now name the overflowing field and bound. ([implementation PR #3094](https://github.com/jstoup111/ai-conductor/pull/3094)).
 - Self-host builds no longer halt when a concurrent Codex session updates its session index or plugin-sync round marker. ([implementation PR #3095](https://github.com/jstoup111/ai-conductor/pull/3095)).
 - build_review no longer re-selects and halts a lap whose findings the adjudicator already settled (for example, rejected); the completion check now honors finalized remediation cases. ([implementation PR #3098](https://github.com/jstoup111/ai-conductor/pull/3098)).
+- FINISH no longer halts as non-advancing after recording the outcome when a PR carries accepted build-review risk; the accepted-risk PR section is now updated in place. ([implementation PR #3101](https://github.com/jstoup111/ai-conductor/pull/3101)).
 
 ## Migration
 
