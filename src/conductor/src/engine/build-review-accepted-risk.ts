@@ -67,23 +67,37 @@ export function renderBuildReviewAcceptedRisk(records: readonly BuildReviewDispo
   return { ok: true, section: lines.join('\n') };
 }
 
-function removeExistingSection(body: string): string | undefined {
+/** Bounds of the marked section, `null` when absent, `undefined` when malformed. */
+function existingSectionBounds(body: string): { readonly start: number; readonly after: number } | null | undefined {
   const searchable = maskProjectOwnedRegions(body);
   const start = searchable.indexOf(BUILD_REVIEW_ACCEPTED_RISK_START);
-  if (start === -1) return body;
+  if (start === -1) return null;
   const end = searchable.indexOf(BUILD_REVIEW_ACCEPTED_RISK_END, start);
   if (end === -1) return undefined;
-  const after = end + BUILD_REVIEW_ACCEPTED_RISK_END.length;
-  return `${body.slice(0, start).trimEnd()}${body.slice(after).trimStart() ? '\n\n' : ''}${body.slice(after).trimStart()}`.trimEnd();
+  return { start, after: end + BUILD_REVIEW_ACCEPTED_RISK_END.length };
 }
 
-/** Idempotently inserts, replaces, or removes the marked accepted-risk PR section. */
+/**
+ * Idempotently inserts, replaces, or removes the marked accepted-risk PR section.
+ *
+ * An existing section is replaced IN PLACE. Re-appending it moved the section
+ * below anything appended after it (the FINISH shipment-plan declaration), so
+ * every repeated upsert rewrote the PR body. FINISH binds its prose judgment to
+ * that body, so record_outcome's upsert staled the judgment the coordinator had
+ * just accepted, re-selected judge_pr_prose, and halted FINISH as non-advancing.
+ */
 export function upsertBuildReviewAcceptedRisk(body: string, records: readonly BuildReviewDispositionRecord[]): BuildReviewAcceptedRiskUpsertResult {
-  const withoutExisting = removeExistingSection(body);
-  if (withoutExisting === undefined) return { ok: false, message: 'accepted build-review risk section is malformed' };
-  if (records.length === 0) return { ok: true, body: withoutExisting, changed: withoutExisting !== body };
+  const bounds = existingSectionBounds(body);
+  if (bounds === undefined) return { ok: false, message: 'accepted build-review risk section is malformed' };
+  if (records.length === 0) {
+    if (bounds === null) return { ok: true, body, changed: false };
+    const next = `${body.slice(0, bounds.start).trimEnd()}${body.slice(bounds.after).trimStart() ? '\n\n' : ''}${body.slice(bounds.after).trimStart()}`.trimEnd();
+    return { ok: true, body: next, changed: next !== body };
+  }
   const rendered = renderBuildReviewAcceptedRisk(records);
   if (!rendered.ok) return rendered;
-  const next = withoutExisting.trim().length === 0 ? rendered.section : `${withoutExisting}\n\n${rendered.section}`;
+  const next = bounds !== null
+    ? `${body.slice(0, bounds.start)}${rendered.section}${body.slice(bounds.after)}`
+    : body.trim().length === 0 ? rendered.section : `${body}\n\n${rendered.section}`;
   return { ok: true, body: next, changed: next !== body };
 }
