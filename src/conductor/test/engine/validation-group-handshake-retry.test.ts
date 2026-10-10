@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:3
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 
@@ -180,4 +181,80 @@ describe('validation-group dispatch handshake retries', () => {
 
     expect(handshake).toHaveBeenCalledWith('prd_audit', expect.any(String), expect.any(Number), 'audit failed');
   });
+
+  it.each([2, 1])(
+    'halts after %i prd_audit success-without-verdict attempt(s), retaining its satisfied validation siblings',
+    async (maxRetries) => {
+      const { dir, statePath } = await fixture();
+      const calls: StepName[] = [];
+      const events: ConductorEvent[] = [];
+      const emitter = new ConductorEventEmitter();
+      for (const type of ['kickback', 'loop_halt'] as const) emitter.on(type, (event) => events.push(event));
+      const runner: StepRunner = {
+        run: vi.fn(async (step, _state, options) => {
+          calls.push(step);
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
+          } else if (step === 'prd_audit') {
+            await writePrdPass(dir, options);
+          } else if (step === 'architecture_review_as_built') {
+            await writeAsBuiltPass(dir, options);
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events: emitter,
+        fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: true,
+        config: { gate_code_validity: { enabled: false }, defaults: { max_retries: maxRetries } },
+      });
+      const commitStateChanges = vi.spyOn(conductor as unknown as {
+        commitStateChanges: (
+          state: ConductState,
+          name: string,
+          changes: Record<string, unknown>,
+        ) => Promise<void>;
+      }, 'commitStateChanges');
+      vi.spyOn(conductor as unknown as {
+        verdictDispatchHandshake: (step: StepName) => Promise<{
+          done: false;
+          routeClass: 'absent';
+          reason: string;
+        } | undefined>;
+      }, 'verdictDispatchHandshake').mockImplementation(async (step) =>
+        step === 'prd_audit'
+          ? {
+              done: false,
+              routeClass: 'absent',
+              reason: 'post-dispatch verdict write handshake failed for prd_audit: fixture verdict is stale',
+            }
+          : undefined,
+      );
+
+      await conductor.run();
+
+      expect(calls.filter((step) => step === 'prd_audit')).toHaveLength(maxRetries);
+      expect(calls.filter((step) => step === 'manual_test')).toHaveLength(1);
+      expect(calls.filter((step) => step === 'architecture_review_as_built')).toHaveLength(1);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      expect(halt).toContain('branch "prd_audit"');
+      expect(halt).toContain(`after ${maxRetries} attempts`);
+      expect(halt).toContain('produced no-verdict');
+      expect(halt).toContain('post-dispatch verdict write handshake failed for prd_audit');
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      expect(commitStateChanges).toHaveBeenCalledWith(
+        expect.anything(),
+        'fail manual_test validation group',
+        expect.objectContaining({
+          manual_test: 'done', validation__manual_test: 'done',
+          architecture_review_as_built: 'done', validation__architecture_review_as_built: 'done',
+          prd_audit: 'failed', last_step: 'manual_test',
+        }),
+      );
+      expect(events.filter((event) => event.type === 'kickback')).toHaveLength(0);
+      expect(events.filter((event) => event.type === 'loop_halt')).toHaveLength(1);
+      expect(calls).not.toContain('remediate');
+      expect((await readKickbackLedger(dir)).gates.prd_audit).toBeUndefined();
+    },
+  );
 });
