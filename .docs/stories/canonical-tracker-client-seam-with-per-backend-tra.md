@@ -104,8 +104,9 @@ exactly one integration point.
   `issue-dep-migration`, `owner-gate/identity`, `wiring-probe`), then all pass with
   fakes injected through the canonical types (per-module local runner types removed).
 - Given the engineer CLI claim path runs end-to-end in tests, when priority bands and
-  blocker verdicts are resolved, then the label reader and blocker resolver consume the
-  injected `TrackerClient`/canonical runner and produce the same claim outcomes as
+  blocker verdicts are resolved, then the priority and blocker reads reach GitHub only
+  through the canonical runner, by way of the backend-neutral ordering source
+  (adr-2026-10-10-backend-neutral-ordering-source), and produce the same claim outcomes as
   before migration.
 
 #### Negative Paths
