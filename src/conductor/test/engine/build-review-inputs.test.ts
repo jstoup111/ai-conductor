@@ -1665,6 +1665,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(malformed.sourceSnapshot).not.toHaveProperty('malformedCoversMarkers');
       expect(Object.keys(malformed.sourceSnapshot.testQuality ?? {}).sort()).toEqual([
         'counterfactualFileSelectors',
+        'excludedMarkerFiles',
         'inScopeTests',
         'unresolvedMarkers',
       ]);
