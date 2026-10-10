@@ -54,7 +54,21 @@ const execFile = promisify(execFileCb);
 
 // gh runner that resolves an owner so the fail-closed identity gate passes and
 // execution reaches the (new) coherence rung. Coherent path must be silent.
-const resolvingGh: GhRunner = async () => ({ stdout: 'bob\n' });
+const resolvingGh: GhRunner = async (args) => {
+  // This fixture reaches landSpec with a GitHub source ref.  Supply the
+  // tracker reads introduced by the dependency proposal gate while preserving
+  // its original owner-resolution behavior.
+  if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
+    return { stdout: JSON.stringify({ body: '' }) };
+  }
+  if (args[0] === 'api' && args[1]?.includes('/dependencies/blocked_by')) {
+    return { stdout: '[]' };
+  }
+  if (args[0] === 'issue' && args[1] === 'list') {
+    return { stdout: '[]' };
+  }
+  return { stdout: 'bob\n' };
+};
 
 const SOURCE_REF = 'acme/app#539';
 const OUTCOME_BULLETS = ['- The duplicate-spec class dies at land.', '- An unmapped outcome blocks the spec.'];

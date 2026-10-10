@@ -92,6 +92,7 @@ import {
   decideLandDependencies,
 } from './land-dependency-gate.js';
 import type { LandDependencyDecision, LandDependencyProposalResult } from './land-dependency-gate.js';
+import { parseSourceRef } from './issue-ref.js';
 
 const execFile = promisify(execFileCb);
 
@@ -717,9 +718,13 @@ export async function landSpec(
   const acceptedDependencies = opts.acceptedDependencies ?? [];
   const declinedDependencies = opts.declinedDependencies ?? [];
   const emptyProposalResult = { kind: 'computed' as const, proposals: [], satisfied: [], advisory: [] };
-  const proposalResult = sourceRef
+  // Native dependency edges exist only for GitHub issue references.  Other
+  // tracker refs (for example Jira keys) retain their established no-op land
+  // behavior; dependency flags against them are still rejected below.
+  const dependencySourceRef = parseSourceRef(sourceRef) ? sourceRef : undefined;
+  const proposalResult = dependencySourceRef
     ? await computeLandDependencyProposals({
-      sourceRef,
+      sourceRef: dependencySourceRef,
       planText: planContent,
       gh: opts.gh ?? (async () => { throw new Error('tracker runner unavailable'); }),
       git: opts.dependencyGit ?? (async () => ({ exitCode: 1, stdout: '', stderr: '' })),
@@ -728,7 +733,7 @@ export async function landSpec(
     })
     : emptyProposalResult;
   const dependencyDecision = decideLandDependencies({
-    sourceRef,
+    sourceRef: dependencySourceRef,
     proposalResult,
     accepted: acceptedDependencies,
     declined: declinedDependencies,
@@ -822,7 +827,7 @@ export async function landSpec(
     slug,
     branch,
     repoPath: worktreePath,
-    ...(sourceRef ? { dependency: { proposals: proposalResult, decision: dependencyDecision } } : {}),
+    ...(dependencySourceRef ? { dependency: { proposals: proposalResult, decision: dependencyDecision } } : {}),
   };
 }
 
