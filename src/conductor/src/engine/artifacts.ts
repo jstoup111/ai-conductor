@@ -99,6 +99,7 @@ import {
   COVERAGE_BINDING_COMPLETION_STATUSES,
   coverageBindingEnvelopePath,
   parseCoverageBindingEnvelope,
+  projectChildOwnership,
 } from './coverage-binding-envelope.js';
 import { pipelinePathFor, type ChildId } from './child-context.js';
 
@@ -1943,16 +1944,47 @@ async function groundDispositionOnlyEvidence(
   // shape-only behavior rather than guessing which stories document applies.
   if (!ctx.featureDesc && !ctx.planPath && !ctx.artifactResolution) return null;
 
-  const authoritativeCriteria = extractAuthoritativeStoryCriteria(storiesText);
+  const allAuthoritativeCriteria = extractAuthoritativeStoryCriteria(storiesText);
+  let authoritativeCriteria = allAuthoritativeCriteria;
+  if (ctx.activeChild !== undefined) {
+    let envelope;
+    try {
+      envelope = parseCoverageBindingEnvelope(
+        JSON.parse(await readFile(coverageBindingEnvelopePath(dir), 'utf-8')),
+      );
+    } catch {
+      envelope = null;
+    }
+    if (
+      envelope === null ||
+      !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status) ||
+      envelope.storyOwnership === undefined
+    ) {
+      return dispositionGroundingRefusal(
+        `disposition-only evidence cannot be validated for child ${ctx.activeChild}: coverage-binding ownership is missing or invalid`,
+      );
+    }
+    const ownedStories = new Set(projectChildOwnership(envelope, ctx.activeChild).storyIds);
+    authoritativeCriteria = allAuthoritativeCriteria.filter((criterion) =>
+      [...ownedStories].some((storyId) => criterion.startsWith(`Story ${storyId} `)),
+    );
+  }
   const authoritativeSet = new Set(authoritativeCriteria);
   const recordedCriteria = evidence.dispositions.map((entry) =>
-    canonicalizeDispositionCriterion(entry.criterion, authoritativeCriteria),
+    canonicalizeDispositionCriterion(entry.criterion, allAuthoritativeCriteria),
   );
   const recordedSet = new Set(recordedCriteria);
-  const unexpected = recordedCriteria.filter((criterion) => !authoritativeSet.has(criterion));
+  const allAuthoritativeSet = new Set(allAuthoritativeCriteria);
+  const foreign = ctx.activeChild === undefined
+    ? []
+    : recordedCriteria.filter((criterion) =>
+      allAuthoritativeSet.has(criterion) && !authoritativeSet.has(criterion),
+    );
+  const unexpected = recordedCriteria.filter((criterion) => !allAuthoritativeSet.has(criterion));
   const omitted = authoritativeCriteria.filter((criterion) => !recordedSet.has(criterion));
-  if (unexpected.length > 0 || omitted.length > 0) {
+  if (foreign.length > 0 || unexpected.length > 0 || omitted.length > 0) {
     const differences = [
+      foreign.length > 0 ? `not owned by child ${ctx.activeChild}: ${foreign.join(', ')}` : '',
       unexpected.length > 0 ? `invented: ${unexpected.join(', ')}` : '',
       omitted.length > 0 ? `omitted: ${omitted.join(', ')}` : '',
     ].filter(Boolean);

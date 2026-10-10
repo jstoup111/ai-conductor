@@ -12,6 +12,11 @@ vi.mock('../../src/engine/child-cursor.js', () => ({ resolveActiveChild }));
 vi.mock('../../src/engine/coverage-binding-decide-set.js', () => ({ resolveCoverageBindingDecideSet }));
 
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import {
+  ACCEPTANCE_SPECS_RED_EVIDENCE,
+  checkStepCompletion,
+} from '../../src/engine/artifacts.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 
 describe('acceptance_specs child scope', () => {
@@ -64,5 +69,105 @@ describe('acceptance_specs child scope', () => {
     expect(systemPrompt).toContain('active child 1');
     expect(systemPrompt).toContain('Story 1: first child');
     expect(systemPrompt).not.toContain('Story 2: second child');
+  });
+});
+
+describe('acceptance_specs child-scoped disposition grounding', () => {
+  const roots: string[] = [];
+  const child2 = parseChildId(2)!;
+
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  async function createFile(root: string, relativePath: string, content: string): Promise<void> {
+    const path = join(root, relativePath);
+    await mkdir(join(path, '..'), { recursive: true });
+    await writeFile(path, content);
+  }
+
+  const story1Happy = 'Story 1 happy: Given child 1 works, When it records evidence, Then its result is accepted.';
+  const story2Happy = 'Story 2 happy: Given child 2 works, When it records evidence, Then its result is accepted.';
+  const story2Negative = 'Story 2 negative: Given child 2 fails, When it records evidence, Then it is refused.';
+
+  function record(criterion: string) {
+    return {
+      criterion,
+      disposition: 'existing-sufficient-test' as const,
+      citation: 'test/engine/existing-behavior.test.ts:1',
+    };
+  }
+
+  async function seed(dispositions: readonly ReturnType<typeof record>[]): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'acceptance-child-disposition-'));
+    roots.push(root);
+    await createFile(root, '.docs/stories/feature.md', `# Stories
+
+## Story 1: first child
+### Happy Path
+- Given child 1 works, When it records evidence, Then its result is accepted.
+
+## Story 2: second child
+### Happy Path
+- Given child 2 works, When it records evidence, Then its result is accepted.
+### Negative Paths
+- Given child 2 fails, When it records evidence, Then it is refused.
+`);
+    await createFile(root, '.pipeline/coverage-binding.json', JSON.stringify({
+      version: 1,
+      slug: 'feature',
+      runId: 'run-1',
+      status: 'done',
+      entries: [],
+      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'second'] },
+      storyOwnership: { '1': 1, '2': 2 },
+    }));
+    await createFile(root, 'test/engine/existing-behavior.test.ts', '// existing proof\n');
+    await createFile(
+      root,
+      '.pipeline/children/2/acceptance-specs-red.json',
+      JSON.stringify({ outcome: 'disposition-only', dispositions }),
+    );
+    return root;
+  }
+
+  const context = {
+    activeChild: child2,
+    featureDesc: 'feature',
+    artifactResolution: {
+      featureIdentities: ['feature'],
+      // Child 1's files are not a child 2 change. Child-base attribution is
+      // added separately; this fixture intentionally has no child 2 specs.
+      changedPaths: new Set<string>(),
+    },
+  };
+
+  it('accepts child 2 when every and only its owned criteria are disposed', async () => {
+    const root = await seed([record(story2Happy), record(story2Negative)]);
+
+    await expect(checkStepCompletion(root, 'acceptance_specs', context)).resolves.toEqual({
+      done: true,
+      viaException: false,
+    });
+  });
+
+  it('refuses an omitted criterion owned by child 2', async () => {
+    const root = await seed([record(story2Happy)]);
+
+    await expect(checkStepCompletion(root, 'acceptance_specs', context)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: expect.stringContaining(`omitted: ${story2Negative}`),
+    });
+  });
+
+  it('refuses a foreign-story criterion as not owned by child 2', async () => {
+    const root = await seed([record(story2Happy), record(story2Negative), record(story1Happy)]);
+
+    await expect(checkStepCompletion(root, 'acceptance_specs', context)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: expect.stringContaining(`not owned by child 2: ${story1Happy}`),
+    });
   });
 });
