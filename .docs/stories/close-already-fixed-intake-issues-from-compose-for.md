@@ -51,12 +51,12 @@ that** the ledger never reads resolved while the issue stays open.
 
 - Given the tracker rejects the audit comment, when the command runs, then it exits nonzero, issues no close call, leaves the ledger entry present, and prints a diagnostic naming the source ref and the failure.
 - Given the audit comment succeeds but the tracker rejects the close, when the command runs, then it exits nonzero, leaves the ledger entry present, and prints a diagnostic that names closing the issue by hand and rerunning the drop without the resolved-by flag as the recovery.
-- Given no ledger entry exists for the source ref, when the resolved-by flag is supplied, then the command refuses with a nonzero exit and issues no tracker call at all.
+- Given no ledger entry exists for an `owner/repo#N` source ref, when the resolved-by flag is supplied, then the command comments the resolving reference and closes the issue under the same per-write authorization as a recorded entry, leaves the ledger file unchanged, attempts no label removal, and reports the ref as not found in the ledger and the issue as closed.
 
 ### Done When
 - [ ] An injected comment failure leaves the entry readable in the ledger, records no close call, and exits nonzero.
 - [ ] An injected close failure leaves the entry readable in the ledger and its stderr text names both closing the issue by hand and rerunning the drop without the flag.
-- [ ] An absent-entry fixture supplied with the flag exits nonzero with zero tracker calls and an unchanged ledger file.
+- [ ] An absent-entry fixture supplied with the flag observes the comment then the close for that issue, no label-removal call, an unchanged ledger file, and a result line reporting `found: false` and `closed: true`.
 
 ## Story 3: Make the gated disposition reachable from the CLI and the composer loop
 
@@ -89,8 +89,9 @@ and the injected close failure, which together pin the ordering: nothing is drop
 tracker has accepted both writes, and a half-completed write-back names its own recovery. Data
 integrity is covered by the agreement criterion — the ledger drop is the last act, so a failed close
 can never leave the ledger claiming a resolution the tracker does not show. Authorization is covered
-by the flag itself: the close is impossible without the operator-supplied resolved-by value, and the
-absent-entry refusal prevents closing an issue the harness holds no claim record for. Concurrency,
+by the flag itself: the close is impossible without the operator-supplied resolved-by value, and
+every comment, close, and label write passes the guarded intake authorization (sole assignee, or an
+exact interactive operator approval); the ledger entry is bookkeeping, not authority. Concurrency,
 resource exhaustion, and cascade deletion are inapplicable: the verb is a single-shot operator
 command over one ref, it deletes one ledger entry with no dependents, and it adds no queue,
 datastore, upload, or transaction. Idempotency is bounded rather than solved: a rerun after a failed
