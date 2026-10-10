@@ -1,4 +1,4 @@
-// Covers: task:13
+// Covers: task:13, task:rem-prd-audit-13-r1
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -86,6 +86,7 @@ beforeEach(async () => {
     join(featureRoot, '.pipeline', 'kickback-ledger.json'),
     JSON.stringify({
       version: 1,
+      effectiveGrowthCap: 9,
       gates: {
         build_review: {
           count: 1, cumulative: 1, treeHash: 'flat', lastReason: 'flat ledger',
@@ -142,6 +143,7 @@ describe('stacked daemon status', () => {
 
     const rendered = out.join('\n');
     expect(rendered).toContain('PLAN GROWTH [demo child 2/2]');
+    expect(rendered).toContain('remaining 9/9');
     expect(rendered).toContain('KICKBACK BUDGET [demo]: Allowance: laps; Child: 2 |');
     expect(rendered).toContain('Kickback budget (build_review): 2/5 consumed; 3 remaining');
     expect(rendered).toContain('Latest reason: child two finding');

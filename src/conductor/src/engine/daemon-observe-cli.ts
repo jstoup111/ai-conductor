@@ -640,7 +640,8 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
       initial.authored,
     );
     const ledger = await readKickbackLedger(featureRoot, child);
-    const cap = ledger.effectiveGrowthCap ?? configCap;
+    const flatLedger = child === undefined ? ledger : await readKickbackLedger(featureRoot);
+    const cap = flatLedger.effectiveGrowthCap ?? configCap;
     const growth = await readGrowth(featureRoot, cap);
     const byGate = Object.entries(growth.byGate)
       .map(([gate, count]) => `${gate}: ${count}`)
