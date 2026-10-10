@@ -180,7 +180,7 @@ membership check, and halt and rebase guards. Features without children are unch
 **Done when:**
 - [test] for the leaf position, `startChild` creates no `refs/heads/feat/c*` ref, and no `startChild` call persists any event.
 - [test] for the first position, `startChild` creates `feat/c1/demo` at the leaf's tip at that moment (`B`, or `H` after a pre-region halt-record commit on the leaf), creates `.pipeline/children/1/`, and writes `refs/conductor/demo/positions` holding the sealed positions.
-- [test] with positions 1 and 3, after child 1's closure ref exists, `startChild` for position 3 creates `feat/c3/demo` at child 1's closure tip and no `feat/c2/demo` ref exists.
+- [test] with positions 1, 3 and 5 (position 5 is the leaf), after child 1's closure ref exists, `startChild` for position 3 creates `feat/c3/demo` at child 1's closure tip and no `feat/c2/demo` ref exists.
 - [test] with an existing `refs/heads/feat/c1`, `startChild` returns a needs-human refusal naming `refs/heads/feat/c1` and no `feat/c1/demo` ref is created.
 - [test] with 3 positions and `stacked_prs.max_slices: 2`, `startChild` returns a needs-human refusal naming `stacked_prs.max_slices` and creates no branch; when `feat/c2/demo` already exists at another sha, the compare-and-swap fails, the refusal names the branch and the existing ref is unchanged.
 
