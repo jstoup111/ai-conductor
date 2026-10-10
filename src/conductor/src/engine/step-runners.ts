@@ -3472,7 +3472,7 @@ export class DefaultStepRunner implements StepRunner {
     // to their asserted branch. An omitted plan carries no declaration, so it
     // cannot suppress a finding.
     const declaredPlanSource = await resolvePlanPatternSource(
-      relative(this.projectDir, planPath).replaceAll('\\', '/'),
+      planPath === undefined ? '' : relative(this.projectDir, planPath).replaceAll('\\', '/'),
       inputs.planBody ?? '',
       async (path) => this.fileExists(join(this.projectDir, path)),
     );

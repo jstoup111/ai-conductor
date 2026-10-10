@@ -174,6 +174,18 @@ function providerCellsForReview(
   ]));
 }
 
+function providerCellsFromBuildReviewPolicy(): ModelTableProviderCellMap {
+  return Object.fromEntries(BUILT_IN_PROVIDERS.map((provider) => [
+    provider.id,
+    'readOnlyReview' in provider.capabilities && provider.capabilities.readOnlyReview === true
+      ? {
+          model: provider.modelPolicy.stepModels.build_review,
+          effort: provider.modelPolicy.stepEfforts.build_review,
+        }
+      : { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
+  ]));
+}
+
 export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
   {
     name: 'build-review-test-quality',
@@ -190,11 +202,7 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
   {
     name: 'build-review-implementation-quality',
     executionPath: 'engine-managed auxiliary rubric',
-    providerCells: {
-      claude: { model: 'opus', effort: 'medium' },
-      codex: { model: 'gpt-5.6-sol', effort: 'medium' },
-      pi: { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
-    },
+    providerCells: providerCellsFromBuildReviewPolicy(),
     why: 'Judges the whole feature diff for concrete, changed-hunk-anchored code-quality and domain-modelling defects in the closed implementation-quality vocabulary.',
   },
   {
