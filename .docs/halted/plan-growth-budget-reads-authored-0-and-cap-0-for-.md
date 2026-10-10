@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-10T23:19:27.448Z
 Slug: plan-growth-budget-reads-authored-0-and-cap-0-for-
 Class: needs-human
 Halting step: unknown
