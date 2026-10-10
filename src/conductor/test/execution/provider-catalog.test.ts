@@ -22,6 +22,10 @@ const originalExecutableOverrides = new Map(
   executableOverrides.map((name) => [name, process.env[name]]),
 );
 
+function interactiveLaunchFor(provider: (typeof BUILT_IN_PROVIDERS)[number] | undefined) {
+  return provider && 'interactiveLaunch' in provider ? provider.interactiveLaunch : undefined;
+}
+
 afterEach(() => {
   for (const name of executableOverrides) {
     const value = originalExecutableOverrides.get(name);
@@ -153,9 +157,9 @@ describe('built-in provider catalog', () => {
 
   it('declares interactive quit instructions only for supported providers', () => {
     expect({
-      claude: findBuiltInProviderDescriptor('claude')?.interactiveLaunch?.quitInstruction,
-      codex: findBuiltInProviderDescriptor('codex')?.interactiveLaunch?.quitInstruction,
-      pi: findBuiltInProviderDescriptor('pi')?.interactiveLaunch,
+      claude: interactiveLaunchFor(findBuiltInProviderDescriptor('claude'))?.quitInstruction,
+      codex: interactiveLaunchFor(findBuiltInProviderDescriptor('codex'))?.quitInstruction,
+      pi: interactiveLaunchFor(findBuiltInProviderDescriptor('pi')),
     }).toEqual({ claude: '/quit', codex: '/quit', pi: undefined });
   });
 

@@ -16,6 +16,12 @@ import {
 } from '../../../src/execution/daemon-session.js';
 import type { HaltDisposition } from '../../../src/engine/halt-marker.js';
 
+function interactiveQuitInstruction(provider: (typeof BUILT_IN_PROVIDERS)[number]): string | undefined {
+  return 'interactiveLaunch' in provider
+    ? provider.interactiveLaunch?.quitInstruction
+    : undefined;
+}
+
 const recoveryByDisposition = {
   'needs-human': 'Follow the needs-human halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
   mechanical: 'Follow the mechanical halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
@@ -128,7 +134,7 @@ describe('guided halt sessions', () => {
       'When daemon-triage reaches its end, follow its monitor-hosted closing step.',
     ].join('\n'));
     for (const quitInstruction of BUILT_IN_PROVIDERS.flatMap(
-      (provider) => provider.interactiveLaunch?.quitInstruction ?? [],
+      (provider) => interactiveQuitInstruction(provider) ?? [],
     )) {
       expect(openingPrompt).not.toContain(quitInstruction);
     }
