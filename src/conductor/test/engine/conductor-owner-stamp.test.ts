@@ -1,5 +1,5 @@
 // conductor-owner-stamp.test.ts — Story 3 (Slice B): the plain `/conduct`
-// DECIDE tail stamps the SAME owner marker the `/engineer` path does
+// DECIDE tail stamps the SAME owner marker the `/composer` path does
 // (adr-2026-07-01-machine-scoped-operator-identity, D4).
 //
 // Today there is NO marker writer on the conduct path at all (only parsers —

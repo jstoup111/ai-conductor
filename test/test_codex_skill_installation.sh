@@ -87,16 +87,14 @@ owned_catalog_is_current() {
     && [ "$(readlink -f "$fake_home/.agents/skills/HARNESS.md")" = "$CHECKOUT/HARNESS.md" ]
 }
 
-canonical_composer_and_engineer_resolve_for_both_hosts() {
+canonical_composer_resolves_for_both_hosts() {
   local fake_home=$1
-  local host_dir skill
+  local host_dir
 
   for host_dir in "$fake_home/.claude/skills" "$fake_home/.agents/skills"; do
-    for skill in composer engineer; do
-      [ -L "$host_dir/$skill" ] || return 1
-      [ "$(readlink -f "$host_dir/$skill")" = "$CHECKOUT/skills/$skill" ] || return 1
-      [ -r "$host_dir/$skill/SKILL.md" ] || return 1
-    done
+    [ -L "$host_dir/composer" ] || return 1
+    [ "$(readlink -f "$host_dir/composer")" = "$CHECKOUT/skills/composer" ] || return 1
+    [ -r "$host_dir/composer/SKILL.md" ] || return 1
   done
 }
 
@@ -166,8 +164,8 @@ else
 fi
 check 'every canonical skill is readable exactly once from ~/.agents/skills' \
   owned_catalog_is_current "$FRESH_HOME"
-check 'both hosts resolve canonical composer and the compatibility engineer delegate' \
-  canonical_composer_and_engineer_resolve_for_both_hosts "$FRESH_HOME"
+check 'both hosts resolve canonical composer' \
+  canonical_composer_resolves_for_both_hosts "$FRESH_HOME"
 check 'a linked skill resource is readable from the installed Codex view' \
   test -r "$FRESH_HOME/.agents/skills/tdd/references/red.md"
 check 'normal installation creates no Codex plugin dependency' \
@@ -175,29 +173,29 @@ check 'normal installation creates no Codex plugin dependency' \
 check 'normal installation leaves no harness-owned duplicate catalog in the legacy scope' \
   legacy_catalog_has_no_owned_entries "$FRESH_HOME"
 
-# The generic catalog check must identify a compatibility delegate that has
-# disappeared or become unreadable in either supported host's installed view.
-BROKEN_DELEGATE_HOME="$TMP_ROOT/home-broken-engineer"
-run_install "$BROKEN_DELEGATE_HOME" --providers claude,codex \
-  >"$TMP_ROOT/broken-delegate-install.out" 2>&1
-rm -f "$BROKEN_DELEGATE_HOME/.claude/skills/engineer" \
-  "$BROKEN_DELEGATE_HOME/.agents/skills/engineer"
-ln -s "$TMP_ROOT/missing-claude-engineer" \
-  "$BROKEN_DELEGATE_HOME/.claude/skills/engineer"
-ln -s "$TMP_ROOT/missing-codex-engineer" \
-  "$BROKEN_DELEGATE_HOME/.agents/skills/engineer"
+# The generic catalog check must identify a skill link that has disappeared or
+# become unreadable in either supported host's installed view.
+BROKEN_SKILL_HOME="$TMP_ROOT/home-broken-composer"
+run_install "$BROKEN_SKILL_HOME" --providers claude,codex \
+  >"$TMP_ROOT/broken-skill-install.out" 2>&1
+rm -f "$BROKEN_SKILL_HOME/.claude/skills/composer" \
+  "$BROKEN_SKILL_HOME/.agents/skills/composer"
+ln -s "$TMP_ROOT/missing-claude-composer" \
+  "$BROKEN_SKILL_HOME/.claude/skills/composer"
+ln -s "$TMP_ROOT/missing-codex-composer" \
+  "$BROKEN_SKILL_HOME/.agents/skills/composer"
 set +e
-run_install "$BROKEN_DELEGATE_HOME" --check --providers claude,codex \
-  >"$TMP_ROOT/broken-delegate-check.out" 2>&1
-BROKEN_DELEGATE_CHECK_CODE=$?
-if [ "$BROKEN_DELEGATE_CHECK_CODE" -ne 0 ] \
-  && grep -qiE 'Claude skill: engineer.*broken symlink' \
-    "$TMP_ROOT/broken-delegate-check.out" \
-  && grep -qiE 'Codex active skill: engineer.*broken symlink' \
-    "$TMP_ROOT/broken-delegate-check.out"; then
-  pass 'check fails with both host diagnostics for a broken engineer delegate'
+run_install "$BROKEN_SKILL_HOME" --check --providers claude,codex \
+  >"$TMP_ROOT/broken-skill-check.out" 2>&1
+BROKEN_SKILL_CHECK_CODE=$?
+if [ "$BROKEN_SKILL_CHECK_CODE" -ne 0 ] \
+  && grep -qiE 'Claude skill: composer.*broken symlink' \
+    "$TMP_ROOT/broken-skill-check.out" \
+  && grep -qiE 'Codex active skill: composer.*broken symlink' \
+    "$TMP_ROOT/broken-skill-check.out"; then
+  pass 'check fails with both host diagnostics for a broken composer skill link'
 else
-  fail 'check fails with both host diagnostics for a broken engineer delegate'
+  fail 'check fails with both host diagnostics for a broken composer skill link'
 fi
 
 # ST-904-3/ST-904-4: update replaces an older harness-owned target, removes

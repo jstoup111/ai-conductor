@@ -271,12 +271,12 @@ describe('detectEngineerCommand: subcommand dispatch parsing', () => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe('dispatchEngineer({kind:"guide"})', () => {
-  it('returns 0 and prints a message mentioning agent-hosted or /engineer skill', async () => {
+  it('returns 0 and prints a message mentioning agent-hosted or /composer skill', async () => {
     const { dispatchEngineer } = await import('../../src/engine/engineer-cli.js');
     const out: string[] = [];
     const code = await dispatchEngineer({ kind: 'guide' }, { print: (s) => out.push(s) });
     expect(code).toBe(0);
-    expect(out.join('\n')).toMatch(/agent.hosted|\/engineer|skill/i);
+    expect(out.join('\n')).toMatch(/agent.hosted|\/composer|skill/i);
   });
 });
 

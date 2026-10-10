@@ -38,7 +38,7 @@ import { INBOUND_ARMOR_LINE } from './intake/sanitize-inbound.js';
  * When stamping an owner on the conduct path, pre-existing Source-Ref lines are
  * preserved: if the marker file exists and contains `Source-Ref:`, that line is
  * carried forward into the stamped marker. This handles the case where a spec was
- * routed from /engineer (intake origin tracked), then continued on the plain
+ * routed from /composer (intake origin tracked), then continued on the plain
  * /conduct path where the conduct owner stamping re-writes the marker to add Owner:.
  */
 export async function writeIntakeMarker(

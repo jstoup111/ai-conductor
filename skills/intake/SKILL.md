@@ -10,7 +10,7 @@ requires: [verify-claims]
 
 ## Purpose
 
-Authors high-quality intake issues: the write-side twin of `/engineer`'s claim side.
+Authors high-quality intake issues: the write-side twin of `/composer`'s claim side.
 An intake issue decides **WHAT** (the problem, its impact, its evidence) and highlights
 **OUTCOMES** (what must be observably true when it's fixed). The engineer's DECIDE phase
 owns **HOW**. A great intake issue lets a zero-context engineer start debugging

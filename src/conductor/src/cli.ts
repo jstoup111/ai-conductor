@@ -674,7 +674,7 @@ export function createProgram(): Command {
   // Engineer subcommands (Phase 9.3). NON-INTERACTIVE: dispatched by index.ts
   // (detectEngineerCommand) before the pipeline boots. Bare `engineer` launches the
   // interactive idea→spec loop; the rest are the deterministic primitives the
-  // /engineer skill calls. Declared with their options so the full --help reference
+  // /composer skill calls. Declared with their options so the full --help reference
   // documents them.
   const engineer = program
     .command('engineer')

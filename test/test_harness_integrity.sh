@@ -325,7 +325,7 @@ skill_refs=$(grep -rohE '`/[a-z][-a-z]*`' "${HARNESS_DIR}"/skills/*/SKILL.md 2>/
 # pointer and hard-fails below: renaming or deleting a skill silently orphans
 # every cross-skill reference to it, and a warn-only check cannot block that.
 KNOWN_NON_SKILL_REFS=(
-  # Claude Code CLI command — skills/engineer/SKILL.md
+  # Claude Code CLI command — skills/composer/SKILL.md
   quit
   # Invocation-syntax placeholder — skills/bootstrap/SKILL.md
   skill-name

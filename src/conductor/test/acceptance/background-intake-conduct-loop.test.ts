@@ -506,7 +506,7 @@ describe('FR-9 — the intake loop path imports no LLM/provider module', () => {
   it("buildIntake's composition root (engineer-cli.ts) imports no @anthropic-ai/sdk, RoutingProvider, or SessionCache", async () => {
     const src = await readFile(BUILD_INTAKE_SRC, 'utf8');
     // engineer-cli.ts is the CLI entrypoint and legitimately spawns an
-    // interactive `claude /engineer` session as a subprocess (ADR-008) — that
+    // interactive `claude /composer` session as a subprocess (ADR-008) — that
     // is process spawning, not an in-process LLM/provider import, so it is
     // not covered by these patterns. What must never appear is a direct
     // import of an SDK/provider/session-cache module into the intake path.

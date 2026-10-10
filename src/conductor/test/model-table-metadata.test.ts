@@ -167,7 +167,6 @@ const EXPECTED_EXTRA_ROW_NAMES = [
   'debugging',
   'simplify',
   'composer',
-  'engineer',
   'intake',
   'conduct',
   'daemon-triage',
@@ -270,10 +269,9 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
     expect(retired).toEqual(['value objects']);
   });
 
-  it('registers the canonical composer at the Opus tier and keeps engineer as its compatibility delegate', () => {
+  it('registers the canonical composer at the Opus tier', () => {
     const rowsByName = new Map(EXTRA_MODEL_TABLE_ROWS.map((row) => [row.name, row]));
     const composer = rowsByName.get('composer');
-    const engineer = rowsByName.get('engineer');
 
     expect(composer).toMatchObject({
       executionPath: 'supported-host interactive',
@@ -288,11 +286,6 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
     });
     expect(readSkillModelPin(join(skillsDir, 'composer'))).toBe('opus');
     expect(PIN_EXEMPT_SKILLS).toContain('composer');
-
-    expect(engineer).toMatchObject({
-      executionPath: 'supported-host interactive',
-      why: expect.stringMatching(/compatibility delegate/i),
-    });
   });
 });
 

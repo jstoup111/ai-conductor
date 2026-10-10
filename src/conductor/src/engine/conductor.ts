@@ -13739,7 +13739,7 @@ export class Conductor {
           // gate passes (all `.docs/plans/*.md` artifacts validated), stamp the
           // `.docs/intake/<plan-stem>.md` owner marker so the operator identity
           // travels with the spec onto the merged default branch. Use the same
-          // machine-scoped identity resolution as the `/engineer` path.
+          // machine-scoped identity resolution as the `/composer` path.
           // Task 14: Also record the active plan path in engine state.
           if (step.name === 'plan') {
             const planFiles = await findArtifactFilesForStep(this.projectRoot, 'plan');
