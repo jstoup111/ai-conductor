@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-10T12:50:18.358Z
 Slug: ci-conductor-job-fails-with-no-vitest-summary-or-f
 Class: needs-human
 Halting step: unknown
