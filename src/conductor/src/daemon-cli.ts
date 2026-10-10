@@ -134,6 +134,7 @@ import {
   formatDaemonConsoleTeeLine,
   withDaemonLogFeatureOwnership,
   type DaemonLogSink,
+  type FeatureDaemonLogger,
 } from './engine/daemon-log.js';
 import type { ConductorEvent, StepName, StepStatus } from './types/index.js';
 import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
@@ -1056,6 +1057,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // read back via `conduct daemon logs` can be correlated in time; the
     // console stays uncluttered for live watching.
     writePersisted: (line) => logSink?.write(formatDaemonLogLine(stripAnsi(line))),
+    verbose: config?.daemon_verbose ?? false,
   });
   // daemon.ts is also used as a plain core, where its `[daemon]` messages are
   // meaningful. Its daemon-mode renderer already owns that prefix, though, so
@@ -1405,7 +1407,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
   const createProviderExecution = (
     eventTarget = events,
-    runtimeLog = log,
+    runtimeLog: (message: string) => void = log,
+    diagnosticLog?: (message: string) => void,
   ): ProviderExecutionContext => ({
     configuredProviders,
     runtimes: createProviderRuntimeSet(registry, runtimeLog, config),
@@ -1424,7 +1427,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         ...(executionContext ? { executionContext } : {}),
       }),
     warn: (_message, transition) => eventTarget.emit(transition),
-    ...(runtimeLog ? { diagnosticLog: runtimeLog } : {}),
+    diagnosticLog: diagnosticLog ?? runtimeLog,
   });
   // Slug-aware recovery dispatchers (rebase-autoresolve, ci-fix) know the
   // feature slug but have no persistent per-feature event bus like
@@ -1442,12 +1445,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       slug,
       (message) => log(message, true),
       formatDaemonFeatureTag(slug),
-    );
+    ) as FeatureDaemonLogger;
     scopedEvents.on('provider_attempt', (event) => renderDaemonEvent(event, scopedLog));
     scopedEvents.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
     scopedEvents.on('session_policy', (event) => renderDaemonEvent(event, scopedLog));
     subscribeRecoverySessionOccurrences(scopedEvents, scopedLog);
-    const providerExecution = createProviderExecution(scopedEvents, scopedLog);
+    const providerExecution = createProviderExecution(scopedEvents, scopedLog, scopedLog.forwarded);
     const provider = providerExecution.configuredProviders[0];
     if (!provider) throw new Error('daemon recovery dispatch requires a configured provider');
     const managedSessionContext = await prepareDaemonFeatureManagedSessionContext({
@@ -1484,15 +1487,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // The pool emits a feature's start/resume/done records before and after its
   // worktree scope exists. Cache the scoped logger by slug so those lifecycle
   // records and the worktree-owned records share one immutable attribution.
-  const featureLogs = new Map<string, (message: string) => void>();
-  const featureLogFor = (slug: string): ((message: string) => void) => {
+  const featureLogs = new Map<string, FeatureDaemonLogger>();
+  const featureLogFor = (slug: string): FeatureDaemonLogger => {
     let featureLog = featureLogs.get(slug);
     if (!featureLog) {
       featureLog = createFeatureDaemonLogger(
         slug,
         (message) => log(message, true),
         formatDaemonFeatureTag(slug),
-      );
+      ) as FeatureDaemonLogger;
       featureLogs.set(slug, featureLog);
     }
     return featureLog;
@@ -1502,7 +1505,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const persistence = startFeatureEventPersistence(worktree.path, events, item.slug);
     const featureEvents = persistence.events;
     const featureLog = featureLogFor(item.slug);
-    const providerExecution = createProviderExecution(featureEvents, featureLog);
+    const providerExecution = createProviderExecution(featureEvents, featureLog, featureLog.forwarded);
     const provider = providerExecution.configuredProviders[0];
     let managedSessionContext: ManagedSessionContext;
     try {
