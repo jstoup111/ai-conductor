@@ -1,9 +1,9 @@
-// Covers: task:9
+// Covers: task:9, task:10
 
 import { describe, expect, it } from 'vitest';
 import type { GitRunner } from '../../../src/engine/rebase.js';
 import type { GhRunner } from '../../../src/engine/tracker-client.js';
-import { computeLandDependencyProposals } from '../../../src/engine/engineer/land-dependency-gate.js';
+import { computeLandDependencyProposals, decideLandDependencies } from '../../../src/engine/engineer/land-dependency-gate.js';
 
 const SOURCE = 'owner/repo#536';
 const PLAN = `### Task 1: change
@@ -146,5 +146,143 @@ describe('computeLandDependencyProposals', () => {
     if (result.kind === 'unavailable') {
       expect(result.cause).toMatch(fail === 'rate-limit' ? /rate limit/i : /network unavailable/i);
     }
+  });
+});
+
+describe('decideLandDependencies', () => {
+  const proposals = [
+    { target: 'owner/repo#520', source: 'declared' as const },
+    { target: 'owner/repo#600', source: 'overlap' as const },
+  ];
+
+  const computed = (targets = proposals) => ({
+    kind: 'computed' as const,
+    proposals: targets,
+    satisfied: [],
+    advisory: [],
+  });
+
+  it('proceeds with accepted and declined proposals after every proposal is decided', () => {
+    expect(decideLandDependencies({
+      sourceRef: SOURCE,
+      proposalResult: {
+        kind: 'computed',
+        proposals: [
+          { target: 'owner/repo#520', source: 'declared' },
+          { target: 'owner/repo#600', source: 'overlap' },
+        ],
+        satisfied: [],
+        advisory: [],
+      },
+      accepted: ['owner/repo#520'],
+      declined: ['owner/repo#600'],
+    })).toEqual({
+      kind: 'proceed',
+      accepted: ['owner/repo#520'],
+      declined: ['owner/repo#600'],
+      skipped: null,
+    });
+  });
+
+  it('proceeds when all proposals are declined or no proposals need a decision', () => {
+    expect(decideLandDependencies({
+      sourceRef: SOURCE,
+      proposalResult: computed(),
+      accepted: [],
+      declined: ['owner/repo#520', 'owner/repo#600'],
+    })).toMatchObject({ kind: 'proceed', accepted: [], declined: ['owner/repo#520', 'owner/repo#600'] });
+
+    expect(decideLandDependencies({
+      sourceRef: SOURCE,
+      proposalResult: computed([]),
+      accepted: [],
+      declined: [],
+    })).toMatchObject({ kind: 'proceed', accepted: [], declined: [] });
+  });
+
+  it('refuses with actionable instructions when a proposal remains undecided', () => {
+    const result = decideLandDependencies({
+      sourceRef: SOURCE,
+      proposalResult: computed(),
+      accepted: ['owner/repo#520'],
+      declined: [],
+    });
+
+    expect(result).toMatchObject({ kind: 'refused-undecided', undecided: ['owner/repo#600'] });
+    expect(result.message).toContain('--depends-on');
+    expect(result.message).toContain('--decline-dependency');
+  });
+
+  it('rejects contradictory and never-proposed dependency decisions', () => {
+    expect(decideLandDependencies({
+      sourceRef: SOURCE,
+      proposalResult: computed(),
+      accepted: ['owner/repo#520'],
+      declined: ['owner/repo#520'],
+    })).toMatchObject({ kind: 'invalid', message: expect.stringContaining('owner/repo#520') });
+
+    expect(decideLandDependencies({
+      sourceRef: SOURCE,
+      proposalResult: computed(),
+      accepted: [],
+      declined: ['owner/repo#777'],
+    })).toMatchObject({ kind: 'invalid', message: expect.stringContaining('owner/repo#777') });
+  });
+
+  it('rejects decisions without a source ref and skips without a reason', () => {
+    expect(decideLandDependencies({
+      sourceRef: undefined,
+      proposalResult: computed(),
+      accepted: ['owner/repo#520'],
+      declined: [],
+    })).toMatchObject({ kind: 'invalid', message: expect.stringContaining('source-ref') });
+
+    expect(decideLandDependencies({
+      sourceRef: SOURCE,
+      proposalResult: computed(),
+      accepted: [],
+      declined: [],
+      skipReason: '',
+    })).toMatchObject({ kind: 'invalid', message: expect.stringContaining('reason') });
+  });
+
+  it('proceeds with a recorded skip when proposal computation is unavailable', () => {
+    expect(decideLandDependencies({
+      sourceRef: SOURCE,
+      proposalResult: { kind: 'unavailable', cause: 'GitHub outage' },
+      accepted: [],
+      declined: [],
+      skipReason: 'GitHub outage',
+    })).toEqual({
+      kind: 'proceed',
+      accepted: [],
+      declined: [],
+      skipped: { reason: 'GitHub outage' },
+    });
+  });
+
+  it('refuses an unavailable check without a skip and notes an unused computed skip', () => {
+    expect(decideLandDependencies({
+      sourceRef: SOURCE,
+      proposalResult: { kind: 'unavailable', cause: 'tracker unavailable' },
+      accepted: [],
+      declined: [],
+    })).toMatchObject({
+      kind: 'refused-unavailable',
+      cause: 'tracker unavailable',
+      message: expect.stringContaining('--skip-dependency-check'),
+    });
+
+    expect(decideLandDependencies({
+      sourceRef: SOURCE,
+      proposalResult: computed(),
+      accepted: ['owner/repo#520'],
+      declined: [],
+      skipReason: 'GitHub outage',
+    })).toMatchObject({
+      kind: 'refused-undecided',
+      undecided: ['owner/repo#600'],
+      skipUnused: expect.stringContaining('GitHub outage'),
+    });
   });
 });
