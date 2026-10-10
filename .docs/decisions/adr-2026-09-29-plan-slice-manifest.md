@@ -85,6 +85,13 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    production callers. Daemon discovery and `planHasDependencyTree` stay presence-only and
    unchanged.
 
+> **Amended 2026-10-10 by #623:** (adr-2026-10-10-single-two-mode-plan-compiler decisions 1, 4,
+> 6) The plan compiler now owns task-heading, `**Dependencies:**`, and slice-manifest parsing.
+> `validatePlanSlices` keeps its typed result but consumes the compiled plan instead of matching
+> `TASK_HEADER_PATTERN` itself; for unmarked plans its output is unchanged. Discovery and
+> `planHasDependencyTree` stay presence-only for unmarked plans only; a marked plan is vetted at
+> discovery by its compile result.
+
 3. **Membership rules.** Engine-appended remediation tasks (`isEngineAppendedRemediationTaskId`)
    are exempt, because they are appended after land by the one-appender authority. Their slice
    placement is #2724's decision. Every other task id declared by a task heading must appear in
@@ -97,6 +104,11 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    - a malformed table, row, or cell;
    - more than `MAX_PLAN_SLICES` slices. This is a code constant equal to 5, not a config key,
      following `adr-2026-09-05-gh-cli-version-floor` D2.
+
+> **Amended 2026-10-10 by #623:** (adr-2026-10-10-single-two-mode-plan-compiler decisions 3, 7)
+> In a marked plan, a task is exempt as engine-appended only when its id is in the engine's record
+> of appended remediation tasks, not by its `rem-` id prefix; an author-written `rem-` task is an
+> authored task. Unmarked plans keep the prefix rule.
 
 > **Amended 2026-10-07 by #2941:** (adr-2026-10-07-sliced-plan-story-ownership-and-stack-eligibility
 > decision 7) The grammar bound becomes `MAX_CHILD_ID` (9), replacing `MAX_PLAN_SLICES` = 5. The
@@ -126,6 +138,10 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    or an unknown id is also a violation. Unsliced plans keep today's presence-only check, so the
    229 existing free-form lines are unaffected.
 
+> **Amended 2026-10-10 by #623:** (adr-2026-10-10-single-two-mode-plan-compiler decision 3) In a
+> marked plan this Dependencies grammar applies to every authored task, sliced or not, and the
+> dependency graph must be acyclic. Unmarked unsliced plans keep the presence-only check.
+
 5. **Land rung `plan-slices`: every tier, flag-independent, non-waivable.** `landSpec` calls
    `validatePlanSlices` beside the Done-when and task-count checks. Any `invalid` result throws
    `landGateError('plan-slices', …)`, a new `LandGateIdentifier` member. The message names every
@@ -139,6 +155,10 @@ strict Dependencies grammar, and none that contradicts this design. The decision
      `adr-2026-09-02-adr-decision-citability-contract`: refuse only, append nothing.
    - The rung stays model-free and offline, and it reads the worktree plan, so a re-run of land
      gives the same verdict.
+
+> **Amended 2026-10-10 by #623:** (adr-2026-10-10-single-two-mode-plan-compiler decision 6) For a
+> marked plan, slice violations are compile errors refused under the single `plan-compile` land
+> gate, alongside every other compile error. Unmarked plans keep the `plan-slices` gate id.
 
 > **Amended 2026-10-07 by #2941:** (adr-2026-10-07-sliced-plan-story-ownership-and-stack-eligibility
 > decisions 1 and 5) This rung stays flag-independent. A second rung, `stacked-delivery`, engages only
