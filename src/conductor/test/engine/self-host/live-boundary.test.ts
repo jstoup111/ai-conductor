@@ -125,7 +125,7 @@ describe('live self-host boundary', () => {
         'plugins/marketplaces', 'shell-snapshots', 'backups', 'sessions',
         'session-env', 'projects', 'tasks', '.last-update-result.json',
         'stats-cache.json', 'mcp-needs-auth-cache.json', 'cache', 'file-history',
-        'paste-cache', 'skills/synced/**/.last-complete-round',
+        'paste-cache', 'skills/synced/**/.last-complete-round', 'plugins/synced/**/.last-complete-round',
         'policy-limits.json.stamp.json',
       ],
       codex: [
@@ -133,7 +133,7 @@ describe('live self-host boundary', () => {
         'plugins/.remote-plugin-install-staging', 'mcp-oauth-locks',
         'thread-writer-locks', '.tmp', 'tmp', 'packages/standalone',
         'models_cache.json', 'session_index.jsonl',
-        'plugins/synced/**/.last-complete-round', '*.sqlite', '*.sqlite-shm', '*.sqlite-wal',
+        '*.sqlite', '*.sqlite-shm', '*.sqlite-wal',
         '*.sqlite-journal',
       ],
       pi: ['sessions', 'models-store.json'],
@@ -1091,15 +1091,17 @@ describe('live self-host boundary', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  it('ignores the Codex plugin-sync round marker but still halts on synced plugin content', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'live-boundary-codex-plugin-sync-'));
+  // The marker lives in the Claude home (~/.claude/plugins/synced/<id>/); Codex
+  // has no plugins/synced tree. Observed 2026-10-10 behind two false halts.
+  it('ignores the Claude plugin-sync round marker but still halts on synced plugin content', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-claude-plugin-sync-'));
     const live = join(root, 'live'); const provider = join(root, 'provider');
     const synced = join(provider, 'plugins', 'synced', '6f39b65c_7cf0890d');
     await Promise.all([mkdir(live), mkdir(synced, { recursive: true })]);
     await writeFile(join(synced, 'SKILL.md'), 'synced plugin content\n');
 
     const baseline = await fingerprintLiveBoundary({
-      liveCheckout: live, unrelatedProviderState: provider, provider: 'codex',
+      liveCheckout: live, unrelatedProviderState: provider, provider: 'claude',
     });
     await writeFile(join(synced, '.last-complete-round'), '1791600000\n');
 

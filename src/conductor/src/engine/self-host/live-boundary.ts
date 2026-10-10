@@ -147,6 +147,12 @@ const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'file-history',                     // per-session snapshots of every file any concurrent session edits
   'paste-cache',                      // per-session scratch for large pasted inputs
   'skills/synced/**/.last-complete-round', // claude.ai skill-sync round marker; see below
+  'plugins/synced/**/.last-complete-round', // plugin-sync round marker, rewritten every plugin sync
+                                       // round under ~/.claude/plugins/synced/<id>/. Verified
+                                       // 2026-10-10 as the sole diff behind false halts of
+                                       // unretryable-input-routing-never-fires-outside-thre and
+                                       // build-loop-cannot-complete-a-feature-child-by-chil. Only the
+                                       // marker is excluded: synced plugin content stays fingerprinted.
   'policy-limits.json.stamp.json',    // fetch stamp the CLI rewrites on its own policy-limits refresh
                                        // cycle; verified 2026-09-25 as the sole diff ("changed
                                        // policy-limits.json.stamp.json", 3 occurrences) behind a false
@@ -184,10 +190,6 @@ const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
                            // guard. Verified 2026-10-10 as the sole diff ("0 added, 0 removed,
                            // 1 changed: changed session_index.jsonl") behind 12 false halts across
                            // 10 features in one day (codex-cli 0.160.1).
-  'plugins/synced/**/.last-complete-round', // plugin-sync round marker, Codex counterpart of Claude's
-                           // `skills/synced/**/.last-complete-round`. Verified 2026-10-10 as the sole
-                           // diff behind the unretryable-input-routing-never-fires-outside-thre halt.
-                           // Only the marker is excluded: synced plugin content stays fingerprinted.
   // Codex's own SQLite stores at the provider-state ROOT — `goals_1`, `logs_2`,
   // `memories_1`, `state_5` today — plus their WAL sidecars, written continuously
   // by any running session. Matched by pattern rather than enumerated because the
@@ -265,7 +267,7 @@ function matchesRootPattern(path: string, pattern: string): boolean {
  * `basename` — the `<prefix>/**`+`/<basename>` exclusion form (any depth). It excludes ONE
  * named marker, never the subtree around it.
  *
- * Its users are the `.last-complete-round` entries under Claude's `skills/synced` and Codex's
+ * Its users are the `.last-complete-round` entries under Claude's `skills/synced` and
  * `plugins/synced`. Claude Code syncs
  * claude.ai skills into `skills/synced/<bucket-uuid>/` and writes, then deletes,
  * a `.last-complete-round` marker every sync round. Verified 2026-09-25 as the
