@@ -1,4 +1,4 @@
-// Covers: task:3, task:5, task:21, rem-ab5-1
+// Covers: task:3, task:5, task:21, task:37, rem-ab5-1
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CONFIG_CONSUMER_KEY_SETS } from '../../src/engine/config.js';

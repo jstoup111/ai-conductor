@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:18, task:rem-as-built-rem-ab4-1
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:18, task:30, task:rem-as-built-rem-ab4-1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';

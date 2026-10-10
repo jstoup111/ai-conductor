@@ -1,3 +1,4 @@
+// Covers: task:14, task:15, task:17, task:18, task:19
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
