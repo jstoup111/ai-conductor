@@ -8,6 +8,7 @@ import {
   stat,
 } from 'node:fs/promises';
 import { registerSighupPersistence } from './sighup-persistence.js';
+import { withGateTier } from './gate-event-tier.js';
 import { existsSync, readdirSync, rmdirSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import {
@@ -664,7 +665,12 @@ export class Conductor {
 
   /** Delegate conductor lifecycle delivery to the shared engine owner. */
   private emitExecutionEvent(event: ConductorEvent): Promise<void> {
-    return this.executionLifecycle.emit(event);
+    return this.executionLifecycle.emit(this.stampGateTier(event));
+  }
+
+  /** Stamp conductor-emitted gate outcomes with the run tier, preserving rebase provenance. */
+  private stampGateTier(event: ConductorEvent): ConductorEvent {
+    return withGateTier(event, this.haltState.complexity_tier);
   }
 
   /** A width-one validation recheck is group-derived only in auto mode with a retained sibling. */
@@ -6369,13 +6375,13 @@ export class Conductor {
       if (manualTestSelfHeals < MAX_KICKBACKS_PER_GATE) {
         manualTestSelfHeals++;
         const evidence = failRows.join('\n');
-        await this.events.emit({
+        await this.events.emit(this.stampGateTier({
           type: 'kickback',
           from: 'manual_test',
           to: 'build',
           evidence,
           count: manualTestSelfHeals,
-        });
+        }));
         // Hand BUILD the bugs it must fix. The whitewash guard on the
         // manual_test gate refuses a PASS rewrite with no new commits,
         // so a no-op BUILD cannot silently converge this loop.
@@ -13845,13 +13851,13 @@ export class Conductor {
           reason: v.kickback?.evidence ?? '',
         });
         const count = kickback.entry.count;
-        await this.events.emit({
+        await this.events.emit(this.stampGateTier({
           type: 'kickback',
           from: stepName,
           to: target,
           evidence: v.kickback?.evidence,
           count,
-        });
+        }));
         if (kickback.exhausted) {
           const reason =
             `kickback ping-pong: ${target} re-opened ${count + 1} times ` +
@@ -13979,14 +13985,14 @@ export class Conductor {
             }, 'build_review');
             if (credited) convergenceCredit = { gate: target };
           }
-          await this.events.emit({
+          await this.events.emit(this.stampGateTier({
             type: 'kickback',
             from: 'rebase',
             to: target,
             evidence: verdict.kickback.evidence,
             count: 1,
             ...(convergenceCredit === undefined ? {} : { convergenceCredit }),
-          });
+          }));
           if (getStepStatus(state, target) !== 'skipped') reopened[target] = 'pending';
         }
         await this.commitStateChanges(state, 'reopen persisted rebase kickbacks', reopened);
@@ -14015,12 +14021,12 @@ export class Conductor {
       if (step.name === 'finish' || (step.name === 'build' && buildRoutedForward)) {
         await writeVerdict(this.projectRoot, step.name, verdict);
       }
-      await this.events.emit({
+      await this.events.emit(this.stampGateTier({
         type: 'gate_verdict',
         step: step.name,
         satisfied: verdict.satisfied,
         reason: verdict.reason,
-      });
+      }));
       if (verdict.satisfied) stuckGate.delete(step.name);
 
       // Task 15: Post-green spot-audit dispatch for semantic attribution verification.
