@@ -86,6 +86,13 @@ import { loadConfig } from '../config.js';
 import { resolveFeatureApplicabilityConfig } from '../resolved-config.js';
 import { validateApplicability } from '../feature-applicability.js';
 import { ALL_STEPS, buildStepRegistry } from '../steps.js';
+import type { GitRunner as DependencyGitRunner } from '../rebase.js';
+import {
+  computeLandDependencyProposals,
+  decideLandDependencies,
+} from './land-dependency-gate.js';
+import type { LandDependencyDecision, LandDependencyProposalResult } from './land-dependency-gate.js';
+import { parseSourceRef } from './issue-ref.js';
 
 const execFile = promisify(execFileCb);
 
@@ -113,12 +120,19 @@ export interface LandSpecOptions {
    * browser.
    */
   renderDeps?: Pick<RenderDeps, 'hasTool' | 'runMmdc' | 'writeTemp'>;
+  /** Tracker/git seams for the intake-only dependency proposal gate. */
+  dependencyGit?: DependencyGitRunner;
+  acceptedDependencies?: string[];
+  declinedDependencies?: string[];
+  skipDependencyCheck?: string;
 }
 
 export interface LandSpecResult {
   slug: string;
   branch: string;
   repoPath: string;
+  /** Present only for an intake-originated land that passed the proposal gate. */
+  dependency?: { proposals: LandDependencyProposalResult; decision: LandDependencyDecision };
 }
 
 /** Closed identifiers for every rejection produced by the land gate. */
@@ -147,7 +161,10 @@ export type LandGateIdentifier =
   | 'mermaid-tool-missing'
   | 'artifact-empty'
   | 'artifact-draft-status'
-  | 'artifact-stub';
+  | 'artifact-stub'
+  | 'dependency-proposals-undecided'
+  | 'dependency-check-unavailable'
+  | 'dependency-decisions-invalid';
 
 export class LandGateError extends Error {
   constructor(public readonly gate: LandGateIdentifier, message: string) {
@@ -695,6 +712,46 @@ export async function landSpec(
     throw landGateError('coherence', error instanceof Error ? error.message : String(error));
   }
 
+  // D6: intake land is the sole blocking dependency-read path.  Markerless
+  // lands remain offline, but still validate accidental decision flags here so
+  // the normal land-gate rejection event is emitted by the CLI.
+  const acceptedDependencies = opts.acceptedDependencies ?? [];
+  const declinedDependencies = opts.declinedDependencies ?? [];
+  const emptyProposalResult = { kind: 'computed' as const, proposals: [], satisfied: [], advisory: [] };
+  // Native dependency edges exist only for GitHub issue references.  Other
+  // tracker refs (for example Jira keys) retain their established no-op land
+  // behavior; dependency flags against them are still rejected below.
+  const dependencySourceRef = parseSourceRef(sourceRef) ? sourceRef : undefined;
+  const proposalResult = dependencySourceRef
+    ? await computeLandDependencyProposals({
+      sourceRef: dependencySourceRef,
+      planText: planContent,
+      gh: opts.gh ?? (async () => { throw new Error('tracker runner unavailable'); }),
+      git: opts.dependencyGit ?? (async () => ({ exitCode: 1, stdout: '', stderr: '' })),
+      cwd: canonical,
+      baseRef: defaultBranch,
+    })
+    : emptyProposalResult;
+  const dependencyDecision = decideLandDependencies({
+    sourceRef: dependencySourceRef,
+    proposalResult,
+    accepted: acceptedDependencies,
+    declined: declinedDependencies,
+    skipReason: opts.skipDependencyCheck,
+  });
+  if (dependencyDecision.kind === 'refused-undecided') {
+    throw landGateError(
+      'dependency-proposals-undecided',
+      `${dependencyDecision.message}${dependencyDecision.skipUnused ? `\n${dependencyDecision.skipUnused}` : ''}`,
+    );
+  }
+  if (dependencyDecision.kind === 'refused-unavailable') {
+    throw landGateError('dependency-check-unavailable', dependencyDecision.message);
+  }
+  if (dependencyDecision.kind === 'invalid') {
+    throw landGateError('dependency-decisions-invalid', dependencyDecision.message);
+  }
+
   // 4f. Mermaid render hard gate (#810). Broken diagrams shipped because the
   //     render-check was skill prose (not enforced) and fail-opened when mmdc
   //     was absent. Enforce it deterministically at the land seam, fail-closed:
@@ -766,7 +823,12 @@ export async function landSpec(
     );
   }
 
-  return { slug, branch, repoPath: worktreePath };
+  return {
+    slug,
+    branch,
+    repoPath: worktreePath,
+    ...(dependencySourceRef ? { dependency: { proposals: proposalResult, decision: dependencyDecision } } : {}),
+  };
 }
 
 /** Existing paths retain their owning feature during DECIDE amendments. New paths,

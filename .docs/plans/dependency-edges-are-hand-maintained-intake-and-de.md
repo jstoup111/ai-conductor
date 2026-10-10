@@ -702,3 +702,94 @@ Task 8 ────────────────────────�
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks, and no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-s5-1: engineer-cli.ts land: render proposals with source labels, plus satisfied, advisory and skip notes, on the refused-undecided/refused-unavailable path too (not only after a successful landSpec). Carry the computed proposal result on the LandGateError. Add a test in engineer-cli-land-dependencies.test.ts that runs land with only --source-ref owner/repo#536 and asserts '#520 (declared)', '#600 (overlap)' and '#610 (overlap)' with no decision flags.
+**Gate:** prd-audit
+**Rationale:** Implementation gap within Task 18 (95%, verified against plan): Task 18 requires proposals with source labels and satisfied/advisory lines on `compose land --source-ref` alone, but rendering happens only after a successful land. The refusal path prints only the LandGateError message. Task 18 Step 3 already covers rendering the decision output in the land case, so no planning or architecture change is needed.
+**Criterion:** S5.1
+**Parent task:** 18
+**Done when:**
+- [test] S5.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s5-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s5-2: land-dependency-gate.ts: build proposals from every linkable overlap (shown + omitted, or call buildSuggestions uncapped), filtering self, closed and already-linked targets before any cap. Test in land-dependency-gate.test.ts: with 7 overlapping open issues, all 7 are proposals, and an undecided 7th refuses land.
+**Gate:** prd-audit
+**Rationale:** Verified defect in Task 9's computeLandDependencyProposals: only buildSuggestions' capped `shown` list (cap 5) is used, so the 6th and later overlaps are never proposed. The plan's Land approach makes every linkable overlap a proposal. Task 9 admits the fix. The label-rendering half is repaired under S5.1/Task 18.
+**Criterion:** S5.2
+**Parent task:** 9
+**Done when:**
+- [test] S5.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s5-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s5-3: engineer-cli-land-dependencies.test.ts: assert that the intake-marked in-flight branch overlap #610 prints with the '(overlap)' source label when land is refused for undecided proposals (covered by the rem-s5-1 rendering change).
+**Gate:** prd-audit
+**Rationale:** Same root cause as S5.1 (verified): #610 is computed with source overlap, but its label is rendered only on the success path. The Task 18 refusal-path rendering repair closes it. The rem-s5-1 test asserts '#610 (overlap)' on the refusal path.
+**Criterion:** S5.3
+**Parent task:** 18
+**Done when:**
+- [test] S5.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s5-3 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-1: dependency-reconciler.ts: centralize raw-body Depends-on form-field extraction, so a field value like '#123, #456' and qualified same-repo refs (owner/repo#N) yield every edge. Route issue-event-sync.ts, land-dependency-gate.ts and the sweep through this one extractor. Add tests for the multi-ref field, the qualified same-repo field, and parity between form and body callers.
+**Gate:** as-built
+**Rationale:** Conforming implementation drift against ADR D1 (approved architecture stays authoritative). Task 1 owns declaredEdges and the parity requirement that form-field input and prose input produce identical edges. Tasks 3, 9 and 14 own the Action, land and drift callers. No architectural decision is needed, only centralized extraction.
+**Governing clause:** adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 1
+**Done when:**
+- adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 1 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-2: dependency-reconciler.ts declaredEdges: drop any edge whose source text the parser flagged as a task-list reference, keeping it only in manualReview. Test: '- [ ] Phase 1 blocked by #10' yields zero edges and one manual-review item. Assert that the Action, land proposals and drift sweep produce nothing for it.
+**Gate:** as-built
+**Rationale:** Verified violation of D1 (task-list references must yield no edge). Task 1 Step 3 states that manual-review items, including task-list items, carry no edge. The fix is local to declaredEdges and admitted by Task 1.
+**Governing clause:** adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 1
+**Done when:**
+- adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 1 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-3: Replace DependencyDriftTracker in dependency-reconciler.ts with the existing TrackerClient (getBlockedBy, open-issue listing) and use BlockerResolver for cycle detection, removing the private cycle code. Delete the duplicated adapters in engineer-cli.ts and intake-loop-cli.ts in favour of the shared TrackerClient/BlockerResolver wiring. Keep the existing Task 14–17 tests green, including the one-read-per-issue and zero-write assertions.
+**Gate:** as-built
+**Rationale:** The approved architecture (reconciler reads only through TrackerClient and BlockerResolver, ADR D1/drift D2, feature diagram REC→TRK/REC→RES) is unambiguous and stays authoritative. The code diverged by adding a parallel DependencyDriftTracker, duplicated adapters and private cycle detection. Restoring conformance is BUILD work under Tasks 14, 16 and 17, which name those seams; no architecture decision is needed.
+**Governing clause:** adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 1
+**Done when:**
+- adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 1 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-3 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-4: land-dependency-gate.ts: filter self, closed and already-linked targets before any display cap, and include every eligible overlap in the decision set. Test: with 5 shown overlaps of which one is the source issue itself plus 1 omitted, all 5 eligible others become proposals.
+**Gate:** as-built
+**Rationale:** Same defect as S5.2 (verified): capped `shown` list, with self-filtering applied after the cap. Admitted by Task 9 and repaired by rem-s5-2. This repair additionally asserts the filter order.
+**Governing clause:** adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 3
+**Done when:**
+- adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-4 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-5: Propagate issue-state lookup failures for intake-marked branches from intake/overlap-sources.ts (via an opt-in strict mode or a distinct failure result, so advisory preflight callers are unchanged) to computeLandDependencyProposals, which returns unavailable naming the cause. Test: a marked branch whose issue read fails gives `unavailable`, not computed/markerless. A local git diff failure stays an advisory note.
+**Gate:** as-built
+**Rationale:** Task 9 states the result is `unavailable` exactly when a tracker read fails, while local git skip notes stay advisory. A swallowed issue-state lookup error on a marked branch therefore contradicts the approved design. The fix is to propagate tracker failure to the land gate while keeping the advisory local-git behavior, within Task 9.
+**Governing clause:** adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 3
+**Done when:**
+- adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-5 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-6: land-dependency-gate.ts decideLandDependencies: run the independently knowable validations (contradictory accept/decline, decisions without source-ref, empty skip reason) before branching on the computed/unavailable result. Test: `unavailable` + skip 'GitHub outage' + #520 both accepted and declined returns `invalid` naming #520.
+**Gate:** as-built
+**Rationale:** Verified ordering bug in decideLandDependencies: an unavailable check plus a skip returns proceed before contradictory accept/decline validation runs. Task 10 already requires `invalid` for contradictory decisions. Reordering the validation is admitted by Task 10.
+**Governing clause:** adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 4
+**Done when:**
+- adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-6 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-7: dependency-reconciler.ts sweep: keep completed blockers for declaration satisfaction, but exclude them from the contradiction and stale/cycle findings. Test: #36 'blocks #37' while blocked by #37 closed as completed produces no contradiction finding.
+**Gate:** as-built
+**Rationale:** Task 14 (Done-when: blockers closed as completed produce no finding in any category) and drift ADR D2 are explicit. The contradiction check ignoring completion state is an implementation defect admitted by Task 14.
+**Governing clause:** adr-2026-10-09-dependency-drift-sweep-on-intake-tick decision 2
+**Done when:**
+- adr-2026-10-09-dependency-drift-sweep-on-intake-tick decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-7 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-8: Make the sweep's open-issue listing complete (paginate past 1,000), or return `repository-indeterminate` naming truncation when completeness cannot be established. Remove the hard 1,000 limit in the engineer-cli.ts and intake-loop-cli.ts listings (shared via the rem-asb-3 TrackerClient wiring). Test: a listing reporting more results than fetched yields repository-indeterminate, never `swept`.
+**Gate:** as-built
+**Rationale:** D2 requires every open issue to be checked, and Task 15 already defines `repository-indeterminate` for listings that cannot be established. A silent 1,000-issue truncation is an implementation gap admitted by Tasks 15, 16 and 17, with no design choice needed: paginate fully, or report indeterminate when completeness is unknown.
+**Governing clause:** adr-2026-10-09-dependency-drift-sweep-on-intake-tick decision 2
+**Done when:**
+- adr-2026-10-09-dependency-drift-sweep-on-intake-tick decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-8 is committed and its targeted tests pass.

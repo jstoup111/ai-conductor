@@ -490,6 +490,26 @@ type ConductorEventBody =
       worktreePath: string;
       sourceRef?: string;
     }
+  | {
+      type: 'land_dependency_decided';
+      repository: string;
+      sourceRef: string;
+      proposals: string[];
+      accepted: string[];
+      declined: string[];
+      skipped: { reason: string } | null;
+      writes: Array<{ target: string; status: string; reason?: string }>;
+    }
+  | {
+      type: 'dependency_drift_swept';
+      repository: string;
+      status: 'swept' | 'repository-indeterminate';
+      unlinked: string[];
+      stale: string[];
+      cycles: string[];
+      contradictions: string[];
+      indeterminate: string[];
+    }
   | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
   | {
       type: 'setup_repair';

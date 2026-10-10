@@ -126,11 +126,21 @@ authors and lands nothing.
 ### 4. Land the authored spec
 
 Run `ai-conductor compose land --project <name> --idea "<idea>" --worktree <worktreePath>`, adding
-`--source-ref <ref>` for intake ideas. This deterministic primitive authors nothing: it commits only
-the already-authored `.docs/` inside `--worktree`, never touches the primary checkout, and rejects
-stubs, DRAFT artifacts or ADRs, missing tier-required artifacts, empty content, and a dirty worktree.
-It stages only `.docs` (no `add -A`) so the commit is strictly this idea's set — no cross-idea bleed.
-It prints `{ slug, branch, repoPath }`; retain the worktree on failure for inspection.
+`--source-ref <ref>` for intake ideas. For an intake idea, land may print dependency proposals. It
+refuses until every proposal has an explicit operator-confirmed decision: add each accepted edge with
+`--depends-on <owner/repo#N>` and each declined edge with
+`--decline-dependency <owner/repo#N>`. Never auto-answer a proposal. If the dependency check is
+unavailable, ask the operator whether to retry or explicitly acknowledge it with
+`--skip-dependency-check "<reason>"`; that skip requires a non-empty reason. This deterministic
+primitive authors nothing: it commits only the already-authored `.docs/` inside `--worktree`, never
+touches the primary checkout, and rejects stubs, DRAFT artifacts or ADRs, missing tier-required
+artifacts, empty content, and a dirty worktree. It stages only `.docs` (no `add -A`) so the commit is
+strictly this idea's set — no cross-idea bleed. It prints `{ slug, branch, repoPath }`; retain the
+worktree on failure for inspection.
+
+Dropping an existing dependency is a separate manual two-step action: first remove its recognized
+dependency prose from the originating issue, then delete the native dependency link. Never treat a
+declined land proposal as permission to remove either one.
 
 ### 5. Open the spec PR and nudge the daemon
 

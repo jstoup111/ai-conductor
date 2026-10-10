@@ -72,6 +72,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   intake_overlap_checked: 'not-audited-by-design',
   // Command rejection telemetry is persisted but has no audit-trail projection.
   land_gate_rejected: 'not-audited-by-design',
+  land_dependency_decided: 'not-audited-by-design',
+  dependency_drift_swept: 'not-audited-by-design',
   project_setup: 'not-audited-by-design',
   memory_setup: 'not-audited-by-design',
   setup_repair: 'not-audited-by-design',
@@ -319,6 +321,14 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     reason: 'stories artifact is not approved',
     project: 'alpha',
     worktreePath: '/tmp/alpha-worktree',
+  },
+  land_dependency_decided: {
+    type: 'land_dependency_decided', repository: 'owner/repo', sourceRef: 'owner/repo#1',
+    proposals: [], accepted: [], declined: [], skipped: null, writes: [],
+  },
+  dependency_drift_swept: {
+    type: 'dependency_drift_swept', repository: 'owner/repo', status: 'swept',
+    unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: [],
   },
   project_setup: { type: 'project_setup', ran: false, reason: 'marker-valid' },
   memory_setup: { type: 'memory_setup', before: 'absent', canonical: true },

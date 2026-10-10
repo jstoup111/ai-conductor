@@ -1,142 +1,83 @@
 #!/usr/bin/env -S npx tsx
-// Applies priority:/size:/blocked_by: labels (and dependency links) to an
-// intake issue at open/edit time, per .github/workflows/intake-label-sync.yml.
+// Applies issue-form labels and every declared dependency edge from an intake
+// issue event. The shared event sync owns source discrimination: labels are
+// form-only, while dependency prose is additive for opened and edited events.
 //
-// Delegates to the shared, acceptance-tested seam `syncIssueLabels`
-// (src/engine/engineer/intake/label-sync.ts) — the same module used by
-// bundled skills/intake/scripts/intake-file helper and bin/intake-backfill — so this script is a thin,
-// side-effecting shell: read the event payload -> extract issue-form fields
-// -> hand off to syncIssueLabels, which owns label auto-create/apply and
-// blocked_by dependency linking via the real `gh` CLI.
-//
-// Failure isolation: this script must NEVER fail the workflow/build. Any error
-// (auth, rate limit, malformed payload, network) is caught and logged; the process
-// always exits 0. This is intake-only labeling — losing a label sync is recoverable
-// (re-edit the issue), but failing CI over it is not acceptable (labels-only, isolated
-// from ci.yml per the task spec).
+// Failure isolation: dependency-link failures are reported but do not fail the
+// Action. A later edit or the drift sweep can reconcile a missed link.
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { makeProductionGh } from '../src/engine/pr-labels.js';
 import { createGuardedGithubOperationRunner } from '../src/engine/tracker-client.js';
 import { createGithubIntakeAuthorization } from '../src/engine/engineer/intake/github-issues.js';
 import {
-  syncIssueLabels,
-  isIssueFormSubmission,
-} from '../src/engine/engineer/intake/label-sync.js';
+  applyIssueEventSync,
+  type IssueEventSyncEvent,
+} from '../src/engine/engineer/intake/issue-event-sync.js';
 
 /**
- * Extract the raw value submitted under a given issue-form field heading.
+ * Apply one GitHub issue event using the Action's production adapters.
  *
- * Issue-form bodies render each field as:
- *   ### <Label>
- *
- *   <value>
- *
- * Returns the text of the first non-empty line following the heading, or
- * undefined if the heading isn't present or has no content (e.g.
- * "_No response_").
+ * This remains a thin entry point: parsing and best-effort link behavior live
+ * in `applyIssueEventSync`, so the Action cannot diverge from other callers.
  */
-function extractField(body: string, heading: string): string | undefined {
-  const headingRegex = new RegExp(`^###\\s+${heading}\\s*$`, 'im');
-  const match = headingRegex.exec(body);
-  if (!match) return undefined;
-
-  const rest = body.slice(match.index + match[0].length);
-  const nextHeadingIdx = rest.search(/^###\s+/m);
-  const section = nextHeadingIdx === -1 ? rest : rest.slice(0, nextHeadingIdx);
-
-  const lines = section
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-
-  if (lines.length === 0) return undefined;
-  const value = lines[0];
-  if (value === '_No response_') return undefined;
-  return value;
-}
-
-/**
- * Parse the "Depends on" field into fully-qualified `owner/repo#N` refs
- * (syncIssueLabels expects cross-repo-capable slug refs, not bare numbers).
- * Accepts "none", empty, or unparsable content as "no dependencies".
- */
-function parseDependsOnField(body: string, repoSlug: string): string[] {
-  const raw = extractField(body, 'Depends on');
-  if (!raw) return [];
-  const matches = raw.matchAll(/#(\d+)/g);
-  const numbers = [...new Set([...matches].map((m) => m[1]))];
-  return numbers.map((n) => `${repoSlug}#${n}`);
-}
-
-async function main(): Promise<void> {
-  const eventPath = process.env.GITHUB_EVENT_PATH;
-  const token = process.env.GITHUB_TOKEN;
-  const repoSlug = process.env.GITHUB_REPOSITORY; // "owner/repo"
+export async function runIntakeLabelSyncApply(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const eventPath = env.GITHUB_EVENT_PATH;
+  const token = env.GITHUB_TOKEN;
+  const repoSlug = env.GITHUB_REPOSITORY;
 
   if (!eventPath || !token || !repoSlug) {
     console.error('[intake-label-sync] missing GITHUB_EVENT_PATH/GITHUB_TOKEN/GITHUB_REPOSITORY; skipping');
     return;
   }
 
-  const event = JSON.parse(readFileSync(eventPath, 'utf8'));
-  const issue = event.issue;
-  if (!issue) {
-    console.error('[intake-label-sync] event payload has no issue; skipping');
+  const event = JSON.parse(readFileSync(eventPath, 'utf8')) as IssueEventSyncEvent;
+  if (!event.issue || !event.repository?.full_name) {
+    console.error('[intake-label-sync] event payload has no issue or repository; skipping');
     return;
   }
 
-  const body: string = issue.body ?? '';
-
-  // Only issue-form submissions have fields to sync. An issue filed by
-  // the bundled skills/intake/scripts/intake-file helper has no field headings and already carries the operator's
-  // chosen priority:/size: labels — defaulting over it would ADD a second,
-  // contradictory band (addLabel is additive).
-  if (!isIssueFormSubmission(body)) {
-    console.error(
-      `[intake-label-sync] issue #${issue.number} is not an issue-form submission ` +
-        '(no Priority/Size field headings); skipping — labels are owned by the filer',
-    );
-    return;
-  }
-
-  const priority = extractField(body, 'Priority');
-  const size = extractField(body, 'Size');
-  const dependsOn = parseDependsOnField(body, repoSlug);
-
-  const issueRef = `${repoSlug}#${issue.number}`;
   const gh = makeProductionGh();
   const actor = typeof event.sender?.login === 'string' && event.sender.login.trim() !== ''
     ? event.sender.login.trim().toLowerCase()
     : 'github-actions';
-  // Association labels and dependency links share the same independently
-  // authorized intake runner. Label definitions still have no shared approval,
-  // so ensureLabel refuses create/update rather than widening this authority.
-  const guardedOperations = createGuardedGithubOperationRunner(gh, {
-    cwd: process.cwd(),
-    intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd() }),
+  const cwd = process.cwd();
+  const operations = createGuardedGithubOperationRunner(gh, {
+    cwd,
+    intake: createGithubIntakeAuthorization({ gh, cwd }),
+  });
+  const result = await applyIssueEventSync(event, {
+    gh,
+    operations,
+    actor,
+    cwd,
+    log: (message) => console.error(message),
   });
 
-  const result = await syncIssueLabels(
-    { priority, size, dependsOn },
-    issueRef,
-    {
-      gh,
-      dependencyOperations: guardedOperations,
-      labelOperations: guardedOperations,
-      actor,
-      cwd: process.cwd(),
-      log: (msg) => console.error(msg),
-    },
-  );
+  for (const failure of result.failures) {
+    console.error(`[intake-label-sync] dependency link ${failure.target} failed: ${failure.reason}`);
+  }
 
   console.log(
-    `[intake-label-sync] applied ${result.priorityLabel}, ${result.sizeLabel}` +
-      (result.linked.length > 0 ? `; linked: ${result.linked.join(', ')}` : '') +
-      (result.badRefs.length > 0 ? `; bad refs: ${result.badRefs.join(', ')}` : ''),
+    `[intake-label-sync] linked: ${result.links.length}; failures: ${result.failures.length}` +
+      (result.labels ? `; labels: ${result.labels.priorityLabel}, ${result.labels.sizeLabel}` : ''),
   );
 }
 
-main().catch((error) => {
-  // Never throw out of the entrypoint — a label-apply failure must not fail the workflow.
-  console.error('[intake-label-sync] unexpected error (non-fatal):', error);
-});
+async function main(): Promise<void> {
+  await runIntakeLabelSyncApply();
+}
+
+const isEntrypoint = process.argv[1] !== undefined
+  && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
+
+if (isEntrypoint) {
+  main().catch((error) => {
+    // Never throw out of the entrypoint — an intake Action error must not fail CI.
+    console.error('[intake-label-sync] unexpected error (non-fatal):', error);
+  });
+}
