@@ -1,4 +1,4 @@
-// Covers: task:2, task:5, task:7, task:15, task:29
+// Covers: task:2, task:4, task:5, task:7, task:15, task:29
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -109,7 +109,7 @@ function inputs(): BuildReviewFrozenInputs {
       mergeBase: "base",
       headSha: "head",
       ...sourceContent,
-      testQuality: { inScopeTests: ["test/a.test.ts"], counterfactualFileSelectors: ["test/a.test.ts"], unresolvedMarkers: [] },
+      testQuality: { inScopeTests: ["test/a.test.ts"], counterfactualFileSelectors: ["test/a.test.ts"], unresolvedMarkers: [], excludedMarkerFiles: [] },
     },
   };
 }
@@ -282,6 +282,31 @@ describe("build-review coordinator: registered dispatch", () => {
     expect(writeCache).not.toHaveBeenCalled();
   });
 
+  it('reports excluded marker files on an empty scope summary', async () => {
+    const frozenInputs = inputs();
+    const emit = vi.fn(async () => undefined);
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: {
+        ...frozenInputs,
+        sourceSnapshot: {
+          ...frozenInputs.sourceSnapshot,
+          testQuality: {
+            inScopeTests: [], counterfactualFileSelectors: [], unresolvedMarkers: [],
+            excludedMarkerFiles: [{ selector: 'tools/old_check.sh', reason: 'unsupported-source-language' }],
+          },
+          testScope: { targets: [], candidates: [], notes: [], changedDeclarations: [], affectedGroups: [], sharedSources: [] } as never,
+        },
+      },
+      emit,
+    }));
+
+    expect(result).toMatchObject({ reason: 'test_quality_empty_scope' });
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'build_review_scope_summary',
+      excludedMarkerFiles: [{ selector: 'tools/old_check.sh', reason: 'unsupported-source-language' }],
+    }));
+  });
+
   it("keeps a disabled whole gate distinct from an empty enabled container", () => {
     expect(classifyBuildReviewRubricBranches({ ...config(false), enabled: false }, [])).toEqual({
       kind: "gate-disabled",
@@ -346,6 +371,7 @@ describe("build-review coordinator: registered dispatch", () => {
             inScopeTests: ['test/legacy-selector.test.ts'],
             counterfactualFileSelectors: [],
             unresolvedMarkers: [{ selector: 'test/legacy-selector.test.ts', reference: 'S99.1' }],
+            excludedMarkerFiles: [],
           },
           testScope: {
             targets: [], candidates: [],
@@ -415,7 +441,7 @@ describe("build-review coordinator: registered dispatch", () => {
             { selector: inScopeTest, titleText: inScopeTitle, staticExtractionFallback: false },
             { selector: relocatedTest, titleText: relocatedTitle, staticExtractionFallback: false },
           ],
-          testQuality: { inScopeTests: [inScopeTest], counterfactualFileSelectors: [inScopeTest], unresolvedMarkers: [] },
+          testQuality: { inScopeTests: [inScopeTest], counterfactualFileSelectors: [inScopeTest], unresolvedMarkers: [], excludedMarkerFiles: [] },
         },
       },
       preflight: vi.fn(async () => ({
@@ -459,6 +485,7 @@ describe("build-review coordinator: registered dispatch", () => {
             inScopeTests: [established],
             counterfactualFileSelectors: [candidate, established],
             unresolvedMarkers: [],
+            excludedMarkerFiles: [],
           },
         },
       },
@@ -752,7 +779,7 @@ describe("build-review coordinator: security envelope", () => {
     const frozen = inputs();
     const input = coordinationInput(true, {
       config: config(true, true),
-      inputs: { ...frozen, sourceSnapshot: { ...frozen.sourceSnapshot, testQuality: { inScopeTests: [], counterfactualFileSelectors: [], unresolvedMarkers: [] } } },
+      inputs: { ...frozen, sourceSnapshot: { ...frozen.sourceSnapshot, testQuality: { inScopeTests: [], counterfactualFileSelectors: [], unresolvedMarkers: [], excludedMarkerFiles: [] } } },
       engineIdentity: { engineStamp: "engine", skillDigests: { security: { kind: "resolved", digest: "security" } } },
       dispatchModel: vi.fn(async () => ({ findings: [{ concernKind: 'injection', summary: 'Untrusted shell input', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'security', locus: { path: 'src/a.ts', contentHash: `sha256:${createHash('sha256').update('const command = request.input').digest('hex')}`, display: 'command' } } }] })),
     });
@@ -1588,7 +1615,7 @@ describe("build-review coordinator: candidate scope resolutions", () => {
         ...frozenInputs,
         sourceSnapshot: {
           ...frozenInputs.sourceSnapshot,
-          testQuality: { inScopeTests: [], counterfactualFileSelectors: ['test/widget.test.ts'], unresolvedMarkers: [] },
+          testQuality: { inScopeTests: [], counterfactualFileSelectors: ['test/widget.test.ts'], unresolvedMarkers: [], excludedMarkerFiles: [] },
           testScope: { candidates: [scopeCandidate] } as never,
         },
       },

@@ -1,6 +1,7 @@
 import { dirname, join } from 'node:path';
 import { mkdir, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { isTestFilePath, isTestSupportPath } from './test-path.js';
 
 export interface TautologyPathClassification {
   /** Executable changed tests: kept at HEAD and passed to the scoped command. */
@@ -231,21 +232,13 @@ function addedPaths(diff: string): ReadonlySet<string> {
   return added;
 }
 
-function isTestPath(path: string): boolean {
-  return /(?:^|\/)(?:__tests__|tests?|spec)\/.*\.(?:test|spec)\.[^/]+$|\.(?:test|spec)\.[^/]+$/i.test(path)
-    || /(?:^|\/)(?:__tests__|tests?|spec)\/.*(?:_test|_spec)\.[^/]+$/i.test(path);
-}
-
-function isTestSupportPath(path: string): boolean {
-  return /(?:^|\/)(?:__tests__|tests?|spec)(?:\/|$)/i.test(path);
-}
-
 /** Closed three-way classifier; unknown paths are production, never a broad test selector. */
-export function classifyTautologyPaths(paths: readonly string[]): TautologyPathClassification {
+export function classifyTautologyPaths(paths: readonly string[], admittedTests: readonly string[] = []): TautologyPathClassification {
+  const admitted = new Set(admittedTests);
   return {
-    tests: paths.filter(isTestPath).sort(),
-    testSupport: paths.filter((path) => !isTestPath(path) && isTestSupportPath(path)).sort(),
-    production: paths.filter((path) => !isTestPath(path) && !isTestSupportPath(path)).sort(),
+    tests: paths.filter((path) => isTestFilePath(path) || admitted.has(path)).sort(),
+    testSupport: paths.filter((path) => !isTestFilePath(path) && !admitted.has(path) && isTestSupportPath(path)).sort(),
+    production: paths.filter((path) => !isTestFilePath(path) && !admitted.has(path) && !isTestSupportPath(path)).sort(),
   };
 }
 
@@ -345,7 +338,7 @@ export async function materializeTautologyPreflight(
   deps: TautologyPreflightDependencies,
 ): Promise<TautologyPreflightResult> {
   const paths = changedPaths(deps.diff);
-  const classified = classifyTautologyPaths(paths);
+  const classified = classifyTautologyPaths(paths, deps.counterfactualFileSelectors ?? []);
   const added = addedPaths(deps.diff);
   const renames = renamedPaths(deps.diff);
   const sourceIdentities = { mergeBase: deps.mergeBase, headSha: deps.headSha };
