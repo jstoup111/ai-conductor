@@ -9,6 +9,7 @@ import {
   detectTaskMembershipCheckCommand,
   runTaskMembershipCheck,
 } from '../../src/engine/task-membership-check-cli.js';
+import { extractBodyTaskIds } from '../../src/engine/autoheal.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 
 const execFileAsync = promisify(execFile);
@@ -70,6 +71,30 @@ describe('task-membership-check hook command', () => {
     expect(output.join('\n')).toContain('Task T3');
     expect(output.join('\n')).toContain('child 2');
     expect(output.join('\n')).toContain('child 1');
+  });
+
+  it('validates every task trailer in message order and accepts exactly the extracted child-local set', async () => {
+    const accepted = ['T1', 'T1'];
+    await writeFile(messagePath, `feat: local trailers\n\n${accepted.map((id) => `Task: ${id}`).join('\n')}\n`);
+    expect(extractBodyTaskIds(await (await import('node:fs/promises')).readFile(messagePath, 'utf8'))).toEqual(accepted);
+    await expect(run('feat/c1/demo')).resolves.toBe(0);
+
+    for (const trailers of [['T3', 'T1'], ['T1', 'T3', 'T1'], ['T1', 'T3']] as const) {
+      await writeFile(messagePath, `feat: foreign trailer\n\n${trailers.map((id) => `Task: ${id}`).join('\n')}\n`);
+      const output: string[] = [];
+      await expect(run('feat/c1/demo', output)).resolves.toBe(1);
+      expect(output.join('\n')).toContain('Task T3');
+      expect(output.join('\n')).toContain('child 2');
+    }
+  });
+
+  it('also validates a foreign current-task stamp when message trailers are local', async () => {
+    await writeFile(join(root, '.pipeline', 'current-task'), 'T3\n');
+    const output: string[] = [];
+
+    await expect(run('feat/c1/demo', output)).resolves.toBe(1);
+    expect(output.join('\n')).toContain('Task T3');
+    expect(output.join('\n')).toContain('child 2');
   });
 
   it('folds recorded remediation tasks into the owning child membership', async () => {

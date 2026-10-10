@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { resolveActiveChild } from '../../src/engine/child-cursor.js';
+import { hasDurableChildState, resolveActiveChild } from '../../src/engine/child-cursor.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import {
   writeCoverageBindingEnvelope,
@@ -224,6 +224,15 @@ describe('resolveActiveChild', () => {
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
       kind: 'active', child: 1, position: 1, isLeaf: false, branch: 'feat/c1/demo',
     });
+  });
+
+  it('recognizes surviving child branches and closure refs without a children directory', async () => {
+    await configureStacked(repository, false);
+    await git(['branch', 'feat/c1/demo', 'feat/daemon-demo']);
+    const tip = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', tip]);
+
+    await expect(hasDurableChildState(repository, 'demo')).resolves.toBe(true);
   });
 
   it('allows a halt-record-only commit after closure and clears leafMovePending after a leaf rewrite map', async () => {

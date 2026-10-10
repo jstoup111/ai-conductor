@@ -181,7 +181,7 @@ import {
   pipelinePathFor,
   type ChildId,
 } from './child-context.js';
-import { resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
+import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import {
   advanceChildRegion,
   enterChildRegion,
@@ -2439,12 +2439,12 @@ export class Conductor {
     const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
     if (!slug) return true;
 
-    const [loadedConfig, existingChildren] = await Promise.all([
+    const [loadedConfig, durableChildState] = await Promise.all([
       loadConfig(this.projectRoot),
-      listExistingChildren(this.projectRoot),
+      hasDurableChildState(this.projectRoot, slug),
     ]);
     const stackConfigured = loadedConfig.ok && loadedConfig.config.stacked_prs?.enabled === true;
-    if (!stackConfigured && existingChildren.length === 0) return true;
+    if (!stackConfigured && durableChildState === false) return true;
 
     const cursor = await this.resolveActiveChild(this.projectRoot, slug);
     if (cursor.kind === 'active') {
@@ -4320,7 +4320,11 @@ export class Conductor {
           }
           // Re-seed task-status.json with the appended tasks marked as pending
           try {
-            await seedTaskStatus(this.projectRoot, planPath);
+            await seedTaskStatus(this.projectRoot, planPath, undefined, {
+              ...(this.activeRegionChild === undefined || !this.featureSlug
+                ? {}
+                : { childBase: { slug: this.featureSlug, child: this.activeRegionChild } }),
+            });
           } catch {
             // Log but continue — seeding failure doesn't block remediation routing
           }
@@ -6773,8 +6777,8 @@ export class Conductor {
           // preserves the N=1 path for callers that intentionally provide no
           // Git adapter. Durable child state remains sufficient to re-enter a
           // stack even if its current config has since disabled creation.
-          const childCursorRelevant = this.config.stacked_prs?.enabled === true ||
-            (await listExistingChildren(this.projectRoot)).length > 0;
+          const durableChildState = await hasDurableChildState(this.projectRoot, slug);
+          const childCursorRelevant = this.config.stacked_prs?.enabled === true || durableChildState !== false;
           if (slug && childCursorRelevant) {
             const cursor = await this.resolveActiveChild(this.projectRoot, slug);
             if (cursor.kind === 'active') {

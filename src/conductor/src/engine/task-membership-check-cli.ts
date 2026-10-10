@@ -73,15 +73,23 @@ export async function runTaskMembershipCheck(deps: TaskMembershipCheckDependenci
   } catch {
     return unreadable('<unknown>', identity.child, 'commit message cannot be read', print);
   }
-  const taskId = extractBodyTaskIds(message)[0];
-  if (taskId === undefined) return 0;
+  const taskIds = extractBodyTaskIds(message);
+  try {
+    const stamped = (await read(join(deps.projectRoot, '.pipeline', 'current-task'))).trim();
+    if (stamped) taskIds.push(stamped);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return unreadable(taskIds[0] ?? '<unknown>', identity.child, 'current task stamp cannot be read', print);
+    }
+  }
+  if (taskIds.length === 0) return 0;
 
   const envelope = await readCoverageBindingEnvelope(deps.projectRoot, coverageBindingFilesystem);
   if (!envelope?.sliceMembership || !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)) {
-    return unreadable(taskId, identity.child, 'coverage-binding envelope is missing or invalid', print);
+    return unreadable(taskIds[0]!, identity.child, 'coverage-binding envelope is missing or invalid', print);
   }
   if (envelope.slug !== identity.slug) {
-    return unreadable(taskId, identity.child, 'coverage-binding envelope belongs to another feature', print);
+    return unreadable(taskIds[0]!, identity.child, 'coverage-binding envelope belongs to another feature', print);
   }
 
   let engineState: unknown = {};
@@ -89,28 +97,28 @@ export async function runTaskMembershipCheck(deps: TaskMembershipCheckDependenci
     engineState = JSON.parse(await read(join(deps.projectRoot, '.pipeline', 'engine-state.json')));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      return unreadable(taskId, identity.child, 'remediation membership cannot be read', print);
+      return unreadable(taskIds[0]!, identity.child, 'remediation membership cannot be read', print);
     }
   }
   if (typeof engineState !== 'object' || engineState === null || Array.isArray(engineState)) {
-    return unreadable(taskId, identity.child, 'remediation membership is malformed', print);
+    return unreadable(taskIds[0]!, identity.child, 'remediation membership is malformed', print);
   }
 
   const state = engineState as Record<string, unknown>;
   const appended = state.appendedRemediationTaskIds;
   const children = state.appendedRemediationTaskChildren;
   if (appended !== undefined && (!Array.isArray(appended) || !appended.every((id) => typeof id === 'string'))) {
-    return unreadable(taskId, identity.child, 'remediation task list is malformed', print);
+    return unreadable(taskIds[0]!, identity.child, 'remediation task list is malformed', print);
   }
   if (children !== undefined && (typeof children !== 'object' || children === null || Array.isArray(children))) {
-    return unreadable(taskId, identity.child, 'remediation child map is malformed', print);
+    return unreadable(taskIds[0]!, identity.child, 'remediation child map is malformed', print);
   }
 
   const owners = new Map<string, number>();
   for (const [id, child] of Object.entries(envelope.sliceMembership.taskSlices)) {
     const canonical = canonicalTaskId(id);
     if (owners.has(canonical) || parseChildId(child) === undefined) {
-      return unreadable(taskId, identity.child, 'coverage-binding task membership is malformed', print);
+      return unreadable(taskIds[0]!, identity.child, 'coverage-binding task membership is malformed', print);
     }
     owners.set(canonical, child);
   }
@@ -124,18 +132,20 @@ export async function runTaskMembershipCheck(deps: TaskMembershipCheckDependenci
       : undefined;
     const canonical = canonicalTaskId(id);
     if (child === undefined || owners.has(canonical)) {
-      return unreadable(taskId, identity.child, 'remediation task membership is missing or malformed', print);
+      return unreadable(taskIds[0]!, identity.child, 'remediation task membership is missing or malformed', print);
     }
     owners.set(canonical, child);
   }
 
-  const owner = owners.get(canonicalTaskId(taskId));
-  if (owner === undefined) {
-    return unreadable(taskId, identity.child, 'Task has no recorded owning child', print);
-  }
-  if (owner !== identity.child) {
-    print(`task-membership-check: rejected Task ${taskId}; it belongs to child ${owner}, not checked-out child ${identity.child}`);
-    return 1;
+  for (const taskId of taskIds) {
+    const owner = owners.get(canonicalTaskId(taskId));
+    if (owner === undefined) {
+      return unreadable(taskId, identity.child, 'Task has no recorded owning child', print);
+    }
+    if (owner !== identity.child) {
+      print(`task-membership-check: rejected Task ${taskId}; it belongs to child ${owner}, not checked-out child ${identity.child}`);
+      return 1;
+    }
   }
   return 0;
 }

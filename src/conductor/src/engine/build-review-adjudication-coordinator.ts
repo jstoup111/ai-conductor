@@ -174,6 +174,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const store = new RemediationCaseStore(input.projectRoot, input.feature, {
     ...(input.child === undefined ? {} : { child: input.child }),
   });
+  const suppressionStore = new RemediationCaseStore(input.projectRoot, input.feature);
   // Not a second writer: the same seam the effective-verdict path already ran
   // for this lap. Its upsert is keyed by finding id, so re-running it here is a
   // no-op refresh rather than a duplicate row.
@@ -181,7 +182,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     projectRoot: input.projectRoot,
     feature: input.feature,
     suppressions: input.suppressions ?? [],
-    store,
+    store: suppressionStore,
   });
   if (!persisted.ok) return fail(`case store ${persisted.reason}`);
   // Before the judge is dispatched there is no frozen dispatch set, so live ids

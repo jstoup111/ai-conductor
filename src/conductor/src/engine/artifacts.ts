@@ -2955,7 +2955,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
 
       // Seed task-status.json from the plan, ensuring file exists and is consistent.
       try {
-        await seedTaskStatus(ctx.projectRoot, ctx.planPath, enginePlanPath);
+        await seedTaskStatus(ctx.projectRoot, ctx.planPath, enginePlanPath, {
+          ...(ctx.activeChild === undefined || !ctx.featureDesc
+            ? {}
+            : { childBase: { slug: ctx.featureDesc, child: ctx.activeChild } }),
+        });
       } catch (err) {
         console.error(
           `[build] seedTaskStatus failed: ${err instanceof Error ? err.message : String(err)}`,

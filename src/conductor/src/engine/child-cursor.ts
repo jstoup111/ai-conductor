@@ -68,7 +68,17 @@ async function runGit(git: GitRunner, args: string[]) {
   }
 }
 
-async function childArtifactsExist(worktree: string, slug: string, git: GitRunner): Promise<boolean | 'git-error'> {
+/**
+ * Whether durable child state survives for this feature, independent of the
+ * current stacked-prs setting. A recreated worktree can lose
+ * `.pipeline/children` while retaining the child branches and closure refs.
+ */
+export async function hasDurableChildState(
+  worktree: string,
+  slug: string,
+  dependencies: ActiveChildDependencies = {},
+): Promise<boolean | 'git-error'> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
   try {
     if ((await readdir(join(worktree, '.pipeline', 'children'))).length > 0) return true;
   } catch (error) {
@@ -198,7 +208,7 @@ export async function resolveActiveChild(
       return { kind: 'git-error' };
     }
   }
-  const artifacts = await childArtifactsExist(worktree, slug, git);
+  const artifacts = await hasDurableChildState(worktree, slug, { git });
   if (artifacts === 'git-error') return { kind: 'git-error' };
 
   let envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>>;

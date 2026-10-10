@@ -3560,7 +3560,6 @@ export class DefaultStepRunner implements StepRunner {
       projectRoot: this.projectDir,
       feature: effective.feature,
       suppressions: suppressionEntries,
-      ...(child === undefined ? {} : { child }),
     });
     if (!persistedSuppressions.ok) {
       return { success: false, output: `build_review suppression history persistence failed: ${persistedSuppressions.reason}` };
@@ -4246,7 +4245,6 @@ export class DefaultStepRunner implements StepRunner {
       projectRoot: this.projectDir,
       feature: effective.feature,
       suppressions: suppressionEntries,
-      ...(input.child === undefined ? {} : { child: input.child }),
     });
     if (!persistedSuppressions.ok) {
       return { success: false, output: `build_review suppression history persistence failed: ${persistedSuppressions.reason}` };

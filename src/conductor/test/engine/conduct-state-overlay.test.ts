@@ -30,7 +30,7 @@ describe('child-routed conduct state', () => {
 
     await expect(readConductStateOverlay(root, parseChildId(2)!)).resolves.toEqual({
       ok: true,
-      value: { build: 'done', worktree: 'done', test_suite: 'failed' },
+      value: { worktree: 'done', test_suite: 'failed' },
     });
     await expect(readFile(flatPath, 'utf8')).resolves.toContain('"build": "done"');
     await expect(readFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8')).resolves.toContain('"test_suite": "done"');

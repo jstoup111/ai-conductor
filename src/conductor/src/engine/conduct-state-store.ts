@@ -57,8 +57,11 @@ export async function readConductStateOverlay(
   // document. Do not inherit the flat cursor from an earlier child: the
   // routed writer would then compare it against an absent child value and
   // refuse the first resumed region transition as a false conflict.
-  const featureState = { ...base.value };
-  if (!Object.hasOwn(region.value, 'last_step')) delete featureState.last_step;
+  // Region state is never inherited from the flat feature document. An absent
+  // child value means pending, rather than a completion from an earlier child.
+  const featureState = Object.fromEntries(
+    Object.entries(base.value).filter(([field]) => !isRegionStep(field) && field !== 'last_step'),
+  ) as ConductState;
   return { ok: true, value: { ...featureState, ...Object.fromEntries(regionEntries) } };
 }
 
