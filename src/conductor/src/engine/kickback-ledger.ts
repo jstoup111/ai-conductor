@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import type { BuildReviewRubricId } from '../types/config.js';
@@ -13,7 +13,9 @@ import { boundedHeadTailExcerpt } from './build-review-test-quality-preflight.js
 import { createConductStateLease } from './conduct-state-lease.js';
 import type { ConductStateLeaseFailureKind } from './conduct-state-lease.js';
 import { isAsBuiltGoverningReference, type AsBuiltGoverningReference } from './as-built-contract.js';
+import { selectFeaturePlan } from './artifacts.js';
 import { listExistingChildren, pipelinePathFor, type ChildId } from './child-context.js';
+import { readState } from './state.js';
 
 /** The latest infrastructure failure charged to a build-review rubric lap. */
 export interface KickbackLastMechanicalFault {
@@ -894,33 +896,21 @@ async function deriveGrowthFromActivePlan(
   projectRoot: string,
   pendingTaskIds: ReadonlySet<string> = new Set(),
 ): Promise<{ growth: PlanGrowthRecord; resolved: boolean }> {
-  let activePlanPath: string | undefined;
-  try {
-    const state = JSON.parse(
-      await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf-8'),
-    ) as { activePlanPath?: unknown };
-    if (typeof state.activePlanPath === 'string' && state.activePlanPath.trim()) {
-      activePlanPath = state.activePlanPath;
-    }
-  } catch {
-    // The absent legacy state has no authoritative plan path; do not guess.
-  }
-
-  if (!activePlanPath) {
+  const state = await readState(join(projectRoot, '.pipeline', 'conduct-state.json'));
+  const featureDesc = state.ok ? state.value.feature_desc : undefined;
+  const selection = await selectFeaturePlan(projectRoot, featureDesc);
+  if (selection.kind !== 'resolved') {
     return { growth: { authored: 0, added: 0, byGate: {} }, resolved: false };
   }
 
   try {
-    const plan = await readFile(
-      isAbsolute(activePlanPath) ? activePlanPath : join(projectRoot, activePlanPath),
-      'utf-8',
-    );
+    const plan = await readFile(selection.path, 'utf-8');
     const authored = [...plan.matchAll(/^#{1,6}\s+Task\s+([A-Za-z0-9._-]+)(?::|\s[—–]|\s*$)/gim)]
       .filter((match) => !pendingTaskIds.has(match[1]!)).length;
     return { growth: { authored, added: 0, byGate: {} }, resolved: true };
   } catch (error) {
     console.warn(
-      `[kickback-ledger] unable to derive growth from active plan ${activePlanPath}: ` +
+      `[kickback-ledger] unable to derive growth from active plan ${selection.path}: ` +
       `${error instanceof Error ? error.message : String(error)}`,
     );
     return { growth: { authored: 0, added: 0, byGate: {} }, resolved: false };
@@ -929,7 +919,7 @@ async function deriveGrowthFromActivePlan(
 
 /**
  * Read growth accounting, deriving its initial authored denominator only from
- * the engine-recorded active plan. Existing rem-* headers are intentionally
+ * the feature's resolved plan. Existing rem-* headers are intentionally
  * included in that denominator: they predate this feature's growth record.
  */
 export async function readGrowth(projectRoot: string, cap: number): Promise<PlanGrowth> {

@@ -629,6 +629,72 @@ describe('kickback-ledger', () => {
       });
     });
 
+    it('derives authored count from the slug-matched feature plan when no active plan is recorded', async () => {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({
+        feature_desc: 'slug-feature',
+      }));
+      await writeFile(join(dir, '.docs/plans/slug-feature.md'), Array.from(
+        { length: 17 },
+        (_, index) => `### Task ${index + 1}: Feature work`,
+      ).join('\n'));
+      await writeFile(join(dir, '.docs/plans/other.md'), Array.from(
+        { length: 5 },
+        (_, index) => `### Task ${index + 1}: Other work`,
+      ).join('\n'));
+
+      await expect(readGrowth(dir, 4)).resolves.toEqual({
+        authored: 17,
+        added: 0,
+        byGate: {},
+        remaining: 4,
+      });
+    });
+
+    it('prefers the recorded active plan over the slug-matched feature plan', async () => {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({
+        feature_desc: 'slug-feature',
+      }));
+      await writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/other.md',
+      }));
+      await writeFile(join(dir, '.docs/plans/slug-feature.md'), Array.from(
+        { length: 17 },
+        (_, index) => `### Task ${index + 1}: Feature work`,
+      ).join('\n'));
+      await writeFile(join(dir, '.docs/plans/other.md'), Array.from(
+        { length: 5 },
+        (_, index) => `### Task ${index + 1}: Other work`,
+      ).join('\n'));
+
+      await expect(readGrowth(dir, 4)).resolves.toEqual({
+        authored: 5,
+        added: 0,
+        byGate: {},
+        remaining: 4,
+      });
+    });
+
+    it('does not derive authored count when multiple plans cannot be resolved for the feature', async () => {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({
+        feature_desc: 'slug-feature',
+      }));
+      await writeFile(join(dir, '.docs/plans/first.md'), '### Task 1: First work');
+      await writeFile(join(dir, '.docs/plans/second.md'), '### Task 1: Second work');
+
+      await expect(readGrowth(dir, 4)).resolves.toEqual({
+        authored: 0,
+        added: 0,
+        byGate: {},
+        remaining: 4,
+      });
+    });
+
     it.each([
       ['without a stored growth record', undefined],
       ['with a stored growth record', { authored: 6, added: 0, byGate: {} }],
