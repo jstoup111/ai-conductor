@@ -99,7 +99,7 @@ function materializedPolicyRunner(input: {
       featureDesc: 'feature', planPath: join(input.root, '.docs', 'plans', 'feature.md'), gitRunner: materialized.runner,
       config: { llm_provider: 'claude', build_review: {
         enabled: true,
-        rubrics: { testQuality: { enabled: false }, ...(input.mixed ? { security: { enabled: true } } : {}) },
+        rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false }, ...(input.mixed ? { security: { enabled: true } } : {}) },
         custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' } },
       } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -145,7 +145,7 @@ it('records Pi as a skipped reviewPolicyCatalog candidate before invoking Claude
   };
   const runner = new DefaultStepRunner(claude, 'custom-policy-pi-fallback', root, {
     featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-    config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+    config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
       portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: ['pi', 'claude'] },
     } } } as HarnessConfig,
     providerRuntimes: new ProviderRuntimeSet([
@@ -211,7 +211,7 @@ async function runOrdinaryCustomMember(
   const policy = providerKey === 'claude' ? CLAUDE_MODEL_POLICY : CODEX_MODEL_POLICY;
   const runner = new DefaultStepRunner(provider, `ordinary-${providerKey}`, root, {
     featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-    config: { llm_provider: providerKey, build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+    config: { llm_provider: providerKey, build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
       portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: providerKey },
     } } } as HarnessConfig,
     providerRuntimes: new ProviderRuntimeSet([{ key: providerKey, provider, policy, builtIn: true, availability: new ModelAvailability(policy.modelFallbackLadder) }]),
@@ -332,7 +332,7 @@ describe('custom build-review policy runner', () => {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: {
         llm_provider: providerKey,
-        build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
           portable: { enabled: true, skill: source === 'plugin' ? 'policy-plugin:portable-policy' : 'portable-policy', question: 'Check the selected policy.', source, llm_provider: providerKey },
         } },
       } as HarnessConfig,
@@ -413,7 +413,7 @@ describe('custom build-review policy runner', () => {
     };
     const runner = new DefaultStepRunner(provider, 'custom-policy-input-digest', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -441,7 +441,7 @@ describe('custom build-review policy runner', () => {
     };
     const runner = new DefaultStepRunner(provider, 'custom-policy-feature-checkout-write', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -476,7 +476,7 @@ describe('custom build-review policy runner', () => {
     try {
       const runner = new DefaultStepRunner(provider, 'custom-policy-event-log', root, {
         featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(), events,
-        config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
           portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
         } } } as HarnessConfig,
         providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -520,7 +520,7 @@ describe('custom build-review policy runner', () => {
     events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event); });
     const runner = new DefaultStepRunner(provider, 'custom-policy-input-mutation', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -578,7 +578,7 @@ describe('custom build-review policy runner', () => {
     events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event); });
     const runner = new DefaultStepRunner(provider, 'custom-policy-throwaway-home', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         // A fallback list makes every candidate capture a baseline in its own
         // prepared home, which the executor tears down before fan-out.
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'global', llm_provider: ['codex', 'claude'] },
@@ -765,7 +765,7 @@ describe('custom build-review policy runner', () => {
     const runner = new DefaultStepRunner(provider, 'mixed-policy-input-mutation', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(), events,
       config: { llm_provider: 'claude', build_review: {
-        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true } },
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true }, implementationQuality: { enabled: false } },
         custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' } },
       } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -783,12 +783,13 @@ describe('custom build-review policy runner', () => {
     });
 
     await expect(runner.run('build_review', { complexity_tier: 'M' } as never)).resolves.toMatchObject({ success: false, currentLapMechanicalFault: true });
-    expect(failures).toHaveLength(3);
+    expect(failures).toHaveLength(4);
     expect(failures).toEqual(expect.arrayContaining([
       // The captured copy lives under an engine-owned pipeline path, so only
       // its own policy-material root (never the evidence root) reports it.
       expect.objectContaining({ rubric: 'portable', cause: 'review-input-mutated', changedInputs: ['capturedPolicyMaterial:SKILL.md'] }),
       expect.objectContaining({ rubric: 'security', cause: 'review-input-mutated', changedInputs: ['capturedPolicyMaterial:SKILL.md'] }),
+      expect.objectContaining({ rubric: 'implementationQuality', cause: 'review-input-mutated', changedInputs: ['capturedPolicyMaterial:SKILL.md'] }),
     ]));
     await expect(readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
   });
@@ -819,7 +820,7 @@ describe('custom build-review policy runner', () => {
     events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event as never); });
     const runner = new DefaultStepRunner(provider, 'custom-policy-serialized-baseline', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(), events,
-      config: { llm_provider: 'claude', build_review: { enabled: true, maxParallel: 1, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, maxParallel: 1, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         alpha: { enabled: true, skill: 'alpha-policy', question: 'Check alpha.', source: 'project', llm_provider: 'claude' },
         beta: { enabled: true, skill: 'beta-policy', question: 'Check beta.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
@@ -869,7 +870,7 @@ describe('custom build-review policy runner', () => {
     const runner = new DefaultStepRunner(provider, 'mixed-concurrent-fan-out', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: { llm_provider: 'claude', build_review: {
-        enabled: true, maxParallel: 2, rubrics: { testQuality: { enabled: false }, security: { enabled: true } },
+        enabled: true, maxParallel: 2, rubrics: { testQuality: { enabled: false }, security: { enabled: true }, implementationQuality: { enabled: false } },
         custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' } },
       } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -908,7 +909,7 @@ describe('custom build-review policy runner', () => {
     const runner = new DefaultStepRunner(provider, 'mixed-policy-mutated-cache', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: { llm_provider: 'claude', build_review: {
-        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true } },
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true }, implementationQuality: { enabled: false } },
         custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' } },
       } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -1011,7 +1012,7 @@ describe('custom build-review policy runner', () => {
     };
     const runner = new DefaultStepRunner(provider, 'custom-policy-input-mutation-exhausted', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -1048,7 +1049,7 @@ describe('custom build-review policy runner', () => {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: {
         llm_provider: 'claude',
-        build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
           portable: { enabled: true, skill: 'policy-plugin:portable-policy', question: 'Check the selected policy.', source: 'plugin', resources: ['references/criteria.md'], llm_provider: 'claude' },
         } },
       } as HarnessConfig,
@@ -1123,7 +1124,7 @@ describe('custom build-review policy runner', () => {
     events.on('build_review_outer_verdict', (event) => { outerVerdicts.push(event); });
     const runner = new DefaultStepRunner(provider, 'custom-policy-resolution-failure', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -1161,7 +1162,7 @@ describe('custom build-review policy runner', () => {
     };
     return new DefaultStepRunner(provider, 'custom-only-durable-evidence', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', test_suite: { timeout_seconds: 120 }, build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', test_suite: { timeout_seconds: 120 }, build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: {
           enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude',
           ...(options.timeoutSeconds === undefined ? {} : { timeout_seconds: options.timeoutSeconds }),
@@ -1287,7 +1288,7 @@ describe('custom build-review policy runner', () => {
     const runner = new DefaultStepRunner(provider, 'mixed-custom-policy', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: {
-        testQuality: { enabled: false }, security: { enabled: true },
+        testQuality: { enabled: false }, security: { enabled: true }, implementationQuality: { enabled: false },
       }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
@@ -1327,7 +1328,7 @@ describe('custom build-review policy runner', () => {
     events.on('build_review_policy_failed', (event) => { failures.push(event); });
     const runner = new DefaultStepRunner(provider, 'custom-policy', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -1369,7 +1370,7 @@ describe('custom build-review policy runner', () => {
     };
     const runner = new DefaultStepRunner(provider, 'custom-policy-failure', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', source: 'project', resources: ['criteria.md'], llm_provider: 'codex' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) }]),
@@ -1447,7 +1448,7 @@ describe('custom build-review policy discovery under candidate authority', () =>
     events.on('build_review_policy_failed', (event) => { failures.push(event); });
     const runner = new DefaultStepRunner(provider, 'custom-policy-authority', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', test_suite: { timeout_seconds: 120 }, build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', test_suite: { timeout_seconds: 120 }, build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude', timeout_seconds: timeoutSeconds },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),

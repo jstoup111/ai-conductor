@@ -63,7 +63,7 @@ async function runBuiltinLap(providerKey: 'claude' | 'codex', disabledCustom = f
     llm_provider: providerKey,
     build_review: {
       enabled: true,
-      rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: providerKey } },
+      rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: providerKey }, implementationQuality: { enabled: false } },
       ...(disabledCustom ? { custom_rubrics: { portable: { enabled: false, skill: 'portable-policy', question: 'Review.' } } } : {}),
     },
   } as HarnessConfig;
