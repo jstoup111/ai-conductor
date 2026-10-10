@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:8, task:12
+// Covers: task:1, task:2, task:3, task:8, task:12
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -1459,6 +1459,68 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.diff).toContain('feature.txt');
       expect(result.diff).toContain('feature change');
       expect(result.planBody).toContain('Fixture plan.');
+    });
+
+    it('exposes path-sorted malformed Covers markers outside the frozen source snapshot', async () => {
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(planPath, '# Plan body\n\n### Task 1: fixture behavior\n', 'utf-8');
+      await Promise.all([
+        writeFile(join(dir, 'test/alpha.test.ts'), [
+          '// Covers: Task: 32',
+          "it('alpha malformed marker', () => {});",
+          '',
+        ].join('\n')),
+        writeFile(join(dir, 'test/beta.test.ts'), [
+          '// Covers: Task: 32',
+          "it('beta malformed marker', () => {});",
+          '',
+        ].join('\n')),
+      ]);
+      await git('add', 'plan.md', 'test');
+      await git('commit', '-m', 'add malformed Covers fixture tests');
+
+      const malformed = await assembleBuildReviewInputs(realGit(), planPath);
+
+      expect(malformed.malformedCoversMarkers).toEqual([
+        { path: 'test/alpha.test.ts', line: 1, token: 'Task: 32' },
+        { path: 'test/beta.test.ts', line: 1, token: 'Task: 32' },
+      ]);
+      expect(malformed.sourceSnapshot).not.toHaveProperty('malformedCoversMarkers');
+      expect(Object.keys(malformed.sourceSnapshot.testQuality ?? {}).sort()).toEqual([
+        'counterfactualFileSelectors',
+        'inScopeTests',
+        'unresolvedMarkers',
+      ]);
+      const projections = deriveBuildReviewRubricProjections({
+        lapId: parseBuildReviewLapId('malformed-covers-fixture')!,
+        inputs: malformed,
+        testQuality: {
+          changedTestSelectors: malformed.sourceSnapshot.testQuality!.inScopeTests,
+          unresolvedMarkers: malformed.sourceSnapshot.testQuality!.unresolvedMarkers,
+          revertedProductionManifest: [],
+          preflight: { classification: 'not-requested' },
+        },
+      });
+      expect(JSON.stringify(projections)).not.toContain('malformedCoversMarkers');
+
+      await Promise.all([
+        writeFile(join(dir, 'test/alpha.test.ts'), [
+          '// Covers: task:1',
+          "it('alpha malformed marker', () => {});",
+          '',
+        ].join('\n')),
+        writeFile(join(dir, 'test/beta.test.ts'), [
+          '// Covers: task:1',
+          "it('beta malformed marker', () => {});",
+          '',
+        ].join('\n')),
+      ]);
+      await git('add', 'test');
+      await git('commit', '-m', 'correct fixture Covers markers');
+
+      await expect(assembleBuildReviewInputs(realGit(), planPath)).resolves.toMatchObject({
+        malformedCoversMarkers: [],
+      });
     });
 
     it('excludes tests introduced only by a newer base branch from feature-owned declaration evidence', async () => {
