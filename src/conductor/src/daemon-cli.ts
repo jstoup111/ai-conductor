@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { createDaemonEventPresenter, type DaemonEventPresenter } from './engine/daemon-event-presenter.js';
 import { runSighupPersistence } from './engine/sighup-persistence.js';
 import { v4 as uuidv4 } from 'uuid';
 import { basename, join, dirname, isAbsolute } from 'node:path';
@@ -3089,20 +3090,33 @@ export function resetRenderedReclaimRetentions(): void {
  * signal high: step boundaries, failures/retries, unsatisfied gates, kickbacks,
  * halts/convergence, and rate limits — not the full event firehose.
  */
+const daemonLifetimePresenters = new WeakMap<(msg: string) => void, DaemonEventPresenter>();
+
+/**
+ * Compatibility seam for callers that have not yet moved their cases into the
+ * presenter. One presenter is created lazily for each daemon log sink; that
+ * keeps presenter memory daemon-lifetime for the global subscriber while Task
+ * 5 replaces per-dispatch callers with explicitly scoped instances.
+ */
 export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => void): void {
-  // Colors mirror the TTY dashboard palette (ui/dashboard-text.ts): green ✓,
-  // cyan ▶, red ✗, yellow warnings, dim chrome. chalk auto-disables under
-  // NO_COLOR / non-TTY, so piped or redirected daemon logs stay plain text.
-  //
-  // Task 11: a throwing renderer must never crash the daemon run — the whole
-  // switch is wrapped defensively so a malformed/unexpected event payload
-  // (e.g. from a future event kind whose formatter assumes a field that
-  // isn't there) degrades to a dropped line, not a process crash.
-  try {
-    renderDaemonEventUnsafe(event, log);
-  } catch {
-    // Best-effort: rendering a daemon.log line must never disrupt the run.
+  let presenter = daemonLifetimePresenters.get(log);
+  if (!presenter) {
+    presenter = createDaemonEventPresenter({
+      log: () => {},
+      verbose: false,
+      // The legacy dispatcher is deliberately transitional. Subsequent tasks
+      // migrate its cases to the presenter's typed output API one group at a time.
+      render: (renderedEvent) => {
+        try {
+          renderDaemonEventUnsafe(renderedEvent, log);
+        } catch {
+          // Best-effort: rendering a daemon.log line must never disrupt the run.
+        }
+      },
+    });
+    daemonLifetimePresenters.set(log, presenter);
   }
+  presenter.render(event);
 }
 
 function buildReviewLapTag(lapId: string): string {
@@ -3118,10 +3132,13 @@ function renderedExecutionSubject(event: ConductorEvent, legacyStep: string): st
     },
     legacyStep,
     executionContext: 'executionContext' in event ? event.executionContext : undefined,
-  })?.subjectLabel ?? legacyStep;
+})?.subjectLabel ?? legacyStep;
 }
 
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
+  // Colors mirror the TTY dashboard palette (ui/dashboard-text.ts): green ✓,
+  // cyan ▶, red ✗, yellow warnings, dim chrome. chalk auto-disables under
+  // NO_COLOR / non-TTY, so piped or redirected daemon logs stay plain text.
   const dot = chalk.dim('·');
   switch (event.type) {
     case 'test_suite_verification':
