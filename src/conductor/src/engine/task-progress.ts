@@ -241,8 +241,12 @@ export async function openRepairForTask(projectRoot: string, id: string): Promis
   const state = await readOpenRepairState(projectRoot);
   if (state.kind === 'unavailable') return { kind: 'unavailable', reason: state.reason };
   if (state.kind === 'none') return { kind: 'none' };
-  const canonicalId = canonicalTaskId(id);
-  const open = state.obligations.find((obligation) => obligation.tasks[canonicalId]?.status === 'open');
+  const standing = taskObligationStanding(state.section, state.planIdentity, id);
+  if (standing.kind === 'current-less') return { kind: 'unavailable', reason: standing.reason };
+  if (standing.kind === 'none') return { kind: 'none' };
+  const open = standing.current?.tasks[canonicalTaskId(id)]?.status === 'open'
+    ? standing.current
+    : standing.live.find((obligation) => obligation.tasks[canonicalTaskId(id)]?.status === 'open');
   return open ? { kind: 'open', obligationId: open.id } : { kind: 'none' };
 }
 
@@ -375,15 +379,17 @@ export async function completeTaskDoneWhen(
   }
   const canonicalId = canonicalTaskId(id);
   const planIdentity = repairPlanIdentity(projectRoot, activePlanPath);
+  const standing = taskObligationStanding(repairState.value, planIdentity, id);
+  if (standing.kind === 'current-less') {
+    return { kind: 'refused', message: `[task-cli] cannot close task ${id}: ${standing.reason}` };
+  }
   // `currentByPlan` selects the newest row for legacy single-repair callers,
   // but a task can carry independent findings from more than one authority.
   // A successful Done-when close is current evidence for every still-open
   // obligation on that task; leaving an older authority open would let it
   // override the just-completed status on the next resolution fold.
-  const openObligationIds = Object.values(repairState.value.records)
-    .filter((obligation) =>
-      obligation.planIdentity === planIdentity && obligation.tasks[canonicalId]?.status === 'open',
-    )
+  const openObligationIds = (standing.kind === 'live' ? standing.live : [])
+    .filter((obligation) => obligation.tasks[canonicalId]?.status === 'open')
     .map((obligation) => obligation.id);
   const evidenceByIndex = new Map<number, string>();
   for (const entry of suppliedEvidence) {

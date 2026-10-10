@@ -1,4 +1,4 @@
-// Covers: task:2, task:4, task:5, task:6
+// Covers: task:2, task:3, task:4, task:5, task:6
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import {
   countResolvedTasks,
   resolveTaskIds,
   resolveTaskIdsWithDiagnostics,
+  openRepairForTask,
   completeTaskDoneWhen,
   haltMarkerExists,
   clearHaltMarker,
@@ -442,6 +443,42 @@ describe('task-progress', () => {
       await expect(resolveTaskIdsWithDiagnostics(dir, ['2'])).resolves.toEqual({
         resolved: new Set(),
         unavailableReasons: new Map([['2', 'repair state is unavailable: task 2 has an open repair obligation but no current obligation is recorded for it']]),
+      });
+    });
+
+    it('reports no open repair when task 2 only has an open superseded obligation', async () => {
+      const repairs = await prepareResolverRepairState();
+      await admitResolverObligation(repairs, 'older', 'build_review', 'orphaned-boundary');
+      const current = await admitResolverObligation(repairs, 'current', 'build_review', 'current-boundary');
+      await repairs.close({
+        planPath: '.docs/plans/feature.md', taskId: '2', obligationId: current.id,
+        evidence: { kind: 'task-done', value: 'current' },
+      });
+
+      await expect(openRepairForTask(dir, '2')).resolves.toEqual({ kind: 'none' });
+    });
+
+    it('reports the open current repair instead of its superseded predecessor', async () => {
+      const repairs = await prepareResolverRepairState();
+      await admitResolverObligation(repairs, 'older', 'build_review', 'orphaned-boundary');
+      const current = await admitResolverObligation(repairs, 'current', 'build_review', 'current-boundary');
+
+      await expect(openRepairForTask(dir, '2')).resolves.toEqual({ kind: 'open', obligationId: current.id });
+    });
+
+    it.each([
+      ['is missing', (state: MutableRepairState) => delete state.repairObligations.currentByPlan['.docs/plans/feature.md']['2']],
+      ['names a missing record', (state: MutableRepairState) => { state.repairObligations.currentByPlan['.docs/plans/feature.md']['2'] = 'missing'; }],
+    ])('reports a current-less repair as unavailable when its current entry %s', async (_caseName, corrupt) => {
+      const repairs = await prepareResolverRepairState();
+      await admitResolverObligation(repairs, 'open', 'build_review', 'boundary');
+      const state = JSON.parse(await readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8')) as MutableRepairState;
+      corrupt(state);
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify(state));
+
+      await expect(openRepairForTask(dir, '2')).resolves.toEqual({
+        kind: 'unavailable',
+        reason: 'repair state is unavailable: task 2 has an open repair obligation but no current obligation is recorded for it',
       });
     });
 
