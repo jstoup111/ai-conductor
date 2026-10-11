@@ -1012,17 +1012,18 @@ export function createGithubTrackerClient(
       if (!Array.isArray(pages) || !pages.every(Array.isArray)) {
         throw new Error('listOpenIssues: paginated listing was not an array of pages');
       }
-      const issues = pages.flat();
+      const entries = pages.flat();
       return {
         complete: true,
-        issues: issues.map((issue) => {
+        issues: entries.flatMap((issue) => {
         if (!issue || typeof issue !== 'object') throw new Error('listOpenIssues: listing contained an invalid issue');
-        const entry = issue as { number?: unknown; body?: unknown };
+        const entry = issue as { number?: unknown; body?: unknown; pull_request?: unknown };
+        if (entry.pull_request != null) return [];
         if (typeof entry.number !== 'number' || !Number.isSafeInteger(entry.number)
           || (typeof entry.body !== 'string' && entry.body != null)) {
           throw new Error('listOpenIssues: listing contained an invalid issue');
         }
-        return { number: entry.number, body: entry.body ?? '' };
+        return [{ number: entry.number, body: entry.body ?? '' }];
         }),
       };
     },

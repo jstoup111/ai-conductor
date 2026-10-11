@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:14, task:15, task:rem-as-built-rem-asb-1, task:rem-as-built-rem-asb-2, task:rem-as-built-rem-asb-3, task:rem-as-built-rem-asb-7, task:rem-as-built-rem-asb-8
+// Covers: task:1, task:2, task:14, task:15, task:rem-as-built-rem-asb-1, task:rem-as-built-rem-asb-2, task:rem-as-built-rem-asb-3, task:rem-as-built-rem-asb-7, task:rem-as-built-rem-asb-8, task:rem-as-built-rem-asb-10
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -6,7 +6,7 @@ import {
   declaredEdges,
   sweepDependencyDrift,
 } from '../../../src/engine/engineer/dependency-reconciler.js';
-import type { TrackerClient } from '../../../src/engine/tracker-client.js';
+import { createGithubTrackerClient, type GhRunner, type TrackerClient } from '../../../src/engine/tracker-client.js';
 
 const SOURCE = 'acme/app#20';
 
@@ -193,6 +193,32 @@ function driftTracker(
 }
 
 describe('sweepDependencyDrift', () => {
+  it('ignores pull-request entries from the open-issue listing without producing findings or indeterminates', async () => {
+    const calls: string[][] = [];
+    const runner: GhRunner = async (args) => {
+      calls.push(args);
+      if (args[1] === 'repos/acme/app/issues?state=open&per_page=100') {
+        return { stdout: JSON.stringify([[
+          { number: 51, body: '' },
+          { number: 52, body: 'Blocked by #53.', pull_request: { url: 'https://api.github.com/repos/acme/app/pulls/52' } },
+        ]]) };
+      }
+      if (args[1] === 'repos/acme/app/issues/51/dependencies/blocked_by') return { stdout: '[]' };
+      throw new Error(`unexpected gh call: ${args.join(' ')}`);
+    };
+
+    await expect(sweepDependencyDrift({
+      repository: 'acme/app',
+      tracker: createGithubTrackerClient(runner),
+    })).resolves.toEqual({
+      kind: 'swept', unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: [],
+    });
+    expect(calls).toEqual([
+      ['api', 'repos/acme/app/issues?state=open&per_page=100', '--paginate', '--slurp'],
+      ['api', 'repos/acme/app/issues/51/dependencies/blocked_by'],
+    ]);
+  });
+
   it('returns unlinked, stale, cycle, and direction-contradiction findings from the four-category fixture', async () => {
     const tracker = driftTracker(
       [
