@@ -36,7 +36,7 @@ const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
   'engine/finish-record-cli.ts:ConductStateStore.apply': 1,
   'engine/gate-verdicts.ts:readVerdict': 3,
   'engine/gate-verdicts.ts:writeVerdict': 2,
-  'engine/kickback-budget-cli.ts:readKickbackLedger': 5,
+  'engine/kickback-budget-cli.ts:readKickbackLedger': 6,
   'engine/kickback-ledger.ts:bumpKickbackGate': 2,
   'engine/kickback-ledger.ts:readKickbackLedger': 20,
   'engine/rebase-transition.ts:ConductStateStore.applyBatch': 1,
@@ -46,7 +46,6 @@ const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
   'engine/rebase.ts:readVerdict': 4,
   'engine/rebase.ts:writeVerdict': 4,
   'engine/remediation-caps.ts:readKickbackLedger': 2,
-  'engine/restack/restack-executor.ts:readKickbackLedger': 1,
   'engine/restack/restack-transition.ts:readVerdict': 1,
   'engine/rewind.ts:ConductStateStore.applyBatch': 3,
   'engine/rewind.ts:ConductStateStore.applyCorrection': 1,
@@ -88,7 +87,6 @@ const CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS: Readonly<Record<string, Classific
  */
 const RESTACK_REGION_ACCESS_CLASSIFICATIONS: Readonly<Record<string, Classification>> = {
   'engine/daemon-rekick.ts:readKickbackLedger(path,child)': 'child-aware',
-  'engine/restack/restack-executor.ts:readKickbackLedger(worktree,activeChild)': 'child-aware',
   'engine/restack/restack-transition.ts:readVerdict(options.worktree,gate,range.child)': 'child-aware',
 };
 
@@ -272,7 +270,6 @@ describe('child-region flat-access audit', () => {
     }
     expect(Object.keys(RESTACK_REGION_ACCESS_CLASSIFICATIONS)).toEqual([
       'engine/daemon-rekick.ts:readKickbackLedger(path,child)',
-      'engine/restack/restack-executor.ts:readKickbackLedger(worktree,activeChild)',
       'engine/restack/restack-transition.ts:readVerdict(options.worktree,gate,range.child)',
     ]);
   });
