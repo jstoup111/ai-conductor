@@ -40,4 +40,28 @@ describe('LogListener delivery health isolation', () => {
       listener.stop();
     }
   });
+
+  it('counts an unfit required identity without changing the local occurrence', async () => {
+    const emit = vi.fn();
+    const drops = vi.fn();
+    const local = vi.fn();
+    const events = new ConductorEventEmitter();
+    const body = 'complete local diagnostic';
+    const event = { type: 'operational_log' as const, severity: 'warn' as const, body, occurredAt: 42,
+      ownership: { scope: 'feature' as const, featureSlug: 'f'.repeat(64 * 1024) } };
+    events.on('operational_log', local);
+    const listener = new LogListener({ emit } as never, 'project', 'worker', drops);
+    listener.start(events);
+
+    try {
+      await events.emit(event);
+      expect(drops).toHaveBeenCalledTimes(1);
+      expect(emit).not.toHaveBeenCalled();
+      expect(local).toHaveBeenCalledWith(event);
+      expect(event.body).toBe(body);
+    } finally {
+      listener.stop();
+      events.off('operational_log', local);
+    }
+  });
 });

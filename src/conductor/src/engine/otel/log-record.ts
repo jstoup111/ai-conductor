@@ -45,6 +45,7 @@ export function normalizeLogRecord(record: ProjectedLogRecord): NormalizedLogRec
   const optional = Object.entries(record.attributes).filter(([key]) => !key.startsWith('conductor.'));
   const attributes = Object.fromEntries([...required, ...optional].slice(0, MAX_ATTRIBUTES));
   const body = truncateUtf8(record.body, MAX_BODY_BYTES);
+  let attributesTruncated = Object.keys(record.attributes).length > Object.keys(attributes).length;
   const mark = (key: string) => {
     if (Object.keys(attributes).length >= MAX_ATTRIBUTES) {
       const removable = Object.keys(attributes).find((name) => !name.startsWith('conductor.'));
@@ -53,10 +54,20 @@ export function normalizeLogRecord(record: ProjectedLogRecord): NormalizedLogRec
     if (Object.keys(attributes).length < MAX_ATTRIBUTES || key in attributes) attributes[key] = true;
   };
   if (body !== record.body) mark('conductor.body.truncated');
-  if (Object.keys(record.attributes).length > MAX_ATTRIBUTES) mark('conductor.attributes.truncated');
-  const normalized = { ...record, body, attributes };
-  const byteSize = Buffer.byteLength(JSON.stringify(normalized), 'utf8');
+  if (attributesTruncated) mark('conductor.attributes.truncated');
+  let normalized = { ...record, body, attributes };
+  let byteSize = Buffer.byteLength(JSON.stringify(normalized), 'utf8');
+  // Optional diagnostics must not turn a complete identity into a dropped record.
+  // Only an identity that cannot fit is an irreducible whole-record loss.
+  while (byteSize > MAX_RECORD_BYTES) {
+    const removable = Object.keys(attributes).find((key) => !key.startsWith('conductor.'));
+    if (removable === undefined) return undefined;
+    delete attributes[removable];
+    attributesTruncated = true;
+    if (attributesTruncated) mark('conductor.attributes.truncated');
+    normalized = { ...record, body, attributes };
+    byteSize = Buffer.byteLength(JSON.stringify(normalized), 'utf8');
+  }
   // Required identity is never abbreviated: reject instead of lying about it.
-  if (byteSize > MAX_RECORD_BYTES) return undefined;
   return { ...normalized, byteSize };
 }
