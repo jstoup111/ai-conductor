@@ -798,6 +798,59 @@ export interface FlattenedReplayPlan {
   absorptionPoints: Array<{ from: string; to: string }>;
 }
 
+/** The replay treatment for one two-parent merge. */
+export type ReplayMergeClassification =
+  | { kind: 'ancestry-only'; mergeSha: string; firstParent: string; secondParent: string; mergeTree: string }
+  | { kind: 'q-carried'; mergeSha: string; firstParent: string; secondParent: string; mergeTree: string; autoTree: string }
+  | { kind: 'flattened'; mergeSha: string; firstParent: string; secondParent: string; mergeTree: string };
+
+/**
+ * Classify a merge before replaying it.  N=1 deliberately preserves the
+ * established two-class result; stacked replays can distinguish a carried Q
+ * side from a side that must be flattened.
+ */
+export async function classifyReplayMerge(
+  git: GitRunner,
+  merge: string,
+  newParent: string,
+  mode: 'n1' | 'stacked',
+): Promise<ReplayMergeClassification> {
+  const parentsResult = await git(['rev-list', '--parents', '-n', '1', merge]);
+  if (parentsResult.exitCode !== 0) throw new Error(`could not read parents for replay entry ${merge}`);
+  const parents = parentsResult.stdout.trim().split(/\s+/).slice(1);
+  if (parents.length < 2) throw new Error(`replay entry ${merge} is not a merge`);
+  const [firstParent, secondParent] = parents as [string, string];
+
+  const [mergeTreeResult, firstParentTreeResult] = await Promise.all([
+    git(['rev-parse', `${merge}^{tree}`]),
+    git(['rev-parse', `${merge}^1^{tree}`]),
+  ]);
+  if (mergeTreeResult.exitCode !== 0 || firstParentTreeResult.exitCode !== 0) {
+    throw new Error(`could not read tree identity for merge ${merge}`);
+  }
+  if (mode === 'n1') {
+    return mergeTreeResult.stdout.trim() === firstParentTreeResult.stdout.trim()
+      ? { kind: 'ancestry-only', mergeSha: merge, firstParent, secondParent, mergeTree: mergeTreeResult.stdout.trim() }
+      : { kind: 'flattened', mergeSha: merge, firstParent, secondParent, mergeTree: mergeTreeResult.stdout.trim() };
+  }
+
+  const [automatic, carried] = await Promise.all([
+    git(['merge-tree', '--write-tree', firstParent, secondParent]),
+    git(['merge-base', '--is-ancestor', secondParent, newParent]),
+  ]);
+  if (automatic.exitCode !== 0) throw new Error(`could not calculate automatic merge for ${merge}: ${automatic.stderr}`);
+  if (carried.exitCode !== 0 && carried.exitCode !== 1) {
+    throw new Error(`could not determine whether merge side is carried for ${merge}: ${carried.stderr}`);
+  }
+  if (carried.exitCode === 0 && mergeTreeResult.stdout.trim() === automatic.stdout.trim()) {
+    return { kind: 'ancestry-only', mergeSha: merge, firstParent, secondParent, mergeTree: mergeTreeResult.stdout.trim() };
+  }
+  if (carried.exitCode === 0) {
+    return { kind: 'q-carried', mergeSha: merge, firstParent, secondParent, mergeTree: mergeTreeResult.stdout.trim(), autoTree: automatic.stdout.trim() };
+  }
+  return { kind: 'flattened', mergeSha: merge, firstParent, secondParent, mergeTree: mergeTreeResult.stdout.trim() };
+}
+
 export type FlattenedReplayProof =
   | { kind: 'proven'; inPlaceTree: string; targetTree: string }
   | { kind: 'refused'; reason: string }
@@ -948,19 +1001,13 @@ export async function planFlattenedReplay(
       continue;
     }
 
-    const [firstParentSha] = parents;
-    const [mergeTreeResult, parentTreeResult] = await Promise.all([
-      git(['rev-parse', `${sha}^{tree}`]),
-      git(['rev-parse', `${sha}^1^{tree}`]),
-    ]);
-    if (mergeTreeResult.exitCode !== 0 || parentTreeResult.exitCode !== 0) {
-      throw new Error(`could not read tree identity for merge ${sha}`);
-    }
-    const mergeTree = mergeTreeResult.stdout.trim();
-    if (mergeTree === parentTreeResult.stdout.trim()) {
+    const classification = await classifyReplayMerge(git, sha, mergeBase, 'n1');
+    if (classification.kind === 'ancestry-only') {
       ancestryOnlyMerges.push(sha);
       continue;
     }
+    const firstParentSha = classification.firstParent;
+    const mergeTree = classification.mergeTree;
 
     const metadata = await git(['show', '-s', '--format=%an%n%ae%n%cn%n%ce%n%s', sha]);
     if (metadata.exitCode !== 0) {
@@ -978,7 +1025,7 @@ export async function planFlattenedReplay(
     entries.push({ kind: 'flattened', sha: flattenedSha, mergeSha: sha, firstParent: firstParentSha, subject });
     flattenedMerges.push(sha);
     pairs.push({ from: sha, to: flattenedSha });
-    const side = await git(['rev-list', `${firstParentSha}..${parents[1]}`]);
+    const side = await git(['rev-list', `${firstParentSha}..${classification.secondParent}`]);
     if (side.exitCode !== 0) {
       throw new Error(`could not list side lineage for merge ${sha}`);
     }

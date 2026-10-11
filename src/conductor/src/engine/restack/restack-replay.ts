@@ -1,4 +1,4 @@
-import type { GitRunner } from '../rebase.js';
+import { classifyReplayMerge, type GitRunner } from '../rebase.js';
 import type { CommitSha, ChildRange } from './restack-types.js';
 import { parseCommitSha } from './restack-types.js';
 
@@ -14,6 +14,12 @@ export interface ChildRangeReplay {
   readonly tip: CommitSha;
   /** Exact correspondences for commits that produced a new object. */
   readonly rewrites: ReadonlyMap<CommitSha, CommitSha>;
+  /** The merge decisions that become one persisted audit event per restack. */
+  readonly audit: {
+    readonly flattenedMerges: readonly CommitSha[];
+    readonly ancestryOnlyMerges: readonly CommitSha[];
+    readonly sideLineageCount: number;
+  };
 }
 
 /** Commits newly introduced by the operation, never commits already in the stack. */
@@ -51,6 +57,18 @@ async function messageOf(git: GitRunner, commit: CommitSha): Promise<string> {
   const result = await git(['show', '-s', '--format=%B', commit]);
   if (result.exitCode !== 0) throw new Error(`could not read message for ${commit}: ${result.stderr}`);
   return result.stdout;
+}
+
+async function mergeParents(git: GitRunner, commit: CommitSha): Promise<readonly CommitSha[]> {
+  const result = await git(['rev-list', '--parents', '-n', '1', commit]);
+  if (result.exitCode !== 0) throw new Error(`could not read parents for ${commit}: ${result.stderr}`);
+  return result.stdout.trim().split(/\s+/).slice(1).map((parent) => requiredSha(parent, `parent for ${commit}`));
+}
+
+async function sideLineageCount(git: GitRunner, firstParent: CommitSha, secondParent: CommitSha): Promise<number> {
+  const result = await git(['rev-list', `${firstParent}..${secondParent}`]);
+  if (result.exitCode !== 0) throw new Error(`could not list side lineage for ${secondParent}: ${result.stderr}`);
+  return result.stdout.split('\n').filter(Boolean).length;
 }
 
 async function commitsInFirstParentRange(git: GitRunner, range: ChildRange): Promise<CommitSha[]> {
@@ -111,6 +129,9 @@ export async function replayChildRange(
   const sign = await commitsAreSigned(git);
   const comparisonPatchIds = await patchIdsForCommits(git, options.comparisonCommits ?? []);
   const rewrites = new Map<CommitSha, CommitSha>();
+  const flattenedMerges: CommitSha[] = [];
+  const ancestryOnlyMerges: CommitSha[] = [];
+  let sideLineageCountTotal = 0;
   let accumulator = newParent;
 
   for (const commit of await commitsInFirstParentRange(git, range)) {
@@ -118,8 +139,25 @@ export async function replayChildRange(
     // A matching patch in the stack itself (for example a child re-applying a
     // reverted parent change) must remain part of that child's history.
     if (comparisonPatchIds.has(await patchIdForCommit(git, commit) ?? '')) continue;
+    const parents = await mergeParents(git, commit);
+    const isMerge = parents.length >= 2;
+    const merge = isMerge
+      ? await classifyReplayMerge(git, commit, newParent, 'stacked')
+      : undefined;
+    if (merge?.kind === 'ancestry-only') {
+      ancestryOnlyMerges.push(commit);
+      sideLineageCountTotal += await sideLineageCount(git, requiredSha(merge.firstParent, `first parent for ${commit}`), requiredSha(merge.secondParent, `second parent for ${commit}`));
+      continue;
+    }
+    if (merge !== undefined) {
+      sideLineageCountTotal += await sideLineageCount(git, requiredSha(merge.firstParent, `first parent for ${commit}`), requiredSha(merge.secondParent, `second parent for ${commit}`));
+      if (merge.kind === 'flattened') flattenedMerges.push(commit);
+    }
+    const mergeArgs = merge?.kind === 'q-carried'
+      ? ['merge-tree', '--write-tree', '--merge-base', merge.autoTree, accumulator, commit]
+      : ['merge-tree', '--write-tree', '--merge-base', `${commit}^1`, accumulator, commit];
     const [merged, originalTree, originalParentTree, accumulatorTree, author, message] = await Promise.all([
-      git(['merge-tree', '--write-tree', '--merge-base', `${commit}^1`, accumulator, commit]),
+      git(mergeArgs),
       requiredShaFrom(git, ['rev-parse', `${commit}^{tree}`], `tree for ${commit}`),
       requiredShaFrom(git, ['rev-parse', `${commit}^1^{tree}`], `first-parent tree for ${commit}`),
       requiredShaFrom(git, ['rev-parse', `${accumulator}^{tree}`], `accumulator tree for ${commit}`),
@@ -133,17 +171,24 @@ export async function replayChildRange(
     // remain meaningful history and must retain their exact correspondence.
     if (mergedTree === accumulatorTree && originalTree !== originalParentTree) continue;
 
+    const commitMessage = merge === undefined
+      ? message
+      : `${message.trimEnd()}\n\nFlattened-merge: ${commit}\n`;
     const result = await git([
       'commit-tree',
       ...(sign ? ['-S'] : []),
       mergedTree,
       '-p', accumulator,
-    ], { input: message, env: commitEnvironment(author, stamp) });
+    ], { input: commitMessage, env: commitEnvironment(author, stamp) });
     if (result.exitCode !== 0) throw new Error(`commit-tree failed for ${commit}: ${result.stderr}`);
     const rewritten = requiredSha(result.stdout, `commit-tree for ${commit}`);
     rewrites.set(commit, rewritten);
     accumulator = rewritten;
   }
 
-  return { tip: accumulator, rewrites };
+  return {
+    tip: accumulator,
+    rewrites,
+    audit: { flattenedMerges, ancestryOnlyMerges, sideLineageCount: sideLineageCountTotal },
+  };
 }

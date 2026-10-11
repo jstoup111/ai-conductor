@@ -48,6 +48,7 @@ describe('replayChildRange invocation-local identity', () => {
       if (args[0] === 'show' && args.some((arg) => arg.includes('%an%x00%ae%x00%aI'))) {
         return { exitCode: 0, stdout: `${replay} Author\x00${replay.toLowerCase()}@example.test\x002021-02-03T04:05:06Z`, stderr: '' };
       }
+      if (args[0] === 'patch-id') return { exitCode: 0, stdout: `${replay.toLowerCase()}-patch ${OLD_TIP}\n`, stderr: '' };
       if (args[0] === 'show') return { exitCode: 0, stdout: `${replay} message\n`, stderr: '' };
       if (args[0] === 'commit-tree') {
         commits.push({ replay, environment: options?.env });

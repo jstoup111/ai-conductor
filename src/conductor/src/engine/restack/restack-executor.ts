@@ -273,6 +273,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const newStackCommits = await comparisonCommits(
       git, options.slug, options.cause, plan.ranges, plan.originating, newDefault,
     );
+    const mergeAudit = { flattenedMerges: [] as string[], ancestryOnlyMerges: [] as string[], sideLineageCount: 0 };
     let parent = newDefault;
     for (const range of plan.ranges) {
       const replay = await replayChildRange(range, parent, journal.journal.committer, git, {
@@ -282,6 +283,9 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while replaying' : updated.detail);
       journal = updated.journal;
       parent = replay.tip;
+      mergeAudit.flattenedMerges.push(...replay.audit.flattenedMerges);
+      mergeAudit.ancestryOnlyMerges.push(...replay.audit.ancestryOnlyMerges);
+      mergeAudit.sideLineageCount += replay.audit.sideLineageCount;
     }
 
     journal = await transitionState(options.worktree, journal, 'ready', git);
@@ -342,6 +346,9 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         type: 'restack_applied', opId: draft.opId, cause: draft.cause, child: range.child,
         oldTip: range.oldTip, newTip: move.newSha, wouldInvalidate: [], parentOverlapPaths: [],
       });
+    }
+    if (mergeAudit.flattenedMerges.length > 0 || mergeAudit.ancestryOnlyMerges.length > 0 || mergeAudit.sideLineageCount > 0) {
+      await options.events?.emit({ type: 'rebase_merge_audit', ...mergeAudit });
     }
     terminal = true;
     return { kind: 'applied', opId: draft.opId };

@@ -131,6 +131,37 @@ describe('runRestack (real local Git)', () => {
     expect((await git(['rev-parse', 'feat/c2/demo'])).stdout.trim()).not.toBe(base);
   });
 
+  it('persists a merge audit after flattening an uncarried side of a child range', async () => {
+    const subject = await fixture();
+    await subject.git(['branch', 'leaf-side']);
+    await subject.git(['checkout', '-q', 'leaf-side']);
+    await writeFile(join(subject.repo, 'side.txt'), 'side work\n');
+    await subject.git(['add', 'side.txt']);
+    await subject.git(['commit', '-qm', 'side work']);
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    await subject.git(['merge', '--no-ff', '-m', 'merge uncarried side', 'leaf-side']);
+    const merge = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await expect(runRestack({
+        worktree: subject.repo,
+        slug: 'demo',
+        cause: 'base-refresh',
+        newDefault: subject.advancedDefault,
+        events,
+        git: makeGitRunner(subject.repo),
+      })).resolves.toMatchObject({ kind: 'applied' });
+
+      const records = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line) as { type: string; flattenedMerges?: string[] });
+      expect(records).toContainEqual(expect.objectContaining({ type: 'rebase_merge_audit', flattenedMerges: [merge] }));
+    } finally {
+      persister.stop();
+    }
+  });
+
   it('halts without a journal or ref move when an active range is not based on its closed parent', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'restack-executor-refusal-'));
     repositories.push(repo);
