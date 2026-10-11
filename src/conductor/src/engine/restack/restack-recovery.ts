@@ -577,7 +577,10 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
     if (!stopAtSynced) await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail });
     return { kind: 'unavailable', detail: `cannot read restack journal ${journalRefFor(options.slug)}` };
   }
-  if (await isJournalOwnerAlive(read.journal.owner)) return { kind: 'live-owner' };
+  // An aborted journal is terminal: its owner wrote its last state and only
+  // leaves cleanup behind.  A long-lived daemon that halted a restack is still
+  // that owner at its next dispatch, so liveness must not block the cleanup.
+  if (read.journal.state !== 'aborted' && await isJournalOwnerAlive(read.journal.owner)) return { kind: 'live-owner' };
 
   let journal: StoredRestackJournal | undefined = { slug: read.slug, blob: read.blob, journal: read.journal };
   let moves: RestackMoveRef[] = [];
