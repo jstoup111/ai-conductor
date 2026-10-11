@@ -520,8 +520,6 @@ describe('SpoolDrainer', () => {
     const received: string[] = [];
     let traceAttempts = 0;
     let now = 1_727_000_000_000;
-    const delays: number[] = [];
-    let sleepCount = 0;
     let releaseFirstTraceRetry: (() => void) | undefined;
     let signalFirstTraceRetry!: () => void;
     const firstTraceRetry = new Promise<void>((resolve) => { signalFirstTraceRetry = resolve; });
@@ -542,26 +540,21 @@ describe('SpoolDrainer', () => {
         received.push(`${path}:${body}`);
         if (path === '/v1/traces') {
           traceAttempts += 1;
-          if (traceAttempts === 1) throw new Error('dropped trace connection');
+          if (traceAttempts === 1) {
+            await new Promise<void>((resolve) => {
+              releaseFirstTraceRetry = resolve;
+              signalFirstTraceRetry();
+            });
+            throw new Error('dropped trace connection');
+          }
           return new Response(undefined, { status: traceAttempts === 2 ? 503 : 200 });
         }
 
-        // The metrics loop is independent, but it must not win the shared
-        // sleep seam before the trace retry has installed its test barrier.
-        await firstTraceRetry;
         signalMetricsDelivered();
         return new Response(undefined, { status: 200 });
       },
       now: () => now,
       sleep: async (delay: number) => {
-        delays.push(delay);
-        sleepCount += 1;
-        if (sleepCount === 1) {
-          await new Promise<void>((resolve) => {
-            releaseFirstTraceRetry = resolve;
-            signalFirstTraceRetry();
-          });
-        }
         now += delay;
       },
       random: () => 0,

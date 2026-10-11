@@ -72,10 +72,12 @@ export const DAEMON_EVENT_PRESENTATION = {
   worktree_reclaim_reclaimed: defaultPresentation, worktree_reclaim_failed: defaultPresentation,
 } as const satisfies Record<RenderedEventType, DaemonEventPresentation>;
 
+type PresentedEntry = Omit<DaemonLogEntry, 'depth'>;
+
 type Output = {
-  info(text: string | DaemonLogEntry): void;
-  warning(text: string | DaemonLogEntry, next: NextAction): void;
-  halt(text: string | DaemonLogEntry, next: NextAction): void;
+  info(text: string | PresentedEntry): void;
+  warning(text: string | PresentedEntry, next: NextAction): void;
+  halt(text: string | PresentedEntry, next: NextAction): void;
   detail(text: string): void;
   once(key: string): Output;
   whenChanged(key: string, value: unknown): Output;
@@ -102,7 +104,7 @@ export function createDaemonEventPresenter({
   const outputFor = (type: RenderedEventType): Output => {
     const presentation = DAEMON_EVENT_PRESENTATION[type];
     const enabled = presentation.level !== 'verbose' || verbose;
-    const emit = (text: string | DaemonLogEntry): void => {
+    const emit = (text: string | PresentedEntry): void => {
       if (enabled) log(typeof text === 'string'
         ? { depth: presentation.depth, text }
         : { ...text, depth: presentation.depth });

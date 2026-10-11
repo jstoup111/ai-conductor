@@ -214,8 +214,8 @@ describe('feature session-event lifecycle', () => {
       .resolves.toContain('repair-result-1');
     expect(rendered.join('\n')).toContain('managed session command refused');
     expect(rendered.join('\n')).toContain('GitHub bypass result');
-    expect(rendered.join('\n')).toContain('repair-refusal-1');
-    expect(rendered.join('\n')).toContain('repair-result-1');
+    expect(rendered.join('\n')).not.toContain('repair-refusal-1');
+    expect(rendered.join('\n')).not.toContain('repair-result-1');
   });
 
   it('starts the feature owner before a failing managed invocation and drains its settled record before rethrowing', async () => {

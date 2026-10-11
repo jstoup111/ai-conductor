@@ -749,8 +749,8 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
     // Concurrent completion order is unspecified; ownership and multiplicity are not.
     expect([...lines].sort()).toEqual([
-      '[feature-a] ✋ feature-a halted — worktree kept (paused)',
-      '[feature-b] ✋ feature-b halted — worktree kept (paused)',
+      '[feature-a] ✋ feature-a halted — worktree kept (paused) — next: ai-conductor monitor all',
+      '[feature-b] ✋ feature-b halted — worktree kept (paused) — next: ai-conductor monitor all',
     ]);
   });
 

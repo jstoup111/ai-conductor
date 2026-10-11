@@ -4183,7 +4183,7 @@ TIER: M`,
         ? advisory
         : reviewOutput)).toBe(true);
       expect(warnings).toEqual([
-        `WARNING: ${advisory}`,
+        `WARNING: ${advisory} — no action needed: the build_review gate continues with the containment advisory`,
       ]);
       expect(coordinate).toHaveBeenCalledOnce();
     });

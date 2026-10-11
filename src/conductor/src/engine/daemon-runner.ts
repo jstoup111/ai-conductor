@@ -647,7 +647,9 @@ export function makeRunFeature(
         }
 
         await deps.teardownWorktree(worktree, true);
+        // ai-conductor:session-command-context=operator-only
         featureLog(formatDaemonHalt(`${item.slug} false-ship halted — worktree kept (${reason})`, { kind: 'operator', action: 'ai-conductor monitor all' }));
+        // /ai-conductor:session-command-context
         await endDispatch('halted');
         const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog, worktree);
         return {
@@ -662,7 +664,9 @@ export function makeRunFeature(
       if (outcome.halted) {
         await endDispatch('halted');
         await deps.teardownWorktree(worktree, true); // keep for the human
+        // ai-conductor:session-command-context=operator-only
         featureLog(formatDaemonHalt(`${item.slug} halted — worktree kept (${outcome.reason ?? 'see .pipeline/HALT'})`, { kind: 'operator', action: 'ai-conductor monitor all' }));
+        // /ai-conductor:session-command-context
         const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog, worktree);
         return {
           slug: item.slug,
