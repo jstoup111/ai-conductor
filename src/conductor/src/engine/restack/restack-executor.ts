@@ -58,6 +58,8 @@ export interface RunRestackOptions {
   readonly resolverCap?: number;
   /** Recovery-only replacement of an applied operation that named this cause. */
   readonly replacesAppliedJournal?: StoredRestackJournal;
+  /** A durable operation which must replace this one after it reaches applied. */
+  readonly followOnCause?: RestackCause;
 }
 
 export type RunRestackResult =
@@ -117,10 +119,8 @@ async function commitsInRange(git: GitRunner, range: string, context: string): P
 
 async function comparisonCommits(
   git: GitRunner,
-  slug: string,
   cause: RestackCause,
   ranges: readonly ChildRange[],
-  originating: readonly ChildId[],
   newDefault: CommitSha,
 ): Promise<CommitSha[]> {
   if (cause === 'base-refresh') {
@@ -128,17 +128,10 @@ async function comparisonCommits(
     return first === undefined ? [] : commitsInRange(git, `${first.oldParent}..${newDefault}`, 'new default commits');
   }
 
-  const commits: CommitSha[] = [];
-  for (const child of originating) {
-    const range = ranges.find((entry) => entry.child === child);
-    if (!range) throw new Error(`missing repair range for child ${child}`);
-    commits.push(...await commitsInRange(
-      git,
-      `refs/conductor/${slug}/closed/c${child}..${range.oldTip}`,
-      `repair commits for child ${child}`,
-    ));
-  }
-  return commits;
+  // Feature-repair origins are exactly the patches that must be carried into
+  // every descendant. Treating them as already-present comparison patches
+  // silently drops the operator's appended work from the rebuilt stack.
+  return [];
 }
 
 async function committerStamp(git: GitRunner): Promise<CommitterStamp> {
@@ -192,7 +185,13 @@ async function journalRefs(git: GitRunner, slug: string, ranges: readonly ChildR
     // intentionally outside the replay range, but its current ref value must
     // still be the CAS old value so the move discards it without a race.
     refs.push({ ref: branchRef, oldSha: await requiredSha(git, branchRef, `branch for child ${range.child}`) });
-    if (range.kind === 'closed') refs.push({ ref: ref(`refs/conductor/${slug}/closed/c${range.child}`), oldSha: range.oldTip });
+    if (range.kind === 'closed') {
+      const closureRef = ref(`refs/conductor/${slug}/closed/c${range.child}`);
+      // A feature repair replays an appended branch tip, while the closure
+      // still names its earlier sealed tip. Pin the actual closure value for
+      // the CAS rather than the replay range's (possibly appended) oldTip.
+      refs.push({ ref: closureRef, oldSha: await requiredSha(git, closureRef, `closure for child ${range.child}`) });
+    }
   }
   return refs;
 }
@@ -368,6 +367,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const draft: RestackJournalDraft = {
       opId: randomUUID() as RestackOpId,
       cause: options.cause,
+      ...(options.followOnCause === undefined ? {} : { followOnCause: options.followOnCause }),
       committer: await committerStamp(git),
       dirtyPaths: [],
       refs: await journalRefs(git, options.slug, plan.ranges),
@@ -387,7 +387,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     await options.events?.emit({ type: 'restack_planned', opId: draft.opId, cause: draft.cause, children: plan.ranges.map((range) => range.child) });
 
     const newStackCommits = await comparisonCommits(
-      git, options.slug, options.cause, plan.ranges, plan.originating, newDefault,
+      git, options.cause, plan.ranges, newDefault,
     );
     const mergeAudit = { flattenedMerges: [] as string[], ancestryOnlyMerges: [] as string[], sideLineageCount: 0 };
     const overlaps = new Map<number, string[]>();
@@ -469,9 +469,14 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       const branchRef = branchRefForRange(options.slug, range);
       const branchOld = readyJournal.journal.refs.find((entry) => entry.ref === branchRef)?.oldSha;
       if (!branchOld) throw new Error(`missing journaled branch ref for child ${range.child}`);
+      const closureRef = ref(`refs/conductor/${options.slug}/closed/c${range.child}`);
+      const closureOld = range.kind === 'closed'
+        ? readyJournal.journal.refs.find((entry) => entry.ref === closureRef)?.oldSha
+        : undefined;
+      if (range.kind === 'closed' && !closureOld) throw new Error(`missing journaled closure ref for child ${range.child}`);
       return [
         { ref: branchRef, oldSha: branchOld, newSha: range.oldTip, child: range.child },
-        ...(range.kind === 'closed' ? [{ ref: ref(`refs/conductor/${options.slug}/closed/c${range.child}`), oldSha: range.oldTip, newSha: range.oldTip, child: range.child }] : []),
+        ...(range.kind === 'closed' ? [{ ref: closureRef, oldSha: closureOld!, newSha: range.oldTip, child: range.child }] : []),
       ];
     });
     // Each staged ref is the source of truth for its move; resolve it after all
