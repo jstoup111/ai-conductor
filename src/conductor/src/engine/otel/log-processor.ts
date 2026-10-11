@@ -3,6 +3,8 @@ import { ProtobufLogsSerializer } from '@opentelemetry/otlp-transformer';
 import type { Context } from '@opentelemetry/api';
 import type { SdkLogRecord } from '@opentelemetry/sdk-logs';
 
+const LOG_DELIVERY_TIMEOUT_MS = 2_000;
+
 export interface LogBatchExporter {
   export(records: SdkLogRecord[], done: (result: ExportResult) => void): void | Promise<void>;
   shutdown?(): Promise<void>;
@@ -93,7 +95,15 @@ export class BoundedLogProcessor {
       this.inFlightBytes += batchBytes;
       await new Promise<void>((resolve) => {
         let settled = false;
-        const settle = (_result?: ExportResult) => { if (!settled) { settled = true; resolve(); } };
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        const settle = (_result?: ExportResult) => {
+          if (settled) return;
+          settled = true;
+          if (timeout) clearTimeout(timeout);
+          resolve();
+        };
+        timeout = setTimeout(() => settle({ code: ExportResultCode.FAILED }), LOG_DELIVERY_TIMEOUT_MS);
+        timeout.unref?.();
         try {
           const exported = this.exporter.export(batch, settle);
           if (exported) void exported.then(() => settle(), () => settle({ code: ExportResultCode.FAILED }));

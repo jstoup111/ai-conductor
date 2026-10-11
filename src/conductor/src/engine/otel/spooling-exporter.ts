@@ -7,6 +7,24 @@ import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import { type SpoolWriteResult, SpoolStore } from './spool-store.js';
 
+const LOG_DELIVERY_TIMEOUT_MS = 2_000;
+
+/** Bounds one asynchronous operation without allowing a late result to affect its caller. */
+async function withinLogDeliveryDeadline<T>(operation: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('log delivery deadline exceeded')), LOG_DELIVERY_TIMEOUT_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function emitEviction(
   events: ConductorEventEmitter | undefined,
   signal: 'traces' | 'metrics' | 'logs',
@@ -147,7 +165,12 @@ export class SpoolingLogExporter implements LogBatchExporter {
   async shutdown(): Promise<void> { await this.inner.shutdown?.(); }
   private async write(records: SdkLogRecord[], done: (result: ExportResult) => void): Promise<void> {
     try {
-      const result = await this.store.write('logs', ProtobufLogsSerializer.serializeRequest(records) ?? new Uint8Array(), records.length, this.destinationId);
+      const result = await withinLogDeliveryDeadline(this.store.write(
+        'logs',
+        ProtobufLogsSerializer.serializeRequest(records) ?? new Uint8Array(),
+        records.length,
+        this.destinationId,
+      ));
       emitEviction(this.events, 'logs', result);
       done({ code: ExportResultCode.SUCCESS });
     } catch (error) {

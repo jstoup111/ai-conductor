@@ -1,10 +1,36 @@
 // Covers: task:9, task:23
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BoundedLogProcessor } from '../../../src/engine/otel/log-processor.js';
 
 const record = (body: string) => ({ body, attributes: {}, resource: {}, instrumentationScope: {}, hrTime: [0, 0], hrTimeObserved: [0, 0], droppedAttributesCount: 0 }) as never;
 
 describe('BoundedLogProcessor', () => {
+  it('bounds a stalled exporter completion and ignores its late callback', async () => {
+    vi.useFakeTimers();
+    const callbacks: Array<(result: { code: number }) => void> = [];
+    const processor = new BoundedLogProcessor({
+      export(_records, done) { callbacks.push(done); },
+    }, { delayMs: 60_000, maxRecords: 2 });
+    processor.onEmit(record('first'));
+    const firstFlush = processor.forceFlush();
+
+    try {
+      expect(callbacks).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(firstFlush).resolves.toBeUndefined();
+
+      processor.onEmit(record('second'));
+      const secondFlush = processor.forceFlush();
+      expect(callbacks).toHaveLength(2);
+      callbacks[0]({ code: 0 });
+      callbacks[1]({ code: 0 });
+      await expect(secondFlush).resolves.toBeUndefined();
+    } finally {
+      await processor.shutdown();
+      vi.useRealTimers();
+    }
+  });
+
   it('admits synchronously, drops overflowing newest records, and settles once', async () => {
     const delivered: unknown[][] = [];
     const dropped: number[] = [];

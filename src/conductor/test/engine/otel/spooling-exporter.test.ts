@@ -1,5 +1,5 @@
 // Covers: task:5, task:6, task:12
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,7 +10,7 @@ import { ValueType } from '@opentelemetry/api';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { SpoolStore, type SpoolFilesystem } from '../../../src/engine/otel/spool-store.js';
 import { buildExporters } from '../../../src/engine/otel/transport.js';
-import { SpoolingMetricExporter, SpoolingSpanExporter } from '../../../src/engine/otel/spooling-exporter.js';
+import { SpoolingLogExporter, SpoolingMetricExporter, SpoolingSpanExporter } from '../../../src/engine/otel/spooling-exporter.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const directories: string[] = [];
@@ -298,6 +298,25 @@ afterEach(async () => {
 });
 
 describe('spooling exporters', () => {
+  it('bounds a stalled log preservation write before falling back to the direct sender', async () => {
+    vi.useFakeTimers();
+    let directCalls = 0;
+    const exporter = new SpoolingLogExporter({
+      write: () => new Promise<never>(() => undefined),
+    } as unknown as SpoolStore, 'destination', {
+      export(_records, done): void { directCalls += 1; done({ code: ExportResultCode.SUCCESS }); },
+    });
+    const result = new Promise<{ code: number }>((resolve) => exporter.export([], resolve));
+
+    try {
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(result).resolves.toEqual({ code: ExportResultCode.SUCCESS });
+      expect(directCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('publishes a traces batch before reporting SDK success', async () => {
     const store = new SpoolStore(await temporaryDirectory());
     const provider = new BasicTracerProvider();

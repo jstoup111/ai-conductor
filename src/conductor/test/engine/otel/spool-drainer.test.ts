@@ -1,5 +1,5 @@
 // Covers: task:10, task:11, task:12, task:13, task:14
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -66,6 +66,65 @@ afterEach(async () => {
 });
 
 describe('SpoolDrainer', () => {
+  it('bounds retained-log authorization and never sends after its deadline', async () => {
+    vi.useFakeTimers();
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('logs', Buffer.from('retained-log'), 1, 'destination');
+    let resolveAuthorization!: (value: { endpoint: string; headers: Record<string, string> }) => void;
+    const authorization = new Promise<{ endpoint: string; headers: Record<string, string> }>((resolve) => { resolveAuthorization = resolve; });
+    let sends = 0;
+    const drainer = new SpoolDrainer(store, {
+      endpoint: 'http://collector.test',
+      headers: () => ({}),
+      exportTimeoutMs: 10,
+      authorizeLog: async () => authorization,
+      fetch: async () => { sends += 1; return new Response(undefined, { status: 200 }); },
+      sleep: async () => new Promise<void>(() => undefined),
+    });
+    const draining = drainer.drainUntilStopped();
+
+    try {
+      await vi.advanceTimersByTimeAsync(10);
+      expect(sends).toBe(0);
+      resolveAuthorization({ endpoint: 'http://collector.test', headers: {} });
+      await Promise.resolve();
+      expect(sends).toBe(0);
+    } finally {
+      await drainer.stop();
+      await draining;
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not send retained logs when stopped during authorization', async () => {
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('logs', Buffer.from('retained-log'), 1, 'destination');
+    let startAuthorization!: () => void;
+    const authorizationStarted = new Promise<void>((resolve) => { startAuthorization = resolve; });
+    let resolveAuthorization!: (value: { endpoint: string; headers: Record<string, string> }) => void;
+    const authorization = new Promise<{ endpoint: string; headers: Record<string, string> }>((resolve) => { resolveAuthorization = resolve; });
+    let sends = 0;
+    const drainer = new SpoolDrainer(store, {
+      endpoint: 'http://collector.test',
+      headers: () => ({}),
+      authorizeLog: async () => { startAuthorization(); return authorization; },
+      fetch: async () => { sends += 1; return new Response(undefined, { status: 200 }); },
+    });
+    const draining = drainer.drainUntilStopped();
+
+    try {
+      await authorizationStarted;
+      await drainer.stop();
+      resolveAuthorization({ endpoint: 'http://collector.test', headers: {} });
+      await draining;
+      expect(sends).toBe(0);
+      expect(await store.list('logs')).toHaveLength(1);
+    } finally {
+      await drainer.stop();
+      await draining.catch(() => undefined);
+    }
+  });
+
   it('retries a transient spool list failure without delaying the other signal', async () => {
     const store = new SpoolStore(await temporaryDirectory());
     await store.write('traces', Buffer.from('retry-trace'));

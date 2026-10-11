@@ -30,6 +30,9 @@ const BACKLOG_REPORT_INTERVAL_MS = 30_000;
 const IDLE_POLL_INTERVAL_MS = 1_000;
 type DeliveryFailureClass = Extract<DeliveryClassification, { action: 'keep' }>['failureClass'];
 type ReportedFailureClass = DeliveryFailureClass | 'spool';
+type DeliveryAttempt =
+  | { authorized: false }
+  | { authorized: true; classification: DeliveryClassification };
 
 /**
  * Delivers immutable OTLP batches one at a time. Delivery is at-least-once:
@@ -117,13 +120,13 @@ export class SpoolDrainer {
       let backoffMs = INITIAL_BACKOFF_MS;
 
       while (!this.stopped) {
-        const logDestination = signal === 'logs' ? await this.options.authorizeLog?.(batch.destinationId) : undefined;
         // A disabled/revoked/mismatched policy leaves retained logs untouched.
         // A stale destination must not block later eligible log batches.  It
         // remains durable (and therefore may become eligible after a config
         // restoration); continue this oldest-first scan instead of ending it.
-        if (signal === 'logs' && !logDestination) break;
-        const classification = await this.deliver(signal, body, logDestination);
+        const delivery = await this.deliver(signal, body, batch.destinationId);
+        if (!delivery.authorized) break;
+        const { classification } = delivery;
         if (this.stopped) return;
         if (classification.action !== 'keep') {
           try {
@@ -193,12 +196,32 @@ export class SpoolDrainer {
     return loop;
   }
 
-  private async deliver(signal: SpoolSignal, body: Buffer, logDestination?: { endpoint: string; headers: Record<string, string> }) {
+  private async deliver(signal: SpoolSignal, body: Buffer, destinationId?: string): Promise<DeliveryAttempt> {
     const controller = new AbortController();
     this.inFlight.add(controller);
     const timeout = setTimeout(() => controller.abort(), signal === 'logs' ? Math.min(this.exportTimeoutMs, 2_000) : this.exportTimeoutMs);
     timeout.unref?.();
     try {
+      let logDestination: { endpoint: string; headers: Record<string, string> } | undefined;
+      if (signal === 'logs') {
+        // Authorization is part of the delivery operation, rather than work
+        // performed before its deadline. A late policy read cannot initiate a
+        // request after this runtime has stopped or relinquished its lease.
+        const authorize = this.options.authorizeLog;
+        if (!authorize) return { authorized: false };
+        const authorized = await this.untilAborted(authorize(destinationId), controller.signal);
+        if (authorized === undefined) {
+          return controller.signal.aborted || this.stopped
+            ? { authorized: true, classification: classifyNetworkError() }
+            : { authorized: false };
+        }
+        logDestination = authorized;
+      }
+      // Lease loss synchronously calls stop(); check it again after the async
+      // authorization boundary and immediately before the irreversible send.
+      if (this.stopped || controller.signal.aborted) {
+        return { authorized: true, classification: classifyNetworkError() };
+      }
       const endpoint = logDestination?.endpoint ?? this.options.endpoint;
       const headers = logDestination?.headers ?? this.options.headers();
       // Logs policies are normalized with /v1/logs already.  Trace/metric
@@ -212,18 +235,36 @@ export class SpoolDrainer {
         body: new Uint8Array(body).buffer as ArrayBuffer,
         signal: controller.signal,
       });
-      return classifyResponse(
-        response.status,
-        new Uint8Array(await response.arrayBuffer()),
-        Object.fromEntries(response.headers.entries()),
-        signal,
-        this.now,
-      );
+      return {
+        authorized: true,
+        classification: classifyResponse(
+          response.status,
+          new Uint8Array(await response.arrayBuffer()),
+          Object.fromEntries(response.headers.entries()),
+          signal,
+          this.now,
+        ),
+      };
     } catch {
-      return classifyNetworkError();
+      return { authorized: true, classification: classifyNetworkError() };
     } finally {
       clearTimeout(timeout);
       this.inFlight.delete(controller);
+    }
+  }
+
+  /** Resolves undefined only when the request deadline or stop signal wins. */
+  private async untilAborted<T>(operation: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+    if (signal.aborted) return undefined;
+    let abort!: () => void;
+    const aborted = new Promise<undefined>((resolve) => {
+      abort = () => resolve(undefined);
+      signal.addEventListener('abort', abort, { once: true });
+    });
+    try {
+      return await Promise.race([operation, aborted]);
+    } finally {
+      signal.removeEventListener('abort', abort);
     }
   }
 
