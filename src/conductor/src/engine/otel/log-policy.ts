@@ -8,10 +8,16 @@ export type LogPolicy =
   | { sendable: false; root?: string; reason: string };
 
 export interface LogPolicyOptions {
-  resolveRoot?: (startDir: string) => Promise<string | null>;
-  loadConfig?: typeof loadMergedConfigForRead;
+  /** The delivery deadline cancels policy reads before they can authorize I/O. */
+  signal?: AbortSignal;
+  resolveRoot?: (startDir: string, signal?: AbortSignal) => Promise<string | null>;
+  loadConfig?: (projectRoot: string, signal?: AbortSignal) => ReturnType<typeof loadMergedConfigForRead>;
   /** Kept local and bounded: a worktree may never become an authorization source. */
   warn?: (message: string) => void;
+}
+
+function throwIfCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw signal.reason ?? new Error('log policy read cancelled');
 }
 
 function stableLogBlock(config: { otel?: unknown }): string {
@@ -41,9 +47,14 @@ export function logDestinationId(config: Extract<ResolvedLogConfig, { enabled: t
  * usable.
  */
 export async function readLogPolicy(startDir: string, options: LogPolicyOptions = {}): Promise<LogPolicy> {
-  const root = await (options.resolveRoot ?? resolveMainRepoRootStrict)(startDir);
+  throwIfCancelled(options.signal);
+  const resolveRoot = options.resolveRoot ?? ((directory: string) => resolveMainRepoRootStrict(directory));
+  const root = await resolveRoot(startDir, options.signal);
+  throwIfCancelled(options.signal);
   if (root === null) return { sendable: false, reason: 'log policy unavailable: canonical project root could not be resolved' };
-  const loaded = await (options.loadConfig ?? loadMergedConfigForRead)(root);
+  const loadConfig = options.loadConfig ?? ((directory: string) => loadMergedConfigForRead(directory));
+  const loaded = await loadConfig(root, options.signal);
+  throwIfCancelled(options.signal);
   if (!loaded.ok) return { sendable: false, root, reason: 'log policy unavailable: canonical configuration could not be read' };
   const resolved = resolveLogConfig(loaded.config);
   if (!resolved.enabled) {
@@ -54,7 +65,8 @@ export async function readLogPolicy(startDir: string, options: LogPolicyOptions 
   // main-root result above and this read performs no migration or write.
   if (root !== startDir) {
     try {
-      const local = await (options.loadConfig ?? loadMergedConfigForRead)(startDir);
+      const local = await loadConfig(startDir, options.signal);
+      throwIfCancelled(options.signal);
       if (local.ok && stableLogBlock(local.config) !== stableLogBlock(loaded.config)) {
         options.warn?.(`log settings in this worktree are ignored; using canonical project policy at ${root}`);
       }
