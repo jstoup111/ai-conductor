@@ -7,17 +7,19 @@ import { observedAtOf } from '../../ui/events.js';
 import { normalizeLogRecord, type ProjectedLogRecord } from './log-record.js';
 
 type LogEvent = Extract<ConductorEvent, { type: LogEventType }>;
+type LogProjection<Type extends LogEventType> = (
+  event: Extract<LogEvent, { type: Type }>,
+  project: string,
+  worker: string,
+) => ProjectedLogRecord;
 
 const severity = { info: SeverityNumber.INFO, warn: SeverityNumber.WARN, error: SeverityNumber.ERROR } as const;
 
 /** The closed projection boundary: never serialize arbitrary event objects. */
-export function projectLogRecord(event: ConductorEvent, project = 'unknown', worker = 'unknown'): ProjectedLogRecord | undefined {
-  if (event.type === 'step_started' || event.type === 'step_completed' || event.type === 'feature_complete') {
-    const body = event.type === 'step_started' ? `step started: ${event.step}`
-      : event.type === 'step_completed' ? `step completed: ${event.step}`
-        : 'feature completed';
+const LOG_PROJECTIONS = {
+  step_started: (event, project, worker) => {
     return {
-      timestamp: Date.parse(observedAtOf(event) ?? '') || Date.now(), severityText: 'INFO', severityNumber: SeverityNumber.INFO, body,
+      timestamp: Date.parse(observedAtOf(event) ?? '') || Date.now(), severityText: 'INFO', severityNumber: SeverityNumber.INFO, body: `step started: ${event.step}`,
       attributes: {
         'conductor.project': project, 'conductor.worker': worker, 'conductor.event': event.type,
         // Lifecycle events do not carry a slug in the public event union;
@@ -25,24 +27,31 @@ export function projectLogRecord(event: ConductorEvent, project = 'unknown', wor
         'conductor.scope': 'project',
       },
     };
-  }
-  if (event.type !== 'operational_log') return undefined;
-  const feature = event.ownership.scope === 'feature' ? event.ownership.featureSlug : undefined;
-  const attrs: Record<string, string | number | boolean> = {
-    'conductor.project': project,
-    'conductor.worker': worker,
-    'conductor.event': event.type,
-    'conductor.scope': feature === undefined ? 'project' : 'feature',
-    ...(feature === undefined ? {} : { 'conductor.feature': feature }),
-    ...(observedAtOf(event) === undefined ? {} : { 'conductor.observed_at': observedAtOf(event)! }),
-  };
-  return {
-    timestamp: event.occurredAt,
-    severityText: event.severity.toUpperCase() as 'INFO' | 'WARN' | 'ERROR',
-    severityNumber: severity[event.severity],
-    body: event.body,
-    attributes: attrs,
-  };
+  },
+  step_completed: (event, project, worker) => ({
+    timestamp: Date.parse(observedAtOf(event) ?? '') || Date.now(), severityText: 'INFO', severityNumber: SeverityNumber.INFO, body: `step completed: ${event.step}`,
+    attributes: { 'conductor.project': project, 'conductor.worker': worker, 'conductor.event': event.type, 'conductor.scope': 'project' },
+  }),
+  feature_complete: (event, project, worker) => ({
+    timestamp: Date.parse(observedAtOf(event) ?? '') || Date.now(), severityText: 'INFO', severityNumber: SeverityNumber.INFO, body: 'feature completed',
+    attributes: { 'conductor.project': project, 'conductor.worker': worker, 'conductor.event': event.type, 'conductor.scope': 'project' },
+  }),
+  operational_log: (event, project, worker) => {
+    const feature = event.ownership.scope === 'feature' ? event.ownership.featureSlug : undefined;
+    const attributes: Record<string, string | number | boolean> = {
+      'conductor.project': project,
+      'conductor.worker': worker,
+      'conductor.event': event.type,
+      'conductor.scope': feature === undefined ? 'project' : 'feature',
+      ...(feature === undefined ? {} : { 'conductor.feature': feature }),
+      ...(observedAtOf(event) === undefined ? {} : { 'conductor.observed_at': observedAtOf(event)! }),
+    };
+    return { timestamp: event.occurredAt, severityText: event.severity.toUpperCase() as 'INFO' | 'WARN' | 'ERROR', severityNumber: severity[event.severity], body: event.body, attributes };
+  },
+} satisfies { [Type in LogEventType]: LogProjection<Type> };
+
+export function projectLogRecord(event: LogEvent, project = 'unknown', worker = 'unknown'): ProjectedLogRecord {
+  return LOG_PROJECTIONS[event.type](event as never, project, worker);
 }
 
 /** Projects only registry-selected events into the SDK logger. */
@@ -55,8 +64,8 @@ export class LogListener {
     this.emitter = emitter;
     for (const type of logEventTypes()) {
       const handler: EventHandler = (event) => {
+        if (!logEventTypes().includes(event.type as LogEventType)) return;
         const record = projectLogRecord(event as LogEvent, this.project, this.worker);
-        if (!record) return;
         const normalized = normalizeLogRecord(record);
         if (!normalized) { this.onDrop?.(); return; }
         this.logger.emit({ timestamp: normalized.timestamp, severityText: normalized.severityText,

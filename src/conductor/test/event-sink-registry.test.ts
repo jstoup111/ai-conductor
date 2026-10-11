@@ -14,6 +14,11 @@ const { provider_stream_progress: _omitted, ...missingProviderStreamProgress } =
 // @ts-expect-error -- every ConductorEvent type requires a sink declaration.
 missingProviderStreamProgress satisfies Record<ConductorEvent['type'], SinkDeclaration>;
 
+const { operational_log: omittedLogDeclaration, ...missingLogDeclaration } = EVENT_SINKS;
+void omittedLogDeclaration;
+// @ts-expect-error -- every sink declares its log-export disposition.
+missingLogDeclaration satisfies Record<ConductorEvent['type'], SinkDeclaration>;
+
 const tracedEventType: OtelTracedEventType = 'loop_halt';
 // @ts-expect-error -- gate_blocked does not declare the OTel sink.
 const untracedEventType: OtelTracedEventType = 'gate_blocked';
@@ -30,6 +35,7 @@ describe('event sink registry', () => {
       persist: true,
       audit: false,
       otel: false,
+      logs: false,
     });
   });
 
@@ -48,12 +54,19 @@ describe('event sink registry', () => {
     expect(otelTracedEventTypes()).not.toContain('unattributed_progress');
   });
 
+  it('explicitly selects only closed lifecycle and operational-log events for log export', async () => {
+    const { logEventTypes } = await import('../src/engine/event-sinks.js');
+    expect(logEventTypes()).toEqual(['operational_log', 'step_started', 'step_completed', 'feature_complete']);
+    expect(EVENT_SINKS.otel_spool_drop.logs).toBe(false);
+  });
+
   it('renders and persists setup repair dispositions without audit or OTel subscriptions', () => {
     expect(EVENT_SINKS.setup_repair).toEqual({
       render: true,
       persist: true,
       audit: false,
       otel: false,
+      logs: false,
     });
   });
 
@@ -63,6 +76,7 @@ describe('event sink registry', () => {
       persist: true,
       audit: false,
       otel: false,
+      logs: false,
     });
   });
 });
