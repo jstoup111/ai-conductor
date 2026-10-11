@@ -66,6 +66,38 @@ afterEach(async () => {
 });
 
 describe('SpoolDrainer', () => {
+  it('routes retained log failures through the attached health owner without a generic renderer error', async () => {
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('logs', Buffer.from('retained-log'), 3, 'destination');
+    const events = new ConductorEventEmitter();
+    const rendererErrors: string[] = [];
+    events.on('renderer_error', (event) => { if (event.type === 'renderer_error') rendererErrors.push(event.error); });
+    let observed!: () => void;
+    const failure = new Promise<void>((resolve) => { observed = resolve; });
+    const health = {
+      failure: vi.fn(() => observed()),
+      recovered: vi.fn(),
+    };
+    const drainer = new SpoolDrainer(store, {
+      endpoint: 'http://collector.test',
+      headers: () => ({}),
+      events,
+      authorizeLog: async () => ({ endpoint: 'http://collector.test', headers: {} }),
+      fetch: async () => new Response(undefined, { status: 503 }),
+    });
+    drainer.setLogHealth(health);
+    const draining = drainer.drainUntilStopped();
+
+    try {
+      await failure;
+      expect(health.failure).toHaveBeenCalledWith('response', 1);
+      expect(rendererErrors).toEqual([]);
+    } finally {
+      await drainer.stop();
+      await draining;
+    }
+  });
+
   it('bounds retained-log authorization and never sends after its deadline', async () => {
     vi.useFakeTimers();
     const store = new SpoolStore(await temporaryDirectory());

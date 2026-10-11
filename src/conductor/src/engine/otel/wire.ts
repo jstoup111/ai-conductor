@@ -142,7 +142,8 @@ export async function wireOtelLogs(
   try {
     const resolved = resolveOtelConfig(_config, context.pipelineDir);
     const worker = resolveWorkerName(resolved);
-    const health = new LogHealth(events);
+    const health = new LogHealth(events, Date.now, policy.config.endpoint);
+    const detachSpoolHealth = spoolRuntime?.drainer.setLogHealth(health);
     const direct: LogBatchExporter = {
       export(records, done) { void sendLogBatch(records, { startDir: policy.root, destinationId: policy.destinationId })
         .then((result) => {
@@ -170,12 +171,16 @@ export async function wireOtelLogs(
     return {
       flush: () => withinLogStopBudget(() => provider.forceFlush()),
       stop: () => stopped ??= (async () => {
-        listener.stop();
-        // Each phase consumes the same deadline.  In particular, a slow
-        // flush must not grant shutdown a second two-second allowance.
-        const deadline = Date.now() + LOG_STOP_BUDGET_MS;
-        await withinLogStopBudget(() => provider.forceFlush(), deadline);
-        await withinLogStopBudget(() => provider.shutdown(), deadline);
+        try {
+          listener.stop();
+          // Each phase consumes the same deadline.  In particular, a slow
+          // flush must not grant shutdown a second two-second allowance.
+          const deadline = Date.now() + LOG_STOP_BUDGET_MS;
+          await withinLogStopBudget(() => provider.forceFlush(), deadline);
+          await withinLogStopBudget(() => provider.shutdown(), deadline);
+        } finally {
+          detachSpoolHealth?.();
+        }
       })(),
     };
   } catch {

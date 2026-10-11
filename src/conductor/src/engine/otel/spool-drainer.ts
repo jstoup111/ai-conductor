@@ -1,6 +1,7 @@
 import { classifyNetworkError, classifyResponse, type DeliveryClassification } from './delivery-classifier.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import { type SpoolSignal, SpoolStore } from './spool-store.js';
+import type { LogFailureClass, LogHealth } from './log-health.js';
 
 export interface SpoolDrainerOptions {
   endpoint: string;
@@ -51,6 +52,7 @@ export class SpoolDrainer {
   private readonly loops = new Set<Promise<void>>();
   private readonly lastFailures = new Map<SpoolSignal, DeliveryFailureClass>();
   private readonly reportedFailures = new Map<SpoolSignal, ReportedFailureClass>();
+  private logHealth: Pick<LogHealth, 'failure' | 'recovered'> | undefined;
   private continuousDrain: Promise<void> | undefined;
   private stopped = false;
 
@@ -75,6 +77,18 @@ export class SpoolDrainer {
     }));
     this.random = options.random ?? Math.random;
     this.exportTimeoutMs = options.exportTimeoutMs ?? DEFAULT_EXPORT_TIMEOUT_MS;
+  }
+
+  /**
+   * The log owner is composed after the shared trace/metric runtime exists.
+   * Only it owns log delivery health, so retained logs cannot create a second
+   * renderer-error reporting path or recursively enter log projection.
+   */
+  setLogHealth(health: Pick<LogHealth, 'failure' | 'recovered'>): () => void {
+    this.logHealth = health;
+    return () => {
+      if (this.logHealth === health) this.logHealth = undefined;
+    };
   }
 
   /**
@@ -131,7 +145,10 @@ export class SpoolDrainer {
         // remains durable (and therefore may become eligible after a config
         // restoration); continue this oldest-first scan instead of ending it.
         const delivery = await this.deliver(signal, body, batch.destinationId);
-        if (!delivery.authorized) break;
+        if (!delivery.authorized) {
+          this.reportLogHealth(signal, 'policy');
+          break;
+        }
         sawEligibleBatch = true;
         const { classification } = delivery;
         if (this.stopped) return;
@@ -145,6 +162,7 @@ export class SpoolDrainer {
           }
           if (classification.action === 'delete') await this.reportRecovery(signal);
           if (classification.action === 'drop') {
+            this.reportLogHealth(signal, 'dropped', classification.rejectedItems || batch.items);
             await this.events?.emit({
               type: 'otel_spool_drop',
               signal,
@@ -318,16 +336,28 @@ export class SpoolDrainer {
   }
 
   private async reportFailure(signal: SpoolSignal, failureClass: ReportedFailureClass, error: string): Promise<void> {
+    if (signal === 'logs') {
+      this.reportLogHealth(signal, logFailureClass(failureClass));
+      return;
+    }
     if (this.reportedFailures.get(signal) === failureClass) return;
     this.reportedFailures.set(signal, failureClass);
     await this.events?.emit({ type: 'renderer_error', rendererName: 'otel', error });
   }
 
   private async reportRecovery(signal: SpoolSignal): Promise<void> {
+    if (signal === 'logs') {
+      this.logHealth?.recovered();
+      return;
+    }
     if (!this.reportedFailures.delete(signal)) return;
     await this.events?.emit({
       type: 'renderer_error', rendererName: 'otel', error: `OTLP ${signal} delivery recovered`,
     });
+  }
+
+  private reportLogHealth(signal: SpoolSignal, failure: LogFailureClass, count = 1): void {
+    if (signal === 'logs') this.logHealth?.failure(failure, count);
   }
 
   private async delay(ms: number): Promise<void> {
@@ -362,6 +392,18 @@ export class SpoolDrainer {
       this.pendingDelays.delete(release);
       signal.removeEventListener('abort', abort);
     }
+  }
+}
+
+/** Collapse transport-only detail into the log health vocabulary without exposing backend text. */
+function logFailureClass(failure: ReportedFailureClass): LogFailureClass {
+  switch (failure) {
+    case 'auth':
+    case 'endpoint':
+    case 'network': return failure;
+    case 'spool': return 'storage';
+    case 'throttled':
+    case 'server': return 'response';
   }
 }
 
