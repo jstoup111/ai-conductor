@@ -248,7 +248,8 @@ async function dispatchWithSessionId(
 describe('daemon OTel visualizer wiring', () => {
   it('attaches one root log owner before forwarded lifecycle and feature diagnostics without changing daemon-log output', async () => {
     const captured: Array<{ type: string; featureSlug?: string; body?: string; ownership?: unknown }> = [];
-    const stop = vi.fn(async () => {});
+    const capturedAtStop: Array<{ type: string; featureSlug?: string; body?: string; ownership?: unknown }> = [];
+    const stop = vi.fn(async () => { capturedAtStop.push(...captured); });
     wireOtelLogs.mockImplementation(async (_config, _context, rootEvents) => {
       rootEvents.on('step_started', (event) => { captured.push(event); });
       rootEvents.on('step_completed', (event) => { captured.push(event); });
@@ -282,6 +283,13 @@ describe('daemon OTel visualizer wiring', () => {
     expect(await readFile(join(repo, '.daemon', 'daemon.log'), 'utf8')).toContain(
       'feature source diagnostic',
     );
+    expect(capturedAtStop).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'operational_log',
+        body: expect.stringMatching(/^finished: 1 feature\(s\) \(/),
+        ownership: { scope: 'project' },
+      }),
+    ]));
     expect(stop).toHaveBeenCalledTimes(1);
   });
 

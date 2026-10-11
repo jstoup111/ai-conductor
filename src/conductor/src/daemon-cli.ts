@@ -3062,6 +3062,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     },
   );
 
+  // The root log owner is still admitted here, so the terminal lifecycle
+  // summary joins its one bounded preservation/flush attempt.  Stopping it
+  // first would leave these otherwise ordinary daemon diagnostics local-only.
+  log(`finished: ${result.processed.length} feature(s) (${result.stoppedReason})`);
+  for (const o of result.processed) {
+    log(
+      `  ${o.slug}: ${o.status}${o.prUrl ? ` ${o.prUrl}` : ''}${o.reason ? ` — ${o.reason}` : ''}`,
+    );
+  }
   await subscriber.stop();
   await daemonLogs?.stop();
   await daemonOtel?.stop();
@@ -3073,12 +3082,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // Leaving it installed makes later SIGTERM delivery invoke stale shutdown
   // state, and accumulates one listener per completed invocation.
   process.off('SIGTERM', daemonSigtermHandler);
-  log(`finished: ${result.processed.length} feature(s) (${result.stoppedReason})`);
-  for (const o of result.processed) {
-    log(
-      `  ${o.slug}: ${o.status}${o.prUrl ? ` ${o.prUrl}` : ''}${o.reason ? ` — ${o.reason}` : ''}`,
-    );
-  }
 
   // Normal completion: drop the crash backstop, restore the console tee,
   // flush+close the log, and release the lock asynchronously.
