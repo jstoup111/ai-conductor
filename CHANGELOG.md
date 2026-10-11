@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-10-10
+## [1.7.0] - 2026-10-11
 
 ### Added
 
@@ -42,6 +42,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Plugin manifests now reject unsupported `step` and `hook` kinds. ([implementation PR #3032](https://github.com/jstoup111/ai-conductor/pull/3032)).
 - conflict-check always compares stories against the full approved ADR corpus; the `conflict_check.adr_corpus` config key is removed. ([implementation PR #3122](https://github.com/jstoup111/ai-conductor/pull/3122)).
+- The coverage_binding step is now a no-op. It no longer runs the coverage-binding judge, criterion/amendment/conflict or ADR-obligation checks, or task reopens, and never halts on plan content. Invalid or stack-ineligible slices build flat. `coverage_binding.judge.*` keys are still accepted but ignored. ([implementation PR #3164](https://github.com/jstoup111/ai-conductor/pull/3164)).
 
 ### Fixed
 
