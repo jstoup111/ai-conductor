@@ -33,7 +33,7 @@ import { deferredAutoParkHaltPresentation } from './auto-park-halt.js';
 import type { OperatorParkedTermination } from './conductor-options.js';
 import { computeTimingRollup } from './timing-rollup.js';
 import { readState } from './state.js';
-import { formatDaemonHalt } from './daemon-log.js';
+import { formatDaemonHalt, formatDaemonWarning } from './daemon-log.js';
 import type { GithubOperationRunner } from './github-operations.js';
 
 /**
@@ -814,25 +814,25 @@ export async function terminateFeature({
     resumeProcedure;
   const markerWrite = await writeHaltMarker(worktreePath, note, 'needs-human', events);
   if (markerWrite.status === 'failed') {
-    log?.(`[daemon-runner] unrecoverable-state: HALT marker write failed for ${slug ?? worktreePath}: ${markerWrite.reason}`);
+    log?.(formatDaemonHalt(`[daemon-runner] unrecoverable-state: HALT marker write failed for ${slug ?? worktreePath}: ${markerWrite.reason}`, { kind: 'operator', action: 'ai-conductor monitor all' }));
     return;
   }
   if (markerWrite.status === 'partial') {
     log?.(
-      `[daemon-runner] unrecoverable-state: HALT was written for ${slug ?? worktreePath}, but HALT.class write failed at ${markerWrite.path}: ${markerWrite.reason}`,
+      formatDaemonWarning(`[daemon-runner] unrecoverable-state: HALT was written for ${slug ?? worktreePath}, but HALT.class write failed at ${markerWrite.path}: ${markerWrite.reason}`, { kind: 'none', why: 'the next sweep retries' }),
     );
     await readFile(markerWrite.writtenPath, 'utf-8').then((body) => {
       if (body !== note) throw new Error('HALT marker verification failed after HALT.class write failure');
     }).catch((err) => {
       log?.(
-        `[daemon-runner] unrecoverable-state: written HALT verification failed for ${slug ?? worktreePath}: ${err instanceof Error ? err.message : String(err)}`,
+        formatDaemonWarning(`[daemon-runner] unrecoverable-state: written HALT verification failed for ${slug ?? worktreePath}: ${err instanceof Error ? err.message : String(err)}`, { kind: 'none', why: 'the next sweep retries' }),
       );
     });
     await readFile(markerWrite.path, 'utf-8').then(() => {
       throw new Error('HALT.class unexpectedly exists after its write failure');
     }).catch((err) => {
       log?.(
-        `[daemon-runner] unrecoverable-state: HALT.class failure path verified for ${slug ?? worktreePath}: ${markerWrite.path} (${err instanceof Error ? err.message : String(err)})`,
+        formatDaemonWarning(`[daemon-runner] unrecoverable-state: HALT.class failure path verified for ${slug ?? worktreePath}: ${markerWrite.path} (${err instanceof Error ? err.message : String(err)})`, { kind: 'none', why: 'the next sweep retries' }),
       );
     });
     return;
@@ -844,7 +844,7 @@ export async function terminateFeature({
     if (body !== note || haltClass !== 'needs-human') throw new Error('marker verification failed');
   }).catch((err) => {
     log?.(
-      `[daemon-runner] unrecoverable-state: HALT marker write failed for ${slug ?? worktreePath}: ${err instanceof Error ? err.message : String(err)}`,
+      formatDaemonHalt(`[daemon-runner] unrecoverable-state: HALT marker write failed for ${slug ?? worktreePath}: ${err instanceof Error ? err.message : String(err)}`, { kind: 'operator', action: 'ai-conductor monitor all' }),
     );
   });
 }

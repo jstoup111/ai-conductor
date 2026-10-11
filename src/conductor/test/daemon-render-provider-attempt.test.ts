@@ -58,7 +58,7 @@ describe('renderDaemonEvent: provider_attempt', () => {
         costUsd: 4.956137999999998,
       },
     });
-    expect(line).toBe('·   acceptance_specs via claude ✓');
+    expect(line).toBe('·   acceptance_specs via claude (opus) ✓ — 54 turns, 8m7s, $4.96');
   });
 
   it('renders a failed attempt with its outcome instead of a success glyph', () => {
@@ -71,7 +71,7 @@ describe('renderDaemonEvent: provider_attempt', () => {
       reason: 'exit 1',
     });
     expect(line).toContain('build via claude');
-    expect(line).toBe('·   build via claude');
+    expect(line).toBe('·   build via claude ✗ failure');
     expect(line).not.toContain('✓');
   });
 
@@ -80,7 +80,7 @@ describe('renderDaemonEvent: provider_attempt', () => {
       type: 'provider_attempt', step: 'build_review', provider: 'codex',
       outcome: 'failure', invoked: false,
       reason: 'Prepared candidate operation timed out before judgment.',
-    })).toEqual(['·   build_review via codex']);
+    })).toEqual(['·   build_review skipped codex (not-invoked: Prepared candidate operation timed out before judgment.)']);
   });
 
   it('does not put unavailable attempt detail in the default line', () => {
@@ -93,7 +93,7 @@ describe('renderDaemonEvent: provider_attempt', () => {
         invoked: false,
         reason: 'cached run-wide unavailability',
       }),
-    ).toEqual(['·   build via codex']);
+    ).toEqual(['·   build skipped codex (unavailable: cached run-wide unavailability)']);
   });
 
   it('suppresses routine lifecycle phases and makes recovery actionable without ids', () => {

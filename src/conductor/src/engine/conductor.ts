@@ -15,6 +15,7 @@ import {
   recordGateRepair,
 } from './test-suite-remediation.js';
 import { basename, dirname, relative, join, isAbsolute } from 'node:path';
+import { formatDaemonWarning } from './daemon-log.js';
 import { homedir } from 'node:os';
 import { execa } from 'execa';
 import {
@@ -4394,7 +4395,7 @@ export class Conductor {
             );
           } catch (err) {
             this.log?.(
-              `WARNING: failed to record appended remediation task ids (removal guard disarmed): ${err instanceof Error ? err.message : String(err)}`,
+              formatDaemonWarning(`failed to record appended remediation task ids (removal guard disarmed): ${err instanceof Error ? err.message : String(err)}`, { kind: 'none', why: 'the next sweep retries' }),
             );
           }
           // Re-seed task-status.json with the appended tasks marked as pending
@@ -4431,18 +4432,18 @@ export class Conductor {
               ]);
               if (commit.exitCode !== 0) {
                 this.log?.(
-                  `WARNING: remediation plan amendment commit failed — plan left uncommitted: ${commit.stderr || commit.stdout}`,
+                  formatDaemonWarning(`remediation plan amendment commit failed — plan left uncommitted: ${commit.stderr || commit.stdout}`, { kind: 'none', why: 'the next sweep retries' }),
                 );
               }
             }
           } catch (err) {
             this.log?.(
-              `WARNING: remediation plan amendment commit failed — plan left uncommitted: ${err instanceof Error ? err.message : String(err)}`,
+              formatDaemonWarning(`remediation plan amendment commit failed — plan left uncommitted: ${err instanceof Error ? err.message : String(err)}`, { kind: 'none', why: 'the next sweep retries' }),
             );
           }
         } else {
           this.log?.(
-            `WARNING: remediation task append failed (${allTasks.length} task(s) dropped): ${appendResult.error}`,
+            formatDaemonWarning(`remediation task append failed (${allTasks.length} task(s) dropped): ${appendResult.error}`, { kind: 'none', why: 'the next sweep retries' }),
           );
         }
       } else if (allTasks.length > 0) {
@@ -4450,7 +4451,7 @@ export class Conductor {
         // but never silently: a dropped append means the builder re-enters
         // with none of the remediation tasks it was just told to deliver.
         this.log?.(
-          `WARNING: remediation task append skipped — no plan path resolved; ${allTasks.length} remediation task(s) never reached the plan or task list`,
+          formatDaemonWarning(`remediation task append skipped — no plan path resolved; ${allTasks.length} remediation task(s) never reached the plan or task list`, { kind: 'none', why: 'the next sweep retries' }),
         );
       }
     }
@@ -12494,7 +12495,7 @@ export class Conductor {
                   'needs-human',
                 );
                 if (markerResult.status === 'failed') {
-                  this.log?.(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`);
+                  this.log?.(formatDaemonWarning(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`, { kind: 'operator', action: 'ai-conductor monitor all' }));
                 }
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
@@ -13044,7 +13045,7 @@ export class Conductor {
                     'needs-human',
                   );
                   if (markerResult.status === 'failed') {
-                    this.log?.(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`);
+                    this.log?.(formatDaemonWarning(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`, { kind: 'operator', action: 'ai-conductor monitor all' }));
                   }
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);

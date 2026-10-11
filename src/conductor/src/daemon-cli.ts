@@ -1393,7 +1393,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     async stop() {},
   };
   const globalPresenter = createDaemonEventPresenter({
-    log: (entry) => globalSubscriberLog(composeDaemonLineBody(entry)),
+    log: globalSubscriberLog,
     verbose: config?.daemon_verbose ?? false,
     render: (event, output) => renderDaemonEventWithPresentation(event, output),
   });
@@ -1454,7 +1454,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const scopedEvents = new ConductorEventEmitter();
     const scopedLog = createFeatureDaemonLogger(
       slug,
-      (message) => log(message, true),
+      log,
       formatDaemonFeatureTag(slug),
     ) as FeatureDaemonLogger;
     const scopedPresenter = createDaemonEventPresenter({
@@ -2816,7 +2816,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                   run: async (featureEvents) => {
                 const recoveryLog = createFeatureDaemonLogger(
                   entry.slug,
-                  (message) => log(message, true),
+                  log,
                   formatDaemonFeatureTag(entry.slug),
                 );
                 subscribeRecoverySessionOccurrences(
@@ -2928,7 +2928,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 run: async (featureEvents) => {
               const recoveryLog = createFeatureDaemonLogger(
                 entry.slug,
-                (message) => log(message, true),
+                log,
                 formatDaemonFeatureTag(entry.slug),
               );
               subscribeRecoverySessionOccurrences(
@@ -2988,7 +2988,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                             providerExecution,
                             log: createFeatureDaemonLogger(
                               ctx.entry.slug,
-                              (message) => log(message, true),
+                              log,
                               formatDaemonFeatureTag(ctx.entry.slug),
                             ),
                           },
@@ -3250,17 +3250,63 @@ function renderDaemonEventWithPresentation(event: ConductorEvent, output: Parame
         if (lifecycle.phase === 'preparing' || lifecycle.phase === 'running' || lifecycle.phase === 'settled') {
           output.detail(`${renderedExecutionSubject(event, event.step)} provider ${lifecycle.phase} (attempt ${lifecycle.attemptId}, recovery ${lifecycle.recoveryCount})`);
         } else if (lifecycle.phase === 'recovering') {
-          output.warning(`${renderedExecutionSubject(event, event.step)} provider recovering (recovery ${lifecycle.recoveryCount}${lifecycle.reason ? ` — ${lifecycle.reason}` : ''})`, { kind: 'none', why: 'the supervisor replaces the attempt' });
+          output.warning(`${renderedExecutionSubject(event, event.step)} provider recovering (recovery ${lifecycle.recoveryCount}${lifecycle.reason ? ` — ${formatRetryReason(lifecycle.reason)}` : ''})`, { kind: 'none', why: 'the supervisor replaces the attempt' });
           output.detail(`attempt ${lifecycle.attemptId}`);
         } else {
-          output.halt(`${renderedExecutionSubject(event, event.step)} provider halted (recovery ${lifecycle.recoveryCount}${lifecycle.reason ? ` — ${lifecycle.reason}` : ''})`, { kind: 'operator', action: 'ai-conductor monitor all' });
+          output.halt(`${renderedExecutionSubject(event, event.step)} provider halted (recovery ${lifecycle.recoveryCount}${lifecycle.reason ? ` — ${formatRetryReason(lifecycle.reason)}` : ''})`, { kind: 'operator', action: 'ai-conductor monitor all' });
           output.detail(`attempt ${lifecycle.attemptId}`);
         }
         return;
       }
-      output.info(`${renderedExecutionSubject(event, event.step)} via ${event.provider}${event.outcome === 'success' ? ' ✓' : ''}`);
+      if (!event.invoked) {
+        const recovery = event.setupRecoveryAction ? `; recovery: ${event.setupRecoveryAction}` : '';
+        output.info(`${event.step} skipped ${event.provider} (${event.skipReason ?? (event.outcome === 'unavailable' ? 'unavailable' : 'not-invoked')}: ${event.reason ?? 'unavailable'}${recovery})`);
+        return;
+      }
+      const facts: string[] = [];
+      if (event.tokenUsage?.numTurns !== undefined) facts.push(`${event.tokenUsage.numTurns} turn${event.tokenUsage.numTurns === 1 ? '' : 's'}`);
+      if (event.tokenUsage?.durationMs !== undefined) facts.push(formatDiagnosticDuration(event.tokenUsage.durationMs));
+      if (event.tokenUsage?.costUsd !== undefined) facts.push(`$${event.tokenUsage.costUsd.toFixed(2)}`);
+      output.info(`${renderedExecutionSubject(event, event.step)} via ${event.provider}${event.model ? ` (${event.model})` : ''} ${event.outcome === 'success' ? '✓' : `✗ ${event.outcome}`}${facts.length ? ` — ${facts.join(', ')}` : ''}`);
       return;
     }
+    case 'step_interrupted':
+      output.warning(`${renderedExecutionSubject(event, event.step)} interrupted: ${event.reason}`, { kind: 'none', why: 'the step retries' });
+      return;
+    case 'step_refused':
+      output.halt(`${renderedExecutionSubject(event, event.step)} refused (${event.kind}): ${event.reason}`, { kind: 'operator', action: 'ai-conductor monitor all' });
+      return;
+    case 'step_status_write_refused':
+      output.halt(`${event.field} status write refused: ${event.expected} → ${event.requested} (${event.intent})`, { kind: 'operator', action: 'ai-conductor monitor all' });
+      return;
+    case 'step_inapplicable_ignored':
+      output.warning(`step applicability ignored (${event.cause}${event.step ? `: ${event.step}` : ''})`, { kind: 'none', why: 'the daemon continues' });
+      return;
+    case 'step_inapplicable_refused':
+      output.halt(`${event.step} applicability refused (${event.priorStatus}): ${event.reason}`, { kind: 'operator', action: 'ai-conductor monitor all' });
+      return;
+    case 'setup_repair':
+      if (event.disposition === 'rejected') {
+        output.warning(`setup repair rejected (${event.reason}${event.quarantineRef ? `; ${event.quarantineRef}` : ''})`, { kind: 'operator', action: 'ai-conductor monitor all' });
+      } else output.info(`setup repair ${event.disposition}`);
+      return;
+    case 'step_retry': {
+      const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
+      output.warning(`${renderedExecutionSubject(event, event.step)} retry (try ${formatRetryCounter(event.attempt, event.maxAttempts, event.progressAttempt, event.progressAttemptCeiling)}: ${formatRetryReason(event.reason)})${delta ? ` ${delta}` : ''}`, { kind: 'none', why: formatRetryReason(event.reason) });
+      return;
+    }
+    case 'scratch_cleanup_reclaimed':
+      output.info(`✓ scratch reclaimed ${event.path} (${event.reason})`);
+      output.detail(`repository ${event.repository}; feature ${event.featureSlug}; run ${event.runId}; attempt ${event.attempt}`);
+      return;
+    case 'scratch_cleanup_retained':
+      output.warning(`scratch retained ${event.path} (${event.reason})`, { kind: 'none', why: 'the next sweep retries' });
+      output.detail(`repository ${event.repository}; feature ${event.featureSlug}; run ${event.runId}; attempt ${event.attempt}`);
+      return;
+    case 'scratch_cleanup_failed':
+      output.warning(`scratch cleanup failed ${event.path} (${event.reason})`, { kind: 'none', why: 'the next sweep retries' });
+      output.detail(`repository ${event.repository}; feature ${event.featureSlug}; run ${event.runId}; attempt ${event.attempt}`);
+      return;
     case 'provider_fallback':
       output.warning(`PROVIDER FALLBACK: ${event.step} — ${event.failedProvider} unavailable (${event.reason}); trying ${event.nextProvider}`, { kind: 'none', why: event.recoveryAction ?? 'the daemon selects the next provider' });
       return;
@@ -3269,6 +3315,50 @@ function renderDaemonEventWithPresentation(event: ConductorEvent, output: Parame
       return;
     case 'loop_halt':
       output.halt({ kind: 'forwarded', moreAt: '.pipeline/HALT', text: `loop halted: ${event.reason}` }, { kind: 'operator', action: 'ai-conductor monitor' });
+      return;
+    case 'halt_marker_write_failed':
+      output.halt(`halt marker write failed: ${event.path} — ${event.reason}`, { kind: 'operator', action: 'ai-conductor monitor all' });
+      return;
+    case 'halt_record_write_failed':
+      output.halt(`halt record write failed: ${event.path} — ${event.reason}`, { kind: 'operator', action: 'ai-conductor monitor all' });
+      return;
+    case 'halt_record_push_failed':
+      output.warning(`halt record push failed: ${event.path} — ${event.reason}`, { kind: 'none', why: 'the next sweep retries' });
+      return;
+    case 'shipment_evidence_refused':
+      output.halt(`shipment evidence refused: ${event.code} — expected ${event.expected}, observed ${event.observed ?? 'none'} (${event.pr})`, { kind: 'operator', action: 'ai-conductor monitor all' });
+      return;
+    case 'rebase_conflict_halt':
+      output.halt(`rebase conflict halted: ${event.reason} (${event.conflicts.join(', ')})`, { kind: 'operator', action: 'ai-conductor monitor all' });
+      return;
+    case 'ci_failed':
+      output.halt(`ci_failed[${event.slug}]: phase=${event.phase} attempts=${event.attempts} checks=[${event.checks.join(',')}]`, { kind: 'operator', action: 'ai-conductor monitor all' });
+      return;
+    case 'ci_repair_diagnostic':
+      output.halt(`ci_repair[${event.slug}] PR ${event.prUrl}${event.provider ? ` provider=${event.provider}` : ''}: ${event.stage}/${event.reason} (${event.disposition})`, { kind: 'operator', action: 'ai-conductor monitor all' });
+      return;
+    case 'finish_publication_blocked': {
+      const condition = typeof event.condition === 'string' ? event.condition : `${event.condition.code} (steps: ${event.condition.steps.join(', ')})`;
+      output.halt(`FINISH publication blocked: ${condition}`, { kind: 'operator', action: 'ai-conductor monitor all' });
+      return;
+    }
+    case 'renderer_error':
+      output.warning(`renderer ${event.rendererName} failed: ${event.error}`, { kind: 'none', why: 'the daemon continues' });
+      return;
+    case 'pipeline_tail_diagnostic':
+      output.warning(`pipeline tail ${event.reason}: ${event.path}${event.byteOffset === undefined ? '' : ` at byte ${event.byteOffset}`}`, { kind: 'none', why: 'the daemon continues' });
+      return;
+    case 'build_no_progress':
+      output.warning(`${event.step} quiet ${event.quietMinutes}m (${event.resolved}/${event.total})`, { kind: 'none', why: 'the daemon continues to monitor progress' });
+      return;
+    case 'build_active_stall':
+      output.warning(`${event.step} active without movement for ${event.minutes}m (${event.resolved}/${event.total}) · action ${event.action}`, { kind: 'none', why: 'the daemon continues to monitor progress' });
+      return;
+    case 'build_stall':
+      output.halt(`${event.step} stall: ${event.reason} (${event.resolvedBefore} → ${event.resolvedAfter})`, { kind: 'operator', action: 'ai-conductor monitor all' });
+      return;
+    case 'auto_park_contradiction':
+      output.halt(`auto_park_contradiction[${event.slug}]: refused verdict="${event.verdict}"`, { kind: 'operator', action: 'ai-conductor monitor all' });
       return;
     case 'session_command_refused':
       output.halt(formatSessionOccurrence(event, false), { kind: 'operator', action: 'ai-conductor monitor all' });
@@ -3281,7 +3371,12 @@ function renderDaemonEventWithPresentation(event: ConductorEvent, output: Parame
   }
   const captured: string[] = [];
   renderDaemonEventUnsafe(event, (line) => captured.push(line));
-  for (const line of captured) output.info(normalizeLegacyDaemonEventText(line));
+  for (const line of captured) {
+    const text = normalizeLegacyDaemonEventText(line);
+    if (text.startsWith('✋ ')) output.halt(text.slice(2), { kind: 'operator', action: 'ai-conductor monitor all' });
+    else if (text.startsWith('⚠ ')) output.warning(text.slice(2), { kind: 'none', why: 'the daemon continues' });
+    else output.info(text);
+  }
 }
 
 /** Remove the legacy renderer's visual column; the presentation table owns it. */

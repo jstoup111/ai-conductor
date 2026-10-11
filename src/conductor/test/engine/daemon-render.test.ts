@@ -64,20 +64,20 @@ describe('renderDaemonEvent', () => {
       step: 'build',
       kind: 'needs-human',
       reason: 'operator judgement required',
-    })).toEqual(['· ✋ build refused (needs-human): operator judgement required']);
+    })).toEqual(['· ✋ build refused (needs-human): operator judgement required — next: ai-conductor monitor all']);
     expect(lines({
       type: 'step_status_write_refused',
       field: 'manual_test',
       expected: 'skipped',
       requested: 'stale',
       intent: 'restage ship tail after build kickback',
-    })).toEqual(['· ✋ manual_test status write refused: skipped → stale (restage ship tail after build kickback)']);
+    })).toEqual(['· ✋ manual_test status write refused: skipped → stale (restage ship tail after build kickback) — next: ai-conductor monitor all']);
     expect(lines({ type: 'step_inapplicable', step: 'manual_test', reason: 'no UI', decider: 'unknown' }))
       .toEqual(['· ⊘ manual_test inapplicable: no UI']);
     expect(lines({ type: 'step_inapplicable_ignored', cause: 'branch-only', step: 'manual_test' }))
-      .toEqual(['· ⊘ step applicability ignored (branch-only: manual_test)']);
+      .toEqual(['· ⚠ step applicability ignored (branch-only: manual_test) — no action needed: the daemon continues']);
     expect(lines({ type: 'step_inapplicable_refused', step: 'manual_test', reason: 'late', priorStatus: 'done' }))
-      .toEqual(['· ✋ manual_test applicability refused (done): late']);
+      .toEqual(['· ✋ manual_test applicability refused (done): late — next: ai-conductor monitor all']);
   });
 
   it('renders an ownership refusal with the same reason and remedy as the terminal', () => {
@@ -89,7 +89,7 @@ describe('renderDaemonEvent', () => {
       reason: 'other-owner',
       remedy: 'ask-resource-owner',
     })).toEqual([
-      '· ✋ GitHub operation refused: issue.comment.create on acme/owned#17 (other-owner); remedy: ask-resource-owner',
+      '· ✋ GitHub operation refused: issue.comment.create on acme/owned#17 (other-owner); remedy: ask-resource-owner — next: ai-conductor monitor all',
     ]);
   });
 
@@ -99,7 +99,7 @@ describe('renderDaemonEvent', () => {
       project: 'acme/jira-project',
       backend: 'jira',
       reason: 'no-adapter',
-    })).toEqual(['· ⚠ tracker backend unavailable: acme/jira-project selected jira (no-adapter)']);
+    })).toEqual(['· ⚠ tracker backend unavailable: acme/jira-project selected jira (no-adapter) — no action needed: the daemon continues']);
   });
 
   it('renders an unavailable read-only review capability with its provider, platform, and reason', () => {
@@ -158,7 +158,7 @@ describe('renderDaemonEvent', () => {
     expect(lines({
       type: 'pipeline_tail_diagnostic', reason: 'malformed-line',
       path: '.pipeline/pipeline-events.jsonl', byteOffset: 42,
-    })).toEqual(['· ⚠ pipeline tail malformed-line: .pipeline/pipeline-events.jsonl at byte 42']);
+    })).toEqual(['· ⚠ pipeline tail malformed-line: .pipeline/pipeline-events.jsonl at byte 42 — no action needed: the daemon continues']);
   });
 
   it('renders exact operator park boundaries without lifecycle semantics', () => {
@@ -309,13 +309,13 @@ describe('renderDaemonEvent', () => {
       reason: 'setup-drift',
       quarantineRef: 'wip/setup-quarantine-render',
       preservedPaths: ['src/repair.ts'],
-    })).toEqual(['· setup repair rejected (setup-drift; wip/setup-quarantine-render)']);
+    })).toEqual(['· ⚠ setup repair rejected (setup-drift; wip/setup-quarantine-render) — next: ai-conductor monitor all']);
     expect(lines({
       type: 'setup_repair',
       disposition: 'rejected',
       reason: 'preservation-failed',
       preservedPaths: [],
-    })).toEqual(['· setup repair rejected (preservation-failed)']);
+    })).toEqual(['· ⚠ setup repair rejected (preservation-failed) — next: ai-conductor monitor all']);
   });
 
   it('renders plan-growth counts with each gate and the current cap', () => {
@@ -336,7 +336,7 @@ describe('renderDaemonEvent', () => {
       type: 'halt_marker_write_failed',
       path: '.pipeline/HALT',
       reason: 'permission denied',
-    })).toEqual(['· ✋ halt marker write failed: .pipeline/HALT — permission denied']);
+    })).toEqual(['· ✋ halt marker write failed: .pipeline/HALT — permission denied — next: ai-conductor monitor all']);
     expect(lines({ type: 'loop_converged' })).toEqual(['· ✓ gate loop converged']);
   });
 
@@ -346,7 +346,7 @@ describe('renderDaemonEvent', () => {
       reason: 'conflict requires human resolution',
       conflicts: ['src/a.ts', 'src/b.ts'],
     })).toEqual([
-      '· ✋ rebase conflict halted: conflict requires human resolution (src/a.ts, src/b.ts)',
+      '· ✋ rebase conflict halted: conflict requires human resolution (src/a.ts, src/b.ts) — next: ai-conductor monitor all',
     ]);
   });
 
@@ -356,7 +356,7 @@ describe('renderDaemonEvent', () => {
     } as ConductorEvent)).toEqual(['· ▶ FINISH publication: write_shipped_record']);
     expect(lines({
       type: 'finish_publication_blocked', condition: 'release_readiness_missing',
-    } as ConductorEvent)).toEqual(['· ✋ FINISH publication blocked: release_readiness_missing']);
+    } as ConductorEvent)).toEqual(['· ✋ FINISH publication blocked: release_readiness_missing — next: ai-conductor monitor all']);
     expect(lines({
       type: 'finish_publication_disposition', disposition: 'retry_build',
     } as ConductorEvent)).toEqual(['· ↩ FINISH publication: route to BUILD']);
@@ -370,7 +370,7 @@ describe('renderDaemonEvent', () => {
         steps: ['compliance-gate', 'notes-gate'],
       },
     })).toEqual([
-      '· ✋ FINISH publication blocked: release_readiness_missing (steps: compliance-gate, notes-gate)',
+      '· ✋ FINISH publication blocked: release_readiness_missing (steps: compliance-gate, notes-gate) — next: ai-conductor monitor all',
     ]);
   });
 
@@ -405,7 +405,7 @@ describe('renderDaemonEvent', () => {
         attempts: 1,
         phase: 'detected',
       }),
-    ).toEqual(['· ✋ ci_failed[org/repo]: phase=detected attempts=1 checks=[test,lint]']);
+    ).toEqual(['· ✋ ci_failed[org/repo]: phase=detected attempts=1 checks=[test,lint] — next: ai-conductor monitor all']);
   });
 
   it('renders ci_failed exhausted phase', () => {
@@ -418,7 +418,7 @@ describe('renderDaemonEvent', () => {
         attempts: 2,
         phase: 'exhausted',
       }),
-    ).toEqual(['· ✋ ci_failed[myorg/myrepo]: phase=exhausted attempts=2 checks=[build]']);
+    ).toEqual(['· ✋ ci_failed[myorg/myrepo]: phase=exhausted attempts=2 checks=[build] — next: ai-conductor monitor all']);
   });
 
   it('renders reclaimed and failed worktree reclamation outcomes but not retained outcomes', () => {

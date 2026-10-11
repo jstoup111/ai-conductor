@@ -46,7 +46,7 @@ import {
   isUnreadableKickbackLedger,
   readKickbackLedger,
 } from './kickback-ledger.js';
-import { formatNextAction, type NextAction } from './daemon-log.js';
+import { formatDaemonWarning, formatDaemonHalt, formatNextAction, type NextAction } from './daemon-log.js';
 import { recoveryProcedure } from './monitor/session.js';
 
 /**
@@ -215,7 +215,7 @@ export async function clearHaltForResume(
   if (prUrl && deps.cleanupPresentation) {
     const presentation = await deps.cleanupPresentation(prUrl);
     if (presentation === 'partial') {
-      deps.log?.(`kickback-budget ${deps.slug}: presentation repair partial — halt retained`);
+      deps.log?.(formatDaemonWarning(`kickback-budget ${deps.slug}: presentation repair partial — halt retained`, { kind: 'none', why: 'the next sweep retries' }));
       return 'partial';
     }
   }
@@ -223,11 +223,11 @@ export async function clearHaltForResume(
     const record = await deps.resolveCommittedRecord?.(deps.worktreePath, deps.slug);
     if (typeof record === 'object' && record !== null && 'kind' in record && record.kind === 'failed') {
       const reason = 'reason' in record && typeof record.reason === 'string' ? record.reason : 'unknown reason';
-      deps.log?.(`kickback-budget ${deps.slug}: halt record not superseded (${reason}) — halt retained`);
+      deps.log?.(formatDaemonWarning(`kickback-budget ${deps.slug}: halt record not superseded (${reason}) — halt retained`, { kind: 'none', why: 'the next sweep retries' }));
       return 'partial';
     }
   } catch (error) {
-    deps.log?.(`kickback-budget ${deps.slug}: halt record not superseded (${errMsg(error)})`);
+    deps.log?.(formatDaemonWarning(`kickback-budget ${deps.slug}: halt record not superseded (${errMsg(error)})`, { kind: 'none', why: 'the next sweep retries' }));
     return 'partial';
   }
   await deps.clearMarker(deps.worktreePath);
@@ -313,22 +313,24 @@ export async function consumeResumeAuthorizations(
       const match = candidates.find(([, entry]) => entry.capEvidence!.haltGeneration === liveGeneration);
       for (const [candidateGate, candidateEntry] of candidates) {
         if (candidateEntry === match?.[1]) continue;
-        deps.log?.(
+        deps.log?.(formatDaemonWarning(
           `kickback-budget ${slug}: ${candidateGate} authorization is stale — ` +
             `bound to generation ${candidateEntry.capEvidence!.haltGeneration} rather than live generation ${liveGeneration || 'absent'}; was not consumed`,
-        );
+          { kind: 'none', why: 'the next sweep retries' },
+        ));
       }
       if (!match) {
-        deps.log?.(`kickback-budget ${slug}: retained — live halt generation does not match authorization`);
+        deps.log?.(formatDaemonWarning(`kickback-budget ${slug}: retained — live halt generation does not match authorization`, { kind: 'none', why: 'the next sweep retries' }));
         continue;
       }
       const [gate, entry] = match;
       const expected = RECOVERABLE_CAP_HALT_CLASS_BY_GATE[gate];
       if (expected === undefined || liveHaltClass !== expected) {
-        deps.log?.(
+        deps.log?.(formatDaemonWarning(
           `kickback-budget ${slug}: retained — live halt class '${liveHaltClass || 'absent'}' ` +
             `is not ${gate}'s recoverable cap halt`,
-        );
+          { kind: 'none', why: 'the next sweep retries' },
+        ));
         continue;
       }
       // Repair-then-clear, then consume. A `partial` clear leaves the halt and
@@ -456,7 +458,7 @@ export async function rekickSweep(
   try {
     slugs = await deps.listHaltedWorktrees();
   } catch (err) {
-    log(`re-kick: could not list halted worktrees (${errMsg(err)}); skipping sweep`);
+    log(formatDaemonWarning(`re-kick: could not list halted worktrees (${errMsg(err)}); skipping sweep`, { kind: 'none', why: 'the next sweep retries' }));
     return { cleared, skipped };
   }
 
@@ -867,7 +869,7 @@ export async function resumeRebaseFirst(opts: {
     }
     if (verifiedMerge.kind === 'halt') {
       await writeHalt(opts.worktreePath, [], `durable shipment evidence: ${verifiedMerge.reason}`, opts.events);
-      opts.log?.(`re-kick ${basename(opts.worktreePath)}: halted — ${verifiedMerge.reason}`);
+      opts.log?.(formatDaemonHalt(`re-kick ${basename(opts.worktreePath)}: halted — ${verifiedMerge.reason}`, { kind: 'operator', action: 'ai-conductor monitor all' }));
       return 'halted';
     }
   }
@@ -1054,11 +1056,11 @@ export async function resumeRebaseFirst(opts: {
     case 'conflict_halt':
       // Re-conflict on the new base → re-park via 9.0's existing HALT path.
       await writeRebaseOutcomeHalt(opts.worktreePath, outcome, opts.events);
-      opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase re-conflicted on advanced base — re-parked`);
+      opts.log?.(formatDaemonHalt(`re-kick ${basename(opts.worktreePath)}: rebase re-conflicted on advanced base — re-parked`, { kind: 'operator', action: 'ai-conductor monitor all' }));
       return 'halted';
     case 'flatten_refused':
       await writeRebaseOutcomeHalt(opts.worktreePath, outcome, opts.events);
-      opts.log?.(`re-kick ${basename(opts.worktreePath)}: flattened rebase refused — re-parked`);
+      opts.log?.(formatDaemonHalt(`re-kick ${basename(opts.worktreePath)}: flattened rebase refused — re-parked`, { kind: 'operator', action: 'ai-conductor monitor all' }));
       return 'halted';
     case 'setup_stop':
       // Setup-only resolver exhaustion: the rebase is still paused, so park it
@@ -1075,7 +1077,7 @@ export async function resumeRebaseFirst(opts: {
         kind: 'needs-human',
         reason: `rebase resolution paused — provider setup unavailable: ${outcome.reason}`,
       });
-      opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase resolution paused — provider setup unavailable — re-parked`);
+      opts.log?.(formatDaemonHalt(`re-kick ${basename(opts.worktreePath)}: rebase resolution paused — provider setup unavailable — re-parked`, { kind: 'operator', action: 'ai-conductor monitor all' }));
       return 'halted';
     case 'changed':
     case 'noop':

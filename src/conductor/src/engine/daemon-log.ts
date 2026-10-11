@@ -142,14 +142,20 @@ export function formatDaemonConsoleTeeLine(level: string, message: string): stri
  */
 export function createOwnershipAwareDaemonLogger(
   baseLog: DaemonActivityLogger,
-): (message: string) => void {
+): (message: DaemonLogMessage) => void {
   return (message) => {
     const slug = featureOwnership.getStore();
     if (!slug) {
       baseLog(message);
       return;
     }
-    baseLog(`${formatDaemonFeatureTag(slug)} ${message}`, true);
+    if (typeof message === 'string') {
+      baseLog(`${formatDaemonFeatureTag(slug)} ${message}`, true);
+      return;
+    }
+    // Preserve presentation metadata: the daemon-mode logger owns forwarded
+    // output collapsing and must receive the entry rather than a flattened body.
+    baseLog({ ...message, featureTag: message.featureTag ?? formatDaemonFeatureTag(slug) }, true);
   };
 }
 

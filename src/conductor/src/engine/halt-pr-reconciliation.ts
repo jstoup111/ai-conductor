@@ -22,6 +22,7 @@ import {
   upsertComment,
 } from './pr-labels.js';
 import { runTrackerAmbientRead } from './tracker-client.js';
+import { formatDaemonWarning } from './daemon-log.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -116,7 +117,7 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, operations, ru
       ]);
       prList = JSON.parse(stdout || '[]') as HaltPrReconciliationTarget[];
     } catch (err) {
-      log?.(`[halt-pr-reconciliation] failed to enumerate PRs: ${err}`);
+      log?.(formatDaemonWarning(`[halt-pr-reconciliation] failed to enumerate PRs: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
       return; // best-effort: no-op on list failure
     }
 
@@ -213,7 +214,7 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, operations, ru
         }
       } catch (err) {
         // Per-PR exception: log + skip, continue with other PRs
-        emit(`[halt-pr-reconciliation] error healing ${pr.url}: ${err}`);
+        emit(formatDaemonWarning(`[halt-pr-reconciliation] error healing ${pr.url}: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
       }
     }
 
@@ -238,6 +239,6 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, operations, ru
     }
   } catch (err) {
     // Sweep-level exception: swallow so callers are never disrupted
-    log?.(`[halt-pr-reconciliation] sweep error: ${err}`);
+    log?.(formatDaemonWarning(`[halt-pr-reconciliation] sweep error: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
   }
 }

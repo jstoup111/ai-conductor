@@ -40,6 +40,7 @@ import {
   NEEDS_REMEDIATION_BODY_MARKER,
 } from './pr-labels.js';
 import { runTrackerUrlRead } from './tracker-client.js';
+import { formatDaemonWarning } from './daemon-log.js';
 import { maskProjectOwnedRegions } from './pr-body-regions.js';
 import {
   PR_BODY_FLOOR_MARKER,
@@ -181,7 +182,7 @@ export async function rehabilitateHaltPr(
     const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body']);
     view = parsePrView(stdout);
   } catch (err) {
-    log(`[halt-pr-rehab] gh pr view failed for ${prUrl} — skipping rehabilitation: ${err}`);
+    log(formatDaemonWarning(`[halt-pr-rehab] gh pr view failed for ${prUrl} — skipping rehabilitation: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
     return 'gh-unavailable';
   }
 
@@ -235,7 +236,7 @@ export async function clearHaltStateForResume(
     const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body']);
     view = parsePrView(stdout);
   } catch (err) {
-    log(`[halt-pr-rehab] resume clear state read failed for ${prUrl}: ${err}`);
+    log(formatDaemonWarning(`[halt-pr-rehab] resume clear state read failed for ${prUrl}: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
     return 'gh-unavailable';
   }
 
@@ -280,7 +281,7 @@ export async function clearHaltStateForResume(
       );
       if (hasHaltSignal(parsePrView(stdout))) return 'partial';
     } catch (err) {
-      log(`[halt-pr-rehab] resume clear verification read failed for ${prUrl}: ${err}`);
+      log(formatDaemonWarning(`[halt-pr-rehab] resume clear verification read failed for ${prUrl}: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
       return 'partial';
     }
     const resolutionNote = `${NEEDS_REMEDIATION_MARKER}\nHalt resolved — the feature resumed and its remediation state was cleared automatically.`;
@@ -295,7 +296,7 @@ export async function clearHaltStateForResume(
       );
       commentId = findNeedsRemediationCommentId(stdout);
     } catch (err) {
-      log(`[halt-pr-rehab] resume resolution comment lookup failed for ${prUrl}: ${err}`);
+      log(formatDaemonWarning(`[halt-pr-rehab] resume resolution comment lookup failed for ${prUrl}: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
     }
     const note = await rehabilitateMutation(
       operations,
@@ -321,7 +322,7 @@ export async function clearHaltStateForResume(
     return 'cleared';
   }
 
-  log(`[halt-pr-rehab] resume clear was partial for ${prUrl}`);
+  log(formatDaemonWarning(`[halt-pr-rehab] resume clear was partial for ${prUrl}`, { kind: 'none', why: 'the next sweep retries' }));
   return 'partial';
 }
 
@@ -359,7 +360,7 @@ export async function retitleFloor(
     const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'title']);
     currentTitle = String((JSON.parse(stdout || '{}') as { title?: unknown }).title ?? '');
   } catch (err) {
-    log(`[halt-pr-rehab] retitle-floor gh pr view failed for ${prUrl} — skipping: ${err}`);
+    log(formatDaemonWarning(`[halt-pr-rehab] retitle-floor gh pr view failed for ${prUrl} — skipping: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
     return { outcome: 'not-halt-pr', title: currentTitle };
   }
 
@@ -374,7 +375,7 @@ export async function retitleFloor(
   if (opts.operations) {
     const result = await rehabilitateMutation(opts.operations, prUrl, 'pull-request.edit', { title: newTitle });
     if (isRefusal(result)) {
-      log(`[halt-pr-rehab] retitle-floor refused for ${prUrl}; no raw edit fallback`);
+      log(formatDaemonWarning(`[halt-pr-rehab] retitle-floor refused for ${prUrl}; no raw edit fallback`, { kind: 'none', why: 'the next sweep retries' }));
       return { outcome: 'refused', title: currentTitle };
     }
     return result.kind === 'executed'
@@ -382,7 +383,7 @@ export async function retitleFloor(
       : { outcome: 'resolved', title: currentTitle };
   }
 
-  log(`[halt-pr-rehab] retitle-floor refused for ${prUrl}; guarded operation boundary is unavailable`);
+  log(formatDaemonWarning(`[halt-pr-rehab] retitle-floor refused for ${prUrl}; guarded operation boundary is unavailable`, { kind: 'none', why: 'the next sweep retries' }));
   return { outcome: 'refused', title: currentTitle };
 }
 
@@ -404,7 +405,7 @@ export async function readStaleHaltTitle(
     const title = String((JSON.parse(stdout || '{}') as { title?: unknown }).title ?? '');
     return title.startsWith(NEEDS_REMEDIATION_TITLE_PREFIX) ? title : null;
   } catch (err) {
-    log?.(`[halt-pr-rehab] gate read failed for ${prUrl} — fail-open: ${err}`);
+    log?.(formatDaemonWarning(`[halt-pr-rehab] gate read failed for ${prUrl} — fail-open: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
     return null;
   }
 }
@@ -440,7 +441,7 @@ export async function ensureShipReady(
   try {
     const before = await readHaltPresentation(gh, cwd, prUrl, logFn);
     if (!before) {
-      logFn(`[halt-pr-rehab] ensureShipReady: could not read PR state for ${prUrl}`);
+      logFn(formatDaemonWarning(`[halt-pr-rehab] ensureShipReady: could not read PR state for ${prUrl}`, { kind: 'none', why: 'the next sweep retries' }));
       return 'partial';
     }
 
@@ -453,7 +454,7 @@ export async function ensureShipReady(
       if (operations) {
         const result = await rehabilitateMutation(operations, prUrl, 'pull-request.ready');
         if (isRefusal(result)) {
-          logFn(`[halt-pr-rehab] ensureShipReady(${prUrl}) refused; no retry or raw ready fallback`);
+          logFn(formatDaemonWarning(`[halt-pr-rehab] ensureShipReady(${prUrl}) refused; no retry or raw ready fallback`, { kind: 'none', why: 'the next sweep retries' }));
           return 'refused';
         }
         if (result.kind !== 'executed') return 'partial';
@@ -502,7 +503,7 @@ export async function readStaleHaltBanner(
     const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
     return maskProjectOwnedRegions(body).includes(HALT_PR_BANNER_SENTINEL) ? HALT_PR_BANNER_SENTINEL : null;
   } catch (err) {
-    log?.(`[halt-pr-rehab] gate read failed for ${prUrl} — fail-open: ${err}`);
+    log?.(formatDaemonWarning(`[halt-pr-rehab] gate read failed for ${prUrl} — fail-open: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
     return null;
   }
 }
@@ -641,7 +642,7 @@ export async function readFlooredBody(
     const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
     return isEngineFlooredBody(body) ? PR_BODY_FLOOR_MARKER : null;
   } catch (err) {
-    log?.(`[halt-pr-rehab] floored-body read failed for ${prUrl} — fail-open: ${err}`);
+    log?.(formatDaemonWarning(`[halt-pr-rehab] floored-body read failed for ${prUrl} — fail-open: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
     return null;
   }
 }
@@ -688,7 +689,7 @@ export async function postHaltHistoryComment(
       existingComments = [];
     }
   } catch (err) {
-    log(`[halt-pr-rehab] halt-history gh pr view failed for ${prUrl} — skipping: ${err}`);
+    log(formatDaemonWarning(`[halt-pr-rehab] halt-history gh pr view failed for ${prUrl} — skipping: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
     return 'gh-unavailable';
   }
 
@@ -827,7 +828,7 @@ export async function makeRetainedPrPresentable(
     const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body']);
     view = parsePrView(stdout);
   } catch (err) {
-    log(`[halt-pr-rehab] retained-PR state read failed for ${prUrl} — skipping repair: ${err}`);
+    log(formatDaemonWarning(`[halt-pr-rehab] retained-PR state read failed for ${prUrl} — skipping repair: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
     return 'gh-unavailable';
   }
   if (!hasHaltSignal(view)) return 'not-halt-pr';
@@ -844,7 +845,7 @@ export async function makeRetainedPrPresentable(
       log,
     });
   } catch (err) {
-    log(`[halt-pr-rehab] retained-PR halt-history capture failed for ${prUrl}: ${err}`);
+    log(formatDaemonWarning(`[halt-pr-rehab] retained-PR halt-history capture failed for ${prUrl}: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
   }
 
   // Step 1: label + body marker + Closes, with draft status left alone.
@@ -860,7 +861,7 @@ export async function makeRetainedPrPresentable(
       preserveDraft: true,
     });
   } catch (err) {
-    log(`[halt-pr-rehab] retained-PR rehabilitation failed for ${prUrl}: ${err}`);
+    log(formatDaemonWarning(`[halt-pr-rehab] retained-PR rehabilitation failed for ${prUrl}: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
     return 'partial';
   }
 
@@ -876,7 +877,7 @@ export async function makeRetainedPrPresentable(
     }, log);
     if (retitle.outcome === 'refused') return 'refused';
   } catch (err) {
-    log(`[halt-pr-rehab] retained-PR retitleFloor failed for ${prUrl}: ${err}`);
+    log(formatDaemonWarning(`[halt-pr-rehab] retained-PR retitleFloor failed for ${prUrl}: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
     anyFailed = true;
   }
 
@@ -897,7 +898,7 @@ export async function makeRetainedPrPresentable(
     if (floored === 'refused') return 'refused';
     if (floored === 'partial') anyFailed = true;
   } catch (err) {
-    log(`[halt-pr-rehab] retained-PR bodyFloor failed for ${prUrl}: ${err}`);
+    log(formatDaemonWarning(`[halt-pr-rehab] retained-PR bodyFloor failed for ${prUrl}: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
     anyFailed = true;
   }
 
@@ -954,7 +955,7 @@ export async function bodyFloor(
     const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
     body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
   } catch (err) {
-    logFn(`[halt-pr-rehab] bodyFloor gh pr view failed for ${prUrl} — skipping: ${err}`);
+    logFn(formatDaemonWarning(`[halt-pr-rehab] bodyFloor gh pr view failed for ${prUrl} — skipping: ${err}`, { kind: 'none', why: 'the next sweep retries' }));
     return 'partial';
   }
 
@@ -994,12 +995,12 @@ export async function bodyFloor(
       if (opts.operations) {
         const result = await rehabilitateMutation(opts.operations, prUrl, 'pull-request.edit', { body: newBody });
         if (isRefusal(result)) {
-          logFn(`[halt-pr-rehab] bodyFloor(${prUrl}) refused; no retry or raw edit fallback`);
+          logFn(formatDaemonWarning(`[halt-pr-rehab] bodyFloor(${prUrl}) refused; no retry or raw edit fallback`, { kind: 'none', why: 'the next sweep retries' }));
           return 'refused';
         }
         if (result.kind !== 'executed') return 'partial';
       } else {
-        logFn(`[halt-pr-rehab] bodyFloor(${prUrl}) refused; guarded operation boundary is unavailable`);
+        logFn(formatDaemonWarning(`[halt-pr-rehab] bodyFloor(${prUrl}) refused; guarded operation boundary is unavailable`, { kind: 'none', why: 'the next sweep retries' }));
         return 'refused';
       }
 

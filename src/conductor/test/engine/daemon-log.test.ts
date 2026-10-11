@@ -373,11 +373,11 @@ describe('engine/daemon-log', () => {
       const output = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join('\n');
 
       createFeatureDaemonLogger('feature-a', logger).forwarded(output, '/tmp/feature-output');
-      logger({ depth: 0, kind: 'forwarded', text: output, moreAt: '/tmp/daemon-output' });
+      logger({ depth: 0, kind: 'forwarded', text: output, moreAt: '/tmp/daemon-output', suffix: ' — next: ai-conductor monitor all' });
 
       expect(live).toEqual([
         '[daemon][feature-a] line 1 (+39 more lines; full text in /tmp/feature-output or set daemon_verbose: true to show them)',
-        '[daemon] line 1 (+39 more lines; full text in /tmp/daemon-output or set daemon_verbose: true to show them)',
+        '[daemon] line 1 (+39 more lines; full text in /tmp/daemon-output or set daemon_verbose: true to show them) — next: ai-conductor monitor all',
       ]);
     });
 
