@@ -406,8 +406,8 @@ describe('DefaultStepRunner', () => {
 
     try {
       await (runner as unknown as {
-        runRubricBuildReview(value: unknown, resolved: typeof config, tier: ConductState['complexity_tier'], context: undefined, capabilities: unknown): Promise<unknown>;
-      }).runRubricBuildReview(inputs, config, 'S', undefined, {
+        runRubricBuildReview(value: unknown, resolved: typeof config, tier: ConductState['complexity_tier'], planPath: undefined, context: undefined, capabilities: unknown): Promise<unknown>;
+      }).runRubricBuildReview(inputs, config, 'S', undefined, undefined, {
         claude: { provider: 'claude', platform: process.platform, status: 'available' },
       });
 

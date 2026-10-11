@@ -372,6 +372,27 @@ describe('daemon E2E fixture', () => {
               status: 'CURRENT', evidence: { provenanceHeadSha: (await execa('git', ['rev-parse', 'HEAD'], { cwd: worktreeDir })).stdout.trim(), outcome: 'PASS' },
             } as never),
           },
+          // The fixture owns every external review boundary. The default-on
+          // implementation-quality reviewer resolves its policy from the
+          // candidate catalog, so do not let this E2E path depend on a Codex
+          // installation or the operator's catalog.
+          buildReviewPolicyCatalog: async ({ skill }) => [{
+            semanticName: skill,
+            source: 'project' as const,
+            installationOrigin: '/fixture/project',
+            canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`,
+            packageRoot: `/fixture/project/${skill}`,
+            declaredDependencies: [],
+            availability: 'available' as const,
+          }],
+          buildReviewPolicyCapture: async (policy) => ({
+            policy,
+            materialPath: '/runtime/policy',
+            definitionPath: '/runtime/policy/SKILL.md',
+            manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Fixture review policy\n') }],
+            metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+            digest: `sha256-v1:${'a'.repeat(64)}`,
+          }),
           buildReviewEffectiveResolver,
         },
       );
