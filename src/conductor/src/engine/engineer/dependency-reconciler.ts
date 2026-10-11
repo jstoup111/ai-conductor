@@ -124,6 +124,16 @@ function formEdge(ref: string, value: string): DependencyEdge | null {
   };
 }
 
+/** Extract every raw issue-form Depends-on reference from its field section. */
+export function extractDependsOnFormValues(body: string): string[] {
+  const heading = /^###\s+Depends on\s*$/im.exec(body);
+  if (!heading) return [];
+  const rest = body.slice(heading.index + heading[0].length);
+  const nextHeading = rest.search(/^###\s+/m);
+  const section = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+  return section.match(/(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#\d+/g) ?? [];
+}
+
 /**
  * Return every unambiguous, same-repository dependency declared for an issue.
  *
@@ -134,7 +144,7 @@ function formEdge(ref: string, value: string): DependencyEdge | null {
 export function declaredEdges(input: DeclaredEdgesInput): DeclaredEdgesResult {
   const parsed = parseDependencyProse({ ref: input.ref, body: input.body });
   const candidates = [
-    ...(input.formDependsOn ?? []).map((value) => formEdge(input.ref, value)).filter(
+    ...[...extractDependsOnFormValues(input.body), ...(input.formDependsOn ?? [])].map((value) => formEdge(input.ref, value)).filter(
       (edge): edge is DependencyEdge => edge !== null,
     ),
     ...parsed.edges,

@@ -94,9 +94,6 @@ export async function applyIssueEventSync(
   const { edges } = declaredEdges({
     ref,
     body,
-    formDependsOn: isFormSubmission
-      ? [extractField(body, 'Depends on')].filter((value): value is string => value !== undefined)
-      : [],
   });
   const links: DependencyLinkResult[] = [];
   const failures: IssueEventSyncFailure[] = [];

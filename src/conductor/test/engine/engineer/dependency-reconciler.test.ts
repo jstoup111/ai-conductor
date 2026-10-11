@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:14, task:15
+// Covers: task:1, task:2, task:14, task:15, task:rem-as-built-rem-asb-1
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -27,6 +27,22 @@ describe('declaredEdges', () => {
     });
 
     expect(result.edges.map((edge) => edge.target)).toEqual(['acme/app#10', 'acme/app#12']);
+  });
+
+  it('extracts every multi-reference and qualified same-repository Depends-on form value from the raw body', () => {
+    const result = declaredEdges({
+      ref: SOURCE,
+      body: '### Depends on\n#123, #456, acme/app#789\n### Priority\nP1',
+    });
+
+    expect(result.edges.map((edge) => edge.target)).toEqual(['acme/app#123', 'acme/app#456', 'acme/app#789']);
+  });
+
+  it('keeps form-field extraction identical for raw-body callers', () => {
+    const body = '### Depends on\n#123, acme/app#456';
+    expect(declaredEdges({ ref: SOURCE, body }).edges).toEqual(
+      declaredEdges({ ref: SOURCE, body, formDependsOn: ['#123', 'acme/app#456'] }).edges,
+    );
   });
 
   it('dedupes a target declared in both the form and prose', () => {
