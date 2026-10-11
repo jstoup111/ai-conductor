@@ -237,7 +237,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
     })) as ConductorEvent;
 
     expect(lines(legacy)).toEqual([
-      '· ⚠ build quiet 15m (21/21) · legacy-no-activity',
+      '· ⚠ build quiet 15m (21/21) · legacy-no-activity — no action needed: the daemon continues to monitor progress',
     ]);
   });
 
@@ -334,7 +334,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       activity: 'quiet',
     });
 
-    expect(line).toBe('· ⚠ build quiet 15m (21/21) · last commit 7m ago · show-provider-activity-age');
+    expect(line).toBe('· ⚠ build quiet 15m (21/21) · last commit 7m ago · show-provider-activity-age — no action needed: the daemon continues to monitor progress');
   });
 
   it('renders a future provider activity timestamp as a zero-length age', () => {
@@ -350,7 +350,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       activity: 'quiet',
     });
 
-    expect(line).toBe('· ⚠ build quiet 15m (21/21) · provider activity 0s ago · show-provider-activity-age');
+    expect(line).toBe('· ⚠ build quiet 15m (21/21) · provider activity 0s ago · show-provider-activity-age — no action needed: the daemon continues to monitor progress');
   });
 
   it('clamps a future provider activity timestamp beyond an exact minute to zero', () => {
@@ -366,7 +366,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       activity: 'quiet',
     });
 
-    expect(line).toBe('· ⚠ build quiet 15m (21/21) · provider activity 0s ago · show-provider-activity-age');
+    expect(line).toBe('· ⚠ build quiet 15m (21/21) · provider activity 0s ago · show-provider-activity-age — no action needed: the daemon continues to monitor progress');
   });
 
   it('marks build_no_progress with a distinct warning glyph under color', () => {
@@ -425,7 +425,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
     });
 
     expect(line).toContain(expected);
-    expect(line).toContain('owner/repository/provider-scratch');
+    expect(line).not.toContain('owner/repository/provider-scratch');
     expect(line).toContain(partial.reason);
   });
 

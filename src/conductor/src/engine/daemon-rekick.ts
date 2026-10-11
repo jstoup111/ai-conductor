@@ -869,7 +869,9 @@ export async function resumeRebaseFirst(opts: {
     }
     if (verifiedMerge.kind === 'halt') {
       await writeHalt(opts.worktreePath, [], `durable shipment evidence: ${verifiedMerge.reason}`, opts.events);
+      // ai-conductor:session-command-context=operator-only
       opts.log?.(formatDaemonHalt(`re-kick ${basename(opts.worktreePath)}: halted — ${verifiedMerge.reason}`, { kind: 'operator', action: 'ai-conductor monitor all' }));
+      // /ai-conductor:session-command-context
       return 'halted';
     }
   }
@@ -1056,11 +1058,15 @@ export async function resumeRebaseFirst(opts: {
     case 'conflict_halt':
       // Re-conflict on the new base → re-park via 9.0's existing HALT path.
       await writeRebaseOutcomeHalt(opts.worktreePath, outcome, opts.events);
+      // ai-conductor:session-command-context=operator-only
       opts.log?.(formatDaemonHalt(`re-kick ${basename(opts.worktreePath)}: rebase re-conflicted on advanced base — re-parked`, { kind: 'operator', action: 'ai-conductor monitor all' }));
+      // /ai-conductor:session-command-context
       return 'halted';
     case 'flatten_refused':
       await writeRebaseOutcomeHalt(opts.worktreePath, outcome, opts.events);
+      // ai-conductor:session-command-context=operator-only
       opts.log?.(formatDaemonHalt(`re-kick ${basename(opts.worktreePath)}: flattened rebase refused — re-parked`, { kind: 'operator', action: 'ai-conductor monitor all' }));
+      // /ai-conductor:session-command-context
       return 'halted';
     case 'setup_stop':
       // Setup-only resolver exhaustion: the rebase is still paused, so park it
@@ -1077,7 +1083,9 @@ export async function resumeRebaseFirst(opts: {
         kind: 'needs-human',
         reason: `rebase resolution paused — provider setup unavailable: ${outcome.reason}`,
       });
+      // ai-conductor:session-command-context=operator-only
       opts.log?.(formatDaemonHalt(`re-kick ${basename(opts.worktreePath)}: rebase resolution paused — provider setup unavailable — re-parked`, { kind: 'operator', action: 'ai-conductor monitor all' }));
+      // /ai-conductor:session-command-context
       return 'halted';
     case 'changed':
     case 'noop':

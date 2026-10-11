@@ -3348,17 +3348,31 @@ function renderDaemonEventWithPresentation(event: ConductorEvent, output: Parame
     case 'pipeline_tail_diagnostic':
       output.warning(`pipeline tail ${event.reason}: ${event.path}${event.byteOffset === undefined ? '' : ` at byte ${event.byteOffset}`}`, { kind: 'none', why: 'the daemon continues' });
       return;
-    case 'build_no_progress':
-      output.warning(`${event.step} quiet ${event.quietMinutes}m (${event.resolved}/${event.total})`, { kind: 'none', why: 'the daemon continues to monitor progress' });
+    case 'build_no_progress': {
+      const position = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId));
+      const commitAge = formatCommitAge(event.lastCommitAt, Date.now());
+      const commit = commitAge ? ` · last commit ${commitAge}` : '';
+      const activity = event.lastActivityAt === undefined
+        ? ''
+        : ` · provider activity ${formatHeartbeatAge(Math.max(0, Date.now() - event.lastActivityAt))} ago`;
+      const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
+      output.warning(`${event.step} quiet ${event.quietMinutes}m (${position}/${event.total})${commit}${activity}${slug}`, { kind: 'none', why: 'the daemon continues to monitor progress' });
       return;
-    case 'build_active_stall':
-      output.warning(`${event.step} active without movement for ${event.minutes}m (${event.resolved}/${event.total}) · action ${event.action}`, { kind: 'none', why: 'the daemon continues to monitor progress' });
+    }
+    case 'build_active_stall': {
+      const position = displayBuildPosition(event.resolved, event.total, false);
+      const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
+      output.warning(`${event.step} active without movement for ${event.minutes}m (${position}/${event.total}) · action ${event.action}${slug}`, { kind: 'none', why: 'the daemon continues to monitor progress' });
       return;
+    }
     case 'build_stall':
       output.halt(`${event.step} stall: ${event.reason} (${event.resolvedBefore} → ${event.resolvedAfter})`, { kind: 'operator', action: 'ai-conductor monitor all' });
       return;
     case 'auto_park_contradiction':
-      output.halt(`auto_park_contradiction[${event.slug}]: refused verdict="${event.verdict}"`, { kind: 'operator', action: 'ai-conductor monitor all' });
+      output.halt(
+        `auto_park_contradiction[${event.slug}]: refused verdict="${event.verdict}" — evidence: summaryTasksCompleted=${event.evidence.summaryTasksCompleted} evidenceStamps=${event.evidence.evidenceStamps} resolvedTasks=${event.evidence.resolvedTasks}`,
+        { kind: 'operator', action: 'ai-conductor monitor all' },
+      );
       return;
     case 'session_command_refused':
       output.halt(formatSessionOccurrence(event, false), { kind: 'operator', action: 'ai-conductor monitor all' });

@@ -814,7 +814,9 @@ export async function terminateFeature({
     resumeProcedure;
   const markerWrite = await writeHaltMarker(worktreePath, note, 'needs-human', events);
   if (markerWrite.status === 'failed') {
+    // ai-conductor:session-command-context=operator-only
     log?.(formatDaemonHalt(`[daemon-runner] unrecoverable-state: HALT marker write failed for ${slug ?? worktreePath}: ${markerWrite.reason}`, { kind: 'operator', action: 'ai-conductor monitor all' }));
+    // /ai-conductor:session-command-context
     return;
   }
   if (markerWrite.status === 'partial') {
@@ -843,9 +845,11 @@ export async function terminateFeature({
   ]).then(([body, haltClass]) => {
     if (body !== note || haltClass !== 'needs-human') throw new Error('marker verification failed');
   }).catch((err) => {
+    // ai-conductor:session-command-context=operator-only
     log?.(
       formatDaemonHalt(`[daemon-runner] unrecoverable-state: HALT marker write failed for ${slug ?? worktreePath}: ${err instanceof Error ? err.message : String(err)}`, { kind: 'operator', action: 'ai-conductor monitor all' }),
     );
+    // /ai-conductor:session-command-context
   });
 }
 

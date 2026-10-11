@@ -26,10 +26,10 @@ describe('renderDaemonEvent: renderer_error', () => {
   });
 
   it('logs one warning naming the OpenTelemetry renderer and error', () => {
-    expect(lines('otel')).toEqual(['· ⚠ renderer otel failed: export failed: 503']);
+    expect(lines('otel')).toEqual(['· ⚠ renderer otel failed: export failed: 503 — no action needed: the daemon continues']);
   });
 
   it('logs one warning naming a non-OpenTelemetry renderer', () => {
-    expect(lines('terminal')).toEqual(['· ⚠ renderer terminal failed: export failed: 503']);
+    expect(lines('terminal')).toEqual(['· ⚠ renderer terminal failed: export failed: 503 — no action needed: the daemon continues']);
   });
 });

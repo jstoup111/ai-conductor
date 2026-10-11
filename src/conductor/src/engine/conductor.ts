@@ -12495,7 +12495,9 @@ export class Conductor {
                   'needs-human',
                 );
                 if (markerResult.status === 'failed') {
+                  // ai-conductor:session-command-context=operator-only
                   this.log?.(formatDaemonWarning(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`, { kind: 'operator', action: 'ai-conductor monitor all' }));
+                  // /ai-conductor:session-command-context
                 }
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
@@ -13045,7 +13047,9 @@ export class Conductor {
                     'needs-human',
                   );
                   if (markerResult.status === 'failed') {
+                    // ai-conductor:session-command-context=operator-only
                     this.log?.(formatDaemonWarning(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`, { kind: 'operator', action: 'ai-conductor monitor all' }));
+                    // /ai-conductor:session-command-context
                   }
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);

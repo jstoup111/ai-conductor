@@ -105,14 +105,14 @@ describe('renderDaemonEvent: provider_attempt', () => {
       invoked: false,
       lifecycle: { phase, attemptId: '123e4567-e89b-12d3-a456-426614174000', recoveryCount: 0 },
     })).toEqual([]);
-    const recovering = lines({ type: 'provider_attempt', step: 'build', provider: 'provider-lifecycle', outcome: 'success', invoked: false, lifecycle: { phase: 'recovering', attemptId: '123e4567-e89b-12d3-a456-426614174000', recoveryCount: 1, reason: 'timeout' } });
-    const exhausted = lines({ type: 'provider_attempt', step: 'build', provider: 'provider-lifecycle', outcome: 'success', invoked: false, lifecycle: { phase: 'exhausted', attemptId: '123e4567-e89b-12d3-a456-426614174000', recoveryCount: 2, reason: 'timeout' } });
-    expect(recovering[0]).toContain('recovery 1 — timeout');
+    const recovering = lines({ type: 'provider_attempt', step: 'build', provider: 'provider-lifecycle', outcome: 'success', invoked: false, lifecycle: { phase: 'recovering', attemptId: '123e4567-e89b-12d3-a456-426614174000', recoveryCount: 1, reason: 'preparation-timeout' } });
+    const exhausted = lines({ type: 'provider_attempt', step: 'build', provider: 'provider-lifecycle', outcome: 'success', invoked: false, lifecycle: { phase: 'exhausted', attemptId: '123e4567-e89b-12d3-a456-426614174000', recoveryCount: 2, reason: 'preparation-timeout' } });
+    expect(recovering[0]).toContain('recovery 1 — preparation-timeout');
     expect(recovering[0]).toMatch(/ — no action needed: /);
     expect(exhausted[0]).toMatch(/✋ build provider halted .* — next: ai-conductor monitor all$/);
     expect([...recovering, ...exhausted].join('\n')).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
     for (const phase of ['preparing', 'running', 'settled', 'recovering', 'exhausted'] as const) {
-      expect(lines({ type: 'provider_attempt', step: 'build', provider: 'provider-lifecycle', outcome: 'success', invoked: false, lifecycle: { phase, attemptId: '123e4567-e89b-12d3-a456-426614174000', recoveryCount: 1, reason: 'timeout' } }, true).join('\n')).toContain('123e4567-e89b-12d3-a456-426614174000');
+      expect(lines({ type: 'provider_attempt', step: 'build', provider: 'provider-lifecycle', outcome: 'success', invoked: false, lifecycle: { phase, attemptId: '123e4567-e89b-12d3-a456-426614174000', recoveryCount: 1, reason: 'preparation-timeout' } }, true).join('\n')).toContain('123e4567-e89b-12d3-a456-426614174000');
     }
   });
 });

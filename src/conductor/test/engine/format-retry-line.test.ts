@@ -75,7 +75,7 @@ describe('format-retry-line', () => {
         { type: 'step_retry', step: 'build', attempt: 2, maxAttempts: 2, reason },
         (line) => lines.push(stripAnsi(line)),
       );
-      expect(lines).toEqual([`· ↻ build retry (try 2/2: ${result})`]);
+      expect(lines).toEqual([`· ⚠ build retry (try 2/2: ${result}) — no action needed: ${result}`]);
     });
 
     it('truncates multi-line input to maxLen', () => {
