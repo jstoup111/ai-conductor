@@ -23,6 +23,7 @@ interface Surface {
   label: string;
   exclude: readonly string[];
   excludeDirectoryBasenames?: readonly string[];
+  semanticEmptyJson?: readonly string[];
   manifest: readonly Entry[];
 }
 interface Entry { path: string; digest: string; }
@@ -124,6 +125,11 @@ const LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES: readonly string[] = ['node_mod
  * fingerprinted: no churn was observed for them, and the latter two are
  * config-like — a self-host process rewriting harness config in the operator
  * home is exactly what this surface exists to catch.
+ *
+ * #3096: `remote-settings.json` is policy config like `policy-limits.json`,
+ * but two 2026-10-10 self-host halts found Claude refreshing its semantically
+ * empty root file between zero bytes and `{}`. It is normalized rather than
+ * excluded, so managed-settings content stays fingerprinted.
  */
 const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'history.jsonl',                    // append-only prompt/response log for every session on the machine
@@ -252,12 +258,22 @@ const PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES: Readonly<Record<SelfHostProvi
   [PI_PROVIDER]: [],
 };
 
+const PROVIDER_STATE_SEMANTIC_EMPTY_JSON: Readonly<Record<SelfHostProviderId, readonly string[]>> = {
+  [CLAUDE_PROVIDER]: ['remote-settings.json'],
+  [CODEX_PROVIDER]: [],
+  [PI_PROVIDER]: [],
+};
+
 function providerStateVolatile(provider: ProviderWith<'selfHost'> | undefined): readonly string[] {
   return provider ? PROVIDER_STATE_VOLATILE[provider.id] : [];
 }
 
 function providerStateVolatileDirectoryBasenames(provider: ProviderWith<'selfHost'> | undefined): readonly string[] {
   return provider ? PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES[provider.id] : ['.in_use'];
+}
+
+function providerStateSemanticEmptyJson(provider: ProviderWith<'selfHost'> | undefined): readonly string[] {
+  return provider ? PROVIDER_STATE_SEMANTIC_EMPTY_JSON[provider.id] : [];
 }
 
 /**
@@ -324,10 +340,22 @@ async function entryContent(file: string): Promise<Buffer | string> {
   });
 }
 
+function isSemanticEmptyJson(bytes: Buffer): boolean {
+  const text = bytes.toString('utf8').trim();
+  if (text === '') return true;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) && Object.keys(parsed).length === 0;
+  } catch {
+    return false;
+  }
+}
+
 async function manifest(
   root: string,
   exclude: readonly string[],
   excludeDirectoryBasenames: readonly string[] = [],
+  semanticEmptyJson: readonly string[] = [],
 ): Promise<Manifest> {
   const startedAt = performance.now();
   // Filter DURING the walk: an excluded subtree is never descended into, so
@@ -357,7 +385,10 @@ async function manifest(
   const entries = await Promise.all(files.map(async file => {
     const path = relative(root, file);
     const bytes = await entryContent(file);
-    return { path, digest: createHash('sha256').update(bytes).digest('hex') };
+    const digest = Buffer.isBuffer(bytes) && semanticEmptyJson.includes(path) && isSemanticEmptyJson(bytes)
+      ? createHash('sha256').update('semantic-empty-json').digest('hex')
+      : createHash('sha256').update(bytes).digest('hex');
+    return { path, digest };
   }));
   const filteredEntries = entries.filter(entry => !exclude.includes(entry.path)).sort((a, b) => a.path.localeCompare(b.path));
   return {
@@ -380,6 +411,7 @@ export async function fingerprintLiveBoundary(args: {
     ...(args.selectedAuthPaths ?? []),
   ];
   const excludeDirectoryBasenames = providerStateVolatileDirectoryBasenames(provider);
+  const semanticEmptyJson = providerStateSemanticEmptyJson(provider);
   const liveCheckout = await manifest(
     args.liveCheckout,
     LIVE_CHECKOUT_VOLATILE,
@@ -389,6 +421,7 @@ export async function fingerprintLiveBoundary(args: {
     args.unrelatedProviderState,
     excluded,
     excludeDirectoryBasenames,
+    semanticEmptyJson,
   );
   return { surfaces: [
     {
@@ -403,6 +436,7 @@ export async function fingerprintLiveBoundary(args: {
       label: 'provider state',
       exclude: excluded,
       excludeDirectoryBasenames,
+      semanticEmptyJson,
       manifest: providerState.entries,
     },
   ], measurements: [
@@ -501,6 +535,7 @@ export async function verifyLiveBoundary(
       surface.root,
       surface.exclude,
       surface.excludeDirectoryBasenames ?? [],
+      surface.semanticEmptyJson ?? [],
     )).entries;
     if (JSON.stringify(current) !== JSON.stringify(surface.manifest)) {
       const diff = diffManifests(surface.manifest, current);
