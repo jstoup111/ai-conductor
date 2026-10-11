@@ -168,6 +168,7 @@ export async function completeInterruptedRebaseOperation(
       reverified: [],
       operationId: options.operation.id,
       child: options.child,
+      ...(options.operation.cause === undefined ? {} : { cause: options.operation.cause }),
     });
   }
   const candidates = options.operation.preservationEvidence ?? [];
@@ -208,6 +209,7 @@ export async function completeInterruptedRebaseOperation(
     reverified: [...new Set(reverified)],
     operationId: options.operation.id,
     child: options.child,
+    ...(options.operation.cause === undefined ? {} : { cause: options.operation.cause }),
   });
 }
 
