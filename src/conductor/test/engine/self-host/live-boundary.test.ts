@@ -1,7 +1,7 @@
 // Covers: task:1, task:2, task:3, task:6
 import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
@@ -474,6 +474,44 @@ describe('live self-host boundary', () => {
           });
           expect(result.reason).toContain('changed remote-settings.json');
         }
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+
+    it('rejects creation of a semantic-empty root remote-settings.json', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'live-boundary-remote-settings-created-'));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(provider)]);
+      const settings = join(provider, 'remote-settings.json');
+      try {
+        for (const content of ['', '{}']) {
+          const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+          await writeFile(settings, content);
+          const result = await verify(baseline);
+          expect(result).toMatchObject({
+            ok: false,
+            reason: expect.stringContaining('provider state changed during self-host execution'),
+          });
+          expect(result.reason).toContain('added remote-settings.json');
+          await unlink(settings);
+        }
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+
+    it('rejects deletion of a semantic-empty root remote-settings.json', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'live-boundary-remote-settings-removed-'));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(provider)]);
+      const settings = join(provider, 'remote-settings.json');
+      await writeFile(settings, '{}');
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await unlink(settings);
+      try {
+        const result = await verify(baseline);
+        expect(result).toMatchObject({
+          ok: false,
+          reason: expect.stringContaining('provider state changed during self-host execution'),
+        });
+        expect(result.reason).toContain('removed remote-settings.json');
       } finally { await rm(root, { recursive: true, force: true }); }
     });
   });
