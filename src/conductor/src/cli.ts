@@ -747,8 +747,8 @@ export function createProgram(): Command {
   // process, so this command writes directly to its sibling ledger without
   // starting a conductor or daemon. Dispatch lives in index.ts.
   program
-    .command('closeout-event <obligation> <started-at> <ended-at>')
-    .description('Record one pipeline closeout timing event');
+    .command('closeout-event <action> <obligation>')
+    .description('Record the start or end of a pipeline closeout obligation');
 
   program
     .command('build-tail [worktree]')
