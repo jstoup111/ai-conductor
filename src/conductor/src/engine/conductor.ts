@@ -4024,7 +4024,15 @@ export class Conductor {
     const refusalReworkRoute = prdAuditOverScopeRoute?.kind === 'refusal-rework'
       ? prdAuditOverScopeRoute
       : undefined;
-    const admittedRefusalGapIds = new Set<string>();
+    // The ordinary gap list keys a refusal disposition by its reference id,
+    // the bare decision id, not the `refusal-<decisionId>` gap id the refusal
+    // admission mints. Refusal dispositions are owned by that admission alone;
+    // matching only the minted id let them fall through to the criterion
+    // ladder, where a mixed as-built round rejected them as unexpected
+    // findings and halted every refusal-rework round (#2746).
+    const refusalReferenceIds = new Set(typedPlan.value.dispositions
+      .filter((disposition) => disposition.reference.kind === 'refusal')
+      .map((disposition) => disposition.reference.id));
     const refusalCriteriaByGapId = new Map<string, string>();
     if (refusalReworkRoute !== undefined) {
       const admission = admitRefusalReworkPlan(typedPlan.value.dispositions, refusalReworkRoute.refusals);
@@ -4042,7 +4050,6 @@ export class Conductor {
         };
       }
       for (const gap of admission.gaps) {
-        admittedRefusalGapIds.add(gap.id);
         refusalCriteriaByGapId.set(gap.id, gap.criterion ?? gap.id);
         appendGaps.push(gap);
         admittedGaps.push(gap);
@@ -4087,7 +4094,7 @@ export class Conductor {
     // gap naming it appends under the same PRD id (one plan task) and plan
     // growth counts it once, not once per binding gap.
     const prdOwnedTaskIds = new Set(gaps
-      .filter((gap) => !admittedRefusalGapIds.has(gap.id) &&
+      .filter((gap) => !refusalReferenceIds.has(gap.id) &&
         remediationDispositionAppendsToPlan(gap.disposition) &&
         gateAdmissions(gap.id).prdAuditAdmits)
       .flatMap((gap) => gap.tasks.map((task) => task.id)));
@@ -4096,7 +4103,7 @@ export class Conductor {
       // Admitted refusal gaps were already bound above through their decision
       // id; the criterion-id ladder below would re-admit them with the wrong
       // gate source, so leave them to the refusal admission only.
-      if (admittedRefusalGapIds.has(gap.id)) continue;
+      if (refusalReferenceIds.has(gap.id)) continue;
       if (gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION) {
         const { prdAuditAdmits, asBuiltAdmits } = gateAdmissions(gap.id);
         // Unlike appended work's compatibility guard below, existing-task is
