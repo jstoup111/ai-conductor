@@ -16,7 +16,8 @@ const activeChild1: ActiveChildResolution = {
   kind: 'active', child: child1, position: child1, isLeaf: false, branch: 'feat/c1/demo',
 };
 const cursorRefusals: Array<[ActiveChildResolution, string]> = [
-  [{ kind: 'divergent', child: child1 }, 'child 1 diverged from its declared successor; restack required (#2943)'],
+  [{ kind: 'divergent', child: child1, check: 'closed-child-rewritten' }, 'child 1 failed active-child check closed-child-rewritten'],
+  [{ kind: 'divergent', child: child1, check: 'range-not-ancestor' }, 'child 1 failed active-child check range-not-ancestor'],
   [{ kind: 'envelope-missing' }, 'coverage-binding envelope is missing while child state exists'],
   [{ kind: 'detached-head' }, 'worktree is in detached HEAD while resolving the active child'],
   [{ kind: 'git-error' }, 'git failed while resolving the active child cursor'],
