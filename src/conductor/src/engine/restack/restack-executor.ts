@@ -28,6 +28,7 @@ import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, type CommitterStamp } from './restack-replay.js';
 import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { syncRestackedWorktree } from './restack-sync.js';
+import { applyRestackTransition } from './restack-transition.js';
 import {
   isLegalJournalTransition,
   parseCommitSha,
@@ -453,8 +454,16 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     await syncRestackedWorktree(options.worktree, checkedOutMove.oldSha, checkedOutMove.newSha, { git });
     journal = await transitionState(options.worktree, journal, 'synced', git);
 
-    // Task 18 supplies the durable transition hook; this Task 8 boundary keeps
-    // state ordering correct until that implementation is available.
+    const transition = await applyRestackTransition({
+      worktree: options.worktree,
+      cause: options.cause,
+      newDefault,
+      activeChild: active.child,
+      ranges: plan.ranges,
+      moves,
+      git,
+      ...(options.events === undefined ? {} : { events: options.events }),
+    });
     journal = await transitionState(options.worktree, journal, 'applied', git);
     if (journal.journal.followOnCause === undefined) await cleanAppliedJournal(journal, git);
     for (const range of plan.ranges) {
@@ -462,7 +471,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       if (!move) throw new Error(`missing move for child ${range.child}`);
       await options.events?.emit({
         type: 'restack_applied', opId: draft.opId, cause: draft.cause, child: range.child,
-        oldTip: range.oldTip, newTip: move.newSha, wouldInvalidate: [], parentOverlapPaths: overlaps.get(range.child) ?? [],
+        oldTip: range.oldTip, newTip: move.newSha, wouldInvalidate: [...(transition.wouldInvalidate.get(range.child) ?? [])], parentOverlapPaths: overlaps.get(range.child) ?? [],
       });
     }
     if (mergeAudit.flattenedMerges.length > 0 || mergeAudit.ancestryOnlyMerges.length > 0 || mergeAudit.sideLineageCount > 0) {
