@@ -1,6 +1,6 @@
 // Covers: task:25
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -16,6 +16,7 @@ import {
 } from '../../../src/engine/restack/restack-journal.js';
 import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
 import { replayChildRange } from '../../../src/engine/restack/restack-replay.js';
+import { syncRestackedWorktree } from '../../../src/engine/restack/restack-sync.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
 
 const execFile = promisify(execFileCallback);
@@ -84,7 +85,36 @@ async function movedJournal(subject: Awaited<ReturnType<typeof fixture>>) {
   await subject.git(['update-ref', 'refs/heads/feat/c1/demo', replay.tip, subject.oldTip]);
   await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', replay.tip, subject.oldTip]);
   await subject.git(['update-ref', journalRefFor('demo'), blob, '']);
-  return { child, replay };
+  return { child, replay, journal, blob };
+}
+
+async function readyJournal(subject: Awaited<ReturnType<typeof fixture>>) {
+  const child = parseChildId(1);
+  if (!child) throw new Error('child id should parse');
+  const replay = await replayChildRange(
+    { child, oldParent: subject.base, oldTip: subject.oldTip, kind: 'active' },
+    subject.advanced,
+    { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+    makeGitRunner(subject.repo),
+  );
+  await pinStagingRef(subject.repo, 'demo', child, replay.tip);
+  const journal: RestackJournal = {
+    opId: 'crashed-ready' as RestackOpId,
+    cause: 'base-refresh',
+    committer: { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+    dirtyPaths: [],
+    refs: [
+      { ref: 'refs/heads/feat/c1/demo' as never, oldSha: subject.oldTip },
+      { ref: 'refs/conductor/demo/closed/c1' as never, oldSha: subject.oldTip },
+    ],
+    ranges: [{ child, oldParent: subject.base, oldTip: subject.oldTip, kind: 'closed' }],
+    children: [{ child, status: 'replayed' }],
+    state: 'ready',
+    owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
+  };
+  const blob = await writeRestackJournalBlob(subject.repo, journal);
+  await subject.git(['update-ref', journalRefFor('demo'), blob, '']);
+  return { child, replay, journal, blob };
 }
 
 describe('recoverRestackJournal refusal paths (real local Git)', () => {
@@ -119,5 +149,52 @@ describe('recoverRestackJournal refusal paths (real local Git)', () => {
     expect(halt).toContain('refs/conductor/demo/closed/c1');
     expect(halt).toContain('refs/conductor/demo/restack/staging/c1');
     expect((await subject.git(['rev-parse', 'refs/heads/feat/c1/demo'])).stdout.trim()).toBe(subject.oldTip);
+  });
+
+  it('aborts a ready journal when a new tracked edit overlaps its pending move', async () => {
+    const subject = await fixture();
+    await readyJournal(subject);
+    await writeFile(join(subject.repo, 'src-a.ts'), 'operator edit\n');
+
+    const result = await recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) });
+
+    expect(result).toEqual({ kind: 'recovered', fromState: 'ready' });
+    expect((await subject.git(['rev-parse', 'refs/heads/feat/c1/demo'])).stdout.trim()).toBe(subject.oldTip);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('dirty-overlap');
+  });
+
+  it('halts on an unexpected moved ref while accepting a halt-record-only checked-out tip at synced', async () => {
+    const divergent = await fixture();
+    const moved = await movedJournal(divergent);
+    await divergent.git(['reset', '--hard', '-q', moved.replay.tip]);
+    const rogue = await (async () => {
+      await writeFile(join(divergent.repo, 'rogue.txt'), 'operator commit\n');
+      await divergent.git(['add', 'rogue.txt']);
+      await divergent.git(['commit', '-qm', 'operator commit']);
+      return (await divergent.git(['rev-parse', 'HEAD'])).stdout.trim();
+    })();
+
+    const refused = await recoverRestackJournal({ worktree: divergent.repo, slug: 'demo', git: makeGitRunner(divergent.repo) });
+
+    expect(refused).toEqual({ kind: 'unavailable', detail: 'journaled refs no longer match the moved side' });
+    const halt = await readFile(join(divergent.repo, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain(`refs/heads/feat/c1/demo ${rogue}`);
+    expect(halt).toContain(`refs/conductor/demo/closed/c1 ${moved.replay.tip}`);
+
+    const synced = await fixture();
+    const syncedMove = await movedJournal(synced);
+    await syncRestackedWorktree(synced.repo, synced.oldTip, syncedMove.replay.tip, { git: makeGitRunner(synced.repo) });
+    const syncedJournal = { ...syncedMove.journal, state: 'synced' as const };
+    const syncedBlob = await writeRestackJournalBlob(synced.repo, syncedJournal);
+    await synced.git(['update-ref', journalRefFor('demo'), syncedBlob, syncedMove.blob]);
+    await mkdir(join(synced.repo, '.docs', 'halted'), { recursive: true });
+    await writeFile(join(synced.repo, '.docs', 'halted', 'demo.md'), 'Status: halted\n');
+    await synced.git(['add', '.docs/halted/demo.md']);
+    await synced.git(['commit', '-qm', 'halt record only']);
+
+    const recovered = await recoverRestackJournal({ worktree: synced.repo, slug: 'demo', git: makeGitRunner(synced.repo) });
+
+    expect(recovered).toEqual({ kind: 'recovered', fromState: 'synced' });
+    await expect(readFile(join(synced.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

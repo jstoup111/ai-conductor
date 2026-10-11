@@ -1,4 +1,4 @@
-// Covers: task:rem-prd-audit-1-r1
+// Covers: task:rem-prd-audit-1-r1, task:35
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // The engine mints `executionContext.executionId` via `node:crypto.randomUUID`
