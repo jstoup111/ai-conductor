@@ -141,7 +141,7 @@ describe('runRestack path ownership (real local Git)', () => {
     const advanced = await advanceDefault(subject, 'src/g.ts', 'X\n');
     const events = new ConductorEventEmitter();
     const refusals: unknown[] = [];
-    events.on('restack_refused', (event) => refusals.push(event));
+    events.on('restack_refused', (event) => { refusals.push(event); });
 
     await expect(restack(subject, advanced, events)).resolves.toEqual({ kind: 'halted' });
 
@@ -168,7 +168,7 @@ describe('runRestack path ownership (real local Git)', () => {
     await restored.git(['checkout', '-q', 'feat/daemon-demo']);
     const restoredEvents = new ConductorEventEmitter();
     const restoredRefusals: unknown[] = [];
-    restoredEvents.on('restack_refused', (event) => restoredRefusals.push(event));
+    restoredEvents.on('restack_refused', (event) => { restoredRefusals.push(event); });
 
     await expect(restack(restored, deletedDefault, restoredEvents)).resolves.toEqual({ kind: 'halted' });
 
@@ -212,7 +212,7 @@ describe('runRestack path ownership (real local Git)', () => {
     const overlapAdvance = await advanceDefault(overlap, 'src/f.ts', 'one=parent\ntwo=base\nthree=base\nfour=base\nfive=base\nsix=base\nseven=base\neight=base\nnine=base\nten=base\n');
     const overlapEvents = new ConductorEventEmitter();
     const applied: unknown[] = [];
-    overlapEvents.on('restack_applied', (event) => applied.push(event));
+    overlapEvents.on('restack_applied', (event) => { applied.push(event); });
 
     await expect(restack(overlap, overlapAdvance, overlapEvents)).resolves.toMatchObject({ kind: 'applied' });
     expect(applied).toContainEqual(expect.objectContaining({ child: 2, parentOverlapPaths: ['src/f.ts'] }));
@@ -224,7 +224,7 @@ describe('runRestack path ownership (real local Git)', () => {
     const noOverlapAdvance = await advanceDefault(noOverlap, 'base.txt', 'parent\n');
     const noOverlapEvents = new ConductorEventEmitter();
     const noOverlapApplied: unknown[] = [];
-    noOverlapEvents.on('restack_applied', (event) => noOverlapApplied.push(event));
+    noOverlapEvents.on('restack_applied', (event) => { noOverlapApplied.push(event); });
 
     await expect(restack(noOverlap, noOverlapAdvance, noOverlapEvents)).resolves.toMatchObject({ kind: 'applied' });
     expect(noOverlapApplied).toContainEqual(expect.objectContaining({ child: 2, parentOverlapPaths: [] }));

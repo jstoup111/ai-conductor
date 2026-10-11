@@ -103,7 +103,7 @@ describe('runRestack flatten refusal (real local Git)', () => {
     const events = new ConductorEventEmitter();
     const refusals: unknown[] = [];
     let resolverCalls = 0;
-    events.on('restack_refused', (event) => refusals.push(event));
+    events.on('restack_refused', (event) => { refusals.push(event); });
 
     const result = await runRestack({
       worktree: subject.repo,

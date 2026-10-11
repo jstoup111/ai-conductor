@@ -13,6 +13,7 @@ import {
   type RestackJournalDraft,
 } from '../../src/engine/restack/restack-journal.js';
 import { type RestackOpId } from '../../src/engine/restack/restack-types.js';
+import type { ChildId } from '../../src/engine/child-context.js';
 
 const roots: string[] = [];
 
@@ -82,7 +83,7 @@ describe('engine commit sites', () => {
 function haltInput(): HaltRecordInput {
   return {
     slug: 'demo', haltClass: 'needs-human', step: 'build', phase: 'BUILD',
-    branch: 'feat/c1/demo', headSha: 'a'.repeat(40), haltedAt: '2030-01-01T00:00:00.000Z', haltBody: 'halt', child: 1,
+    branch: 'feat/c1/demo', headSha: 'a'.repeat(40), haltedAt: '2030-01-01T00:00:00.000Z', haltBody: 'halt', child: 1 as ChildId,
   };
 }
 

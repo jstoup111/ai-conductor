@@ -165,7 +165,7 @@ describe('journaled restack move (real local Git)', () => {
     await fixture.git(['update-ref', 'refs/heads/feat/c2/demo', fixture.newC1, fixture.refs[2].oldSha]);
     const events = new ConductorEventEmitter();
     const refused: unknown[] = [];
-    events.on('restack_refused', (event) => refused.push(event));
+    events.on('restack_refused', (event) => { refused.push(event); });
 
     const result = await applyRestackMove(fixture.repo, fixture.stored, fixture.moves, { events });
     expect(result).toMatchObject({ kind: 'refused', reason: 'stack-ref-changed', detail: 'refs/heads/feat/c2/demo' });
@@ -232,6 +232,6 @@ describe('journaled restack move (real local Git)', () => {
 
 function collectRefusals(events: ConductorEventEmitter): unknown[] {
   const records: unknown[] = [];
-  events.on('restack_refused', (event) => records.push(event));
+  events.on('restack_refused', (event) => { records.push(event); });
   return records;
 }

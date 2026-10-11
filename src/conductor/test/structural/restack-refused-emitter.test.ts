@@ -10,7 +10,6 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const sourceDirectory = join(testDirectory, '../../src');
-const restackEmitterPath = join(sourceDirectory, 'engine/restack/restack-events.ts');
 
 interface RefusalConstruction {
   readonly file: string;
@@ -128,7 +127,7 @@ describe('restack refused emitter', () => {
     const events = new ConductorEventEmitter();
     const recorded: unknown[] = [];
     const child = parseChildId(2)!;
-    events.on('restack_refused', (event) => recorded.push(event));
+    events.on('restack_refused', (event) => { recorded.push(event); });
 
     await events.emit(emitRestackRefused({ reason: 'cascade-cap', child, detail: '2/2' }));
     await events.emit(emitRestackRefused({ reason: 'published-stack', detail: '#2945' }));

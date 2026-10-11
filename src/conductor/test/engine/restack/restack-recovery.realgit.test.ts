@@ -486,7 +486,7 @@ describe('recoverRestackJournal (real local Git)', () => {
     await subject.git(['update-ref', journalRefFor('demo'), blob, '']);
     const events = new ConductorEventEmitter();
     const refusals: unknown[] = [];
-    events.on('restack_refused', (event) => refusals.push(event));
+    events.on('restack_refused', (event) => { refusals.push(event); });
 
     await expect(runStackPreflight({
       worktree: subject.repo,
@@ -534,7 +534,7 @@ describe('recoverRestackJournal (real local Git)', () => {
 
     const events = new ConductorEventEmitter();
     const recovered: unknown[] = [];
-    events.on('restack_recovered', (event) => recovered.push(event));
+    events.on('restack_recovered', (event) => { recovered.push(event); });
     const result = await recoverRestackJournal({
       worktree: subject.repo,
       slug: 'demo',

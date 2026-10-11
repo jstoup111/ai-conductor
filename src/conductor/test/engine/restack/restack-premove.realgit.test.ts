@@ -89,7 +89,7 @@ describe('runRestack pre-move checks (real local Git)', () => {
     await subject.git(['worktree', 'add', '-q', other, 'feat/c1/demo']);
     const events = new ConductorEventEmitter();
     const refusals: unknown[] = [];
-    events.on('restack_refused', (event) => refusals.push(event));
+    events.on('restack_refused', (event) => { refusals.push(event); });
 
     const result = await restack(subject, events);
 
@@ -103,7 +103,7 @@ describe('runRestack pre-move checks (real local Git)', () => {
     await writeFile(join(subject.repo, 'src', 'a.ts'), 'operator edit\n');
     const events = new ConductorEventEmitter();
     const refusals: unknown[] = [];
-    events.on('restack_refused', (event) => refusals.push(event));
+    events.on('restack_refused', (event) => { refusals.push(event); });
 
     const result = await restack(subject, events);
 
@@ -121,7 +121,7 @@ describe('runRestack pre-move checks (real local Git)', () => {
     await writeFile(join(subject.repo, 'base.txt'), 'operator base edit\n');
     const events = new ConductorEventEmitter();
     const refusals: unknown[] = [];
-    events.on('restack_refused', (event) => refusals.push(event));
+    events.on('restack_refused', (event) => { refusals.push(event); });
 
     const result = await restack(subject, events);
 
@@ -153,7 +153,7 @@ describe('runRestack pre-move checks (real local Git)', () => {
     await chmod(quarantine, 0o555);
     const events = new ConductorEventEmitter();
     const refusals: unknown[] = [];
-    events.on('restack_refused', (event) => refusals.push(event));
+    events.on('restack_refused', (event) => { refusals.push(event); });
 
     try {
       const result = await restack(subject, events);

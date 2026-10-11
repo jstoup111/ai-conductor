@@ -53,7 +53,7 @@ async function commit(git: (args: string[]) => ReturnType<typeof execFile>, repo
   await writeFile(join(repo, path), contents);
   await git(['add', path]);
   await git(['commit', '-qm', message]);
-  return sha((await git(['rev-parse', 'HEAD'])).stdout.trim());
+  return sha(String((await git(['rev-parse', 'HEAD'])).stdout).trim());
 }
 
 async function refSnapshot(git: (args: string[]) => ReturnType<typeof execFile>) {

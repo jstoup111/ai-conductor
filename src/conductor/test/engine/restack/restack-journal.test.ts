@@ -87,7 +87,7 @@ describe('ref-backed restack journal (real local Git)', () => {
       const oldSha = sha((await fixture.git(['rev-parse', 'HEAD'])).stdout.trim());
       const events = new ConductorEventEmitter();
       const refused: unknown[] = [];
-      events.on('restack_refused', (event) => refused.push(event));
+      events.on('restack_refused', (event) => { refused.push(event); });
 
       const first = await createRestackJournal(fixture.repo, 'demo', draft(oldSha), events);
       expect(first.kind).toBe('created');

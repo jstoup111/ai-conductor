@@ -128,7 +128,7 @@ describe('runRestack conflict resolver (real local Git)', () => {
 
     const events = new ConductorEventEmitter();
     const refusals: unknown[] = [];
-    events.on('restack_refused', (event) => refusals.push(event));
+    events.on('restack_refused', (event) => { refusals.push(event); });
     const result = await runRestack({
       worktree: subject.repo,
       slug: 'demo',
@@ -249,7 +249,7 @@ describe('runRestack conflict resolver (real local Git)', () => {
     const contexts: { readonly conflicts: readonly string[] }[] = [];
     const events = new ConductorEventEmitter();
     const conflicts: unknown[] = [];
-    events.on('restack_conflict', (event) => conflicts.push(event));
+    events.on('restack_conflict', (event) => { conflicts.push(event); });
 
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,

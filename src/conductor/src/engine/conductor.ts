@@ -15311,7 +15311,9 @@ export class Conductor {
         if (restacked.kind !== 'applied') {
           const reason = restacked.kind === 'unavailable'
             ? `stack base refresh unavailable: ${restacked.detail}`
-            : 'stack base refresh halted';
+            : restacked.kind === 'refused'
+              ? 'stack base refresh deferred: another live restack owns the journal'
+              : 'stack base refresh halted';
           return { success: false, output: reason };
         }
         const head = await git(['rev-parse', '--verify', 'HEAD']);

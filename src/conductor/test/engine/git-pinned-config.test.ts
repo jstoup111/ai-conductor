@@ -14,7 +14,7 @@ import { makeGitRunner, performRebase, startFeatureReplay, type GitRunner } from
 
 const pinnedEntries = Object.entries(PINNED_ENGINE_GIT_CONFIG);
 
-function pinnedEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function pinnedEnvironment(_env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(
     pinnedEntries.flatMap(([key, value], index) => [
       [`GIT_CONFIG_KEY_${index}`, key],

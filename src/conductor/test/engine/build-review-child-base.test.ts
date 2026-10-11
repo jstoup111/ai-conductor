@@ -197,7 +197,7 @@ describe('build_review child base', () => {
       gradedBaseSha: restackedParent,
       flaggedPaths: ['child.ts'],
       childBase: { slug: 'demo', child },
-      regrade: async () => 'unreachable',
+      regrade: async () => { throw new Error('regrade must not run'); },
     })).resolves.toEqual({ kind: 'kicked-to-build' });
     expect(calls.some((args) => args[0] === 'rebase')).toBe(false);
   });

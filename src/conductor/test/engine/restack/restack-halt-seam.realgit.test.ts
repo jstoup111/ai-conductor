@@ -188,7 +188,7 @@ describe('restack halt seam (real local Git)', () => {
     const subject = await movedFixture();
     const events = new ConductorEventEmitter();
     const failures: string[] = [];
-    events.on('halt_record_write_failed', (event) => failures.push(event.reason));
+    events.on('halt_record_write_failed', (event) => { if (event.type === 'halt_record_write_failed') failures.push(event.reason); });
     await expect(writeHaltMarker(subject.repo, 'operator decision required\n', 'needs-human', events)).resolves.toEqual({ status: 'written' });
 
     const journal = await readRestackJournal(subject.repo, 'demo');
