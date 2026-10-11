@@ -549,7 +549,7 @@ export interface DiscoverBacklogOpts {
    * exactly as before this feature existed). When supplied, exactly one
    * instance is used per `discoverBacklog()` call (per scan pass) — the
    * production wiring is responsible for constructing a fresh
-   * `createBlockerResolver({ run: createGhBlockerRunner() })` on every poll
+   * `createBlockerResolver({ source: createOrderingSource(...) })` on every poll
    * rather than caching one across polls, so memo/cycle-detection state never
    * leaks stale verdicts between scans.
    */

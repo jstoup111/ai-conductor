@@ -1,7 +1,7 @@
 // Covers: task:4, task:7, task:8
 import { describe, expect, it, vi } from 'vitest';
 
-import { createPriorityResolver, parsePriorityLabels, parseSizeLabel, type IssueLabelReader } from '../../../src/engine/backlog-priority.js';
+import { createPriorityResolver, parsePriorityLabels, parseSizeLabel } from '../../../src/engine/backlog-priority.js';
 import type { OrderingSource } from '../../../src/engine/ordering-source.js';
 import {
   orderMonitorQueue,
@@ -24,7 +24,9 @@ function halt(
   };
 }
 
-function orderingSourceFor(reader: IssueLabelReader): OrderingSource {
+type LabelReader = (refs: string[]) => Promise<Map<string, string[] | 'not-found'>>;
+
+function orderingSourceFor(reader: LabelReader): OrderingSource {
   return {
     async readFacts(refs) {
       const labelsByRef = await reader(refs);

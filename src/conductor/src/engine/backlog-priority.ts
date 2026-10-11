@@ -1,8 +1,4 @@
 import type { BacklogItem } from './daemon.js';
-import type { GhRunner } from './tracker-client.js';
-import { parseSourceRef } from './engineer/issue-ref.js';
-import { splitOwnerRepo } from './engineer/source-ref.js';
-import { runTrackerRepositoryRead } from './tracker-client.js';
 import type { OrderingSource } from './ordering-source.js';
 
 /**
@@ -27,13 +23,6 @@ export type PriorityResolution =
   | { mode: 'banded'; bands: Map<string, PriorityBand> }
   | { mode: 'fallback' }
   | { mode: 'off' };
-
-/**
- * Function that fetches labels for issue references.
- * Takes an array of sourceRef strings (e.g., 'owner/repo#N') and returns
- * a map of ref to labels or 'not-found' if the issue doesn't exist.
- */
-export type IssueLabelReader = (refs: string[]) => Promise<Map<string, string[] | 'not-found'>>;
 
 /**
  * Extract the highest priority band from a list of issue labels.
@@ -291,56 +280,4 @@ export function orderBacklog(items: BacklogItem[], res: PriorityResolution): Bac
     band,
     resolutionMode: 'banded',
   }));
-}
-
-/**
- * Create a GitHub issue label reader that fetches labels from issues via gh REST API.
- *
- * For each sourceRef (e.g., 'owner/repo#N'):
- * - Parses the ref and builds `gh api repos/<owner>/<repo>/issues/<N>`
- * - Extracts label names from the JSON response
- * - Returns 'not-found' for 404 errors (issue doesn't exist)
- * - Throws on transport errors (non-404)
- *
- * @param runner - Injected executor for gh commands
- * @returns IssueLabelReader function that fetches labels for refs
- */
-export function ghIssueLabelReader(runner: GhRunner, cwd = '.'): IssueLabelReader {
-  return async (refs: string[]) => {
-    const result = new Map<string, string[] | 'not-found'>();
-
-    for (const ref of refs) {
-      try {
-        const parsed = parseSourceRef(ref);
-        const ownerRepo = parsed ? splitOwnerRepo(parsed.repo) : null;
-        if (!parsed || !ownerRepo) {
-          // Unparseable ref (including Jira-shaped refs) — treat as not found,
-          // without making a gh call.
-          result.set(ref, 'not-found');
-          continue;
-        }
-
-        const { owner, repo } = ownerRepo;
-        const { number } = parsed;
-        // gh api accepts exactly ONE endpoint argument — path must be a single token
-        const stdout = await runTrackerRepositoryRead(runner, cwd, 'issue.read', `${owner}/${repo}`, { kind: 'issue', number: Number(number) }, ['api', `repos/${owner}/${repo}/issues/${number}`]);
-        const data = JSON.parse(stdout) as { labels?: Array<{ name: string }> | null };
-        const labels = (data.labels ?? []).map((l) => l.name ?? '').filter(Boolean);
-        result.set(ref, labels);
-      } catch (error) {
-        // Check if error is a 404
-        const is404 = (error as any)?.status === 404 ||
-          (error instanceof Error && error.message.includes('404'));
-
-        if (is404) {
-          result.set(ref, 'not-found');
-        } else {
-          // Non-404 error — re-throw as outage
-          throw error;
-        }
-      }
-    }
-
-    return result;
-  };
 }

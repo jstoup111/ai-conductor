@@ -37,7 +37,7 @@ export interface OrderingSourceDeps {
 
 /**
  * Construct the ordering source. GitHub fact reads retain the existing
- * ghIssueLabelReader transport and failure semantics exactly.
+ * GitHub's existing REST transport and failure semantics exactly.
  */
 export function createOrderingSource(deps: OrderingSourceDeps): OrderingSource {
   const cwd = deps.cwd ?? '.';

@@ -787,7 +787,7 @@ describe('engineer forget (T23, FR-40)', () => {
 describe('engineer claim: priority-banded ordering (#461)', () => {
   /** Fake `gh` runner keyed by `owner/repo#N`, serving both the blocker
    *  endpoint (`createBlockerResolver`) and the label endpoint
-   *  (`ghIssueLabelReader`) from the SAME injected function — mirroring how
+   *  (the ordering source) from the SAME injected function — mirroring how
    *  the real CLI wires one `gh` for both concerns. */
   function createFakeGh(
     fixtures: {

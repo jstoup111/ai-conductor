@@ -23,7 +23,6 @@ import type { BacklogItem } from '../../src/engine/daemon.js';
 async function loadBacklogPriority() {
   return (await import('../../src/engine/backlog-priority.js')) as {
     createPriorityResolver: (reader: any, log: any) => any;
-    ghIssueLabelReader: (runner: any) => any;
     orderBacklog: (items: BacklogItem[], res: any) => BacklogItem[];
     parsePriorityLabels: (labels: string[]) => string | undefined;
   };
@@ -36,9 +35,9 @@ async function loadDaemonWorkSource() {
   };
 }
 
-type IssueLabelReader = (refs: string[]) => Promise<Map<string, string[] | 'not-found'>>;
+type LabelReader = (refs: string[]) => Promise<Map<string, string[] | 'not-found'>>;
 
-function orderingSourceFor(reader: IssueLabelReader) {
+function orderingSourceFor(reader: LabelReader) {
   return {
     async readFacts(refs: string[]) {
       const labelsByRef = await reader(refs);
@@ -72,8 +71,8 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
   it('TEST 1: Resolver accepts dependencies and produces ordering results', async () => {
     const backlogMod = await loadBacklogPriority();
 
-    // Create a fake label reader (mimicking ghIssueLabelReader)
-    const fakeReader: IssueLabelReader = async (refs) => {
+    // Create a fake label reader at the ordering-source boundary.
+    const fakeReader: LabelReader = async (refs) => {
       const result = new Map<string, string[] | 'not-found'>();
       for (const ref of refs) {
         if (ref === 'acme/app#1') result.set(ref, ['priority: high']);
@@ -118,7 +117,7 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
       'acme/app#2': ['priority: high'],
     };
 
-    const fakeReader: IssueLabelReader = async (refs) => {
+    const fakeReader: LabelReader = async (refs) => {
       const result = new Map<string, string[] | 'not-found'>();
       for (const ref of refs) {
         result.set(ref, labels[ref] ?? 'not-found');
@@ -174,7 +173,7 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
 
     // Track how many times the reader is called
     let readerCallCount = 0;
-    const fakeReader: IssueLabelReader = async (refs) => {
+    const fakeReader: LabelReader = async (refs) => {
       readerCallCount++;
       const result = new Map<string, string[] | 'not-found'>();
       for (const ref of refs) {
@@ -227,7 +226,7 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
     const backlogMod = await loadBacklogPriority();
 
     // Create a reader that fails (simulating GitHub/network outage)
-    const failingReader: IssueLabelReader = async () => {
+    const failingReader: LabelReader = async () => {
       throw new Error('priority source unreachable');
     };
 

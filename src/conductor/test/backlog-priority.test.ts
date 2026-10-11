@@ -5,14 +5,13 @@ import {
   parseSizeLabel,
   createPriorityResolver,
   orderBacklog,
-  ghIssueLabelReader,
   PRIORITY_BAND_RANK,
   type PriorityResolution,
   type PriorityBand,
 } from '../src/engine/backlog-priority.js';
 import type { BacklogItem } from '../src/engine/daemon.js';
 import type { GhRunner } from '../src/engine/tracker-client.js';
-import type { OrderingSource } from '../src/engine/ordering-source.js';
+import { createOrderingSource, type OrderingSource } from '../src/engine/ordering-source.js';
 
 /**
  * Narrows a PriorityResolution to its 'banded' variant, asserting via `expect`
@@ -1608,7 +1607,7 @@ describe('orderBacklog — permutation and determinism properties', () => {
   });
 });
 
-describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', () => {
+describe('createOrderingSource — GitHub fact reader via gh REST API', () => {
   describe('test 1: Build gh api command from sourceRef', () => {
     it('parses owner/repo#N and builds correct gh api argv', async () => {
       const callLog: Array<{ args: string[] }> = [];
@@ -1617,8 +1616,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         return { stdout: JSON.stringify({ labels: [{ name: 'priority: high' }] }) };
       };
 
-      const reader = ghIssueLabelReader(runner);
-      await reader(['owner/repo#123']);
+      await createOrderingSource({ run: runner }).readFacts(['owner/repo#123']);
 
       expect(callLog).toHaveLength(1);
       // gh api takes exactly ONE endpoint argument — segments must be joined
@@ -1638,13 +1636,12 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         return { stdout: JSON.stringify({ labels: [{ name: 'priority: high' }] }) };
       };
 
-      const reader = ghIssueLabelReader(runner);
-      const result = await reader(['owner1/repo1#123', 'owner2/repo2#456']);
+      const result = await createOrderingSource({ run: runner }).readFacts(['owner1/repo1#123', 'owner2/repo2#456']);
 
       expect(callLog).toHaveLength(2);
       expect(result.size).toBe(2);
-      expect(result.get('owner1/repo1#123')).toEqual(['priority: high']);
-      expect(result.get('owner2/repo2#456')).toEqual(['priority: medium']);
+      expect(result.get('owner1/repo1#123')).toEqual({ priority: 'high', size: undefined });
+      expect(result.get('owner2/repo2#456')).toEqual({ priority: 'medium', size: undefined });
     });
   });
 
@@ -1662,10 +1659,9 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         };
       };
 
-      const reader = ghIssueLabelReader(runner);
-      const result = await reader(['owner/repo#1']);
+      const result = await createOrderingSource({ run: runner }).readFacts(['owner/repo#1']);
 
-      expect(result.get('owner/repo#1')).toEqual(['priority: high', 'bug', 'feature']);
+      expect(result.get('owner/repo#1')).toEqual({ priority: 'high', size: undefined });
     });
 
     it('handles empty labels array', async () => {
@@ -1673,10 +1669,9 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         return { stdout: JSON.stringify({ labels: [] }) };
       };
 
-      const reader = ghIssueLabelReader(runner);
-      const result = await reader(['owner/repo#1']);
+      const result = await createOrderingSource({ run: runner }).readFacts(['owner/repo#1']);
 
-      expect(result.get('owner/repo#1')).toEqual([]);
+      expect(result.get('owner/repo#1')).toEqual({ priority: undefined, size: undefined });
     });
   });
 
@@ -1688,8 +1683,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         throw err;
       };
 
-      const reader = ghIssueLabelReader(runner);
-      const result = await reader(['owner/repo#999']);
+      const result = await createOrderingSource({ run: runner }).readFacts(['owner/repo#999']);
 
       expect(result.get('owner/repo#999')).toBe('not-found');
     });
@@ -1706,12 +1700,11 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         return { stdout: JSON.stringify({ labels: [{ name: 'priority: high' }] }) };
       };
 
-      const reader = ghIssueLabelReader(runner);
-      const result = await reader(['owner/repo#123', 'owner/repo#999', 'owner/repo#456']);
+      const result = await createOrderingSource({ run: runner }).readFacts(['owner/repo#123', 'owner/repo#999', 'owner/repo#456']);
 
-      expect(result.get('owner/repo#123')).toEqual(['priority: high']);
+      expect(result.get('owner/repo#123')).toEqual({ priority: 'high', size: undefined });
       expect(result.get('owner/repo#999')).toBe('not-found');
-      expect(result.get('owner/repo#456')).toEqual(['priority: high']);
+      expect(result.get('owner/repo#456')).toEqual({ priority: 'high', size: undefined });
     });
   });
 
@@ -1723,11 +1716,10 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         return { stdout: JSON.stringify({ labels: [] }) };
       };
 
-      const reader = ghIssueLabelReader(runner);
-      const result = await reader(['PROJ-123']);
+      const result = await createOrderingSource({ run: runner }).readFacts(['PROJ-123']);
 
       expect(callCount).toBe(0);
-      expect(result.get('PROJ-123')).toBe('not-found');
+      expect(result.get('PROJ-123')).toBe('unavailable');
     });
   });
 
@@ -1737,9 +1729,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         throw new Error('network timeout');
       };
 
-      const reader = ghIssueLabelReader(runner);
-
-      await expect(reader(['owner/repo#1'])).rejects.toThrow('network timeout');
+      await expect(createOrderingSource({ run: runner }).readFacts(['owner/repo#1'])).rejects.toThrow('network timeout');
     });
 
     it('ENOENT error throws', async () => {
@@ -1749,9 +1739,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         throw err;
       };
 
-      const reader = ghIssueLabelReader(runner);
-
-      await expect(reader(['owner/repo#1'])).rejects.toThrow('ENOENT');
+      await expect(createOrderingSource({ run: runner }).readFacts(['owner/repo#1'])).rejects.toThrow('ENOENT');
     });
 
     it('500 error throws', async () => {
@@ -1761,9 +1749,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         throw err;
       };
 
-      const reader = ghIssueLabelReader(runner);
-
-      await expect(reader(['owner/repo#1'])).rejects.toThrow('HTTP 500');
+      await expect(createOrderingSource({ run: runner }).readFacts(['owner/repo#1'])).rejects.toThrow('HTTP 500');
     });
   });
 });

@@ -5,7 +5,6 @@
 // consumer (daemon gate + intake) depends on this resolver's verdict.
 
 import { parseSourceRef } from './engineer/issue-ref.js';
-import type { GhRunner } from './tracker-client.js';
 import type { OrderingSource } from './ordering-source.js';
 
 /** A reference to a single GitHub issue, as returned by `parseSourceRef`. */
@@ -20,13 +19,6 @@ export type BlockerVerdict =
   | { kind: 'blocked'; blockers: IssueRef[] }
   | { kind: 'indeterminate'; detail: string }
   | { kind: 'cycle'; members: IssueRef[] };
-
-/**
- * Injected shell-out to `gh`. Uses the canonical `GhRunner` seam from
- * `tracker-client.ts` — every real production runner requires a `cwd`, so
- * this resolver forwards one on every invocation (see `BlockerResolverDeps.cwd`).
- */
-export type BlockerRunner = GhRunner;
 
 export interface BlockerResolverDeps {
   source: OrderingSource;
