@@ -19,7 +19,7 @@ function roundUpPowerOfTwo(bytes: number): number {
 }
 
 describe('remediation projection corpus limits', () => {
-  // Covers: task:10
+  // Covers: task:3, task:10
   it('ships finite corpus-sized structured limits and a total envelope', async () => {
     const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
     const limits: RemediationProjectionLimits = REMEDIATION_PROJECTION_LIMITS;

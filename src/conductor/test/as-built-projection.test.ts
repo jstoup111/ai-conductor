@@ -1,13 +1,12 @@
 // Covers: task:3, task:6, task:7, task:8
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, readdir, readFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import * as asBuiltProjection from '../src/engine/as-built-projection.js';
 import {
   AS_BUILT_PROJECTION_VERSION,
   buildAsBuiltProjection,
@@ -111,14 +110,6 @@ afterEach(async () => {
 async function commit(root: string, message: string): Promise<void> {
   await execFileAsync('git', ['-C', root, 'add', '.']);
   await execFileAsync('git', ['-C', root, 'commit', '-m', message]);
-}
-
-async function largestCorpusBytes(directory: string): Promise<number> {
-  const names = await readdir(directory, { recursive: true });
-  const sizes = await Promise.all(names
-    .filter((name) => name.endsWith('.md'))
-    .map(async (name) => Buffer.byteLength(await readFile(join(directory, name), 'utf-8'))));
-  return Math.max(...sizes);
 }
 
 async function diffDigest(root: string, path: string): Promise<string> {
@@ -430,41 +421,6 @@ Status: APPROVED
       ok: false,
       fault: expect.objectContaining({ dimension: 'pending-findings', detail: expect.stringContaining(ledger) }),
     });
-  });
-
-  it('keeps the largest plan, stories, and governing-ADR decision corpus inputs within shipped byte limits', async () => {
-    const repositoryRoot = resolve(process.cwd(), '../..');
-    const limits = asBuiltProjection.AS_BUILT_PROJECTION_LIMITS;
-
-    await expect(Promise.all([
-      largestCorpusBytes(join(repositoryRoot, '.docs', 'plans')),
-      largestCorpusBytes(join(repositoryRoot, '.docs', 'stories')),
-      largestCorpusBytes(join(repositoryRoot, '.docs', 'decisions')),
-    ])).resolves.toEqual(expect.arrayContaining([
-      expect.any(Number), expect.any(Number), expect.any(Number),
-    ]));
-    const [largestPlan, largestStories, largestAdr] = await Promise.all([
-      largestCorpusBytes(join(repositoryRoot, '.docs', 'plans')),
-      largestCorpusBytes(join(repositoryRoot, '.docs', 'stories')),
-      largestCorpusBytes(join(repositoryRoot, '.docs', 'decisions')),
-    ]);
-
-    expect({
-      perFileHunks: limits.perFileHunksBytes,
-      totalDiff: limits.totalDiffBytes,
-      planTasks: limits.planTasksBytes,
-      storyCriteria: limits.storyCriteriaBytes,
-      governingAdrDecisions: limits.governingAdrDecisionsBytes,
-    }).toEqual({
-      perFileHunks: expect.any(Number),
-      totalDiff: expect.any(Number),
-      planTasks: expect.any(Number),
-      storyCriteria: expect.any(Number),
-      governingAdrDecisions: expect.any(Number),
-    });
-    expect(limits.planTasksBytes).toBeGreaterThanOrEqual(largestPlan);
-    expect(limits.storyCriteriaBytes).toBeGreaterThanOrEqual(largestStories);
-    expect(limits.governingAdrDecisionsBytes).toBeGreaterThanOrEqual(largestAdr);
   });
 
   it('omits a changed file whose hunks exceed the per-file byte cap with a content digest', async () => {
