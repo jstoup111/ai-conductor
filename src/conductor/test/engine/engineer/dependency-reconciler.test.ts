@@ -99,6 +99,29 @@ describe('declaredEdges', () => {
     expect(result.manualReview).toEqual([expect.objectContaining({ reason: 'task-list-phase' })]);
   });
 
+  it('excludes a task-list line from raw Depends-on form extraction while preserving its manual review', () => {
+    const result = declaredEdges({
+      ref: SOURCE,
+      body: '### Depends on\n- [ ] Phase 1 blocked by #10',
+    });
+
+    expect(result.edges).toEqual([]);
+    expect(result.manualReview).toEqual([expect.objectContaining({
+      reason: 'task-list-phase',
+      excerpt: 'Phase 1 blocked by #10',
+    })]);
+  });
+
+  it('keeps a separate prose declaration when excluding a task-list line', () => {
+    const result = declaredEdges({
+      ref: SOURCE,
+      body: '### Depends on\n- [ ] Phase 1 blocked by #10\n\nBlocked by #10.',
+    });
+
+    expect(result.edges.map((edge) => edge.target)).toEqual(['acme/app#10']);
+    expect(result.manualReview).toEqual([expect.objectContaining({ reason: 'task-list-phase' })]);
+  });
+
   it('returns identical edge lists for the same form-field and prose reference', () => {
     const form = declaredEdges({ ref: SOURCE, body: '', formDependsOn: ['#10'] });
     const prose = declaredEdges({ ref: SOURCE, body: 'Blocked by #10.' });

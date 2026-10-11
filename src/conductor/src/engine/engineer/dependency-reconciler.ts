@@ -121,6 +121,19 @@ export function extractDependsOnFormValues(body: string): string[] {
   return section.match(/(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#\d+/g) ?? [];
 }
 
+/** Remove only task-list lines already classified by the prose parser. */
+function withoutTaskListPhaseLines(body: string, manualReview: readonly ManualReviewItem[]): string {
+  const taskListExcerpts = new Set(manualReview
+    .filter((item) => item.reason === 'task-list-phase')
+    .map((item) => item.excerpt));
+  if (taskListExcerpts.size === 0) return body;
+
+  return body.split('\n').map((line) => {
+    const match = /^-\s*\[[ xX]\]\s*(.*)$/.exec(line);
+    return match && taskListExcerpts.has(match[1].trim()) ? '' : line;
+  }).join('\n');
+}
+
 /**
  * Return every unambiguous, same-repository dependency declared for an issue.
  *
@@ -130,15 +143,13 @@ export function extractDependsOnFormValues(body: string): string[] {
  */
 export function declaredEdges(input: DeclaredEdgesInput): DeclaredEdgesResult {
   const parsed = parseDependencyProse({ ref: input.ref, body: input.body });
-  const source = parseSourceRef(input.ref);
-  const taskListTargets = new Set(parsed.manualReview
-    .filter((item) => item.reason === 'task-list-phase')
-    .flatMap((item) => [...item.excerpt.matchAll(/#(\d+)/g)].map((match) => source ? `${source.repo}#${match[1]}` : '')));
+  const body = withoutTaskListPhaseLines(input.body, parsed.manualReview);
+  const prose = parseDependencyProse({ ref: input.ref, body });
   const candidates = [
-    ...[...extractDependsOnFormValues(input.body), ...(input.formDependsOn ?? [])].map((value) => formEdge(input.ref, value)).filter(
+    ...[...extractDependsOnFormValues(body), ...(input.formDependsOn ?? [])].map((value) => formEdge(input.ref, value)).filter(
       (edge): edge is DependencyEdge => edge !== null,
     ),
-    ...parsed.edges.filter((edge) => !taskListTargets.has(edge.target)),
+    ...prose.edges,
   ];
   const edges: DependencyEdge[] = [];
   const manualReview: DeclaredEdgeManualReviewItem[] = [...parsed.manualReview];
