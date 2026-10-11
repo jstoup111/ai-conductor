@@ -30,6 +30,7 @@ import { replayChildRange, type CommitterStamp } from './restack-replay.js';
 import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
+import { cleanClearedAbortedRestackJournal } from './restack-recovery.js';
 import { cascadeUpdateLines, checkCascadeCap, MAX_RESTACK_CASCADES_PER_CHILD } from './cascade-cap.js';
 import { readKickbackLedger, recordKickbackCapEvidence } from '../kickback-ledger.js';
 import { renderKickbackBudgetView } from '../kickback-budget-view.js';
@@ -320,6 +321,11 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
   let moves: RestackMoveRef[] = [];
   let terminal = false;
   try {
+    // The caller has already superseded the committed halt record and consumed
+    // any matching authorization.  Do one narrow, terminal-only recheck here
+    // so a cleared halt cannot make the next restack look outstanding.
+    const staleCleanup = await cleanClearedAbortedRestackJournal(options.worktree, options.slug, { git });
+    if (staleCleanup === 'unavailable') return { kind: 'unavailable', detail: 'cannot remove cleared aborted restack journal' };
     const [newDefault, active] = await Promise.all([
       defaultTip(git, options.newDefault),
       activeFor(options.worktree, options.slug, git),

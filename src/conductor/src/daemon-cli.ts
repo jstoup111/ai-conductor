@@ -241,7 +241,7 @@ import {
   resolveHaltRetention,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
-import { isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
+import { HALT_MARKER, isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import { enrollWatch, sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
@@ -1779,7 +1779,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // boundary. A record left by an already-cleared halt can be resolved
       // here, after recovery; never supersede a still-live halt record.
       prepareResume: async () => {
-        if (await haltMarkerExists(wt.path)) return;
+        if (await access(join(wt.path, HALT_MARKER)).then(() => true).catch(() => false)) return;
         try {
           await supersedeHaltRecord(wt.path, item.slug, 'stack-preflight');
         } catch (error) {

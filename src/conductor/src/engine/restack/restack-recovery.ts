@@ -289,6 +289,27 @@ async function hasOutstandingHalt(slug: string, git: GitRunner): Promise<boolean
   return record?.exitCode === 0 && /^Status:\s*halted\s*$/mi.test(record.stdout);
 }
 
+/**
+ * Remove precisely the stale terminal journal an entry point may inherit after
+ * its halt record was superseded.  This intentionally does not drive a
+ * non-terminal journal: recovery remains its sole owner.
+ */
+export async function cleanClearedAbortedRestackJournal(
+  worktree: string,
+  slug: string,
+  options: Pick<RecoverRestackJournalOptions, 'git'> = {},
+): Promise<'none' | 'cleaned' | 'unavailable'> {
+  const git = options.git ?? makeGitRunner(worktree);
+  const read = await readRestackJournal(worktree, slug, { git });
+  if (read.kind === 'missing') return 'none';
+  if (read.kind !== 'journal') return 'unavailable';
+  if (read.journal.state !== 'aborted') return 'none';
+  if (await hasOutstandingHalt(slug, git)) return 'none';
+  return await cleanJournal(worktree, { slug: read.slug, blob: read.blob, journal: read.journal }, git)
+    ? 'cleaned'
+    : 'unavailable';
+}
+
 async function resumePlanned(
   worktree: string,
   journal: StoredRestackJournal,
@@ -401,9 +422,10 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
       return await cleanJournal(options.worktree, journal, git) ? { kind: 'cleaned' } : { kind: 'unavailable', detail: 'cannot remove applied restack journal' };
     }
     if (journal.journal.state === 'aborted') {
-      return !(await hasOutstandingHalt(options.slug, git)) && await cleanJournal(options.worktree, journal, git)
-        ? { kind: 'cleaned' }
-        : { kind: 'none' };
+      const cleaned = await cleanClearedAbortedRestackJournal(options.worktree, options.slug, { git });
+      return cleaned === 'cleaned' ? { kind: 'cleaned' }
+        : cleaned === 'unavailable' ? { kind: 'unavailable', detail: 'cannot remove aborted restack journal' }
+          : { kind: 'none' };
     }
     const fromState = journal.journal.state as Exclude<JournalState, 'applied' | 'aborted'>;
     if (journal.journal.state === 'planned') {

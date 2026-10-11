@@ -1,5 +1,9 @@
+import { access } from 'node:fs/promises';
+import { join } from 'node:path';
+
 import { hasDurableChildState, resolveActiveChild } from '../child-cursor.js';
 import type { GitRunner } from '../rebase.js';
+import { HALT_MARKER } from '../halt-marker.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import { checkCascadeCap } from './cascade-cap.js';
 import { runRestack } from './restack-executor.js';
@@ -29,10 +33,23 @@ export interface RunStackPreflightOptions {
    * or the authorization ledger's process-wide dependencies.
    */
   readonly prepareResume?: () => Promise<void>;
+  /**
+   * A staged authorization is deliberately an explicit seam: merely having an
+   * old ledger entry is not permission to cross a live halt.  The daemon's
+   * normal authorization consumer clears the marker before this entry point,
+   * while this hook keeps direct resume callers equally fail-closed.
+   */
+  readonly hasMatchingResumeAuthorization?: () => Promise<boolean>;
+  /** Injectable only for the dispatch boundary tests. */
+  readonly hasLiveHalt?: () => Promise<boolean>;
 }
 
 async function deferredBaseRefresh(events: ConductorEventEmitter | undefined): Promise<void> {
   await events?.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
+}
+
+async function liveHaltExists(worktree: string): Promise<boolean> {
+  return access(join(worktree, HALT_MARKER)).then(() => true).catch(() => false);
 }
 
 /**
@@ -44,6 +61,18 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   const recovery = await recoverRestackJournal(options);
   if (recovery.kind === 'live-owner') return { kind: 'halted' };
   if (recovery.kind === 'unavailable') return recovery;
+
+  // Recovery is safe while a feature is parked; changing closure refs is not.
+  // A matching, staged authorization is the sole exception.  In the regular
+  // daemon path that authorization clears HALT before dispatch, but checking
+  // it here keeps CLI resume and direct callers from silently bypassing a
+  // live halt.
+  const hasLiveHalt = options.hasLiveHalt ?? (() => liveHaltExists(options.worktree));
+  if (await hasLiveHalt()) {
+    if (options.hasMatchingResumeAuthorization === undefined || !await options.hasMatchingResumeAuthorization()) {
+      return { kind: 'halted' };
+    }
+  }
 
   // This phase is intentionally after recovery. A halt-record commit must
   // never race an in-flight move, and a recovered follow-on owns its journal
