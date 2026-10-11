@@ -184,6 +184,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     if (failure.reason === 'rejected-transition' && failure.violation !== undefined) {
       const { invariant, caseIds, sourceIds } = failure.violation;
       const feature = input.feature.feature;
+      // ai-conductor:session-command-context=operator-only
       return fail(
         `case transition rejected: ${invariant} (cases ${caseIds.join(', ')}; sources ${sourceIds.join(', ')})\n` +
         'persisted case history is valid and unchanged\n' +
@@ -192,6 +193,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         '(an engine admits it or a judgement no longer proposes it).',
         failure.violation,
       );
+      // /ai-conductor:session-command-context
     }
     return fail(`${prefix} ${failure.reason}`);
   };
