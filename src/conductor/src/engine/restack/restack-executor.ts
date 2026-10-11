@@ -244,6 +244,15 @@ async function replayConflict(git: GitRunner, error: unknown): Promise<ReplayCon
   return { commit, paths };
 }
 
+async function mergeInRange(git: GitRunner, range: ChildRange): Promise<CommitSha | undefined> {
+  for (const commit of await commitsInRange(git, `${range.oldParent}..${range.oldTip}`, `child ${range.child} range`)) {
+    const parents = await runGit(git, ['rev-list', '--parents', '-n', '1', commit]);
+    if (parents.exitCode !== 0) throw new Error(`cannot read parents for ${commit}`);
+    if (parents.stdout.trim().split(/\s+/).length > 2) return commit;
+  }
+  return undefined;
+}
+
 async function haltUnresolvedConflict(
   worktree: string,
   slug: string,
@@ -337,6 +346,19 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       } catch (error) {
         const conflict = await replayConflict(git, error);
         if (!conflict) throw error;
+        const merge = await mergeInRange(git, range);
+        if (merge) {
+          if (!await pinStagingRef(options.worktree, options.slug, range.child, range.oldTip, { git })) {
+            throw new Error(`cannot pin original tip for merge-bearing child ${range.child}`);
+          }
+          await abortJournal(options.worktree, journal, git, []);
+          await haltRestack(options.worktree, 'flatten_refused', options.events, {
+            child: range.child,
+            detail: `merge ${merge}; resolve the conflict on child branch ${branchRefForRange(options.slug, range).slice('refs/heads/'.length)} and resume`,
+          });
+          terminal = true;
+          return { kind: 'halted' };
+        }
         const resolution = await resolveRestackConflict({
           worktree: options.worktree,
           range,
