@@ -1840,3 +1840,48 @@ outcomes as one feature (track scope boundary).
 **Done when:**
 - adr-2026-10-10-stacked-restack-journaled-replay decision 3 is satisfied by this task.
 - The repair for task rem-as-built-rem-as-built-R16 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R28: Add a restack-recovery realgit test: a dead owner's journal left at `moved` makes recoverRestackJournal run verifyRestackMove, synchronise the feature worktree to the moved tip, apply the transition exactly once (assert one transition commit/record), remove the journal and its staging refs, and persist restack_recovered with the journal's opId and fromState 'moved'
+**Gate:** prd-audit
+**Rationale:** Verified (95%): restack-recovery.ts already implements the moved arm (verify, sync, apply, remove the journal). The only gap is a missing test. Task 24's third [test] done-when requires one, but the only moved-state tests are the operator-edit rollback and the halt-seam synced case. This is a test strengthening inside an approved task, so it goes to BUILD, not plan or architecture.
+**Criterion:** S7.3
+**Parent task:** 24
+**Done when:**
+- [test] S7.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R28 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R29: Add a restack-recovery realgit test: a dead owner's journal left at `rolling-back` with some refs already restored and others still at new SHAs makes recoverRestackJournal restore every journaled ref to its old SHA, end the journal `aborted`, and persist restack_recovered with the journal's opId and fromState 'rolling-back'
+**Gate:** prd-audit
+**Rationale:** Verified (95%): rollBackFromRolling exists in restack-recovery.ts. A grep for 'rolling-back' in the tests finds only restack-types.test.ts and engine-commit-sites.test.ts, so no recovery test covers the arm. Task 24's done-when requires this test, so it is BUILD test work.
+**Criterion:** S7.5
+**Parent task:** 24
+**Done when:**
+- [test] S7.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R29 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R30: Add a restack-recovery realgit test: after a crash at `planned` with child 1 replayed, advance feat/c2/demo to a new commit, then run recoverRestackJournal and assert the journal is aborted, every refs/restack staging ref is removed, no feature/child/leaf ref moved from its pre-recovery SHA, and the stack-ref-changed halt is written
+**Gate:** prd-audit
+**Rationale:** Inferred (90%) from the audit evidence: the code aborts a planned journal whose input refs moved, but no recovery test moves feat/c2/demo after a crash at planned. Task 24's first [test] done-when requires that negative case. This is BUILD test work, and the test should also assert the stack-ref-changed halt the path writes.
+**Criterion:** S7.10
+**Parent task:** 24
+**Done when:**
+- [test] S7.10 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R30 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R31: Add a restack-recovery realgit test that runs recoverRestackJournal twice in a row on a dead owner's interrupted journal and asserts the second run leaves every ref (git for-each-ref snapshot), the feature worktree contents (status + tree hash) and .pipeline/events.jsonl byte-identical to their state after the first run
+**Gate:** prd-audit
+**Rationale:** Verified (95%): grepping the restack tests for twice/idempotent finds only the unrelated restack-conflict case. Task 24's last [test] done-when requires a double-run idempotence test that compares refs, worktree and events.jsonl. This is BUILD test work.
+**Criterion:** S7.16
+**Parent task:** 24
+**Done when:**
+- [test] S7.16 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R31 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R32: Add a real-git autoresolve test: record a pushed/ lease tip R1 for the daemon-owned feature branch, push a human commit R2 to the remote branch and fetch it so R2 is not in HEAD, then run publishResolution and assert the push is refused with expected=R1 (not any string), the remote branch stays at R2, no force push runs, and exactly one push_lease_refused event is persisted with the canonical feature slug
+**Gate:** prd-audit
+**Rationale:** Verified (90%): the code path is correct. autoresolve.ts derives the slug via daemonOwnedSlugOfBranch, and push-lease.ts refuses with expected=R1. But autoresolve-lease, autoresolve-lease-publish and push-lease-decision tests cover only the unrecorded or initial-tracking path, with no recorded pushed/ tip R1 and fetched human R2. Task rem-prd-audit-R9's done-when requires that real-git test, so it is BUILD test work.
+**Criterion:** S14.7
+**Parent task:** rem-prd-audit-R9
+**Done when:**
+- [test] S14.7 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R32 is committed and its targeted tests pass.
