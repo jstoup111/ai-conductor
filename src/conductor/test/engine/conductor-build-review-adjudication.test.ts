@@ -437,7 +437,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       haltClass: await readFile(join(run.projectRoot, '.pipeline', 'HALT.class'), 'utf8'),
       dispatchedBuild: run.dispatched.includes('build'),
     }).toMatchObject({
-      halt: expect.stringContaining('build_review adjudication halted: case store malformed-state'),
+      halt: expect.stringContaining('build_review adjudication halted: suppression store malformed-state'),
       haltClass: 'needs-human',
       dispatchedBuild: false,
     });
