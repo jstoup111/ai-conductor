@@ -186,6 +186,7 @@ import {
   type ChildId,
 } from './child-context.js';
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
+import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import {
   advanceChildRegion,
   enterChildRegion,
@@ -4416,25 +4417,36 @@ export class Conductor {
           // matching the append-plumbing policy above (routing must not
           // block on bookkeeping).
           try {
-            const git = makeGitRunner(this.projectRoot);
-            await git(['add', '--', planPath]);
-            const staged = await git(['diff', '--cached', '--quiet', '--', planPath]);
-            if (staged.exitCode !== 0) {
+            const guarded = await commitEngineChangeWhenStacked({
+              worktree: this.projectRoot,
+              slug: this.featureSlug ?? this.featureDesc ?? '',
+              pathspec: [planPath],
+              message: 'chore(plan): record appended remediation tasks',
+              noVerify: true,
+            });
+            if (guarded === undefined) {
+              const git = makeGitRunner(this.projectRoot);
+              await git(['add', '--', planPath]);
+              const staged = await git(['diff', '--cached', '--quiet', '--', planPath]);
+              if (staged.exitCode !== 0) {
               // Pathspec-scoped: commits only the plan file even if other
               // paths happen to be staged.
-              const commit = await git([
-                'commit',
-                '-m',
-                withDaemonCoAuthorTrailer('chore(plan): record appended remediation tasks'),
-                '--no-verify',
-                '--',
-                planPath,
-              ]);
-              if (commit.exitCode !== 0) {
-                this.log?.(
-                  `WARNING: remediation plan amendment commit failed — plan left uncommitted: ${commit.stderr || commit.stdout}`,
-                );
+                const commit = await git([
+                  'commit',
+                  '-m',
+                  withDaemonCoAuthorTrailer('chore(plan): record appended remediation tasks'),
+                  '--no-verify',
+                  '--',
+                  planPath,
+                ]);
+                if (commit.exitCode !== 0) {
+                  this.log?.(
+                    `WARNING: remediation plan amendment commit failed — plan left uncommitted: ${commit.stderr || commit.stdout}`,
+                  );
+                }
               }
+            } else if (guarded.kind === 'failed' || guarded.kind === 'refused') {
+              this.log?.(`WARNING: remediation plan amendment commit failed — plan left uncommitted: ${guarded.reason}`);
             }
           } catch (err) {
             this.log?.(

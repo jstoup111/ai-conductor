@@ -42,6 +42,7 @@ import { computeCostRollup } from './cost-rollup.js';
 import { computeTimingRollup } from './timing-rollup.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
+import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { computeBuildReviewMetrics, readMergedFeatureEvents } from './build-tail-rollup.js';
@@ -269,21 +270,36 @@ export async function dispatchShippedRecord(
 
     await writeShippedRecord(join(cwd, relPath), recordBody);
 
-    await execa('git', ['add', relPath], { cwd });
-    // Only commit when the add actually staged a change — an idempotent re-run
-    // (identical content already committed) must not create a duplicate commit.
-    const staged = await execa('git', ['diff', '--cached', '--quiet', '--', relPath], {
-      cwd,
-      reject: false,
+    const guarded = await commitEngineChangeWhenStacked({
+      worktree: cwd,
+      slug: identity.slug,
+      pathspec: [relPath],
+      message: `shipped record: ${identity.slug}`,
+      noVerify: true,
     });
-    if (staged.exitCode !== 0) {
-      await execa('git', ['commit', '-m', withDaemonCoAuthorTrailer(`shipped record: ${identity.slug}`), '--no-verify'], {
+    if (guarded === undefined) {
+      await execa('git', ['add', relPath], { cwd });
+      // Only commit when the add actually staged a change — an idempotent re-run
+      // (identical content already committed) must not create a duplicate commit.
+      const staged = await execa('git', ['diff', '--cached', '--quiet', '--', relPath], {
         cwd,
-        env: withEngineCommitEnv(),
+        reject: false,
       });
+      if (staged.exitCode !== 0) {
+        await execa('git', ['commit', '-m', withDaemonCoAuthorTrailer(`shipped record: ${identity.slug}`), '--no-verify'], {
+          cwd,
+          env: withEngineCommitEnv(),
+        });
+        console.log(`  ✓ shipped record committed: ${relPath}`);
+      } else {
+        console.log(`  ✓ shipped record already committed: ${relPath}`);
+      }
+    } else if (guarded.kind === 'written') {
       console.log(`  ✓ shipped record committed: ${relPath}`);
-    } else {
+    } else if (guarded.kind === 'noop') {
       console.log(`  ✓ shipped record already committed: ${relPath}`);
+    } else {
+      throw new Error(`could not commit shipped record: ${guarded.reason}`);
     }
     return 0;
   } catch (err) {

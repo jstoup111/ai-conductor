@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { readRestackJournal } from './restack/restack-journal.js';
+import { hasDurableChildState } from './child-cursor.js';
 
 export interface CommitEngineChangeOptions {
   readonly worktree: string;
@@ -20,6 +21,19 @@ export type CommitEngineChangeResult =
   | { readonly kind: 'noop' }
   | { readonly kind: 'refused'; readonly reason: string }
   | { readonly kind: 'failed'; readonly reason: string };
+
+/**
+ * Use the commit fence only for a feature which has entered the durable
+ * stacked-child lifecycle.  Call sites retain their historical `git commit`
+ * command for ordinary (N=1) features; that distinction is deliberate, not a
+ * best-effort probe hidden at each caller.
+ */
+export async function commitEngineChangeWhenStacked(
+  options: CommitEngineChangeOptions,
+): Promise<CommitEngineChangeResult | undefined> {
+  const durable = await hasDurableChildState(options.worktree, options.slug);
+  return durable === true ? commitEngineChange(options) : undefined;
+}
 
 const FENCED_STATES = new Set(['ready', 'moved', 'rolling-back']);
 
