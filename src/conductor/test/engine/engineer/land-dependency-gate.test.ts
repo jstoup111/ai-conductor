@@ -1,4 +1,4 @@
-// Covers: task:9, task:10, task:rem-prd-audit-rem-s5-2
+// Covers: task:9, task:10, task:rem-prd-audit-rem-s5-2, task:rem-as-built-rem-asb-4
 
 import { describe, expect, it } from 'vitest';
 import type { GitRunner } from '../../../src/engine/rebase.js';
@@ -166,6 +166,33 @@ describe('computeLandDependencyProposals', () => {
       kind: 'refused-undecided',
       undecided: ['owner/repo#606'],
     });
+  });
+
+  it('filters the source issue before selecting all eligible shown and omitted overlaps', async () => {
+    const { gh } = recordingGh({
+      body: '',
+      openIssues: [536, 600, 601, 602, 603, 604].map((number) => ({
+        number,
+        body: 'Touches src/shared.ts.',
+      })),
+    });
+    const { git } = recordingGit({ marker: false });
+
+    const result = await computeLandDependencyProposals({
+      sourceRef: SOURCE,
+      planText: PLAN,
+      gh,
+      git,
+      cwd: '/target',
+      baseRef: 'main',
+    });
+
+    expect(result).toMatchObject({ kind: 'computed' });
+    if (result.kind !== 'computed') throw new Error('expected computed dependency proposals');
+    expect(result.proposals).toEqual([600, 601, 602, 603, 604].map((number) => ({
+      target: `owner/repo#${number}`,
+      source: 'overlap',
+    })));
   });
 
   it.each([
