@@ -11,6 +11,7 @@ import { makeGitRunner } from '../../../src/engine/rebase.js';
 import {
   journalRefFor,
   pinStagingRef,
+  readRestackJournal,
   writeRestackJournalBlob,
   type RestackJournal,
 } from '../../../src/engine/restack/restack-journal.js';
@@ -163,7 +164,7 @@ describe('recoverRestackJournal refusal paths (real local Git)', () => {
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('dirty-overlap');
   });
 
-  it('halts on an unexpected moved ref while accepting a halt-record-only checked-out tip at synced', async () => {
+  it('halts on an unexpected moved ref while naming every journaled live value', async () => {
     const divergent = await fixture();
     const moved = await movedJournal(divergent);
     await divergent.git(['reset', '--hard', '-q', moved.replay.tip]);
@@ -180,7 +181,9 @@ describe('recoverRestackJournal refusal paths (real local Git)', () => {
     const halt = await readFile(join(divergent.repo, '.pipeline', 'HALT'), 'utf8');
     expect(halt).toContain(`refs/heads/feat/c1/demo ${rogue}`);
     expect(halt).toContain(`refs/conductor/demo/closed/c1 ${moved.replay.tip}`);
+  });
 
+  it('completes a synced journal after a checked-out halt-record commit without moving that branch', async () => {
     const synced = await fixture();
     const syncedMove = await movedJournal(synced);
     await syncRestackedWorktree(synced.repo, synced.oldTip, syncedMove.replay.tip, { git: makeGitRunner(synced.repo) });
@@ -191,10 +194,20 @@ describe('recoverRestackJournal refusal paths (real local Git)', () => {
     await writeFile(join(synced.repo, '.docs', 'halted', 'demo.md'), 'Status: halted\n');
     await synced.git(['add', '.docs/halted/demo.md']);
     await synced.git(['commit', '-qm', 'halt record only']);
+    const branchBeforeRecovery = (await synced.git(['rev-parse', 'refs/heads/feat/c1/demo'])).stdout.trim();
+    const calls: string[][] = [];
+    const rawGit = makeGitRunner(synced.repo);
+    const observingGit: typeof rawGit = async (args, options) => {
+      (calls as string[][]).push([...args, ...(options?.input === undefined ? [] : [options.input])]);
+      return rawGit(args, options);
+    };
 
-    const recovered = await recoverRestackJournal({ worktree: synced.repo, slug: 'demo', git: makeGitRunner(synced.repo) });
+    const recovered = await recoverRestackJournal({ worktree: synced.repo, slug: 'demo', git: observingGit });
 
     expect(recovered).toEqual({ kind: 'recovered', fromState: 'synced' });
+    expect((await synced.git(['rev-parse', 'refs/heads/feat/c1/demo'])).stdout.trim()).toBe(branchBeforeRecovery);
+    expect(await readRestackJournal(synced.repo, 'demo')).toEqual({ kind: 'missing' });
+    expect(calls.filter((call) => call[0] === 'update-ref').flat().join('\n')).not.toContain('refs/heads/feat/c1/demo');
     await expect(readFile(join(synced.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
