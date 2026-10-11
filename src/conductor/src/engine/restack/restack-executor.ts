@@ -32,6 +32,7 @@ import { replayChildRange, type CommitterStamp } from './restack-replay.js';
 import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { syncRestackedWorktree } from './restack-sync.js';
+import { emitRestackRefused } from './restack-events.js';
 import { applyRestackTransition } from './restack-transition.js';
 import { cleanClearedAbortedRestackJournal } from './restack-recovery.js';
 import {
@@ -72,6 +73,8 @@ export interface RunRestackOptions {
 export type RunRestackResult =
   | { readonly kind: 'applied'; readonly opId: RestackOpId }
   | { readonly kind: 'halted' }
+  /** Another live operation owns the journal; this run did nothing durable. */
+  | { readonly kind: 'refused'; readonly reason: 'restack-outstanding' }
   | { readonly kind: 'repair-pending'; readonly child: number }
   | { readonly kind: 'unavailable'; readonly detail: string };
 
@@ -397,8 +400,15 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       : await replaceAppliedJournalWithFollowOn(options.worktree, options.slug, options.replacesAppliedJournal, draft, { git });
     if (created.kind === 'refused') {
       terminal = true;
-      await haltRestack(options.worktree, created.reason, options.events);
-      return { kind: 'halted' };
+      // The journal belongs to another operation, which remains its sole
+      // owner. Halting here would write a needs-human HALT and commit a halt
+      // record on the checked-out branch, moving a ref the owner journaled.
+      // createRestackJournal already emitted the one refusal; the follow-on
+      // replacement does not, so emit it here exactly once.
+      if (options.replacesAppliedJournal !== undefined) {
+        await options.events?.emit(emitRestackRefused({ reason: created.reason }));
+      }
+      return { kind: 'refused', reason: created.reason };
     }
     if (created.kind === 'unavailable') throw new Error(created.detail);
     journal = created.journal;

@@ -598,9 +598,10 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
           ...(options.resolverCap === undefined ? {} : { resolverCap: options.resolverCap }),
           replacesAppliedJournal: journal,
         });
-        return result.kind === 'unavailable'
-          ? { kind: 'unavailable', detail: result.detail }
-          : { kind: 'cleaned' };
+        if (result.kind === 'unavailable') return { kind: 'unavailable', detail: result.detail };
+        // Losing the follow-on replacement means another live operation now
+        // owns the journal; recovery must not report it as cleaned.
+        return result.kind === 'refused' ? { kind: 'live-owner' } : { kind: 'cleaned' };
       }
       return await cleanJournal(options.worktree, journal, git) ? { kind: 'cleaned' } : { kind: 'unavailable', detail: 'cannot remove applied restack journal' };
     }
