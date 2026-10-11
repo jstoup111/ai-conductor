@@ -1137,21 +1137,30 @@ otel:
 ### otel.logs
 
 Operational log export is independently opt-in. It uses HTTP/protobuf only, reads the canonical
-main-checkout policy at send time, and leaves all terminal and `daemon.log` output unchanged. A log
-endpoint is normalized to exactly one `/v1/logs` suffix. Header values are environment references;
-never put a credential in this file.
+main-checkout policy at send time, and leaves all terminal and `daemon.log` output unchanged. It can
+be enabled without trace or metric export when `otel.logs.endpoint` is explicit. Header values are
+environment references; never put a credential in this file.
 
 | Key | Type | Default |
 | --- | --- | --- |
 | `otel.logs.enabled` | boolean | `false` |
-| `otel.logs.endpoint` | HTTP(S) URL | inherited only from a valid HTTP/protobuf OTLP parent |
+| `otel.logs.endpoint` | HTTP(S) OTLP base URL, without credentials, query, or fragment | inherited only from a valid HTTP/protobuf OTLP parent |
 | `otel.logs.headers` | header-to-`{ env: NAME }` mapping | inherited parent references |
 | `otel.logs.spool.enabled` | boolean | `true` when logs are enabled |
 | `otel.logs.spool.max_bytes` | positive integer | `67108864` (64 MiB), separate from trace/metric retention |
 
-An explicit `endpoint` replaces the parent endpoint. An explicit `headers: {}` deliberately sends no
-headers. Invalid log settings disable only logs and produce a named local diagnostic; existing traces,
-metrics, and local diagnostics continue.
+The configured endpoint is a base URL. Trailing slashes and any repeated `/v1/logs` suffix are
+removed, then exactly one `/v1/logs` suffix is appended; for example,
+`https://collector.example/` and `https://collector.example/v1/logs` both send to
+`https://collector.example/v1/logs`. Supply a backend path that precedes that suffix, such as an
+Elasticsearch `.../_otlp` base. An explicit `endpoint` replaces the parent endpoint. An explicit
+`headers: {}` deliberately sends no headers.
+
+Every header value must use exactly `{ env: VARIABLE_NAME }`. The named process-environment variable
+holds the complete header value when a backend requires a prefix (for example, `ApiKey …` or
+`x-sumo-token: …`); it is not written to the config file or the retained spool. Invalid log settings
+disable only logs and produce a named local diagnostic; existing traces, metrics, and local diagnostics
+continue.
 
 ```yaml
 otel:
