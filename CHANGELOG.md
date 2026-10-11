@@ -37,6 +37,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Reviewers see plan task titles in landed specification commit bodies. ([implementation PR #3091](https://github.com/jstoup111/ai-conductor/pull/3091)).
 - ADR authors can cite decisions headed with ATX-numbered headings. ([implementation PR #3115](https://github.com/jstoup111/ai-conductor/pull/3115)).
 - Composer `land`, `handoff`, and `forget` now post their GitHub issue write-backs from an operator session without an assignment or terminal prompt; daemon sessions keep the stricter rule. ([implementation PR #3134](https://github.com/jstoup111/ai-conductor/pull/3134)).
+- Daemon scheduling now derives priority, size, and dependency ordering through a backend-neutral source. ([implementation PR #3172](https://github.com/jstoup111/ai-conductor/pull/3172)).
 
 ### Removed
 
