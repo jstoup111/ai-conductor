@@ -1,4 +1,4 @@
-import { formatRemediationCommand } from './remediation-commands.js';
+import { formatPreGuardCommand, formatRemediationCommand } from './remediation-commands.js';
 
 export interface OrphanedWorktreeMissing {
   readonly featureDesc: string;
@@ -40,4 +40,12 @@ export function formatShipEvidenceGapInstructions(featureDesc?: string): string 
 export function formatRecoveryDeclinedInstructions(featureDesc?: string): string {
   return `\nNo changes made. To inspect: ${formatRemediationCommand({ kind: 'inline-status' })}\n` +
     `  To start over: ${formatRemediationCommand({ kind: 'inline-fresh', feature: featureDesc })}\n`;
+}
+
+/** Formats the refusal for bare invocations that bypass the inline subcommand. */
+export function formatInlineGuardGuidance(): string {
+  return 'conduct: the inline SDLC pipeline now runs under the `inline` subcommand.\n' +
+    `  Run:        ${formatRemediationCommand({ kind: 'inline-run', feature: '<feature description>' })}\n` +
+    `  State ops:  ${formatRemediationCommand({ kind: 'inline-status' })} | ${formatRemediationCommand({ kind: 'inline-resume' })} | ${formatRemediationCommand({ kind: 'inline-report' })} | ${formatRemediationCommand({ kind: 'inline-diagnose' })} | …\n` +
+    `  All commands: ${formatPreGuardCommand({ kind: 'top-level-help' })}`;
 }

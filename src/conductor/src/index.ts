@@ -6,6 +6,13 @@ export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.j
 import type { RunMode } from './types/index.js';
 import { recoverCommandState, replaceCommandState } from './engine/command-state.js';
 import { emitDaemonSessionRefusal, guardDaemonSessionInvocation } from './execution/daemon-session.js';
+import { formatPreGuardCommand } from './remediation-commands.js';
+import { formatInlineGuardGuidance } from './remediation-guidance.js';
+
+/** True when argv requests the top-level command reference. */
+export function isTopLevelHelpRequest(argv: readonly string[]): boolean {
+  return argv.slice(2).some((arg) => arg === '--help' || arg === '-h');
+}
 
 export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMode {
   if (opts.auto && opts.interactive) {
@@ -14,7 +21,7 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
   }
   if (opts.auto) {
     console.error(
-      'Error: --auto is deprecated. Use `ai-conductor daemon start` instead; see docs/guides/running-the-daemon.md.',
+      `Error: --auto is deprecated. Use \`${formatPreGuardCommand({ kind: 'daemon-start' })}\` instead; see docs/guides/running-the-daemon.md.`,
     );
     process.exit(1);
   }
@@ -402,7 +409,7 @@ export function renderCanonicalFullHelp(): string {
       'compose/brain idea→spec loop (`compose`; `engineer` is a deprecated alias, and `compose --help` shows its full command reference)',
     )
     .replace(/^  engineer(\s)/m, '  compose$1')
-    .replaceAll('ai-conductor engineer', 'ai-conductor compose')
+    .replaceAll('ai-conductor engineer', formatPreGuardCommand({ kind: 'compose' }))
     .replace('Supervisor engineer:', 'Compose:')
     .replaceAll('`engineer worktree`', '`compose worktree`')
     .replaceAll('`engineer land`', '`compose land`');
@@ -1331,7 +1338,7 @@ async function dispatchCliCommand(): Promise<void> {
   // description is never mistaken for an unknown command); the discoverable
   // surface lives in createProgram(). Subcommand-specific help is already handled
   // by the dispatchers above, so any `--help` reaching here is top-level.
-  if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
+  if (isTopLevelHelpRequest(process.argv)) {
     process.stdout.write(renderCanonicalFullHelp());
     process.exit(0);
   }
@@ -1355,12 +1362,7 @@ async function dispatchCliCommand(): Promise<void> {
     if (bareCommand && !bareCommand.startsWith('-') && !/\s/.test(bareCommand)) {
       console.error(`error: unknown command '${bareCommand}'`);
     }
-    console.error(
-      'conduct: the inline SDLC pipeline now runs under the `inline` subcommand.\n' +
-        '  Run:        conduct inline "<feature description>"\n' +
-        '  State ops:  conduct inline --status | --resume | --report | --diagnose | …\n' +
-        '  All commands: conduct --help',
-    );
+    console.error(formatInlineGuardGuidance());
     process.exit(1);
   }
 
