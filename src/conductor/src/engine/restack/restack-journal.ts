@@ -43,6 +43,12 @@ export interface RestackJournalDraft {
   readonly cause: RestackCause;
   readonly followOnCause?: RestackCause;
   readonly committer: CommitterStamp;
+  /** The exact target default used by this operation, never re-resolved on recovery. */
+  readonly newDefault?: CommitSha;
+  /** Commits which were already present on that target when replay began. */
+  readonly comparisonCommits?: readonly CommitSha[];
+  /** Repair origins whose cascade counters are charged when this journal applies. */
+  readonly originatingChildren?: readonly ChildId[];
   readonly dirtyPaths: readonly string[];
   readonly refs: readonly RestackJournalRef[];
   readonly ranges: readonly ChildRange[];
@@ -179,13 +185,28 @@ function parseJournal(value: unknown): RestackJournal | undefined {
   const refs = parseRefs(value.refs);
   const ranges = parseRanges(value.ranges);
   const children = parseChildren(value.children);
+  const newDefault = value.newDefault === undefined ? undefined : typeof value.newDefault === 'string' ? parseCommitSha(value.newDefault) : undefined;
+  const comparisonCommits = value.comparisonCommits === undefined ? undefined
+    : Array.isArray(value.comparisonCommits)
+      ? value.comparisonCommits.map((commit) => typeof commit === 'string' ? parseCommitSha(commit) : undefined)
+      : undefined;
+  const originatingChildren = value.originatingChildren === undefined ? undefined
+    : Array.isArray(value.originatingChildren)
+      ? value.originatingChildren.map((child) => typeof child === 'number' ? parseChildId(child) : undefined)
+      : undefined;
   if (!cause || (value.followOnCause !== undefined && !followOnCause) || !journalStates.has(value.state as JournalState) || !owner || !committer
-    || !isStringArray(value.dirtyPaths) || !refs || !ranges || !children) return undefined;
+    || !isStringArray(value.dirtyPaths) || !refs || !ranges || !children
+    || (value.newDefault !== undefined && !newDefault)
+    || (value.comparisonCommits !== undefined && (!comparisonCommits || comparisonCommits.some((commit) => !commit)))
+    || (value.originatingChildren !== undefined && (!originatingChildren || originatingChildren.some((child) => !child)))) return undefined;
   return {
     opId: value.opId as RestackOpId,
     cause,
     ...(followOnCause === undefined ? {} : { followOnCause }),
     committer,
+    ...(newDefault === undefined ? {} : { newDefault }),
+    ...(comparisonCommits === undefined ? {} : { comparisonCommits: comparisonCommits as CommitSha[] }),
+    ...(originatingChildren === undefined ? {} : { originatingChildren: originatingChildren as ChildId[] }),
     dirtyPaths: [...value.dirtyPaths],
     refs,
     ranges,
@@ -348,6 +369,8 @@ export async function updateRestackChildStatus(
   const stage = stagingRefFor(slug, child);
   const oldStage = await stagingTip(git, stage);
   if (oldStage === undefined) return { kind: 'unavailable', detail: 'cannot read staging ref' };
+  // Child progress changes are not journal *state* transitions; keeping this
+  // CAS separate is what lets the state-transition guard stay exact.
   const input = ['start', `update ${journalRefFor(slug)} ${blob} ${previous.blob}`, `update ${stage} ${tip} ${oldStage}`, 'prepare', 'commit', ''].join('\n');
   const updated = await runGit(git, ['update-ref', '--stdin'], input);
   if (updated?.exitCode !== 0) return { kind: 'stale' };

@@ -11,7 +11,7 @@ import { verifyProtectedArtifactSeal } from '../protected-artifact-seal.js';
 import { resolve } from 'node:path';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import {
-  journalRefFor,
+  journalStateUpdateLines,
   stagingRefFor,
   writeRestackJournalBlob,
   type StoredRestackJournal,
@@ -237,7 +237,7 @@ async function writeState(
   } catch {
     return undefined;
   }
-  const updated = await runGit(git, ['update-ref', journalRefFor(previous.slug), blob, previous.blob]);
+  const updated = await runGit(git, ['update-ref', '--stdin'], transaction(journalStateUpdateLines(previous, blob, state)));
   return updated?.exitCode === 0 ? { slug: previous.slug, blob, journal: next } : undefined;
 }
 
@@ -304,7 +304,7 @@ export async function applyRestackMove(
     const moved = await runGit(git, ['update-ref', '--stdin'], transaction([
       ...moveLines(moves),
       ...(marker === undefined ? [] : [marker]),
-      `update ${journalRefFor(journal.slug)} ${nextBlob} ${journal.blob}`,
+      ...journalStateUpdateLines(journal, nextBlob, 'moved'),
     ]));
     if (moved?.exitCode === 0) return { kind: 'moved', journal: { slug: journal.slug, blob: nextBlob, journal: next } };
     if (!moved) return { kind: 'unavailable', detail: 'Git unavailable while moving restack refs' };
@@ -391,7 +391,7 @@ export async function rollbackRestackMove(
   const reverse = moves.map((move) => `update ${move.ref} ${move.oldSha} ${move.newSha}`);
   const rolledBack = await runGit(git, ['update-ref', '--stdin'], transaction([
     ...reverse,
-    `update ${journalRefFor(journal.slug)} ${abortedBlob} ${rolling.blob}`,
+    ...journalStateUpdateLines(rolling, abortedBlob, 'aborted'),
   ]));
   if (rolledBack?.exitCode !== 0) return { kind: 'unavailable', detail: rolledBack ? detail(rolledBack) : 'Git unavailable while rolling back restack refs' };
   return { kind: 'aborted', journal: { slug: journal.slug, blob: abortedBlob, journal: abortedJournal } };

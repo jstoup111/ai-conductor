@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { parseChildId, type ChildId } from '../child-context.js';
+import { resolveActiveChild } from '../child-cursor.js';
 import { childBranchFor, leafBranchFor, parseFeatureBranch } from '../feature-branch-identity.js';
 import { makeGitRunner, type GitRunner, writeSealHalt } from '../rebase.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
@@ -12,6 +13,7 @@ import {
   stagingRefFor,
   updateRestackChildStatus,
   writeRestackJournalBlob,
+  journalStateUpdateLines,
   type RestackJournalDraft,
   type StoredRestackJournal,
 } from './restack-journal.js';
@@ -153,17 +155,25 @@ async function checkedOutRef(git: GitRunner): Promise<RefName> {
   return parsed;
 }
 
-async function activeFor(_worktree: string, slug: string, git: GitRunner): Promise<{ child: ChildId; branchRef: RefName; isLeaf: boolean }> {
+async function activeFor(worktree: string, slug: string, git: GitRunner): Promise<{ child: ChildId; branchRef: RefName; isLeaf: boolean; unenteredLeaf?: ChildId }> {
+  const cursor = await resolveActiveChild(worktree, slug, { git });
+  if (cursor.kind === 'active' || cursor.kind === 'repair-pending') {
+    const branch = ref(`refs/heads/${cursor.branch}`);
+    // The sealed cursor, rather than the checkout, is authoritative.  This
+    // also preserves declared gaps such as c1 -> c3.
+    return { child: cursor.child, branchRef: branch, isLeaf: cursor.isLeaf, ...(cursor.nextChild === undefined ? {} : { unenteredLeaf: cursor.nextChild }) };
+  }
+  // N=1/older stack records predate the sealed envelope. Keep their existing
+  // ref-only recovery path, but never use it when a sealed cursor exists.
+  if (cursor.kind !== 'envelope-missing' && cursor.kind !== 'no-child') throw new Error(`cannot resolve restack cursor: ${cursor.kind}`);
   const head = await checkedOutRef(git);
   const identity = parseFeatureBranch(head.slice('refs/heads/'.length));
-  if (identity.kind === 'child' && identity.slug === slug) {
-    return { child: identity.child, branchRef: head, isLeaf: false };
-  }
+  if (identity.kind === 'child' && identity.slug === slug) return { child: identity.child, branchRef: head, isLeaf: false };
   if (identity.kind !== 'leaf' || identity.slug !== slug) throw new Error('restack requires this feature\'s checked-out branch');
   const closed = await runGit(git, ['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/closed/`]);
   if (closed.exitCode !== 0) throw new Error('cannot inspect closed child refs');
   const ids = closed.stdout.split('\n').flatMap((entry) => {
-    const matched = new RegExp(`^refs/conductor/${slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/closed/c([1-9])$`).exec(entry.trim());
+    const matched = /\/closed\/c([1-9][0-9]*)$/.exec(entry.trim());
     return matched ? [Number(matched[1])] : [];
   });
   const child = parseChildId(Math.max(0, ...ids) + 1);
@@ -206,13 +216,13 @@ async function transitionState(
   if (!isLegalJournalTransition(journal.journal.state, state)) throw new Error(`illegal restack state transition to ${state}`);
   const next = { ...journal.journal, state };
   const blob = await writeRestackJournalBlob(worktree, next, { git });
-  const updated = await runGit(git, ['update-ref', journalRefFor(journal.slug), blob, journal.blob]);
+  const updated = await runGit(git, ['update-ref', '--stdin'], transaction(journalStateUpdateLines(journal, blob, state)));
   if (updated.exitCode !== 0) throw new Error(`cannot transition restack journal to ${state}`);
   return { slug: journal.slug, blob, journal: next };
 }
 
 /** Apply the terminal journal transition and the repair cascade charge atomically. */
-async function transitionAppliedWithCascade(
+export async function transitionAppliedWithCascade(
   worktree: string,
   journal: StoredRestackJournal,
   originatingChildren: readonly ChildId[],
@@ -225,7 +235,7 @@ async function transitionAppliedWithCascade(
   if (updates.kind !== 'lines') throw new Error(updates.detail);
   const updated = await runGit(git, ['update-ref', '--stdin'], transaction([
     ...updates.lines,
-    `update ${journalRefFor(journal.slug)} ${blob} ${journal.blob}`,
+    ...journalStateUpdateLines(journal, blob, 'applied'),
   ]));
   if (updated.exitCode !== 0) throw new Error('cannot transition restack journal to applied with cascade counts');
   return { slug: journal.slug, blob, journal: next };
@@ -330,17 +340,25 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     // so a cleared halt cannot make the next restack look outstanding.
     const staleCleanup = await cleanClearedAbortedRestackJournal(options.worktree, options.slug, { git });
     if (staleCleanup === 'unavailable') return { kind: 'unavailable', detail: 'cannot remove cleared aborted restack journal' };
-    const [newDefault, active] = await Promise.all([
-      defaultTip(git, options.newDefault),
-      activeFor(options.worktree, options.slug, git),
-    ]);
+    const active = await activeFor(options.worktree, options.slug, git);
+    // A feature repair preserves its original base. Resolving origin/main here
+    // would silently turn a repair into a base refresh.
+    const newDefault = options.cause === 'feature-repair'
+      ? undefined
+      : await defaultTip(git, options.newDefault);
+    const planningDefault = newDefault ?? await requiredSha(git, `refs/conductor/${options.slug}/closed/c${active.child}`, 'active closure').catch(async () => {
+      const result = await runGit(git, ['merge-base', active.branchRef, 'HEAD']);
+      const parsed = result.exitCode === 0 ? parseCommitSha(result.stdout.trim()) : undefined;
+      if (!parsed) throw new Error('cannot resolve old default for feature repair');
+      return parsed;
+    });
     const plan = await planRestackRanges(options.worktree, {
       slug: options.slug,
-      oldDefaultTip: newDefault,
+      oldDefaultTip: planningDefault,
       cause: options.cause,
       active,
       ...(active.isLeaf ? {} : {
-        unenteredLeaf: { child: parseChildId(active.child + 1)!, branchRef: ref(`refs/heads/${leafBranchFor(options.slug)}`) },
+        unenteredLeaf: { child: active.unenteredLeaf ?? parseChildId(active.child + 1)!, branchRef: ref(`refs/heads/${leafBranchFor(options.slug)}`) },
       }),
     }, { git });
     if (plan.kind === 'refused') {
@@ -374,11 +392,15 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       }
     }
 
+    const comparison = await comparisonCommits(git, options.cause, plan.ranges, planningDefault);
     const draft: RestackJournalDraft = {
       opId: randomUUID() as RestackOpId,
       cause: options.cause,
       ...(options.followOnCause === undefined ? {} : { followOnCause: options.followOnCause }),
       committer: await committerStamp(git),
+      newDefault: planningDefault,
+      comparisonCommits: comparison,
+      ...(options.cause === 'feature-repair' ? { originatingChildren: plan.originating } : {}),
       dirtyPaths: [],
       refs: await journalRefs(git, options.slug, plan.ranges),
       ranges: plan.ranges,
@@ -396,13 +418,25 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     journal = created.journal;
     await options.events?.emit({ type: 'restack_planned', opId: draft.opId, cause: draft.cause, children: plan.ranges.map((range) => range.child) });
 
-    const newStackCommits = await comparisonCommits(
-      git, options.cause, plan.ranges, newDefault,
-    );
+    const newStackCommits = comparison;
     const mergeAudit = { flattenedMerges: [] as string[], ancestryOnlyMerges: [] as string[], sideLineageCount: 0 };
     const overlaps = new Map<number, string[]>();
-    let parent = newDefault;
-    for (const range of plan.ranges) {
+    let parent = planningDefault;
+    const lastOriginIndex = options.cause === 'feature-repair'
+      ? Math.max(-1, ...plan.ranges.map((range, index) => plan.originating.includes(range.child) ? index : -1))
+      : -1;
+    for (const [rangeIndex, range] of plan.ranges.entries()) {
+      // Repair leaves all existing lower tips intact. Only descendants of the
+      // highest originating child are rebuilt on the new closure chain.
+      if (options.cause === 'feature-repair' && rangeIndex <= lastOriginIndex) {
+        const adopted = await requiredSha(git, branchRefForRange(options.slug, range), `branch for child ${range.child}`);
+        const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', adopted, { git });
+        if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while adopting child' : updated.detail);
+        journal = updated.journal;
+        overlaps.set(range.child, []);
+        parent = adopted;
+        continue;
+      }
       let replay;
       try {
         replay = await replayChildRange(range, parent, journal.journal.committer, git, {
@@ -532,7 +566,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const transition = await applyRestackTransition({
       worktree: options.worktree,
       cause: options.cause,
-      newDefault,
+      newDefault: planningDefault,
       activeChild: active.child,
       ranges: plan.ranges,
       moves,

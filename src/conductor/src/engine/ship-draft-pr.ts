@@ -42,19 +42,21 @@ import {
 import { executeRemoteGit } from './remote-git-operations.js';
 import {
   forcePushWithExpectedLease,
-  type PushLeaseEventEmitter,
   type PushLeaseGitRunner,
 } from './push-lease.js';
 import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from './tracker-client.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { runTrackerUrlRead } from './tracker-client.js';
+import { parseFeatureRef } from './feature-branch-identity.js';
 
 function leaseSlug(branch: string): string {
   // All production callers use daemon feature branches. Retain a stable,
   // ref-safe fallback for historical/custom branch names rather than letting a
   // post-rebase refresh bypass the lease decision entirely.
-  return branch.replace(/^refs\/heads\//, '').replaceAll('/', '-');
+  const normalized = branch.replace(/^refs\/heads\//, '');
+  const identity = parseFeatureRef(`refs/heads/${normalized}`);
+  return identity.kind === 'child' || identity.kind === 'leaf' ? identity.slug : normalized.replaceAll('/', '-');
 }
 
 function leaseGit(git: GitRunner, cwd: string): PushLeaseGitRunner {
@@ -184,7 +186,7 @@ export interface OpenShipDraftPrDeps {
   remoteGit?: typeof executeRemoteGit;
   remoteMutation?: GithubMutationExecutionContext;
   /** Existing event spine for refusal telemetry from the guarded push. */
-  events?: GithubOperationEventEmitter & PushLeaseEventEmitter;
+  events?: GithubOperationEventEmitter;
   /** Guarded PR creation; an absent runner is a refusal, never a raw gh fallback. */
   operations?: GithubOperationRunner;
   log?: (msg: string) => void;
@@ -430,7 +432,7 @@ export async function openShipDraftPr(
         branch,
         git: leaseGit(git, cwd),
         remoteGit: runRemote,
-        events: deps.events,
+        events: deps.events === undefined ? undefined : { emit: (event) => deps.events!.emit(event as never) },
       })
       : await runRemote(['push', '-u', 'origin', `HEAD:refs/heads/${branch}`]);
     if (pushed.kind !== 'executed') {

@@ -7,6 +7,7 @@ import type { ConductorEventEmitter } from '../../ui/events.js';
 import {
   isJournalOwnerAlive,
   journalRefFor,
+  journalStateUpdateLines,
   readRestackJournal,
   stagingRefFor,
   updateRestackChildStatus,
@@ -22,9 +23,10 @@ import {
   type RestackMoveRef,
 } from './restack-move.js';
 import { replayChildRange } from './restack-replay.js';
+import { checkPathOwnership } from './restack-ownership.js';
 import { RestackSyncOperatorEditError, syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
-import { runRestack } from './restack-executor.js';
+import { runRestack, transitionAppliedWithCascade } from './restack-executor.js';
 import {
   isLegalJournalTransition,
   parseCommitSha,
@@ -119,7 +121,7 @@ async function transition(
   } catch {
     return undefined;
   }
-  const updated = await runGit(git, ['update-ref', journalRefFor(stored.slug), blob, stored.blob]);
+  const updated = await runGit(git, ['update-ref', '--stdin'], transaction(journalStateUpdateLines(stored, blob, state)));
   return updated?.exitCode === 0 ? { slug: stored.slug, blob, journal } : undefined;
 }
 
@@ -328,7 +330,11 @@ async function resumePlanned(
       parent = staged;
       continue;
     }
-    const replay = await replayChildRange(range, parent, current.journal.committer, git);
+    const replay = await replayChildRange(range, parent, current.journal.committer, git, {
+      comparisonCommits: current.journal.comparisonCommits,
+    });
+    const ownership = await checkPathOwnership(range, parent, replay.tip, git);
+    if (ownership.kind === 'refused') return undefined;
     const updated = await updateRestackChildStatus(worktree, current.slug, current, range.child, 'replayed', replay.tip, { git });
     if (updated.kind !== 'updated') return undefined;
     current = updated.journal;
@@ -353,7 +359,7 @@ async function rollBackFromRolling(
   }
   const reversed = await runGit(git, ['update-ref', '--stdin'], transaction([
     ...moves.map((move) => `update ${move.ref} ${move.oldSha} ${move.newSha}`),
-    `update ${journalRefFor(journal.slug)} ${blob} ${journal.blob}`,
+    ...journalStateUpdateLines(journal, blob, 'aborted'),
   ]));
   return reversed?.exitCode === 0 ? { slug: journal.slug, blob, journal: aborted } : undefined;
 }
@@ -529,14 +535,16 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
       await applyRestackTransition({
         worktree: options.worktree,
         cause: journal.journal.cause,
-        newDefault: journal.journal.ranges[0]!.oldParent,
+        newDefault: journal.journal.newDefault ?? journal.journal.ranges[0]!.oldParent,
         activeChild: activeMove.child,
         ranges: journal.journal.ranges,
         moves,
         git,
         ...(options.events === undefined ? {} : { events: options.events }),
       });
-      const applied = await transition(options.worktree, journal, 'applied', git);
+      const applied = journal.journal.cause === 'feature-repair'
+        ? await transitionAppliedWithCascade(options.worktree, journal, journal.journal.originatingChildren ?? [], git)
+        : await transition(options.worktree, journal, 'applied', git);
       if (!applied) return { kind: 'unavailable', detail: 'cannot apply recovered restack transition' };
       if (applied.journal.followOnCause === undefined && !await cleanJournal(options.worktree, applied, git)) {
         return { kind: 'unavailable', detail: 'cannot clean recovered restack journal' };

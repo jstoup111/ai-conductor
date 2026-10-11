@@ -115,7 +115,6 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     await checkCascadeCap(options.worktree, options.slug, [child], undefined, { git: options.git });
   }
 
-  if (options.baseRefreshDue) await options.consumeRekick?.();
   const repair = await runRestack({
     worktree: options.worktree,
     slug: options.slug,
@@ -139,6 +138,10 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     await deferredBaseRefresh(options.events);
     return { kind: 'unavailable', detail: 'feature-repair journal did not retain its base-refresh follow-on' };
   }
+  // A crash before the repair journal names its follow-on must leave REKICK in
+  // place. The durable journal is the hand-off; the sentinel is only its
+  // discovery trigger.
+  await options.consumeRekick?.();
   const followOn = await runRestack({
     worktree: options.worktree,
     slug: options.slug,

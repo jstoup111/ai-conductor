@@ -148,8 +148,9 @@ export async function checkCascadeCap(
     return { kind: 'exhausted', child: first, count: limit, limit, detail: `${state.detail} (${state.ref})` };
   }
   for (const child of [...new Set(originatingChildren)].sort((left, right) => left - right)) {
+    const childLimit = state.counts.limits?.[String(child)] ?? limit;
     const count = state.counts.counts[String(child)] ?? 0;
-    if (count >= limit) return { kind: 'exhausted', child, count, limit };
+    if (count >= childLimit) return { kind: 'exhausted', child, count, limit: childLimit };
   }
   return { kind: 'clear', counts: state.counts, limit };
 }

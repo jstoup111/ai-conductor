@@ -253,7 +253,9 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
   }
 
     const first = options.ranges[0];
-    const leaf = options.ranges.at(-1);
+    // The flat, whole-feature policy belongs solely to the declared leaf. An
+    // intermediate active child has its own region tuple and must not claim it.
+    const leaf = options.ranges.find((range) => range.kind === 'leaf-active' || range.kind === 'leaf-unentered');
     const leafMove = leaf === undefined ? undefined : moveByChild.get(leaf.child);
     const featureState = join(options.worktree, '.pipeline', 'conduct-state.json');
   if (first && leaf && leafMove && await exists(featureState)) {

@@ -18,6 +18,7 @@ type ActiveChildTarget = {
   isLeaf: boolean;
   branch: string;
   leafMovePending?: boolean;
+  nextChild?: ChildId;
 };
 
 export type RepairPendingChildResolution = ActiveChildTarget & {
@@ -324,15 +325,17 @@ export async function resolveActiveChild(
   const closedSet = new Set(closed.map(({ child }) => child));
   const leaf = positions.at(-1)!;
   const child = positions.slice(0, -1).find((position) => !closedSet.has(position)) ?? leaf;
+  const nextChild = positions[positions.indexOf(child) + 1];
   const isLeaf = child === leaf;
   const active = isLeaf
     ? {
       kind: 'active' as const, child, position: child, isLeaf, branch: leafBranchFor(slug),
       ...(leafMovePending || leafMoved ? { leafMovePending } : {}),
+      ...(nextChild === undefined ? {} : { nextChild }),
     }
     : (() => {
       const branch = childBranchFor(slug, child);
-      return branch.ok ? { kind: 'active' as const, child, position: child, isLeaf, branch: branch.branch } : undefined;
+      return branch.ok ? { kind: 'active' as const, child, position: child, isLeaf, branch: branch.branch, ...(nextChild === undefined ? {} : { nextChild }) } : undefined;
     })();
   if (active === undefined) return { kind: 'git-error' };
   if (repairChildren.length > 0) return { ...active, kind: 'repair-pending', repairChildren };

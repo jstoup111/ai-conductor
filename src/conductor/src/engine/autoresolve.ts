@@ -51,6 +51,7 @@ import { isTestPath } from './gate-invalidation.js';
 import { hasDurableChildState } from './child-cursor.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { forcePushWithExpectedLease } from './push-lease.js';
+import { parseFeatureRef } from './feature-branch-identity.js';
 
 const execFile = promisify(execFileCb);
 
@@ -813,9 +814,10 @@ export async function pushRefreshedBranch(
 
   const cwd = remote.cwd ?? '.';
   const leaseBranch = branch.replace(/^refs\/heads\//, '');
+  const identity = parseFeatureRef(`refs/heads/${leaseBranch}`);
   const pushResult = await forcePushWithExpectedLease({
     cwd,
-    slug: remote.slug ?? leaseBranch.replaceAll('/', '-'),
+    slug: remote.slug ?? (identity.kind === 'child' || identity.kind === 'leaf' ? identity.slug : leaseBranch.replaceAll('/', '-')),
     branch: leaseBranch,
     git: async (args) => {
       const result = await git([...args]);
@@ -832,7 +834,7 @@ export async function pushRefreshedBranch(
       mutation: remote.mutation,
       events: remote.events,
     }),
-    events: remote.events,
+    events: remote.events === undefined ? undefined : { emit: (event) => remote.events!.emit(event as never) },
   });
 
   if (pushResult.kind === 'executed') {
