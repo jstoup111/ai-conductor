@@ -109,6 +109,10 @@ import {
   verifyCompleteState,
   formatGapReport,
 } from './engine/complete-verifier.js';
+import {
+  formatOrphanedStateResetHint,
+  formatOrphanedWorktreeMissing,
+} from './remediation-guidance.js';
 import { ensureClaudeSettings } from './engine/preflight.js';
 import { spawnAutoUpdateCheck } from './engine/auto-update-check.js';
 import { createLiveRegion } from './ui/live-region.js';
@@ -1484,7 +1488,7 @@ async function dispatchCliCommand(): Promise<void> {
       } else {
         // orphaned-state: surface the same message --resume would
         console.error(
-          `\nOrphaned conductor state in ${detection.stateFilePath}.\n  Run ai-conductor --reset to clear, or recreate the worktree.\n`,
+          formatOrphanedStateResetHint(detection.stateFilePath),
         );
         process.exit(1);
       }
@@ -1583,16 +1587,11 @@ async function dispatchCliCommand(): Promise<void> {
       // the worktree step is supposed to provide. Refuse and give the user
       // a clear next-action.
       console.error(
-        `\nOrphaned conductor state in ${detection.stateFilePath}.\n` +
-          `\n  Feature "${detection.featureDesc ?? opts.featureDesc}" was marked past the worktree step,\n` +
-          `  but no worktree exists at any of:\n` +
-          detection.expectedLocations.map((p) => `    - ${p}`).join('\n') +
-          `\n\n  Either:\n` +
-          `    1) Recreate the missing worktree at one of those paths, OR\n` +
-          `    2) Run \`ai-conductor --reset\` from this directory to clear the stale state\n` +
-          `       (you'll lose the recorded progress, but the actual code on the\n` +
-          `       feature branch — if it exists — is untouched).\n` +
-          `\n  Refusing to continue here so artifacts don't land on the wrong branch.\n`,
+        formatOrphanedWorktreeMissing({
+          featureDesc: detection.featureDesc ?? opts.featureDesc,
+          stateFilePath: detection.stateFilePath,
+          expectedLocations: detection.expectedLocations,
+        }),
       );
       process.exit(1);
     }
