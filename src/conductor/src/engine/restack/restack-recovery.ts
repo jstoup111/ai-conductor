@@ -323,7 +323,7 @@ async function resumePlanned(
 ): Promise<StoredRestackJournal | undefined> {
   if (!await refsStillAtOldValues(journal, git)) return undefined;
   let current = journal;
-  let parent = current.journal.ranges[0]?.oldParent;
+  let parent = current.journal.newDefault ?? current.journal.ranges[0]?.oldParent;
   if (!parent) return undefined;
   for (const range of current.journal.ranges) {
     const child = current.journal.children.find((entry) => entry.child === range.child);

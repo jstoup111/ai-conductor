@@ -115,6 +115,57 @@ describe('recoverRestackJournal (real local Git)', () => {
     expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
   });
 
+  // Covers: task:rem-as-built-R22
+  it('replays a planned base refresh from its journaled new default before any child stages', async () => {
+    const subject = await fixture();
+    const first = parseChildId(1);
+    const second = parseChildId(2);
+    if (!first || !second) throw new Error('child ids should parse');
+
+    await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', subject.oldTip]);
+    await subject.git(['checkout', '-qb', 'feat/c2/demo']);
+    const secondTip = await (async () => {
+      await writeFile(join(subject.repo, 'second.txt'), 'second\n');
+      await subject.git(['add', 'second.txt']);
+      await subject.git(['commit', '-qm', 'second child']);
+      return sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    })();
+
+    const journal: RestackJournal = {
+      opId: 'crashed-planned-base-refresh' as RestackOpId,
+      cause: 'base-refresh',
+      newDefault: subject.advanced,
+      committer: { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+      dirtyPaths: [],
+      refs: [
+        { ref: 'refs/heads/feat/c1/demo' as never, oldSha: subject.oldTip },
+        { ref: 'refs/conductor/demo/closed/c1' as never, oldSha: subject.oldTip },
+        { ref: 'refs/heads/feat/c2/demo' as never, oldSha: secondTip },
+      ],
+      ranges: [
+        { child: first, oldParent: subject.base, oldTip: subject.oldTip, kind: 'closed' },
+        { child: second, oldParent: subject.oldTip, oldTip: secondTip, kind: 'active' },
+      ],
+      children: [{ child: first, status: 'pending' }, { child: second, status: 'pending' }],
+      state: 'planned',
+      owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
+    };
+    const blob = await writeRestackJournalBlob(subject.repo, journal);
+    await subject.git(['update-ref', journalRefFor('demo'), blob, '']);
+    await rm(join(subject.repo, '.pipeline'), { recursive: true, force: true });
+
+    const result = await recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) });
+
+    expect(result).toEqual({ kind: 'recovered', fromState: 'planned' });
+    const [firstTip, recoveredSecondTip] = await Promise.all([
+      subject.git(['rev-parse', 'feat/c1/demo']).then(({ stdout }) => stdout.trim()),
+      subject.git(['rev-parse', 'feat/c2/demo']).then(({ stdout }) => stdout.trim()),
+    ]);
+    await expect(subject.git(['merge-base', '--is-ancestor', subject.advanced, firstTip])).resolves.toMatchObject({ stdout: '', stderr: '' });
+    await expect(subject.git(['merge-base', '--is-ancestor', firstTip, recoveredSecondTip])).resolves.toMatchObject({ stdout: '', stderr: '' });
+    expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
+  });
+
   it('finishes a dead owner’s ready journal after .pipeline is lost, using only its staging and journal refs', async () => {
     const subject = await fixture();
     const child = parseChildId(1);
