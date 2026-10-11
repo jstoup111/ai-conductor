@@ -7,6 +7,7 @@
 // change to how the marker is written or where it lives had to be mirrored across
 // all of them. Both the constant and the best-effort writer now live here.
 
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { execa } from 'execa';
@@ -25,6 +26,9 @@ export const HALT_MARKER = '.pipeline/HALT';
 
 /** Machine-readable sidecar classifying why a HALT was raised. */
 export const HALT_CLASS_MARKER = '.pipeline/HALT.class';
+
+/** Durable episode metadata bound to the HALT body it was written for. */
+export const HALT_EPISODE_MARKER = '.pipeline/HALT.episode';
 
 /** HALT class for a feature-authored protected-artifact violation. */
 export const PROTECTED_ARTIFACT_HALT_CLASS = 'protected-artifact';
@@ -74,6 +78,99 @@ export type HaltMarkerWriteResult =
   | { status: 'partial'; writtenPath: string; path: string; reason: string }
   | { status: 'failed'; path: string; reason: string };
 
+export type EpisodeStampWriteResult =
+  | { status: 'written' }
+  | { status: 'failed'; reason: string };
+
+export type EpisodeStampReadResult =
+  | { kind: 'valid'; deadlineMs: number }
+  | { kind: 'invalid'; reason: 'absent' | 'malformed' | 'halt-absent' | 'digest-mismatch' };
+
+interface EpisodeStamp {
+  deadlineMs: number;
+  haltDigest: string;
+}
+
+/**
+ * Stamp the current HALT as episode-caused. The digest prevents a stamp from
+ * being attached to a later, unrelated halt after an operator clears by hand.
+ */
+export async function writeEpisodeStamp(
+  projectRoot: string,
+  deadlineMs: number,
+): Promise<EpisodeStampWriteResult> {
+  const stampPath = join(projectRoot, HALT_EPISODE_MARKER);
+  const tempPath = `${stampPath}.tmp`;
+
+  try {
+    const haltBody = await readFile(join(projectRoot, HALT_MARKER), 'utf8');
+    const stamp: EpisodeStamp = {
+      deadlineMs,
+      haltDigest: haltDigest(haltBody),
+    };
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(tempPath, JSON.stringify(stamp), 'utf8');
+    await rename(tempPath, stampPath);
+    return { status: 'written' };
+  } catch (error) {
+    await unlink(tempPath).catch(() => {});
+    return { status: 'failed', reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** Read an episode stamp without allowing corrupt worktree state to escape. */
+export async function readEpisodeStamp(projectRoot: string): Promise<EpisodeStampReadResult> {
+  let contents: string;
+  try {
+    contents = await readFile(join(projectRoot, HALT_EPISODE_MARKER), 'utf8');
+  } catch (error) {
+    const errno = error as NodeJS.ErrnoException;
+    return errno.code === 'ENOENT'
+      ? { kind: 'invalid', reason: 'absent' }
+      : { kind: 'invalid', reason: 'malformed' };
+  }
+
+  let stamp: unknown;
+  try {
+    stamp = JSON.parse(contents);
+  } catch {
+    return { kind: 'invalid', reason: 'malformed' };
+  }
+  if (!isEpisodeStamp(stamp)) return { kind: 'invalid', reason: 'malformed' };
+
+  let haltBody: string;
+  try {
+    haltBody = await readFile(join(projectRoot, HALT_MARKER), 'utf8');
+  } catch {
+    return { kind: 'invalid', reason: 'halt-absent' };
+  }
+  return haltDigest(haltBody) === stamp.haltDigest
+    ? { kind: 'valid', deadlineMs: stamp.deadlineMs }
+    : { kind: 'invalid', reason: 'digest-mismatch' };
+}
+
+/** Remove an episode stamp, tolerating an already-cleared sidecar. */
+export async function removeEpisodeStamp(projectRoot: string): Promise<void> {
+  await unlink(join(projectRoot, HALT_EPISODE_MARKER)).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error;
+  });
+}
+
+function haltDigest(body: string): string {
+  return createHash('sha256').update(body).digest('hex');
+}
+
+function isEpisodeStamp(value: unknown): value is EpisodeStamp {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const stamp = value as Partial<EpisodeStamp>;
+  return (
+    typeof stamp.deadlineMs === 'number' &&
+    Number.isFinite(stamp.deadlineMs) &&
+    typeof stamp.haltDigest === 'string' &&
+    /^[a-f0-9]{64}$/.test(stamp.haltDigest)
+  );
+}
+
 /**
  * Write `.pipeline/HALT` under `projectRoot` with `body` as its contents,
  * creating `.pipeline/` if needed. Best-effort: mkdir/write failures are
@@ -101,6 +198,7 @@ export async function writeHaltMarker(
     await unlink(haltClassPath).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error;
     });
+    await removeEpisodeStamp(projectRoot);
     await writeFile(markerPath, body, 'utf-8');
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
