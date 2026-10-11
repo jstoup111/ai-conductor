@@ -12,7 +12,7 @@ import { createOperationalLogger } from '../../src/engine/operational-log.js';
 
 describe('operational logger', () => {
   it('persists operational occurrences without rendering them and enables log projection', () => {
-    expect((EVENT_SINKS as Record<string, unknown>).operational_log).toEqual({
+    expect(EVENT_SINKS.operational_log).toEqual({
       render: false,
       persist: true,
       audit: false,
