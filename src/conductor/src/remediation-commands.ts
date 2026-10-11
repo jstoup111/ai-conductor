@@ -41,13 +41,17 @@ export function remediationArgv(command: RemediationCommand): string[] {
   return args;
 }
 
-function shellQuote(token: string): string {
-  return /^[A-Za-z0-9_./:-]+$/.test(token)
+function shellQuote(token: string, force = false): string {
+  return !force && /^[A-Za-z0-9_./:-]+$/.test(token)
     ? token
     : `"${token.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 /** Formats an operator-facing remediation command from its tokenized form. */
 export function formatRemediationCommand(command: RemediationCommand): string {
-  return ['ai-conductor', ...remediationArgv(command)].map(shellQuote).join(' ');
+  const args = remediationArgv(command);
+  return [
+    'ai-conductor',
+    ...args.map((arg, index) => shellQuote(arg, Boolean(command.feature) && index === args.length - 1)),
+  ].join(' ');
 }

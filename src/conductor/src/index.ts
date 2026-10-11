@@ -112,6 +112,8 @@ import {
 import {
   formatOrphanedStateResetHint,
   formatOrphanedWorktreeMissing,
+  formatRecoveryDeclinedInstructions,
+  formatShipEvidenceGapInstructions,
 } from './remediation-guidance.js';
 import { ensureClaudeSettings } from './engine/preflight.js';
 import { spawnAutoUpdateCheck } from './engine/auto-update-check.js';
@@ -1501,11 +1503,7 @@ async function dispatchCliCommand(): Promise<void> {
       return;
     }
     console.error(formatGapReport(targetFeatureDesc, targetWorktree, verification));
-    console.error(
-      '  To roll back feature_status and resume at the first failing step, run:\n' +
-        `    ai-conductor ${targetFeatureDesc ? `"${targetFeatureDesc}"` : ''}\n` +
-        '  …and answer "y" at the recovery prompt. To inspect raw state: ai-conductor --status\n',
-    );
+    console.error(formatShipEvidenceGapInstructions(targetFeatureDesc));
     process.exit(1);
   }
 
@@ -1542,10 +1540,7 @@ async function dispatchCliCommand(): Promise<void> {
           'Roll back feature_status and resume at the first failing step? [Y/n/q]: ',
         );
         if (answer === 'n' || answer === 'q') {
-          console.log(
-            '\nNo changes made. To inspect: ai-conductor --status\n' +
-              `  To start over: ai-conductor --fresh ${opts.featureDesc ? `"${opts.featureDesc}"` : ''}\n`,
-          );
+          console.log(formatRecoveryDeclinedInstructions(opts.featureDesc));
           return;
         }
         // Default Y → roll back. Drop feature_status and flip the failing

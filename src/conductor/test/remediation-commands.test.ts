@@ -1,4 +1,5 @@
 // Covers: task:1
+// Covers: task:4
 import { describe, expect, it } from 'vitest';
 import { detectInline, parseArgs } from '../src/cli.js';
 import {
@@ -54,6 +55,7 @@ describe('remediation commands', () => {
   it.each([
     [undefined, 'ai-conductor inline', 'ai-conductor inline --fresh'],
     ['', 'ai-conductor inline', 'ai-conductor inline --fresh'],
+    ['shipx', 'ai-conductor inline "shipx"', 'ai-conductor inline --fresh "shipx"'],
     ['add login', 'ai-conductor inline "add login"', 'ai-conductor inline --fresh "add login"'],
   ])('formats run and fresh commands without empty feature tokens for %j', (feature, run, fresh) => {
     expect(formatRemediationCommand({ kind: 'inline-run', feature })).toBe(run);
