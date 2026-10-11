@@ -19,7 +19,7 @@ export const BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS = Object.freeze({
   maxEvidenceLocations: 64,
   maxReferenceBytes: 256,
   maxTextBytes: 8_000,
-  maxSerializedBytes: 128 * 1024,
+  maxSerializedBytes: 256 * 1024,
 });
 
 export interface BuildReviewAdjudicationCurrentSource extends BuildReviewRawSourceProjection {
