@@ -70,7 +70,7 @@ import {
 } from './engineer/intake/dependency-claim.js';
 import type { Envelope } from './engineer/intake/port.js';
 import { createBlockerResolver } from './blocker-resolver.js';
-import { ghIssueLabelReader } from './backlog-priority.js';
+import { createOrderingSource } from './ordering-source.js';
 import { createDeliveryGuardedQueue, getIssueState } from './engineer/intake/delivery-guard.js';
 import { INTAKE_CLAIM_LEASE_WAIT_MS, withIntakeClaimLease } from './engineer/intake/claim-lease.js';
 import { reconcileStrandedClaims } from './engineer/intake/reconcile-strands.js';
@@ -1566,16 +1566,20 @@ export async function dispatchEngineer(
         // Fresh resolver per claim call — createBlockerResolver()'s memo is scoped
         // to a single walk, so reusing one across calls would leak stale verdicts
         // (see daemon-backlog.ts:210-221 for the same rule on the daemon side).
-        const resolver = createBlockerResolver({ run: (args) => gh(args, { cwd: process.cwd() }) });
+        const source = createOrderingSource({
+          run: (args) => gh(args, { cwd: process.cwd() }),
+          cwd: process.cwd(),
+          events: opts.events,
+        });
+        const resolver = createBlockerResolver({ source });
         // Claim-time label read — no cache: a relabel between claims must be
         // honored on the very next claim (TR-1 happy 3). A throwing reader is
         // handled inside claimUnblocked (falls back to drain order, warns once
         // via `log`) — never caught here.
-        const labelReader = ghIssueLabelReader((args) => gh(args, { cwd: process.cwd() }));
         const outcome = await claimUnblocked({
           queue: guardedQueue as unknown as DependencyClaimQueue,
           resolveDependency: (sourceRef) => resolver.resolve(sourceRef ?? ''),
-          resolveBands: (refs) => resolveClaimBands(labelReader, refs),
+          resolveBands: (refs) => resolveClaimBands(source, refs),
           log: (...args: unknown[]) => printErr(args.map((a) => String(a)).join(' ')),
         });
 

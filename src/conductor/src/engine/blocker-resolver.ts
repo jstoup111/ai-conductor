@@ -5,8 +5,7 @@
 // consumer (daemon gate + intake) depends on this resolver's verdict.
 
 import { parseSourceRef } from './engineer/issue-ref.js';
-import type { GhRunner } from './tracker-client.js';
-import { runTrackerRepositoryRead } from './tracker-client.js';
+import type { OrderingSource } from './ordering-source.js';
 
 /** A reference to a single GitHub issue, as returned by `parseSourceRef`. */
 export interface IssueRef {
@@ -21,21 +20,8 @@ export type BlockerVerdict =
   | { kind: 'indeterminate'; detail: string }
   | { kind: 'cycle'; members: IssueRef[] };
 
-/**
- * Injected shell-out to `gh`. Uses the canonical `GhRunner` seam from
- * `tracker-client.ts` — every real production runner requires a `cwd`, so
- * this resolver forwards one on every invocation (see `BlockerResolverDeps.cwd`).
- */
-export type BlockerRunner = GhRunner;
-
 export interface BlockerResolverDeps {
-  run: BlockerRunner;
-  /**
-   * Working directory forwarded to `run` on every `gh` invocation. Optional
-   * for backward compatibility with callers that construct `run` as a
-   * closure already bound to a cwd; defaults to `process.cwd()`.
-   */
-  cwd?: string;
+  source: OrderingSource;
 }
 
 export interface BlockerResolver {
@@ -151,54 +137,28 @@ export function createBlockerResolver(deps: BlockerResolverDeps): BlockerResolve
 }
 
 async function resolveUncached(sourceRef: string, deps: BlockerResolverDeps): Promise<BlockerVerdict> {
-  const parsed = parseSourceRef(sourceRef);
-  if (!parsed) {
-    return { kind: 'indeterminate', detail: `unparseable sourceRef: ${sourceRef}` };
+  const outcome = await deps.source.readBlockers(sourceRef);
+
+  if (Array.isArray(outcome)) {
+    if (outcome.length === 0) {
+      return { kind: 'unblocked' };
+    }
+    return {
+      kind: 'blocked',
+      blockers: outcome.flatMap((blocker) => {
+        const parsed = parseSourceRef(blocker);
+        return parsed ? [{ repo: parsed.repo, number: parsed.number }] : [];
+      }),
+    };
+  }
+  if (typeof outcome === 'object') {
+    return { kind: 'indeterminate', detail: outcome.indeterminate };
   }
 
-  const { repo, number } = parsed;
-
-  let stdout: string;
-  try {
-    stdout = await runTrackerRepositoryRead(deps.run, deps.cwd ?? process.cwd(), 'issue.read', `${repo}`, { kind: 'issue', number: Number(number) }, ['api', `repos/${repo}/issues/${number}/dependencies/blocked_by`]);
-  } catch (err: unknown) {
-    // Network/API failure — isolated to this ref; never throw into the scan loop.
-    const detail = err instanceof Error ? err.message : String(err);
-    return { kind: 'indeterminate', detail };
+  switch (outcome) {
+    case 'unavailable':
+      return { kind: 'indeterminate', detail: `no ordering adapter for jira reference ${sourceRef}` };
+    case 'not-found':
+      return { kind: 'indeterminate', detail: `issue not found: ${sourceRef}` };
   }
-
-  let blockedBy: unknown;
-  try {
-    blockedBy = JSON.parse(stdout);
-  } catch (err: unknown) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return { kind: 'indeterminate', detail: `unparseable blocked_by response: ${detail}` };
-  }
-
-  if (!Array.isArray(blockedBy) || blockedBy.length === 0) {
-    return { kind: 'unblocked' };
-  }
-
-  const openBlockers: IssueRef[] = [];
-  for (const item of blockedBy) {
-    const entry = item as { number?: unknown; repository_url?: unknown; state?: unknown };
-    if (entry.state === 'closed') continue;
-
-    const repositoryUrl = typeof entry.repository_url === 'string' ? entry.repository_url : '';
-    const match = repositoryUrl.match(/repos\/([^/]+\/[^/]+)$/);
-    const repo = match ? match[1] : repositoryUrl;
-    const number = String(entry.number ?? '');
-
-    openBlockers.push({ repo, number });
-  }
-
-  if (openBlockers.length > 0) {
-    return { kind: 'blocked', blockers: openBlockers };
-  }
-
-  // Every blocker in blocked_by is closed — regardless of close reason
-  // (completed, not_planned, etc.) — so this issue is unblocked. A
-  // reopened blocker is reflected as `state: 'open'` in the API response
-  // and is caught by the openBlockers branch above.
-  return { kind: 'unblocked' };
 }

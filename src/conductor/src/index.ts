@@ -237,6 +237,7 @@ import {
 } from './engine/halt-issues/halt-issues-cli.js';
 import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
+import { createOrderingSource } from './engine/ordering-source.js';
 import { runOverlapScan, renderReport as renderOverlapReport } from './engine/overlap-scan.js';
 import { makeProductionGh } from './engine/pr-labels.js';
 import { buildDaemonExitWitnessCommand, hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
@@ -730,7 +731,7 @@ export function detectOverlapScanCommand(argv: string[]): OverlapScanDispatch | 
 
 /**
  * Run the overlap scan with real production runners: `makeGitRunner(cwd)` for
- * git, and `createBlockerResolver({ run: (args) => gh(args, { cwd }) })` for
+ * git, and `createBlockerResolver({ source: createOrderingSource(...) })` for
  * the blocker sweep — the exact construction `engineer-cli.ts` uses for its
  * own per-call blocker resolver. Prints `renderReport` and ALWAYS exits 0:
  * this is an advisory primitive that must never block authoring, even when
@@ -745,7 +746,9 @@ export async function overlapScanCommand(
 
   const git = makeGitRunner(cwd);
   const gh = makeProductionGh();
-  const resolver = createBlockerResolver({ run: (args) => gh(args, { cwd }) });
+  const resolver = createBlockerResolver({
+    source: createOrderingSource({ run: (args) => gh(args, { cwd }), cwd }),
+  });
 
   const localBase = cmd.base ?? (await originDefaultBranch(git)) ?? 'main';
 

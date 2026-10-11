@@ -44,6 +44,7 @@ import { extractPrdFrIds } from '../prd-fr-ids.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { runOverlapScan, type RunOverlapScanArgs, type OverlapReport } from '../overlap-scan.js';
 import { createBlockerResolver } from '../blocker-resolver.js';
+import { createOrderingSource } from '../ordering-source.js';
 import type { GhRunner } from '../owner-gate/identity.js';
 import { deriveDefaultBranch } from './spec-branch.js';
 import type { AuthoringGuard } from './authoring-guard.js';
@@ -1814,7 +1815,10 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
   // a missing `gh` runner (no network/auth injected) just skips the check.
   if (gh) {
     const resolver = createBlockerResolver({
-      run: (ghArgs: string[]) => gh(ghArgs, { cwd: worktreePath }),
+      source: createOrderingSource({
+        run: (ghArgs: string[]) => gh(ghArgs, { cwd: worktreePath }),
+        cwd: worktreePath,
+      }),
     });
     const report = await advisoryDuplicateClaimWarn({
       candidateFiles: Array.from(ideaFiles),

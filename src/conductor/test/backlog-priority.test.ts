@@ -1,16 +1,17 @@
+// Covers: task:4
 import { describe, it, expect } from 'vitest';
 import {
   parsePriorityLabels,
   parseSizeLabel,
   createPriorityResolver,
   orderBacklog,
-  ghIssueLabelReader,
   PRIORITY_BAND_RANK,
   type PriorityResolution,
   type PriorityBand,
 } from '../src/engine/backlog-priority.js';
 import type { BacklogItem } from '../src/engine/daemon.js';
 import type { GhRunner } from '../src/engine/tracker-client.js';
+import { createOrderingSource, type OrderingSource } from '../src/engine/ordering-source.js';
 
 /**
  * Narrows a PriorityResolution to its 'banded' variant, asserting via `expect`
@@ -22,6 +23,25 @@ function assertBanded(
   result: PriorityResolution
 ): asserts result is Extract<PriorityResolution, { mode: 'banded' }> {
   expect(result.mode).toBe('banded');
+}
+
+type LegacyReader = (refs: string[]) => Promise<Map<string, string[] | 'not-found'>>;
+
+function orderingSourceFor(reader: LegacyReader): OrderingSource {
+  return {
+    async readFacts(refs) {
+      const labelsByRef = await reader(refs);
+      return new Map([...labelsByRef].map(([ref, labels]) => [
+        ref,
+        labels === 'not-found'
+          ? 'not-found'
+          : { priority: parsePriorityLabels(labels), size: parseSizeLabel(labels) },
+      ]));
+    },
+    async readBlockers() {
+      return [];
+    },
+  };
 }
 
 describe('PRIORITY_BAND_RANK — exported band ranking', () => {
@@ -251,6 +271,89 @@ describe('parseSizeLabel — extract size from issue labels', () => {
 });
 
 describe('createPriorityResolver — stateful resolver with caching', () => {
+  it('keeps an unavailable Jira reference unlabeled without degrading GitHub priority ordering', async () => {
+    let reads = 0;
+    const source: OrderingSource = {
+      async readFacts(refs: string[]) {
+        reads += 1;
+        return new Map(refs.map((ref) => [
+          ref,
+          ref === 'PROJ-123'
+            ? 'unavailable'
+            : { priority: 'high' as const, size: undefined },
+        ]));
+      },
+      async readBlockers() {
+        return [];
+      },
+    };
+    const warnings: string[] = [];
+    const resolver = createPriorityResolver(source, (warning) => warnings.push(warning));
+
+    const result = await resolver.resolve([
+      { slug: 'jira', sourceRef: 'PROJ-123' },
+      { slug: 'github', sourceRef: 'owner/repo#1' },
+    ], { refresh: true });
+
+    expect(result).toEqual({
+      mode: 'banded',
+      bands: new Map([['PROJ-123', 'unlabeled'], ['owner/repo#1', 'high']]),
+    });
+    await resolver.resolve([
+      { slug: 'jira', sourceRef: 'PROJ-123' },
+      { slug: 'github', sourceRef: 'owner/repo#1' },
+    ], { refresh: false });
+    expect(reads).toBe(1);
+    expect(warnings).toEqual([]);
+  });
+
+  it('treats a thrown GitHub fact read in a Jira-mixed pass as an outage', async () => {
+    const source: OrderingSource = {
+      async readFacts(refs: string[]) {
+        if (refs.includes('owner/repo#1')) throw new Error('GitHub unavailable');
+        return new Map(refs.map((ref) => [ref, 'unavailable']));
+      },
+      async readBlockers() {
+        return [];
+      },
+    };
+    const warnings: string[] = [];
+    const result = await createPriorityResolver(source, (warning) => warnings.push(warning)).resolve([
+      { slug: 'jira', sourceRef: 'PROJ-123' },
+      { slug: 'github', sourceRef: 'owner/repo#1' },
+    ], { refresh: true });
+
+    expect({ result, warnings }).toEqual({
+      result: { mode: 'fallback' },
+      warnings: ['Priority resolution outage (reader failed): GitHub unavailable'],
+    });
+  });
+
+  it('does not let ordering-fact size alter backlog priority order', async () => {
+    const items: BacklogItem[] = [
+      { slug: 'low', sourceRef: 'owner/repo#1' },
+      { slug: 'high', sourceRef: 'owner/repo#2' },
+    ];
+    const orderForSizes = async (size1: 'S' | 'L', size2: 'S' | 'L') => {
+      const source = {
+        async readFacts() {
+          return new Map([
+            ['owner/repo#1', { priority: 'low' as const, size: size1 }],
+            ['owner/repo#2', { priority: 'high' as const, size: size2 }],
+          ]);
+        },
+        async readBlockers() {
+          return [];
+        },
+      };
+      const resolution = await createPriorityResolver(source, () => {}).resolve(items, { refresh: true });
+      return orderBacklog(items, resolution).map(({ slug }) => slug);
+    };
+
+    await expect(Promise.all([orderForSizes('S', 'L'), orderForSizes('L', 'S')]))
+      .resolves.toEqual([['high', 'low'], ['high', 'low']]);
+  });
+
   describe('refresh fetch — fetch all linked refs, update cache', () => {
     it('resolve with refresh: true fetches all refs via reader', async () => {
       const callLog: string[] = [];
@@ -268,7 +371,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return result;
       };
 
-      const resolver = createPriorityResolver(reader, console.log);
+      const resolver = createPriorityResolver(orderingSourceFor(reader), console.log);
 
       const items: BacklogItem[] = [
         { slug: 'feature-1', sourceRef: 'owner/repo#1' },
@@ -290,7 +393,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return new Map<string, string[]>();
       };
 
-      const resolver = createPriorityResolver(reader, console.log);
+      const resolver = createPriorityResolver(orderingSourceFor(reader), console.log);
 
       const items: BacklogItem[] = [
         { slug: 'feature-1' }, // no sourceRef
@@ -316,7 +419,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
           ref === 'owner/repo#404' ? 'not-found' : ['priority: high'],
         ]));
       };
-      const resolver = createPriorityResolver(reader, () => {});
+      const resolver = createPriorityResolver(orderingSourceFor(reader), () => {});
       const first: BacklogItem[] = [
         { slug: 'known', sourceRef: 'owner/repo#1' },
         { slug: 'missing', sourceRef: 'owner/repo#404' },
@@ -355,7 +458,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return result;
       };
 
-      const resolver = createPriorityResolver(reader, console.log);
+      const resolver = createPriorityResolver(orderingSourceFor(reader), console.log);
 
       const items: BacklogItem[] = [
         { slug: 'feature-1', sourceRef: 'owner/repo#1' },
@@ -393,7 +496,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return result;
       };
 
-      const resolver = createPriorityResolver(reader, console.log);
+      const resolver = createPriorityResolver(orderingSourceFor(reader), console.log);
 
       const items: BacklogItem[] = [
         { slug: 'feature-1', sourceRef: 'owner/repo#1' },
@@ -427,7 +530,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return new Map<string, string[]>();
       };
 
-      const resolver = createPriorityResolver(reader, console.log);
+      const resolver = createPriorityResolver(orderingSourceFor(reader), console.log);
 
       const items: BacklogItem[] = [
         { slug: 'feature-1' }, // no sourceRef
@@ -454,7 +557,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return new Map<string, string[]>();
       };
 
-      const resolver = createPriorityResolver(reader, console.log);
+      const resolver = createPriorityResolver(orderingSourceFor(reader), console.log);
 
       const items: BacklogItem[] = [];
 
@@ -475,7 +578,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return new Map<string, string[]>();
       };
 
-      const resolver = createPriorityResolver(reader, console.log);
+      const resolver = createPriorityResolver(orderingSourceFor(reader), console.log);
 
       const items: BacklogItem[] = [
         { slug: 'garbled-item' }, // sourceRef field missing (upstream garbled the marker)
@@ -503,7 +606,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         if (!available) throw new Error('transport failure');
         return new Map<string, string[] | 'not-found'>(refs.map((ref) => [ref, ['priority: high']]));
       };
-      const resolver = createPriorityResolver(reader, (message) => warnings.push(message));
+      const resolver = createPriorityResolver(orderingSourceFor(reader), (message) => warnings.push(message));
       const items: BacklogItem[] = [{ slug: 'feature-1', sourceRef: 'owner/repo#1' }];
 
       expect((await resolver.resolve(items, { refresh: false })).mode).toBe('fallback');
@@ -542,7 +645,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return result;
       };
 
-      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+      const resolver = createPriorityResolver(orderingSourceFor(reader), (msg: string) => warnLog.push(msg));
 
       const items: BacklogItem[] = [
         { slug: 'feature-1', sourceRef: 'owner/repo#1' },
@@ -584,7 +687,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return result;
       };
 
-      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+      const resolver = createPriorityResolver(orderingSourceFor(reader), (msg: string) => warnLog.push(msg));
 
       const items: BacklogItem[] = [
         { slug: 'feature-1', sourceRef: 'owner/repo#1' }, // empty labels
@@ -621,7 +724,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return result;
       };
 
-      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+      const resolver = createPriorityResolver(orderingSourceFor(reader), (msg: string) => warnLog.push(msg));
 
       const items: BacklogItem[] = [
         { slug: 'feature-1', sourceRef: 'owner/repo#1' }, // closed with priority
@@ -659,7 +762,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return result;
       };
 
-      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+      const resolver = createPriorityResolver(orderingSourceFor(reader), (msg: string) => warnLog.push(msg));
 
       const items: BacklogItem[] = [
         { slug: 'feature-1', sourceRef: 'owner/repo#1' }, // non-priority labels
@@ -688,7 +791,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         throw new Error('transport failure');
       };
 
-      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+      const resolver = createPriorityResolver(orderingSourceFor(reader), (msg: string) => warnLog.push(msg));
 
       const items: BacklogItem[] = [{ slug: 'feature-1', sourceRef: 'owner/repo#1' }];
 
@@ -709,7 +812,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         throw new Error('transport failure');
       };
 
-      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+      const resolver = createPriorityResolver(orderingSourceFor(reader), (msg: string) => warnLog.push(msg));
 
       const items: BacklogItem[] = [{ slug: 'feature-1', sourceRef: 'owner/repo#1' }];
 
@@ -743,7 +846,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return result;
       };
 
-      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+      const resolver = createPriorityResolver(orderingSourceFor(reader), (msg: string) => warnLog.push(msg));
 
       const items: BacklogItem[] = [{ slug: 'feature-1', sourceRef: 'owner/repo#1' }];
 
@@ -779,7 +882,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return result;
       };
 
-      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+      const resolver = createPriorityResolver(orderingSourceFor(reader), (msg: string) => warnLog.push(msg));
 
       const items: BacklogItem[] = [{ slug: 'feature-1', sourceRef: 'owner/repo#1' }];
 
@@ -820,7 +923,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return result;
       };
 
-      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+      const resolver = createPriorityResolver(orderingSourceFor(reader), (msg: string) => warnLog.push(msg));
 
       const items: BacklogItem[] = [
         { slug: 'feature-1', sourceRef: 'owner/repo#1' },
@@ -846,7 +949,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         throw new Error('transport failure');
       };
 
-      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+      const resolver = createPriorityResolver(orderingSourceFor(reader), (msg: string) => warnLog.push(msg));
 
       const items: BacklogItem[] = [
         { slug: 'feature-1', sourceRef: 'owner/repo#1' },
@@ -883,7 +986,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
         return result;
       };
 
-      const resolver = createPriorityResolver(reader, (msg: string) => warnLog.push(msg));
+      const resolver = createPriorityResolver(orderingSourceFor(reader), (msg: string) => warnLog.push(msg));
 
       const items: BacklogItem[] = [{ slug: 'feature-1', sourceRef: 'owner/repo#1' }];
 
@@ -1504,7 +1607,7 @@ describe('orderBacklog — permutation and determinism properties', () => {
   });
 });
 
-describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', () => {
+describe('createOrderingSource — GitHub fact reader via gh REST API', () => {
   describe('test 1: Build gh api command from sourceRef', () => {
     it('parses owner/repo#N and builds correct gh api argv', async () => {
       const callLog: Array<{ args: string[] }> = [];
@@ -1513,8 +1616,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         return { stdout: JSON.stringify({ labels: [{ name: 'priority: high' }] }) };
       };
 
-      const reader = ghIssueLabelReader(runner);
-      await reader(['owner/repo#123']);
+      await createOrderingSource({ run: runner }).readFacts(['owner/repo#123']);
 
       expect(callLog).toHaveLength(1);
       // gh api takes exactly ONE endpoint argument — segments must be joined
@@ -1534,13 +1636,12 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         return { stdout: JSON.stringify({ labels: [{ name: 'priority: high' }] }) };
       };
 
-      const reader = ghIssueLabelReader(runner);
-      const result = await reader(['owner1/repo1#123', 'owner2/repo2#456']);
+      const result = await createOrderingSource({ run: runner }).readFacts(['owner1/repo1#123', 'owner2/repo2#456']);
 
       expect(callLog).toHaveLength(2);
       expect(result.size).toBe(2);
-      expect(result.get('owner1/repo1#123')).toEqual(['priority: high']);
-      expect(result.get('owner2/repo2#456')).toEqual(['priority: medium']);
+      expect(result.get('owner1/repo1#123')).toEqual({ priority: 'high', size: undefined });
+      expect(result.get('owner2/repo2#456')).toEqual({ priority: 'medium', size: undefined });
     });
   });
 
@@ -1558,10 +1659,9 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         };
       };
 
-      const reader = ghIssueLabelReader(runner);
-      const result = await reader(['owner/repo#1']);
+      const result = await createOrderingSource({ run: runner }).readFacts(['owner/repo#1']);
 
-      expect(result.get('owner/repo#1')).toEqual(['priority: high', 'bug', 'feature']);
+      expect(result.get('owner/repo#1')).toEqual({ priority: 'high', size: undefined });
     });
 
     it('handles empty labels array', async () => {
@@ -1569,10 +1669,9 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         return { stdout: JSON.stringify({ labels: [] }) };
       };
 
-      const reader = ghIssueLabelReader(runner);
-      const result = await reader(['owner/repo#1']);
+      const result = await createOrderingSource({ run: runner }).readFacts(['owner/repo#1']);
 
-      expect(result.get('owner/repo#1')).toEqual([]);
+      expect(result.get('owner/repo#1')).toEqual({ priority: undefined, size: undefined });
     });
   });
 
@@ -1584,8 +1683,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         throw err;
       };
 
-      const reader = ghIssueLabelReader(runner);
-      const result = await reader(['owner/repo#999']);
+      const result = await createOrderingSource({ run: runner }).readFacts(['owner/repo#999']);
 
       expect(result.get('owner/repo#999')).toBe('not-found');
     });
@@ -1602,12 +1700,11 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         return { stdout: JSON.stringify({ labels: [{ name: 'priority: high' }] }) };
       };
 
-      const reader = ghIssueLabelReader(runner);
-      const result = await reader(['owner/repo#123', 'owner/repo#999', 'owner/repo#456']);
+      const result = await createOrderingSource({ run: runner }).readFacts(['owner/repo#123', 'owner/repo#999', 'owner/repo#456']);
 
-      expect(result.get('owner/repo#123')).toEqual(['priority: high']);
+      expect(result.get('owner/repo#123')).toEqual({ priority: 'high', size: undefined });
       expect(result.get('owner/repo#999')).toBe('not-found');
-      expect(result.get('owner/repo#456')).toEqual(['priority: high']);
+      expect(result.get('owner/repo#456')).toEqual({ priority: 'high', size: undefined });
     });
   });
 
@@ -1619,11 +1716,10 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         return { stdout: JSON.stringify({ labels: [] }) };
       };
 
-      const reader = ghIssueLabelReader(runner);
-      const result = await reader(['PROJ-123']);
+      const result = await createOrderingSource({ run: runner }).readFacts(['PROJ-123']);
 
       expect(callCount).toBe(0);
-      expect(result.get('PROJ-123')).toBe('not-found');
+      expect(result.get('PROJ-123')).toBe('unavailable');
     });
   });
 
@@ -1633,9 +1729,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         throw new Error('network timeout');
       };
 
-      const reader = ghIssueLabelReader(runner);
-
-      await expect(reader(['owner/repo#1'])).rejects.toThrow('network timeout');
+      await expect(createOrderingSource({ run: runner }).readFacts(['owner/repo#1'])).rejects.toThrow('network timeout');
     });
 
     it('ENOENT error throws', async () => {
@@ -1645,9 +1739,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         throw err;
       };
 
-      const reader = ghIssueLabelReader(runner);
-
-      await expect(reader(['owner/repo#1'])).rejects.toThrow('ENOENT');
+      await expect(createOrderingSource({ run: runner }).readFacts(['owner/repo#1'])).rejects.toThrow('ENOENT');
     });
 
     it('500 error throws', async () => {
@@ -1657,9 +1749,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
         throw err;
       };
 
-      const reader = ghIssueLabelReader(runner);
-
-      await expect(reader(['owner/repo#1'])).rejects.toThrow('HTTP 500');
+      await expect(createOrderingSource({ run: runner }).readFacts(['owner/repo#1'])).rejects.toThrow('HTTP 500');
     });
   });
 });

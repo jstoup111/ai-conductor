@@ -1,3 +1,4 @@
+// Covers: task:5
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Dependency-Ordered Intake and Dispatch" (#229).
 //
@@ -43,7 +44,9 @@ import { tmpdir } from 'os';
 import { discoverBacklog, type BacklogTreeSource } from '../../src/engine/daemon-backlog.js';
 import { scanInheritedState, renderDashboard } from '../../src/engine/daemon-dashboard.js';
 import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daemon-work-source.js';
-import { createBlockerResolver, type BlockerRunner } from '../../src/engine/blocker-resolver.js';
+import { createBlockerResolver } from '../../src/engine/blocker-resolver.js';
+import { createOrderingSource } from '../../src/engine/ordering-source.js';
+import type { GhRunner } from '../../src/engine/tracker-client.js';
 import { dispatchEngineer } from '../../src/engine/engineer-cli.js';
 import { createFileQueue } from '../../src/engine/engineer/intake/queue.js';
 import { createLedger } from '../../src/engine/engineer/intake/ledger.js';
@@ -293,7 +296,7 @@ describe('Flow A — daemon dependency gate across scan cycles', () => {
 // run-loop only ever calls `localWorkSource(deps).discover({refresh})`
 // (daemon-work-source.ts), which on every pass constructs a FRESH resolver
 // via `deps.makeResolver()` (matching production's
-// `createBlockerResolver({run: createGhBlockerRunner()})`) and forwards it
+// `createBlockerResolver({source: createOrderingSource({run})})`) and forwards it
 // into the real `discoverBacklog`. This flow drives that exact seam: a fake
 // `gh` runner stands in for the platform, `createBlockerResolver` is the
 // REAL resolver built from it, and `discover()` is called exactly as the
@@ -306,13 +309,13 @@ describe('Flow A — daemon dependency gate across scan cycles', () => {
 describe('Flow A2 — live path through localWorkSource().discover()', () => {
   /** Fake `gh` runner: models `blocked_by` responses per issue key, mutable across calls. */
   function createFakeGh(initialBlockedBy: Record<string, unknown[]> = {}): {
-    run: BlockerRunner;
+    run: GhRunner;
     setBlockedBy(key: string, entries: unknown[]): void;
     throwFor: Set<string>;
   } {
     const table = new Map<string, unknown[]>(Object.entries(initialBlockedBy));
     const throwFor = new Set<string>();
-    const run: BlockerRunner = async (args: string[]) => {
+    const run: GhRunner = async (args: string[]) => {
       const target = args.find((a) => a.includes('/dependencies/blocked_by'));
       const m = target?.match(/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/dependencies\/blocked_by/);
       const key = m ? `${m[1]}#${m[2]}` : '';
@@ -360,7 +363,7 @@ describe('Flow A2 — live path through localWorkSource().discover()', () => {
     const gh = createFakeGh({ 'acme/app#40': [openBlocker('acme/app', 41)] });
     const logLines: string[] = [];
     const ws = localWorkSource(
-      makeDeps(dir, () => createBlockerResolver({ run: gh.run }), (m) => logLines.push(m)),
+      makeDeps(dir, () => createBlockerResolver({ source: createOrderingSource({ run: gh.run, cwd: dir }) }), (m) => logLines.push(m)),
     );
 
     const items = await ws.discover({ refresh: false });
@@ -378,7 +381,7 @@ describe('Flow A2 — live path through localWorkSource().discover()', () => {
     const gh = createFakeGh({ 'acme/app#42': [openBlocker('acme/app', 43)] });
     const logLines: string[] = [];
     const ws = localWorkSource(
-      makeDeps(dir, () => createBlockerResolver({ run: gh.run }), (m) => logLines.push(m)),
+      makeDeps(dir, () => createBlockerResolver({ source: createOrderingSource({ run: gh.run, cwd: dir }) }), (m) => logLines.push(m)),
     );
 
     const tick1 = await ws.discover({ refresh: false });
@@ -400,7 +403,7 @@ describe('Flow A2 — live path through localWorkSource().discover()', () => {
     gh.throwFor.add('acme/app#44');
     const logLines: string[] = [];
     const ws = localWorkSource(
-      makeDeps(dir, () => createBlockerResolver({ run: gh.run }), (m) => logLines.push(m)),
+      makeDeps(dir, () => createBlockerResolver({ source: createOrderingSource({ run: gh.run, cwd: dir }) }), (m) => logLines.push(m)),
     );
 
     const items = await ws.discover({ refresh: false });
@@ -423,7 +426,7 @@ describe('Flow A2 — live path through localWorkSource().discover()', () => {
     });
     const logLines: string[] = [];
     const ws = localWorkSource(
-      makeDeps(dir, () => createBlockerResolver({ run: gh.run }), (m) => logLines.push(m)),
+      makeDeps(dir, () => createBlockerResolver({ source: createOrderingSource({ run: gh.run, cwd: dir }) }), (m) => logLines.push(m)),
     );
 
     const items = await ws.discover({ refresh: false });

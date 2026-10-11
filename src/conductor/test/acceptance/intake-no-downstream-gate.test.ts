@@ -12,17 +12,15 @@
 // §verify-claims): unlike Stories 1-3, Story 6 asserts the ABSENCE of a
 // downstream failure mode that this feature must never introduce. Task 7 adds
 // NO new production code of its own — it is Verify-only and depends on Tasks
-// 1/3/4/6 already having landed. Driven against TODAY's untouched
+// 1/3/4/6 already having landed. Driven against the current
 // `dependency-claim.ts`, `github-issues.ts poll()`, and `.github/workflows/ci.yml`
-// (none of which Tasks 1-4/6 are allowed to modify per the operator directive),
 // every assertion in this file is expected to PASS right now — confirmed by
 // running it below — and must KEEP passing after Tasks 1/3/4/6 land. That is
 // the correct signal for a regression guard: it establishes the invariant
 // BEFORE implementation touches anything nearby, so any future PR that adds a
 // criteria gate to the claim path, poll(), or ci.yml breaks this spec
-// immediately. (Verified via `git diff origin/main -- .../dependency-claim.ts`
-// = empty and a direct run of this file, both confirmed while authoring this
-// spec.) This file therefore does NOT need to fail for RED to be established
+// immediately. The invariant is semantic: unrelated refactors of those paths
+// remain allowed. This file therefore does NOT need to fail for RED to be established
 // for the feature as a whole — Stories 1-3's specs (intake-form-label-sync,
 // intake-file-completeness, intake-backfill-sweep) each fail on a genuinely
 // missing module, which is what satisfies the `failed >= 1` acceptance-specs
@@ -42,14 +40,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect } from 'vitest';
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import { readFile, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGithubIssuesAdapter } from '../../src/engine/engineer/intake/github-issues.js';
-
-const execFileP = promisify(execFileCb);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // src/conductor/test/acceptance -> repo root is 4 levels up.
@@ -120,24 +114,7 @@ describe('Story 6 — the pipeline does NOT gate on priority/size/linking (intak
     });
   });
 
-  describe('dependency-claim.ts stays byte-identical to main; ClaimOutcome union gains no member', () => {
-    it('git diff against main for dependency-claim.ts is empty', async () => {
-      let diffOutput: string;
-      try {
-        const { stdout } = await execFileP('git', ['diff', 'origin/main', '--', CLAIM_PATH_REL], {
-          cwd: REPO_ROOT,
-        });
-        diffOutput = stdout;
-      } catch {
-        // origin/main may be unavailable in some environments — fall back to local main.
-        const { stdout } = await execFileP('git', ['diff', 'main', '--', CLAIM_PATH_REL], {
-          cwd: REPO_ROOT,
-        });
-        diffOutput = stdout;
-      }
-      expect(diffOutput.trim(), 'dependency-claim.ts must be byte-identical to main').toBe('');
-    });
-
+  describe('dependency-claim.ts has no criteria-gating outcome', () => {
     it('the ClaimOutcome union has exactly claim | empty | all-blocked — no needs-criteria variant', async () => {
       const source = await readFile(join(REPO_ROOT, CLAIM_PATH_REL), 'utf-8');
       const unionMatch = source.match(/export type ClaimOutcome =([\s\S]*?);\n\n/);

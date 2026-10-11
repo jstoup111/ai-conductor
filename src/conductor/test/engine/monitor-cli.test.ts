@@ -297,6 +297,38 @@ describe('Task 20 — monitor pre-boot command', () => {
     expect(startEventSpine).toHaveBeenCalledWith('/projects/operator');
   });
 
+  it('uses the ordering source for the default resolver and reports an unavailable tracker backend on the operator spine', async () => {
+    const emit = vi.fn(async () => {});
+    const run = vi.fn(async (deps: { deriveMembership: () => Promise<readonly ProjectHalt[]> }) => {
+      await expect(deps.deriveMembership()).resolves.toMatchObject([{
+        slug: 'blocked-feature',
+        band: 'unlabeled',
+        orderingBasis: 'priority-band',
+      }]);
+      return { active: false };
+    });
+
+    await dispatchMonitorCommand({ kind: 'run' }, '/projects/operator', {
+      resolveProvider: async () => ({ provider: 'codex' }),
+      deriveQueueMembership: async () => ({
+        code: 0,
+        halts: [{ ...halt(), sourceRef: 'PROJ-7' }],
+      }),
+      runGuidedMonitorQueue: run as never,
+      startEventSpine: (() => ({ events: { emit }, stop: vi.fn() })) as never,
+      reconcileHaltIssues: async () => cleanReconciliation(),
+      createInterrupt: () => ({ untilStop: new Promise<void>(() => {}), dispose: vi.fn() }),
+    });
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith({
+      type: 'tracker_backend_unavailable',
+      project: 'PROJ-7',
+      backend: 'jira',
+      reason: 'no-adapter',
+    });
+  });
+
   it('reads durable deferrals on the composed pass and keeps them behind unseen work', async () => {
     const deferred = { ...halt(), slug: 'deferred' };
     const unseen = { ...halt(), slug: 'unseen' };

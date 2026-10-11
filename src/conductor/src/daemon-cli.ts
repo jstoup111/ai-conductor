@@ -168,8 +168,7 @@ import {
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
 import { buildWorkOrder, type WorkOrder, type WorkOrderGitRunner } from './engine/work-order.js';
-import { createBlockerResolver } from './engine/blocker-resolver.js';
-import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
+import { createDaemonOrderingReaders } from './engine/daemon-ordering-readers.js';
 import { cleanupHaltPresentation, parseIssueRef, resolveSpecPrUrl } from './engine/pr-labels.js';
 import { createStaleEngineChecker } from './engine/engine-identity.js';
 import { initStaleEngineState } from './engine/stale-engine-init.js';
@@ -244,7 +243,6 @@ import { isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import { enrollWatch, sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
-import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
 import {
   readRestartPending,
@@ -2055,12 +2053,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   });
   const haltPrGit = makeFinishPublicationGit();
 
-  // Task 13: Construct ONE priority resolver per daemon run (process-local state,
-  // never persisted to disk). The resolver backs the REAL gh CLI runner so cross-repo
-  // issue refs are fetched from GitHub (ghIssueLabelReader wraps the runner in
-  // parseIssueRef → gh argv → JSON label extraction). Passed to localWorkSource for
-  // post-gate ordering and to the dashboard for fallback-mode display.
-  const priorityResolver = createPriorityResolver(ghIssueLabelReader(ownerGh, projectRoot), log);
+  // Construct one shared ordering source per daemon run. Its priority cache is
+  // process-local, while each discover pass receives a fresh blocker resolver.
+  const { priorityResolver, makeResolver } = createDaemonOrderingReaders({
+    run: ownerGh,
+    cwd: projectRoot,
+    events,
+    log,
+  });
 
   // Task 12 (adr-2026-07-03-gated-snapshot-status-read-model): the daemon
   // directory backing `.daemon/gated.json` — every discovery pass rewrites
@@ -2181,12 +2181,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       readMergeTime: (slug, baseRef) =>
         firstAppearanceTime(ownerGit, baseRef, `.docs/plans/${slug}.md`),
       cutover: config?.owner_gate_cutover ?? null,
-      // Dependency gate (rem-fr4-2): fresh BlockerResolver per discover() pass
-      // — see LocalWorkSourceDeps.makeResolver doc — so the per-pass memo in
-      // createBlockerResolver() never leaks stale verdicts across polls. The
-      // real `gh` binary backs the runner in production, the only production
-      // caller of createGhBlockerRunner().
-      makeResolver: () => createBlockerResolver({ run: createGhBlockerRunner(), cwd: projectRoot }),
+      // The shared reader factory creates a fresh blocker resolver per pass,
+      // so its per-pass memo never leaks stale verdicts across polls.
+      makeResolver,
       // Priority resolution (Task 13): post-gate ordering by issue priority bands.
       // The resolver is constructed once per daemon run with process-local caching
       // (no disk persistence). Passed to discover() for ordering and available to

@@ -1,7 +1,8 @@
 import { loadMergedConfig } from './config.js';
 import type { EffortLevel, HarnessConfig } from '../types/config.js';
 import { resolveGuidedSessionSelection, type GuidedSessionSelection } from './monitor/selection.js';
-import { createPriorityResolver, ghIssueLabelReader } from './backlog-priority.js';
+import { createPriorityResolver } from './backlog-priority.js';
+import { createOrderingSource } from './ordering-source.js';
 import { makeProductionGh } from './tracker-client.js';
 import { startOperatorEventSpine } from './event-persister.js';
 import { dispatchHaltIssuesSweep } from './halt-issues/halt-issues-cli.js';
@@ -129,7 +130,7 @@ export async function dispatchMonitorCommand(
   const interrupt = (deps.createInterrupt ?? createInterruptSignal)();
   const spine = (deps.startEventSpine ?? startOperatorEventSpine)(projectRoot);
   const priorityResolver = deps.priorityResolver ?? createPriorityResolver(
-    ghIssueLabelReader(makeProductionGh(), projectRoot),
+    createOrderingSource({ run: makeProductionGh(), cwd: projectRoot, events: spine.events }),
     print,
   );
   const readStoredDeferrals = deps.readDeferrals ?? readDeferrals;
