@@ -62,6 +62,87 @@ describe('child-routed conduct state', () => {
     await expect(readFile(join(root, '.pipeline', 'conduct-state.json'), 'utf8')).rejects.toThrow();
   });
 
+  it('records a feature-wide step after the region when the expectation is the child cursor', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conduct-state-overlay-'));
+    roots.push(root);
+    const child = parseChildId(2)!;
+    const flatPath = join(root, '.pipeline', 'conduct-state.json');
+    await writeState(flatPath, { coverage_binding: 'done', last_step: 'coverage_binding' });
+    const state = createRoutedConductStateStore(root, child);
+    await state.applyBatch({
+      name: 'complete child review',
+      mutations: [
+        { field: 'build_review', expected: undefined, next: 'done', intent: 'complete child review' },
+        { field: 'last_step', expected: undefined, next: 'build_review', intent: 'record child cursor' },
+      ],
+    });
+
+    await expect(state.applyBatch({
+      name: 'save step status',
+      mutations: [
+        { field: 'manual_test', expected: undefined, next: 'done', intent: 'save manual_test step status' },
+        { field: 'last_step', expected: 'build_review', next: 'manual_test', intent: 'record last completed step' },
+      ],
+    })).resolves.toMatchObject({ kind: 'applied' });
+
+    await expect(readFile(flatPath, 'utf8')).resolves.toContain('"last_step": "manual_test"');
+  });
+
+  it('records a region step after a feature-wide step when the expectation is the flat cursor', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conduct-state-overlay-'));
+    roots.push(root);
+    const child = parseChildId(2)!;
+    await writeState(join(root, '.pipeline', 'conduct-state.json'), { manual_test: 'done', last_step: 'rebase' });
+    const state = createRoutedConductStateStore(root, child);
+    await state.applyBatch({
+      name: 'complete child review',
+      mutations: [
+        { field: 'build_review', expected: undefined, next: 'done', intent: 'complete child review' },
+        { field: 'last_step', expected: undefined, next: 'build_review', intent: 'record child cursor' },
+      ],
+    });
+
+    await expect(state.applyBatch({
+      name: 'save step status',
+      mutations: [
+        { field: 'build', expected: undefined, next: 'done', intent: 'save build step status' },
+        { field: 'last_step', expected: 'rebase', next: 'build', intent: 'record last completed step' },
+      ],
+    })).resolves.toMatchObject({ kind: 'applied' });
+
+    await expect(readConductStateOverlay(root, child)).resolves.toMatchObject({
+      ok: true,
+      value: { build: 'done', last_step: 'build' },
+    });
+  });
+
+  it('still refuses a cursor expectation that matches neither document', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conduct-state-overlay-'));
+    roots.push(root);
+    const child = parseChildId(2)!;
+    const flatPath = join(root, '.pipeline', 'conduct-state.json');
+    await writeState(flatPath, { last_step: 'coverage_binding' });
+    const state = createRoutedConductStateStore(root, child);
+    await state.applyBatch({
+      name: 'complete child review',
+      mutations: [
+        { field: 'build_review', expected: undefined, next: 'done', intent: 'complete child review' },
+        { field: 'last_step', expected: undefined, next: 'build_review', intent: 'record child cursor' },
+      ],
+    });
+
+    const result = await state.applyBatch({
+      name: 'save step status',
+      mutations: [
+        { field: 'manual_test', expected: undefined, next: 'done', intent: 'save manual_test step status' },
+        { field: 'last_step', expected: 'prd_audit', next: 'manual_test', intent: 'record last completed step' },
+      ],
+    });
+
+    expect(result.kind).not.toBe('applied');
+    await expect(readFile(flatPath, 'utf8')).resolves.toContain('"last_step": "coverage_binding"');
+  });
+
   it('does not let a flat completed build skip the active child build in Conductor selection', async () => {
     const root = await mkdtemp(join(tmpdir(), 'conduct-state-overlay-'));
     roots.push(root);

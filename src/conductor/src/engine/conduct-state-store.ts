@@ -80,17 +80,43 @@ export function createRoutedConductStateStore(
   if (child === undefined) return flat;
   const regional = createFilesystemConductStateStore(pipelinePathFor(root, 'conduct-state.json', child));
   const storeFor = (field: string) => isRegionStep(field) ? regional : flat;
+  // `last_step` lives in both documents once a region has run: the child holds
+  // the region cursor and the flat document holds the feature-wide one. The
+  // conductor's in-memory cursor is whichever it wrote last, so a save that
+  // crosses the region boundary carries the other document's value as its
+  // expectation. Accept an expectation that matches either document's cursor
+  // and compare-and-swap against the document actually written (#3177).
+  async function alignCursor(
+    mutations: StateMutation<ConductState>[],
+    target: typeof flat,
+    other: typeof flat,
+  ): Promise<StateMutation<ConductState>[]> {
+    const index = mutations.findIndex((mutation) => mutation.field === 'last_step');
+    if (index === -1) return mutations;
+    const cursor = mutations[index]!;
+    const current = await target.read();
+    if (!current.ok || Object.is(current.value.last_step, cursor.expected)) return mutations;
+    const crossed = await other.read();
+    if (!crossed.ok || !Object.is(crossed.value.last_step, cursor.expected)) return mutations;
+    const aligned = [...mutations];
+    aligned[index] = { ...cursor, expected: current.value.last_step } as StateMutation<ConductState>;
+    return aligned;
+  }
   return {
     read: () => readConductStateOverlay(root, child),
-    apply: (mutation) => storeFor(mutation.field).apply(mutation),
+    async apply(mutation) {
+      if (mutation.field !== 'last_step') return storeFor(mutation.field).apply(mutation);
+      const [aligned] = await alignCursor([mutation], flat, regional);
+      return flat.apply(aligned!);
+    },
     async applyBatch(batch) {
       const hasRegionMutation = batch.mutations.some((mutation) => isRegionStep(mutation.field));
-      const regionMutations = batch.mutations.filter(
+      const regionMutations = await alignCursor(batch.mutations.filter(
         (mutation) => isRegionStep(mutation.field) || (hasRegionMutation && mutation.field === 'last_step'),
-      );
-      const flatMutations = batch.mutations.filter(
+      ), regional, flat);
+      const flatMutations = await alignCursor(batch.mutations.filter(
         (mutation) => !isRegionStep(mutation.field) && !(hasRegionMutation && mutation.field === 'last_step'),
-      );
+      ), flat, regional);
       if (regionMutations.length > 0) {
         const result = await regional.applyBatch({ name: batch.name, mutations: regionMutations });
         if (result.kind !== 'applied' && result.kind !== 'idempotent') return result;
