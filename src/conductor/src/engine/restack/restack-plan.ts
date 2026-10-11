@@ -170,16 +170,17 @@ export async function planRestackRanges(
   const activeTip = activeExists ? await resolveTip(git, options.active.branchRef) : undefined;
   if (activeExists && activeTip === undefined) return { kind: 'unavailable', detail: `cannot resolve active child ${options.active.child}` };
 
-  const originating = options.cause === 'feature-repair'
-    ? closed.filter((entry) => entry.branchTip !== entry.closureTip).map((entry) => entry.child)
-    : [];
-
+  // A repair originates only at closed children carrying appended work; a
+  // branch extended by halt records alone is a moved child whose records stay
+  // out of every replay range, exactly as in a base refresh.
+  const originating: ChildId[] = [];
   for (const entry of closed) {
-    if (originating.includes(entry.child)) continue;
     if (entry.branchTip === entry.closureTip) continue;
     const haltOnly = await hasOnlyHaltRecordsPastClosure(git, entry.closureTip, entry.branchTip, options.slug);
     if (haltOnly === undefined) return { kind: 'unavailable', detail: `cannot inspect commits after closed child ${entry.child}` };
-    if (!haltOnly) return { kind: 'repair-pending', child: entry.child };
+    if (haltOnly) continue;
+    if (options.cause !== 'feature-repair') return { kind: 'repair-pending', child: entry.child };
+    originating.push(entry.child);
   }
 
   const closureByChild = new Map(closed.map((entry) => [entry.child, entry.closureTip]));
