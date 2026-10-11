@@ -87,6 +87,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The daemon no longer reports freshly landed, owned specs as un-owned; the owner gate reads ownership at the same base commit the backlog scan uses. ([implementation PR #3140](https://github.com/jstoup111/ai-conductor/pull/3140)).
 - A rejected custom build_review rubric result now names only the cited source regions that failed frozen-source admission, instead of reporting every cited region as mismatched. ([implementation PR #3155](https://github.com/jstoup111/ai-conductor/pull/3155)).
 - A config that still sets the retired `conflict_check` block is now ignored with a warning instead of failing validation. ([implementation PR #3157](https://github.com/jstoup111/ai-conductor/pull/3157)).
+- Builds no longer halt for a human decision when an as-built review returns more than a handful of findings; the remediation input limit for pending as-built findings now matches the other criterion-bearing inputs. ([implementation PR #3181](https://github.com/jstoup111/ai-conductor/pull/3181)).
 
 ## Migration
 
