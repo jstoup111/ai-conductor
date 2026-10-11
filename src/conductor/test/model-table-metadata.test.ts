@@ -290,19 +290,18 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
 });
 
 describe('AUXILIARY_MODEL_TABLE_ROWS auxiliary-judge registration', () => {
-  it('defines the build-review rubrics and coverage-binding judge without inventing lifecycle steps', () => {
+  it('defines the build-review rubrics and rebase-regrade judge without inventing lifecycle steps', () => {
     const names = AUXILIARY_MODEL_TABLE_ROWS.map((row) => row.name);
 
     expect(names).toEqual([
       'build-review-test-quality',
       'build-review-security',
-      'coverage-binding',
       'rebase-regrade',
     ]);
     expect(Object.keys(STEP_RATIONALE)).not.toEqual(expect.arrayContaining(names));
 
-    expect(AUXILIARY_MODEL_TABLE_ROWS.find((row) => row.name === 'coverage-binding')).toMatchObject({
-      name: 'coverage-binding',
+    expect(AUXILIARY_MODEL_TABLE_ROWS.find((row) => row.name === 'rebase-regrade')).toMatchObject({
+      name: 'rebase-regrade',
       executionPath: 'engine-managed auxiliary judge',
     });
   });

@@ -46,9 +46,9 @@ export async function admitAndRestageRepair(
   const admissionKey = createHash('sha256').update(JSON.stringify({
     planPath: input.planPath,
     source: input.sourceAuthority,
-    // A coverage-binding finding id is the claim digest.  It is part of the
-    // durable effect identity: two distinct amendments may bind the same
-    // task on the same HEAD, but must retain separate admissions and laps.
+    // Finding ids are part of the durable effect identity: two distinct
+    // findings may bind the same task on the same HEAD, but must retain
+    // separate admissions and laps.
     findings: findingIds,
     bindings: taskIds.map(canonicalTaskId).sort(),
     head: admissionHead,
@@ -80,8 +80,8 @@ export async function admitAndRestageRepair(
   if (!admission.ok) return { kind: 'failed', detail: `could not persist admission: ${admission.message}` };
 
   // prd_audit and as-built repairs use the obligation as their pending-repair
-  // receipt and charge only when BUILD dispatches. coverage_binding retains
-  // its independent restage-time lap (ADR 2026-09-06 D10).
+  // receipt and charge only when BUILD dispatches. Any other gate is charged
+  // its restage-time lap here (ADR 2026-09-06 D10).
   // The route label is presentation-facing (`architecture-review-as-built`,
   // or a validation-group label), while `gates` carries the canonical ledger
   // owners.  Classifying by the label charged an as-built repair here and

@@ -246,7 +246,7 @@ deprecation warning and event; see [build_review](#build_review)). Everything el
 | `ci_watch` | object | `{ enabled: true }` | [ci_watch](#ci_watch) |
 | `build_progress_halt` | object | see section | [build_progress_halt](#build_progress_halt) |
 | `retry_routing` | object | `{ enabled: true }` | [retry_routing](#retry_routing) |
-| `coverage_binding` | object | `{ judge: { enabled: false, batch_size: 8 } }` | [coverage_binding](#coverage_binding) |
+| `coverage_binding` | object (retired, ignored) | `{ judge: { enabled: false, batch_size: 8 } }` | [coverage_binding](#coverage_binding) |
 | `feature_applicability` | object | `{ enabled: false }` | [feature_applicability](#feature_applicability) |
 | `kickback_escalation` | object | `{ enabled: true }` | [kickback_escalation](#kickback_escalation) |
 | `cumulative_kickback_bound` | object | `{ enabled: true }` | [cumulative_kickback_bound](#cumulative_kickback_bound) |
@@ -958,7 +958,7 @@ group policy step. Its duration ends when that member settles, so sibling and gr
 not inflate the member's duration. The same member label is used for its duration, retry, dispatch,
 and terminal-outcome metrics.
 
-Build-review rubric and coverage-binding provider attempts carry the execution identity of their
+Build-review rubric provider attempts carry the execution identity of their
 owning lifecycle step, including provider preparation and settlement events. Their auxiliary member
 labels remain available for dispatch attribution; these calls update the owning step span rather
 than opening separate rubric spans. Context-free callers retain legacy name-based correlation.
@@ -1283,26 +1283,19 @@ Consumed at `src/conductor/src/engine/conductor.ts:10364-10365, 10886-10887`.
 
 ## coverage_binding
 
-Opt-in pre-BUILD judge that confirms each criterion claim is asserted by the cited task's Done when checks.
+Retired. The `coverage_binding` step is a no-op: it never dispatches a judge, never checks criterion,
+amendment, conflict, or ADR-obligation claims, never reopens tasks, and never halts on plan content.
+It still runs at its pipeline position, records the plan's slice topology for
+[stacked delivery](#stacked_prs), and completes as passed. These keys remain accepted and validated so
+existing configurations load, but the engine ignores them.
 
 | Key | Type | Validation | Default |
 | --- | --- | --- | --- |
-| `coverage_binding.judge.enabled` | boolean | Boolean, else hard error | `false` |
-| `coverage_binding.judge.batch_size` | integer | Positive integer, else hard error | `8` |
+| `coverage_binding.judge.enabled` | boolean | Boolean, else hard error; ignored | `false` |
+| `coverage_binding.judge.batch_size` | integer | Positive integer, else hard error; ignored | `8` |
 
-Only `enabled` and `batch_size` are accepted under `coverage_binding.judge`. Each fresh judge
-session evaluates an ordered batch of at most `batch_size` claims; a size of `1` uses one session
-per claim. The engine validates one verdict per claim and checkpoints accepted batches, so a later
-run reuses unchanged completed judgments and evaluates only pending claims.
-
-When enabled, the judge also checks the whole plan against each sealed story criterion and each
-decision in an approved or partially superseded ADR that the branch changes or the plan cites. Every
-plan task's Done when checks are judged together against each claim; a claim is `conflicts` only when
-satisfying a named task would necessarily violate it. Any `conflicts` verdict refuses the step as
-`needs-human` before any completed task is reopened, naming the claim, task ids, Done when checks, and
-the incompatible requirement — see
-[plan conflict refusal](../runbooks/stalled-or-stuck-feature.md#coverage_binding-refused-a-plan-conflict).
-When the judge is disabled, conflict claims are recorded as `unjudged`.
+Only `enabled` and `batch_size` are accepted under `coverage_binding.judge`. The plan skill's
+pre-land coverage judgement is unaffected.
 
 ## feature_applicability
 
@@ -1479,8 +1472,8 @@ removal attempts; other `needs-remediation` causes remain sticky.
 ## stacked_prs
 
 Opts a project into stacked delivery of a sliced plan. Plan-slice grammar validation (the
-`plan-slices` land gate and the `coverage_binding` slice layer) runs regardless of this block; the
-checks below run only when `enabled` is `true`. An admitted plan builds
+`plan-slices` land gate) runs regardless of this block; the checks below run only when `enabled` is
+`true`. An admitted plan builds
 [child by child](#child-by-child-build). Restack, fix routing to the owning child, and child
 publication remain reserved for the stacked child-plans chain (#2943–#2945).
 
@@ -1494,7 +1487,7 @@ block is present, an omitted `enabled` resolves to `false` and an omitted `max_s
 `1`.
 
 When `enabled` is `true` and the plan declares a `## Slices` manifest, the `stacked-delivery` land
-gate at `engineer/land` and the `coverage_binding` step refuse the plan unless all of these hold:
+gate at `engineer/land` refuses the plan unless all of these hold:
 
 - The complexity tier is `M` or `L`.
 - `.docs/complexity/<plan-stem>.md` carries a `Stacked-Delivery: approved` line.
@@ -1504,8 +1497,9 @@ gate at `engineer/land` and the `coverage_binding` step refuse the plan unless a
 - No custom step sits between `acceptance_specs` and `build_review`, and no custom BUILD step
   before `build_review` is a loop gate or kickback target.
 
-The refusal lists every failed condition; `coverage_binding` refuses as `needs-human`. On success,
-`coverage_binding` records the story-to-slice mapping as `storyOwnership` in
+The land-gate refusal lists every failed condition. At BUILD entry, `coverage_binding` re-evaluates
+the same conditions without refusing: an invalid slice manifest or an ineligible plan builds flat. On
+success, `coverage_binding` records the story-to-slice mapping as `storyOwnership` in
 [`coverage-binding.json`](artifacts.md).
 
 ### Child-by-child build
@@ -1540,7 +1534,8 @@ child, in declared order:
 - **Rebase.** While a non-leaf child is active, the re-kick rebase is skipped and a
   `rebase_skipped_for_stack` event is recorded. At the leaf, the normal rebase applies.
 - **Positions.** Sealed positions are recorded at `refs/conductor/<slug>/positions`. Once child state
-  exists, a `coverage_binding` reseal that moves, adds, or removes a position refuses.
+  exists, a `coverage_binding` run that moves, adds, or removes a position refuses `needs-human`.
+  This is the step's only remaining refusal.
 - **Halts.** A halt record is committed to the active child's branch with a `Child:` line and is not
   pushed.
 

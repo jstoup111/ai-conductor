@@ -61,19 +61,16 @@ async function runWithPlan(planText: string) {
 }
 
 describe('coverage-binding slice layer', () => {
-  it.each(['S', 'M', 'L'] as const)('refuses an amended unassigned Task 9 before the disabled judge exit for tier %s', async (tier) => {
+  it.each(['S', 'M', 'L'] as const)('builds an amended unassigned Task 9 plan flat without a refusal for tier %s', async (tier) => {
     const { projectDir, planPath, provider, runner } = await runWithPlan(amendedPlanWithUnassignedTask);
     try {
-      await expect(runner.run('coverage_binding', { complexity_tier: tier })).resolves.toMatchObject({
-        success: false,
-        refusal: {
-          kind: 'needs-human',
-          reason: expect.stringContaining('Task 9'),
-        },
-      });
+      const result = await runner.run('coverage_binding', { complexity_tier: tier });
+      expect(result).toMatchObject({ success: true });
+      expect(result.refusal).toBeUndefined();
       expect(provider.invoke).not.toHaveBeenCalled();
-      await expect(readFile(coverageBindingEnvelopePath(projectDir), 'utf8')).resolves.toContain('"status":"refused"');
-      await expect(readFile(coverageBindingEnvelopePath(projectDir), 'utf8')).resolves.toContain('"entries":[]');
+      const envelope = JSON.parse(await readFile(coverageBindingEnvelopePath(projectDir), 'utf8'));
+      expect(envelope).toMatchObject({ status: 'disabled', entries: [] });
+      expect(envelope.sliceMembership).toBeUndefined();
       await expect(readFile(planPath, 'utf8')).resolves.toBe(amendedPlanWithUnassignedTask);
     } finally {
       await rm(projectDir, { recursive: true, force: true });

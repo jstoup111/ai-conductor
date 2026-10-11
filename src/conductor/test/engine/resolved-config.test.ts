@@ -15,7 +15,6 @@ import {
   resolveProviderPreparationTimeoutMinutes,
   resolveDispatchStartTimeoutSeconds,
   resolveTeardownTimeoutSeconds,
-  resolveCoverageBindingConfig,
 } from '../../src/engine/resolved-config.js';
 import {
   coordinateBuildReviewRubrics,
@@ -165,17 +164,6 @@ describe('engine/resolved-config', () => {
       expect(() => resolveProviderNativeStepConfig(
         'plan', 'DECIDE', policyWithoutModel,
       )).toThrow(/requires a configured model/);
-    });
-  });
-
-  describe('resolveCoverageBindingConfig', () => {
-    it('defaults the judge to disabled', () => {
-      expect(resolveCoverageBindingConfig(undefined)).toEqual({ judgeEnabled: false, batchSize: 8 });
-    });
-
-    it('resolves an explicitly enabled judge', () => {
-      expect(resolveCoverageBindingConfig({ coverage_binding: { judge: { enabled: true } } }))
-        .toEqual({ judgeEnabled: true, batchSize: 8 });
     });
   });
 

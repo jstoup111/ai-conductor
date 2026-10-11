@@ -511,11 +511,10 @@ describe('engine-managed auxiliary rows', () => {
   const auxiliarySkills = [
     'build-review-test-quality',
     'build-review-security',
-    'coverage-binding',
     'rebase-regrade',
   ];
 
-  it('renders rubric and coverage-binding helpers with their resolved policies', () => {
+  it('renders rubric and judge helpers with their resolved policies', () => {
     expect(buildAuxiliaryRows()).toEqual(
       [
         expect.objectContaining({
@@ -534,15 +533,6 @@ describe('engine-managed auxiliary rows', () => {
             claude: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
             codex: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
             pi: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
-          },
-        }),
-        expect.objectContaining({
-          name: 'coverage-binding',
-          executionPath: 'engine-managed auxiliary judge',
-          providerCells: {
-            claude: { model: 'inherits resolved coverage-binding policy', effort: 'inherits resolved coverage-binding policy' },
-            codex: { model: 'inherits resolved coverage-binding policy', effort: 'inherits resolved coverage-binding policy' },
-            pi: { model: 'inherits resolved coverage-binding policy', effort: 'inherits resolved coverage-binding policy' },
           },
         }),
         expect.objectContaining({
@@ -565,7 +555,6 @@ describe('engine-managed auxiliary rows', () => {
     const rendered = renderModelTable();
     expect(rendered).toContain('| build-review-test-quality | engine-managed auxiliary rubric |');
     expect(rendered).toContain('| build-review-security | engine-managed auxiliary rubric |');
-    expect(rendered).toContain('| coverage-binding | engine-managed auxiliary judge |');
     expect(rendered).toContain('| rebase-regrade | engine-managed auxiliary judge |');
   });
 });

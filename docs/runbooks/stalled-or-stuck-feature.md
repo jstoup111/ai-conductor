@@ -892,21 +892,25 @@ clearing it again.
 
 ### coverage_binding refused a plan conflict
 
-**Symptom:** `.pipeline/HALT` is `needs-human` and contains `coverage_binding refused: plan tasks
-conflict with sealed criteria or ADR decisions.` Each block names a `Claim` (`stories#criterion-<n>`
-or `<adr-stem>#D<n>`), its text, the conflicting task ids, their Done when checks, and the conflict.
+`coverage_binding` is a no-op step: it no longer judges plan conflicts, criterion coverage, DECIDE
+amendments, or ADR obligations, never reopens tasks, and never halts on plan content. An invalid slice
+manifest or a plan ineligible for stacked delivery builds flat instead of halting.
 
-**Diagnosis:** Read the `kind: "conflict"` entries in `.worktrees/<slug>/.pipeline/coverage-binding.json`
-and the `coverage_binding_conflict_judged` events. Decide which side is wrong: the plan task's Done
-when checks, or the sealed criterion or ADR decision. The refusal precedes reopens, so no completed
-task was reopened.
+**Symptom:** `.pipeline/HALT` still contains a `coverage_binding refused:` reason written before this
+change (plan conflicts, cited Done when checks, architecture obligation coverage, plan slices, or
+stacked-delivery eligibility).
 
-**Recovery:** Revise the wrong artifact by hand per
-[a halt requests a plan revision](#a-halt-requests-a-plan-revision), including the reseal of any
-sealed artifact you amend. Changing a story criterion or ADR decision is a DECIDE change, not a plan
-fix.
+**Recovery:** Clear the halt with `rm -f .worktrees/<slug>/.pipeline/HALT
+.worktrees/<slug>/.pipeline/HALT.class` and let the daemon re-dispatch. The step re-runs and passes.
 
-**Verification:** The next `coverage-binding.json` has no `conflicts` verdict and the step passes.
+**Exception: sealed child positions.** The only refusal the step still raises is
+`coverage_binding refused: sealed child positions are immutable after child state exists`. It fires
+when a stacked feature that has already started building children has a plan whose slice positions
+differ from `refs/conductor/<slug>/positions`. Restore the plan's `## Slices` positions to the sealed
+set, then clear the halt; changing the shape of a started stack needs a restack (#2943).
+
+**Verification:** The next `.pipeline/coverage-binding.json` has status `disabled` and no entries, and
+the step is marked done.
 
 ### The halt is a plan gap
 
@@ -1151,10 +1155,8 @@ artifact again after resealing and it refuses exactly as before, because the sea
 longer matches. Reseal again only after reviewing the new amendment.
 
 For a changed path in the feature's coverage-binding DECIDE set, a successful reseal also invalidates
-completed coverage evidence. On the next re-kick, coverage binding runs before BUILD. Its amendment
-judgement may reopen a completed task only when the amended obligation contradicts that task; a
-reseal by itself never reopens work. Inspect the emitted coverage-binding events and the refreshed
-`.pipeline/coverage-binding.json` rather than editing task state by hand.
+completed coverage evidence. On the next re-kick, the no-op `coverage_binding` step re-runs before
+BUILD and re-records only the plan's slice topology; it never reopens work.
 
 If REKICK encounters this refusal before starting git, the HALT begins
 `protected-artifact seal error` and explicitly says no rebase is active. Do not use the rebase

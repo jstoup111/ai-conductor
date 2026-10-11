@@ -236,7 +236,7 @@
 # Controls: stacked_prs — stacked delivery of a plan's ## Slices manifest.
 # Allowed: an object with enabled (true or false) and max_slices (integer 1-9; above 5 warns).
 # Default: unset; when present, enabled false and max_slices 1.
-# Changing it: enabling adds stacked-delivery checks at engineer/land and coverage_binding.
+# Changing it: enabling adds stacked-delivery checks at engineer/land; coverage_binding then records story ownership.
 # Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
 # Controls: build_review — the judgement gate that reviews the build before the SHIP-tail steps.
 # Allowed: an object with enabled, scopeContainmentEnforced, maxParallel, adjudication, and rubrics; perTaskFloor is retired and ignored.
@@ -296,10 +296,10 @@
 # Default: enabled true.
 # Changing it: false makes every retry a plain rerun of the same step.
 # Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
-# Controls: coverage_binding — the opt-in pre-BUILD judge that checks each acceptance criterion is asserted by its task's Done when checks.
-# Allowed: an object with judge, itself an object with the single key enabled (true or false).
+# Controls: coverage_binding — retired; the coverage_binding step is a no-op that only records plan slice topology.
+# Allowed: an object with judge, itself an object with enabled (true or false) and batch_size (a positive integer).
 # Default: judge.enabled false.
-# Changing it: judge.enabled true adds a provider dispatch before BUILD and can stop a plan whose criteria are not bound to tasks.
+# Changing it: has no effect; the keys are still validated so existing configurations load.
 # Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
 # Controls: feature_applicability — whether merged DECIDE artifacts may declare selected feature steps inapplicable.
 # Allowed: an object with the single key enabled (true or false); any other key fails the load.
@@ -386,7 +386,7 @@ build_review:
     testQuality:
       enabled: false
 
-# enabled adds stacked-delivery checks at engineer/land and coverage_binding; build-loop slice
+# enabled adds stacked-delivery checks at engineer/land; coverage_binding records ownership; build-loop slice
 # checkpoints remain reserved for the stacked child-plans chain (#2940–#2949).
 # stacked_prs:
 #   enabled: false

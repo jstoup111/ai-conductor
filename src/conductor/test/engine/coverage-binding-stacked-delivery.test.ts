@@ -92,23 +92,16 @@ describe('coverage-binding stacked delivery', () => {
     });
   });
 
-  it('refuses ownership that spans child positions without rewriting the envelope', async () => {
+  it('builds flat without a refusal when story ownership spans child positions', async () => {
     const subject = await fixture({ spanning: true, config: 'stacked_prs:\n  enabled: true\n  max_slices: 2\n' });
-    const envelopePath = join(subject.projectDir, '.pipeline', 'coverage-binding.json');
-    await mkdir(join(subject.projectDir, '.pipeline'), { recursive: true });
-    await writeFile(envelopePath, '{"existing":true}\n');
-    const before = await readFile(envelopePath, 'utf8');
 
-    await expect(subject.runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
-      success: false,
-      refusal: { kind: 'needs-human' },
-    });
-    const result = await subject.runner.run('coverage_binding', { complexity_tier: 'M' });
-    expect(result.refusal?.reason).toContain('Story 2 spans child positions 1 and 2');
-    expect(await readFile(envelopePath, 'utf8')).toBe(before);
+    await expect(subject.runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+    const envelope = JSON.parse(await readFile(join(subject.projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
+    expect(envelope).toMatchObject({ status: 'disabled', sliceMembership: { taskSlices: { '1': 1, '2': 1, '3': 2 } } });
+    expect(envelope.storyOwnership).toBeUndefined();
   });
 
-  it('rechecks fresh max_slices and resolved custom steps before writing an envelope', async () => {
+  it('builds flat without a refusal when fresh max_slices or resolved custom steps make the plan ineligible', async () => {
     const subject = await fixture({ config: [
       'stacked_prs:',
       '  enabled: true',
@@ -121,9 +114,10 @@ describe('coverage-binding stacked delivery', () => {
 
     const result = await subject.runner.run('coverage_binding', { complexity_tier: 'M' });
 
-    expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
-    expect(result.refusal?.reason).toContain('plan declares 2 slices, exceeding stacked_prs.max_slices = 1');
-    expect(result.refusal?.reason).toContain('custom step lint_gate is inside the per-child region');
-    await expect(readFile(join(subject.projectDir, '.pipeline', 'coverage-binding.json'), 'utf8')).rejects.toThrow();
+    expect(result).toMatchObject({ success: true });
+    expect(result.refusal).toBeUndefined();
+    const envelope = JSON.parse(await readFile(join(subject.projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
+    expect(envelope).toMatchObject({ status: 'disabled', sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 2 } } });
+    expect(envelope.storyOwnership).toBeUndefined();
   });
 });

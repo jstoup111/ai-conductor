@@ -559,7 +559,7 @@ small or names the other gate halts again at the same boundary.
 A malformed `pendingRepair` reads the `prd_audit`, as-built, and growth allowances as exhausted, so
 `build` does not dispatch. When the route-into-no-op guard halts `needs-human` after an append, the
 pending repair is discarded without charging. `build_review`, `test_suite`, and `manual_test` kickbacks
-settle no pending repair, and a `coverage_binding` existing-task reopen still charges its lap at re-stage.
+settle no pending repair.
 
 The `build` rework hint for a `testQuality` FAIL carries best-effort `plan contract:` and
 `prior attempts:` pointer lines derived from the raw rubric aggregate — a `plan contract:` pointer names the

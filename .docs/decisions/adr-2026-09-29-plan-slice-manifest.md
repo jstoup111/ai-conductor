@@ -154,6 +154,12 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    - **An `invalid` result:** records `refused` and ends needs-human through the existing refusal
      path and halt writer. It names each violation, never appends a task, and never routes to
      `plan` (D6).
+
+     > **Amended 2026-10-10 by #3164:** An `invalid` result no longer refuses. `coverage_binding` is
+     > a no-op (`adr-2026-08-31-coverage-binding-judge-step`, amended). It logs the violations, records
+     > no membership, and the feature builds flat. The land `plan-slices` rung (Decision 5) is now the
+     > only refusing check. Membership recording, `plan_slices_changed`, the baseline rule, and the
+     > unsliced-plan rule below are unchanged.
    - **Membership recording:** the runner records the engine-computed membership in the envelope
      as an optional field: task id → slice position, plus the ordered slice titles, excluding
      exempt ids. That field is kept when the envelope is invalidated. It is not completion evidence,

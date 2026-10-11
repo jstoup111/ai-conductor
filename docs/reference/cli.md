@@ -1340,9 +1340,8 @@ an `operator` origin, distinct from step-attributed records. See
 for the full recovery procedure.
 
 When the changed resealed path is a current coverage-binding DECIDE input, a completed
-coverage-binding result is invalidated. The next re-kick runs coverage binding before BUILD; its
-amendment judgement can reopen only completed tasks that the changed DECIDE obligation contradicts.
-No task is reopened merely because an operator resealed an artifact.
+coverage-binding result is invalidated. The next re-kick runs the no-op coverage-binding step before
+BUILD, which re-records only the plan's slice topology. No task is reopened.
 
 The `--reason` rationale is not just an audit-trail entry: the next `build_review` on this feature
 renders every `operator-reseal`-triggered entry, with its paths, rationale, and commit range, in the

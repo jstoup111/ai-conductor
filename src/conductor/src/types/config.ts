@@ -407,8 +407,8 @@ export interface RetryRoutingConfig {
 }
 
 /**
- * Opt-in pre-BUILD judge that confirms each criterion claim is asserted by
- * the cited task's Done when checks. The shipped default is disabled.
+ * Retired coverage-binding judge settings. Still accepted and validated so
+ * existing configs load, but ignored: the coverage_binding step is a no-op.
  */
 export interface CoverageBindingConfig {
   judge?: {

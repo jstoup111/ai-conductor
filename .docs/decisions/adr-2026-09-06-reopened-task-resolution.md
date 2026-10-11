@@ -53,6 +53,10 @@ The operator selected shared semantics for explicitly reopened tasks, confirmed 
 > ledger key `gates.coverage_binding` under the engine's default per-gate lap cap (no new config
 > key), never to another gate's allowance. For decision 8, its governing review is the feature's next `build_review` lap;
 > `coverage_binding` does not re-review repaired code.
+>
+> **Amended 2026-10-10 by #3164:** Decision 10 is retired. `coverage_binding` is now a no-op
+> (`adr-2026-08-31-coverage-binding-judge-step`, amended), so it never admits a repair or reopens a
+> task. `gates.coverage_binding` is no longer charged. Decisions 1–9 are unchanged.
 
 > **Amended 2026-10-02 by #2014:** a change to a plan task's own text becomes an admitted repair
 > source, so `Task:` trailers that predate the change no longer resolve the rewritten task. Decisions

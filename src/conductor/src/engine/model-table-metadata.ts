@@ -45,7 +45,7 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   architecture_review:
     'Pre-implementation design feasibility and alignment requires a high-capability model from the selected provider policy.',
   worktree: 'Git operations — mechanical branch/worktree management.',
-  coverage_binding: 'Engine-native coverage-claim gate; its later auxiliary judge has a separate model-table row.',
+  coverage_binding: 'Engine-native no-op gate; records plan slice topology for stacked delivery and dispatches no model.',
   acceptance_specs: 'Translating acceptance criteria into executable boundary-level specs requires strong reasoning to preserve behavioral intent and negative paths, using MEDIUM effort for S/M and HIGH effort for Large work.',
   build:
     'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model with MEDIUM effort for reliable code authoring, rising to HIGH effort for Large work. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass.',
@@ -159,7 +159,6 @@ export type AuxiliaryModelTableRow = AuxiliaryModelTableRowBase & (
 );
 
 const RESOLVED_RUBRIC_POLICY = 'inherits resolved rubric policy' as const;
-const RESOLVED_COVERAGE_BINDING_POLICY = 'inherits resolved coverage-binding policy' as const;
 const RESOLVED_REBASE_POLICY = 'inherits resolved rebase policy' as const;
 const PI_NOT_APPLICABLE = 'n/a' as const;
 
@@ -187,15 +186,6 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
     executionPath: 'engine-managed auxiliary rubric',
     providerCells: providerCellsForReview(RESOLVED_RUBRIC_POLICY, RESOLVED_RUBRIC_POLICY),
     why: 'Judges the whole feature diff for concrete, changed-hunk-anchored security defects in the closed security vocabulary.',
-  },
-  {
-    name: 'coverage-binding',
-    executionPath: 'engine-managed auxiliary judge',
-    providerCells: providerCellsForReview(
-      RESOLVED_COVERAGE_BINDING_POLICY,
-      RESOLVED_COVERAGE_BINDING_POLICY,
-    ),
-    why: 'Fresh per-claim judgement of whether cited Done when checks assert the criterion; the engine scopes inputs, validates the closed verdict, and owns the gate outcome.',
   },
   {
     name: 'rebase-regrade',
