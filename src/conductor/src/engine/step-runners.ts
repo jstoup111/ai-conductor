@@ -3958,17 +3958,7 @@ export class DefaultStepRunner implements StepRunner {
           await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
         };
-        // `findings` is optional in the flat native schema because
-        // unsupported-policy does not carry it. It remains required for a
-        // custom-findings result, including when an adapter omits it rather
-        // than returning an explicit empty array.
-        const missingCustomFindings = (() => {
-          const raw = invoked.finalStructuredResult;
-          return raw !== null && typeof raw === 'object' && !Array.isArray(raw) &&
-            (raw as Record<string, unknown>).kind === 'custom-findings' &&
-            !Object.hasOwn(raw, 'findings');
-        })();
-        if (dispatched.kind === 'root-rejection' || missingCustomFindings) {
+        if (dispatched.kind === 'root-rejection') {
           return settleCustomStructuredRejection(invoked.finalStructuredResult);
         }
         const parsed = dispatched.kind === 'structured' ? dispatched.parsed : undefined;
@@ -3976,36 +3966,13 @@ export class DefaultStepRunner implements StepRunner {
         if (runtimeUnsupported) {
           const classification = classifyBuildReviewPolicyIncompatibility(runtimeUnsupported);
           if (classification.kind === 'unsupported-policy') {
-            coverageFailure = true;
-            failure = { reason: 'invalid-structured-result', detail: `unsupported-policy: ${classification.requirement}` };
-            const rejection = diagnoseBuildReviewCustomReviewerPayloadRejection(invoked.finalStructuredResult);
-            const regionComparison = await compareBuildReviewCitedSourceRegions(
-              invoked.finalStructuredResult,
-              inputs.sourceSnapshot.sourceChanges ?? [],
-              { read: (side, path) => new BuildReviewScopeSource(this.gitRunner, inputs.sourceSnapshot.headSha).readAtOptional(side === 'head' ? inputs.sourceSnapshot.headSha : inputs.sourceSnapshot.mergeBase, path) },
-            ).catch(() => undefined);
-            const retainedResponsePath = await retainBuildReviewRejectedResponse({
-              pipelineDir,
-              worktreeRoot: this.projectDir,
-              lapId,
-              rubric: entry.id,
-              rubricKind: 'custom',
-              detail: failure.detail,
-              rejection,
-              provider: context.candidate.providerKey,
-              model: actualModel,
-              structuredResult: invoked.finalStructuredResult ?? null,
-              output: invoked.output,
-              ...(retainedPrompt === undefined ? {} : { promptPath: retainedPrompt.path, promptSha256: retainedPrompt.sha256 }),
-              ...(regionComparison === undefined ? {} : { regionComparison }),
-            });
-            await this.events?.emit({
-              type: 'build_review_rubric_infrastructure_failure', rubric: entry.id, lapId,
-              reason: 'invalid-structured-result', cause: 'invalid-structured-result', rejection, excerpt: failure.detail,
-              ...(retainedResponsePath === undefined ? {} : { retainedResponsePath }),
-            });
-            await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
-            return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
+            return {
+              kind: 'judged' as const,
+              result: {
+                ...invoked,
+                output: JSON.stringify({ declaration, result: { kind: 'unsupported-policy', rubric: entry.id, requirement: classification.requirement } }),
+              },
+            };
           }
           coverageFailure = true;
           failure = { reason: classification.reason, detail: renderBuildReviewPolicyUnsupportedDiagnostic(runtimeUnsupported) };

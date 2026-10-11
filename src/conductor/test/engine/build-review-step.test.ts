@@ -1326,10 +1326,10 @@ describe('build_review structured rubric dispatch', () => {
         ],
       }],
     };
-    const unsupportedResponse = { kind: 'unsupported-policy', requirement: 'requires deployment credentials' };
+    const secondMalformedResponse = { kind: 'custom-findings', version: 'v1', findings: 'not-an-array' };
     const invoke = vi.fn()
       .mockResolvedValueOnce({ success: true, output: 'first rejected output', exitCode: 0, finalStructuredResult: malformedResponse })
-      .mockResolvedValueOnce({ success: true, output: 'second rejected output', exitCode: 0, finalStructuredResult: unsupportedResponse });
+      .mockResolvedValueOnce({ success: true, output: 'second rejected output', exitCode: 0, finalStructuredResult: secondMalformedResponse });
     const runtimeProvider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
       nativeSchemaCapability: { nativeOutputSchema: true },
@@ -1398,8 +1398,8 @@ describe('build_review structured rubric dispatch', () => {
       });
       expect(first.regionComparison.map((comparison: { status: string }) => comparison.status)).toEqual(['match', 'content-hash-mismatch']);
       expect(second).toMatchObject({
-        rubricKind: 'custom', attempt: 2, detail: 'unsupported-policy: requires deployment credentials',
-        output: 'second rejected output', structuredResult: unsupportedResponse, promptPath,
+        rubricKind: 'custom', attempt: 2, detail: expect.any(String),
+        output: 'second rejected output', structuredResult: secondMalformedResponse, promptPath,
       });
       expect(failures.map((failure) => failure.retainedResponsePath)).toEqual([
         `.custom-pipeline/build-review-rejections/${lapId}/custom-policy.1.json`,
@@ -1485,7 +1485,7 @@ describe('build_review structured rubric dispatch', () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-root-rejection-retention-'));
     const pipelineDir = join(projectDir, '.custom-pipeline');
     const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
-    const payload = { kind: 'custom-findings', version: 'v1' };
+    const payload = { kind: 'custom-findings', version: 'v1', findings: 'not-an-array' };
     const fixture = customRetentionFixture(projectDir, payload);
     try {
       await fixture.dispatch(pipelineDir, lapId);
@@ -1493,6 +1493,38 @@ describe('build_review structured rubric dispatch', () => {
 
       expect(record.structuredResult).toEqual(payload);
       expect(record.regionComparison).toEqual([]);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('judges custom findings when an adapter omits the optional empty findings field', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-omitted-findings-'));
+    const pipelineDir = join(projectDir, '.custom-pipeline');
+    const fixture = customRetentionFixture(projectDir, { kind: 'custom-findings', version: 'v1' });
+    try {
+      const outcome = await fixture.dispatch(pipelineDir, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8');
+
+      expect(outcome).toMatchObject({ success: true, member: { result: { kind: 'judged', findings: [] } } });
+      expect(fixture.failures).toEqual([]);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a well-formed unsupported-policy response as a judged result', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-unsupported-policy-'));
+    const pipelineDir = join(projectDir, '.custom-pipeline');
+    const fixture = customRetentionFixture(projectDir, { kind: 'unsupported-policy', requirement: 'requires deployment credentials' });
+    try {
+      const outcome = await fixture.dispatch(pipelineDir, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8');
+
+      expect(outcome).toMatchObject({
+        success: true,
+        member: { result: { kind: 'unsupported-policy', rubric: 'custom-policy', requirement: 'requires deployment credentials' } },
+      });
+      expect(fixture.failures).toEqual([]);
+      await expect(access(join(pipelineDir, 'build-review-rejections'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
