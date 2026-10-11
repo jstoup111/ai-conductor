@@ -4,6 +4,13 @@ spec_hash: e0752fe79c9f9e11f252282d23de3f6f6eb81a91e437c8606da06d519f480e1f
 pr: https://github.com/jstoup111/ai-conductor/pull/3180
 shipped: 2026-10-11
 engine_version: 20261011T115555Z-99faaaf0d36a
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This is an additive diagnostic field on an existing spine event, beyond the planned retainedResponsePath. It keeps the event's rejection consistent with the retained record's rejection, but it changes no review outcome or classification. It is visible only to event-log consumers. No Scope: trailer or reseal rationale covers it."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
