@@ -793,3 +793,19 @@ Task 8 ────────────────────────�
 **Done when:**
 - adr-2026-10-09-dependency-drift-sweep-on-intake-tick decision 2 is satisfied by this task.
 - The repair for task rem-as-built-rem-asb-8 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-9: dependency-reconciler.ts declaredEdges: remove task-list lines (the excerpts the parser flags as task-list-phase) from the body before both extractDependsOnFormValues and prose extraction, instead of filtering prose edges by target. Keep the manualReview items. Tests: (a) '### Depends on\n- [ ] Phase 1 blocked by #10' yields zero edges and one task-list manual-review item; (b) a body with '- [ ] Phase 1 blocked by #10' plus a separate 'Blocked by #10.' yields exactly one #10 edge and keeps the manual-review item; (c) the rem-asb-1 multi-ref and qualified form-field tests stay green.
+**Gate:** as-built
+**Rationale:** Verified, 98%, by reading dependency-reconciler.ts declaredEdges (about lines 114-160). extractDependsOnFormValues scans the whole Depends-on section, including task-list lines, so a '- [ ] Phase 1 blocked by #10' line under '### Depends on' still yields a form edge. Meanwhile, taskListTargets filters prose edges by target, which suppresses an independent valid 'Blocked by #10.' declaration elsewhere. ADR D1 is unambiguous: task-list text yields no edge, and other declarations stand. This is implementation drift in Task 1 (declared-edge extraction) and its prior repair rem-asb-2, so no architecture decision is needed. Fix at the source: strip flagged task-list lines from the text before form and prose extraction, rather than filtering by target. The fix must keep manualReview items, the multi-ref and qualified form-field coverage from rem-asb-1, and the existing Task 1 and rem-asb-2 tests.
+**Governing clause:** adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 1
+**Done when:**
+- adr-2026-10-09-dependency-reconciler-and-edge-write-ownership decision 1 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-9 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-10: tracker-client.ts listOpenIssues: skip entries that carry a non-null pull_request field, while keeping complete --paginate listing and complete: true. Test in the tracker-client tests: a two-page listing mixing issues and PR entries returns only the issues, from both pages. In the sweep tests, add a case where a PR entry in the listing produces no finding and no indeterminate entry.
+**Gate:** as-built
+**Rationale:** Verified, 99%, by reading tracker-client.ts listOpenIssues (about lines 1002-1030). It reads repos/{repo}/issues?state=open with --paginate and maps every entry, but never checks the pull_request discriminator that the GitHub Issues REST endpoint sets on pull-request entries. The drift sweep therefore treats open PRs as issues, contrary to drift-sweep ADR D2 ('every open issue'). This is a conforming implementation fix within Task 14/15 sweep scope and the rem-asb-8 pagination repair, so no architecture decision is needed. Pagination and completeness must be kept.
+**Governing clause:** adr-2026-10-09-dependency-drift-sweep-on-intake-tick decision 2
+**Done when:**
+- adr-2026-10-09-dependency-drift-sweep-on-intake-tick decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-10 is committed and its targeted tests pass.
