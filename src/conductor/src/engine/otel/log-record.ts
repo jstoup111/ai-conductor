@@ -1,3 +1,5 @@
+import { createContextKey, type Context } from '@opentelemetry/api';
+
 export interface ProjectedLogRecord {
   timestamp: number;
   severityText: 'INFO' | 'WARN' | 'ERROR';
@@ -13,6 +15,18 @@ export interface NormalizedLogRecord extends ProjectedLogRecord {
 const MAX_BODY_BYTES = 32 * 1024;
 const MAX_RECORD_BYTES = 64 * 1024;
 const MAX_ATTRIBUTES = 64;
+const LOG_RECORD_BYTE_SIZE = createContextKey('conductor.log.record.byte_size');
+
+/** Carries the bounded local representation's size to the SDK processor. */
+export function withLogRecordByteSize(context: Context, byteSize: number): Context {
+  return context.setValue(LOG_RECORD_BYTE_SIZE, byteSize);
+}
+
+/** Returns a listener-provided normalized size, never an untrusted estimate. */
+export function logRecordByteSize(context?: Context): number | undefined {
+  const byteSize = context?.getValue(LOG_RECORD_BYTE_SIZE);
+  return typeof byteSize === 'number' && Number.isSafeInteger(byteSize) && byteSize >= 0 ? byteSize : undefined;
+}
 
 function truncateUtf8(value: string, limit: number): string {
   if (Buffer.byteLength(value, 'utf8') <= limit) return value;

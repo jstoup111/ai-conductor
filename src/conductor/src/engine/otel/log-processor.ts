@@ -1,7 +1,7 @@
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
-import { ProtobufLogsSerializer } from '@opentelemetry/otlp-transformer';
 import type { Context } from '@opentelemetry/api';
 import type { SdkLogRecord } from '@opentelemetry/sdk-logs';
+import { logRecordByteSize } from './log-record.js';
 
 const LOG_DELIVERY_TIMEOUT_MS = 2_000;
 
@@ -19,12 +19,17 @@ export interface BoundedLogProcessorOptions {
   onDrop?: (count: number) => void;
 }
 
+interface QueuedLogRecord {
+  record: SdkLogRecord;
+  byteSize: number;
+}
+
 /**
  * The SDK's stock processor has an unobservable overflow queue. This is the
  * one bounded queue for logs: producer callbacks do no serialization or I/O.
  */
 export class BoundedLogProcessor {
-  private readonly queue: SdkLogRecord[] = [];
+  private readonly queue: QueuedLogRecord[] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
   private inFlight = 0;
   private inFlightBytes = 0;
@@ -47,12 +52,15 @@ export class BoundedLogProcessor {
 
   onEmit(record: SdkLogRecord, _context?: Context): void {
     if (this.stopped) return;
-    const bytes = serializedBytes([record]);
+    // Listener normalization owns this measurement.  onEmit stays a bounded
+    // admission path and never serializes records on a producer callback.
+    const bytes = logRecordByteSize(_context);
+    if (bytes === undefined) { this.options.onDrop?.(1); return; }
     if (this.queue.length + this.inFlight >= this.maxRecords || this.queuedBytes + this.inFlightBytes + bytes > this.maxBytes) {
       this.options.onDrop?.(1); return;
     }
-    this.queue.push(record); this.queuedBytes += bytes;
-    this.schedule();
+    this.queue.push({ record, byteSize: bytes }); this.queuedBytes += bytes;
+    this.requestFlush(this.queue.length >= this.maxBatchRecords || this.queuedBytes >= this.maxBatchBytes);
   }
 
   async forceFlush(): Promise<void> {
@@ -68,29 +76,37 @@ export class BoundedLogProcessor {
     await this.exporter.shutdown?.();
   }
 
-  private schedule(): void {
-    if (this.timer || this.flushing) return;
+  private requestFlush(immediately = false): void {
+    if (this.flushing) return;
+    if (immediately) {
+      if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
+      void this.flush();
+      return;
+    }
+    if (this.timer) return;
     this.timer = setTimeout(() => { this.timer = undefined; void this.flush(); }, this.delayMs);
     this.timer.unref?.();
   }
 
   private async flush(): Promise<void> {
     if (this.flushing) return this.flushing;
-    this.flushing = this.drain().finally(() => { this.flushing = undefined; if (this.queue.length && !this.stopped) this.schedule(); });
+    this.flushing = this.drain().finally(() => {
+      this.flushing = undefined;
+      if (this.queue.length && !this.stopped) this.requestFlush(this.queue.length >= this.maxBatchRecords || this.queuedBytes >= this.maxBatchBytes);
+    });
     return this.flushing;
   }
 
   private async drain(): Promise<void> {
     while (this.queue.length) {
-      const batch: SdkLogRecord[] = [];
+      const batch: QueuedLogRecord[] = [];
+      let batchBytes = 0;
       while (this.queue.length && batch.length < this.maxBatchRecords) {
         const next = this.queue[0];
-        const candidate = [...batch, next];
-        if (batch.length > 0 && serializedBytes(candidate) > this.maxBatchBytes) break;
-        this.queue.shift(); this.queuedBytes -= serializedBytes([next]); batch.push(next);
+        if (batch.length > 0 && batchBytes + next.byteSize > this.maxBatchBytes) break;
+        this.queue.shift(); this.queuedBytes -= next.byteSize; batchBytes += next.byteSize; batch.push(next);
       }
       if (!batch.length) { this.queue.shift(); this.options.onDrop?.(1); continue; }
-      const batchBytes = serializedBytes(batch);
       this.inFlight += batch.length;
       this.inFlightBytes += batchBytes;
       await new Promise<void>((resolve) => {
@@ -105,20 +121,12 @@ export class BoundedLogProcessor {
         timeout = setTimeout(() => settle({ code: ExportResultCode.FAILED }), LOG_DELIVERY_TIMEOUT_MS);
         timeout.unref?.();
         try {
-          const exported = this.exporter.export(batch, settle);
+          const exported = this.exporter.export(batch.map(({ record }) => record), settle);
           if (exported) void exported.then(() => settle(), () => settle({ code: ExportResultCode.FAILED }));
         } catch { settle({ code: ExportResultCode.FAILED }); }
       });
       this.inFlight -= batch.length;
       this.inFlightBytes -= batchBytes;
     }
-  }
-}
-
-function serializedBytes(records: SdkLogRecord[]): number {
-  try { return (ProtobufLogsSerializer.serializeRequest(records) ?? new Uint8Array()).byteLength; } catch {
-    // A malformed third-party record must not poison unrelated producers; the
-    // exporter remains the authoritative serializer and can reject it later.
-    return Buffer.byteLength(JSON.stringify(records.map((record) => ({ body: record.body, attributes: record.attributes }))), 'utf8');
   }
 }

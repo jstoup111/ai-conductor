@@ -1,10 +1,11 @@
+import { context } from '@opentelemetry/api';
 import { SeverityNumber } from '@opentelemetry/api-logs';
 import type { Logger } from '@opentelemetry/api-logs';
 import type { ConductorEvent } from '../../types/events.js';
 import type { ConductorEventEmitter, EventHandler } from '../../ui/events.js';
 import { logEventTypes, type LogEventType } from '../event-sinks.js';
 import { observedAtOf } from '../../ui/events.js';
-import { normalizeLogRecord, type ProjectedLogRecord } from './log-record.js';
+import { normalizeLogRecord, withLogRecordByteSize, type ProjectedLogRecord } from './log-record.js';
 
 type LogEvent = Extract<ConductorEvent, { type: LogEventType }>;
 type LogProjection<Type extends LogEventType> = (
@@ -70,7 +71,8 @@ export class LogListener {
         if (!normalized) { this.onDrop?.(); return; }
         this.logger.emit({ timestamp: normalized.timestamp, severityText: normalized.severityText,
           severityNumber: normalized.severityNumber as SeverityNumber, body: normalized.body,
-          attributes: normalized.attributes, eventName: normalized.attributes['conductor.event'] as string });
+          attributes: normalized.attributes, eventName: normalized.attributes['conductor.event'] as string,
+          context: withLogRecordByteSize(context.active(), normalized.byteSize) });
       };
       this.handlers.push([type, handler]);
       emitter.on(type, handler);
