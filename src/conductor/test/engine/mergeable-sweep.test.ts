@@ -484,10 +484,10 @@ describe('sweepMergeableLabels — Task 5 readiness routes', () => {
         labels: ['mergeable'],
       }),
       [urls.indeterminate]: [
-        readinessState({ mergeable: 'UNKNOWN' }),
-        readinessState({ mergeable: 'UNKNOWN' }),
+        readinessState({ mergeable: 'UNKNOWN', labels: ['ci-failed'] }),
+        readinessState({ mergeable: 'UNKNOWN', labels: ['ci-failed'] }),
       ],
-      [urls.undocumented]: readinessState({ mergeStateStatus: 'NEW_GITHUB_VALUE' }),
+      [urls.undocumented]: readinessState({ mergeStateStatus: 'NEW_GITHUB_VALUE', labels: ['ci-failed'] }),
       [urls.draft]: readinessState({
         isDraft: true,
         mergeable: 'CONFLICTING',
@@ -532,6 +532,14 @@ describe('sweepMergeableLabels — Task 5 readiness routes', () => {
       urls.dirtyConflict,
     ]);
     expect(ciFixEligible.mock.calls.map(([candidate]) => candidate.prUrl)).toEqual([urls.failing]);
+    // Covers: task:rem-prd-audit-R1 — indeterminate observations remain fully read-only
+    // even when they retain the legacy ci-failed label.
+    expect(removeLabelCalls.filter((call) =>
+      call.prUrl === urls.indeterminate || call.prUrl === urls.undocumented,
+    )).toEqual([]);
+    expect(addLabelCalls.filter((call) =>
+      call.prUrl === urls.indeterminate || call.prUrl === urls.undocumented,
+    )).toEqual([]);
     expect(allArgs.flat().join(' ')).not.toContain('/57/');
     expect(allArgs.flat().join(' ')).not.toContain('/58/');
     expect(teardownWorktree).not.toHaveBeenCalled();
