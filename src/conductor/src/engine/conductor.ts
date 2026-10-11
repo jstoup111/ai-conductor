@@ -4843,6 +4843,24 @@ export class Conductor {
   }
 
   /**
+   * The failure occurrence and the recovery route must agree about whether a
+   * build-review FAIL is provisional. Keep the cheap, non-mutating admission
+   * checks in one predicate; stale-lap disposal remains at the route boundary.
+   */
+  private async buildReviewFailureEntersAdjudication(step: StepName): Promise<boolean> {
+    if (step !== 'build_review' || !this.buildReviewAdjudicationEnabled()) return false;
+    if (!(this.daemon || this.mode === 'auto' || this.hasEnabledCustomBuildReviewPolicy())) return false;
+    try {
+      const raw = JSON.parse(await readFile(
+        pipelinePathFor(this.projectRoot, 'build-review.json', this.activeRegionChild), 'utf8',
+      ));
+      return parseBuildReviewAggregate(raw) !== null;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Custom policies have one aggregate outcome authority in every execution
    * mode. Built-in-only attended runs retain their established raw routing.
    */
@@ -12314,11 +12332,13 @@ export class Conductor {
               ],
             });
           }
+          const provisionalBuildReviewFailure = await this.buildReviewFailureEntersAdjudication(step.name);
           await emitTracked({
             type: 'step_failed',
             step: step.name,
             error: lastError,
             retryCount: attempt,
+            ...(provisionalBuildReviewFailure ? { provisional: 'pending-adjudication' as const } : {}),
             ...(failedStepResult?.exitFacts !== undefined && { providerExit: failedStepResult.exitFacts }),
             ...(failedStepResult?.effort !== undefined && { effort: failedStepResult.effort }),
             ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
@@ -12783,7 +12803,10 @@ export class Conductor {
                     await emitAdjudicated('build');
                     const ledger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
                     const count = ledger.gates.build_review?.count ?? 1;
-                    const evidence = `build-review admitted repair ${outcome.caseIds.join(', ')}\n${outcome.trace}` +
+                    // The trace remains durable adjudication evidence, but is not
+                    // operator-facing kickback text: it contains route/case
+                    // diagnostics that the final event deliberately owns.
+                    const evidence = `build-review admitted repair ${outcome.caseIds.join(', ')}` +
                       (outcome.remainingInfrastructure ? `\n${BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE}` : '');
                     await emitTracked({ type: 'kickback', from: 'build_review', to: 'build', evidence, count });
                     pendingRetryHints.set('build', `build_review adjudication: ${evidence}`);
@@ -12836,7 +12859,6 @@ export class Conductor {
                     return;
                   }
                   await this.saveConductorStepStatus(state, step.name, 'failed');
-                  await emitAdjudicated('retry');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   i = i - 1; // for-loop i++ re-lands on build_review
                   continue;

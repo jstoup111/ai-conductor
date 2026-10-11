@@ -286,9 +286,11 @@ export function renderedSessionOccurrenceTypes(): RenderedSessionOccurrence['typ
  * Render the closed, producer-sanitized fields of a managed-session occurrence.
  * A local CLI outcome is deliberately not represented as remote-state proof.
  */
-export function formatSessionOccurrence(event: RenderedSessionOccurrence): string {
+export function formatSessionOccurrence(event: RenderedSessionOccurrence, verbose = true): string {
   const scope = event.scope.kind === 'feature' ? `feature ${event.scope.featureSlug}` : 'project';
-  const source = `${scope}; provider ${event.provider}; dispatch ${event.dispatchId}; event ${event.eventId}`;
+  const source = verbose
+    ? `${scope}; provider ${event.provider}; dispatch ${event.dispatchId}; event ${event.eventId}`
+    : `${scope}; provider ${event.provider}`;
   switch (event.type) {
     case 'session_command_refused':
       return `managed session command refused: ${event.subcommand} (${source})`;

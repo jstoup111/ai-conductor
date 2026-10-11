@@ -241,6 +241,7 @@ import {
   readKickbackHaltGeneration,
   recoverEpisodeHalts,
   resolveHaltRetention,
+  createRetentionLogGate,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
 import { isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
@@ -877,6 +878,7 @@ export function buildProgressReKickDeps(
   config: HarnessConfig | undefined,
   worktreeBase: string,
   log?: (message: string) => void,
+  retentionGate?: ReturnType<typeof createRetentionLogGate>,
 ): {
   isProgressReKickEligible?: (slug: string) => Promise<boolean>;
   progressReKickDispatchCeiling: number;
@@ -899,9 +901,11 @@ export function buildProgressReKickDeps(
       // shared retention predicate is consulted before the progress compare.
       const retention = await resolveHaltRetention(() => readRawHaltClass(slugRoot));
       if (retention.retained) {
-        log?.(`progress re-kick: ${slug} retained — halt disposition ${retention.haltClass}`);
+        if (retentionGate) retentionGate.observe(slug, retention.haltClass, 'progress re-kick');
+        else log?.(`progress re-kick: ${slug} retained — halt disposition ${retention.haltClass}`);
         return false;
       }
+      retentionGate?.forget(slug);
       const [lastResolvedCount, liveResolvedCount] = await Promise.all([
         readLastResolvedCount(slugRoot),
         countResolvedTasks(slugRoot),
@@ -1059,6 +1063,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     writePersisted: (line) => logSink?.write(formatDaemonLogLine(stripAnsi(line))),
     verbose: config?.daemon_verbose ?? false,
   });
+  const retentionLogGate = createRetentionLogGate(log);
   // daemon.ts is also used as a plain core, where its `[daemon]` messages are
   // meaningful. Its daemon-mode renderer already owns that prefix, though, so
   // normalize only the core-to-renderer bridge to one durable/live prefix.
@@ -2250,6 +2255,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     lastRekickSha,
     markRekicked: (slug, sha) => markRekicked(projectRoot, slug, sha),
     log,
+    retentionGate: retentionLogGate,
     hasWarned: (slug) => hasWarned(projectRoot, slug),
     markWarned: (slug) => markWarned(projectRoot, slug),
     // Task 6 (operator-park): the same real `park-marker.ts` primitive backing
@@ -2309,7 +2315,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // real progress-gated cross-dispatch re-kick (T8/T9/T10) into runDaemon
       // — previously constructed and fully unit-tested only at the
       // daemon.ts/pickEligible level, never reachable from this entrypoint.
-      ...buildProgressReKickDeps(config, worktreeBase, log),
+      ...buildProgressReKickDeps(config, worktreeBase, log, retentionLogGate),
       // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).
@@ -2361,6 +2367,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           readHaltClass: (slug) => readRawHaltClass(join(worktreeBase, slug)),
           clearMarker: (slug) => clearMarker(join(worktreeBase, slug)),
           log,
+          retentionGate: retentionLogGate,
         });
       },
       // Keep daemon-level observations on the existing root event spine.  The
@@ -3221,7 +3228,11 @@ function renderDaemonEventWithPresentation(event: ConductorEvent, output: Parame
       return;
     }
     case 'self_host_containment_verdict':
-      output.whenChanged('self-host-containment', event.contained).info(event.contained ? `self-host containment verified: ${event.evidence}` : `self-host containment unavailable: ${event.reason}`);
+      if (event.contained) {
+        output.whenChanged('self-host-containment', `true:${event.evidence}`).info(`self-host containment verified: ${event.evidence}`);
+      } else {
+        output.whenChanged('self-host-containment', `false:${event.reason}`).info(`self-host containment unavailable: ${event.reason}`);
+      }
       return;
     case 'self_host_boundary_fingerprint':
       output.once('self-host-boundary-fingerprint').info(`self-host boundary fingerprint: ${event.surfaces.map((surface) => `${surface.label} ${surface.elapsedMs}ms/${surface.fileCount} files`).join('; ')}`);
@@ -3229,6 +3240,46 @@ function renderDaemonEventWithPresentation(event: ConductorEvent, output: Parame
       return;
     case 'session_policy':
       output.once(`session-policy:${event.provider}:${event.reason}`).warning(`${event.step}: ${event.provider} session policy — ${event.reason}`, { kind: 'none', why: 'the daemon uses a fresh session' });
+      return;
+    case 'step_failed': {
+      if (event.provisional === 'pending-adjudication') {
+        output.warning(`${renderedExecutionSubject(event, event.step)} provisional FAIL (try ${event.retryCount}) — pending adjudication: ${event.error.split('\n')[0] ?? ''}`, { kind: 'none', why: 'adjudication decides the route and a final verdict line follows' });
+      } else output.info(`✗ ${renderedExecutionSubject(event, event.step)} failed (try ${event.retryCount}): ${event.error}`);
+      return;
+    }
+    case 'provider_attempt': {
+      if (event.lifecycle) {
+        const { lifecycle } = event;
+        if (lifecycle.phase === 'preparing' || lifecycle.phase === 'running' || lifecycle.phase === 'settled') {
+          output.detail(`${renderedExecutionSubject(event, event.step)} provider ${lifecycle.phase} (attempt ${lifecycle.attemptId}, recovery ${lifecycle.recoveryCount})`);
+        } else if (lifecycle.phase === 'recovering') {
+          output.warning(`${renderedExecutionSubject(event, event.step)} provider recovering (recovery ${lifecycle.recoveryCount}${lifecycle.reason ? ` — ${lifecycle.reason}` : ''})`, { kind: 'none', why: 'the supervisor replaces the attempt' });
+          output.detail(`attempt ${lifecycle.attemptId}`);
+        } else {
+          output.halt(`${renderedExecutionSubject(event, event.step)} provider halted (recovery ${lifecycle.recoveryCount}${lifecycle.reason ? ` — ${lifecycle.reason}` : ''})`, { kind: 'operator', action: 'ai-conductor monitor all' });
+          output.detail(`attempt ${lifecycle.attemptId}`);
+        }
+        return;
+      }
+      output.info(`${renderedExecutionSubject(event, event.step)} via ${event.provider}`);
+      return;
+    }
+    case 'provider_fallback':
+      output.warning(`PROVIDER FALLBACK: ${event.step} — ${event.failedProvider} unavailable (${event.reason}); trying ${event.nextProvider}`, { kind: 'none', why: event.recoveryAction ?? 'the daemon selects the next provider' });
+      return;
+    case 'rate_limit':
+      output.warning(`${event.reason === 'usage-exhausted' ? 'usage exhausted' : 'rate limited'}: waiting ${event.waitSeconds}s`, { kind: 'none', why: `waiting ${event.waitSeconds}s` });
+      return;
+    case 'loop_halt':
+      output.halt(`loop halted: ${event.reason.split('\n')[0] ?? event.reason} (details: .pipeline/HALT)`, { kind: 'operator', action: 'ai-conductor monitor' });
+      return;
+    case 'session_command_refused':
+      output.halt(formatSessionOccurrence(event, false), { kind: 'operator', action: 'ai-conductor monitor all' });
+      output.detail(formatSessionOccurrence(event, true));
+      return;
+    case 'github_bypass_attempt': case 'github_bypass_result': case 'github_possible_bypass': case 'session_event_delivery_diagnostic':
+      output.warning(formatSessionOccurrence(event, false), { kind: 'operator', action: 'ai-conductor monitor all' });
+      output.detail(formatSessionOccurrence(event, true));
       return;
   }
   if (!legacyLog) return;

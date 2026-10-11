@@ -158,6 +158,7 @@ export async function recoverEpisodeHalts(deps: {
   readHaltClass: (slug: string) => Promise<string>;
   clearMarker: (slug: string) => Promise<void>;
   log?: (message: string) => void;
+  retentionGate?: ReturnType<typeof createRetentionLogGate>;
 }): Promise<string[]> {
   const cleared: string[] = [];
   for (const slug of await deps.stampedHalts()) {
@@ -168,9 +169,11 @@ export async function recoverEpisodeHalts(deps: {
     }
     const decision = await resolveHaltRetention(() => deps.readHaltClass(slug));
     if (decision.retained) {
-      deps.log?.(`episode-end sweep: ${slug} retained — halt disposition ${decision.haltClass}`);
+      if (deps.retentionGate) deps.retentionGate.observe(slug, decision.haltClass, 'episode-end sweep');
+      else deps.log?.(`episode-end sweep: ${slug} retained — halt disposition ${decision.haltClass}`);
       continue;
     }
+    deps.retentionGate?.forget(slug);
     await deps.clearMarker(slug);
     deps.log?.(`episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)`);
     cleared.push(slug);
@@ -397,6 +400,8 @@ export interface RekickSweepDeps {
   hasWarned?: (slug: string) => Promise<boolean>;
   /** Warn-once: record that the "already shipped" skip was logged for this slug. */
   markWarned?: (slug: string) => Promise<void>;
+  /** Shared daemon-lifetime retention presentation memory. */
+  retentionGate?: ReturnType<typeof createRetentionLogGate>;
   /**
    * True when a slug's worktree carries an operator-placed park marker. Checked
    * FIRST in the per-slug loop, ahead of `isProcessed` and the SHA guard: a
@@ -526,9 +531,11 @@ export async function rekickSweep(
         } catch {
           /* best-effort */
         }
-        log(`re-kick ${slug}: skipped — halt disposition ${haltClass} (${classReason})`);
+        if (deps.retentionGate) deps.retentionGate.observe(slug, haltClass, 're-kick');
+        else log(`re-kick ${slug}: skipped — halt disposition ${haltClass} (${classReason})`);
         continue;
       }
+      deps.retentionGate?.forget(slug);
     }
 
     // FR-9: bounded — already re-kicked at this SHA → leave parked.

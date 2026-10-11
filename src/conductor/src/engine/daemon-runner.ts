@@ -33,6 +33,7 @@ import { deferredAutoParkHaltPresentation } from './auto-park-halt.js';
 import type { OperatorParkedTermination } from './conductor-options.js';
 import { computeTimingRollup } from './timing-rollup.js';
 import { readState } from './state.js';
+import { formatDaemonHalt } from './daemon-log.js';
 import type { GithubOperationRunner } from './github-operations.js';
 
 /**
@@ -646,7 +647,7 @@ export function makeRunFeature(
         }
 
         await deps.teardownWorktree(worktree, true);
-        featureLog(`✋ ${item.slug} false-ship halted — worktree kept (${reason})`);
+        featureLog(formatDaemonHalt(`${item.slug} false-ship halted — worktree kept (${reason})`, { kind: 'operator', action: 'ai-conductor monitor all' }));
         await endDispatch('halted');
         const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog, worktree);
         return {
@@ -661,7 +662,7 @@ export function makeRunFeature(
       if (outcome.halted) {
         await endDispatch('halted');
         await deps.teardownWorktree(worktree, true); // keep for the human
-        featureLog(`✋ ${item.slug} halted — worktree kept (${outcome.reason ?? 'see .pipeline/HALT'})`);
+        featureLog(formatDaemonHalt(`${item.slug} halted — worktree kept (${outcome.reason ?? 'see .pipeline/HALT'})`, { kind: 'operator', action: 'ai-conductor monitor all' }));
         const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog, worktree);
         return {
           slug: item.slug,
