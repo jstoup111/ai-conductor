@@ -116,7 +116,7 @@ describe('integration/autoresolve — lease-protected publish', () => {
     expect(result).toEqual({ pushed: true });
     const pushCall = calls.find((c) => c[0] === 'push');
     expect(pushCall).toBeDefined();
-    expect(pushCall).toContain('--force-with-lease');
+    expect(pushCall?.some((arg) => arg.startsWith('--force-with-lease=refs/heads/feat/widget:'))).toBe(true);
     expect(pushCall).not.toContain('--force');
 
     // Origin now carries the refreshed content — the push is the only mutation.

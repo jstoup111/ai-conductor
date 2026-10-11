@@ -150,7 +150,11 @@ describe('engine/autoresolve — outcome logging at call sites', () => {
   });
 
   it('publishResolution: success path logs one refreshed line with the PR identifier and lease-push stage', async () => {
+    const remoteTip = 'a'.repeat(40);
     const { git } = fakeGit((args) => {
+      if (args[0] === 'rev-parse' && args.includes('refs/remotes/origin/feat/widget')) {
+        return { exitCode: 0, stdout: `${remoteTip}\n`, stderr: '' };
+      }
       if (args[0] === 'push') return { exitCode: 0, stdout: '', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
     });
@@ -173,7 +177,11 @@ describe('engine/autoresolve — outcome logging at call sites', () => {
   });
 
   it('publishResolution: lease-rejection path logs one escalated line with the lease-push stage', async () => {
+    const remoteTip = 'a'.repeat(40);
     const { git } = fakeGit((args) => {
+      if (args[0] === 'rev-parse' && args.includes('refs/remotes/origin/feat/widget')) {
+        return { exitCode: 0, stdout: `${remoteTip}\n`, stderr: '' };
+      }
       if (args[0] === 'push') {
         return {
           exitCode: 1,

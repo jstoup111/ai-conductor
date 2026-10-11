@@ -851,6 +851,11 @@ export async function pushRefreshedBranch(
   // Detect lease rejection (typical error message from git)
   if (stderr.includes('stale') || stderr.includes('lease') || stderr.includes('rejected')) {
     reason = `lease push rejected (stale remote ref or concurrent change): ${stderr.slice(0, 100)}`;
+  } else if (pushResult.kind === 'refused') {
+    // The expected-SHA decision can detect a moved ref before Git receives
+    // the push. Keep that refusal recognisably a lease outcome for callers
+    // and operators, just as Git's own stale-lease error is.
+    reason = `lease push refused (stale remote ref or concurrent change): ${stderr.slice(0, 100)}`;
   } else if (stderr) {
     reason = `push error: ${stderr.slice(0, 100)}`;
   }
