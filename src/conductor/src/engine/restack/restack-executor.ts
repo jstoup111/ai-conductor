@@ -448,10 +448,12 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       journal = updated.journal;
       const ownership = await checkPathOwnership(range, parent, replay.tip, git);
       if (ownership.kind === 'refused') {
+        await abortJournal(options.worktree, journal, git, moves);
         await haltRestack(options.worktree, 'replay-mismatch', options.events, {
           child: range.child,
           detail: ownership.paths.join(', '),
         });
+        terminal = true;
         return { kind: 'halted' };
       }
       overlaps.set(range.child, await parentOverlapPaths(range, parent, git));
@@ -478,11 +480,15 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const checkedOut = await checkedOutRef(git);
     const preMove = await checkRestackPreMove(options.worktree, moves, checkedOut, { git });
     if (preMove.kind === 'refused') {
+      await abortJournal(options.worktree, journal, git, moves);
       await haltRestack(options.worktree, preMove.reason, options.events, { detail: preMove.detail });
+      terminal = true;
       return { kind: 'halted' };
     }
     if (preMove.kind === 'seal-refused') {
+      await abortJournal(options.worktree, journal, git, moves);
       await writeSealHalt(options.worktree, preMove.detail, options.events);
+      terminal = true;
       return { kind: 'halted' };
     }
     if (preMove.kind === 'unavailable') throw new Error(preMove.detail);

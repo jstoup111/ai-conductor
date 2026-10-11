@@ -48,6 +48,12 @@ export interface RecoverRestackJournalOptions {
   readonly slug: string;
   readonly events?: ConductorEventEmitter;
   readonly git?: GitRunner;
+  /**
+   * Halt writers need the refs and worktree settled, but must not publish the
+   * restack transition while composing their durable halt record.  This mode
+   * therefore stops at `synced` (or finishes a rollback at `aborted`).
+   */
+  readonly target?: 'completed' | 'synced';
 }
 
 function ref(raw: string): RefName {
@@ -335,22 +341,48 @@ async function haltVerificationFailure(worktree: string, detail: string, events:
   await haltRestack(worktree, 'verification-failed', events, { detail });
 }
 
+async function abortHaltTargetRecovery(
+  worktree: string,
+  journal: StoredRestackJournal | undefined,
+  moves: readonly RestackMoveRef[],
+  git: GitRunner,
+): Promise<void> {
+  if (!journal) return;
+  if (journal.journal.state === 'moved' && moves.length > 0) {
+    await rollbackRestackMove(worktree, journal, moves, { git });
+    return;
+  }
+  if (journal.journal.state === 'rolling-back' && moves.length > 0) {
+    await rollBackFromRolling(worktree, journal, moves, git);
+    return;
+  }
+  if (journal.journal.state === 'planned' || journal.journal.state === 'ready') {
+    await transition(worktree, journal, 'aborted', git);
+  }
+}
+
 /**
  * Continue or roll back a dead process's journal using only Git refs and the
  * journal blob.  `.pipeline` is deliberately neither read nor required.
  */
 export async function recoverRestackJournal(options: RecoverRestackJournalOptions): Promise<RecoverRestackJournalResult> {
   const git = options.git ?? makeGitRunner(options.worktree);
+  const stopAtSynced = options.target === 'synced';
   const read = await readRestackJournal(options.worktree, options.slug, { git });
   if (read.kind === 'missing') return { kind: 'none' };
   if (read.kind === 'unreadable') {
     const detail = await corruptJournalRefValues(options.slug, git);
-    await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail });
+    if (!stopAtSynced) await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail });
     return { kind: 'unavailable', detail: `cannot read restack journal ${journalRefFor(options.slug)}` };
   }
   if (await isJournalOwnerAlive(read.journal.owner)) return { kind: 'live-owner' };
 
-  let journal: StoredRestackJournal = { slug: read.slug, blob: read.blob, journal: read.journal };
+  let journal: StoredRestackJournal | undefined = { slug: read.slug, blob: read.blob, journal: read.journal };
+  let moves: RestackMoveRef[] = [];
+  const unavailableAfterHaltTargetAbort = async (detail: string): Promise<RecoverRestackJournalResult> => {
+    if (stopAtSynced) await abortHaltTargetRecovery(options.worktree, journal, moves, git).catch(() => {});
+    return { kind: 'unavailable', detail };
+  };
   try {
     if (journal.journal.state === 'applied') {
       if (journal.journal.followOnCause !== undefined) {
@@ -375,6 +407,11 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
     }
     const fromState = journal.journal.state as Exclude<JournalState, 'applied' | 'aborted'>;
     if (journal.journal.state === 'planned') {
+      if (stopAtSynced) {
+        await transition(options.worktree, journal, 'aborted', git);
+        await options.events?.emit({ type: 'restack_recovered', opId: journal.journal.opId, fromState });
+        return { kind: 'recovered', fromState };
+      }
       const resumed = await resumePlanned(options.worktree, journal, git);
       if (!resumed) {
         // A planned journal has never moved a production ref.  If an operator
@@ -385,7 +422,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
           if (!aborted || !await cleanJournal(options.worktree, aborted, git)) {
             return { kind: 'unavailable', detail: 'cannot abort changed planned restack journal' };
           }
-          await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: 'a journaled input ref changed before recovery' });
+          if (!stopAtSynced) await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: 'a journaled input ref changed before recovery' });
           await options.events?.emit({ type: 'restack_recovered', opId: journal.journal.opId, fromState });
           return { kind: 'recovered', fromState };
         }
@@ -394,24 +431,24 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
       journal = resumed;
     }
 
-    const moves = await movesFor(journal, git);
-    if (!moves) return { kind: 'unavailable', detail: 'cannot reconstruct restack move from journal refs' };
+    moves = await movesFor(journal, git) ?? [];
+    if (moves.length === 0) return unavailableAfterHaltTargetAbort('cannot reconstruct restack move from journal refs');
     const checkedOut = await checkedOutRef(git);
-    if (!checkedOut) return { kind: 'unavailable', detail: 'restack recovery requires a checked-out feature branch' };
+    if (!checkedOut) return unavailableAfterHaltTargetAbort('restack recovery requires a checked-out feature branch');
 
     if (journal.journal.state === 'ready') {
       const sides = await movedRefSides(journal, moves, checkedOut, git);
       if ([...sides.values()].some((side) => side !== 'old')) {
         const aborted = await transition(options.worktree, journal, 'aborted', git);
         if (!aborted) return { kind: 'unavailable', detail: 'cannot abort changed recovered restack' };
-        await haltChangedJournalRefs(options.worktree, journal, options.events, git);
+        if (!stopAtSynced) await haltChangedJournalRefs(options.worktree, journal, options.events, git);
         return { kind: 'recovered', fromState };
       }
       const preMove = await checkRestackPreMove(options.worktree, moves, checkedOut, { git });
       if (preMove.kind === 'refused') {
         const aborted = await transition(options.worktree, journal, 'aborted', git);
         if (!aborted) return { kind: 'unavailable', detail: 'cannot abort refused recovered restack' };
-        await haltRestack(options.worktree, preMove.reason, options.events, { detail: preMove.detail });
+        if (!stopAtSynced) await haltRestack(options.worktree, preMove.reason, options.events, { detail: preMove.detail });
         await options.events?.emit({ type: 'restack_recovered', opId: journal.journal.opId, fromState });
         return { kind: 'recovered', fromState };
       }
@@ -424,14 +461,14 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
     if (journal.journal.state === 'moved') {
       const sides = await movedRefSides(journal, moves, checkedOut, git);
       if ([...sides.values()].some((side) => side !== 'new')) {
-        await haltChangedJournalRefs(options.worktree, journal, options.events, git);
+        if (!stopAtSynced) await haltChangedJournalRefs(options.worktree, journal, options.events, git);
         return { kind: 'unavailable', detail: 'journaled refs no longer match the moved side' };
       }
       const verified = await verifyMovedRecovery(options.worktree, journal, moves, checkedOut, git);
       if (verified.kind === 'failed') {
         const rolledBack = await rollbackRestackMove(options.worktree, journal, moves, { git });
         if (rolledBack.kind !== 'aborted') return { kind: 'unavailable', detail: rolledBack.detail };
-        await haltVerificationFailure(options.worktree, verified.detail, options.events);
+        if (!stopAtSynced) await haltVerificationFailure(options.worktree, verified.detail, options.events);
         await options.events?.emit({ type: 'restack_recovered', opId: journal.journal.opId, fromState });
         return { kind: 'recovered', fromState };
       }
@@ -444,7 +481,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         if (!(error instanceof RestackSyncOperatorEditError)) throw error;
         const rolledBack = await rollbackRestackMove(options.worktree, journal, moves, { git });
         if (rolledBack.kind !== 'aborted') return { kind: 'unavailable', detail: rolledBack.detail };
-        await haltRestack(options.worktree, 'dirty-overlap', options.events, { detail: error.path });
+        if (!stopAtSynced) await haltRestack(options.worktree, 'dirty-overlap', options.events, { detail: error.path });
         await options.events?.emit({ type: 'restack_recovered', opId: journal.journal.opId, fromState });
         return { kind: 'recovered', fromState };
       }
@@ -461,6 +498,10 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
     }
 
     if (journal.journal.state === 'synced') {
+      if (stopAtSynced) {
+        await options.events?.emit({ type: 'restack_recovered', opId: journal.journal.opId, fromState });
+        return { kind: 'recovered', fromState };
+      }
       const activeMove = moves.find((move) => move.ref === checkedOut);
       if (!activeMove?.child) return { kind: 'unavailable', detail: 'cannot identify active child for recovered transition' };
       await applyRestackTransition({
@@ -482,6 +523,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
     await options.events?.emit({ type: 'restack_recovered', opId: read.journal.opId, fromState });
     return { kind: 'recovered', fromState };
   } catch (error) {
+    if (stopAtSynced) await abortHaltTargetRecovery(options.worktree, journal, moves, git).catch(() => {});
     return { kind: 'unavailable', detail: error instanceof Error ? error.message : String(error) };
   }
 }
