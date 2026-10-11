@@ -76,7 +76,7 @@ describe('validation-group refusal persistence', () => {
     const persister = new EventPersister(eventsPath, events);
     persister.start();
     try {
-      await new Conductor({
+      const conductor = new Conductor({
         projectRoot: root,
         stateFilePath: join(root, '.pipeline/conduct-state.json'),
         stepRunner: input.runner,
@@ -87,7 +87,12 @@ describe('validation-group refusal persistence', () => {
         maxRetries: 1,
         verifyArtifacts: input.verifyArtifacts ?? false,
         escalateBuildFailure: async () => ({}),
-      }).run();
+      });
+      // Refusal persistence is the boundary under test. Keep the validator
+      // handshake contract in its dedicated tests rather than requiring this
+      // event fixture to manufacture typed current-run artifacts.
+      vi.spyOn(conductor as any, 'verdictDispatchHandshake').mockResolvedValue(undefined);
+      await conductor.run();
     } finally {
       persister.stop();
     }

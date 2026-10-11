@@ -170,7 +170,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     extra: Partial<ConstructorParameters<typeof Conductor>[0]> = {},
   ): Conductor {
     const { config: extraConfig, ...conductorExtra } = extra;
-    return new Conductor({
+    const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -188,6 +188,10 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       fromStep: 'manual_test',
       ...conductorExtra,
     });
+    // These acceptance flows own join and kickback behavior. The separate
+    // handshake suite owns current typed-verdict identity and retries.
+    vi.spyOn(conductor as any, 'verdictDispatchHandshake').mockResolvedValue(undefined);
+    return conductor;
   }
 
   async function writeRemediableAsBuiltVerdict(

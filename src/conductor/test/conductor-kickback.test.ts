@@ -1,5 +1,5 @@
 // Covers: task:2, task:3, task:4
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -197,6 +197,11 @@ describe('validation-group kickback restages', () => {
       verifyArtifacts: true,
       maxRetries: 1,
     });
+
+    // This fixture exercises the consolidated-kickback restage, not the
+    // validator write contract. The dedicated handshake suite owns the
+    // typed-artifact/run-identity boundary.
+    vi.spyOn(conductor as any, 'verdictDispatchHandshake').mockResolvedValue(undefined);
 
     (conductor as any).planRemediation = async () => ({
       kind: 'route', target: 'build', evidence: 'validated gap', hint: 'repair the gap',
