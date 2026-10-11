@@ -125,6 +125,7 @@ import {
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { wireInteractiveOtelMetrics, wireOtelLogs, wireOtelVisualizer } from './engine/otel/wire.js';
 import type { OtelVisualizerStartContext } from './engine/otel/wire.js';
+import { createOperationalLogger } from './engine/operational-log.js';
 import { resolveEngineVersion } from './engine/shipped-record.js';
 import { resolveRunSourceRef } from './engine/run-provenance.js';
 import {
@@ -341,10 +342,11 @@ export function buildInteractiveVisualizers(
   // reader itself is deliberately async and fail-closed, so expose it as the
   // same caller-owned lifecycle shape without blocking unrelated connectors.
   let logOwner: ReturnType<typeof wireOtelLogs> | undefined;
+  let logStop: Promise<void> | undefined;
   const logs: VisualizerPlugin = {
     name: 'otel-logs',
     start: () => { logOwner ??= wireOtelLogs(config, { ...context.startContext, pipelineDir: context.pipelineDir }, context.emitter); },
-    stop: async () => { await logOwner?.then((owner) => owner?.stop()); },
+    stop: () => logStop ??= (logOwner?.then((owner) => owner?.stop()) ?? Promise.resolve()),
   };
   // OTel's synchronous visualizer helpers start their own constructors above.
   // Start the asynchronous log owner here as well; returning an unstarted
@@ -399,6 +401,45 @@ export async function stopVisualizers(visualizers: VisualizerPlugin[]): Promise<
       }),
     ),
   );
+}
+
+/**
+ * Keep foreground diagnostics on the event spine while their normal terminal
+ * output remains untouched.  The returned cleanup is deliberately idempotent:
+ * an interactive invocation may fail after installing the bridge, and a later
+ * invocation in the same process must not retain the old feature ownership.
+ */
+export function installInteractiveDiagnosticBridge(
+  events: ConductorEventEmitter,
+  feature: string | undefined,
+): () => void {
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  const ownership = feature === undefined
+    ? { scope: 'project' as const }
+    : { scope: 'feature' as const, featureSlug: feature };
+  const logger = createOperationalLogger({
+    emit: (occurrence) => events.emit(occurrence),
+    localSink: (severity, body) => {
+      (severity === 'warn' ? originalWarn : originalError)(body);
+    },
+    now: Date.now,
+    ownership,
+  });
+  const format = (args: unknown[]): string => args.map((arg) => String(arg)).join(' ');
+  const bridgedWarn = (...args: unknown[]): void => { logger.warn(format(args)); };
+  const bridgedError = (...args: unknown[]): void => { logger.error(format(args)); };
+  console.warn = bridgedWarn;
+  console.error = bridgedError;
+
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    // Do not overwrite a bridge installed by a nested/later invocation.
+    if (console.warn === bridgedWarn) console.warn = originalWarn;
+    if (console.error === bridgedError) console.error = originalError;
+  };
 }
 
 /** Render root help with the public compose alias as the canonical spelling. */
@@ -1697,6 +1738,7 @@ async function dispatchCliCommand(): Promise<void> {
   const sessionTail = startSessionEventTail(projectRoot, events);
   let subscriber: Awaited<ReturnType<typeof bootDispatchingCliProviders>>;
   let visualizerList: ReturnType<typeof buildInteractiveVisualizers> = [];
+  let restoreInteractiveDiagnosticBridge: (() => void) | undefined;
   try {
     subscriber = await bootDispatchingCliProviders({
     command: 'inline',
@@ -1708,6 +1750,34 @@ async function dispatchCliCommand(): Promise<void> {
     if (!subscriber) {
       throw new Error('Provider discovery was not enabled for the inline command');
     }
+
+  // Build configured visualizers plus OTel before constructing the provider
+  // runtime, so its diagnostics join the configured-run spine too.
+  const visualizerContext: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = {
+    config: config ?? {},
+    pipelineDir,
+    emitter: events,
+    startContext: createVisualizerStartContext({
+      runId: sessionId,
+      project: projectRoot,
+      feature: opts.featureDesc,
+      sourceRef: await resolveRunSourceRef(projectRoot, opts.featureDesc),
+      branch: await resolveCurrentBranch(projectRoot),
+      engineVersion: resolveEngineVersion(__dirname),
+      harnessVersion: await resolveHarnessVersion(__dirname),
+      pipelineDir,
+    }),
+  };
+  visualizerList = buildInteractiveVisualizers(
+    registry,
+    visualizerContext.config,
+    visualizerContext,
+  );
+  // From this point the configured log owner is attached to the same spine as
+  // lifecycle records.  Keep foreground warnings/errors local *and* offer
+  // their structured occurrence to that owner; early command/admin output
+  // remains intentionally outside this configured-run capture boundary.
+  restoreInteractiveDiagnosticBridge = installInteractiveDiagnosticBridge(events, opts.featureDesc);
 
   // Compose one provider-routing context from the complete frozen registry.
   // The ordered config survives intact; its first entry is only the
@@ -1775,29 +1845,6 @@ async function dispatchCliCommand(): Promise<void> {
   // (never process.cwd()) so the audit trail preserves this run's history.
   const auditWriter = new AuditTrailWriter(projectRoot);
   auditWriter.subscribe(events);
-
-  // Build configured visualizers plus OTel, whose shared helper retains
-  // ownership of its `otel:` configuration gate and start lifecycle.
-  const visualizerContext: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = {
-    config: config ?? {},
-    pipelineDir,
-    emitter: events,
-    startContext: createVisualizerStartContext({
-      runId: sessionId,
-      project: projectRoot,
-      feature: opts.featureDesc,
-      sourceRef: await resolveRunSourceRef(projectRoot, opts.featureDesc),
-      branch: await resolveCurrentBranch(projectRoot),
-      engineVersion: resolveEngineVersion(__dirname),
-      harnessVersion: await resolveHarnessVersion(__dirname),
-      pipelineDir,
-    }),
-  };
-  visualizerList = buildInteractiveVisualizers(
-    registry,
-    visualizerContext.config,
-    visualizerContext,
-  );
 
   const stepRunner = new DefaultStepRunner(compatibilityRuntime.provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
@@ -1932,6 +1979,7 @@ async function dispatchCliCommand(): Promise<void> {
     await sessionTail.drain();
     persister.stop();
     await stopVisualizers(visualizerList);
+    restoreInteractiveDiagnosticBridge?.();
     await subscriber?.stop();
   }
 }
