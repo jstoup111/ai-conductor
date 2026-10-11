@@ -19,15 +19,19 @@ import { loadConfig } from './config.js';
 import { kickbackBudgetFallbackLimit, prdAuditAppendCap } from './remediation-caps.js';
 import { childStateExists, parseChildId, type ChildId } from './child-context.js';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
+import { MAX_RESTACK_CASCADES_PER_CHILD, readCascadeCounts, updateCascadeLimit } from './restack/cascade-cap.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
 
-const GATES = new Set(['build_review', 'prd_audit', 'architecture_review_as_built']);
+const GATES = new Set(['build_review', 'prd_audit', 'architecture_review_as_built', 'restack']);
 async function defaultsFor(worktree: string): Promise<Record<string, number>> {
   const loaded = await loadConfig(worktree);
   const config = loaded.ok ? loaded.config : {} as HarnessConfig;
   return Object.fromEntries(
-    [...GATES].map((gate) => [gate, kickbackBudgetFallbackLimit(gate, config)]),
+    [...GATES].map((gate) => [
+      gate,
+      gate === 'restack' ? MAX_RESTACK_CASCADES_PER_CHILD : kickbackBudgetFallbackLimit(gate, config),
+    ]),
   );
 }
 
@@ -174,7 +178,14 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     print(`kickback-budget: invalid child id "${command.child}".`);
     return 1;
   }
-  if (child !== undefined && !(await childStateExists(worktree, child))) {
+  // Restack recovery is deliberately ref-backed: the originating child's
+  // worktree may have been recreated after its cascade cap halted the stack.
+  // All other gates retain their child-state boundary.
+  if (command.gate === 'restack' && child === undefined) {
+    print('kickback-budget: --gate restack requires --child.');
+    return 1;
+  }
+  if (child !== undefined && command.gate !== 'restack' && !(await childStateExists(worktree, child))) {
     print(`kickback-budget: child ${child} has no child state.`);
     return 1;
   }
@@ -185,6 +196,17 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   const gate = command.gate;
   const action: KickbackBudgetAdjustment['kind'] = command.action === 'raise' ? 'raise' : 'reset';
   const rationale = command.rationale.trim();
+  const restackChild = gate === 'restack' ? child! : undefined;
+  const cascadeState = restackChild === undefined ? undefined : await readCascadeCounts(worktree, command.feature);
+  if (cascadeState?.kind === 'unreadable') {
+    print(`kickback-budget: refused — ${cascadeState.detail}`);
+    return 1;
+  }
+  if (restackChild !== undefined && cascadeState !== undefined &&
+      !(String(restackChild) in cascadeState.counts.counts) && !(String(restackChild) in (cascadeState.counts.limits ?? {}))) {
+    print(`kickback-budget: refused — child ${restackChild} has no cascade state.`);
+    return 1;
+  }
   // The recovery-eligible class is per gate: the cumulative build_review cap
   // writes `needs-human` (D1), while the two remediation-append cap terminals
   // write `kickback-cap` (adr-2026-08-25 D4, preserved by D1's amendment). Read
@@ -211,7 +233,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   let liveHaltGeneration = '';
   try {
     const defaults = await defaultsFor(worktree);
-    const remediation = gate !== 'build_review';
+    const remediation = gate !== 'build_review' && gate !== 'restack';
     // D3: machine-scoped identity through the approved user-config → GitHub
     // chain. `GITHUB_ACTOR` is an environment variable any pipeline process can
     // set, so it can never be the authority for an operator authorization.
@@ -223,7 +245,9 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       if (!entry.capEvidence) throw new Error('no current cap evidence for that gate');
       const allowance = entry.capEvidence.allowance ?? 'laps';
       const growth = allowance === 'growth';
-      const currentLimit = growth
+      const currentLimit = gate === 'restack'
+        ? (cascadeState!.counts.limits?.[String(restackChild!)] ?? MAX_RESTACK_CASCADES_PER_CHILD)
+        : growth
         ? (ledger.effectiveGrowthCap ?? entry.capEvidence.limit)
         : remediation ? (entry.effectiveLapCap ?? entry.capEvidence.limit) : (entry.effectiveLimit ?? defaults[gate]);
       const currentConsumed = growth ? (ledger.growth?.added ?? 0) : remediation ? (entry.laps ?? 0) : entry.cumulative;
@@ -239,6 +263,9 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       const liveHaltClass = (await readFile(join(worktree, HALT_CLASS_MARKER), 'utf8')).trim();
       if (liveHaltClass !== RECOVERABLE_CAP_HALT_CLASS_BY_GATE[gate]) throw new Error('live halt is not eligible for recovery');
       const current = await readKickbackLedger(worktree, child);
+      if (gate === 'restack' && !current.gates[gate]?.capEvidence?.latestReason.includes(`originating child ${restackChild}`)) {
+        throw new Error('restack cap evidence names a different originating child');
+      }
       liveHaltGeneration = current.gates[gate]?.capEvidence?.haltGeneration ?? '';
       if (!liveHaltGeneration || !haltBody.includes(`Kickback halt generation: ${liveHaltGeneration}`)) {
         throw new Error('live halt no longer matches current cap evidence');
@@ -253,6 +280,30 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       allowance: adjustment.allowance,
     };
     await appendAuthorizationEvent(worktree, event, deps.appendEvent);
+    if (restackChild !== undefined && cascadeState !== undefined) {
+      const changed = await updateCascadeLimit(
+        worktree,
+        command.feature,
+        restackChild,
+        cascadeState.blob,
+        (current) => {
+          const currentLimit = current.limits?.[String(restackChild)] ?? MAX_RESTACK_CASCADES_PER_CHILD;
+          return {
+            version: 1,
+            counts: {
+              ...current.counts,
+              ...(action === 'reset' ? { [String(restackChild)]: 0 } : {}),
+            },
+            limits: {
+              ...(current.limits ?? {}),
+              [String(restackChild)]: action === 'raise' ? currentLimit + command.by! : currentLimit,
+            },
+          };
+        },
+      );
+      if (changed.kind === 'stale') throw new Error('cascade counts changed concurrently; no resume authorization was installed');
+      if (changed.kind === 'unreadable') throw new Error(changed.detail);
+    }
     const applied = await applyKickbackBudgetAdjustment(worktree, gate, adjustment, defaults[gate], child);
     committed = true;
     const adjustedLedger = await readKickbackLedger(worktree, child);

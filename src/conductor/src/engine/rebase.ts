@@ -93,7 +93,7 @@ export type ProspectiveMergeResult = 'clean' | 'conflicting' | 'indeterminate';
  * `merge-tree --write-tree` uses exit 0 for a clean merge and 1 for conflicts;
  * every other exit is an operational failure whose mergeability is unknown.
  */
-async function classifyProspectiveMerge(
+export async function classifyProspectiveMerge(
   git: GitRunner,
   baseRef: string,
 ): Promise<ProspectiveMergeResult> {

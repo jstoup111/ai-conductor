@@ -431,6 +431,8 @@ import {
   originDefaultBranch,
   resolveBase,
   filterCodeOrTestPaths,
+  classifyMergeableSkip,
+  classifyProspectiveMerge,
   type RebaseOutcome,
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
@@ -15272,6 +15274,20 @@ export class Conductor {
       if (current.exitCode === 0) {
         outcome = { kind: 'noop', baseSha: target, allChangedPaths: [] };
       } else {
+        // Preserve FINISH's existing mergeable-skip policy, but evaluate it
+        // only after durable stack repair.  A base change that touches either
+        // code or review inputs remains non-skippable and reaches restack.
+        const prospective = await classifyProspectiveMerge(git, base.ref);
+        const skip = prospective === 'clean'
+          ? await classifyMergeableSkip(git, base, this.projectRoot)
+          : undefined;
+        if (skip?.skippable) {
+          outcome = { kind: 'mergeable_skip', baseRef: base.ref, baseSha: skip.baseSha, baseKind: base.kind };
+          this.lastRebaseOutcome = outcome;
+          await emitRebaseEvent(this.events, outcome);
+          await recordRebaseStepCompletion(this.stateFilePath, outcome);
+          return { success: true };
+        }
         const restacked = await runRestack({
           worktree: this.projectRoot,
           slug: stackSlug,

@@ -10,6 +10,8 @@ export interface CascadeCounts {
   readonly version: 1;
   /** String keys keep the ref-backed JSON stable and readable outside TypeScript. */
   readonly counts: Readonly<Record<string, number>>;
+  /** Per-originating-child operator overrides.  Absent means the default cap. */
+  readonly limits?: Readonly<Record<string, number>>;
 }
 
 export type ReadCascadeCountsResult =
@@ -23,6 +25,11 @@ export type CascadeCapResult =
 export type CascadeUpdateLinesResult =
   | { readonly kind: 'lines'; readonly lines: readonly string[]; readonly counts: CascadeCounts }
   | { readonly kind: 'unreadable'; readonly ref: RefName; readonly detail: string };
+
+export type CascadeLimitUpdateResult =
+  | { readonly kind: 'updated'; readonly counts: CascadeCounts }
+  | { readonly kind: 'stale' }
+  | { readonly kind: 'unreadable'; readonly detail: string };
 
 export interface CascadeCapDependencies {
   readonly git?: GitRunner;
@@ -56,11 +63,48 @@ function parseCounts(value: unknown): CascadeCounts | undefined {
     if (child === undefined || rawChild !== String(child) || typeof rawCount !== 'number' || !Number.isSafeInteger(rawCount) || rawCount < 0) return undefined;
     counts[rawChild] = rawCount;
   }
-  return { version: 1, counts };
+  let limits: Record<string, number> | undefined;
+  if (record.limits !== undefined) {
+    if (typeof record.limits !== 'object' || record.limits === null || Array.isArray(record.limits)) return undefined;
+    limits = {};
+    for (const [rawChild, rawLimit] of Object.entries(record.limits as Record<string, unknown>)) {
+      const child = parseChildId(rawChild);
+      if (child === undefined || rawChild !== String(child) || typeof rawLimit !== 'number' || !Number.isSafeInteger(rawLimit) || rawLimit < 1) return undefined;
+      limits[rawChild] = rawLimit;
+    }
+  }
+  return { version: 1, counts, ...(limits === undefined ? {} : { limits }) };
 }
 
 function emptyCounts(): CascadeCounts {
   return { version: 1, counts: {} };
+}
+
+/**
+ * Update one child's durable cascade limit with an object-id lease.  This is
+ * deliberately separate from ledger accounting: the counter is the authority
+ * when an old child worktree has been recreated or discarded.
+ */
+export async function updateCascadeLimit(
+  worktree: string,
+  slug: string,
+  child: ChildId,
+  expectedBlob: CommitSha | undefined,
+  update: (current: CascadeCounts) => CascadeCounts,
+  dependencies: CascadeCapDependencies = {},
+): Promise<CascadeLimitUpdateResult> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const state = await readCascadeCounts(worktree, slug, { git });
+  if (state.kind === 'unreadable') return { kind: 'unreadable', detail: state.detail };
+  if (state.blob !== expectedBlob) return { kind: 'stale' };
+  const next = update(state.counts);
+  if (!next.limits?.[String(child)]) return { kind: 'unreadable', detail: 'updated cascade limit is missing its child' };
+  const written = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(next));
+  const blob = written?.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
+  if (!blob) return { kind: 'unreadable', detail: `cannot write cascade counts for ${state.ref}` };
+  const result = await runGit(git, ['update-ref', state.ref, blob, expectedBlob ?? '0000000000000000000000000000000000000000']);
+  if (result?.exitCode !== 0) return { kind: 'stale' };
+  return { kind: 'updated', counts: next };
 }
 
 /** Read the durable ref-backed cascade counters; malformed state fails closed. */
@@ -126,7 +170,11 @@ export async function cascadeUpdateLines(
   if (state.kind === 'unreadable') return state;
   const next: Record<string, number> = { ...state.counts.counts };
   for (const child of new Set(originatingChildren)) next[String(child)] = (next[String(child)] ?? 0) + 1;
-  const counts: CascadeCounts = { version: 1, counts: next };
+  const counts: CascadeCounts = {
+    version: 1,
+    counts: next,
+    ...(state.counts.limits === undefined ? {} : { limits: state.counts.limits }),
+  };
   const blobResult = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(counts));
   const blob = blobResult?.exitCode === 0 ? parseCommitSha(blobResult.stdout.trim()) : undefined;
   if (!blob) return { kind: 'unreadable', ref: state.ref, detail: `cannot write cascade counts for ${state.ref}` };

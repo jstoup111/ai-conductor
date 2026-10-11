@@ -31,7 +31,7 @@ import { resolveRestackConflict, type RestackResolver } from './restack-resolver
 import { syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
 import { cleanClearedAbortedRestackJournal } from './restack-recovery.js';
-import { cascadeUpdateLines, checkCascadeCap, MAX_RESTACK_CASCADES_PER_CHILD } from './cascade-cap.js';
+import { cascadeUpdateLines, checkCascadeCap, MAX_RESTACK_CASCADES_PER_CHILD, readCascadeCounts } from './cascade-cap.js';
 import { readKickbackLedger, recordKickbackCapEvidence } from '../kickback-ledger.js';
 import { renderKickbackBudgetView } from '../kickback-budget-view.js';
 import {
@@ -231,7 +231,11 @@ async function transitionAppliedWithCascade(
   return { slug: journal.slug, blob, journal: next };
 }
 
-async function restackCascadeLimit(worktree: string, activeChild: ChildId): Promise<number> {
+async function restackCascadeLimit(worktree: string, slug: string, activeChild: ChildId): Promise<number> {
+  const cascades = await readCascadeCounts(worktree, slug);
+  if (cascades.kind === 'unreadable') throw new Error(`cannot read restack cascade counters: ${cascades.detail}`);
+  const durableLimit = cascades.counts.limits?.[String(activeChild)];
+  if (durableLimit !== undefined) return durableLimit;
   const ledger = await readKickbackLedger(worktree, activeChild);
   if (ledger.unreadable) throw new Error('cannot read active child kickback ledger for restack cascade cap');
   return ledger.gates.restack?.effectiveLimit ?? MAX_RESTACK_CASCADES_PER_CHILD;
@@ -351,7 +355,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     if (plan.kind === 'unavailable') throw new Error(plan.detail);
 
     if (options.cause === 'feature-repair') {
-      const limit = await restackCascadeLimit(options.worktree, active.child);
+      const limit = await restackCascadeLimit(options.worktree, options.slug, active.child);
       const cap = await checkCascadeCap(options.worktree, options.slug, plan.originating, limit, { git });
       if (cap.kind === 'exhausted') {
         const entry = await recordKickbackCapEvidence(options.worktree, 'restack', {
