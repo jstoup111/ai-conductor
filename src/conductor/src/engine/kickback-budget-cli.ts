@@ -148,7 +148,12 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     // adr-2026-08-31 decision 3: one malformed gate is reported as unavailable;
     // its healthy siblings still render their authoritative values.
     const unavailable = unreadableKickbackGates(ledger).filter((gate) => GATES.has(gate));
-    const readable = [...GATES].filter((gate) => !unavailable.includes(gate));
+    // `restack` is a per-originating-child pseudo-gate backed by the cascade
+    // ref.  A feature without a durable child state has no such budget, and
+    // must retain the established N=1 inspect rendering.
+    const readable = [...GATES].filter((gate) =>
+      !unavailable.includes(gate) && (gate !== 'restack' || child !== undefined),
+    );
     const liveHaltGeneration = await readKickbackHaltGeneration(worktree);
     const pendingLaps = (gate: string) =>
       gate === 'prd_audit' || gate === 'architecture_review_as_built'
