@@ -96,6 +96,11 @@ into one stack-eligibility verdict. Land and `coverage_binding` both evaluate it
    - `plan-task-parse.ts` stays the Story-line grammar owner and gains the normalizing reader.
      `parsePlanTaskStoryIds` keeps its current behavior for unsliced plans.
 
+> **Amended 2026-10-10 by #623:** (adr-2026-10-10-single-two-mode-plan-compiler decision 1) The
+> plan compiler becomes the Story-line grammar owner, including the normalizing reader. The
+> ownership predicate consumes the compiled story ids; legacy-mode output for unmarked plans is
+> unchanged.
+
 3. **Stack eligibility is one typed verdict in `plan-slices.ts`.** It is a pure function of the
    following inputs:
    - the complexity tier, which must be `M` or `L`. A missing or `S` tier is ineligible;

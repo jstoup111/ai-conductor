@@ -70,7 +70,7 @@ entry so that unbuildable work can be displayed instead of vanishing.
   blocked list contains that slug with reason `stories-not-approved`, and the existing
   `merged spec cannot build — stories not approved …` log line is still emitted with its
   current wording.
-- Given a merged spec whose plan carries no dependency tree, when a discovery pass runs, then
+- Given a merged spec whose unmarked plan (one without the plan-format marker of adr-2026-10-10-single-two-mode-plan-compiler) carries no dependency tree, when a discovery pass runs, then
   the blocked list contains that slug with reason `no-dependency-tree`, and the existing log
   line is still emitted with its current wording.
 - Given a merged non-`S`-tier spec with no parseable coherence artifact, when a discovery pass

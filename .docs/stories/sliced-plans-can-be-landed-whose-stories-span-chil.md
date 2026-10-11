@@ -27,7 +27,7 @@ than one child, so that every child can turn its own stories green.
 - Given an eligible baseline whose story `1` is cited only by tasks in slice 1 and story `2` only by
   tasks in slice 2, when `ai-conductor compose land` runs, then the spec commits and land reports no
   `stacked-delivery` violation.
-- Given an eligible baseline in which a task with no `**Story:**` line, and a task whose Story line is
+- Given an eligible unmarked baseline (one without the plan-format marker of adr-2026-10-10-single-two-mode-plan-compiler) in which a task with no `**Story:**` line, and a task whose Story line is
   `n/a`, sit in slice 2 while story `1` is owned by slice 1, when land runs, then the spec commits:
   infrastructure tasks may sit in any child.
 
@@ -107,7 +107,7 @@ plans and every flag-off project behave as before.
   `plan-slices` grammar rung applies.
 
 #### Negative Paths
-- Given a sliced plan with the flag off that is malformed under the existing grammar (a task in no
+- Given an unmarked sliced plan with the flag off that is malformed under the existing grammar (a task in no
   slice), when land runs, then it still fails with the existing gate `plan-slices` and not with
   `stacked-delivery`.
 - Given the flag off and `stacked_prs.max_slices` absent, when a sliced plan with 3 slices lands, then
@@ -121,7 +121,7 @@ plans and every flag-off project behave as before.
 ### Done When
 - [ ] Land-spec tests cover an unsliced plan with the flag on, and a spanning, Small, unsigned
       sliced plan with the flag off, and both commit.
-- [ ] A flag-off malformed sliced plan fails with identifier `plan-slices`.
+- [ ] A flag-off malformed unmarked sliced plan fails with identifier `plan-slices`.
 
 ## Story 4: Stacked delivery requires Medium/Large tier and a recorded sign-off
 

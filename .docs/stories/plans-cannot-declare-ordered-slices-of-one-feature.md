@@ -46,7 +46,7 @@ opted in, so that the grammar can land before any consumer of it exists.
 
 #### Negative Paths
 - Given a malformed slice manifest, when land runs once with `stacked_prs.enabled` false and once with it true, then both runs refuse with the identical slice refusal message
-- Given a plan with no `## Slices` section but a `## Task Dependency Graph` section and no per-task Dependencies lines, when land runs, then no slice refusal is raised and the existing presence-only dependency check still accepts the plan
+- Given an unmarked plan (one without the plan-format marker of adr-2026-10-10-single-two-mode-plan-compiler) with no `## Slices` section but a `## Task Dependency Graph` section and no per-task Dependencies lines, when land runs, then no slice refusal is raised and the existing presence-only dependency check still accepts the plan
 - Given a plan whose `## Slices` table appears only inside a fenced code block, when land runs, then the plan is treated as having no slices and no slice refusal is raised
 
 ### Done When
@@ -93,14 +93,14 @@ slice, so that a downstream stack can never be cut from an incomplete or ambiguo
 - Given a sealed sliced plan to which the engine has appended remediation task `rem-build-review-1` in no slice, when the slice validator runs, then the remediation task raises no membership violation
 
 #### Negative Paths
-- Given a sliced plan whose Task 6 appears in no slice, when land runs, then land refuses with the `plan-slices` refusal naming Task 6 as in no slice
+- Given an unmarked sliced plan whose Task 6 appears in no slice, when land runs, then land refuses with the `plan-slices` refusal naming Task 6 as in no slice
 - Given a sliced plan whose Task 3 is cited by slice 1 and slice 2, when land runs, then land refuses naming Task 3 and both slice positions
 - Given a sliced plan whose slice 2 row cites no tasks, when land runs, then land refuses naming slice 2 as empty
 - Given a sliced plan with two rows both at position 2, when land runs, then land refuses naming duplicate slice position 2
 - Given a sliced plan whose slice 1 cites task 12 and the plan has no Task 12 heading, when land runs, then land refuses naming task 12 as an unknown task id
 - Given a Small-tier spec whose sliced plan leaves Task 2 in no slice, when land runs, then land refuses exactly as it would for a Medium-tier spec
 - Given a sliced plan with Task 6 in no slice and Task 3 in two slices, when land runs, then one refusal names both violations rather than only the first
-- Given a sliced plan with Task 6 in no slice and a coherence waiver line naming that defect, when land runs, then land still refuses with the `plan-slices` refusal
+- Given an unmarked sliced plan with Task 6 in no slice and a coherence waiver line naming that defect, when land runs, then land still refuses with the `plan-slices` refusal
 
 ### Done When
 - [ ] `LandGateIdentifier` includes `plan-slices`, and `landSpec` throws it for every invalid slice result

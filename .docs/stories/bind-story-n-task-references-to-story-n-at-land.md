@@ -43,7 +43,7 @@ As a spec author, I want a story reference that matches no story to be named in 
 
 #### Negative Paths
 
-- Given a plan task carries no story-reference line at all and a type that is neither infrastructure nor refactor, when the orphan-task check reports that task, then the reported item names the absent reference line and carries no invented cited id.
+- Given a task in an unmarked plan (one without the plan-format marker of adr-2026-10-10-single-two-mode-plan-compiler) carries no story-reference line at all and a type that is neither infrastructure nor refactor, when the orphan-task check reports that task, then the reported item names the absent reference line and carries no invented cited id.
 
 ### Done When
 

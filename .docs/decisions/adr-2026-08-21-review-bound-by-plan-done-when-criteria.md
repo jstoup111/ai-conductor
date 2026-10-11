@@ -88,6 +88,12 @@ daemon discovery or the conductor plan gate: 300 of 301 merged plans lack the bl
 building. The "unbounded quality word" rule stays authoring guidance (#1764) — it is a judgement,
 which adr-2026-07-22 keeps off the mechanical side.
 
+> **Amended 2026-10-10 by #623:** (adr-2026-10-10-single-two-mode-plan-compiler decisions 1, 3, 6)
+> The Done-when parser moves into the plan compiler. For unmarked plans this rung, its gate id, and
+> its exclusion from discovery are unchanged. For a marked plan, a missing or malformed Done-when
+> block is a compile error: land refuses it under the `plan-compile` gate, and discovery blocks the
+> spec with reason `plan-compile-failed`.
+
 **D2 — `boundTo` is an optional per-finding field under contract v3.** Grammar: either the literal
 `beyond`, or a `content-region` reference (adr-2026-08-18 schema, no fourth kind) over the plan
 path whose `contentHash` is the normalized text of one `Done when:` line, with the `occurrence`
