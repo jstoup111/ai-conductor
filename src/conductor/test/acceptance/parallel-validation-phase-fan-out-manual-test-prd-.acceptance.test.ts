@@ -1144,6 +1144,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
           new Promise<void>((resolve) => {
             setImmediate(resolve);
           }),
+        deadline: () => null,
         nextWaitSeconds: (_baseSeconds?: number) => 60,
       };
 

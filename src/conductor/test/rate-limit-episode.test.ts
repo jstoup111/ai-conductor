@@ -1,3 +1,4 @@
+// Covers: task:8
 import { describe, it, expect } from 'vitest';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -69,6 +70,30 @@ describe('rate-limit-episode', () => {
     // Without calling enter(), active() should return false
     expect(episode.active(1000)).toBe(false);
     expect(episode.active(999999999)).toBe(false);
+  });
+
+  it('deadline(now) exposes only the active entered deadline', async () => {
+    const mod = await load();
+    const create = requireFn(mod, 'create');
+
+    const baseTime = 1000;
+    const firstDeadline = baseTime + 5000;
+    const laterDeadline = baseTime + 8000;
+    const episode = create({ now: () => baseTime });
+
+    const beforeEnter = episode.deadline(baseTime);
+    episode.enter(firstDeadline);
+    const firstEnteredDeadline = episode.deadline(baseTime);
+    episode.enter(laterDeadline);
+    const laterEnteredDeadline = episode.deadline(baseTime);
+    const expiredDeadline = episode.deadline(laterDeadline);
+
+    expect([beforeEnter, firstEnteredDeadline, laterEnteredDeadline, expiredDeadline]).toEqual([
+      null,
+      firstDeadline,
+      laterDeadline,
+      null,
+    ]);
   });
 
   it('clear() exits the episode once the deadline passes, so active(now) returns false again', async () => {

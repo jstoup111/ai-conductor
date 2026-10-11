@@ -99,6 +99,7 @@ describe('engine/daemon — runDaemon', () => {
         active: () => ++episodeChecks > 1,
         enter: () => {},
         clear: async () => {},
+        deadline: () => null,
         nextWaitSeconds: () => 0,
       },
       runFeature: async () => new Promise<FeatureOutcome>((resolve) => { release = resolve; }),
@@ -2002,6 +2003,7 @@ describe('engine/daemon — runDaemon', () => {
       active: () => true, // Episode is active → suppress dispatch
       enter: () => {},
       clear: () => Promise.resolve(),
+          deadline: () => null,
           nextWaitSeconds: () => 60,
     };
 
@@ -2080,6 +2082,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          deadline: () => null,
           nextWaitSeconds: () => 60,
         },
         sleep: async () => {
@@ -2150,6 +2153,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          deadline: () => null,
           nextWaitSeconds: () => 60,
         },
         isPaused: async () => isPausedFlag,
@@ -2200,6 +2204,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          deadline: () => null,
           nextWaitSeconds: () => 60,
         },
         sleep: async () => {
@@ -2240,6 +2245,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          deadline: () => null,
           nextWaitSeconds: () => 60,
         },
         isPaused: async () => isPausedFlag,
@@ -2286,6 +2292,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          deadline: () => null,
           nextWaitSeconds: () => 60,
         },
         onHaltWritten: async (slug, episodeCaused) => {
@@ -2316,6 +2323,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          deadline: () => null,
           nextWaitSeconds: () => 60,
         },
         onHaltWritten: async (slug, episodeCaused) => {
@@ -2355,6 +2363,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          deadline: () => null,
           nextWaitSeconds: () => 60,
         },
         onHaltWritten: async (slug, episodeCaused) => {
@@ -2419,6 +2428,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          deadline: () => null,
           nextWaitSeconds: () => 60,
         },
         onHaltWritten: async (slug, episodeCaused) => {
@@ -2477,6 +2487,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          deadline: () => null,
           nextWaitSeconds: () => 60,
         },
         sleep: async () => {
@@ -2517,6 +2528,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          deadline: () => null,
           nextWaitSeconds: () => 60,
         },
         requestRestart,
@@ -2564,6 +2576,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          deadline: () => null,
           nextWaitSeconds: () => 60,
         },
         sleep: async () => {
@@ -2604,6 +2617,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          deadline: () => null,
           nextWaitSeconds: () => 60,
         },
         sleep: async () => {
@@ -2646,6 +2660,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          deadline: () => null,
           nextWaitSeconds: () => 60,
         },
         requestRestart,

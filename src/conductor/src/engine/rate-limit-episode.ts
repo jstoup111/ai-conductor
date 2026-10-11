@@ -29,6 +29,13 @@ export interface RateLimitEpisode {
   active(nowMs?: number): boolean;
 
   /**
+   * Return the active rate-limit deadline without changing episode state.
+   * @param nowMs - Current time in milliseconds (defaults to Date.now())
+   * @returns the active deadline, or null when no episode is active
+   */
+  deadline(nowMs?: number): number | null;
+
+  /**
    * Exit the rate-limit episode, clearing the deadline.
    * Returns a promise that resolves when the deadline is reached or the signal aborts.
    * @param signal - Optional AbortSignal to cancel the wait early
@@ -138,6 +145,15 @@ export function create(options?: CreateOptions): RateLimitEpisode {
 
       // Active only if current time is strictly before deadline
       return now < deadline;
+    },
+
+    deadline(nowMs?: number): number | null {
+      if (deadline === null) {
+        return null;
+      }
+
+      const now = nowMs ?? getNow();
+      return now < deadline ? deadline : null;
     },
 
     clear(signal?: AbortSignal): Promise<void> {

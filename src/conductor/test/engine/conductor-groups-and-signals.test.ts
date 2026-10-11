@@ -362,6 +362,7 @@ describe('engine/conductor', () => {
           enter: vi.fn(),
           clear: vi.fn().mockResolvedValue(undefined),
           active: () => false,
+          deadline: () => null,
           nextWaitSeconds: () => 0,
         },
         providerExecution: {
@@ -5341,6 +5342,7 @@ describe('engine/conductor', () => {
           episodeClearSignal = signal;
           return Promise.resolve();
         },
+        deadline: () => null,
         nextWaitSeconds: () => 60,
       };
 

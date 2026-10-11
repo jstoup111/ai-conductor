@@ -27,6 +27,7 @@ describe('daemon rate-limit episode dispatch gate (Task 7)', () => {
         enter: () => {},
         active: () => true,
         clear: async () => {},
+        deadline: () => null,
         nextWaitSeconds: () => 60,
       },
     };
@@ -52,6 +53,7 @@ describe('daemon rate-limit episode dispatch gate (Task 7)', () => {
         enter: () => {},
         active: () => false,
         clear: async () => {},
+        deadline: () => null,
         nextWaitSeconds: () => 60,
       },
     };
@@ -106,6 +108,7 @@ describe('daemon rate-limit episode dispatch gate (Task 7)', () => {
         enter: () => {},
         active: () => episodeActive,
         clear: async () => {},
+        deadline: () => null,
         nextWaitSeconds: () => 60,
       },
     };
@@ -147,6 +150,7 @@ describe('daemon rate-limit episode dispatch gate (Task 7)', () => {
           return episodeActive;
         },
         clear: async () => {},
+        deadline: () => null,
         nextWaitSeconds: () => 60,
       },
       sleep: async () => {}, // no real waiting in the test
@@ -178,6 +182,7 @@ describe('daemon rate-limit episode dispatch gate (Task 7)', () => {
         enter: () => {},
         active: () => episodeActive,
         clear: async () => {},
+        deadline: () => null,
         nextWaitSeconds: () => 60,
       },
       sleep: async () => {
@@ -211,6 +216,7 @@ describe('daemon rate-limit episode dispatch gate (Task 7)', () => {
         enter: () => {},
         active: () => true, // episode active, pause not
         clear: async () => {},
+        deadline: () => null,
         nextWaitSeconds: () => 60,
       },
     };
@@ -232,6 +238,7 @@ describe('daemon rate-limit episode dispatch gate (Task 7)', () => {
         enter: () => {},
         active: () => false,
         clear: async () => {},
+        deadline: () => null,
         nextWaitSeconds: () => 60,
       },
     };
@@ -253,6 +260,7 @@ describe('daemon rate-limit episode dispatch gate (Task 7)', () => {
         enter: () => {},
         active: () => true, // both active
         clear: async () => {},
+        deadline: () => null,
         nextWaitSeconds: () => 60,
       },
     };
@@ -274,6 +282,7 @@ describe('daemon rate-limit episode dispatch gate (Task 7)', () => {
         enter: () => {},
         active: () => false, // both inactive
         clear: async () => {},
+        deadline: () => null,
         nextWaitSeconds: () => 60,
       },
     };

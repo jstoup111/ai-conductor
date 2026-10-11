@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, expect, it } from 'vitest';
 import { detectInline, parseArgs } from '../src/cli.js';
 import {
