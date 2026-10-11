@@ -133,11 +133,15 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
   const resolveRoot = join(options.worktree, '.pipeline', 'restack', 'resolve');
   await mkdir(resolveRoot, { recursive: true });
   const temporaryWorktree = await mkdtemp(join(resolveRoot, 'child-'));
+  // Helper files live beside the checkout, never inside it: writing into the
+  // detached worktree (for example its own ignore file) would modify a tracked
+  // path and make `git rebase` refuse to start.
+  const helpers = await mkdtemp(join(resolveRoot, 'helpers-'));
   const identity = committerEnvironment(options.stamp);
-  const todoPath = join(temporaryWorktree, '.restack-rebase-todo');
-  const sequenceEditorPath = join(temporaryWorktree, '.restack-sequence-editor');
-  const rewritePath = join(temporaryWorktree, '.restack-rewritten-list');
-  const hooksPath = join(temporaryWorktree, '.restack-hooks');
+  const todoPath = join(helpers, 'rebase-todo');
+  const sequenceEditorPath = join(helpers, 'sequence-editor');
+  const rewritePath = join(helpers, 'rewritten-list');
+  const hooksPath = join(helpers, 'hooks');
   let added = false;
 
   try {
@@ -153,7 +157,6 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
     await mkdir(hooksPath);
     await writeFile(join(hooksPath, 'post-rewrite'), `#!/bin/sh\ncat > ${shellQuote(rewritePath)}\n`);
     await chmod(join(hooksPath, 'post-rewrite'), 0o700);
-    await writeFile(join(temporaryWorktree, '.gitignore'), '.restack-*\n');
 
     const environment: NodeJS.ProcessEnv = {
       ...identity,
@@ -196,15 +199,19 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
       : undefined;
     return { outcome, tip, rewrites: await readRewrites(rewritePath), candidates };
   } finally {
-    if (added) {
-      try {
-        await runGit(['worktree', 'remove', '--force', temporaryWorktree], { env: identity });
-      } finally {
+    try {
+      if (added) {
+        try {
+          await runGit(['worktree', 'remove', '--force', temporaryWorktree], { env: identity });
+        } finally {
+          await runGit(['worktree', 'prune'], { env: identity });
+        }
+      } else {
+        await rm(temporaryWorktree, { recursive: true, force: true });
         await runGit(['worktree', 'prune'], { env: identity });
       }
-    } else {
-      await rm(temporaryWorktree, { recursive: true, force: true });
-      await runGit(['worktree', 'prune'], { env: identity });
+    } finally {
+      await rm(helpers, { recursive: true, force: true });
     }
   }
 }
