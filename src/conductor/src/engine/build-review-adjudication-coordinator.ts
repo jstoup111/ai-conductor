@@ -210,9 +210,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     suppressions: input.suppressions ?? [],
     store: suppressionStore,
   });
-  if (!persisted.ok) return failStore('case store', persisted);
+  if (!persisted.ok) return failStore('suppression store', persisted);
   const suppressionHistory = await suppressionStore.read();
-  if (!suppressionHistory.ok) return failStore('case store', suppressionHistory);
+  if (!suppressionHistory.ok) return failStore('suppression store', suppressionHistory);
   // Before the judge is dispatched there is no frozen dispatch set, so live ids
   // are computed against the raw join. The two agree for every all-accepted lap,
   // and this is reassigned to the frozen set once one exists.

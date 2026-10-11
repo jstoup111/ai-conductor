@@ -1,4 +1,4 @@
-// Covers: task:3, task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1
+// Covers: task:3, task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -358,7 +358,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     }]]);
   });
 
-  it('keeps corrupt persisted history on the existing malformed case-store event', async () => {
+  it('reports corrupt flat suppression history through the suppression-store event', async () => {
     const root = await projectRoot();
     const corruptCases = [{
       id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
@@ -382,9 +382,9 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect([result, events.filter((event) => event.type === 'remediation_adjudication_failed')]).toEqual([{
       ok: false,
-      detail: 'case store malformed-state',
+      detail: 'suppression store malformed-state',
     }, [{
-      type: 'remediation_adjudication_failed', domain: 'build_review', lapId: 'lap-1', reason: 'case store malformed-state',
+      type: 'remediation_adjudication_failed', domain: 'build_review', lapId: 'lap-1', reason: 'suppression store malformed-state',
     }]]);
   });
 
