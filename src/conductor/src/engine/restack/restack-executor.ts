@@ -18,6 +18,7 @@ import {
   applyRestackMove,
   checkRestackPreMove,
   haltRestack,
+  haltRestackConflict,
   rollbackRestackMove,
   verifyRestackMove,
   type RestackMoveRef,
@@ -262,10 +263,9 @@ async function haltUnresolvedConflict(
   }
   await abortJournal(worktree, journal, git, []);
   await events?.emit({ type: 'restack_conflict', opId: journal.journal.opId, child: range.child, commit: conflict.commit, paths: [...conflict.paths] });
-  await haltRestack(worktree, reason === 'replay-mismatch' ? 'replay-mismatch' : 'restack-conflict', events, {
-    child: range.child,
-    detail: `commit ${conflict.commit}; paths: ${conflict.paths.join(', ')}${resolutionDetail === undefined ? '' : `\n${resolutionDetail}`}`,
-  });
+  const detail = `commit ${conflict.commit}; paths: ${conflict.paths.join(', ')}${resolutionDetail === undefined ? '' : `\n${resolutionDetail}`}`;
+  if (reason === 'replay-mismatch') await haltRestack(worktree, 'replay-mismatch', events, { child: range.child, detail });
+  else await haltRestackConflict(worktree, range.child, detail, events);
 }
 
 /**

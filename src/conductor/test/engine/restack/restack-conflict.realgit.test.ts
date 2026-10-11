@@ -140,7 +140,9 @@ describe('runRestack conflict resolver (real local Git)', () => {
     const before = await refs(subject);
     const events = new ConductorEventEmitter();
     const conflicts: unknown[] = [];
+    const refusals: unknown[] = [];
     events.on('restack_conflict', (event) => conflicts.push(event));
+    events.on('restack_refused', (event) => refusals.push(event));
 
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
@@ -149,11 +151,13 @@ describe('runRestack conflict resolver (real local Git)', () => {
 
     expect(await refs(subject)).toBe(before);
     expect(conflicts).toEqual([expect.objectContaining({ child: 2, commit: subject.c2, paths: ['src/c.ts'] })]);
+    expect(refusals).toEqual([]);
     const child = parseChildId(2);
     if (!child) throw new Error('child 2 must parse');
     expect((await subject.git(['rev-parse', stagingRefFor('demo', child)])).stdout.trim()).toBe(subject.c2);
     await expect(readRestackJournal(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('src/c.ts');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/^restack conflict child 2\n/);
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
 

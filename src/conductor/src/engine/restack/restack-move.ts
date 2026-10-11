@@ -247,6 +247,20 @@ export async function haltRestack(
   return writeHaltMarker(worktree, `restack refused (${reason})${child}${detail}\n`, 'needs-human', events);
 }
 
+/**
+ * Write the human halt for an unresolved replay conflict. A conflict is not a
+ * refusal (ADR decision 12): its occurrence is `restack_conflict`, emitted by
+ * the caller, so this writes the halt without a `restack_refused`.
+ */
+export async function haltRestackConflict(
+  worktree: string,
+  child: ChildId,
+  detail: string,
+  events?: ConductorEventEmitter,
+): Promise<HaltMarkerWriteResult> {
+  return writeHaltMarker(worktree, `restack conflict child ${child}\n${detail}\n`, 'needs-human', events);
+}
+
 async function abortReadyMove(
   worktree: string,
   journal: StoredRestackJournal,
