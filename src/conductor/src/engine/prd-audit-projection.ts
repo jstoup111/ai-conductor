@@ -29,13 +29,16 @@ export const PRD_AUDIT_PROJECTION_VERSION = 6;
 const PRD_AUDIT_DIFF_EXCERPT_PER_FILE_BYTES = 256 * 1024;
 const PRD_AUDIT_DIFF_EXCERPT_TOTAL_BYTES = 512 * 1024;
 
-/** Largest observed normal source inputs at the time these engineering bounds were set. */
+/**
+ * BUILD-time snapshot of the largest observed normal source inputs.
+ * The live-corpus tier enforces that shipped limits continue to admit the corpus.
+ */
 export const PRD_AUDIT_PROJECTION_CORPUS_MAXIMA_BYTES = {
-  planIntentBytes: 1_708,
-  planTasksBytes: 248_796,
-  criteriaBytes: 43_226,
-  prdIntentBytes: 17_991,
-  coherenceBytes: 68_397,
+  planIntentBytes: 1_708, // .docs/plans/rejected-build-review-reviewer-output-is-not-retai.md (1,708 B)
+  planTasksBytes: 248_796, // .docs/plans/a-change-to-one-stacked-child-cannot-be-carried-in.md (248,796 B)
+  criteriaBytes: 43_226, // .docs/stories/projects-cannot-add-portable-non-competing-build-r.md (43,226 B)
+  prdIntentBytes: 17_991, // .docs/specs/2026-08-13-build-review-rubric-dispositions-and-fan-out.md (17,991 B)
+  coherenceBytes: 68_397, // .docs/coherence/a-change-to-one-stacked-child-cannot-be-carried-in.md (68,397 B)
   historyBytes: 0,
 } as const;
 
