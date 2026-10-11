@@ -5,6 +5,7 @@ check_github_invocation_boundary.sh integrity integrity validates its contract d
 check_halt_writers.sh integrity integrity validates its contract directly
 check_interpreter_source.sh integrity integrity validates its contract directly
 check_migration_block_authoring.sh integrity integrity validates its contract directly
+check_shell_test_classification.sh integrity integrity validates the delivered shell-test classifications
 check_skill_invocation_policy.sh integrity integrity validates its contract directly
 check_update_flow_config_ownership.sh integrity integrity validates its contract directly
 lint_shell.sh integrity integrity runs shell syntax and static checks
@@ -22,13 +23,17 @@ test_migration_block_authoring.sh integrity integrity runs its fixture suite
 test_no_legacy_cli_references.sh integrity integrity runs its fixture suite
 test_provider_skill_contracts.sh integrity integrity runs its fixture suite
 test_release_pr_workflow.sh integrity integrity runs its fixture suite
+test_run_shell_tests.sh integrity integrity runs shell-test runner fixtures
+test_shell_test_classification.sh integrity integrity runs shell-test classification fixtures
 test_skill_invocation_policy.sh integrity integrity runs its fixture suite
 
 # Scripts called by an integrity-run fixture suite.
 check_docs_navigation.sh invoked-by:test_docs_navigation.sh documentation fixture invokes it
 docs_pages.smoke.test.sh invoked-by:test_docs_pages_smoke.sh Pages fixture invokes it
+run_shell_tests.sh invoked-by:test_run_shell_tests.sh shell-runner fixtures invoke it
 
 # Shared shell library; sourced by fixture scripts rather than executed.
+shell_test_manifest.sh sourced-helper shared shell-test manifest parsing helpers are sourced
 test_helpers.sh sourced-helper shared fixture helpers are sourced
 
 # Triage: examples acceptance scripts verified through the isolated shell runner.
