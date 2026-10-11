@@ -56,12 +56,12 @@ describe('readBuildWindows', () => {
   it('normalizes ISO ledger timestamps while retaining numeric timestamp compatibility', async () => {
     const directory = await writeLedgers({
       engine: [
-        { type: 'step_started', step: 'build', index: 0, ts: '1970-01-01T00:00:00.010Z' },
-        { type: 'build_progress', step: 'build', resolved: 1, total: 1, ts: '1970-01-01T00:00:00.030Z' },
-        { type: 'step_completed', step: 'build', status: 'done', ts: '1970-01-01T00:00:00.050Z' },
+        { type: 'step_started', step: 'build', index: 0, ts: '2026-08-29T14:00:00.010Z' },
+        { type: 'build_progress', step: 'build', resolved: 1, total: 1, ts: '2026-08-29T14:00:00.030Z' },
+        { type: 'step_completed', step: 'build', status: 'done', ts: '2026-08-29T14:00:00.050Z' },
       ],
       pipeline: [
-        { type: 'pipeline_closeout', obligation: 'summary', startedAt: 15, endedAt: 20, ts: 20 },
+        { type: 'pipeline_closeout', obligation: 'summary', startedAt: 1_788_012_000_015, endedAt: 1_788_012_000_020, ts: 1_788_012_000_020 },
       ],
     });
 
@@ -69,13 +69,13 @@ describe('readBuildWindows', () => {
       state: 'measured',
       windows: [
         {
-          startedAt: 10,
-          endedAt: 50,
+          startedAt: 1_788_012_000_010,
+          endedAt: 1_788_012_000_050,
           events: [
-            { type: 'step_started', step: 'build', index: 0, ts: 10 },
-            { type: 'pipeline_closeout', obligation: 'summary', startedAt: 15, endedAt: 20, ts: 20 },
-            { type: 'build_progress', step: 'build', resolved: 1, total: 1, ts: 30 },
-            { type: 'step_completed', step: 'build', status: 'done', ts: 50 },
+            { type: 'step_started', step: 'build', index: 0, ts: 1_788_012_000_010 },
+            { type: 'pipeline_closeout', obligation: 'summary', startedAt: 1_788_012_000_015, endedAt: 1_788_012_000_020, ts: 1_788_012_000_020 },
+            { type: 'build_progress', step: 'build', resolved: 1, total: 1, ts: 1_788_012_000_030 },
+            { type: 'step_completed', step: 'build', status: 'done', ts: 1_788_012_000_050 },
           ],
         },
       ],
@@ -85,13 +85,13 @@ describe('readBuildWindows', () => {
   it('stably merges both ledgers by ts and retains closeout events within a build window', async () => {
     const directory = await writeLedgers({
       engine: [
-        { type: 'step_started', step: 'build', index: 0, ts: 10 },
-        { type: 'build_progress', step: 'build', resolved: 1, total: 2, ts: 30 },
-        { type: 'step_completed', step: 'build', status: 'done', ts: 50 },
+        { type: 'step_started', step: 'build', index: 0, ts: 1_788_012_000_010 },
+        { type: 'build_progress', step: 'build', resolved: 1, total: 2, ts: 1_788_012_000_030 },
+        { type: 'step_completed', step: 'build', status: 'done', ts: 1_788_012_000_050 },
       ],
       pipeline: [
-        { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 20, endedAt: 25, ts: 20 },
-        { type: 'pipeline_closeout', obligation: 'summary', startedAt: 35, endedAt: 40, ts: 35 },
+        { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 1_788_012_000_020, endedAt: 1_788_012_000_025, ts: 1_788_012_000_025 },
+        { type: 'pipeline_closeout', obligation: 'summary', startedAt: 1_788_012_000_035, endedAt: 1_788_012_000_040, ts: 1_788_012_000_040 },
       ],
     });
 
@@ -99,14 +99,14 @@ describe('readBuildWindows', () => {
       state: 'measured',
       windows: [
         {
-          startedAt: 10,
-          endedAt: 50,
+          startedAt: 1_788_012_000_010,
+          endedAt: 1_788_012_000_050,
           events: [
-            { type: 'step_started', step: 'build', index: 0, ts: 10 },
-            { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 20, endedAt: 25, ts: 20 },
-            { type: 'build_progress', step: 'build', resolved: 1, total: 2, ts: 30 },
-            { type: 'pipeline_closeout', obligation: 'summary', startedAt: 35, endedAt: 40, ts: 35 },
-            { type: 'step_completed', step: 'build', status: 'done', ts: 50 },
+            { type: 'step_started', step: 'build', index: 0, ts: 1_788_012_000_010 },
+            { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 1_788_012_000_020, endedAt: 1_788_012_000_025, ts: 1_788_012_000_025 },
+            { type: 'build_progress', step: 'build', resolved: 1, total: 2, ts: 1_788_012_000_030 },
+            { type: 'pipeline_closeout', obligation: 'summary', startedAt: 1_788_012_000_035, endedAt: 1_788_012_000_040, ts: 1_788_012_000_040 },
+            { type: 'step_completed', step: 'build', status: 'done', ts: 1_788_012_000_050 },
           ],
         },
       ],
@@ -158,7 +158,7 @@ describe('computeBuildTailRollup', () => {
           { type: 'build_progress', step: 'build', resolved: 1, total: 2, ts: 120 },
           { type: 'build_progress', step: 'build', resolved: 2, total: 2, ts: 140 },
           { type: 'build_progress', step: 'build', resolved: 2, total: 2, headMoved: true, ts: 160 },
-          { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 165, endedAt: 180, ts: 180 },
+          { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 1_788_012_000_165, endedAt: 1_788_012_000_180, ts: 1_788_012_000_180 },
           { type: 'step_completed', step: 'build', ts: 200 },
         ],
       },
@@ -247,7 +247,7 @@ describe('computeBuildTailRollup', () => {
         endedAt: 20,
         events: [
           { type: 'build_progress', resolved: 1, total: 1, ts: 15 },
-          { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 19, endedAt: 18, ts: 19 },
+          { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 1_788_012_000_019, endedAt: 1_788_012_000_018, ts: 1_788_012_000_019 },
         ],
       },
     ])).toEqual({ state: 'partial' });
@@ -277,8 +277,8 @@ describe('build-tail rollup evidence states', () => {
     const directory = await writeLedgers({
       engine: [{ type: 'feature_started', ts: 10 }],
       pipeline: [
-        { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 100, endedAt: 3100, ts: 3100 },
-        { type: 'pipeline_closeout', obligation: 'summary', startedAt: 3200, endedAt: 3700, ts: 3700 },
+        { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 1_788_012_000_100, endedAt: 1_788_012_003_100, ts: 1_788_012_003_100 },
+        { type: 'pipeline_closeout', obligation: 'summary', startedAt: 1_788_012_003_200, endedAt: 1_788_012_003_700, ts: 1_788_012_003_700 },
       ],
     });
 

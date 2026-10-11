@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { closeoutDurationMs } from './closeout-trust.js';
 
 export type BuildTailEvent = Record<string, unknown> & { ts: number };
 
@@ -92,13 +93,9 @@ function closeoutDurations(
   let recorded = false;
   for (const event of events) {
     if (event.type !== 'pipeline_closeout') continue;
-    if (
-      typeof event.obligation !== 'string'
-      || typeof event.startedAt !== 'number'
-      || typeof event.endedAt !== 'number'
-      || event.endedAt < event.startedAt
-    ) return undefined;
-    const duration = event.endedAt - event.startedAt;
+    if (typeof event.obligation !== 'string') return undefined;
+    const duration = closeoutDurationMs(event);
+    if (duration === undefined) return undefined;
     durationMs += duration;
     obligations[event.obligation] = (obligations[event.obligation] ?? 0) + duration;
     recorded = true;
