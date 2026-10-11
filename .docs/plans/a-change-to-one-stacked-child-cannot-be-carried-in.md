@@ -1648,3 +1648,55 @@ outcomes as one feature (track scope boundary).
 **Done when:**
 - adr-2026-10-10-stacked-restack-journaled-replay decision 10 is satisfied by this task.
 - The repair for task rem-as-built-R24 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R25: In kickback-budget-cli.ts, for gate restack stage beforeConsumed/afterConsumed from the originating child's count in refs/conductor/<slug>/cascades (cascadeState.counts), not entry.cumulative. Add a CLI-driven test that reaches a real cascade-cap halt through runRestack, runs `kickback-budget raise --gate restack --child 1`, and asserts the raised limit is persisted and resume is authorized
+**Gate:** prd-audit
+**Rationale:** Verified (100%, read kickback-budget-cli.ts): for gate restack, currentLimit is read from the cascades ref, but currentConsumed falls through to entry.cumulative. That value is 0 on the cap-evidence entry, while the cascades ref holds the child's count, so applyCascadeAdjustment returns stale and raise throws. This is a clear implementation and test gap inside the approved rem-prd-audit-R8 and Task 31.2 contract, so it goes to BUILD.
+**Criterion:** S13.3
+**Parent task:** rem-prd-audit-R8
+**Done when:**
+- [test] S13.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R25 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R26: Add a CLI-driven test in the kickback-budget restack tests that reaches a real cascade-cap halt through runRestack, runs `kickback-budget reset --gate restack --child 1`, and asserts child 1's cascades count is 0 and resume is authorized (depends on rem-prd-audit-R25)
+**Gate:** prd-audit
+**Rationale:** Same verified defect as S13.3 (kickback-budget-cli.ts staging uses entry.cumulative for restack), so reset hits a stale CAS and never zeroes the count. Coverage is admitted by rem-prd-audit-R8 and Task 31.2; the code fix lands in rem-prd-audit-R25, and this task adds the missing CLI-driven reset coverage.
+**Criterion:** S13.4
+**Parent task:** rem-prd-audit-R8
+**Done when:**
+- [test] S13.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R26 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R27: Add a CLI-driven test that reaches a real cascade-cap halt, deletes the feature worktree, recreates it from its branch without .pipeline/children/1, then runs `kickback-budget raise --gate restack --child 1` and asserts it is accepted and the raised limit persists in the cascades ref (depends on rem-prd-audit-R25)
+**Gate:** prd-audit
+**Rationale:** The --child validation already reads the cascades ref, but the command still fails on the same stale CAS (S13.3), and no test covers a recreated worktree. The fix lands in rem-prd-audit-R25. rem-prd-audit-R8 explicitly admits a recreated-worktree test, so this goes to BUILD.
+**Criterion:** S13.8
+**Parent task:** rem-prd-audit-R8
+**Done when:**
+- [test] S13.8 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R27 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R25: In restack-recovery.ts, for a feature-repair journal, adopt the existing branch tip of each pending originating or lower child (index <= highest originating child) with an empty rewrite map, as restack-executor.ts does, instead of replaying it. Add a real-git recovery test that crashes at planned before the originating child is staged and asserts closed/c1 equals the original branch tip and no replay of child 1 occurs
+**Gate:** as-built
+**Rationale:** Verified (100%): the restack-executor.ts feature-repair loop adopts each existing branch tip for ranges at or below lastOriginIndex. The pending loop in restack-recovery.ts has no such branch and replays every ordinary range. ADR decision 2 is already settled and rem-as-built-R1 and Task 24 admit the repair, so this is conforming implementation drift for BUILD.
+**Governing clause:** adr-2026-10-10-stacked-restack-journaled-replay decision 2
+**Done when:**
+- adr-2026-10-10-stacked-restack-journaled-replay decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R25 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R26: In restack-executor.ts and restack-recovery.ts, when the unentered leaf's tip lies in an adopted child's range during feature-repair, resolve the leaf to its unchanged original tip (identity) instead of requiring an exact-rewrite match. Add real-git executor and recovery tests for a feature-repair whose originating child owns the pre-region halt-record leaf, asserting the repair succeeds and the leaf stays at H
+**Gate:** as-built
+**Rationale:** Verified (99%): in restack-executor.ts, the unentered-leaf arm requires exactly one exact-rewrite match. An adopted child records new Map(), so a leaf owned by an adopted child throws, and the recovery owner lookup has the same dependency. Under ADR decision 2 an adopted child's commits are unchanged, so the leaf keeps its original tip. rem-as-built-R3, rem-prd-audit-R15 and rem-as-built-R1 admit the repair, so it goes to BUILD.
+**Governing clause:** adr-2026-10-10-stacked-restack-journaled-replay decision 2
+**Done when:**
+- adr-2026-10-10-stacked-restack-journaled-replay decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R26 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R27: In restack-recovery.ts, on a replay conflict, check mergeInRange before dispatching resolveRestackConflict. For a merge-bearing range, pin the original tip and halt restack_refused with reason flatten_refused naming the merge, as restack-executor.ts does. Add a recovery test (crash at planned, conflicting merge-bearing pending child) asserting no resolver dispatch, no ref moved, and recovery text with no `git rebase` command
+**Gate:** as-built
+**Rationale:** Verified (100%): restack-recovery.ts calls resolveRestackConflict on any replay conflict without the mergeInRange check. restack-executor.ts runs that check and refuses flatten_refused. Task 17 already requires no resolver dispatch for a merge-bearing child, so the recovery path must match, and this goes to BUILD.
+**Parent task:** 17
+**Governing clause:** Task 17
+**Done when:**
+- Task 17 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R27 is committed and its targeted tests pass.
