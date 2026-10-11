@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { ExportResultCode } from '@opentelemetry/core';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { SpoolDrainer } from '../../../src/engine/otel/spool-drainer.js';
+import { LogHealth } from '../../../src/engine/otel/log-health.js';
 import { SpoolStore } from '../../../src/engine/otel/spool-store.js';
 import { SpoolingLogExporter } from '../../../src/engine/otel/spooling-exporter.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
@@ -230,9 +231,9 @@ describe('durable log spool', () => {
     [401, 'auth'],
     [403, 'auth'],
     [404, 'endpoint'],
-    [408, 'throttled'],
-    [429, 'throttled'],
-    [503, 'server'],
+    [408, 'response'],
+    [429, 'response'],
+    [503, 'response'],
   ] as const)('retains a log batch after HTTP %i, without rerouting it, and emits a safe %s warning', async (status, failureClass) => {
     const store = new SpoolStore(await temporaryDirectory());
     await store.write('logs', Buffer.from(`retain-log-${status}`), 1, destinationId);
@@ -250,6 +251,7 @@ describe('durable log spool', () => {
       },
       sleep: async () => new Promise<void>(() => undefined),
     });
+    drainer.setLogHealth(new LogHealth(events, Date.now, 'https://incorrect-path.example/v1/logs'));
     const draining = drainer.drainUntilStopped();
     try {
       await waitFor(() => warnings.length === 1);
@@ -260,7 +262,7 @@ describe('durable log spool', () => {
     }
 
     expect(destinations).toEqual(['https://incorrect-path.example/v1/logs']);
-    expect(warnings).toEqual([`OTLP logs delivery failed: ${failureClass}`]);
+    expect(warnings).toEqual([`[otel] log delivery to https://incorrect-path.example ${failureClass}; records remain local`]);
     expect(warnings.join('\n')).not.toContain(authorization);
   });
 
@@ -276,6 +278,7 @@ describe('durable log spool', () => {
       fetch: async () => { throw new Error('Bearer network-secret unavailable'); },
       sleep: async () => new Promise<void>(() => undefined),
     });
+    drainer.setLogHealth(new LogHealth(events, Date.now, 'https://unavailable.example/v1/logs'));
     const draining = drainer.drainUntilStopped();
     try {
       await waitFor(() => warnings.length === 1);
@@ -285,7 +288,7 @@ describe('durable log spool', () => {
       await draining;
     }
 
-    expect(warnings).toEqual(['OTLP logs delivery failed: network']);
+    expect(warnings).toEqual(['[otel] log delivery to https://unavailable.example network; records remain local']);
     expect(warnings.join('\n')).not.toContain('network-secret');
   });
 

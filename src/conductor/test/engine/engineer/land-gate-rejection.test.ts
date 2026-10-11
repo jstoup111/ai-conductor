@@ -53,6 +53,7 @@ describe('land-gate rejection classification', () => {
       persist: true,
       audit: false,
       otel: false,
+      logs: false,
     });
   });
 });

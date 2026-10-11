@@ -64,10 +64,10 @@ describe('Task 18 — monitor queue event spine', () => {
       deferred: EVENT_SINKS.monitor_item_deferred,
       ended: EVENT_SINKS.monitor_session_ended,
     }).toEqual({
-      offered: { render: false, persist: true, audit: false, otel: false },
-      opened: { render: false, persist: true, audit: false, otel: false },
-      deferred: { render: false, persist: true, audit: false, otel: false },
-      ended: { render: false, persist: true, audit: false, otel: false },
+      offered: { render: false, persist: true, audit: false, otel: false, logs: false },
+      opened: { render: false, persist: true, audit: false, otel: false, logs: false },
+      deferred: { render: false, persist: true, audit: false, otel: false, logs: false },
+      ended: { render: false, persist: true, audit: false, otel: false, logs: false },
     });
   });
 

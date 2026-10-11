@@ -44,8 +44,8 @@ describe('OTel spool events', () => {
 
     try {
       expect({ drop: EVENT_SINKS.otel_spool_drop, backlog: EVENT_SINKS.otel_spool_backlog }).toEqual({
-        drop: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
-        backlog: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
+        drop: { render: false, persist: true, audit: false, otel: false, logs: false, otelTrace: false },
+        backlog: { render: false, persist: true, audit: false, otel: false, logs: false, otelTrace: false },
       });
 
       persister.start();

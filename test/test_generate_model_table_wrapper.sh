@@ -21,6 +21,7 @@ HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WRAPPER="$HARNESS_DIR/bin/generate-model-table"
 DIST_DIR="$HARNESS_DIR/src/conductor/dist"
 TSX_BIN="$HARNESS_DIR/src/conductor/node_modules/.bin/tsx"
+TEST_TMPDIR="${TMPDIR:-/tmp}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -82,7 +83,7 @@ EOF
 
   BEFORE_SNAP="$(dist_snapshot)"
   set +e
-  GENERATE_MODEL_TABLE_HARNESS_MD="$TMP_HARNESS" "$WRAPPER" >/tmp/gmt_ok_out.log 2>&1
+  GENERATE_MODEL_TABLE_HARNESS_MD="$TMP_HARNESS" "$WRAPPER" >"$TEST_TMPDIR/gmt_ok_out.log" 2>&1
   OK_EXIT=$?
   set -e
   AFTER_SNAP="$(dist_snapshot)"
@@ -116,13 +117,13 @@ echo "sentinel" > "$FAKE_ROOT/src/conductor/dist/sentinel.js"
 BEFORE_ERR_SNAP=$(find "$FAKE_ROOT/src/conductor/dist" -type f -exec stat -c '%n %Y' {} \; | sort)
 
 set +e
-"$FAKE_ROOT/bin/generate-model-table" >/tmp/gmt_err_out.log 2>&1
+"$FAKE_ROOT/bin/generate-model-table" >"$TEST_TMPDIR/gmt_err_out.log" 2>&1
 ERR_EXIT=$?
 set -e
 AFTER_ERR_SNAP=$(find "$FAKE_ROOT/src/conductor/dist" -type f -exec stat -c '%n %Y' {} \; | sort)
 
 assert "wrapper exits 2 when tsx is missing (no npx fallback)" "$([ "$ERR_EXIT" -eq 2 ] && echo 0 || echo 1)"
-assert "error message mentions 'npm install'" "$(grep -q 'npm install' /tmp/gmt_err_out.log && echo 0 || echo 1)"
+assert "error message mentions 'npm install'" "$(grep -q 'npm install' "$TEST_TMPDIR/gmt_err_out.log" && echo 0 || echo 1)"
 assert "dist mtimes unchanged after error run" "$([ "$BEFORE_ERR_SNAP" = "$AFTER_ERR_SNAP" ] && echo 0 || echo 1)"
 
 rm -rf "$FAKE_ROOT"

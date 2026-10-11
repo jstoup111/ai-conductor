@@ -44,7 +44,7 @@ describe('rate-limit record attribution', () => {
     expect(persisted).toMatchObject(historical);
     expect(persisted).not.toHaveProperty('provider');
     expect(persisted).not.toHaveProperty('deadline');
-    expect(EVENT_SINKS.rate_limit).toEqual({ render: true, persist: true, audit: false, otel: false });
+    expect(EVENT_SINKS.rate_limit).toEqual({ render: true, persist: true, audit: false, otel: false, logs: false });
   });
 
   it('persists the exhausted provider and parsed deadline from the rate-limited result', async () => {
@@ -131,7 +131,7 @@ describe('rate-limit record attribution', () => {
 
   it('keeps rate_limit out of the declared OpenTelemetry exporter subscriptions', () => {
     expect(otelEventTypes()).not.toContain('rate_limit');
-    expect(EVENT_SINKS.rate_limit).toEqual({ render: true, persist: true, audit: false, otel: false });
+    expect(EVENT_SINKS.rate_limit).toEqual({ render: true, persist: true, audit: false, otel: false, logs: false });
   });
 
   async function runAndReadRateLimitRecord(input: {
