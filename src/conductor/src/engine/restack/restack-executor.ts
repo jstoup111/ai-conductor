@@ -23,6 +23,7 @@ import {
 } from './restack-move.js';
 import { planRestackRanges } from './restack-plan.js';
 import { replayChildRange, type CommitterStamp } from './restack-replay.js';
+import { syncRestackedWorktree } from './restack-sync.js';
 import {
   isLegalJournalTransition,
   parseCommitSha,
@@ -286,8 +287,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
 
     const checkedOutMove = moves.find((move) => move.ref === checkedOut);
     if (!checkedOutMove) throw new Error('checked-out branch is not part of restack move');
-    const synced = await runGit(git, ['read-tree', '-m', '-u', checkedOutMove.oldSha, checkedOutMove.newSha]);
-    if (synced.exitCode !== 0) throw new Error(`cannot synchronize restacked worktree: ${synced.stderr}`);
+    await syncRestackedWorktree(options.worktree, checkedOutMove.oldSha, checkedOutMove.newSha, { git });
     journal = await transitionState(options.worktree, journal, 'synced', git);
 
     // Task 18 supplies the durable transition hook; this Task 8 boundary keeps
