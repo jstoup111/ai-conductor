@@ -7,8 +7,12 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
-import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
+import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
+import { runRestack } from '../../../src/engine/restack/restack-executor.js';
+import { journalRefFor, readRestackJournal, writeRestackJournalBlob } from '../../../src/engine/restack/restack-journal.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
+import { parseChildId } from '../../../src/engine/child-context.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
@@ -92,7 +96,7 @@ describe('runStackPreflight (real local Git)', () => {
     await subject.git(['checkout', '-q', 'feat/daemon-demo']);
     const events = new ConductorEventEmitter();
     const refusals: unknown[] = [];
-    events.on('restack_refused', (event) => refusals.push(event));
+    events.on('restack_refused', (event) => { refusals.push(event); });
 
     await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo) }))
       .resolves.toEqual({ kind: 'halted' });
@@ -110,7 +114,7 @@ describe('runStackPreflight (real local Git)', () => {
     await subject.git(['checkout', '-q', 'feat/daemon-demo']);
     const events = new ConductorEventEmitter();
     const planned: { cause?: string; opId?: string }[] = [];
-    events.on('restack_planned', (event) => planned.push(event));
+    events.on('restack_planned', (event) => { planned.push(event as { cause?: string; opId?: string }); });
     const phases: string[] = [];
 
     await expect(runStackPreflight({
@@ -120,5 +124,125 @@ describe('runStackPreflight (real local Git)', () => {
     expect(phases).toEqual(['consume']);
     expect(planned.map(({ cause }) => cause)).toEqual(['feature-repair', 'base-refresh']);
     expect(planned[0]!.opId).not.toBe(planned[1]!.opId);
+  });
+
+  async function withPersistedEvents<T>(repo: string, run: (events: ConductorEventEmitter) => Promise<T>) {
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    let result: T;
+    try {
+      result = await run(events);
+    } finally {
+      persister.stop();
+    }
+    const records = (await readFile(join(repo, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as { type: string; reason?: string; cause?: string; opId?: string });
+    return { result, records };
+  }
+
+  async function advanceDefaultAndAppendOperatorCommit(subject: Awaited<ReturnType<typeof fixture>>, operatorPath: string) {
+    await subject.git(['checkout', '-q', 'main']);
+    const advanced = await subject.commit('base advance', 'main.txt', 'advanced\n');
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await subject.commit('operator change', operatorPath, 'X\n');
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    return advanced;
+  }
+
+  // Covers: S9.9, task:rem-prd-audit-R4
+  it('persists deferred-base-refresh and runs no base refresh when a due repair is refused for a dirty overlap', async () => {
+    const subject = await fixture();
+    const advanced = await advanceDefaultAndAppendOperatorCommit(subject, 'base.txt');
+    // The checked-out leaf must move to carry base.txt; an uncommitted edit to it refuses the repair.
+    await writeFile(join(subject.repo, 'base.txt'), 'operator wip\n');
+    const closedBefore = (await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim();
+    const consumed: string[] = [];
+
+    const { result, records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
+      worktree: subject.repo, slug: 'demo', baseRefreshDue: true,
+      consumeRekick: async () => { consumed.push('consume'); }, events, git: makeGitRunner(subject.repo),
+    }));
+
+    expect(result).toEqual({ kind: 'halted' });
+    expect(records.filter((record) => record.type === 'restack_refused').map((record) => record.reason))
+      .toEqual(['dirty-overlap', 'deferred-base-refresh']);
+    expect(records.filter((record) => record.type === 'restack_planned').map((record) => record.cause))
+      .not.toContain('base-refresh');
+    expect(consumed).toEqual([]);
+    await expect(subject.git(['merge-base', '--is-ancestor', advanced, 'feat/c1/demo'])).rejects.toBeDefined();
+    expect((await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim()).toBe(closedBefore);
+  });
+
+  // Covers: S9.10, task:rem-prd-audit-R5
+  it('persists deferred-base-refresh when the repair applies but the follow-on base refresh is refused checked-out-elsewhere', async () => {
+    const subject = await fixture();
+    const advanced = await advanceDefaultAndAppendOperatorCommit(subject, 'operator.txt');
+    const elsewhere = await mkdtemp(join(tmpdir(), 'stack-preflight-elsewhere-'));
+    repositories.push(elsewhere);
+    await subject.git(['worktree', 'add', '-q', elsewhere, 'feat/c1/demo']);
+    const operatorTip = (await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim();
+
+    const { result, records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
+      worktree: subject.repo, slug: 'demo', baseRefreshDue: true, events, git: makeGitRunner(subject.repo),
+    }));
+
+    expect(result).toEqual({ kind: 'halted' });
+    // The repair applied: child 1's closure moved to the operator commit and the leaf carries it.
+    expect((await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim()).toBe(operatorTip);
+    expect((await subject.git(['show', 'feat/daemon-demo:operator.txt'])).stdout).toBe('X\n');
+    expect(records.filter((record) => record.type === 'restack_applied').map((record) => record.cause))
+      .toContain('feature-repair');
+    expect(records.filter((record) => record.type === 'restack_applied').map((record) => record.cause))
+      .not.toContain('base-refresh');
+    expect(records.filter((record) => record.type === 'restack_refused').map((record) => record.reason))
+      .toEqual(['checked-out-elsewhere', 'deferred-base-refresh']);
+    expect((await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim()).toBe(operatorTip);
+    await expect(subject.git(['merge-base', '--is-ancestor', advanced, 'feat/c1/demo'])).rejects.toBeDefined();
+  });
+
+  // Covers: S9.12, task:rem-prd-audit-R6
+  it('runs the durable base-refresh follow-on with a distinct opId when the process died after the repair journal reached applied', async () => {
+    const subject = await fixture();
+    const advanced = await advanceDefaultAndAppendOperatorCommit(subject, 'operator.txt');
+    const childOne = parseChildId(1);
+    if (!childOne) throw new Error('child id should parse');
+    // The repair half of a due resume, exactly as the preflight starts it.
+    const repair = await runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', originatingChildren: [childOne],
+      followOnCause: 'base-refresh', git: makeGitRunner(subject.repo),
+    });
+    expect(repair.kind).toBe('applied');
+    const applied = await readRestackJournal(subject.repo, 'demo');
+    if (applied.kind !== 'journal') throw new Error('repair journal should remain');
+    expect(applied.journal).toMatchObject({ state: 'applied', cause: 'feature-repair', followOnCause: 'base-refresh' });
+    // Simulate the process dying before the follow-on started: the journal's owner is no longer alive.
+    const deadBlob = await writeRestackJournalBlob(subject.repo, {
+      ...applied.journal, owner: { host: 'dead-preflight-host', pid: 1, processStartTime: '0' },
+    });
+    await subject.git(['update-ref', journalRefFor('demo'), deadBlob, applied.blob]);
+    const repairOpId = applied.journal.opId;
+
+    const nativeGit = makeGitRunner(subject.repo);
+    const transactions: string[] = [];
+    const git: GitRunner = async (args, options) => {
+      if (args[0] === 'update-ref' && args[1] === '--stdin' && options?.input !== undefined) transactions.push(options.input);
+      return nativeGit(args, options);
+    };
+    const { result, records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
+      worktree: subject.repo, slug: 'demo', events, git,
+    }));
+
+    // Recovery completed the follow-on, so the cursor then judges a coherent stack.
+    expect(result).toEqual({ kind: 'clear' });
+    const planned = records.filter((record) => record.type === 'restack_planned');
+    expect(planned.map((record) => record.cause)).toEqual(['base-refresh']);
+    expect(planned[0]!.opId).not.toBe(repairOpId);
+    // The follow-on journal replaced the dead repair's applied journal by CAS on its blob.
+    expect(transactions.some((input) => new RegExp(`^update ${journalRefFor('demo')} [0-9a-f]{40} ${deadBlob}$`, 'm').test(input)))
+      .toBe(true);
+    expect((await subject.git(['merge-base', '--is-ancestor', advanced, 'feat/c1/demo'])).stdout).toBe('');
+    expect((await subject.git(['show', 'feat/daemon-demo:operator.txt'])).stdout).toBe('X\n');
+    expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
   });
 });
