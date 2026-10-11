@@ -160,6 +160,8 @@ export class SpoolingLogExporter implements LogBatchExporter {
     private readonly destinationId: string,
     private readonly inner: LogBatchExporter,
     private readonly events?: ConductorEventEmitter,
+    /** Counts a failed durable admission at the log owner's bounded health seam. */
+    private readonly onPreservationFailure?: (count: number) => void,
   ) {}
   export(records: SdkLogRecord[], done: (result: ExportResult) => void): void { void this.write(records, done); }
   async shutdown(): Promise<void> { await this.inner.shutdown?.(); }
@@ -174,11 +176,21 @@ export class SpoolingLogExporter implements LogBatchExporter {
       emitEviction(this.events, 'logs', result);
       done({ code: ExportResultCode.SUCCESS });
     } catch (error) {
+      // A direct delivery can still succeed, but the durable copy was not
+      // made. Count that distinct storage failure before handing the exact
+      // batch to the common, policy-authorized direct sender.
+      this.onPreservationFailure?.(records.length);
       if (!this.warned) {
         this.warned = true;
         void this.events?.emit({ type: 'renderer_error', rendererName: 'otel', error: '[otel] log preservation failed; attempting authorized direct delivery' });
       }
-      this.inner.export(records, done);
+      try {
+        this.inner.export(records, done);
+      } catch {
+        // Storage loss and a broken direct adapter must remain observational;
+        // neither may escape an SDK callback into the build.
+        done({ code: ExportResultCode.FAILED });
+      }
     }
   }
 }

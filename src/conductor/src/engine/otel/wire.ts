@@ -133,7 +133,13 @@ export async function wireOtelLogs(
         }); },
     };
     const exporter = policy.config.spool.enabled && spoolRuntime
-      ? new SpoolingLogExporter(spoolRuntime.store, policy.destinationId, direct, events) : direct;
+      ? new SpoolingLogExporter(
+        spoolRuntime.store,
+        policy.destinationId,
+        direct,
+        events,
+        (count) => health.failure('storage', count),
+      ) : direct;
     const processor = new BoundedLogProcessor(exporter, { onDrop: (count) => health.failure('dropped', count) });
     const provider = new LoggerProvider({ resource: buildResource({ pipelineDir: context.pipelineDir,
       project: policy.root, projectName: basename(policy.root), workerName: worker,

@@ -1,5 +1,5 @@
-// Covers: task:13
-import { afterEach, describe, expect, it } from 'vitest';
+// Covers: task:13, task:15
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,6 +41,57 @@ afterEach(async () => {
 });
 
 describe('durable log spool', () => {
+  it('caps all log destinations without charging or changing trace and metric retention', async () => {
+    const directory = await temporaryDirectory();
+    let now = 1_727_000_000_000;
+    const store = new SpoolStore(directory, { maxBytes: 1_024, logMaxBytes: 10, now: () => now });
+    const trace = Buffer.from('trace-retained-byte-for-byte');
+    const metric = Buffer.from('metric-retained-byte-for-byte');
+    const inactiveDestination = 'sha256:inactive-destination';
+    await store.write('traces', trace);
+    await store.write('metrics', metric);
+    await store.write('logs', Buffer.from('old!'), 2, inactiveDestination);
+    now += 1;
+    const active = await store.write('logs', Buffer.from('newer'), 3, destinationId);
+    now += 1;
+    const result = await store.write('logs', Buffer.from('last'), 5, destinationId);
+    if (active.rejectedOversize || result.rejectedOversize) throw new Error('expected capped log batches to be retained');
+
+    expect({
+      eviction: { batches: result.evictedBatches, items: result.evictedItems },
+      logs: (await store.list('logs')).map(({ destinationId: id, items }) => ({ id, items })),
+      logBytes: await store.totalBytes('logs'),
+      traces: await Promise.all((await store.list('traces')).map((batch) => store.read(batch))),
+      metrics: await Promise.all((await store.list('metrics')).map((batch) => store.read(batch))),
+    }).toEqual({
+      eviction: { batches: 1, items: 2 },
+      logs: [{ id: destinationId, items: 3 }, { id: destinationId, items: 5 }],
+      logBytes: 9,
+      traces: [trace],
+      metrics: [metric],
+    });
+  });
+
+  it.each(['ENOSPC', 'EACCES'])('reports a %s preservation failure and falls back without throwing', async (code) => {
+    const events = new ConductorEventEmitter();
+    const warnings: string[] = [];
+    events.on('renderer_error', (event) => warnings.push(event.error));
+    const preservationFailures = vi.fn();
+    const direct = vi.fn((_records: unknown[], done: (result: { code: ExportResultCode }) => void) => {
+      done({ code: ExportResultCode.SUCCESS });
+    });
+    const exporter = new SpoolingLogExporter({
+      write: async () => { throw Object.assign(new Error(code), { code }); },
+    } as unknown as SpoolStore, destinationId, { export: direct }, events, preservationFailures);
+
+    await expect(new Promise<{ code: ExportResultCode }>((resolve) => exporter.export([record], resolve)))
+      .resolves.toEqual({ code: ExportResultCode.SUCCESS });
+
+    expect(direct).toHaveBeenCalledExactlyOnceWith([record], expect.any(Function));
+    expect(preservationFailures).toHaveBeenCalledExactlyOnceWith(1);
+    expect(warnings).toEqual(['[otel] log preservation failed; attempting authorized direct delivery']);
+  });
+
   it('commits a protobuf log batch before acknowledgement, then a later authorized owner replays it with rotated credentials', async () => {
     const directory = await temporaryDirectory();
     const store = new SpoolStore(directory);
