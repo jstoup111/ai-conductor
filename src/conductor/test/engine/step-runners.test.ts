@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:4, task:7, task:8, task:10, task:11, task:12, task:17
+// Covers: task:1, task:3, task:4, task:5, task:7, task:8, task:10, task:11, task:12, task:17
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
