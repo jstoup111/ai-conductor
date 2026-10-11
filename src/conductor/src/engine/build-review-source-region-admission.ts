@@ -95,7 +95,8 @@ export async function compareBuildReviewCitedSourceRegions(
       const citation = record(regionValue);
       if (
         !citation || typeof citation.path !== 'string' ||
-        !Number.isSafeInteger(citation.startLine) || !Number.isSafeInteger(citation.endLine)
+        typeof citation.startLine !== 'number' || !Number.isSafeInteger(citation.startLine) ||
+        typeof citation.endLine !== 'number' || !Number.isSafeInteger(citation.endLine)
       ) continue;
 
       const path = citation.path;
