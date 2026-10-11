@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:14, task:15, task:rem-as-built-rem-asb-1
+// Covers: task:1, task:2, task:14, task:15, task:rem-as-built-rem-asb-1, task:rem-as-built-rem-asb-2
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -90,6 +90,13 @@ describe('declaredEdges', () => {
         reason: 'reverse-direction',
       }),
     ]);
+  });
+
+  it('keeps task-list dependency-shaped references manual-review-only', () => {
+    const result = declaredEdges({ ref: SOURCE, body: '- [ ] Phase 1 blocked by #10' });
+
+    expect(result.edges).toEqual([]);
+    expect(result.manualReview).toEqual([expect.objectContaining({ reason: 'task-list-phase' })]);
   });
 
   it('returns identical edge lists for the same form-field and prose reference', () => {

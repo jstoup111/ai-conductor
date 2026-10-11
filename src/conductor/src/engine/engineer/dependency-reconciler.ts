@@ -143,11 +143,15 @@ export function extractDependsOnFormValues(body: string): string[] {
  */
 export function declaredEdges(input: DeclaredEdgesInput): DeclaredEdgesResult {
   const parsed = parseDependencyProse({ ref: input.ref, body: input.body });
+  const source = parseSourceRef(input.ref);
+  const taskListTargets = new Set(parsed.manualReview
+    .filter((item) => item.reason === 'task-list-phase')
+    .flatMap((item) => [...item.excerpt.matchAll(/#(\d+)/g)].map((match) => source ? `${source.repo}#${match[1]}` : '')));
   const candidates = [
     ...[...extractDependsOnFormValues(input.body), ...(input.formDependsOn ?? [])].map((value) => formEdge(input.ref, value)).filter(
       (edge): edge is DependencyEdge => edge !== null,
     ),
-    ...parsed.edges,
+    ...parsed.edges.filter((edge) => !taskListTargets.has(edge.target)),
   ];
   const edges: DependencyEdge[] = [];
   const manualReview: DeclaredEdgeManualReviewItem[] = [...parsed.manualReview];
