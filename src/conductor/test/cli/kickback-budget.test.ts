@@ -1,4 +1,5 @@
-// Covers: task:11, task:27, task:28, task:31.2, task:33, R20
+// Covers: task:rem-prd-audit-R20
+// Covers: task:11, task:27, task:28, task:31.2, task:33
 import { describe, expect, it } from 'vitest';
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -455,8 +456,9 @@ describe('kickback-budget inspect reconciles an interrupted adjustment at comman
   });
 });
 
-// Covers: task:31.2, R20 — a restack authorization event is durable intent,
-// but recovery must restore the cascade before granting the child a resume.
+// Covers: task:31.2, task:rem-prd-audit-R20
+// A restack authorization event is durable intent, but recovery must restore
+// the cascade before granting the child a resume.
 describe('kickback-budget restack recovery', () => {
   async function crashAfterAuthorizationEvent() {
     const fixture = await makeFeature({ version: 1, gates: {} });
