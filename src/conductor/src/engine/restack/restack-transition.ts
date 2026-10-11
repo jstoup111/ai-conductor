@@ -17,6 +17,7 @@ import {
 } from '../rebase.js';
 import { compareReplayTree } from '../rebase-replay.js';
 import { applyRebaseTransition } from '../rebase-transition.js';
+import { translateAfterRebase } from '../rebase-translate.js';
 import { readState } from '../state.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import type { RestackMoveRef } from './restack-move.js';
@@ -204,6 +205,23 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
   };
   const activeRange = options.ranges.find((range) => range.child === options.activeChild);
   const activeMove = moveByChild.get(options.activeChild);
+
+  // Replay constructs the exact old child range on a new parent. Reuse the
+  // established rebase translator for each moved range: it persists the flat
+  // correspondence and rewrites only flat evidence stores. In particular it
+  // never touches `.pipeline/current-task` or a closed child's region store.
+  for (const range of options.ranges) {
+    const move = moveByChild.get(range.child);
+    if (!move || move.oldSha === move.newSha) continue;
+    await translateAfterRebase(
+      options.git,
+      options.worktree,
+      range.oldParent,
+      range.oldTip,
+      move.newSha,
+      options.events,
+    );
+  }
   if (activeRange && activeRange.kind !== 'closed' && activeMove) {
     const activeOutcome = await outcomeFor(options.worktree, options.git, {
       previous: activeRange.oldTip,
