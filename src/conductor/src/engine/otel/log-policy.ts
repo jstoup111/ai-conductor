@@ -1,4 +1,4 @@
-import { loadMergedConfigForRead } from '../config.js';
+import { loadMergedConfigForRead, projectConfigPath } from '../config.js';
 import { resolveMainRepoRootStrict } from '../park-marker.js';
 import { resolveLogConfig, type ResolvedLogConfig } from './log-config.js';
 
@@ -18,6 +18,10 @@ export interface LogPolicyOptions {
 
 function throwIfCancelled(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw signal.reason ?? new Error('log policy read cancelled');
+}
+
+function unavailable(root: string | undefined, reason: string): LogPolicy {
+  return root === undefined ? { sendable: false, reason } : { sendable: false, root, reason };
 }
 
 function stableLogBlock(config: { otel?: unknown }): string {
@@ -49,14 +53,31 @@ export function logDestinationId(config: Extract<ResolvedLogConfig, { enabled: t
 export async function readLogPolicy(startDir: string, options: LogPolicyOptions = {}): Promise<LogPolicy> {
   throwIfCancelled(options.signal);
   const resolveRoot = options.resolveRoot ?? ((directory: string) => resolveMainRepoRootStrict(directory));
-  const root = await resolveRoot(startDir, options.signal);
+  let root: string | null;
+  try {
+    root = await resolveRoot(startDir, options.signal);
+  } catch {
+    throwIfCancelled(options.signal);
+    return unavailable(undefined, 'log policy unavailable: canonical project root could not be resolved');
+  }
   throwIfCancelled(options.signal);
-  if (root === null) return { sendable: false, reason: 'log policy unavailable: canonical project root could not be resolved' };
+  if (root === null) return unavailable(undefined, 'log policy unavailable: canonical project root could not be resolved');
   const loadConfig = options.loadConfig ?? ((directory: string) => loadMergedConfigForRead(directory));
-  const loaded = await loadConfig(root, options.signal);
+  let loaded: Awaited<ReturnType<typeof loadMergedConfigForRead>>;
+  try {
+    loaded = await loadConfig(root, options.signal);
+  } catch {
+    throwIfCancelled(options.signal);
+    return unavailable(root, 'log policy unavailable: canonical configuration could not be read');
+  }
   throwIfCancelled(options.signal);
-  if (!loaded.ok) return { sendable: false, root, reason: 'log policy unavailable: canonical configuration could not be read' };
-  const resolved = resolveLogConfig(loaded.config);
+  if (!loaded.ok) return unavailable(root, 'log policy unavailable: canonical configuration could not be read');
+  let resolved: ResolvedLogConfig;
+  try {
+    resolved = resolveLogConfig(loaded.config);
+  } catch {
+    return unavailable(root, 'log policy unavailable: canonical configuration is invalid');
+  }
   if (!resolved.enabled) {
     return { sendable: false, root, reason: resolved.error ?? 'log export is disabled' };
   }
@@ -68,7 +89,7 @@ export async function readLogPolicy(startDir: string, options: LogPolicyOptions 
       const local = await loadConfig(startDir, options.signal);
       throwIfCancelled(options.signal);
       if (local.ok && stableLogBlock(local.config) !== stableLogBlock(loaded.config)) {
-        options.warn?.(`log settings in this worktree are ignored; using canonical project policy at ${root}`);
+        options.warn?.(`log settings in this worktree are ignored; using canonical project policy at ${projectConfigPath(root)}`);
       }
     } catch {
       // The canonical policy has already been read successfully.  An optional
