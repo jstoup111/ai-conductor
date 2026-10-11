@@ -417,6 +417,65 @@ describe('live self-host boundary', () => {
         expect(await verify(baseline)).toEqual({ ok: true });
       } finally { await rm(root, { recursive: true, force: true }); }
     });
+
+    it('rejects a semantic-empty root remote-settings.json rewritten to managed settings', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'live-boundary-remote-settings-empty-to-managed-'));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(provider)]);
+      const settings = join(provider, 'remote-settings.json');
+      await writeFile(settings, '{}');
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await writeFile(settings, '{"permissions":{"deny":["Bash"]}}');
+      try {
+        const result = await verify(baseline);
+        expect(result).toMatchObject({
+          ok: false,
+          reason: expect.stringContaining('provider state changed during self-host execution'),
+        });
+        expect(result.reason).toContain('changed remote-settings.json');
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+
+    it('rejects managed root remote-settings.json rewritten to each semantic-empty form', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'live-boundary-remote-settings-managed-to-empty-'));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(provider)]);
+      const settings = join(provider, 'remote-settings.json');
+      const managedSettings = '{"permissions":{"deny":["Bash"]}}';
+      try {
+        for (const content of ['{}', '']) {
+          await writeFile(settings, managedSettings);
+          const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+          await writeFile(settings, content);
+          const result = await verify(baseline);
+          expect(result).toMatchObject({
+            ok: false,
+            reason: expect.stringContaining('provider state changed during self-host execution'),
+          });
+          expect(result.reason).toContain('changed remote-settings.json');
+        }
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+
+    it('rejects a semantic-empty root remote-settings.json rewritten to non-empty JSON forms', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'live-boundary-remote-settings-empty-to-non-empty-'));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(provider)]);
+      const settings = join(provider, 'remote-settings.json');
+      try {
+        for (const content of ['{', '[]', 'null']) {
+          await writeFile(settings, '{}');
+          const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+          await writeFile(settings, content);
+          const result = await verify(baseline);
+          expect(result).toMatchObject({
+            ok: false,
+            reason: expect.stringContaining('provider state changed during self-host execution'),
+          });
+          expect(result.reason).toContain('changed remote-settings.json');
+        }
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
   });
 
   describe('claude.ai skill-sync round marker', () => {
