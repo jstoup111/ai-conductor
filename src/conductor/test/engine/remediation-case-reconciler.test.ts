@@ -1,4 +1,4 @@
-// Covers: task:3, task:5
+// Covers: task:2, task:3, task:5
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -92,6 +92,43 @@ afterEach(async () => {
 });
 
 describe('remediation case reconciler', () => {
+  it('carries a rejected source-link transition and leaves the valid store bytes unchanged', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({
+      value: null,
+      nextState: {
+        ...state,
+        cases: [durableAction({
+          id: 'case-R',
+          resolution: 'resolved',
+          sources: [{ sourceId: 'source-S', outcome: 'acted', recordedAt: RECORDED_AT }],
+          effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+        })],
+      },
+    }));
+    const before = await readFile(remediationCaseStorePath(projectRoot), 'utf8');
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'new-case' }, [
+        { sourceId: 'source-S', outcome: 'acted', caseRef: 'new-case' },
+      ]),
+      recordedAt: '2026-08-30T13:00:00.000Z',
+      generateId: generatedIds('case-N', 'effect-N'),
+    });
+
+    expect([result, await readFile(remediationCaseStorePath(projectRoot), 'utf8')]).toEqual([{
+      ok: false,
+      reason: 'store-failure',
+      storeReason: 'rejected-transition',
+      violation: {
+        invariant: 'source-linked-by-multiple-cases',
+        caseIds: ['case-R', 'case-N'],
+        sourceIds: ['source-S'],
+      },
+    }, before]);
+  });
+
   it.each([
     ['interrupted unattempted action resumes', durableAction(), new Set<string>(), 'resume'],
     ['attempted action halts regardless of changed-tree facts outside the durable identity', durableAction(), new Set(['case-1']), 'halt-repeat'],

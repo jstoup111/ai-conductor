@@ -5,6 +5,7 @@ import {
   type RemediationCaseRecord,
   type RemediationCaseStoreFailureReason,
   type RemediationCaseStoreState,
+  type RemediationCaseTransitionViolation,
   RemediationCaseStore,
 } from './remediation-case-store.js';
 import type { RemediationCaseGraph } from './remediation-case-validator.js';
@@ -50,7 +51,12 @@ export type ReconcileRemediationCasesResult =
       readonly resolvedAbsentCaseIds: readonly string[];
     }
   | { readonly ok: false; readonly reason: RemediationCaseReconciliationRejection }
-  | { readonly ok: false; readonly reason: 'store-failure'; readonly storeReason: RemediationCaseStoreFailureReason };
+  | {
+    readonly ok: false;
+    readonly reason: 'store-failure';
+    readonly storeReason: RemediationCaseStoreFailureReason;
+    readonly violation?: RemediationCaseTransitionViolation;
+  };
 
 /** Explicit durable bindings, never prose similarity or tree movement, decide reuse. */
 export type RemediationCaseReuseDisposition = 'resume' | 'reuse' | 'halt-repeat' | 'halt-regression';
@@ -343,7 +349,14 @@ export async function reconcileRemediationCases(
       ? { value: reconciliation, ...(reconciliation.changed ? { nextState: reconciliation.state } : {}) }
       : { value: reconciliation };
   });
-  if (!mutation.ok) return { ok: false, reason: 'store-failure', storeReason: mutation.reason };
+  if (!mutation.ok) {
+    return {
+      ok: false,
+      reason: 'store-failure',
+      storeReason: mutation.reason,
+      ...(mutation.reason === 'rejected-transition' && mutation.violation ? { violation: mutation.violation } : {}),
+    };
+  }
   return mutation.value.ok
     ? {
         ok: true,
