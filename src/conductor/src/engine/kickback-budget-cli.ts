@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { KickbackBudgetDispatch } from '../cli.js';
+import { KICKBACK_BUDGET_GATES, type KickbackBudgetDispatch } from '../cli.js';
 import { appendCloseoutEvent, appendKickbackBudgetAuthorizationEvent, readKickbackBudgetAuthorizationEvents } from './closeout-events.js';
 import { EventPersister } from './event-persister.js';
 import { AuditTrailWriter } from './audit-trail.js';
@@ -23,7 +23,7 @@ import { applyCascadeAdjustment, MAX_RESTACK_CASCADES_PER_CHILD, readCascadeCoun
 import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
 
-const GATES = new Set(['build_review', 'prd_audit', 'architecture_review_as_built', 'restack']);
+const GATES = new Set<string>(KICKBACK_BUDGET_GATES);
 async function defaultsFor(worktree: string): Promise<Record<string, number>> {
   const loaded = await loadConfig(worktree);
   const config = loaded.ok ? loaded.config : {} as HarnessConfig;

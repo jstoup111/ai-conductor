@@ -398,6 +398,9 @@ export interface DecideGrantDispatch {
   reason: string;
 }
 
+/** Gates accepted by `kickback-budget raise|reset --gate`. */
+export const KICKBACK_BUDGET_GATES = ['build_review', 'prd_audit', 'architecture_review_as_built', 'restack'] as const;
+
 export interface KickbackBudgetDispatch {
   kind: 'kickback-budget';
   action: 'inspect' | 'raise' | 'reset';
@@ -753,6 +756,18 @@ export function createProgram(): Command {
   program
     .command('build-tail [worktree]')
     .description('Render a deterministic build task/remediation/closeout timing rollup');
+
+  // Operator budget recovery. Dispatch lives in index.ts
+  // (detectKickbackBudgetCommand); declared here so `--help` documents it.
+  program
+    .command('kickback-budget <action>')
+    .description('Inspect, raise or reset a halted feature\'s kickback budget (action: inspect | raise | reset)')
+    .option('--feature <slug>', 'Feature worktree slug')
+    .option('--gate <gate>', `Gate to adjust: ${KICKBACK_BUDGET_GATES.join(' | ')} (restack requires --child)`)
+    .option('--child <k>', 'Child id; for restack, the originating child named by the cascade-cap halt')
+    .option('--by <n>', 'Positive amount to raise the limit by (raise only)')
+    .option('--rationale <text>', 'Operator rationale (raise and reset)')
+    .option('--format <format>', 'Output format: human | json');
 
   const buildReview = program
     .command('build-review')
