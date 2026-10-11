@@ -1552,10 +1552,15 @@ export async function applyKickbackBudgetAdjustment(
     const allowance = entry.capEvidence?.allowance ?? 'laps';
     const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
     const growth = allowance === 'growth';
+    const restack = allowance === 'restacks';
     const beforeLimit = growth
       ? (ledger.effectiveGrowthCap ?? entry.capEvidence!.limit)
       : remediation ? (entry.effectiveLapCap ?? entry.capEvidence!.limit) : (entry.effectiveLimit ?? defaultLimit);
-    const beforeConsumed = growth ? (ledger.growth?.added ?? 0) : remediation ? (entry.laps ?? 0) : entry.cumulative;
+    const beforeConsumed = growth
+      ? (ledger.growth?.added ?? 0)
+      : restack
+        ? entry.capEvidence!.consumed
+        : remediation ? (entry.laps ?? 0) : entry.cumulative;
     const raised = adjustment.kind === 'raise' ? adjustment.afterLimit : beforeLimit;
     const next: KickbackGateEntry = {
       ...entry,
@@ -1597,7 +1602,12 @@ function capEvidenceAgreesWithAdjustment(
   const allowance = evidence.allowance ?? 'laps';
   const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
   const growth = allowance === 'growth';
-  const currentConsumed = growth ? (ledger.growth?.added ?? 0) : remediation ? (entry.laps ?? 0) : entry.cumulative;
+  const restack = allowance === 'restacks';
+  const currentConsumed = growth
+    ? (ledger.growth?.added ?? 0)
+    : restack
+      ? evidence.consumed
+      : remediation ? (entry.laps ?? 0) : entry.cumulative;
   const currentLimit = growth
     ? (ledger.effectiveGrowthCap ?? evidence.limit)
     : remediation

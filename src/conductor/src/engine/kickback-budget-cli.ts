@@ -296,7 +296,9 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
         : growth
         ? (ledger.effectiveGrowthCap ?? entry.capEvidence.limit)
         : remediation ? (entry.effectiveLapCap ?? entry.capEvidence.limit) : (entry.effectiveLimit ?? defaults[gate]);
-      const currentConsumed = growth ? (ledger.growth?.added ?? 0) : remediation ? (entry.laps ?? 0) : entry.cumulative;
+      const currentConsumed = gate === 'restack'
+        ? (cascadeState!.counts.counts[String(restackChild!)] ?? 0)
+        : growth ? (ledger.growth?.added ?? 0) : remediation ? (entry.laps ?? 0) : entry.cumulative;
       return {
         id: randomUUID(), kind: action, beforeConsumed: currentConsumed,
         afterConsumed: action === 'reset' ? 0 : currentConsumed,
