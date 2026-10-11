@@ -11,8 +11,8 @@ export interface PushLeaseGitRunner {
  * callback makes the lease decision own local Git only: a caller still owns
  * the provenance and credential context needed by executeRemoteGit.
  */
-export interface ExpectedLeaseRemoteGit {
-  (args: readonly string[]): Promise<ExpectedLeaseRemoteResult>;
+export interface ExpectedLeaseRemoteGit<Result extends ExpectedLeaseRemoteResult = ExpectedLeaseRemoteResult> {
+  (args: readonly string[]): Promise<Result>;
 }
 
 export type ExpectedLeaseRemoteResult =
@@ -26,7 +26,12 @@ export interface PushLeaseEventEmitter {
   emit(event: Extract<ConductorEvent, { type: 'push_lease_refused' }>): Promise<void>;
 }
 
-export type ForcePushWithExpectedLeaseResult = ExpectedLeaseRemoteResult;
+type ExpectedLeasePreflightResult = Exclude<ExpectedLeaseRemoteResult, { readonly kind: 'executed' }>;
+
+/** The remote result is retained so callers can consume its successful-write metadata. */
+export type ForcePushWithExpectedLeaseResult<RemoteResult extends ExpectedLeaseRemoteResult = ExpectedLeaseRemoteResult> =
+  | ExpectedLeasePreflightResult
+  | RemoteResult;
 
 export interface PushLeaseIntent {
   readonly expected: string | undefined;
@@ -135,14 +140,14 @@ async function emitLeaseRefusal(
  * deliberately delegates the write to that chokepoint so every lease still
  * receives its ownership/credential checks and durable pushed-tip recording.
  */
-export async function forcePushWithExpectedLease(input: {
+export async function forcePushWithExpectedLease<RemoteResult extends ExpectedLeaseRemoteResult>(input: {
   readonly cwd: string;
   readonly slug: string;
   readonly branch: string;
-  readonly remoteGit: ExpectedLeaseRemoteGit;
+  readonly remoteGit: ExpectedLeaseRemoteGit<RemoteResult>;
   readonly events?: PushLeaseEventEmitter;
   readonly git?: PushLeaseGitRunner;
-}): Promise<ForcePushWithExpectedLeaseResult> {
+}): Promise<ForcePushWithExpectedLeaseResult<RemoteResult>> {
   const git = input.git ?? defaultGit(input.cwd);
   const branch = branchName(input.branch);
   const tracking = trackingRef(branch);

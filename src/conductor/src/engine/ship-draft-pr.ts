@@ -40,7 +40,11 @@ import {
   type GithubOperationRunner,
 } from './github-operations.js';
 import { executeRemoteGit } from './remote-git-operations.js';
-import { forcePushWithExpectedLease, type PushLeaseGitRunner } from './push-lease.js';
+import {
+  forcePushWithExpectedLease,
+  type PushLeaseEventEmitter,
+  type PushLeaseGitRunner,
+} from './push-lease.js';
 import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from './tracker-client.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
@@ -180,7 +184,7 @@ export interface OpenShipDraftPrDeps {
   remoteGit?: typeof executeRemoteGit;
   remoteMutation?: GithubMutationExecutionContext;
   /** Existing event spine for refusal telemetry from the guarded push. */
-  events?: GithubOperationEventEmitter;
+  events?: GithubOperationEventEmitter & PushLeaseEventEmitter;
   /** Guarded PR creation; an absent runner is a refusal, never a raw gh fallback. */
   operations?: GithubOperationRunner;
   log?: (msg: string) => void;

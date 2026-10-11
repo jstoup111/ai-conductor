@@ -9,7 +9,12 @@ import { resolveMainRepoRoot } from './park-marker.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import { makeProductionGh, makeProductionGit, type GhRunner, type GitRunner } from './pr-labels.js';
 import { parseFeatureBranch } from './feature-branch-identity.js';
-import { forcePushWithExpectedLease, type PushLeaseGitRunner } from './push-lease.js';
+import {
+  forcePushWithExpectedLease,
+  type ForcePushWithExpectedLeaseResult,
+  type PushLeaseEventEmitter,
+  type PushLeaseGitRunner,
+} from './push-lease.js';
 import type { ChildId } from './child-context.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
@@ -49,10 +54,10 @@ export interface HaltRecordRemoteOptions {
   readonly mutation?: GithubMutationExecutionContext;
   readonly git?: GitRunner;
   readonly gh?: GhRunner;
-  readonly events?: GithubOperationEventEmitter;
+  readonly events?: GithubOperationEventEmitter & PushLeaseEventEmitter;
 }
 
-type HaltRecordPublicationResult = Awaited<ReturnType<typeof executeRemoteGit>> | {
+type HaltRecordPublicationResult = ForcePushWithExpectedLeaseResult | {
   readonly kind: 'refused';
   readonly reason: string;
 };
