@@ -44,3 +44,15 @@ test_bin_migrate_ledger.sh shell-runner verifies migration ledger behavior in is
 test_bin_migrate_multi_version_jump.sh shell-runner verifies multi-version migration behavior in isolated fixtures
 # triage: test_bin_migrate_parse.sh kept — isolated runner PASS
 test_bin_migrate_parse.sh shell-runner verifies migration fence parsing and ordering
+
+# Triage: first install orphan scripts verified through the isolated shell runner.
+# triage: test_install_channel_selection.sh fixed — isolated runner PASS with the schema-launcher fixture boundary
+test_install_channel_selection.sh shell-runner verifies first-run installer update-channel selection
+# triage: test_install_check_build_auth.sh kept — isolated runner PASS
+test_install_check_build_auth.sh shell-runner verifies installer build-auth health reporting
+# triage: test_install_docs_guard_wiring.sh kept — isolated runner PASS
+test_install_docs_guard_wiring.sh shell-runner verifies installer docs-guard hook wiring
+# triage: test_install_literal_configuration.sh fixed — isolated runner PASS with a PATH-independent shell fixture
+test_install_literal_configuration.sh shell-runner verifies literal installer configuration handling
+# triage: test_install_node_guard.sh kept — isolated runner PASS
+test_install_node_guard.sh shell-runner verifies installer Node-version failure handling

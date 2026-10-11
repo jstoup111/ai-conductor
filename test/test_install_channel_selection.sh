@@ -17,13 +17,21 @@ cp -r "$HARNESS_DIR/bin" "$CHECKOUT/bin"
 cp -r "$HARNESS_DIR/skills" "$CHECKOUT/skills"
 cp -r "$HARNESS_DIR/hooks" "$CHECKOUT/hooks"
 cp "$HARNESS_DIR/HARNESS.md" "$HARNESS_DIR/ARCHITECTURE.md" "$HARNESS_DIR/VERSION" "$CHECKOUT/"
+# The installer now treats a missing engine bundle as a failed installation.
+# This test stubs npm, so provide the minimal conductor layout and bundle that
+# the success path requires; channel selection remains the behavior under test.
+mkdir -p "$CHECKOUT/src/conductor/dist"
+printf '{"name":"fixture-conductor"}\n' > "$CHECKOUT/src/conductor/package.json"
+printf '// fixture bundle\n' > "$CHECKOUT/src/conductor/dist/index.js"
 
 STUBS="$TMP_ROOT/stubs"
 mkdir -p "$STUBS"
-for tool in rtk npm node claude codex uv; do
+for tool in rtk npm claude codex uv; do
   printf '#!/usr/bin/env bash\nexit 0\n' > "$STUBS/$tool"
   chmod +x "$STUBS/$tool"
 done
+printf '#!/usr/bin/env bash\n[ "${1:-}" = "--version" ] && { echo v26.7.0; exit 0; }\nexit 0\n' > "$STUBS/node"
+chmod +x "$STUBS/node"
 PY3="$(python3 -c 'import sys; print(sys.executable)')"
 ln -s "$PY3" "$STUBS/python3"
 
@@ -81,7 +89,7 @@ for CHANNEL_CASE in 'separate-main:--channel main:main' 'equals-main:--channel=m
   read -r -a ARGS <<< "$CHANNEL_ARGS"
 
   set +e
-  OUT=$(cd "$CHECKOUT" && HOME="$CASE_HOME" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" "${ARGS[@]}" --allow-worktree-root </dev/null 2>&1)
+  OUT=$(cd "$CHECKOUT" && HOME="$CASE_HOME" PATH="$STUBS:$PATH" AI_CONDUCTOR_ENGINE_BIN="$STUBS/conduct-ts" timeout 8s "$CHECKOUT/bin/install" "${ARGS[@]}" --allow-worktree-root </dev/null 2>&1)
   CODE=$?
   set -e
 
@@ -95,12 +103,12 @@ done
 run_case() {
   local case_home=$1
   shift
-  (cd "$CHECKOUT" && HOME="$case_home" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" "$@" --allow-worktree-root </dev/null 2>&1)
+  (cd "$CHECKOUT" && HOME="$case_home" PATH="$STUBS:$PATH" AI_CONDUCTOR_ENGINE_BIN="$STUBS/conduct-ts" timeout 8s "$CHECKOUT/bin/install" "$@" --allow-worktree-root </dev/null 2>&1)
 }
 
 run_pty_case() {
   local case_home=$1 case_name=$2 install_args=$3 prompt_answers=${4:-'3\n1\n1\n'}
-  printf '%b' "$prompt_answers" | timeout -k 1s 8s script -qec "env HOME='$case_home' PATH='$STUBS:$PATH' '$CHECKOUT/bin/install' $install_args --allow-worktree-root" \
+  printf '%b' "$prompt_answers" | timeout -k 1s 8s script -qec "env HOME='$case_home' PATH='$STUBS:$PATH' AI_CONDUCTOR_ENGINE_BIN='$STUBS/conduct-ts' '$CHECKOUT/bin/install' $install_args --allow-worktree-root" \
     "$TMP_ROOT/${case_name}.log" 2>&1 || true
 }
 
