@@ -1,4 +1,4 @@
-// Covers: task:13
+// Covers: task:13, task:rem-prd-audit-refusal-7c10a767-f289-4d69-a726-5c1817437dc6
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -291,27 +291,41 @@ describe('sweepMergeableLabels — shipped-readiness recovery ordering', () => {
     expect(selected).toHaveLength(1);
   });
 
-  it('leaves human, CI-exhaustion, and conflict labels sticky without adding mergeable', async () => {
-    for (const entry of [
-      legacyEntry,
-      { ...legacyEntry, escalationCause: 'conflict-resolution' as const },
-    ]) {
-      const project = await tempProject();
-      const removed: string[] = [];
-      const added: string[] = [];
-      await rewriteWatch(project, [entry]);
+  it('clears a recovered conflict-resolution label', async () => {
+    const project = await tempProject();
+    const removed: string[] = [];
+    const added: string[] = [];
+    await rewriteWatch(project, [{ ...legacyEntry, escalationCause: 'conflict-resolution' }]);
 
-      await sweepMergeableLabels({
-        projectRoot: project,
-        runGh: fakeGh(
-          stateJson('MERGEABLE', ['needs-remediation'], [{ status: 'COMPLETED', conclusion: 'SUCCESS' }]),
-          removed,
-          added,
-        ),
-      });
+    await sweepMergeableLabels({
+      projectRoot: project,
+      runGh: fakeGh(
+        stateJson('MERGEABLE', ['needs-remediation'], [{ status: 'COMPLETED', conclusion: 'SUCCESS' }]),
+        removed,
+        added,
+      ),
+    });
 
-      expect(removed).toEqual([]);
-      expect(added).toEqual([]);
-    }
+    expect(removed).toEqual(['repos/acme/widgets/issues/7/labels/needs-remediation']);
+    expect(added).toEqual([]);
+  });
+
+  it('leaves human and CI-exhaustion labels sticky without adding mergeable', async () => {
+    const project = await tempProject();
+    const removed: string[] = [];
+    const added: string[] = [];
+    await rewriteWatch(project, [legacyEntry]);
+
+    await sweepMergeableLabels({
+      projectRoot: project,
+      runGh: fakeGh(
+        stateJson('MERGEABLE', ['needs-remediation'], [{ status: 'COMPLETED', conclusion: 'SUCCESS' }]),
+        removed,
+        added,
+      ),
+    });
+
+    expect(removed).toEqual([]);
+    expect(added).toEqual([]);
   });
 });

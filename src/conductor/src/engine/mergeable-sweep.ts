@@ -671,8 +671,8 @@ export async function sweepMergeableLabels({
           await removeLabel(entryGh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
         }
 
-        // Shipped readiness owns only its own attribution. Conflict, CI, and
-        // human remediation labels stay sticky during readiness recovery.
+        // Shipped readiness owns only its own attribution. CI and human
+        // remediation labels stay sticky during readiness recovery.
 
         // Task 17 (AC1): preserve the historical conflict candidate behavior,
         // but collect after remediation recovery so later dispatch sees the
@@ -689,6 +689,14 @@ export async function sweepMergeableLabels({
         // remains watched for the next tick, but neither a stale label nor a
         // repair/escalation action can turn uncertainty into a side effect.
         if (indeterminate) continue;
+
+        // A conflict-resolution label becomes stale once GitHub reports the PR
+        // mergeable again. Legacy/unattributed labels remain sticky.
+        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
+        if (idx >= 0) {
+          entry = await maybeClearConflictLabel(entry, state, entryGh, log);
+          survivors[idx] = entry;
+        }
 
         // FR-12: if the PR carries `needs-remediation`, ensure `mergeable` is absent.
         let hasRemediation = state.labels.includes('needs-remediation') && !readinessLabelRemoved;
