@@ -701,3 +701,30 @@ Task 1 ─┬─ Task 2
 **Done when:**
 - [test] S6.2 is satisfied by this task.
 - The repair for task rem-prd-audit-10-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-9-R1: step-runners.test.ts: replace the hand-supplied-suppression test with one that runs the real build_review step runner. Use a planBody declaring `Pattern-source: src/source-widget.ts` with a rename map to src/target-widget.ts, a fileExists stub that resolves the source, and a stubbed implementationQuality judged result holding one duplication finding anchored at the derived target with evidence naming only the source. Assert the persisted aggregate's declaredReplicationSuppressions equals [{findingId, sourcePath, targetPath}] and that the effective verdict is PASS with suppressedFindingIds containing that id. Pass no suppression array by hand.
+**Gate:** prd-audit
+**Rationale:** Verified, 98% confidence: the 'build_review declared replication suppressions' block (test/engine/step-runners.test.ts:95-138) only calls joinBuildReviewRubricOutcomes with a hand-supplied suppression array. It never runs the build_review step, so the derivation at src/engine/step-runners.ts:3473-3490 (resolvePlanPatternSource -> declaredReplicationSuppressions) is never exercised. The architecture is settled and task 9's first [test] doneWhen already admits the repair. This is test-only BUILD work under task 9. Completed behavior is preserved: the joinBuildReviewRubricOutcomes/deriveEffectiveBuildReviewVerdict assertions may stay as aggregate-level coverage, but they must stop being the evidence for this criterion.
+**Criterion:** S6.11
+**Parent task:** 9
+**Done when:**
+- [test] S6.11 is satisfied by this task.
+- The repair for task rem-prd-audit-9-R1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-9-R2: step-runners.test.ts: rewrite the 'does not suppress declared replication' it.each cases to drive the real build_review step runner with the declared planBody. Case one is a duplication finding anchored at src/other-widget.ts. Case two is a finding anchored at the derived target but with mixed evidence: one location naming the source and one naming src/other-widget.ts, which exercises the `some` check. Assert the persisted declaredReplicationSuppressions is [] and the effective verdict FAILs with the finding id in unresolvedFindingIds.
+**Gate:** prd-audit
+**Rationale:** Verified, 98% confidence: the off-target-anchor, foreign-evidence and no-Pattern-source cases (step-runners.test.ts:125-137) pass declaredReplicationSuppressions: [] by hand and then assert []. That is tautological. The filter at step-runners.ts:3481-3483 (anchor must equal the rename-mapped target; every evidenceLocation must name sourcePath) and the unresolved-plan branch are never invoked. Task 9's second and third [test] doneWhen admit this. It is test-only BUILD work and needs no architecture or plan change.
+**Criterion:** S6.12
+**Parent task:** 9
+**Done when:**
+- [test] S6.12 is satisfied by this task.
+- The repair for task rem-prd-audit-9-R2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-9-R3: step-runners.test.ts: rewrite 'plan without Pattern-source' to run the real build_review step runner with a planBody that has no Pattern-source line, plus the same target-anchored, source-only-evidence duplication finding that suppresses in 9-R1. Assert the persisted declaredReplicationSuppressions is [] and the lap FAILs. This proves the empty list comes from the step's own derivation and was not supplied by hand.
+**Gate:** prd-audit
+**Rationale:** Verified, 98% confidence: the off-target-anchor, foreign-evidence and no-Pattern-source cases (step-runners.test.ts:125-137) pass declaredReplicationSuppressions: [] by hand and then assert []. That is tautological. The filter at step-runners.ts:3481-3483 (anchor must equal the rename-mapped target; every evidenceLocation must name sourcePath) and the unresolved-plan branch are never invoked. Task 9's second and third [test] doneWhen admit this. It is test-only BUILD work and needs no architecture or plan change.
+**Criterion:** S6.12
+**Parent task:** 9
+**Done when:**
+- [test] S6.12 is satisfied by this task.
+- The repair for task rem-prd-audit-9-R3 is committed and its targeted tests pass.
