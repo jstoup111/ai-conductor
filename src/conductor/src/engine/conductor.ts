@@ -413,6 +413,7 @@ import {
   resolveTaskIds,
 } from './task-progress.js';
 import { supersedeHaltRecord } from './halt-record.js';
+import { runStackPreflight } from './restack/stack-preflight.js';
 import {
   makeGitRunner,
   performRebase,
@@ -6105,6 +6106,29 @@ export class Conductor {
     if (this.fromStep) {
       startIndex = indexOf(this.fromStep);
     } else if (this.resume) {
+      // A stacked resume must repair durable closure state before either the
+      // cursor or the rebase-operation fence interprets it.  A journal owns
+      // any in-progress record it wrote, so classifying it first would turn a
+      // recoverable restack into an unrelated rebase HALT.
+      const resumeSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+      if (resumeSlug) {
+        const preflight = await runStackPreflight({
+          worktree: this.projectRoot,
+          slug: resumeSlug,
+          events: this.events,
+          prepareResume: async () => {
+            if (await haltMarkerExists(this.projectRoot)) return;
+            try {
+              await supersedeHaltRecord(this.projectRoot, resumeSlug, 'stack-preflight');
+            } catch {
+              // The existing resume path remains the authority for a
+              // best-effort record supersession failure; never classify a
+              // journal while trying to report that secondary failure.
+            }
+          },
+        });
+        if (preflight.kind === 'halted' || preflight.kind === 'unavailable') return;
+      }
       if (!await this.activateChildRegionStateForResume(state)) return;
       // A restarted process has no `lastRebaseOutcome`, so the durable
       // operation descriptor is the only authority that can prevent it from

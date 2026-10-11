@@ -198,6 +198,7 @@ import { amendDeferredAutoParkHaltAtWorktree } from './engine/auto-park-halt.js'
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { getStepStatus, readState } from './engine/state.js';
 import { supersedeHaltRecord } from './engine/halt-record.js';
+import { runStackPreflight } from './engine/restack/stack-preflight.js';
 import {
   createStepStatusWriteRefusalDiagnostics,
   resolveConductorStateStore,
@@ -1755,6 +1756,40 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         boundary: { kind: 'pre-first-unit' },
       };
       return termination;
+    }
+
+    // A stacked feature's closure refs are durable state, not a conductor
+    // concern.  Recover/repair them before the ordinary re-kick path consumes
+    // REKICK or judges the active child.  In particular, a repair which has a
+    // chained base refresh owns consumption of REKICK through its journal;
+    // otherwise resumeRebaseFirst retains its historical one-shot behavior.
+    const rekickPath = join(pipelineDir, 'REKICK');
+    const stackPreflight = await runStackPreflight({
+      worktree: wt.path,
+      slug: item.slug,
+      baseRefreshDue: existsSync(rekickPath),
+      consumeRekick: async () => {
+        await unlinkFile(rekickPath).catch((error: unknown) => {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT') throw error;
+        });
+      },
+      events: featureEvents,
+      // Authorizations are consumed by the daemon's pre-dispatch maintenance
+      // boundary. A record left by an already-cleared halt can be resolved
+      // here, after recovery; never supersede a still-live halt record.
+      prepareResume: async () => {
+        if (await haltMarkerExists(wt.path)) return;
+        try {
+          await supersedeHaltRecord(wt.path, item.slug, 'stack-preflight');
+        } catch (error) {
+          featureLog(`stack preflight could not supersede halt record: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      },
+    });
+    if (stackPreflight.kind === 'halted' || stackPreflight.kind === 'unavailable') {
+      featureLog(`stack preflight ${item.slug}: ${stackPreflight.kind}`);
+      return;
     }
     const resume = await resumeRebaseFirst({
       worktreePath: wt.path,
