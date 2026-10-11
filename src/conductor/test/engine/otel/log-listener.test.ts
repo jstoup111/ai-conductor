@@ -14,11 +14,25 @@ describe('LogListener delivery health isolation', () => {
 
     try {
       await events.emit({
+        type: 'operational_log',
+        severity: 'info',
+        body: 'ordinary operational record',
+        occurredAt: 42,
+        ownership: { scope: 'project' },
+      });
+      expect(emit).toHaveBeenCalledOnce();
+      expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+        body: 'ordinary operational record',
+        severityText: 'INFO',
+        eventName: 'operational_log',
+      }));
+
+      await events.emit({
         type: 'renderer_error',
         rendererName: 'otel',
         error: '[otel] log delivery network; records remain local',
       });
-      expect(emit).not.toHaveBeenCalled();
+      expect(emit).toHaveBeenCalledOnce();
     } finally {
       listener.stop();
     }
