@@ -378,6 +378,23 @@ describe('build-review adjudication context', () => {
       }),
     });
   });
+
+  it('admits the full task contracts of a ninety-one task plan without a byte-overflow stop', () => {
+    // A landed 40-task plan grown by remediation to 91 tasks serialized to
+    // 143,451 bytes and halted under the former 128 KiB ceiling.
+    const admittedTaskContracts = Array.from({ length: 91 }, (_value, index) => ({
+      id: String(index + 1),
+      contract: `### Task ${index + 1}: restack step\n${'c'.repeat(1_550)}`,
+    }));
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: [],
+      planContract: { path: '.docs/plans/large.md', pointers: [], admittedTaskContracts },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && Buffer.byteLength(JSON.stringify(result.context))).toBeGreaterThan(128 * 1024);
+  });
   it('declares the case-v1 discriminator and every input field the skill is told to read', () => {
     const result = assembleBuildReviewAdjudicationContext({
       aggregate: aggregate(finding('alpha')),
