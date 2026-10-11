@@ -330,8 +330,12 @@ async function unenteredLeafOwner(
   });
   if (rewrittenMatches.length > 0) return rewrittenMatches.length === 1 ? rewrittenMatches[0] : undefined;
   if (journal.journal.cause !== 'feature-repair') return undefined;
-  const identityMatches = (await Promise.all(journal.journal.ranges.map(async (candidate) => {
-    if (candidate.kind === 'leaf-unentered' || !journal.journal.originatingChildren?.includes(candidate.child)) return undefined;
+  // Every child through the highest origin is adopted unchanged, whether or
+  // not it originated the repair; an adopted owner maps the leaf to itself.
+  const lastOriginIndex = Math.max(-1, ...journal.journal.ranges.map((candidate, index) =>
+    journal.journal.originatingChildren?.includes(candidate.child) ? index : -1));
+  const identityMatches = (await Promise.all(journal.journal.ranges.map(async (candidate, index) => {
+    if (candidate.kind === 'leaf-unentered' || index > lastOriginIndex) return undefined;
     const child = journal.journal.children.find((entry) => entry.child === candidate.child);
     if (child?.status !== 'replayed' || (child.rewrites?.length ?? 0) !== 0) return undefined;
     const inside = await leafIsInsideRange(git, range.oldTip, candidate);

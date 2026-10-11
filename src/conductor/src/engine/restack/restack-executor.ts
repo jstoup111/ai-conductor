@@ -420,12 +420,13 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
             const rewritten = rewrites.get(range.oldTip);
             return rewritten === undefined ? [] : [{ child, rewritten }];
           });
-        // A repair adopts its originating children unchanged, so a pre-region
-        // leaf contained by one of those ranges has no rewritten counterpart.
-        // Its durable identity is its original tip, not the adopted child's tip.
+        // A repair adopts every child through the highest origin unchanged
+        // (originating or not), so a pre-region leaf contained by one of those
+        // ranges has no rewritten counterpart. Its durable identity is its
+        // original tip, not the adopted child's tip.
         const identityMatches = rewrittenMatches.length === 0 && options.cause === 'feature-repair'
-          ? (await Promise.all(plan.ranges.slice(0, rangeIndex).map(async (candidate) => {
-            if (!plan.originating.includes(candidate.child)) return undefined;
+          ? (await Promise.all(plan.ranges.slice(0, rangeIndex).map(async (candidate, candidateIndex) => {
+            if (candidateIndex > lastOriginIndex || candidate.kind === 'leaf-unentered') return undefined;
             return await leafIsInsideRange(git, range.oldTip, candidate)
               ? { child: candidate.child, rewritten: range.oldTip }
               : undefined;
